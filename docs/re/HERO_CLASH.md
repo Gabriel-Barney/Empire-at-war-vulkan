@@ -476,8 +476,9 @@ Boarding 0x63fae0(behaviour, thief, vehicle):
   type's default response events; audio only).
 - **+0x3a1 & 0x10 "incognito: not auto-acquired, does not auto-acquire, until it deals or takes damage"**:
   writers boarding 0x63fae0 and the Blast ability apply 0x71c0b0. Cleared by Take_Damage 0x3a9e30 (on the victim
-  when a source is given and that source has no targeting pack or is targeting this victim; on a non-projectile
-  source that has the flag, which then also gets CAUSE_DAMAGE; on a projectile's shooter, 0x2aca60) and by
+  when a source is given and that source is not a projectile (no projectile pack +0xe8) or is a projectile whose
+  target (pack +8) is this victim; on a non-projectile source that has the flag, which then also gets
+  CAUSE_DAMAGE; on a projectile's shooter, 0x2aca60; exact place and order in §8.4.1) and by
   MaximumFirepower 0x707390 (team members). Not cleared by owner change; saved. Readers: target candidate scan
   0x5662b0 (`TACTICAL_COMBAT.md` §2.3 item 1: skipped as a candidate), hardpoint target pick 0x385190, hardpoint
   auto-scan 0x387400 (an owner with the flag does not scan), targeting services 0x634810 / 0x633ae0 (a unit with
@@ -499,6 +500,149 @@ chance, `SpawnRequest` CaptureVariant with `q.owner` = victim owner, victim kill
   with the owner change.
 - Readers to wire: `bribe_accepts` step 6 / the convert victim test refuse `flags_3a2 & 0x08`; target candidate
   scans skip incognito units; incognito units do not auto-acquire; Take_Damage clears incognito per §8.2.
+
+### 8.4 s78n t05 leftovers (2026-11-10)
+
+Read from the decompile and the disassembly of `corruption\StarWarsG.exe` (vtables read from the PE). All
+writes / clears of +0x3a1 & 0x10 in the binary: set by 0x63fae0 and 0x71c0b0; cleared by 0x3a9e30 (three sites)
+and 0x707390. Readers: 0x385190, 0x387400, 0x5662b0, 0x633ae0, 0x634810 and 0x3a9e30. Nothing else (the object
+ctors 0x388720 / 0x38a280 init the byte; save / load 0x39ce40 / 0x3a5ad0 carry it) [H].
+
+#### 8.4.1 Where Take_Damage clears the incognito bit [H]
+
+Take_Damage 0x3a9e30(victim V, kind, amount, source S, …), in code order:
+1. out-invulnerable := 0;
+2. (+0x23b0 behaviour wake, no gate);
+3. **0x3a9ef1** build-pad redirect: when V's +0x150 pack has a finished structure (+0x10) that is not dying /
+   removed (+0x3a0 & 0x42 == 0), the whole call is re-made on that structure and returns (so the clears below
+   happen on the structure, not the pad). `TACTICAL_COMBAT.md` §3.6 step 1 calls this "parent container"; it is
+   the §7.1 pack;
+4. team redirect / share (`TACTICAL_COMBAT.md` §3.6 step 2; recursive calls each run the steps below on the member);
+5. **0x3aa1be** kind not 0 / 13 and slot byte +0x37d set → return;
+6. **0x3aa1db** type +0xa3 (`Immune_To_Damage`) → return;
+7. **0x3aa1e8** V +0x3a7 (garrisoned / hidden in a container) → return;
+8. **0x3aa20e victim clear:** if V +0x3a1 & 0x10, S non-null, and (S has no projectile pack (S +0xe8 == 0), or
+   the pack's target (+8) == V) → V +0x3a1 &= ~0x10;
+9. **0x3aa231** × V's TAKE_DAMAGE multiplier (kind 7) unless the raw flag;
+10. **source clear** (only when S non-null):
+    - S is a projectile (pack set) and its shooter id (pack +0x58) is not 0x3fffff and resolves (0x2aca60):
+      **0x3aa285** shooter +0x3a1 &= ~0x10 if set; then × shooter CAUSE_DAMAGE (kind 8) and the diminishing-firepower
+      flag := 0x397f60(shooter, 3), both **regardless** of the bit;
+    - S is not a projectile: **0x3aa2aa** only if S +0x3a1 & 0x10: clear it, × S CAUSE_DAMAGE (kind 8), flag :=
+      0x397f60(S, 3). A non-projectile source without the bit gets neither;
+    - otherwise (no source, or the shooter is gone / 0x3fffff) the flag stays 0;
+11. base shield, diminishing firepower (**only when that flag is set** and kind == 1; it also writes V +0x304 only
+    then), under-construction, retreat multipliers;
+12. **0x3aa3a8** damage-enabled gate (kinds 0 / 8 / 13 or the global flag) → return;
+13. **0x3aa3bf** GOM (+0x2b8) state byte → return [L meaning]; **0x3aa3e7** V +0x3a0 & 0x20 → return;
+14. MP / difficulty multipliers, hardpoint name;
+15. **0x3aa631** V health (+0x5c) ≤ 0 or amount ≤ 0 → end (nothing more);
+16. lucky shot, `Get_Damage_Multiplier`, the style-10 listeners (0x37d160, the "refused" / redirected hit:
+    amount := 0, out-invulnerable := 1), shields, armour, hull.
+
+So, against the cases asked:
+- **Before the clears (no clear):** the +0x37d invulnerability gate, `Immune_To_Damage`, a garrisoned / hidden
+  victim. A hit stopped there clears neither the victim nor the shooter.
+- **After the clears (they still happen):** every damage multiplier, the damage-enabled gate, the +0x3a0 & 0x20
+  gate, a dead / dying victim (health ≤ 0: there is no live test before step 15), a zero or negative amount,
+  a hit cancelled by a listener (Absorb / Redirect blaster, saber deflection), a fully shield-absorbed hit.
+- **Friendly hits:** Take_Damage has no owner test at all. Whether a friendly hit reaches it is the caller's
+  business (projectile sweep / area damage, `TACTICAL_COMBAT.md` §3.4 / §3.5); one that does clears as usual.
+- **Self hit** (S == V, not a projectile, e.g. STIM_PACK 0x3a9e30(V, 1, x, V)): step 8 clears V first, so at
+  step 10 S has no bit any more: no CAUSE_DAMAGE, no diminishing firepower.
+- **Who is "the source":** for a projectile hit S is the projectile object (it always exists); the shooter is only
+  looked up for the shooter clear / CAUSE. The victim clear depends on the projectile's *target*, not on the
+  shooter: splash / area victims and stray hits of a projectile aimed elsewhere keep their bit; the projectile's
+  own target loses it even when the shooter is dead.
+- **No source** (scripted damage, burning without source, …): nothing is cleared.
+
+Check of the port's condition (victim cleared when the source "is not a combat unit, is a projectile, has no weapon,
+or targets the victim"): wrong on two counts. (a) Any projectile: retail only when the projectile's target is
+the victim. (b) A non-projectile source: retail clears **always** (no weapon / targeting test at all). The source
+side (shooter of a projectile; a non-projectile source with the bit) matches, except the order (self hit) and that
+the port clears only for a live victim after its damage-enabled gate.
+
+***Port spec*** (`take_damage_inner`, `combat_system.cpp`):
+- Add `ObjectId projectile_target = kNoObject` to `DamageRequest`; every site that sets
+  `source_is_projectile = true` (direct hit, area damage, the 4038 area loop, `ability_system.cpp` 627) fills it with
+  the projectile's `target` (pack +8; kNoObject when it has none).
+- Place the clear after the +0x37d gates (`kUnitInvulnerable`, `invuln_end`), `immune_to_damage` and a garrisoned
+  victim (`kUnitGarrisoned`: no clear, no damage), and **before** the `damage_enabled` gate and step 4.
+- Victim: `if ((v.flags & kUnitIncognito) && (r.source_is_projectile ? r.projectile_target == v.id
+  : r.source != kNoObject)) v.flags &= ~kUnitIncognito;` (no `unit_can_attack` / `current_target` test).
+- Then the source: projectile → the shooter if `has_unit(r.source)`: clear its bit, CAUSE always (as now);
+  non-projectile → only if `src->flags & kUnitIncognito`: clear, CAUSE. The victim clear runs first, so a self hit
+  gets no CAUSE. Drop `kUnitSkipTargeting` from the step-5 test (see §8.4.2).
+- A victim already `kUnitDead` but still in the table: the retail clears still run (there is no live test before
+  them); the port may run the two clears before its `live()` return [H code; M how often such hits arrive].
+- Side finding, same block [H]: retail's diminishing-firepower allow flag is false unless step 10 set it (a found
+  shooter, or an incognito non-projectile source); the port uses `allow = true` with no source and the flag of any
+  source. Port: `allow` = the shooter's flag for a projectile with a live shooter, the source's flag for an
+  incognito non-projectile source (read before its clear), else false; the last-hit stamp (+0x304) is written only
+  when diminishing applies. Outside t05; changes non-projectile kind-1 damage (hero clash, STIM_PACK, abilities).
+
+#### 8.4.2 Blast (0x71c0b0) and the bit [H]
+
+`Blast_Ability` vtable 0x8cd2f0: accept (slot 5) 0x592e30 (target null or the user itself), update (slot 4)
+0x71c190, apply (slot 30) 0x71c0b0, **no remove override** (slot 31 = 0x13b7d0, `return 0`; compare
+MaximumFirepower's slot 31 0x707130 → 0x707390).
+- **Set:** apply 0x71c0b0, last step, on the **user**: +0x3a1 |= 0x10 (after counter, buildup mesh, charging
+  particle, recharge 70).
+- **Never cleared by Blast:** the update 0x71c190 (counter, meshes, particles, −K) and the absent remove do not
+  touch it. It goes only through Take_Damage (§8.4.1) or MaximumFirepower's 0x707390 (team members).
+- **Same bit, same rules as the thief's:** Take_Damage does not know who set it. For a Blast user that means:
+  the first Blast projectile (or any later shot) that reaches Take_Damage on anything clears it through the shooter
+  rule; being hit by a projectile aimed at it, or by any non-projectile source, clears it through the victim rule.
+  A Blast whose shots never hit leaves the user incognito indefinitely.
+- **Effect on the Blast user while set** (the same readers as the stolen vehicle): enemies do not pick it as a new
+  target (0x5662b0, 0x385190); it does not search for a target when it has none (0x634810 / 0x633ae0 return
+  before the search) and its hardpoints do not auto-scan (0x387400). A current / ordered target is kept, so the
+  charged special hardpoints fire at the target the user already has [H code; M practical effect].
+- **Differences thief vs Blast:** only who carries the bit (the vehicle, with the thief garrisoned inside, vs the
+  Blast user itself) and when it is set. No other reader, timer or clear distinguishes them.
+
+***Port spec*** (`ability_classes.cpp`, C::Blast):
+- Apply: `set_flag(o.id, kUnitIncognito, true)` instead of `kUnitSkipTargeting`.
+- Remove both Blast clears (the phase-0 → 1 "[port] +0x3a1 cleared here" and `class_remove` C::Blast).
+- With that, `kUnitSkipTargeting` marks only the port's dummy targets. The Blast user then also stops being
+  excluded by the port-only `kUnitSkipTargeting` filters (`promote_goal` 0x5680b0, `tactical_battle.cpp` 289 /
+  1672, the ability victim filters in `ability_behaviors.cpp` / `ability_classes.cpp`): retail reads the bit only in
+  the five readers above and Take_Damage. Tests that expect `kUnitSkipTargeting` after a Blast change with it.
+
+#### 8.4.3 Vehicle thief on a vehicle without `Vehicle_Thief_Inside_Clone` [H]
+
+- **Accept** (VehicleThief vtable 0x8cb698 slot 5, 0x711590): target non-null; enemy of the thief's owner
+  (0x39a450 → 0x2824f0) [M: relation name]; the ability's type / category filter (0x48e290 → 0x39f300:
+  `Applicable_Unit_Types` hit, else `Applicable_Unit_Categories` & CategoryMask and not excluded); the target has a
+  model (+0x2a0); the thief can activate CAPTURE_VEHICLE (0x39b480(thief, 18, 1)). **No clone test.**
+- **Apply** 0x7112f0: the user needs VEHICLE_THIEF (behaviour 0x32); accept; range; draw. Then `clone type =
+  vehicle type +0xda8`:
+  - set: victim +0x330 := thief's owner (killer player byte), notify 0x25, a (type, owner) record appended to the
+    mode list +0x208 [M meaning]; spawn the clone (vehicle position / orientation, vehicle owner); **spawn failed →
+    return 0** (nothing else: vehicle alive, no CAPTURE_VEHICLE); notify(vehicle, 1, clone); kill the vehicle
+    (0x391310(vehicle, 0)); the boarded object = the clone;
+  - **null: the boarded object = the original vehicle** (no spawn, no kill, no +0x330 / list record).
+  - Then for both: 0x48cca0 / 0x48e4d0 (activation bookkeeping with the boarded object), boarding 0x63fae0(thief,
+    boarded) (§8.1: EJECT_VEHICLE_THIEF on only if that object has unit ability 46, owner change to the thief's,
+    +0x3a2 |= 8, +0x3a1 |= 0x10, garrison; the container pack +0xf8 is created on demand by 0x390740, so any
+    vehicle can take the thief), and CAPTURE_VEHICLE (18) on for the thief whatever the boarding returned.
+- So retail neither refuses nor kills: **the thief boards and takes over the original vehicle.**
+- **Shipped FoC data:** Chewbacca_Vehicle_Thief (NAMEDHEROUNITS.XML) has empty `Applicable_Unit_Categories` and 20
+  `Applicable_Unit_Types` (the missing comma after `Swamp_Speeder_P` is harmless: newline is a list delimiter,
+  `OBJECT_TYPES.md` §4.5). All 20 resolve a clone: 17 carry the tag, `Pirate_Skiff` inherits `Pirate_Skiff_Captured`
+  from `Skiff`, `Swamp_Speeder_E` / `Swamp_Speeder_P` inherit `Swamp_Speeder_Captured` from `Swamp_Speeder`
+  (`Variant_Of_Existing_Type`, `OBJECT_TYPES.md` §3). Every named clone exists. **No shipped target reaches the
+  no-clone path**; it matters only for mods. (The other tagged types `Skiff`, `Swamp_Speeder`,
+  `Pod_Walker_Underworld` are not in the list, so Chewbacca cannot target them.)
+
+***Port spec***:
+- `ability_classes.cpp` C::VehicleThief: do not kill the victim in the ability system; the host decides.
+- Host CaptureVariant (`tactical_battle_oi_abilities.cpp`): variant resolved → spawn; spawn failed → nothing (the
+  victim lives) [port: retail's apply then also fails; unreachable in the port]; spawned → kill the victim
+  (`kKindNoDeathClone`, killer the thief) and board the variant as now. **No variant → board the original**: owner
+  change to the thief's owner, `kUnitStolenVehicle | kUnitIncognito`, `flags_3a2 |= 8`, `s4_board(thief, victim)`,
+  EJECT_VEHICLE_THIEF on only when the vehicle has unit ability 46; no kill, no spawn.
+- CAPTURE_VEHICLE on for the thief in both cases (as now). Shipped battles do not change (every target has a clone).
 
 ---
 

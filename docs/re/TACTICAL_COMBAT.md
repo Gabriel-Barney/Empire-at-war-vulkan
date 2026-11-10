@@ -2046,7 +2046,7 @@ Arguments: victim, damage kind, amount, source, hardpoint name, out-absorbed, ou
 flag, out-invulnerable.
 
 **Redirection and gates**
-1. **Parent container:** if the victim's parent container (+0x150) is alive, the damage goes to it instead [M].
+1. **Build-pad redirect:** if the victim is a build pad whose finished structure (pad data pack +0x150, slot +0x10) is alive, the damage goes to that structure instead (corrected 2026-11-10, HERO_CLASH.md §7.1 / §8.4.1; earlier read as a "parent container").
 2. **Teams [H]:**
    - `Redirect_Damage_To_Teammates`: amount/(n − 1) to each other member.
    - `Share_Damage_With_Teammates`: each member takes memberMax × amount / selfMax.
