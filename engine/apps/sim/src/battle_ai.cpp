@@ -818,7 +818,8 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
 
 // ---- order execution ----------------------------------------------------------------------------------------------
 
-bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_threshold, uint8_t flags, objects::ObjectId goal_object) {
+bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_threshold, uint8_t flags, objects::ObjectId goal_object,
+                         bool object_block) {
     const TacticalBattle::Unit* u = b_->unit_by_id(id);
     if (!u || !u->alive || u->retreated || !u->movable) return false;
     if (b_->movement_locked(id)) return true;  // OI follow-up t03: the locked unit keeps its order (A1_READINGS §28.9)
@@ -830,8 +831,10 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     o.flags = flags;  // s78f t10: the order's block flags (0x01 attack-move / 0x02 guard)
     o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // s78f t10: the object block (movement: -1 = none)
     // s78n t20 (MOVEMENT 4.3.1 items 2 / 6): an object goal (block kind 3) takes neither the destination check nor the
-    // single-member shortcut
-    o.skip_destination_check = goal_object != objects::kNoObjectId;
+    // single-member shortcut. The check's object test has no exemption for the order's target (retail sends kind 3 to
+    // the attack-arc slot test 0x438c10, which leaves the target out), so run on an object goal it moves the goal off
+    // the very object the units were sent to: attackers end out of weapon range of a standing enemy and never fire.
+    o.skip_destination_check = object_block || goal_object != objects::kNoObjectId;
     b_->movement_->move(o, host_->random().synced(), b_->frame_);
     return true;
 }
@@ -888,14 +891,18 @@ void BattleAi::follow_service() {
         if (dx * dx + dy * dy <= f.r * f.r) continue;
         f.gx = tp.x;
         f.gy = tp.y;
+        // s78n t20 fix (MOVEMENT 4.3.1 item 2): the follow stands for the formation's re-path of a kind-3 goal
+        // (0x4192b0) - no destination check. [port] a Move_To(object) follow (kind 1 in retail, which does not follow
+        // at all) re-paths the same way.
         if (f.units.size() == 1) {
-            move_unit(f.units.front(), tp.x, tp.y, f.threat);
+            move_unit(f.units.front(), tp.x, tp.y, f.threat, 0, objects::kNoObjectId, true);
             continue;
         }
         mv::MoveOrder o;
         o.units = f.units;
         o.threat_threshold = f.threat;
         o.destination = {std::clamp(tp.x, bb.min.x, bb.max.x), std::clamp(tp.y, bb.min.y, bb.max.y)};
+        o.skip_destination_check = true;
         b_->movement_->move(o, host_->random().synced(), b_->frame_);
     }
     follows_.erase(std::remove_if(follows_.begin(), follows_.end(), [](const ObjectFollow& f) { return f.units.empty(); }), follows_.end());
@@ -1059,7 +1066,9 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 const objects::ObjectId fobj = is_fighter(u->id) ? block : objects::kNoObjectId;
                 if (d > 0.8f * range) {
                     const float k = (d - 0.7f * range) / d;
-                    move_unit(u->id, up.x + dx * k, up.y + dy * k, mv::kThreatOff, 0, fobj);
+                    // s78n t20 fix (MOVEMENT 4.3.1 item 2): the approach stands for the attack's object-goal block -
+                    // no destination check (as TacticalBattle::attack_approach)
+                    move_unit(u->id, up.x + dx * k, up.y + dy * k, mv::kThreatOff, 0, fobj, true);
                 } else if (fobj != objects::kNoObjectId && !b_->movement_locked(u->id)) {
                     mv::MoveOrder o;
                     o.units = {u->id};
@@ -1179,6 +1188,10 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                                                : objects::kNoObjectId;
             const uint32_t targ = le32(b, 20);  // REMAINING_GAPS §4.2: Move_To threat threshold (float bits, 0 = off)
             const float tt = order == lua::LuaOrder::MoveTo && targ != 0u ? std::bit_cast<float>(targ) : mv::kThreatOff;
+            // s78n t20 fix (MOVEMENT 4.3.1 item 2; LUA_API "Move_To / Attack_Move / Guard_Target"): Attack_Move and
+            // Guard_Target on an object build a kind-3 block, which never takes the position destination check;
+            // Move_To(object) is a kind-1 position snapshot and takes it (the same split as `fobj` above)
+            const bool object_block = fobj != objects::kNoObjectId;
             if (tw != cmd::kNoObject && !point_goal) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
                 // s78f t10: fighters given an object block follow it in their own formation (0x4192b0 steps 3 / 4,
@@ -1196,11 +1209,12 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             if (group.units.size() == 1) {  // a single unit: unchanged path
                 if (order != lua::LuaOrder::AttackMove) b_->combat_->clear_order(u->id);
                 if (!b_->movement_locked(u->id)) b_->fighter_order(group.units, fflags, Vec3{x, y, 0.0f}, fobj);
-                return move_unit(u->id, x, y, tt, fflags, fobj) ? R::None : R::InvalidUnit;  // s78f t10: the same block
+                return move_unit(u->id, x, y, tt, fflags, fobj, object_block) ? R::None : R::InvalidUnit;  // s78f t10: the same block
             }
             group.threat_threshold = tt;
             group.flags = fflags;  // s78f t10: the movement block = the host record's (flags, object)
             group.goal_object = fobj == objects::kNoObjectId ? -1 : fobj;
+            group.skip_destination_check = object_block;  // s78n t20 fix (MOVEMENT 4.3.1 item 2)
             const tactical::Aabb& gb = mode_->bounds();
             group.destination = {std::clamp(x, gb.min.x, gb.max.x), std::clamp(y, gb.min.y, gb.max.y)};
             b_->drop_locked(group.units);  // OI follow-up t03: locked members keep their order [M: group-move reading]
@@ -1710,7 +1724,7 @@ void BattleAi::standin_orders() {
         const Vec3 ep = st.position(best->h);
         const float k = (dist - 0.7f * range) / dist;
         const Vec3 dest{up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k, 0.0f};
-        move_unit(u.id, dest.x, dest.y);
+        move_unit(u.id, dest.x, dest.y, mv::kThreatOff, 0, objects::kNoObjectId, true);  // s78n t20 fix: an attack approach
         if (!b_->movement_locked(u.id)) b_->fighter_order(std::span<const objects::ObjectId>(&u.id, 1), 0, dest);  // S7 t22
         ++b_->stats_.orders;
     }

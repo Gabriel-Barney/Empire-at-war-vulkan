@@ -1544,6 +1544,7 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         const tactical::Aabb& b = mode.bounds();
         o.destination.x = std::clamp(o.destination.x, b.min.x, b.max.x);
         o.destination.y = std::clamp(o.destination.y, b.min.y, b.max.y);
+        o.skip_destination_check = true;  // s78n t20 fix (MOVEMENT 4.3.1 item 2): an attack approach, as attack_approach
         movement_->move(o, rng, frame_);
         fighter_order(o.units, 0, Vec3{o.destination.x, o.destination.y, 0.0f});  // S7 t22
         ++stats_.orders;
