@@ -448,6 +448,9 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         const float sc = ty.get_float(t, "Scale_Factor") > 0.0f ? ty.get_float(t, "Scale_Factor") : 1.0f;
         u.hard_x_extent = ty.get_float(t, "Custom_Hard_XExtent") * sc;
         u.hard_y_extent = ty.get_float(t, "Custom_Hard_YExtent") * sc;
+        // s78n t11 (TACTICAL_COMBAT §5.4.6 item 3): the deployed range extents (MPTL / MAL_Rocket_Vehicle set only Y 24).
+        u.hard_x_extent_deployed = ty.get_float(t, "Custom_Hard_XExtent_Deployed") * sc;
+        u.hard_y_extent_deployed = ty.get_float(t, "Custom_Hard_YExtent_Deployed") * sc;
         // s78n t08f (TACTICAL_COMBAT §5.4.5, 0x371e70 / 0x372040; replaces A1j t04's |model bbox max.x / max.y|): the model
         // fallback of the slot 43 / 46 extents is the half size h of the collision bound of the mode's model (ModelClass vf
         // +0x58 = avoid_model's bound_h: collision-enabled meshes' 0x402 boxes through the bind pose, (1, 1, 1) without one;

@@ -856,12 +856,19 @@ float CombatSystem::target_extent(const Unit& t, Vec3 from) const {
 
 bool CombatSystem::footprint_extents(const Unit& t, float& ex, float& ey) const {
     const UnitDesc& td = desc_of(t);
-    if (!(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f) && td.model_x_extent < 0.0f) {
+    // s78n t11 (TACTICAL_COMBAT §5.4.6 items 3 / 4 and port spec item 6; 0x396a30 / 0x396b70 -> 0x371f30 / 0x372100): a
+    // Deploys type with a locomotor in Walk state 0x18 Deploying (kUnitDeployingIn) or 0x19 Deployed (kUnitDeploying; not
+    // 0x1A Undeploying) takes Custom_Hard_XExtent_Deployed / _YExtent_Deployed x Scale_Factor on each axis that sets one;
+    // the axes are independent (unlike 0x371d20's shared test). Not deployed_or_deploying(): that excludes 0x18. [port]
+    // the deploy-pending byte +0x2b3 is not modelled (Max_Dist_Walk_While_Deployed > 0 only; no FoC unit).
+    const bool dep = td.deploys && td.has_locomotor && (t.flags & (kUnitDeploying | kUnitDeployingIn)) != 0;
+    const float dx = dep ? td.hard_x_extent_deployed : 0.0f, dy = dep ? td.hard_y_extent_deployed : 0.0f;
+    if (!(dx > 0.0f) && !(dy > 0.0f) && !(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f) && td.model_x_extent < 0.0f) {
         ex = ey = td.radius;
         return false;
     }
-    ex = td.hard_x_extent > 0.0f ? td.hard_x_extent : td.model_x_extent >= 0.0f ? td.model_x_extent : td.radius;
-    ey = td.hard_y_extent > 0.0f ? td.hard_y_extent : td.model_y_extent >= 0.0f ? td.model_y_extent : td.radius;
+    ex = dx > 0.0f ? dx : td.hard_x_extent > 0.0f ? td.hard_x_extent : td.model_x_extent >= 0.0f ? td.model_x_extent : td.radius;
+    ey = dy > 0.0f ? dy : td.hard_y_extent > 0.0f ? td.hard_y_extent : td.model_y_extent >= 0.0f ? td.model_y_extent : td.radius;
     return true;
 }
 

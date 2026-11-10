@@ -1705,6 +1705,72 @@ void test_gaps_constants() {
         m.w.tick();
         CHECK(m.w.sys->auto_target(1) == (c.in ? ObjectId{2} : kNoObject));
     }
+    // s78n t11 (TACTICAL_COMBAT §5.4.6 items 3 / 4 / 6): MPTL - Custom_Hard_XExtent 30, _YExtent 15, _YExtent_Deployed 24,
+    // Scale_Factor 1.1 -> X 33.0, Y 16.5, deployed Y 26.4. The deployed Y applies in Walk state 0x18 (kUnitDeployingIn with
+    // kUnitDeployTransition) and 0x19 (kUnitDeploying), not in 0x1A (kUnitDeployTransition alone) and not for a type that
+    // does not deploy; the X extent has no deployed value and stays 33.0.
+    struct DepCase {
+        float d;
+        bool end_on;
+        uint32_t flags;
+        bool deploys, in;
+    };
+    const uint32_t s18 = kUnitDeployingIn | kUnitDeployTransition, s19 = kUnitDeploying, s1a = kUnitDeployTransition;
+    for (const DepCase c : {DepCase{1020.0f, false, 0u, true, false}, DepCase{1020.0f, false, s18, true, true},
+                            DepCase{1020.0f, false, s19, true, true}, DepCase{1020.0f, false, s1a, true, false},
+                            DepCase{1027.0f, false, 0u, true, false}, DepCase{1027.0f, false, s18, true, false},
+                            DepCase{1027.0f, false, s19, true, false}, DepCase{1027.0f, false, s1a, true, false},
+                            DepCase{1032.0f, true, 0u, true, true}, DepCase{1032.0f, true, s18, true, true},
+                            DepCase{1032.0f, true, s19, true, true}, DepCase{1032.0f, true, s1a, true, true},
+                            DepCase{1034.0f, true, 0u, true, false}, DepCase{1034.0f, true, s19, true, false},
+                            DepCase{1020.0f, false, s19, false, false}, DepCase{1016.0f, false, s19, false, true}}) {
+        TargetWorld m;
+        UnitDesc mptl = m.w.data.units[m.capital];
+        mptl.hard_x_extent = 33.0f;
+        mptl.hard_y_extent = 16.5f;
+        mptl.hard_y_extent_deployed = 26.4f;
+        mptl.deploys = c.deploys;
+        mptl.has_locomotor = true;
+        mptl.radius = 200.0f;  // tree box only
+        const uint32_t md = push_unit(m.w.data, mptl);
+        m.w.make();
+        m.w.add(1, m.attacker, 0, Vec3{0, 0, 0});
+        m.w.add(2, md, 1, Vec3{c.d, 0, 0}, c.end_on ? Vec3{-1, 0, 0} : Vec3{0, 1, 0});
+        if (c.flags) m.w.sys->set_flag(2, c.flags, true);
+        m.w.tick();
+        CHECK(m.w.sys->auto_target(1) == (c.in ? ObjectId{2} : kNoObject));
+        // slot 46 (min_range_geometry_of) reads the same extents: from the flank (U at the origin) E is the Y extent
+        float D = 0.0f, E = 0.0f;
+        CHECK(m.w.sys->min_range_geometry_of(2, Vec3{0, 0, 0}, D, E));
+        if (!c.end_on) {
+            const bool dep = c.deploys && (c.flags & (kUnitDeploying | kUnitDeployingIn)) != 0;
+            CHECK_F(E, dep ? 26.4f : 16.5f);
+        }
+    }
+    {  // each axis on its own: a deployed X alone widens only the along extent; has_locomotor false -> the normal extents
+        TargetWorld m;
+        UnitDesc dxo = m.w.data.units[m.capital];
+        dxo.hard_x_extent = 33.0f;
+        dxo.hard_y_extent = 16.5f;
+        dxo.hard_x_extent_deployed = 50.0f;
+        dxo.deploys = true;
+        dxo.has_locomotor = true;
+        const uint32_t d1 = push_unit(m.w.data, dxo);
+        dxo.has_locomotor = false;
+        const uint32_t d2 = push_unit(m.w.data, dxo);
+        m.w.make();
+        m.w.add(2, d1, 1, Vec3{0, 0, 0});
+        m.w.add(3, d2, 1, Vec3{0, 500, 0});
+        m.w.sys->set_flag(2, kUnitDeploying, true);
+        m.w.sys->set_flag(3, kUnitDeploying, true);
+        float D = 0.0f, E = 0.0f;
+        CHECK(m.w.sys->min_range_geometry_of(2, Vec3{100, 0, 0}, D, E));  // along the facing (+x)
+        CHECK_F(E, 50.0f);
+        CHECK(m.w.sys->min_range_geometry_of(2, Vec3{0, 100, 0}, D, E));  // across
+        CHECK_F(E, 16.5f);
+        CHECK(m.w.sys->min_range_geometry_of(3, Vec3{100, 500, 0}, D, E));
+        CHECK_F(E, 33.0f);
+    }
 }
 
 // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 "inside min range" in full - E is the X half-extent, or the Y one when

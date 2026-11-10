@@ -919,6 +919,31 @@ void test_foc() {
             std::printf("foc range extents: Nebulon_B_Frigate: no model data (sim built without assets), skipped\n");
         }
     }
+    {  // s78n t11 (TACTICAL_COMBAT §5.4.6 item 6): the _Deployed range extents of the two FoC types that set one
+       // (Custom_Hard_XExtent 30, _YExtent 15, _YExtent_Deployed 24, no _XExtent_Deployed): MPTL x Scale_Factor 1.1,
+       // MAL_Rocket_Vehicle x 0.7. Type data only (no model read).
+        struct Dep {
+            const char* name;
+            float x, y, dep_y;
+        };
+        for (const Dep c : {Dep{"MPTL", 33.0f, 16.5f, 26.4f}, Dep{"MAL_Rocket_Vehicle", 21.0f, 10.5f, 16.8f}}) {
+            const uint32_t t = static_cast<uint32_t>(types.resolve_name(c.name));
+            CHECK(t < types.size());
+            if (t >= types.size()) continue;
+            std::vector<uint32_t> idx;
+            const BattleTables bt = catalog.build_battle({t}, idx, false);
+            CHECK(idx.size() == 1);
+            if (idx.size() != 1) continue;
+            const tactical::combat::UnitDesc& u = bt.combat.units[idx[0]];
+            std::printf("foc deployed range extents: %s X %.2f Y %.2f, deployed X %.2f Y %.2f, deploys %d\n", c.name,
+                        static_cast<double>(u.hard_x_extent), static_cast<double>(u.hard_y_extent),
+                        static_cast<double>(u.hard_x_extent_deployed), static_cast<double>(u.hard_y_extent_deployed),
+                        u.deploys ? 1 : 0);
+            CHECK(std::fabs(u.hard_x_extent - c.x) < 0.001f && std::fabs(u.hard_y_extent - c.y) < 0.001f);
+            CHECK(u.hard_x_extent_deployed == 0.0f && std::fabs(u.hard_y_extent_deployed - c.dep_y) < 0.001f);
+            CHECK(u.deploys && u.has_locomotor);
+        }
+    }
     // Fog of war on real data (owner: fog agent): shipped GameConstants; grids, dense mask and REVEAL placements of
     // two real maps.
     const tactical::fog::FogConstants& fc = catalog.fog_constants();

@@ -370,6 +370,10 @@ struct UnitDesc {
     // (slot 43 footprint E; 0 = the radius).
     float min_attack_distance = 0.0f;
     float hard_x_extent = 0.0f, hard_y_extent = 0.0f;
+    // s78n t11 (TACTICAL_COMBAT §5.4.6 items 3 / 4, 0x371f30 / 0x372100): Custom_Hard_X/YExtent_Deployed x Scale_Factor
+    // (0 = unset). Each replaces its axis of the slot 43 / 46 extent while a Deploys unit with a locomotor is deploying
+    // or deployed (Walk state 0x18 / 0x19), each axis on its own.
+    float hard_x_extent_deployed = 0.0f, hard_y_extent_deployed = 0.0f;
     // A1j t04 / s78n t08f (TACTICAL_COMBAT §5.4.5, 0x371e70 / 0x372040): without a Custom_Hard extent, the game's X extent
     // (along the facing) = |collision-bound half y| and the Y extent (across) = |collision-bound half x| of the mode's
     // model x Scale_Factor (models face -Y); 0 without a model; < 0: no model data (the radius stands in).
@@ -827,6 +831,11 @@ enum UnitFlag : uint32_t {
     // duelling hero moves again while +0x3b4 stays set). Read only by the host's movement lock; cleared with
     // kUnitHeroClash. Saved and hashed with the other flags.
     kUnitHeroClashUnlocked = 1u << 25,
+    // s78n t11 (TACTICAL_COMBAT §5.4.6 item 4.3): the walk locomotor is in state 0x18 Deploying (vf +0x130), which
+    // kUnitDeployTransition (0x18 or 0x1A) cannot tell from Undeploying. Read by the slot 43 / 46 extents
+    // (footprint_extents: the _Deployed extents apply in 0x18 and 0x19, not in 0x1A). Set by the ability system with
+    // kUnitDeployTransition (set_deploy_state). Saved and hashed with the other flags.
+    kUnitDeployingIn = 1u << 26,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
 inline constexpr uint32_t kUnitHostMirrorFlags =
@@ -1770,7 +1779,8 @@ private:
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;
     // s78n t02: the footprint half-extents (Custom_Hard_X/YExtent, model collision bound (s78n t08f), radius fallback)
     // shared by slots 43 and 46;
-    // false when the unit has neither hard extents nor model data (both are then the radius).
+    // false when the unit has neither hard extents nor model data (both are then the radius). s78n t11: a deploying /
+    // deployed Deploys unit takes its _Deployed extent on each axis that sets one (0x371f30 / 0x372100).
     bool footprint_extents(const Unit& t, float& ex, float& ey) const;
     // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 steps 6 / 7 (min_range_geometry_of) and the whole weapon min
     // range test from `from` with min distance r (steps 4 - 7): a team-member target is retested against its team's live

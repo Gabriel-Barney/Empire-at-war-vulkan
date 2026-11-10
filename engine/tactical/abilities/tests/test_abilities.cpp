@@ -4415,12 +4415,16 @@ void test_s8_apply_facing_marker_deploy() {
         const uint32_t both = kUnitDeploying | kUnitDeployTransition;
         w.ab->set_deploy_state(1, 0x18);  // Deploying: both weapon sources hold fire (the transition gate)
         CHECK((w.sys->flags(1) & both) == kUnitDeployTransition && !w.ab->deployed(1) && !w.ab->is_active(1, kDeploy));
+        CHECK((w.sys->flags(1) & kUnitDeployingIn) != 0u);  // s78n t11: 0x18 alone (the _Deployed range extents)
         w.ab->set_deploy_state(1, 0x19);  // Deployed
         CHECK((w.sys->flags(1) & both) == kUnitDeploying && w.ab->deployed(1) && w.ab->is_active(1, kDeploy));
+        CHECK((w.sys->flags(1) & kUnitDeployingIn) == 0u);
         w.ab->set_deploy_state(1, 0x1A);  // Undeploying: transition again, no longer deployed
         CHECK((w.sys->flags(1) & both) == kUnitDeployTransition && !w.ab->deployed(1));
+        CHECK((w.sys->flags(1) & kUnitDeployingIn) == 0u);
+        w.ab->set_deploy_state(1, 0x18);
         w.ab->set_deploy_state(1, 0);
-        CHECK((w.sys->flags(1) & both) == 0u);
+        CHECK((w.sys->flags(1) & (both | kUnitDeployingIn)) == 0u);
         accept = false;  // the locomotor refused (no Walk, or nothing to do): no Deployed event
         CHECK(w.ab->set_unit_ability_mode(one, kDeploy, true, w.frame) <= 1);
         w.collect();

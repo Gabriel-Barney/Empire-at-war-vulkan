@@ -647,6 +647,8 @@ void AbilitySystem::set_deploy_state(ObjectId id, uint8_t walk_state) {
     if (!combat_->has_unit(id)) return;
     combat_->set_flag(id, combat::kUnitDeploying, deployed);
     combat_->set_flag(id, combat::kUnitDeployTransition, walk_state == 0x18 || walk_state == 0x1A);
+    // s78n t11 (TACTICAL_COMBAT §5.4.6 item 4.3): 0x18 alone, for the _Deployed range extents (not while undeploying).
+    combat_->set_flag(id, combat::kUnitDeployingIn, walk_state == 0x18);
 }
 
 void AbilitySystem::h_jet_pack(Obj& o, ObjectId target, uint32_t frame) {
