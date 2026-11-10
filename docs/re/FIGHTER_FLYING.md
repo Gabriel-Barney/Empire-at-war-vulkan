@@ -1429,11 +1429,21 @@ container's locomotor.
    - side = (slot.y (+0x118) + jig.y (+0x130)) − ((−s·d.x + c·d.y) + d.z·0).
 
    0x42c270 refreshes the jiggle (MOVEMENT §4) before it is read.
-4. **Speed.** vK = K pack +0xec, vmax = the member's maxspeed.
+4. **Speed.** vK = K pack +0xec, vmax = the member's maxspeed = **0x370f00(member type, member object)** (dis: rdx =
+   the member at 0x14062d97a; the same call in the speed step 0x62d520): the member has no TEAM slot, so this is its
+   own `Max_Speed` × the §3.4 chain (mode 1.56, fleeing through its container's path, its own SPEED product), **not**
+   capped by the team speed.
    - |along| ≤ 1.0 (0x140a4430c): v = vK.
    - along > 1: t = clamp(along / 10, 0, 1) (0x140a44310) and v = (vmax − vK)·t + vK.
-   - along < −1: t = clamp(−along / 10, 0, 1) and v = (0 − vK)·t·t + vK (quadratic slow-down).
+   - along < −1: t = clamp(−along / 10, 0, 1) and v = (0 − vK)·t·t + vK (quadratic slow-down; **v = 0 while the
+     member is 10 or more ahead of its slot**, so after a re-lay that puts its slot far behind it the member stands
+     until the slot comes within 10).
    - If the member state is 0x10: v = 0.
+   - **Confirmed by the s78n t14 retail run [H]** (`S78N_T14_RUN.md`): Stormtrooper squads (team speed min(0.8, 1.0)
+     × 1.56 = 1.248, member vmax 1.0 × 1.56 = 1.56) reach 1.25 × the container while behind and close an 8-10 unit
+     lag in about 60 frames (rate (vmax − vK) / 10 per frame); Rebel squads (team min(1.1, 1.0) × 1.56 = 1.56 = member
+     vmax) never exceed the container (peak 1.00-1.01), so a lagging Rebel member stays behind until the container
+     brakes. The catch-up headroom is vmax(member) − team speed, a data effect; there is no separate catch-up factor.
 5. Speed step (0x62d520): accelerate by vf +0x2d8 or decelerate by vf +0x2e0, clamped to [0, vmax], into pack
    +0xec.
 6. **Heading.**
@@ -1559,6 +1569,24 @@ slot depends on where the members stand at layout time** (a projection sort), no
 7. A new layout (every turn > 8.11°, every move start, every SPREAD_OUT toggle) is a new scatter, because NOW
    differs; the members are re-assigned by where they stand.
 
+**s78n t14 retail run (2026-11-10, `S78N_T14_RUN.md`):**
+- **Re-lay rule confirmed [H]:** all 16 legs follow the dot ≤ 0.99 test against the last laid direction when the
+  container's *actual* path heading is used (0 deg keeps, 30 deg re-lays; the 5 deg legs kept the slots where the
+  path ran 0.4 / 5.0 deg from the last layout and re-laid where it ran 9.4 / 10.7 deg).
+- **Rows confirmed [H]:** settled slots fit the grid of pitch 2·hx + 20·g with g = the **member** type's
+  `FormationSpacing` (12 for Stormtroopers, RMS 0.97-1.79; the container's 1.0 gives RMS about 16).
+- **Dartboard: code re-read, unchanged; not confirmed by the run.** Re-read 0x5ac2a0 / 0x241830 / 0x371e30 /
+  0x371be0: L uses k and hx (`Custom_Hard_XExtent` × `Scale_Factor`, +0x16bc), Wd uses m and hy (+0x16c0), g = member
+  0's type +0x16d4; seed (int32) K obj +0x50 (= Lua `Get_Object_ID`) × NOW (FS global frame 0x140b0a320) wrapping;
+  both generators start at that index and accumulate in **float**; points always inside ±L/2 × ±Wd/2. A scatter is
+  re-randomised at each call of 0x5ac2a0 (each re-lay), not per order. The kit could not test it: Lua
+  `GetCurrentTime()` (0x5428b0) is the **mode** frame / 30, not NOW (NOW / 30 is `GetCurrentTime.Frame()`, 0x5406b0
+  [M for the Lua call form]), and Rebel jiggle (raggedness 1.6, ±3.5 per axis, inside the slot point 0x62c180) puts
+  the settled-position RMS at the random baseline. What a rerun should fit: `S78N_T14_RUN.md` "What the kit should
+  do".
+- **Late starts after a re-lay are step 4, not a delay:** a member whose new slot lies ≥ 10 behind it has v = 0
+  (§7 step 4); one mirrored layout (trial 3 leg 2) made the old front row stand 19-20 frames.
+
 **Spawn.** The drop (TACTICAL_GAPS §4.2.1) places the members with 0x5abc00 in index order; the container's first
 service then lays out with its own facing (caller 2). For a Rows team of identical members whose drop orientation
 equals the container's, the projection sort reproduces the index order, so nothing moves; a Dartboard team, or a Rows
@@ -1583,7 +1611,10 @@ Each member service first maps the container's state (when obj +0x2b0 has a pack
 2. **Start delay** (new): the container's path-set hook 0x5ad140, for a **kind-1 (formation) path while the container
    speed +0xec is 0**, sets every member's pack **+0xe4 := synced int [0, `Max_Move_Frame_Delay`]** (GC +0x1538, FoC
    **6**; 0x1ffb40 on the synced LCG 0x140a13e24, inclusive, rejection-masked), in member index order, members without
-   a pack skipped (no draw). Nothing else resets +0xe4 (state 0 clears +0xe8 / +0xec only).
+   a pack skipped (no draw). Nothing else resets +0xe4 (state 0 clears +0xe8 / +0xec only). **s78n t14 run [H]:**
+   start spreads 0.9-6.0 frames on every ordinary leg; no longer delay exists in the code. The two longer "late
+   starts" of the run (17 and 19-20 frames) are members standing at v = 0 because a re-lay put their slot ≥ 10 behind
+   them (§7 step 4), and on that leg no delays were drawn at all [M: not a kind-1 path set at speed 0].
 3. **0x10 (container turning in place):** if +0xe4 ≠ 0: +0xe4 −= 1 and nothing else (no steer, no turn, the
    member stands). Else §7 0x62d620 (v = 0: the member only turns toward its heading) and the turn clip 0x62bef0
    (TURNL 3 / TURNR 4, or 0x48 / 0x49 while SPREAD_OUT is active; blend min(|Δ| / rate × 0.03333, GC 0x140b16d28)).
@@ -1690,6 +1721,43 @@ member's step (§7 step 8, §7.3 item 7): the port's `steer_commit` wall slide i
 - ***Port spec:*** none for FoC data. `TacticalBattle::mv_squad_add` may keep `bt_team_positions` for squads it
   refuses; for the four Walk-member squads retail's container still walks its own path while the Walk members act on
   their own [M], so the re-centred stand-in is a [port] choice there.
+
+### 7.7 s78n t14 run: the container's speed step (0x5aaf70): acceleration and the straggler cap [H unless tagged]
+The container's move step 0x5adfb0 calls 0x5aaf70 (rel32 call at 0x1405ae0b3; Ghidra files its body under
+0x5abbf0, which is really the thunk at vf +0x110 → vf +0x1c0). It computes a target speed T and steps pack +0xec
+toward it. Confirmed by the s78n t14 run (`S78N_T14_RUN.md`).
+1. **Acceleration and deceleration = 0x5ab540** (LandTeamContainer vftable 0x8a3630, both vf +0x2d8 and vf +0x2e0):
+   a = min over the members m (TEAM list, index order, null entries skipped; start −1, first value taken) of
+   **0x373080(m's type, K)** = `OverrideDeceleration`(T_m) × E(T_m, K) / `Max_Speed`(T_m), with E(T_m, K) =
+   min(`Max_Speed`(T_m), min over K's members of their raw `Max_Speed` (0x4049e0)) × the §3.4 chain 0x376990 run on
+   the container object (mode 1.56, fleeing, K's SPEED product, ...); `OverrideDeceleration`(T_m) itself when
+   `Max_Speed`(T_m) = 0. If the minimum is not > 0 (no members, or every member type has no deceleration): a = K's
+   effective max speed 0x370f00(K type, K) (full speed in one frame). **The member type's deceleration, for both
+   directions; the container's own acceleration fields are not read** (FoC containers carry `Override_Acceleration`,
+   a tag the parser does not know anyway). FoC: Stormtrooper squads 0.05 × 1.56 = **0.078**, Rebel squads 0.07 ×
+   1.56 = **0.109** per frame; the run measured 0.078 and 0.109 on start ramps and braking.
+2. **Straggler cap 0x5ab640(K)** (called twice; T := min(T, its value)): vmax = 0x370f00(K type, K) (the team
+   speed); f = K's facing (cos yaw, sin yaw) (0x41c000 on obj +0x84); HX = the joint box 0x404450 output +0x18 =
+   (max − min) / 2 of the members' slot x ± their half-extents (box seeded with 0) + K's type `MaxJiggleDistance`
+   (+0x16ac; default 0, no FoC container sets it) (TACTICAL_COMBAT §5.4.4). If 0x404450 fails (no TEAM / no members)
+   the cap is vmax. Else, for each member m in index order (null skipped), p = f.x·(m.x − K.x) + f.y·(m.y − K.y)
+   (live positions, 2-D): when **p < −(HX + 2)** (0x1408007d4 = 2.0), t = clamp(((−HX − 2) − p) / 10, 0, 1)
+   (0x140805898 = 10.0) and cap := min(cap, (1 − t)·vmax). So a member more than HX + 2 behind the container slows it
+   linearly to 0 at HX + 12. Run: solving the cap for HX from each poll's speed and rearmost member gives 15.0-15.4 on
+   three Rows starts (3 × 3 grid of pitch 12, hx 3: predicted 15.0) and 15.69-15.86 over 85 frames of a Dartboard leg.
+3. Order inside 0x5aaf70 [M for the cap terms other than 2]: T starts at vmax (or pack +0x158 when vf +0x1c8 answers
+   true; the deceleration when there is no started path), then the path corner / arrival caps, the collision cap
+   0x509ea0 (which may also demand an immediate change), the straggler cap, and T := the deceleration in state 0x14.
+   Step: T > v → v += min(a, T − v); T < v → v := T when the collision cap asked for it, else v −= min(a, v − T);
+   then clamp to [0, vmax].
+
+***Port spec (s78n t14 run):*** (1) the squad container's walk uses a = d = the minimum over its members of
+`OverrideDeceleration` × (the member type's team-capped effective speed / its `Max_Speed`), falling back to full speed
+when that is not > 0; today `MovementSystem::configure` gives it its own type's (absent) values, so the port's squads
+start and stop in one frame. (2) The container's walk target speed takes min(·, straggler cap) of item 2, computed from
+the members' start-of-tick positions and slots (`tslot`) in member index order (serial, before the parallel walk, like
+`team_caps`); the cap is a target, reached at the item-1 rate. (3) No change to `steer_member`'s vmax (already the
+member's own effective max speed) or to the start delays.
 
 ---
 

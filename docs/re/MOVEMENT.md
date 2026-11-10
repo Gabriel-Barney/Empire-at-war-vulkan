@@ -1343,6 +1343,9 @@ turns on arrival. Missing: the arrival turn above (threshold 10°, stopped turn 
 ### 3.7 Infantry teams [H]
 
 - **Container:** a squad is a LAND_TEAM_CONTAINER object (e.g. Stormtrooper_Team: Max_Speed 0.8, Max_Rate_Of_Turn 12). Its speed is the minimum of its members (§3.4).
+  Its acceleration and deceleration are **not** §3.4's rule on its own type: both are the minimum over its members of
+  their type's `OverrideDeceleration` rule (0x5ab540), and its target speed is capped while a member trails more than
+  HX + 2 behind it (0x5ab640); speed step 0x5aaf70: FIGHTER_FLYING §7.7 (s78n t14 retail run, 2026-11-10).
 - **Members** (LandTeamInfantry service `0x62ca10`):
   - copy the container's walk states 0x10/0x13/0x14 into their own data pack, and recompute idle states (`0x62bbf0`);
     what each copy drives, and the per-member start delay (0..`Max_Move_Frame_Delay` frames, synced draws): FIGHTER_FLYING §7.3;
