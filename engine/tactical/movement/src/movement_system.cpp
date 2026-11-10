@@ -386,7 +386,6 @@ bool MovementSystem::remove_impl(ObjectId id) {
         if (m.anchor == id) {
             m.anchor = -1;
             m.recovery = 0;
-            m.steer_blocked = 0;
             m.start_delay = 0;
         }
     std::erase_if(parked_, [id](const LandTeamSlot& p) { return p.container == id; });  // s78n review: and its parked ones
@@ -826,9 +825,6 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u->m.pos = pos;
     u->m.yaw = wrap_deg(yaw_deg);
     u->z = z;
-    if (u->d.team_container)  // s78n review: the squad's members recover to their slots at the new place (a give-up ends)
-        for (Unit& m : units_)
-            if (m.anchor == id) m.steer_blocked = 0;
     if (u->d.locomotor != LocomotorKind::Default) {  // §4.3-4.7: idle where placed
         u->sm.anim = AnimPlay{};
         u->sm.dest = pos;
@@ -1106,6 +1102,7 @@ bool MovementSystem::collision_applies(const CollisionObject& c, uint32_t frame)
     if (!ground_collider(a) || !ground_collider(b)) return false;
     if (!collision_classes_interact(a.d.collision_class, b.d.collision_class)) return false;
     if (pair_exempt(a, b)) return false;  // s78n t14 part B: set_collision_exempt
+    if (a.anchor >= 0 || b.anchor >= 0) return false;  // FIGHTER_FLYING §7.8: a squad member is never a participant
     switch (c.kind) {
         case CollisionKind::MovingVsMoving:
             return !drives_through(a, b) && checker_moving(a, frame) && other_moving(b) && mvm_contact(a, b);
@@ -1348,7 +1345,9 @@ bool MovementSystem::resolve_blocker(Unit& a, uint32_t blocker, float contact, u
         for (uint32_t c : cand) {
             const Unit& o = units_[c];
             if (o.has_goal) continue;
-            if (a.d.team_container && o.anchor == a.d.id) continue;  // s78n t14 part B: a container's own members
+            // FIGHTER_FLYING §7.8 item 3: the dynamic repath never sees a squad member, its own or anyone else's (a squad
+            // is its container there).
+            if (o.anchor >= 0) continue;
             if (pair_exempt(a, o)) continue;                          // s78n t14 part B: set_collision_exempt
             if (!collision_classes_interact(a.d.collision_class, o.d.collision_class)) continue;
             if (crushes(a, o)) continue;  // OI tactical
@@ -1597,6 +1596,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
         t.has_goal = k.has_goal;
         t.laid_out = k.laid_out;  // s78n t14
         t.has_target = k.team_target;
+        t.z = k.z;
         t.fleeing = k.pushed && k.push_flee;  // s78n t14 part B (0x39a5b0)
         const auto lo = std::lower_bound(recs.begin(), recs.end(), u.anchor,
                                          [](const SteerRec& e, ObjectId c) { return e.container < c; });
@@ -1664,8 +1664,15 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                     if (u.d.team_container) plp.turn_rate *= fb;
                 }
                 // s78n t16 (§7.7 item 2): the straggler cap is a target speed (reached at the rate above)
-                const float pcap = squad && u.straggle < 1.0f ? u.straggle * plp.max_speed : kInf;
+                // (folded in the moving state only, not while braking: §7.7 item 4)
+                const LocoState st0 = u.m.state;
+                const float pcap =
+                    squad && u.straggle < 1.0f && st0 != LocoState::WalkEndMove ? u.straggle * plp.max_speed : kInf;
                 res[i] = walk_step(u.m, plp, pcap, &grid_, nullptr);
+                // §7.7 item 4: at speed 0 the container's move step does nothing else that frame (no turn)
+                if (squad && st0 == LocoState::WalkMoving && !(u.m.speed > 0.0f) && !res[i].moved && !res[i].arrived &&
+                    !res[i].blocked)
+                    u.m.yaw = yaw0;
                 u.m.escape_until = escape;
                 std::swap(u.m.path, u.push_path);
                 std::swap(u.m.next, u.push_next);
@@ -1691,7 +1698,9 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 // 0x5ab640.
                 if (u.d.team_container) {
                     lp.accel = lp.decel = u.team_accel > 0.0f ? u.team_accel : u.team_cap;
-                    if (u.straggle < 1.0f) cap = std::min(cap, u.straggle * u.team_cap);
+                    // The cap is folded in the moving state only (retail 0x13, every path kind), not while braking
+                    // (0x14: WalkEndMove), §7.7 item 4.
+                    if (u.straggle < 1.0f && u.m.state != LocoState::WalkEndMove) cap = std::min(cap, u.straggle * u.team_cap);
                     // §7.7 item 3: the collision cap 0x509ea0 may demand an immediate change - [port] a collision hold
                     // stops the container in one frame (as before s78n t16), it does not brake at 0x5ab540.
                     if (frame < u.hold_until) lp.decel = u.team_cap;
@@ -1709,7 +1718,13 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 const V2 to = u.m.path[u.m.next] - u.m.pos;
                 u.relay.push_back(length_sq(to) > 0.0f ? to : dir_from_deg(u.m.yaw));
             }
+            const LocoState st0 = u.m.state;
             res[i] = walk_step(u.m, lp, cap, &grid_, u.in_formation ? &x : nullptr);
+            // s78n t16 (§7.7 item 4): a squad container at speed 0 in its moving state (the straggler cap at 0, a hold) does
+            // nothing else that frame - no turn, no waypoint step; its members keep steering to their slots.
+            if (u.d.team_container && st0 == LocoState::WalkMoving && !(u.m.speed > 0.0f) && !res[i].moved &&
+                !res[i].arrived && !res[i].blocked)
+                u.m.yaw = yaw0;
             if (u.d.team_container)
                 for (uint32_t p = next0; p < u.m.next && static_cast<size_t>(p) + 1 < u.m.path.size(); ++p)
                     u.relay.push_back(u.m.path[p + 1] - u.m.path[p]);
@@ -1743,7 +1758,15 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // [port] a pushed walk blocked for kReplanAfterBlocked frames ends where it is.
             if (r.blocked) ++stats_.blocked_steps;
             if (r.arrived || (r.blocked && ++u.push_blocked >= kReplanAfterBlocked)) {
+                const bool cut = !r.arrived;
                 end_push(u);
+                // s78n review: a pushed walk cut short on a unit with no order leaves a stopped locomotor (the walk only
+                // stops on its last waypoint): a squad's members then run the recovery decision, and the next order starts
+                // with the start turn and the move-start re-lay.
+                if (cut && !u.has_goal) {
+                    u.m.speed = 0.0f;
+                    u.m.state = LocoState::WalkStopped;
+                }
             } else if (r.moved) {
                 u.push_blocked = 0;
             }
@@ -1984,7 +2007,6 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.f32(u.tslot.y);
             h.u32(u.tindex);
             h.u8(u.recovery);  // s78n t14: the recovery state (was a bool)
-            h.u32(u.steer_blocked);
             h.u32(u.start_delay);  // s78n t14
         }
         if (u.pushed) {  // a1k t03: hashed only while a pushed move is active

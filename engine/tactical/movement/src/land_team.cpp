@@ -12,32 +12,6 @@ namespace alamo::tactical::movement {
 namespace {
 
 constexpr float kRecoveryDistance = 4.0f;  // 0x140a4431c (FIGHTER_FLYING §7 item 9, MOVEMENT §3.7)
-constexpr uint32_t kRecoveryBlockedFrames = 10;  // [port] = the walk's kReplanAfterBlocked
-
-// [port] The member's move must pass its movement class (the thin cell walk of the Walk locomotor). A member standing on
-// a blocked cell may leave it (as the walk's blocked-start escape).
-bool steer_move_ok(const PassabilityGrid& grid, V2 a, V2 b, uint32_t mask) {
-    if (!grid.passable_world(a, mask)) return true;
-    return walk_cells(a, b, [&](int32_t cx, int32_t cy) { return grid.passable_cell(cx, cy, mask); });
-}
-
-// [port] Wall slide: the full step, else its x part, else its y part. False: the member stays.
-bool steer_commit(const PassabilityGrid& grid, LandMotion& m, V2 to, uint32_t mask) {
-    if (steer_move_ok(grid, m.pos, to, mask)) {
-        m.pos = to;
-        return true;
-    }
-    const V2 tx{to.x, m.pos.y}, ty{m.pos.x, to.y};
-    if (tx.x != m.pos.x && steer_move_ok(grid, m.pos, tx, mask)) {
-        m.pos = tx;
-        return true;
-    }
-    if (ty.y != m.pos.y && steer_move_ok(grid, m.pos, ty, mask)) {
-        m.pos = ty;
-        return true;
-    }
-    return false;
-}
 
 // s78n t14 part B: the passability probe 0x5a4c10 of the steering vector for a movement class: every cell the segment
 // touches passes the mask (the start cell included).
@@ -52,7 +26,6 @@ void MovementSystem::attach_member(Unit& u, ObjectId container, V2 slot, uint32_
     u.tslot = slot;
     u.tindex = tindex;
     u.recovery = 0;
-    u.steer_blocked = 0;
     // The member's own order ends: its container holds the squad's (the formation unit).
     u.has_goal = false;
     u.need_path = false;
@@ -150,7 +123,6 @@ bool MovementSystem::suspend_team_member(ObjectId member) {
     park_record(*u);
     u->anchor = -1;
     u->recovery = 0;
-    u->steer_blocked = 0;
     u->m.speed = 0.0f;
     u->m.state = LocoState::WalkStopped;
     team_ix_rebuild();
@@ -566,8 +538,9 @@ void MovementSystem::team_speed_steps() {
         }
         // Item 1, 0x5ab540: min over the members of 0x373080(member type, K) = OverrideDeceleration x E / Max_Speed, E =
         // 0x370f00(member type, K) = min(member Max_Speed, the members' minimum) x K's chain (mode multiplier, container
-        // factor; the fleeing factor is applied by the walk); the bare OverrideDeceleration when Max_Speed is 0. The
-        // first value is taken, then the minimum; not > 0 -> K's effective max speed (team_accel 0).
+        // factor; the fleeing factor is applied by the walk); the bare OverrideDeceleration when Max_Speed is 0; a type
+        // without the tag gives E (MOVEMENT §3.4: no override = the effective max speed), so an untagged member does not
+        // lower the minimum. The first value is taken, then the minimum; not > 0 -> K's effective max speed (team_accel 0).
         // Item 2, 0x404450: the joint box starts at 0 and holds every slot x +/- the member's half-extent.
         bool first = true;
         float a = 0.0f, lx = 0.0f, ux = 0.0f;
@@ -576,8 +549,10 @@ void MovementSystem::team_speed_steps() {
             if (mi < 0) continue;
             const Unit& m = units_[static_cast<size_t>(mi)];
             const float ms = m.d.max_speed;
+            const float eff = std::min(ms, raw) * mult * k.team_factor;
             float v = m.d.decel;
-            if (ms != 0.0f) v = v * (std::min(ms, raw) * mult * k.team_factor) / ms;
+            if (!(v > 0.0f)) v = eff;
+            else if (ms != 0.0f) v = v * eff / ms;
             a = first ? v : std::min(a, v);
             first = false;
             lx = std::min(lx, m.tslot.x - m.team_hx);
@@ -595,12 +570,7 @@ void MovementSystem::team_speed_steps() {
             if (mi < 0) continue;
             const Unit& m = units_[static_cast<size_t>(mi)];
             const float p = f.x * (m.m.pos.x - k.m.pos.x) + f.y * (m.m.pos.y - k.m.pos.y);
-            if (!(p < edge)) continue;
-            // [port] retail members are not passability-tested, the port's are (steer_commit): a member whose straight line
-            // to its slot point is blocked cannot close up by steering, so it does not hold the container.
-            const V2 off{m.tslot.x + m.jiggle.x, m.tslot.y + m.jiggle.y};
-            const V2 slot{k.m.pos.x + f.x * off.x - f.y * off.y, k.m.pos.y + f.y * off.x + f.x * off.y};
-            if (!steer_probe_ok(grid_, m.m.pos, slot, m.lp.mask)) continue;
+            if (!(p < edge)) continue;  // every member in the list counts (0x5ab640 tests nothing else)
             fac = std::min(fac, 1.0f - std::clamp((edge - p) / 10.0f, 0.0f, 1.0f));
         }
         k.straggle = fac;
@@ -614,6 +584,9 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k, std::span<const St
     // container's path for a member) Fleeing_Infantry_Speed_Bonus multiplies the member's max speed 0x370f00 (the catch-up
     // and recovery speeds), so its acceleration / deceleration (0x372fe0 / 0x373080: x effective / Max_Speed), and its turn
     // rate 0x62c3d0 (steering, recovery turn / move, the 0.5 x rate recovery threshold). x 1 is exact otherwise.
+    // FIGHTER_FLYING §7.3 "Recovery in full" item 1: the whole member service is skipped while the member's locomotor is
+    // suspended (pack +0x260; the port's speed factor 0: a stun).
+    if (!(u.speed_factor > 0.0f)) return;
     const float flee = k.fleeing ? cfg_.constants.fleeing_infantry_speed_bonus : 1.0f;
     const float vmax = loco_max_speed(u) * flee;
     const float accel = u.lp.accel > 0.0f ? u.lp.accel * flee : vmax;
@@ -631,11 +604,9 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k, std::span<const St
     const bool turning = k.state == LocoState::WalkStartTurn || k.state == LocoState::WalkTurning;
     const bool steering = turning || k.state == LocoState::WalkMoving || k.state == LocoState::WalkEndMove;
     if (!steering) {
-        // Recovery decision 0x62bbf0 (item 6): only while the container is laid out and has no target. s78n review [port]:
-        // a recovery that gave up (kRecoveryBlockedFrames blocked frames: steer_blocked stays at the limit) is not
-        // restarted until the container moves or is teleported (both reset steer_blocked).
-        const bool decide = (k.state == LocoState::WalkStopped || k.state == LocoState::None) && k.laid_out &&
-                            !k.has_target && u.steer_blocked < kRecoveryBlockedFrames;
+        // Recovery decision 0x62bbf0 (item 6): only while the container is laid out and has no target. No distance limit,
+        // no timer, no give-up (FIGHTER_FLYING §7.3 "Recovery in full" item 7).
+        const bool decide = (k.state == LocoState::WalkStopped || k.state == LocoState::None) && k.laid_out && !k.has_target;
         const V2 target{k.pos.x + c * off.x - s * off.y, k.pos.y + s * off.x + c * off.y};
         const V2 to = target - u.m.pos;
         const float dist = length(to);
@@ -666,7 +637,10 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k, std::span<const St
         }
         // 0x2A Recovery Moving (0x62d190): speed step toward vmax, or toward 0 inside v^2 / (2 decel); move along the yaw.
         const float v0 = u.m.speed;
-        const float want = dist < v0 * v0 / (2.0f * decel) ? 0.0f : vmax;
+        // the brake distance is 3-D with the slot point at the container's height (§7.3 item 6 [quirk])
+        const float dz = k.z - u.z;
+        const float d3 = std::sqrt(dist * dist + dz * dz);
+        const float want = d3 < v0 * v0 / (2.0f * decel) ? 0.0f : vmax;
         float sp = v0;
         if (sp < want) sp = std::min(want, sp + accel);
         else sp = std::max(want, sp - decel);
@@ -676,22 +650,14 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k, std::span<const St
             u.m.state = LocoState::WalkStopped;
             return;
         }
+        // The step is committed as it is (vf +0x2f8 = 0x42d6a0: terrain conform and set position): no passability test, no
+        // collision test - a straight walk at the slot, through anything (§7.3 item 7).
         const V2 fw = dir_from_deg(u.m.yaw);
-        if (!steer_commit(grid_, u.m, V2{fw.x * sp + u.m.pos.x, fw.y * sp + u.m.pos.y}, u.lp.mask)) {
-            u.m.speed = 0.0f;
-            if (++u.steer_blocked >= kRecoveryBlockedFrames) {  // give up (kept until the team moves, see above)
-                u.steer_blocked = kRecoveryBlockedFrames;
-                u.recovery = 0;
-                u.m.state = LocoState::WalkStopped;
-            }
-            return;
-        }
-        u.steer_blocked = 0;
+        u.m.pos = V2{fw.x * sp + u.m.pos.x, fw.y * sp + u.m.pos.y};
         u.m.state = LocoState::WalkMoving;
         return;
     }
     u.recovery = 0;
-    u.steer_blocked = 0;
     // §7.3 items 3-4: while the container turns in place or moves, a member with a start delay counts it down and stands.
     if (k.state != LocoState::WalkEndMove && u.start_delay > 0) {
         --u.start_delay;
@@ -734,13 +700,10 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k, std::span<const St
         u.m.state = LocoState::WalkStopped;
         return;
     }
-    // Step 8: move along the new yaw.
+    // Step 8: move along the new yaw. Retail commits the step with no passability test (the same vf +0x2f8 as the
+    // recovery step), so nothing can refuse it: that is what bounds a member's lag together with the straggler cap.
     const V2 fw = dir_from_deg(u.m.yaw);
-    if (!steer_commit(grid_, u.m, V2{fw.x * sp + u.m.pos.x, fw.y * sp + u.m.pos.y}, u.lp.mask)) {
-        u.m.speed = 0.0f;
-        u.m.state = LocoState::WalkStopped;
-        return;
-    }
+    u.m.pos = V2{fw.x * sp + u.m.pos.x, fw.y * sp + u.m.pos.y};
     u.m.state = LocoState::WalkMoving;
 }
 

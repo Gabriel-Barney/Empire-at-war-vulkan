@@ -288,9 +288,10 @@ if(_alamo_sim)
     # why seed 1 stalls is an open item on the roadmap (a2k follow-ups). a2l t04: a terrain-blocked infantry standoff, not a
     # port bug (A1_READINGS §41); on dev 03940b96 seed 1 ends (18496) but seed 2 does not and seed 4 ends at 28675.
     # s78n t14 part B / t16 (2026-11-10): squad containers collide, flee from crushers, ramp at 0x5ab540 and wait for stragglers
-    # (FIGHTER_FLYING §7.1 / §7.5 / §7.7), which moves every land battle: seeds 1, 2 and 5 end with a Rebel win (17117, 14824,
-    # 23209), seeds 3, 4 and 6 do not end in 30000 ticks (no squad container is held for good in them: the longest straggler
-    # wait is 785 frames). Pinned to seed 2.
+    # (FIGHTER_FLYING §7.1 / §7.5 / §7.7), which moves every land battle. After the review fixes (squad members are not
+    # passability-tested, every member counts in the straggler cap): seed 1 no end in 30000 ticks, seed 2 Rebel at 15233,
+    # seed 3 Rebel at 15919, seed 4 no end, seed 5 Rebel at 18809, seed 6 no end; no container waits 150 frames or more for
+    # a straggler in any of the six (longest 136). Pinned to seed 2.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_end
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
                      --seed 2)

@@ -521,6 +521,9 @@ public:
     void commit(objects::ObjectStore& store) const;
     const MovementStats& stats() const { return stats_; }
     const CollisionLayer& collisions() const { return coll_; }  // land: live collision objects, last driver order
+    // s78n t14 part B: the squad containers' collision objects the last land tick's driver resolved (dropped from
+    // collisions() in the same pass); the members' steering vector 0x509810 reads both lists in creation (seq) order.
+    std::span<const CollisionObject> resolved_team_collisions() const { return coll_done_; }
 
     // ---- S10-int: effective-speed factor from the host (MOVEMENT.md 3.4: Mod_Multiplier Speed x
     // Engines_Disabled_Speed_Modifier x (1 + modifier list 5); 0 while immobilised). Scales max speed and
@@ -579,23 +582,25 @@ public:
     //   - each member steers per frame (LandTeamInfantry 0x62d620) toward container + R(yaw) (slot + jiggle) from the
     //     container's state at the start of the tick [port: members precede their container in service order], with the
     //     speed rule of FIGHTER_FLYING §7 step 4 (v = 0 while the container turns in place, port state WalkStartTurn for
-    //     retail 0x10), the heading rule of step 6 and its own turn rate; [port] the move is passability-tested (a blocked
-    //     move tries each axis alone, else the member stays). s78n t14 part B: step 6 adds the collision steering vector
-    //     0x509810 (team_member_avoid) from its container's collision objects;
+    //     retail 0x10), the heading rule of step 6 and its own turn rate; the step is committed with no passability test
+    //     (FIGHTER_FLYING §7 step 8, §7.3 "Recovery in full" item 7: a member walks through impassable cells, which is
+    //     what bounds its lag together with the straggler cap). s78n t14 part B: step 6 adds the collision steering
+    //     vector 0x509810 (team_member_avoid) from its container's collision objects;
     //   - s78n t16 (FIGHTER_FLYING §7.7, 0x5aaf70; confirmed by the retail runs in S78N_T14_RUN.md): the container's speed
     //     step. Acceleration = deceleration = 0x5ab540 = the minimum over its steering members of the member's
     //     OverrideDeceleration x (min(member Max_Speed, the members' smallest raw Max_Speed) x the mode multiplier x the
-    //     container factor) / member Max_Speed (the bare OverrideDeceleration when its Max_Speed is 0); a minimum not > 0
-    //     (a member type without the tag) = the team speed (full speed in one frame); the container type's own
-    //     acceleration tags are not used (FoC: 0.05 x 1.56 = 0.078 Stormtrooper squads, 0.07 x 1.56 = 0.109 Rebel
+    //     container factor) / member Max_Speed (the bare OverrideDeceleration when its Max_Speed is 0; a member type
+    //     without the tag gives that speed itself, MOVEMENT §3.4, so it does not lower the minimum); a minimum not > 0 =
+    //     the team speed (full speed in one frame); the container type's own acceleration tags are not used (FoC: 0.05 x 1.56 = 0.078 Stormtrooper squads, 0.07 x 1.56 = 0.109 Rebel
     //     squads per frame). Straggler cap 0x5ab640: the target speed is at most (1 - t) x the team speed, t the largest
     //     clamp(((-HX - 2) - p) / 10, 0, 1) over the members with p < -(HX + 2), p = (member - container) . the
     //     container's facing, HX = the joint slot box half-length (0x404450: the box holds (0, 0) and every slot x +/- the
     //     member's half-extent; set_team_member_shape) + the container's MaxJiggleDistance. Both are computed serially from
     //     the positions at the start of the tick and apply to the order path and a pushed path alike (on a crush-flee
-    //     path both x Fleeing_Infantry_Speed_Bonus, with the team speed). [port] a member whose straight line to its slot
-    //     point is not passable for its movement class is left out of the cap (the port's members are passability-tested,
-    //     retail's are not: a member held by a wall must not stop the squad for good);
+    //     path both x Fleeing_Infantry_Speed_Bonus, with the team speed). Every steering member counts, whatever its
+    //     state (0x5ab640 tests nothing else). The cap is folded in the moving state only (retail 0x13), not while the
+    //     container brakes (0x14, port WalkEndMove), turns in place or stands; at speed 0 in the moving state the
+    //     container does nothing else that frame (no turn), and its members keep steering to their slots;
     //   - s78n t14 (FIGHTER_FLYING §7.3): the member's step follows the container's walk state (start of the tick): turning
     //     in place (port WalkStartTurn / WalkTurning = retail 0x10) or moving (0x13): a member with a start delay counts it
     //     down and stands; else it steers (v = 0 while turning). Braking (WalkEndMove = 0x14): it steers, delay ignored.
@@ -604,8 +609,7 @@ public:
     //     0.5 x the turn rate, else walk (0x2A); d = 4.0 -> walk; d < 4.0 -> keep walking only while already walking, the
     //     next step closes in and the speed is >= the deceleration, else stand (speed 0). The walk turns toward the slot
     //     point by the turn rate, steps its speed toward the max speed (toward 0 inside v^2 / (2 decel)) and moves along
-    //     its new yaw. [port] the move is passability-tested (wall slide); after kReplanAfterBlocked blocked frames the
-    //     recovery gives up and stays given up until the container moves or is teleported. (s78n t14: the earlier [port]
+    //     its new yaw; no passability test, no distance limit, no timer and no give-up. (s78n t14: the earlier [port]
     //     turn in place to the container's facing at the slot is gone: the member turns while the container turns.)
     //   - the slots are re-laid by lay_out_land_team (see there); the `slots` given here only stand until the first one.
     // A member's view reports the container's has_goal / arrived / failed / goal (has_goal also while recovering). Removing
@@ -724,9 +728,11 @@ public:
     // ---- N1 stage 2 save / load (contract: alamo/core/save_file.hpp; src/movement_save.cpp) ----
     // The loader builds the battle the same way first: MovementSystem(same MovementConfig), set_grid(grid_from_map) +
     // the same map stamps, the same space / air boxes and static entries, every hook (set_height_fn, set_hostility,
-    // set_threat_fn, set_anim_length_fn, set_flying_hooks, set_fighter_avoid_fn, set_fighter_formation_hooks); then read()
-    // replaces ALL mutable state, so no host call is needed after it (no relink: cross-references are object ids, hooks are
-    // not touched).
+    // set_threat_fn, set_anim_length_fn, set_flying_hooks, set_fighter_avoid_fn, set_fighter_formation_hooks,
+    // set_scatters_fn); then read() replaces ALL mutable state, so no host call is needed after it (no relink:
+    // cross-references are object ids, hooks are not touched). One per-tick host input is not saved:
+    // set_collision_exempt (a squad container's garrison exclusion) is -1 after read() until the host sets it again
+    // before the next tick(), as it does on every tick.
     // Units added by the rebuild are replaced by the saved ones (read() is not additive).
     // Layout: u32 version, u8 mode (must equal mode()), then sections (u32 length + bytes):
     //   grid    PassabilityGrid::write (stamps + version; the map-derived part is checked by digest, not restored)
@@ -846,14 +852,11 @@ private:
         uint32_t pend = 0;
         bool adopted = false;
         // s78n t03 (save version 14): a steering land squad member - its container (-1 none), slot (along, side; pack
-        // +0x114 / +0x118), team index, recovery state (0x29 / 0x2A) and consecutive blocked recovery frames.
-        // s78n review: steer_blocked >= kRecoveryBlockedFrames with recovering false = the recovery gave up; it stays given
-        // up (no new recovery) until the container has a goal again or is teleported.
+        // +0x114 / +0x118), team index and recovery state (0x29 / 0x2A).
         ObjectId anchor = -1;
         V2 tslot;
         uint32_t tindex = 0;
         uint8_t recovery = 0;  // s78n t14: the member's recovery state: 0 none, 0x29 turning, 0x2A moving (save version 15)
-        uint32_t steer_blocked = 0;
         // s78n t14 (save version 15): a member's start delay (pack +0xe4) and shape (set_team_member_shape); a container's
         // laid-out flag (+0x2a4) and last layout dir (+0xd8), SPREAD_OUT state and current-target flag (host-set).
         uint32_t start_delay = 0;
@@ -866,13 +869,14 @@ private:
         bool push_flee = false;
         // s78n t14 part B: set_collision_exempt (transient, host-set every tick): -1 none, kCollisionExemptAll, or a unit.
         ObjectId exempt = -1;
-    // s78n t14: this tick's re-lay requests of a container (layout dirs in order; written by its own walk or a push,
+        // s78n t14: this tick's re-lay requests of a container (layout dirs in order; written by its own walk or a push,
         // consumed by the serial pass after the walk). Transient: empty between ticks, not saved.
         std::vector<V2> relay;
     };
     // s78n t03: a container's state at the start of the land tick, read by its steering members (tick_land).
     struct TeamSnap {
         V2 pos;
+        float z = 0.0f;  // the recovery brake distance is 3-D with the slot point at the container's height (§7.3)
         float yaw = 0.0f;
         float speed = 0.0f;
         LocoState state = LocoState::WalkStopped;

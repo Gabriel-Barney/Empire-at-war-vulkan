@@ -1031,7 +1031,8 @@ void test_land_squad_container() {
     std::vector<objects::ObjectId> members;
     std::vector<std::pair<mv::ObjectId, mv::V2>> slots;
     Vec3 start{}, goal{};
-    float off_line = 0.0f, max_lead = 0.0f, team_speed = 0.0f, late_along = 0.0f, settle_err = 0.0f;
+    bool collided = false;  // the container had a collision object during the move
+    float off_line = 0.0f, off_path = 0.0f, off_path_clear = 0.0f, max_lead = 0.0f, team_speed = 0.0f, late_along = 0.0f, settle_err = 0.0f;
     uint32_t store_mismatch = 0, moving_frames = 0, recover_frames = 0;
     float start_error = -1.0f, recovered_error = -1.0f;
     std::vector<float> along_ref;  // s78n t14: each member's along error 120 frames into the move
@@ -1144,9 +1145,28 @@ void test_land_squad_container() {
         if (stage == 1) {
             if (k.has_goal) {
                 ++moving_frames;
-                // the container's own straight path: its distance from the start -> goal line
+                // the container walks its own planned path (never re-centred on its members): its distance from that path's
+                // polyline, frame by frame (s78n t14 part B: the path itself may bend around another squad's container, so
+                // the straight start -> goal line is only reported)
                 const float gx = goal.x - start.x, gy = goal.y - start.y, gl = std::sqrt(gx * gx + gy * gy);
                 off_line = std::max(off_line, std::fabs((p.x - start.x) * gy - (p.y - start.y) * gx) / gl);
+                const std::span<const mv::V2> path = ms.land_path(team_id);
+                float dmin = path.empty() || k.pushed ? 0.0f : 3.0e38f;
+                for (size_t w = 0; w + 1 < path.size() && !k.pushed; ++w) {
+                    const float ax = path[w].x, ay = path[w].y, bx = path[w + 1].x - ax, by = path[w + 1].y - ay;
+                    const float l2 = bx * bx + by * by;
+                    const float seg_t = l2 > 0.0f ? std::clamp(((k.pos.x - ax) * bx + (k.pos.y - ay) * by) / l2, 0.0f, 1.0f) : 0.0f;
+                    const float ex = k.pos.x - (ax + seg_t * bx), ey = k.pos.y - (ay + seg_t * by);
+                    dmin = std::min(dmin, std::sqrt(ex * ex + ey * ey));
+                }
+                if (path.size() == 1) dmin = std::sqrt((k.pos.x - path[0].x) * (k.pos.x - path[0].x) + (k.pos.y - path[0].y) * (k.pos.y - path[0].y));
+                // until its first collision object the container is on its path; a MovingVsMoving object with another
+                // squad's container then side-steps it off the path for a while ([port] stand-in, see PHASE4 s78n t14 part B)
+                for (const mv::CollisionObject& co : ms.collisions().list()) collided = collided || co.a == team_id || co.b == team_id;
+                for (const mv::CollisionObject& co : ms.resolved_team_collisions())
+                    collided = collided || co.a == team_id || co.b == team_id;
+                if (!collided) off_path_clear = std::max(off_path_clear, dmin);
+                off_path = std::max(off_path, dmin);
                 team_speed = std::max(team_speed, k.speed);
                 for (size_t m = 0; m < members.size(); ++m) {
                     const mv::UnitView v = ms.view(members[m]);
@@ -1180,16 +1200,19 @@ void test_land_squad_container() {
     CHECK(done);
     std::printf("  land squad: dropped up to %.2f off their slots, recovered to %.2f in %u frames\n", static_cast<double>(start_error),
                 static_cast<double>(recovered_error), recover_frames);
-    std::printf("  land squad: moving %u frames, off its line <= %.3f, members up to %.2f behind their slots at the team speed %.3f, "
+    std::printf("  land squad: moving %u frames, off its line <= %.3f, off its path <= %.3f (<= %.3f before a collision object), members up to %.2f behind their slots at the team speed %.3f, "
                 "along error change after 2 s <= %.2f, settled within %.2f (target %d); store = mover %d\n",
-                moving_frames, static_cast<double>(off_line), static_cast<double>(max_lead), static_cast<double>(team_speed),
+                moving_frames, static_cast<double>(off_line), static_cast<double>(off_path), static_cast<double>(off_path_clear),
+                static_cast<double>(max_lead),
+                static_cast<double>(team_speed),
                 static_cast<double>(late_along), static_cast<double>(settle_err), settle_target ? 1 : 0, store_mismatch == 0 ? 1 : 0);
     if (!done) return;
     CHECK(store_mismatch == 0);
     CHECK(start_error > 4.0f && recovered_error >= 0.0f && recovered_error <= 4.0f);  // idle recovery (> 4.0 from the slot)
-    // s78n t14 part B: the container is a land collision checker now - it walks its own path (never re-centred on its
-    // members), but paths around another squad's container standing near its goal (about 16 off the straight line here)
-    CHECK(moving_frames > 60 && off_line < 30.0f);
+    // s78n t14 part B: the container walks its own planned path (never re-centred on its members): on it (< 0.5) until its
+    // first collision object; it is a land collision checker now, and a MovingVsMoving object with another squad's
+    // container side-steps it up to about 16 off that path here before it comes back
+    CHECK(moving_frames > 60 && off_path_clear < 0.5f && off_path < 20.0f);
     CHECK(max_lead > 1.0f);   // the container leads (its members steer from its start-of-tick state)
     CHECK(along_ref.size() == members.size() && late_along < 4.0f);  // and the members hold the formation
     CHECK(settle_target || settle_err <= 4.0f);  // s78n t14: they recover to their slots only while the team has no target
