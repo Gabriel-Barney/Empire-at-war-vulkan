@@ -915,6 +915,11 @@ public:
     // pad was used.
     int32_t pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules, int32_t builder = -1);
     objects::ObjectId pad_contents(objects::ObjectId pad) const;  // built, else UC, else kNoObjectId
+    // s78n t05 (HERO_CLASH §7.1 / §7.2, 0x395c10 step 6): the pad's UC or built slot is set AND that object is alive (a
+    // combat unit: not dead in CombatSystem; else a battle unit: alive and not retreated; [port] else set counts).
+    // Retail clears the slot in the frame its content dies; pads_tick clears it on the next poll, so the liveness test
+    // stands for that. Read by the Bribe accept and the convert victim test through their host hooks.
+    bool pad_occupied(objects::ObjectId pad) const;
     bool pad_locked(objects::ObjectId pad) const;
     void pad_lock(objects::ObjectId pad, bool lock);
     // --- end Int-final ---

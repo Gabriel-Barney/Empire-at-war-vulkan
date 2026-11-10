@@ -1211,6 +1211,121 @@ void test_team_hack_bribe(bool bribe) {
     else CHECK(credits_at_change == credits_at_order);
 }
 
+// s78n t05 (HERO_CLASH §8.1 / §8.2): the Underworld's vehicle thief steals the Empire's speeder. The capture variant is
+// spawned with the speeder's owner, then the boarding changes its owner to the thief's (store, combat, abilities), sets
+// the permanent stolen-vehicle flag and the incognito flag, and the thief is inside it. While incognito no unit
+// auto-acquires the variant; the stolen flag survives a later owner change.
+void test_vehicle_thief() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSetup setup = make_setup(*d, true);
+    const uint32_t thief_co = type_of(*d, "S10_Thief_Co"), thief_t = type_of(*d, "S10_Thief");
+    const uint32_t speeder_co = type_of(*d, "S10_Speeder_Co"), speeder_t = type_of(*d, "S10_Speeder"),
+                   stolen_t = type_of(*d, "S10_Speeder_Stolen");
+    CHECK(thief_co < d->types.size() && speeder_co < d->types.size() && stolen_t < d->types.size());
+    setup.forces.push_back({0, 1, speeder_co});  // the Empire's defenders + the speeder
+    // the Underworld's invaders, the thief first (an invader's later companies may wait in reserve)
+    setup.forces.insert(setup.forces.begin(), {1, 2, thief_co});
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, setup);
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    namespace tc = alamo::tactical::combat;
+    const uint8_t kind = tactical::abilities::ability_type_from_name("CAPTURE_VEHICLE");
+    bool invaded = false;
+    int stage = 0;
+    uint32_t order_frame = 0, watched = 0, acquired = 0;
+    objects::ObjectId thief = objects::kNoObjectId, speeder = objects::kNoObjectId, stolen = objects::kNoObjectId;
+    for (uint64_t t = 0; t < 6000 && stage < 3; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;  // the battle ended
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        const tc::CombatSystem& cs = b->combat();
+        if (stage == 0) {  // the thief and the speeder
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                const objects::ObjectHandle h = st.find(id);
+                if (!cs.alive(id) || !st.alive(h)) continue;
+                if (st.type(h) == thief_t) thief = id;
+                if (st.type(h) == speeder_t) speeder = id;
+            }
+            CHECK(thief != objects::kNoObjectId && speeder != objects::kNoObjectId);
+            if (thief == objects::kNoObjectId || speeder == objects::kNoObjectId) break;
+            CHECK(cs.owner(thief) == 1 && cs.owner(speeder) == 0 && b->abilities().has_ability(thief, kind));
+            const objects::ObjectId users[] = {thief};
+            const bool ordered = b->abilities().targeted_ability(users, kind, speeder, -1, b->frame()) == 1u;
+            CHECK(ordered);
+            if (!ordered) break;
+            order_frame = b->frame();
+            stage = 1;
+            continue;
+        }
+        if (stage == 1) {  // the capture variant appears (the speeder is gone)
+            for (size_t i = 0; i < cs.unit_count() && stolen == objects::kNoObjectId; ++i) {
+                const auto id = cs.unit_id_at(i);
+                const objects::ObjectHandle h = st.find(id);
+                if (cs.alive(id) && st.alive(h) && st.type(h) == stolen_t) stolen = id;
+            }
+            if (stolen == objects::kNoObjectId) {
+                if (b->frame() >= order_frame + 60u) break;
+                continue;
+            }
+            CHECK(!cs.alive(speeder));
+            CHECK(st.owner(st.find(stolen)) == 1 && cs.owner(stolen) == 1);
+            CHECK((cs.flags(stolen) & tc::kUnitStolenVehicle) != 0 && (cs.flags(stolen) & tc::kUnitIncognito) != 0);
+            CHECK(b->garrison_holder_of(thief) == stolen);
+            stage = 2;
+            continue;
+        }
+        // stage 2: while incognito, no unit auto-acquires the stolen vehicle (60 ticks)
+        if (cs.alive(stolen) && (cs.flags(stolen) & tc::kUnitIncognito)) {
+            ++watched;
+            for (size_t i = 0; i < cs.unit_count(); ++i)
+                if (cs.auto_target(cs.unit_id_at(i)) == stolen) ++acquired;
+        }
+        if (b->frame() >= order_frame + 90u) {
+            // the stolen flag survives an owner change (Change_Owner keeps +0x3a2)
+            if (cs.alive(stolen)) {
+                CHECK(b->script_change_owner(*tm, st.find(stolen), 0));
+                CHECK(cs.owner(stolen) == 0 && (cs.flags(stolen) & tc::kUnitStolenVehicle) != 0);
+            }
+            stage = 3;
+        }
+    }
+    std::printf("  vehicle thief: thief %d -> speeder %d, variant %d; %u incognito ticks watched, %u acquisitions\n",
+                static_cast<int>(thief), static_cast<int>(speeder), static_cast<int>(stolen), watched, acquired);
+    CHECK(stage == 3 && stolen != objects::kNoObjectId && watched > 0 && acquired == 0);
+}
+
 // s78j t04 (TACTICAL_COMBAT §3.1.1 "other spawns"): a land reserve drop without a landing object (S10_Squad has no
 // Company_Transport_Unit here) spawns its members - and their TEAM containers - with the owner's entry-facing record
 // (TacticalBattle::player_drop_facing, the reinforce_facing hook of the Lua bridges), not the side's start facing.
@@ -1913,6 +2028,7 @@ int main(int argc, char** argv) {
     std::printf("s78l t04: Hack / Tactical_Bribe spread to the whole team; a vehicle's landing exit ends on the landing yaw\n");
     test_team_hack_bribe(false);
     test_team_hack_bribe(true);
+    test_vehicle_thief();  // s78n t05
     test_vehicle_landing_exit();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);

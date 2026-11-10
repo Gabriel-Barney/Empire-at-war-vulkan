@@ -4398,7 +4398,7 @@ struct BribeRun {
     float paid = -1.0f;
 };
 BribeRun oi_bribe(const AbilityObjectDesc& target, int32_t target_owner, uint64_t target_cats, float credits = -1.0f,
-                  bool corrupted = false) {
+                  bool corrupted = false, uint32_t target_flags = 0, int pad = -1) {
     OiWorld w;
     SpecialAbilityDesc b = oi_special("Bribe", SpecialClass::TacticalBribe, ActivationStyle::UserInput);
     b.applicable_categories = 0;  // no Applicable_Unit_Categories / _Types (as shipped)
@@ -4414,7 +4414,7 @@ BribeRun oi_bribe(const AbilityObjectDesc& target, int32_t target_owner, uint64_
     w.make(GameMode::Land);
     BribeRun out;
     float bank = credits;
-    if (credits >= 0.0f || corrupted) {
+    if (credits >= 0.0f || corrupted || pad >= 0) {
         AbilityHost h;
         h.battle_planet_corrupted = [corrupted] { return corrupted; };
         h.pay_credits = [&bank, &out](int32_t player, float cost) {
@@ -4423,10 +4423,13 @@ BribeRun oi_bribe(const AbilityObjectDesc& target, int32_t target_owner, uint64_
             out.paid = cost;
             return true;
         };
+        // s78n t05: the host's occupied-build-pad query (pad 1: the target is a pad holding a live object)
+        if (pad >= 0) h.occupied_build_pad = [pad](ObjectId id) { return pad == 1 && id == 2; };
         w.ab->set_host(std::move(h));
     }
     w.add(1, ad, 0, {0, 0, 0});
     w.add(2, td, target_owner, {300, 0, 0});
+    if (target_flags != 0) w.sys->set_flag(2, target_flags, true);
     const ObjectId one[] = {1};
     out.accepted = w.ab->targeted_ability(one, kTacticalBribe, 2, -1, w.frame);
     for (int i = 0; i < 5; ++i) w.tick();
@@ -4564,6 +4567,14 @@ void test_bribe_hack_accept() {
         CHECK(oi_bribe(mine, 1, kCatInfantry, 1000.0f).accepted == 0);
         CHECK(oi_bribe(priced, 1, 0, 1000.0f).accepted == 0);
     }
+    {  // s78n t05 (HERO_CLASH §7 / §8, 0x395c10 steps 2 and 6): a vehicle taken over by a vehicle thief and a build pad
+       // holding a live object are refused; the incognito flag alone and an empty pad are not
+        CHECK(oi_bribe(priced, 1, kCatInfantry, 1000.0f, false, kUnitStolenVehicle).accepted == 0);
+        CHECK(oi_bribe(priced, 1, kCatInfantry, 1000.0f, false, kUnitStolenVehicle | kUnitIncognito).owner_after == 1);
+        CHECK(oi_bribe(priced, 1, kCatInfantry, 1000.0f, false, kUnitIncognito).owner_after == 0);
+        CHECK(oi_bribe(priced, 1, kCatInfantry, 1000.0f, false, 0, 1).accepted == 0);
+        CHECK(oi_bribe(priced, 1, kCatInfantry, 1000.0f, false, 0, 0).owner_after == 0);
+    }
     // Hack: Applicable_Unit_Types only (as R2D2_Hack_Ability): a listed type passes (step 1), even when also excluded; an
     // unlisted type fails on the empty categories mask; no tags at all: nothing passes.
     auto hack = [](std::vector<int32_t> types, std::vector<int32_t> excluded, uint64_t cats, int32_t target_type) {
@@ -4593,6 +4604,34 @@ void test_bribe_hack_accept() {
     CHECK(hack({}, {}, 0, 9) == 0);            // no filter tags
     CHECK(hack({}, {}, kCatInfantry, 9) == 1); // categories hit
     CHECK(hack({}, {9}, kCatInfantry, 9) == 0);  // categories hit, then excluded
+}
+
+void test_maximum_firepower_incognito() {
+    // s78n t05 (HERO_CLASH §8.2): MaximumFirepower's end 0x707390 clears the incognito flag (+0x3a1 & 0x10) of the user's
+    // team ([port] the user itself; a non-team user here). The stolen-vehicle flag stays.
+    OiWorld w;
+    SpecialAbilityDesc mf = oi_special("MF", SpecialClass::MaximumFirepower, ActivationStyle::UserInput);
+    mf.max_range = 1000.0f;
+    const uint32_t ms = add_special(w.ad, mf);
+    AbilityObjectDesc a;
+    a.unit_abilities = {oi_gui(kMaximumFirepower, 5.0f, 10.0f, "MF")};
+    a.specials = {ms};
+    const uint32_t ad = push(w.cd, w.ad, oi_unit("User", 100.0f), a);
+    const uint32_t td = push(w.cd, w.ad, oi_unit("Target", 100.0f), AbilityObjectDesc{});
+    w.make();
+    w.add(1, ad, 0, {0, 0, 0});
+    w.add(2, td, 1, {300, 0, 0});
+    const ObjectId one[] = {1};
+    CHECK(w.ab->targeted_ability(one, kMaximumFirepower, 2, -1, w.frame) == 1);
+    w.tick();
+    CHECK(w.ab->special_applied(1, name_crc("MF")));
+    w.sys->set_flag(1, kUnitIncognito | kUnitStolenVehicle, true);
+    w.tick();
+    CHECK(w.sys->flags(1) & kUnitIncognito);  // still running
+    w.sys->kill_unit(2, kNoObject, kKindNormal, w.frame);
+    for (int i = 0; i < 3; ++i) w.tick();
+    CHECK(!w.ab->special_applied(1, name_crc("MF")));
+    CHECK(!(w.sys->flags(1) & kUnitIncognito) && (w.sys->flags(1) & kUnitStolenVehicle));
 }
 
 // s78m t08 (TACTICAL_COMBAT §5.4.2): Tactical_Bribe's range. Tyber (Activation_Max_Range 100, radius 8: not in the formula)
@@ -5718,6 +5757,7 @@ int main(int argc, char** argv) {
     test_oi_anim_timings();
     test_oi_anim_gates_and_locks();
     test_bribe_hack_accept();
+    test_maximum_firepower_incognito();  // s78n t05
     test_bribe_range();  // s78m t08
     test_hack_repair_range();  // s78n t07 / t01
     test_s78n_allied_users();  // s78n t07

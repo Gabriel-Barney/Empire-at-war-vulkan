@@ -226,6 +226,9 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
     };
     // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): the Combat_Bonus accept's ally test 0x39a230 (relation 0; neutral is not).
     h.allied_players = [this](int32_t a, int32_t b) { return bt_allied(a, b); };
+    // s78n t05 (HERO_CLASH §7, TACTICAL_COMBAT §5.4.3 item 1): Bribe's step 6 refuses a build pad holding a live UC /
+    // finished object.
+    h.occupied_build_pad = [this](tc::ObjectId id) { return pad_occupied(id); };
     // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3a): Combat_Bonus Specific_Faction against the galactic faction registry
     // (FactionFiles order, case-insensitive) and the players' factions.
     h.faction_index = [this](std::string_view name) -> int32_t {
@@ -591,8 +594,20 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 if (vt < 0) break;
                 const objects::ObjectId id = oi_spawn_unit(mode, vt, oi_sv(q.position), oi_sv(q.facing), q.owner);
                 if (id == objects::kNoObjectId) break;
-                s4_board(mode, q.source, id);
+                // s78n t05 (HERO_CLASH §8.1, boarding 0x63fae0): 3. EJECT_VEHICLE_THIEF on; 4. Change_Owner(vehicle, the
+                // thief's owner) through the port's owner change (store, trees, abilities / combat, movement, fog,
+                // garrison); 5. +0x3a2 |= 0x08 (stolen vehicle, permanent); 7. +0x3a1 |= 0x10 (incognito); 8. the thief
+                // boards. [port] the thief's record of the vehicle's previous owner is not kept (the eject kills the
+                // vehicle, REMAINING_GAPS §5.1, so nothing reads it); the store notify (step 6) is not modelled.
                 abilities_->set_unit_ability_active(id, ta::kEjectVehicleThief, true, frame_);
+                const objects::ObjectHandle th = store.find(q.source), vh = store.find(id);
+                if (store.alive(th) && store.alive(vh)) {
+                    const int32_t thief_owner = store.owner(th);
+                    if (thief_owner >= 0 && store.owner(vh) != thief_owner) script_change_owner(mode, vh, thief_owner);
+                }
+                if (combat_->has_unit(id)) combat_->set_flag(id, tc::kUnitStolenVehicle | tc::kUnitIncognito, true);
+                if (Unit* u = unit_by_id(id)) u->flags_3a2 = static_cast<uint8_t>(u->flags_3a2 | 8u);  // the +0x3a2 record
+                s4_board(mode, q.source, id);
                 break;
             }
             case ta::SpawnPurpose::BarrageTarget: {

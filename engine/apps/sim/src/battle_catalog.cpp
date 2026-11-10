@@ -618,6 +618,10 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     u.ranged_target_z_adjust =
         ty.get_string(t, "Ranged_Target_Z_Adjust").empty() ? 6.0f : ty.get_float(t, "Ranged_Target_Z_Adjust");
     u.converted_die_time = ty.get_float(t, "Converted_To_Enemy_Die_Time_Seconds");
+    // s78n t05 (TACTICAL_COMBAT §3.5, 0x395c10 steps 3-5): the convert victim test's type half.
+    u.proximity_mine = ty.has_behavior(t, objects::BehaviorSet::Union, objects::behavior_type_id("PROXIMITY_MINE"));
+    u.friendly_damage_amount = ty.get_float(t, "Friendly_Damage_Amount");
+    u.named_hero = ty.get_bool(t, "Is_Named_Hero");
     u.has_locomotor = ty.has_behavior(t, objects::BehaviorSet::Union, objects::beh::Locomotor);
     // cu8g t05 (obj +0x2a0, the infection spread candidate test): a model is named for the battle's mode.
     if (s.model_mode >= 0)

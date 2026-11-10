@@ -1230,7 +1230,8 @@ uint16_t CombatSystem::aim_point_count(const Unit& t) const {
 bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const {
     // Filters of section 2.3 (all must pass, so their order does not change the result; fog [4] is tested last
     // because it is the most expensive).
-    if (t.flags & (kUnitSkipTargeting | kUnitDead | kUnitGarrisoned)) return false;  // 1, 3
+    // 1 (s78n t05: kUnitIncognito is +0x3a1 & 0x10 too), 3
+    if (t.flags & (kUnitSkipTargeting | kUnitIncognito | kUnitDead | kUnitGarrisoned)) return false;
     const UnitDesc& ad = desc_of(a);
     const UnitDesc& td = desc_of(t);
     if (!td.is_valid_target) return false;  // 2
@@ -1301,6 +1302,9 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
     }
     if (frame_ < u.next_scan) return;
     if (!unit_can_attack(u)) return;  // no TargetingBehavior work without a weapon
+    // s78n t05 (HERO_CLASH §8.2, targeting services 0x634810 / 0x633ae0): an incognito unit (+0x3a1 & 0x10) does not
+    // auto-acquire. [port] no scan is due, so the scan draws are not made either; an ordered target is kept (above).
+    if (u.flags & kUnitIncognito) return;
     u.scan_due = 1;
     const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
     // Current target kept when still valid and sticky or scored exactly 1.0 (section 2.1).
@@ -2164,7 +2168,8 @@ bool CombatSystem::opportunity_allowed(const Unit& /*u*/, const HardpointDesc& h
 bool CombatSystem::opportunity_valid(const Unit& u, const Hardpoint& h, const Unit& t) const {
     // "can still be fired at" [M]: live enemy, candidate flags, stealth, Fire_Category_Restrictions,
     // fire range (XY + target radius from the hardpoint) and the fire cone.
-    if (!live(&t) || (t.flags & (kUnitSkipTargeting | kUnitGarrisoned))) return false;
+    // s78n t05: the hardpoint pick 0x385190 skips an incognito target (+0x3a1 & 0x10, HERO_CLASH §8.2)
+    if (!live(&t) || (t.flags & (kUnitSkipTargeting | kUnitIncognito | kUnitGarrisoned))) return false;
     if (!is_enemy(u.owner, t.owner)) return false;
     const HardpointDesc& hd = data_->hardpoints[h.desc];
     const UnitDesc& td = desc_of(t);
@@ -2184,6 +2189,9 @@ bool CombatSystem::opportunity_fire(Unit& u, Hardpoint& h, uint32_t frame, SimRn
         h.opp_target = kNoObject;
         h.opp_hp = -1;
         if (frame < h.opp_next_scan || !trees_) return false;
+        // s78n t05 (HERO_CLASH §8.2, hardpoint auto-scan 0x387400): an owner with the incognito flag does not scan.
+        // [port] the scan time is not advanced, so the first service after the flag clears scans.
+        if (u.flags & kUnitIncognito) return false;
         h.opp_next_scan = frame + cfg_.fps / 2u;  // rescan at most every FPS x 0.5 frames
         const HardpointDesc& hd = data_->hardpoints[h.desc];
         const float range = fire_range(hd.fire_range, mod_r(u, ModList::FireRange)) * 1.1f;
@@ -2881,6 +2889,21 @@ bool CombatSystem::effect_match(const Unit& v, uint64_t mask, const std::vector<
     return (vd.category_mask & mask) != 0;
 }
 
+bool CombatSystem::convert_victim_ok(const Unit& v, uint64_t mask) const {
+    // s78n t05 (TACTICAL_COMBAT §3.5 "Convert and its team rule" step 2, HERO_CLASH §7.3: 0x395c10 with
+    // Projectile_Convert_Enemy_Targets_Category_Mask), in order: 1. CategoryMask & mask; 2. not a vehicle taken over by a
+    // vehicle thief (+0x3a2 & 0x08); 3. no PROXIMITY_MINE; 4. Friendly_Damage_Amount <= 0; 5. not Is_Named_Hero; 6. not
+    // a build pad holding a live under-construction or finished object (the host's pad state).
+    const UnitDesc& vd = desc_of(v);
+    if (!effect_match(v, mask, nullptr)) return false;
+    if (v.flags & kUnitStolenVehicle) return false;
+    if (vd.proximity_mine) return false;
+    if (vd.friendly_damage_amount > 0.0f) return false;
+    if (vd.named_hero) return false;
+    if (hooks_ && hooks_->occupied_build_pad(v.id)) return false;
+    return true;
+}
+
 void CombatSystem::effect_victims(int32_t owner, bool enemies, Vec3 center, float radius, std::vector<Unit*>& out) {
     // Per-player GOM queries around the detonation (0x2a8fb0), players in list order, ascending id within a player
     // (port, §1.10); enemies of `owner`, or owner + allies (not enemies) when !enemies. Live units, XY circle [M].
@@ -2932,7 +2955,7 @@ void CombatSystem::detonation_effects(const Projectile& p, Vec3 center, ObjectId
         // (0x4ca2f0), so a team listed several times converts once. The team is the 0x39b1a0 container: damage_team
         // (= team on land, the squadron in space), so a space squadron converts as a whole as a land team does.
         for (Unit* v : vs) {
-            if (!effect_match(*v, pd.convert_mask, nullptr) || !live(v)) continue;
+            if (!convert_victim_ok(*v, pd.convert_mask) || !live(v)) continue;  // s78n t05: 0x395c10 in full
             if (v->owner == p.owner) continue;
             // s78i t04 (§3.5 steps 3-5): Change_Owner covers the container and every member. Order = the notification
             // order: the victim, then the container when it is a combat unit (a member victim's container; a container
@@ -3388,8 +3411,17 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     const Unit* src = unit(r.source);  // a dead-this-tick source still counts until the flush [M]
     float x = r.amount;
     x = x * mult(v, ModKind::TakeDamage);  // 4
-    if (src && (r.source_is_projectile || (src->flags & kUnitSkipTargeting)))
+    if (src && (r.source_is_projectile || (src->flags & (kUnitSkipTargeting | kUnitIncognito))))
         x = x * mult(*src, ModKind::CauseDamage);  // 5
+    // s78n t05 (HERO_CLASH §8.2, Take_Damage 0x3a9e30): the incognito flag (+0x3a1 & 0x10) goes on dealing or taking
+    // damage - on the victim when a source is given that has no targeting (not a combat unit, a projectile, or no weapon)
+    // or is targeting this victim; on a projectile's shooter, and on a non-projectile source that has it (after its
+    // CAUSE_DAMAGE above). [port] cleared here, after the gates (a refused hit clears nothing); the retail order inside
+    // Take_Damage is not read.
+    if (r.source != kNoObject && (v.flags & kUnitIncognito)) {
+        if (!src || r.source_is_projectile || !unit_can_attack(*src) || current_target(src->id) == v.id) v.flags &= ~kUnitIncognito;
+    }
+    if (src && (src->flags & kUnitIncognito)) unit(r.source)->flags &= ~kUnitIncognito;
     if (v.flags & kUnitInBaseShield) x = x * cfg_.base_shield_vulnerability;  // 6
     if (k == kKindNormal) {  // 7 diminishing firepower (ALLOW_TARGET_DIMINISHING_FIREPOWER, default true)
         bool allow = true;

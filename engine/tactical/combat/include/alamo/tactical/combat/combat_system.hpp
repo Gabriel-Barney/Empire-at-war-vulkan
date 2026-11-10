@@ -434,6 +434,11 @@ struct UnitDesc {
     std::vector<int32_t> death_projectiles;       // Death_Projectiles (ProjectileDesc indices)
     float ranged_target_z_adjust = 0.0f;          // Ranged_Target_Z_Adjust
     float converted_die_time = 0.0f;              // Converted_To_Enemy_Die_Time_Seconds
+    // s78n t05 (TACTICAL_COMBAT §3.5 "Convert and its team rule", 0x395c10 steps 3-5): the convert victim test refuses a
+    // type with the PROXIMITY_MINE behaviour, a Friendly_Damage_Amount (+0x23ec) > 0 or Is_Named_Hero (+0x13).
+    bool proximity_mine = false;
+    float friendly_damage_amount = 0.0f;
+    bool named_hero = false;
     bool has_locomotor = true;                    // jamming victims need a locomotor
     // cu8g t05: the object has a model (obj +0x2a0, the ModelClass made from the mode's model at creation; never made when
     // the type names none, MOVEMENT §2 / SPACE_AVOIDANCE). Battle host: the type names a model for the battle's mode
@@ -694,6 +699,10 @@ public:
     // L1 systems (L1_S4_REMAINING.md §3.3): the victim's ion-storm lockout - its shields absorb nothing (0x549ac0).
     // Called from Take_Damage (serial phases / host calls). Default: never.
     virtual bool ion_storm_shields_down(ObjectId /*victim*/, uint32_t /*frame*/) const { return false; }
+    // s78n t05 (HERO_CLASH §7, 0x395c10 step 6): `id` is a build pad whose under-construction or finished content is set
+    // and alive (retail clears the slot in the frame the content dies). Read by the convert victim test (serial
+    // detonation step). Default: no build pads.
+    virtual bool occupied_build_pad(ObjectId /*id*/) const { return false; }
     // cu8 t01 (L1_S4_REMAINING §3.2, TACTICAL_GAPS §7.4): `player` is weather-affected (no Weatherproof entry). The land
     // weather accuracy factor applies only to shooters of such players. Called from the fire step (serial). Default: yes.
     virtual bool weather_affected(int32_t /*player*/) const { return true; }
@@ -797,6 +806,16 @@ enum UnitFlag : uint32_t {
     // != 0). A moving land unit without TURRET attacks (state 4) only without Attack clips. Derived state: not hashed.
     kUnitMoving = 1u << 20,
     kUnitAttackClip = 1u << 21,
+    // s78n t05 (HERO_CLASH §8.2, TACTICAL_COMBAT §5.4.3 item 5): obj +0x3a2 & 0x08 - a vehicle taken over by a vehicle
+    // thief. Set by the boarding (host), never cleared (owner changes keep it). Read by the Bribe accept (step 6, on T)
+    // and the convert-projectile victim test (0x395c10 step 2). Saved and hashed with the other flags.
+    kUnitStolenVehicle = 1u << 22,
+    // s78n t05 (HERO_CLASH §8.2): obj +0x3a1 & 0x10 "incognito" as the vehicle-thief boarding sets it - not a candidate of
+    // the target scans (§2.3 item 1, the hardpoint pick 0x385190), no auto-acquire of its own (targeting services, the
+    // hardpoint auto-scan 0x387400), CAUSE_DAMAGE for a non-projectile source (§3.6 step 5); cleared by Take_Damage
+    // (take_damage_inner) and by MaximumFirepower's end 0x707390. [port] a bit of its own: kUnitSkipTargeting keeps the
+    // port's dummy-target marker and Blast's charge (no Take_Damage clear) unchanged. Saved and hashed.
+    kUnitIncognito = 1u << 23,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
 inline constexpr uint32_t kUnitHostMirrorFlags =
@@ -1900,6 +1919,8 @@ private:
     void service_repairs(Unit& u, uint32_t frame);
     void death_spawns(Unit& v, uint32_t frame);  // Die step 7 (respawn, Destruction_Survivors)
     bool effect_match(const Unit& v, uint64_t mask, const std::vector<int32_t>* types) const;
+    // s78n t05: the convert projectile's victim test 0x395c10 (TACTICAL_COMBAT §3.5 step 2, HERO_CLASH §7.3), in order.
+    bool convert_victim_ok(const Unit& v, uint64_t mask) const;
     void effect_victims(int32_t owner, bool enemies, Vec3 center, float radius, std::vector<Unit*>& out);
     std::vector<Unit*> effect_scratch_;
     void record_damage(const DamageRequest& r, const Unit& v, const Unit* src, int32_t hp, const DamageResult& out,

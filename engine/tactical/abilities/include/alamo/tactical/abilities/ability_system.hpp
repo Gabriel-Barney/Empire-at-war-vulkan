@@ -287,6 +287,10 @@ struct AbilityHost {
     // (relation a -> b == 0: own player included, a neutral relation 2 is not). Read by the Combat_Bonus accept. Unset:
     // [port] not enemies in the combat relation table (`allied`).
     std::function<bool(int32_t a, int32_t b)> allied_players;
+    // s78n t05 (HERO_CLASH §7, TACTICAL_COMBAT §5.4.3 item 1; 0x395c10 step 6): `id` is a build pad whose
+    // under-construction or finished content is set and alive. Read by the Tactical_Bribe accept (step 6, on T). Unset:
+    // no build pads.
+    std::function<bool(ObjectId id)> occupied_build_pad;
     // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): a land squad container's joint box for the too-close test
     // (slot 46): every member's formation slot offset in the container's frame with its footprint half-extents, the
     // container type's MaxJiggleDistance and the container's facing (yaw as a vector). Unset / false: [port] E_T = 0 (the

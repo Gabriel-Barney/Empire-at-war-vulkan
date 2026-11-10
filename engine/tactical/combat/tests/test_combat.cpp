@@ -6235,6 +6235,146 @@ void test_convert_team() {
     }
 }
 
+void test_convert_victim_test() {
+    // s78n t05 (TACTICAL_COMBAT §3.5 step 2, HERO_CLASH §7.3: 0x395c10 in order): a convert projectile skips a vehicle taken
+    // over by a vehicle thief, a PROXIMITY_MINE type, Friendly_Damage_Amount > 0, a named hero and a build pad holding a
+    // live UC / finished object (host hook); the plain victim and an incognito one (not part of the test) convert.
+    struct PadHooks final : CombatHooks {
+        std::vector<ObjectId> converted;
+        void unit_effect(ObjectId id, UnitEffect e, int32_t, Vec3, uint32_t) override {
+            if (e == UnitEffect::Converted) converted.push_back(id);
+        }
+        bool occupied_build_pad(ObjectId id) const override { return id == 15; }
+    };
+    World w;
+    PadHooks hk;
+    ProjectileDesc cv;
+    cv.name = "Proj_Convert";
+    cv.max_speed = 10.0f;
+    cv.convert = true;
+    cv.convert_radius = 100.0f;
+    w.data.projectiles.push_back(cv);
+    UnitDesc d;
+    d.tactical_health = 100.0f;
+    const uint32_t plain = push_unit(w.data, d);
+    UnitDesc hero = d;
+    hero.named_hero = true;
+    const uint32_t hd = push_unit(w.data, hero);
+    UnitDesc fd = d;
+    fd.friendly_damage_amount = 5.0f;
+    const uint32_t fdd = push_unit(w.data, fd);
+    UnitDesc mine = d;
+    mine.proximity_mine = true;
+    const uint32_t md = push_unit(w.data, mine);
+    CombatConfig cfg;
+    cfg.mode = GameMode::Land;
+    w.make(cfg);
+    w.sys->set_hooks(&hk);
+    w.add(10, plain, 1, Vec3{10, 0, 0});
+    w.add(11, hd, 1, Vec3{20, 0, 0});
+    w.add(12, fdd, 1, Vec3{30, 0, 0});
+    w.add(13, md, 1, Vec3{40, 0, 0});
+    w.add(14, plain, 1, Vec3{0, 10, 0});
+    w.add(15, plain, 1, Vec3{0, 20, 0});  // the occupied build pad
+    w.add(16, plain, 1, Vec3{0, 30, 0});
+    w.sys->set_flag(14, kUnitStolenVehicle, true);
+    w.sys->set_flag(16, kUnitIncognito, true);
+    ProjectileLaunch l;
+    l.owner = 0;
+    l.projectile = 0;
+    l.from = Vec3{0, 0, 0};
+    l.point = l.from;
+    l.fuse_seconds = 0.0f;
+    CHECK(w.sys->launch_projectile(l, w.frame));
+    w.tick();
+    w.tick();
+    CHECK(w.sys->owner(10) == 0 && (w.sys->flags(10) & kUnitConverted));
+    CHECK(w.sys->owner(16) == 0);
+    for (const ObjectId id : {ObjectId{11}, ObjectId{12}, ObjectId{13}, ObjectId{14}, ObjectId{15}})
+        CHECK(w.sys->owner(id) == 1 && !(w.sys->flags(id) & kUnitConverted));
+    CHECK(hk.converted.size() == 2);
+    CHECK((w.sys->flags(14) & kUnitStolenVehicle) != 0);  // permanent
+}
+
+void test_incognito_targeting() {
+    // s78n t05 (HERO_CLASH §8.2, +0x3a1 & 0x10 as the vehicle-thief boarding sets it): not auto-acquired, no auto-acquire
+    // of its own (no scan, so no scan draws), an attack order still works; Take_Damage clears it.
+    {  // an incognito target is not a candidate; once cleared it is acquired
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
+        t.w.sys->set_flag(2, kUnitIncognito, true);
+        for (int i = 0; i < 60; ++i) t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == kNoObject);
+        t.w.sys->set_flag(2, kUnitIncognito, false);
+        for (int i = 0; i < 60 && t.w.sys->auto_target(1) == kNoObject; ++i) t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == 2);
+    }
+    {  // an incognito attacker does not scan (no draws) but keeps an ordered target
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
+        t.w.sys->set_flag(1, kUnitIncognito, true);
+        const uint64_t d0 = t.w.rng.draws();
+        for (int i = 0; i < 60; ++i) t.w.tick();
+        CHECK(t.w.sys->auto_target(1) == kNoObject && t.w.rng.draws() == d0);
+        t.w.sys->order_attack(1, 2);
+        t.w.tick();
+        CHECK(t.w.sys->current_target(1) == 2);
+    }
+    {  // Take_Damage: the victim's flag goes when the source targets it, is a projectile or has no weapon; the source's
+       // flag goes when it deals damage (a non-projectile source with the flag also gets CAUSE_DAMAGE)
+        TargetWorld t;
+        t.w.add(1, t.attacker, 0, Vec3{0, 0, 0});
+        t.w.add(2, t.capital, 1, Vec3{300, 0, 0});
+        t.w.add(3, t.capital, 1, Vec3{-300, 0, 0});  // no weapon
+        DamageRequest r;
+        r.victim = 2;
+        r.amount = 1.0f;
+        t.w.sys->set_flag(2, kUnitIncognito, true);
+        t.w.sys->take_damage(r, t.w.frame);  // no source: kept
+        CHECK(t.w.sys->flags(2) & kUnitIncognito);
+        t.w.sys->set_flag(1, kUnitIncognito, true);
+        r.source = 1;  // armed, not targeting 2: the victim keeps it, the source loses it
+        t.w.sys->take_damage(r, t.w.frame);
+        CHECK((t.w.sys->flags(2) & kUnitIncognito) && !(t.w.sys->flags(1) & kUnitIncognito));
+        t.w.sys->order_attack(1, 2);
+        t.w.sys->take_damage(r, t.w.frame);  // targeting the victim
+        CHECK(!(t.w.sys->flags(2) & kUnitIncognito));
+        t.w.sys->set_flag(2, kUnitIncognito, true);
+        r.source = 3;  // no weapon (no targeting)
+        t.w.sys->take_damage(r, t.w.frame);
+        CHECK(!(t.w.sys->flags(2) & kUnitIncognito));
+        t.w.sys->set_flag(1, kUnitIncognito, true);
+        r.victim = 3;
+        r.source = 1;
+        r.source_is_projectile = true;  // a projectile's shooter and its victim
+        t.w.sys->set_flag(3, kUnitIncognito, true);
+        t.w.sys->take_damage(r, t.w.frame);
+        CHECK(!(t.w.sys->flags(1) & kUnitIncognito) && !(t.w.sys->flags(3) & kUnitIncognito));
+    }
+    {  // save / load: both flags ride the saved flag word (no format change) and survive an owner change
+        TargetWorld a;
+        a.w.add(1, a.attacker, 0, Vec3{0, 0, 0});
+        a.w.add(2, a.capital, 1, Vec3{300, 0, 0});
+        a.w.sys->set_flag(2, kUnitIncognito | kUnitStolenVehicle, true);
+        a.w.sys->set_owner(2, 0);
+        ByteWriter wa;
+        a.w.sys->write(wa);
+        TargetWorld b;
+        ByteReader r(wa.bytes());
+        CHECK(b.w.sys->read(r));
+        CHECK((b.w.sys->flags(2) & (kUnitIncognito | kUnitStolenVehicle)) == (kUnitIncognito | kUnitStolenVehicle));
+        CHECK(b.w.sys->owner(2) == 0);
+        StateHasher ha, hb, hc;
+        a.w.sys->hash_units(ha);
+        b.w.sys->hash_units(hb);
+        a.w.sys->set_flag(2, kUnitIncognito, false);
+        a.w.sys->hash_units(hc);
+        CHECK(ha.digest() == hb.digest() && ha.digest() != hc.digest());  // hashed
+    }
+}
+
 void test_team_container_slot() {
     // s78h t06 (TACTICAL_COMBAT §3.1.1 "When the container is serviced, and a member's death in the same frame"): a land
     // team's TeamTargeting runs once per tick at the container slot, before every member's own service (the descending
@@ -6683,6 +6823,8 @@ int main(int argc, char** argv) {
     test_team_handover_and_damage();  // s78g t06
     test_squad_value();               // s78h t03
     test_convert_team();              // s78h t04
+    test_convert_victim_test();       // s78n t05
+    test_incognito_targeting();       // s78n t05
     test_energy_drain_engines();      // cu8f t02
     test_team_container_slot();       // s78h t06
     test_team_head_alone();           // s78i t03

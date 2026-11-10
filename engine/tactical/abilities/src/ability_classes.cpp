@@ -326,18 +326,21 @@ bool AbilitySystem::bribe_accepts(const Obj& o, ObjectId target) const {
     // 5. cost > 0 (c <= 1 rejects). -1 = no cost data [port]: no gate.
     const float cost = bribe_cost(o, target);
     if (cost >= 0.0f && !(cost > 0.0f)) return false;
-    // 6. 0x395c10(T, all categories): CategoryMask != 0 ([inferred] a container desc with mask 0 uses the member's), no
-    //    PROXIMITY_MINE, Friendly_Damage_Amount <= 0, not Is_Named_Hero ([inferred] the member's flag counts too).
-    //    [port] not modelled (§5.4.3 items 1 and 5): T +0x3a2 & 0x08 (a vehicle taken over by a vehicle thief) and T
-    //    +0x150, the build-pad data pack (T is a build pad holding an under-construction or finished object; no vanilla
-    //    effect: no shipped pad has a Tactical_Bribe_Cost > 1).
+    // 6. 0x395c10(T, all categories), in order (HERO_CLASH §7.3): CategoryMask != 0 ([inferred] a container desc with
+    //    mask 0 uses the member's); s78n t05: not a vehicle taken over by a vehicle thief (T +0x3a2 & 0x08, §5.4.3 item 5);
+    //    no PROXIMITY_MINE; Friendly_Damage_Amount <= 0; not Is_Named_Hero ([inferred] the member's flag counts too);
+    //    s78n t05: T is not a build pad holding a live under-construction or finished object (+0x150, §5.4.3 item 1: the
+    //    host's pad state; no vanilla effect, no shipped pad has a Tactical_Bribe_Cost > 1).
+    const ObjectId tid = t != x ? x->container : target;
     uint64_t mask = td.category_mask;
     if (mask == 0 && t != x) mask = xd.category_mask;
     if (mask == 0) mask = combat_->data().units[combat_->desc_index(target)].category_mask;
     if (mask == 0) return false;
+    if (combat_->has_unit(tid) && (combat_->flags(tid) & combat::kUnitStolenVehicle)) return false;
     if (td.proximity_mine || xd.proximity_mine) return false;
     if (td.friendly_damage_amount > 0.0f) return false;
     if (td.named_hero || xd.named_hero) return false;
+    if (host_.occupied_build_pad && host_.occupied_build_pad(tid)) return false;
     return true;
 }
 
@@ -1459,6 +1462,11 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
             o.active[kMaximumFirepower] = 0;
             start_recharge(o, kMaximumFirepower);
             sync_combat(o);
+            // s78n t05 (HERO_CLASH §8.2): 0x707390 clears the incognito flag (+0x3a1 & 0x10) of the team members. [port]
+            // the user itself too (a non-team user stands for its own team).
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitIncognito, false);
+            for (const ObjectId m : members_of(o.id))
+                if (combat_->has_unit(m)) combat_->set_flag(m, combat::kUnitIncognito, false);
             break;
         case C::CorruptSystems:
             if (Obj* v = obj(sp.target)) v->corrupted = 0;

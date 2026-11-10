@@ -92,6 +92,20 @@ objects::ObjectId TacticalBattle::pad_contents(objects::ObjectId pad) const {
     return s->built != objects::kNoObjectId ? s->built : s->uc;
 }
 
+bool TacticalBattle::pad_occupied(objects::ObjectId pad) const {
+    // s78n t05 (HERO_CLASH §7.1: "occupied" = +8 or +0x10 non-null, both cleared in the frame the content dies).
+    const PadState* s = pad_state(pad);
+    if (!s) return false;
+    const auto live = [this](objects::ObjectId id) {
+        if (id == objects::kNoObjectId) return false;
+        if (combat_ && combat_->has_unit(id)) return combat_->alive(id);
+        const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
+        if (it != units_.end() && it->id == id) return it->alive && !it->retreated;
+        return true;
+    };
+    return live(s->uc) || live(s->built);
+}
+
 bool TacticalBattle::pad_locked(objects::ObjectId pad) const {
     const PadState* s = pad_state(pad);
     return s && s->locked;

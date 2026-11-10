@@ -271,6 +271,10 @@ public:
     void ion_stunned(tc::ObjectId id, uint32_t frame) override { a_->ion_stunned(id, frame); }
     bool ion_storm_shields_down(tc::ObjectId id, uint32_t frame) const override { return a_->ion_storm_shields_down(id, frame); }  // L1 systems
     bool weather_affected(int32_t player) const override { return a_->weather_affected(player); }  // cu8 t01 (Weatherproof)
+    // s78n t05 (HERO_CLASH §7): the convert victim test's occupied-build-pad step (no pad state before a pad is used).
+    bool occupied_build_pad(tc::ObjectId id) const override {
+        return b_->pads_used_ && b_->pad_occupied(id);
+    }
     // cu8f t02: energy-pool engine disable (ion projectiles, CU8F_T01_T02_T07_RE.md §2.4).
     void engines_drained(tc::ObjectId id, float seconds, uint32_t /*frame*/) override { b_->energy_drain_engines(id, seconds); }
     void units_removed() override { a_->units_removed(); }

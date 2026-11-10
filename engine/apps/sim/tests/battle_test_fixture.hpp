@@ -331,7 +331,38 @@ inline std::string hack_types() {
                  "</Hack_Ability><Tactical_Bribe_Ability Name=\"S10_Bribe\"><Activation_Style>User_Input</Activation_Style>"
                  "<Activation_Max_Range>5000</Activation_Max_Range>"
                  "</Tactical_Bribe_Ability></Abilities></GroundInfantry>\n"
-                 " <GroundCompany Name=\"S10_Slicer_Co\"><Company_Units>S10_Slicer</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
+                 " <GroundCompany Name=\"S10_Slicer_Co\"><Company_Units>S10_Slicer</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 // s78n t05 (HERO_CLASH §8): a vehicle thief (CAPTURE_VEHICLE + Vehicle_Thief_Ability, range 0-5000, chance
+                 // 1) and a stealable speeder whose Vehicle_Thief_Inside_Clone is a one-slot GARRISON_VEHICLE variant; only
+                 // test_vehicle_thief puts them into a battle.
+                 " <GroundInfantry Name=\"S10_Thief\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>50</AI_Combat_Power><CategoryMask>Infantry</CategoryMask><MovementClass>Infantry</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR, GARRISON_UNIT</LandBehavior><Garrison_Category>Infantry</Garrison_Category>"
+                 "<Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>"
+                 "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>CAPTURE_VEHICLE</Type><Recharge_Seconds>1</Recharge_Seconds>"
+                 "<GUI_Activated_Ability_Name>S10_Steal</GUI_Activated_Ability_Name></Unit_Ability></Unit_Abilities_Data>"
+                 "<Abilities SubObjectList=\"Yes\"><Vehicle_Thief_Ability Name=\"S10_Steal\"><Activation_Style>User_Input</Activation_Style>"
+                 "<Activation_Min_Range>0</Activation_Min_Range><Activation_Max_Range>5000</Activation_Max_Range>"
+                 "<Activation_Chance>1.0</Activation_Chance><Applicable_Unit_Categories>Vehicle</Applicable_Unit_Categories>"
+                 "</Vehicle_Thief_Ability></Abilities></GroundInfantry>\n"
+                 " <GroundCompany Name=\"S10_Thief_Co\"><Company_Units>S10_Thief</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 " <GroundVehicle Name=\"S10_Speeder\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>100</AI_Combat_Power><CategoryMask>Vehicle</CategoryMask><MovementClass>Tracked</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR</LandBehavior><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>10</Custom_Hard_XExtent><Custom_Hard_YExtent>10</Custom_Hard_YExtent>"
+                 "<Tactical_Bribe_Cost>40</Tactical_Bribe_Cost><Vehicle_Thief_Inside_Clone>S10_Speeder_Stolen</Vehicle_Thief_Inside_Clone>"
+                 "</GroundVehicle>\n"
+                 " <GroundVehicle Name=\"S10_Speeder_Stolen\"><Tactical_Health>5000</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<AI_Combat_Power>100</AI_Combat_Power><CategoryMask>Vehicle</CategoryMask><MovementClass>Tracked</MovementClass>"
+                 "<Behavior>SELECTABLE</Behavior><Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR, GARRISON_VEHICLE</LandBehavior><Garrison_Category>Infantry</Garrison_Category>"
+                 "<Num_Garrison_Slots>1</Num_Garrison_Slots><Custom_Soft_Footprint_Radius>10</Custom_Soft_Footprint_Radius>"
+                 "<Custom_Hard_XExtent>10</Custom_Hard_XExtent><Custom_Hard_YExtent>10</Custom_Hard_YExtent>"
+                 "<Tactical_Bribe_Cost>40</Tactical_Bribe_Cost></GroundVehicle>\n"
+                 " <GroundCompany Name=\"S10_Speeder_Co\"><Company_Units>S10_Speeder</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
     return t;
 }
 
