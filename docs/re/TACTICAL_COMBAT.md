@@ -2600,7 +2600,7 @@ general link block.
   called only by the TACTICAL_BUILD_OBJECTS behaviour's attach 0x42db20 (it also clears +8 / +0x10). The object
   constructor 0x388b60 zeroes +0x150, so every object that is not a build pad keeps it null.
 - The two pointers are the pad's contents: **+8 = the under-construction object** (set by the build start 0x42dbd0),
-  **+0x10 = the finished object** (set by the completion 0x42d8b0). When a content object dies, `Die` notifies its
+  **+0x10 = the finished object** (set by the completion 0x42e890, and by the galactic-persistence restore 0x42d8b0; HERO_CLASH.md). When a content object dies, `Die` notifies its
   parent pad (0x42e6d0), which clears the slot holding it (and the lock byte +0x2c with +0x10).
 - Other readers, for the same meaning: `Die` (0x39bdb0) kills the pad's content (+0x10, else +8) with the pad;
   selecting a pad selects its content (COMMANDS §2.4.1); the land collision pair filter (0x508170) skips a pad
