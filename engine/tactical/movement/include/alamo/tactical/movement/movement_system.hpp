@@ -23,18 +23,29 @@
 //      against the 160 x 160 square of candidates (SpatialTree query, ascending id); a qualifying
 //      pair without a collision object gets one (CollisionLayer, collision.hpp: MovingVsMoving /
 //      MovingVsStopped / StoppedVsStopped, creation frame recorded);
-//   3b. collision driver (TACTICAL_GAPS §6.7; s78n t18: MOVEMENT §5.4.1 / §5.4.2): records whose participants are gone
-//      or left the layer are dropped, the rest sorted ascending by crowd - age ([port] stable by insertion order) and
-//      serviced every frame in that order; a record that is not decided yet (state None) is decided only while the
-//      DynamicLandComplexityQuota (100 per 5 frames) allows. MovingVsStopped = the decision 0x684f90 (Repulsion, the
-//      early-arrival cut, Path Around through the dynamic local pathfinder, a push of the blocker onto a walked path,
-//      the crusher driving on, Try Again Later with a re-decide every 30 frames; no instant displacement) and its
-//      per-state service; a record ends by its state only. MovingVsMoving of two Infantry / Bike movers = the chooser
-//      0x67f7b0 (Path Around for a forced path, Speed Slave Only within 60 degrees, else Repulse) and its states; other
-//      MovingVsMoving pairs keep the port's stand-in (speed slaving / yield / side-step on each unit's check frames,
-//      dropped when the pair stops predicting contact) and StoppedVsStopped still pushes both apart ([port]). Each
-//      record answers its participants a speed and an "at once" flag, folded per unit before the walk. The layer is
-//      hashed (land only);
+//      (s78n t20, MOVEMENT §5.2: "Moving" = not suspended and (speed > 0, or a path record on its stack - a planned order
+//      path or a collision-owned record on top of it - or turning in place); no order test, so a unit on a pushed path,
+//      a StoppedVsStopped path or a detour is a checker and the moving side);
+//   3b. collision driver (TACTICAL_GAPS §6.7; s78n t18: MOVEMENT §5.4.1 / §5.4.2; s78n t20: §5.4.1 "Per-frame driver"):
+//      records whose participants are gone or left the layer are dropped; the records that do not take the quota pass
+//      (a decided MovingVsMoving, every StoppedVsStopped) are serviced in creation order; the others are sorted ascending
+//      by crowd - age ([port] stable by insertion order) and serviced in that order, a record that is not decided yet
+//      (state None) only while the DynamicLandComplexityQuota (100 per 5 frames) allows. MovingVsStopped = the decision
+//      0x684f90 (Repulsion - also for a short-range unit closing on its target -, the early-arrival cut 0x685e10 with the
+//      spare point and the attack-range clause, Path Around 0x5c80e0, a push of the blocker onto a walked path - never
+//      of a unit in a hero clash -, the crusher driving on, Try Again Later with a re-decide every 30 frames; no instant
+//      displacement) and its per-state service; a record ends by its state only. Path Around (MOVEMENT §1.5.1,
+//      path_around.hpp) = a visibility-graph detour from the unit to a rejoin point on its own path - the obstacles are
+//      the layer objects' swept rectangles chosen by the relation code, the search runs twice (crossing an obstacle at x
+//      DynamicObstacleOverlapPenalty only when the first pass finds no way) - pushed as a record on top of the unit's
+//      path stack; the ordered path stays underneath and resumes at the first waypoint line not yet crossed.
+//      StoppedVsStopped (§5.4.3) = one of the two walks a path to the first free spot of the ring search around itself
+//      (who: 0x687010; Resolving while it holds that path, Try Again Later every 30 frames). MovingVsMoving of two
+//      Infantry / Bike movers = the chooser 0x67f7b0 (Path Around for a forced path, Speed Slave Only within 60 degrees,
+//      else Repulse) and its states; other MovingVsMoving pairs keep the port's stand-in (speed slaving / yield /
+//      side-step on each unit's check frames, dropped when the pair stops predicting contact; [port] until §5.4.6 is
+//      ported). Each record answers its participants a speed and an "at once" flag, folded per unit before the walk.
+//      The layer is hashed (land only);
 //   4. walk locomotor step of every unit IN PARALLEL (each unit writes only itself);
 //   5. serial commit in ascending id: terrain height, arrivals, blocked -> re-plan after 10
 //      blocked frames (§1.6 re-path trigger), candidate tree refit.
@@ -57,8 +68,8 @@
 // box overlaps its crusher box (players ascending, then ids): the victim turns to face away and a
 // CrushEvent is reported for the host to apply 1,000,000 damage of Squash_Damage_Type ([port]: the
 // crusher box is the square of the unit's radius - no CRUSHER bones in the sim; the per-state
-// permission 0x397f60 [L] is not modelled); a crusher's collision checks and local repaths ignore the
-// units it can crush (§5.4 case 3 "push/crush attempt", [port] reading).
+// permission 0x397f60 [L] is not modelled); the Path Around obstacle set leaves out the units the mover can crush
+// (MOVEMENT §1.5.1 item 3); s78n t20: a crusher takes a MovingVsStopped record with a standing unit it crushes (§5.4.5).
 // REMAINING_GAPS §4.2: threat-aware planning. MoveOrder::threat_threshold (Lua Move_To(target, T); 1e18 = off) is kept
 // per unit; with set_threat_fn() the space planner runs threat mode (ops 25-32, only for units whose raw Space_Layer
 // is 0) and the land region search multiplies its edge costs (§4.2 cost rule). Without a threat fn the threat factor
@@ -103,8 +114,12 @@
 //           No draws.
 // RNG: FLYING loiter re-issue - one synced range_float(-90, 90) per re-issue without an attack target (serial,
 // ascending id, after the parallel walk). No other new draws.
-// PROVISIONAL: the MovingVsMoving states of pairs that are not two Infantry / Bike movers and the StoppedVsStopped
-// resolution are stand-ins (s78n t18: Infantry pairs and MovingVsStopped follow MOVEMENT §5.4.1 / §5.4.2); corridor squeeze
+// Orders (s78n t20, MOVEMENT §4.3.1): a land move order without flag 0x20 and without an object goal runs the destination
+// check 0x439360 once, at the order - each formation's goal is moved to the first centre whose rectangle is passable, clear
+// of the order's other formations and not blocked by units that stand there or are heading there (more than 15 % of its
+// area); the order is never refused. A single unit ordered onto its own footprint does not move (the plan's shortcut).
+// PROVISIONAL: the MovingVsMoving states of pairs that are not two Infantry / Bike movers are a stand-in (s78n t18 / t20:
+// Infantry pairs, MovingVsStopped and StoppedVsStopped follow MOVEMENT §5.4.1 - §5.4.5); corridor squeeze
 // (corridor.hpp) is a stand-alone pass: the port's formation members path individually (no shared formation path).
 // The jiggle draws skip special air units.
 #pragma once
@@ -1362,7 +1377,8 @@ private:
     }
     static bool raised(const Unit& u) { return u.hover == 1; }  // the hover gate's "raised" (rising / lowering are not)
     bool svs_overlap(const Unit& a, const Unit& b) const;  // StoppedVsStopped contact 0x686500 (gate + coefficient)
-    // A crusher drives through units it crushes, except a squad container (pushed instead; its members are crushed).
+    // [port] the MovingVsMoving stand-in only: a crusher takes no record with a moving single unit it crushes (a squad
+    // container is pushed instead; its members are crushed).
     bool drives_through(const Unit& c, const Unit& v) const { return crushes(c, v) && !v.d.team_container; }
     // The free-position search 0x440f90 around unit b itself (A1_READINGS §40.2): the push's set-up (cone pi / 4, outside
     // radius 0.33) and StoppedVsStopped's (Infantry class pi / 1.0, others 3 pi / 4 / 0.75; MOVEMENT §5.4.3)

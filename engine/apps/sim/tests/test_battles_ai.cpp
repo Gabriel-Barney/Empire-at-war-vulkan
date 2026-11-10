@@ -1032,12 +1032,21 @@ void test_land_squad_container() {
     std::vector<std::pair<mv::ObjectId, mv::V2>> slots;
     Vec3 start{}, goal{};
     bool collided = false;  // the container had a collision object during the move
+    bool detoured = false, have_prev = false;  // s78n t20: it walked a Path Around detour (a record on top of its path)
+    float max_step = 0.0f;
+    mv::V2 prev_pos{};
+    // s78n t20 item 6 (MOVEMENT 4.3.1): after the checks above, the squad is ordered onto another standing squad
+    int onto = 0;  // 0 not started, 1 ordered, 2 arrived, 3 no second standing squad
+    objects::ObjectId other_team = objects::kNoObjectId;
+    mv::V2 other_pos{}, onto_goal{};
+    float other_hx = 0.0f, other_hy = 0.0f, own_hx = 0.0f, own_hy = 0.0f;
+    uint32_t onto_frame = 0, hold_run = 0, hold_max = 0;
     float off_line = 0.0f, off_path = 0.0f, max_lead = 0.0f, team_speed = 0.0f, late_along = 0.0f, settle_err = 0.0f;
     uint32_t store_mismatch = 0, moving_frames = 0, recover_frames = 0, box_mismatch = 0;
     float start_error = -1.0f, recovered_error = -1.0f;
     std::vector<float> along_ref;  // s78n t14: each member's along error 120 frames into the move
     bool settle_target = false;    // a member has a target when the team stopped (no recovery, §7.3 item 6)
-    for (uint64_t t = 0; t < 8000 && !done; ++t) {
+    for (uint64_t t = 0; t < 8000 && !(done && onto >= 2); ++t) {
         host.tick_once();
         if (!invaded && host.modes().depth() == 1) {
             const std::vector<uint32_t> f = gs->fleets_at(1, 1);
@@ -1045,10 +1054,54 @@ void test_land_squad_container() {
         }
         TacticalBattle* b = battles.battle();
         TacticalMode* tm = host.tactical();
-        if (!b || !tm || b->frame() < 3) continue;
+        if (!b || !tm || b->frame() < 3) {
+            if (done) break;  // the battle is over
+            continue;
+        }
         objects::ObjectStore& st = tm->primary();
         const tc::CombatSystem& cs = b->combat();
         const mv::MovementSystem& ms = b->movement();
+        if (done) {
+            // s78n t20 item 6: the destination check of the order moves the goal off the standing squad, so the mover
+            // never waits in front of it (before: an early-arrival cut at best, a long Try Again Later hold at worst)
+            if (onto == 0) {
+                std::map<uint32_t, uint32_t> count;
+                for (size_t i = 0; i < cs.unit_count(); ++i) {
+                    const auto id = cs.unit_id_at(i);
+                    if (cs.team(id) != 0 && cs.alive(id)) ++count[cs.team(id)];
+                }
+                for (const auto& [tid, n] : count) {
+                    const auto cid = static_cast<objects::ObjectId>(tid);
+                    const objects::ObjectHandle th2 = st.find(cid);
+                    if (cid == team_id || n < 2 || !st.alive(th2) || !ms.has_unit(cid) || ms.view(cid).has_goal) continue;
+                    // (the object test has no owner test: the human's own second squad when there is one, else any)
+                    if (other_team == objects::kNoObjectId || (st.owner(th2) == 0 && st.owner(st.find(other_team)) != 0)) other_team = cid;
+                }
+                bool mine_alive = ms.has_unit(team_id);
+                for (const auto id : members) mine_alive = mine_alive && cs.alive(id);
+                if (other_team == objects::kNoObjectId || !mine_alive || !ms.team_joint_box(other_team, other_hx, other_hy) ||
+                    !ms.team_joint_box(team_id, own_hx, own_hy)) {
+                    onto = 3;
+                    continue;
+                }
+                other_pos = ms.view(other_team).pos;
+                CHECK(b->order_move(*tm, 0, members, other_pos.x, other_pos.y, host.random().synced()) == commands::RejectReason::None);
+                onto_goal = ms.view(team_id).goal;
+                onto_frame = b->frame();
+                onto = 1;
+                continue;
+            }
+            if (onto == 1) {
+                bool held = false;
+                for (const mv::CollisionObject& co : ms.collisions().list())
+                    held = held || ((co.a == team_id && co.speed_a == 0.0f) || (co.b == team_id && co.speed_b == 0.0f));
+                hold_run = held ? hold_run + 1 : 0;
+                hold_max = std::max(hold_max, hold_run);
+                if (!ms.has_unit(team_id) || !ms.has_unit(other_team)) onto = 3;  // (a squad died meanwhile)
+                else if ((!ms.view(team_id).has_goal && b->frame() > onto_frame + 5) || b->frame() > onto_frame + 1500) onto = 2;
+            }
+            continue;
+        }
         if (stage == 0) {  // a live team of the human player (0) with >= 2 members
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
             for (size_t i = 0; i < cs.unit_count(); ++i) {
@@ -1175,7 +1228,15 @@ void test_land_squad_container() {
                 bool rec_now = false;
                 for (const mv::CollisionObject& co : ms.collisions().list()) rec_now = rec_now || co.a == team_id || co.b == team_id;
                 collided = collided || rec_now;
-                off_path = std::max(off_path, dmin);
+                // s78n t20 (MOVEMENT 1.5.1 item 5): a Path Around detour is a record on top of the path stack; when it
+                // ends the container heads from the detour's last corner straight for its next ordered waypoint, so from
+                // then on it is beside the ordered polyline by design - the distance is taken up to the first detour, and
+                // the step length (no displacement in one step) on every frame
+                detoured = detoured || (k.pushed && k.push_kind == 2);
+                if (have_prev) max_step = std::max(max_step, std::sqrt((k.pos.x - prev_pos.x) * (k.pos.x - prev_pos.x) + (k.pos.y - prev_pos.y) * (k.pos.y - prev_pos.y)));
+                prev_pos = k.pos;
+                have_prev = true;
+                if (!detoured) off_path = std::max(off_path, dmin);
                 team_speed = std::max(team_speed, k.speed);
                 for (size_t m = 0; m < members.size(); ++m) {
                     const mv::UnitView v = ms.view(members[m]);
@@ -1222,8 +1283,26 @@ void test_land_squad_container() {
     CHECK(start_error > 4.0f && recovered_error >= 0.0f && recovered_error <= 4.0f);  // idle recovery (> 4.0 from the slot)
     // s78n t18: the container walks its own planned path (never re-centred on its members) and stays on it through its
     // collision objects: no nudge off the path, no repath against infantry (before t18 a MovingVsMoving object with another
-    // squad's container side-stepped it up to about 16 off the path)
+    // squad's container side-stepped it up to about 16 off the path). s78n t20: against a standing vehicle it walks a
+    // Path Around detour (the record on top of its path stack) and then resumes toward its next ordered waypoint; it
+    // never moves farther in one step than its team speed.
     CHECK(moving_frames > 60 && off_path < 0.5f);
+    CHECK(max_step <= team_speed + 1e-3f);
+    std::printf("  land squad: Path Around detour %d, largest step %.3f\n", detoured ? 1 : 0, static_cast<double>(max_step));
+    // s78n t20 item 6: ordered onto a standing squad - the goal is off its footprint (the two joint boxes, each
+    // + BetweenFormationSpacing on the mover's side, do not overlap at the goal; the slot search may shift it by half a
+    // cell), the squad arrives, and no collision record ever holds it for 30 frames
+    if (onto == 2 && battles.battle() != nullptr && battles.battle()->movement().has_unit(team_id)) {
+        const mv::UnitView k2 = battles.battle()->movement().view(team_id);
+        const float gx = std::fabs(onto_goal.x - other_pos.x), gy = std::fabs(onto_goal.y - other_pos.y);
+        std::printf("  land squad: ordered onto squad %d at (%.0f, %.0f) - goal (%.0f, %.0f), arrived %d, longest collision hold %u frames\n",
+                    static_cast<int>(other_team), static_cast<double>(other_pos.x), static_cast<double>(other_pos.y),
+                    static_cast<double>(onto_goal.x), static_cast<double>(onto_goal.y), k2.arrived ? 1 : 0, hold_max);
+        CHECK(gx > own_hx + other_hx + 5.0f - 10.0f || gy > own_hy + other_hy + 5.0f - 10.0f);
+        CHECK(k2.arrived && hold_max < 30);
+    } else {
+        std::printf("  land squad: ordered onto a standing squad - not run (state %d: no second standing squad, or one died)\n", onto);
+    }
     CHECK(box_mismatch == 0);  // s78n t18 review: squad_joint_slots and team_joint_box agreed on every moving frame
     CHECK(max_lead > 1.0f);   // the container leads (its members steer from its start-of-tick state)
     CHECK(along_ref.size() == members.size() && late_along < 4.0f);  // and the members hold the formation

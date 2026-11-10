@@ -829,6 +829,9 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     o.threat_threshold = threat_threshold;
     o.flags = flags;  // s78f t10: the order's block flags (0x01 attack-move / 0x02 guard)
     o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // s78f t10: the object block (movement: -1 = none)
+    // s78n t20 (MOVEMENT 4.3.1 items 2 / 6): an object goal (block kind 3) takes neither the destination check nor the
+    // single-member shortcut
+    o.skip_destination_check = goal_object != objects::kNoObjectId;
     b_->movement_->move(o, host_->random().synced(), b_->frame_);
     return true;
 }
