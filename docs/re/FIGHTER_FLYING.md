@@ -1723,6 +1723,39 @@ recovery; while it turns in place they only turn.
   Move_To X with flags 0x20 through the coordinator; else 0x3abb80(K, X) only. The Move_To gives a kind-1 path, so the
   members get start delays (§7.3 item 2) and a re-lay at the move start (§7.2 caller 1).
 - **Host destroyed / release all** 0x37a060: K and every member := H.P and H's orientation, then adopted.
+- **Whose `Garrison_Value` / `Garrison_Category` count, and the approach radius (s78n t18 RE, 2026-11-10)** [H
+  unless tagged]. Read from 0x444310, 0x443d10, 0x443ff0, 0x443700, 0x4446b0, 0x379d30, 0x37ade0, 0x3954b0,
+  0x3982b0, 0x405320, 0x443ce0, the type constructor 0x367250.
+  1. **Capacity counts the container, once.** The entry 0x4446b0 tests free(H) ≥ **K's type** `Garrison_Value`
+     (+0x23ac), and 0x379d30 appends **one entry, K**, to H's contents list (0x37ade0 then only hides the members).
+     free(H) = 0x3954b0 = H's `Num_Garrison_Slots` − Σ over the contents-list entries of the **entry's type**
+     `Garrison_Value` (DUMMY_UPGRADE entries skipped). The members' values are never read. The same K-type value is
+     used by the approach checks (0x443d10 / 0x443ff0 / 0x443700: free(H) < value → cancel) and by Lua
+     `Can_Garrison` (L1_S4_REMAINING §2.5).
+  2. **Default 1.** The type constructor writes `Garrison_Value` := 1; no FoC team container and no FoC infantry
+     member sets the tag (only AT-ST, T2-B, TIE Crawler, the mobile defence unit, Dark Troopers I / II / III and the
+     Destroyer Droid do: 2, 2, 2, 2, 1, 1, 2, 2). So **a squad takes 1 slot**: a `Garrison_Bunker_Template` (5 slots)
+     holds 5 squads, a Juggernaut / HTT / F9-TZ (10) holds 10, whatever the squad size.
+  3. **Category:** the mask test 0x38f9a0 (L1_S4_REMAINING §3.5) reads the ordered object's type, so K's
+     `Garrison_Category` (every FoC land team container: Infantry); the members' categories are not read.
+  4. **Approach / entry radius:** every range test is (distance from K's position (K obj +0x78) to the approach
+     point 0x443a90) − r ≤ limit, with r = 0x443ce0 = the **3-D length of the half-extent vector** of the box
+     0x3982b0(K). For an object with TEAM that box is the team data +0x8c / +0x98 (0x405320): the **live union box of
+     the members' model bounds**, world axis-aligned, refreshed by the TEAM service 0x405b10 (TACTICAL_COMBAT
+     §5.4.4). So r = √(ex² + ey² + ez²) of that union box's half extents: it grows when the squad is strung out and
+     has nothing to do with the joint slot box or with `Custom_Hard_*Extent`. (A non-team unit: its model's box; no
+     model: 0.05.) Limits: the service 0x443ff0, every frame in states 1-2: 3-D distance − r ≤ H's
+     `Garrison_Radius` (+0x236c) → start entering; the handler 0x443d10 on a finished approach move: 3-D distance −
+     r ≤ **60.0** (0x140a28bcc) → state 2 and 0x443700 (2-D distance − r ≤ `Garrison_Radius` → enter, else a short
+     flag-0x20 move of that excess toward the point).
+  5. **Host id of the squad:** K's pack, as for any unit (MOVEMENT §5.3 "Garrison host id"): set at the order,
+     cleared at K's next order or death, or at the walk-out arrival when K is still subscribed to signal 10.
+- ***Port spec (capacity / radius):*** a squad counts the **container type's** `Garrison_Value` (default 1 when the
+  tag is absent) and `Garrison_Category` against the host; the plan's [port] "sum of the members' values" would
+  refuse a 9-man squad at a 5-slot bunker and is wrong. The squad enters as one when (container position → approach
+  point distance) − r ≤ `Garrison_Radius`, r = half the 3-D diagonal of the members' live bounding box (members'
+  positions ± their model half extents; [port] the members' hard extents and a nominal height if model bounds are
+  not at hand, and say so); the plan's [port] "the container's movement radius" is not what retail subtracts.
 - ***Port spec:*** the port parks members one by one (`park_team_member` / `rejoin_land_team`). Retail garrisons the
   container: `TacticalBattle` should, at entry, teleport the container mover to the host position (members to it + their
   offsets) and keep it there while parked; at exit, teleport it (`TacticalBattle::teleport` → `MovementSystem::teleport`)
@@ -1766,6 +1799,26 @@ recovery; while it turns in place they only turn.
    t·(dir.y, −dir.x); else 0.
 So a member's vector is: side-steps (≤ 1 each, scaled by its speed ratio) away from the other party (or that party's
 members) of each of its **container's** collision objects. Members get no vector from their own team.
+
+**Corrections and confirmations (s78n t18 RE, 2026-11-10) [H]:**
+- **Callers of 0x509810:** a scan of the whole `.text` for `call` / `jmp` rel32 finds four sites: Walk 0x61d890
+  (0x61dca4), LandTeamInfantry 0x62d620 (0x62db2e), Bike 0x639550 (0x6397a6), JetPack 0x640cc0 (0x640e75). **No
+  LandTeamContainer function uses a collision vector**; the container's wanted facing 0x5ab840 is the path direction
+  plus the lane term (pack +0x15c) only. How Walk adds the vector to its heading: MOVEMENT §5.4.1.
+- **Item 4, "0x4261d0 / 0x41cf50 relate a and b":** they test that b is in **a's formation** (b's pack +0x1f0 = the
+  formation of a). Then t = clamp(overlap coefficient of the two footprint rectangles, 0, 1) (MOVEMENT §5.3.1)
+  instead of the distance ramp.
+- **Item 4, r = 0x397780:** √(HX² + HY²) of the joint slot box only for a land team container; for any other unit
+  it is 0x373b30 = `Scale_Factor` × the **soft** footprint radius (`Custom_Soft_Footprint_Radius`, else
+  `Space_Obstacle_Radius`, else the larger model x / y half extent), not the hard extents. The distance |a.P − b.P|
+  in t is 3-D.
+- **Item 4, the two side tests (0x5c66a0):** with L = (r_a + r_b)·1.3 and b's position B: "left free" = the segment
+  B → B + L·left passes 0x5a4c10 for a's movement class **and** so does the segment from B + L·left − L·dir to B +
+  L·left + L·dir (a corridor of length 2L beside b); "right free" likewise with −left. left = (−dir.y, dir.x).
+  b on a's right (left·(b − a) < 0) and left free → + t·left; else right free → − t·left; else 0.
+- **Which records give a vector** (vf +0x38): MovingVsStopped: the obstacle side in every state, the mover side only
+  in state 2 (Repulsion); MovingVsMoving: both sides in states 3 (Repulse) and 11 only; StoppedVsStopped: state 1,
+  the unit being moved. When each state is taken: MOVEMENT §5.4.1 / §5.4.2.
 
 ***Port spec:*** (1) `MovementSystem::ground_collider` / `detect_collisions`: the container is a collision checker
 and a partner (its type's `UnitCollisionClass`, `Is_Squashable`, `MovementPredictionInterval`), members stay out as
@@ -1894,6 +1947,68 @@ toward it. Confirmed by the s78n t14 run (`S78N_T14_RUN.md`).
      only when the path is set while v = 0 (§7.3 item 2).
    - **Path end: not at once.** 0x14 brakes at a from v² / (2a) before the end; 0x15 then sets the speed (≤ a) to 0.
    - **Arrival state 0x15** (0x5adb50) always writes pack +0xec / +0xf0 := 0.
+   - **MovingVsMoving flags, precisely (s78n t18 RE, 2026-11-10; MOVEMENT §5.4.2):** the constructor leaves both
+     flags 0; the state-0 *service* (a record that waits for quota) sets both to 1; states 1, 2, 4, 6, 7, 10, 12, 15,
+     16 reset them to 0 each frame before deciding a hold; **state 3 (Repulse) and state 11 do not reset them** (3
+     never sets one either; 11 can set the slave's through 0x67f130).
+     Two Infantry-class movers on crossing or opposed headings are in Repulse: speed answer = max speed for both, no
+     hold. On headings within 60° they are in Speed Slave Only (2): the rear one gets the slave speed 0x67f590, and
+     the flag when that speed is 0 or the two footprint rectangles touch (speed 0 = they touch while the front one
+     moves away).
+6. **The container service 0x5ad690 and the arrival state 0x5adb50 in full (s78n t18 RE, 2026-11-10)** [H]. Read
+   from 0x5ad690, 0x5adb50, 0x5ab840, 0x5c4ec0 / 0x5c5060, 0x5c4920, 0x5c5910, 0x557b10, 0x559260.
+   The service is one `switch` on the state that **loops in the same call** until a case ends the frame:
+   | state | does | then |
+   |---|---|---|
+   | 0 | no path → lay out if needed, **frame ends**. Top path not started (+0x6d = 0) → state 0x16, **frame ends**. Started → re-lay the slots toward the wanted facing (0x5ac120, §7.2 caller 1), state 0x10 | **same frame** → 0x10 |
+   | 0x10 | turn toward the wanted facing 0x5ab840 by the rate (0x5ad5a0) | turn budget left over (> 0) → state 0x13, **same frame**; else frame ends |
+   | 0x13 | lay out if needed; move step 0x5adfb0 | frame ends |
+   | 0x14 | speed > a (vf +0x2e0, item 1) → move step 0x5adfb0, frame ends | speed ≤ a → state 0x15, **same frame** (no move step that frame) |
+   | 0x15 | 0x5adb50, below | frame ends, except the final-facing turn → 0x10 same frame |
+   | 0x16 | no path → lay out if needed, frame ends. Top path already started → state 0x15, same frame. Not started → +0x6d := 1, state 0 | **same frame** → 0 → 0x10 (→ 0x13) |
+   **0x5adb50 (state 0x15), in order:**
+   1. speed := 0 (pack +0xec / +0xf0). **No position is written anywhere in the function: no snap.**
+   2. No top path, or the top path is not started (a new path arrived while moving, item 5) → state 0x16, frame
+      ends; nothing is popped.
+   3. **Arrival tolerance.** If the container is heading for the **last** waypoint (path index +0x60 + 2 = waypoint
+      count) and n·(K.P − W) **> −5.0**, where W is the last waypoint and n the unit direction of the last segment
+      (the waypoint line 0x5c4ec0 / 0x5c5060; 2-D): the waypoint index steps (0x5c4920). So "arrived" = within 5.0
+      before the last waypoint's line, measured along the last segment, or past it; the sideways offset is not
+      tested.
+   4. Not on the last waypoint now (0x5c5910 false: stopped short of that line, or on an earlier leg) → **state 0,
+      frame ends**. Next frame state 0 finds a started path: re-lay (only if the direction changed by more than 8.11°
+      or the slots are not laid), turn (0x10), move (0x13): **the container restarts the same path from speed 0**
+      at the rate a and brakes again at v² / (2a) before the end. No start delays are drawn (they belong to the path
+      set, §7.3 item 2).
+   5. On the last waypoint: wanted = 0x5ab840 = the last waypoint's **final facing** (+0x0c) when it is non-zero,
+      else the container's own orientation. When it is non-zero and |wanted yaw − yaw| > the threshold → state
+      0x10 and the switch goes on **in the same frame** (turn in place; when the turn completes the move step runs,
+      finds the last waypoint, brakes and comes back here). Threshold = **10°**, or the turn rate (0x372560) when
+      that is ≤ 10° and the path kind is 3 (TerrainCollision) or the current waypoint's speed fraction is 0: the
+      Walk rule of MOVEMENT §3.5.1.
+   6. Otherwise **pop** the top path record (0x557b10: the stack's last record is destroyed, the tracker hook
+      0x559260 runs, pack **+0x288 := NOW**), state 0x16, frame ends.
+   **After the pop, one state per frame boundary:** the next frame's 0x16 finds either no path (idle; the members'
+   recovery runs from here, §7.3), or the path below: already started → 0x15 **the same frame**, which pops it too
+   if the container is within the tolerance of its end, else → state 0 and it resumes the frame after (rare: the
+   move step 0x5adfb0 itself pops a top path that reaches its last waypoint while a started path lies below and
+   walks on along that one without braking, A1_READINGS §40.3); not started → it is started and 0 → 0x10 (→ 0x13)
+   run **in that same frame**.
+   **Sequence for a path end:** frame N: 0x14 with speed ≤ a → 0x15: speed 0, arrived test, pop, state 0x16.
+   Frame N + 1: 0x16 (idle, or the start of the next path as above). **For a new order while moving:** frame N: 0x14
+   → 0x15: speed 0, state 0x16 (top path not started). Frame N + 1: 0x16 → started → 0 (re-lay) → 0x10 (turn; and
+   0x13's first move step in the same frame when the turn has budget left).
+   "Signal 10 / order finished" is not raised here: it is the formation's arrival (A1_READINGS §33.4), once every
+   member's locomotor reports done (no speed and no path).
+
+***Port spec (arrival, s78n t18):*** the plan's [port] choice is confirmed: (a) the braking state ends when the
+speed is ≤ a at the start of a tick: speed := 0 that tick, no step; (b) arrived = on the last segment and within 5.0
+before the last waypoint's line along that segment (or past it); no snap, the container stays where it stopped; the
+path is popped and the unit is idle (`WalkStopped`) from that tick; (c) otherwise the same path restarts on the next
+tick (turn, then accelerate from 0); (d) a final facing on the last waypoint is turned to in place when it differs by
+more than 10°, before the pop; (e) a container with a new, unstarted path: speed 0 this tick, the start (re-lay,
+turn, and the first move step if the turn leaves budget) on the **next** tick. The plan's "[port] the start is the
+next frame" is retail.
 
 ***Port spec (s78n t14 run):*** (1) the squad container's walk uses a = d = the minimum over its members of
 `OverrideDeceleration` × (the member type's team-capped effective speed / its `Max_Speed`), falling back to full speed
@@ -1960,6 +2075,46 @@ transport, hover, build pad) are in MOVEMENT §5.2 / §5.3.
 4. **The container's own step** is passability-tested for its own movement class at its own point only (0x50e280
    in 0x5adfb0, skipped when the path's +0x5c flag is set); a failed test reports to the collision system (0x509090)
    and the container does not move that frame. Members are not tested at all (§7.3 "Recovery in full" item 7).
+
+5. **What a container does in its collision records (s78n t18 RE, 2026-11-10; details and addresses MOVEMENT
+   §5.4.1 / §5.4.2)** [H]. A container is Infantry class in every FoC type; the code tests "team container" as
+   locomotor vf +0x230.
+   - **Container moving, Infantry-class unit stopped (MovingVsStopped, decision 0x684f90).** The "infantry against
+     infantry → Repulsion at once" rule **excludes a container mover** (and a container obstacle), unless the mover
+     is short-range and the obstacle is its target. A container reaches Repulsion (state 2) when its path is forced
+     (flag 0x20: garrison exit) or when its **destination is not blocked**: it is not on its final leg, or its
+     footprint at the path end overlaps no stopped unit (0x684710). Then it **walks on at its normal speed straight
+     through the obstacle's footprint** (speed answer = max speed, no flag; no LandTeamContainer code reads a
+     vector; only its own point is passability-tested), its members side-step (§7.5), the stopped unit stays where
+     it is, and the record ends when the obstacle lies behind the container's facing by more than the two radii
+     √(HX² + HY²) + √(hx² + hy²), or the container has no path left.
+     With a blocked destination the container gets, in this order: the **early-arrival cut** 0x685e10 (its path is
+     shortened to the last point where its box (HX + 5, HY) is clear; Resolved, with the "at once" flag), a Path
+     Around (dynamic path, state 1), for a **non-hostile** pair a **push** of the blocker (0x6859a0; a single,
+     non-container infantry mover does not push at this step), else Try Again Later (speed answer 0, braking at a,
+     re-decided every 30 frames).
+   - **Container stopped, something moving at it:** a single infantry / bike mover: the decision goes the same way
+     with the container as obstacle (no immediate Repulsion; Repulsion when the mover's destination is free). A
+     vehicle that cannot crush: Path Around first; when that fails and the pair is not hostile, a push of the
+     container; else a second Path Around / state 8 / Try Again Later. A crusher: MOVEMENT §5.4.1 steps 8-9 (one
+     push attempt if the squad scatters, then state 4: it drives on at full speed and the push is not retried).
+   - **Two moving, both Infantry class (MovingVsMoving, chooser 0x67f7b0):** no container test at all. Forced path
+     on one side → the other one path-arounds. Same formation, or headings within 60° → **Speed Slave Only** (the
+     rear one follows by the slave-speed rule and is held at once when the two boxes touch). Otherwise → **Repulse**:
+     both at max speed, no hold (0x67f130 is not called in that state), vectors of weight 1.0 for both sides'
+     members. The record is removed the frame either one has neither speed nor path.
+6. **Layer 0x10 stores a rectangle per mover** (MOVEMENT §5.3.2): for a container the joint slot box turned by its
+   yaw, flagged Static while it has no speed and no path, else Moving, refreshed every frame. The occupancy query
+   0x538200 (jetpack landing 0x6420e0 and others) is a rectangle-overlap test against those records: a spot inside
+   a squad's joint box is occupied, a spot where only a member stands is not.
+
+***Port spec (s78n t18):*** (a) container mover against Infantry-class stopped unit: first ask "is my destination
+blocked" (final leg and footprint at the path end overlaps a stopped layer object); no → Repulsion (walk through at
+full speed, members side-step, no repath / hold / push / nudge; ends when the obstacle is behind by the two radii
+or the path is gone); yes → arrival cut, Path Around, friendly push, hold with a 30-frame retry, in that order. The
+plan's unconditional Repulsion for the pair is right only for the first case. (b) Two moving Infantry-class
+participants: Repulse on crossing / opposed headings, Speed Slave Only within 60° (MOVEMENT §5.4.2 port spec).
+(c) Occupancy and candidate queries use the container's joint box rectangle; members are in no query.
 
 ***Port spec:*** (1) `MovementSystem::detect_collisions`: candidates are the registered ground colliders only; a
 squad member is never a checker, never a partner and never an obstacle rectangle of the dynamic repath, for its own
@@ -2055,7 +2210,8 @@ dynamic-repath queries before the pair gates of MOVEMENT §5.3.
 ## 11. Still open
 1. **Fighter / squadron:**
    - the writers of team list +0x88 (E) and +0x8c (S);
-   - pack +0x15c (lateral offset) [L];
+   - ~~pack +0x15c (lateral offset) [L]~~: the formation lane term, written by 0x41dbb0 (MOVEMENT §5.4.1 "How Walk
+     combines", 2026-11-10) [H];
    - the 0x5c5060 corner shift length (0x54f700) [L];
    - who enters Dead_Stop 0x1F;
    - unit abilities 0x29 / 0x22 in the provocation test (by number only);
@@ -2071,7 +2227,8 @@ dynamic-repath queries before the pair gates of MOVEMENT §5.3.
 2. **Flying:**
    - how state 0x26 is left;
    - the clearance query 0x63b640: resolved (§6.3.1). Still open there: the entry builder 0x6b3b00 (entry AABB and
-     half-extents) [M], and whether land transports ever hold a Corvette-layer record [L];
+     half-extents) [M] (read 2026-11-10 for land movers: MOVEMENT §5.3.2), and whether land transports ever hold a
+     Corvette-layer record [L];
    - the formation destination kinds of 0x583680: read 2026-11-03 (§4.11 D 7; kind 4 = the viewer's own position);
    - the jetpack follower 0x641010 was not compared line by line.
 3. **0x5070b0:** exact arithmetic; `Stopped_Rate_Of_Turn` readers.
