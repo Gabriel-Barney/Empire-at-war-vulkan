@@ -878,10 +878,6 @@ struct DamageRequest {
     bool no_team = false;
     bool has_impact = false;  // impact point known (projectile hits): lucky-shot hull re-route
     Vec3 impact;
-    // s78n t06 (HERO_CLASH §3.7, §8.4.1 step 10-11): no diminishing firepower for this hit. Retail applies it only when a
-    // shooter was found or the non-projectile source was incognito; [port] a narrow stand-in for the hero-clash exchange
-    // damage (a non-projectile source without +0x3a1 & 0x10) until that allow rule is ported for every source.
-    bool no_diminishing = false;
 };
 
 struct DamageResult {

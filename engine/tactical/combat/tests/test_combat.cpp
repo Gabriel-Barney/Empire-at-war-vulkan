@@ -1619,20 +1619,69 @@ void test_gaps_constants() {
     UnitDesc v;
     v.tactical_health = 1e6f;
     const uint32_t vd = push_unit(w.data, v);
+    UnitAbilityDesc nodim;
+    nodim.ability_type = kAbilityPowerToWeapons;
+    nodim.flag[kFlagAllowDiminishingFirepower] = 0;
+    w.data.abilities = {nodim};
+    UnitDesc nodim_unit = v;
+    nodim_unit.abilities = {0, -1};
+    const uint32_t ndd = push_unit(w.data, nodim_unit);
     w.make(cfg);
+    // s78n t13 (HERO_CLASH §8.4.1 steps 10 - 11): the curve applies, and the last-hit stamp is written, only for a kind-1
+    // hit whose allow flag step 10 set - a projectile with a found shooter, or an incognito non-projectile source - and
+    // whose source's ALLOW_TARGET_DIMINISHING_FIREPOWER is true.
     w.add(1, vd, 0, Vec3{0, 0, 0});
-    auto hit = [&](uint32_t frame) {
+    w.add(2, vd, 1, Vec3{500, 0, 0});     // a live shooter
+    w.add(3, vd, 1, Vec3{500, 500, 0});   // the incognito non-projectile source
+    w.add(4, ndd, 1, Vec3{500, 1000, 0}); // a shooter whose active ability has ALLOW_TARGET_DIMINISHING_FIREPOWER false
+    w.sys->set_ability_active(4, 0, true);
+    for (ObjectId id = 5; id <= 9; ++id) w.add(id, vd, 0, Vec3{0, static_cast<float>(id) * 100.0f, 0});
+    enum class Src { None, Plain, Projectile };
+    auto hit = [&](ObjectId victim, uint32_t frame, Src s, ObjectId source = 2, uint8_t kind = kKindNormal) {
         DamageRequest r;
-        r.victim = 1;
+        r.victim = victim;
         r.amount = 100.0f;
+        r.kind = kind;
+        if (s != Src::None) r.source = source;
+        r.source_is_projectile = s == Src::Projectile;
         return w.sys->take_damage(r, frame).after_multipliers;
     };
-    CHECK_NEAR(hit(1000), 100.0, 1e-3);          // first hit: 999999 frames -> last y (1)
-    CHECK_NEAR(hit(1000), 60.0, 1e-3);           // 0 s -> 0.6
-    CHECK_NEAR(hit(1009), 70.0, 1e-2);           // 0.3 s -> 0.7 (knot)
-    const float mid = hit(1009 + 18);            // 0.6 s: between 0.7 and 0.9
+    CHECK_NEAR(hit(1, 1000, Src::Projectile), 100.0, 1e-3);       // first hit: 999999 frames -> last y (1)
+    CHECK_NEAR(hit(1, 1000, Src::Projectile), 60.0, 1e-3);        // 0 s -> 0.6
+    CHECK_NEAR(hit(1, 1009, Src::Projectile), 70.0, 1e-2);        // 0.3 s -> 0.7 (knot)
+    const float mid = hit(1, 1009 + 18, Src::Projectile);         // 0.6 s: between 0.7 and 0.9
     CHECK(mid > 70.0f && mid < 90.0f);
-    CHECK_NEAR(hit(1027 + 90), 100.0, 1e-3);     // 3 s: past the last knot
+    CHECK_NEAR(hit(1, 1027 + 90, Src::Projectile), 100.0, 1e-3);  // 3 s: past the last knot
+    CHECK_NEAR(hit(1, 1117, Src::Plain), 100.0, 1e-3);            // a plain non-projectile source right after a stamp
+    CHECK_NEAR(hit(5, 1000, Src::None), 100.0, 1e-3);             // no source: never diminished, never stamps
+    CHECK_NEAR(hit(5, 1000, Src::None), 100.0, 1e-3);
+    CHECK_NEAR(hit(5, 1000, Src::Projectile), 100.0, 1e-3);       // so this is still the victim's first stamped hit
+    // the stamp is written only by a diminishing hit: non-projectile hits in between do not move it
+    CHECK_NEAR(hit(6, 2000, Src::Projectile), 100.0, 1e-3);
+    CHECK_NEAR(hit(6, 2000, Src::Plain), 100.0, 1e-3);
+    CHECK_NEAR(hit(6, 2003, Src::Plain), 100.0, 1e-3);
+    CHECK_NEAR(hit(6, 2009, Src::Projectile), 70.0, 1e-2);        // 0.3 s after 2000, not 0.2 s after 2003
+    // a projectile whose shooter is gone: no curve, no stamp (the next live-shooter hit measures from 2009)
+    CHECK_NEAR(hit(6, 2012, Src::Projectile, 77), 100.0, 1e-3);
+    CHECK_NEAR(hit(6, 2018, Src::Projectile), 70.0, 1e-2);
+    // an incognito non-projectile source: the curve applies once, with its bit; then it is a plain source
+    CHECK_NEAR(hit(7, 3000, Src::Projectile), 100.0, 1e-3);
+    w.sys->set_flag(3, kUnitIncognito, true);
+    CHECK_NEAR(hit(7, 3000, Src::Plain, 3), 60.0, 1e-3);
+    CHECK(!(w.sys->flags(3) & kUnitIncognito));
+    CHECK_NEAR(hit(7, 3000, Src::Plain, 3), 100.0, 1e-3);
+    // ALLOW_TARGET_DIMINISHING_FIREPOWER false on the shooter: no curve and no stamp (0.6 s after 4000 at 4018)
+    CHECK_NEAR(hit(8, 4000, Src::Projectile), 100.0, 1e-3);
+    CHECK_NEAR(hit(8, 4000, Src::Projectile, 4), 100.0, 1e-3);
+    CHECK_NEAR(hit(8, 4009, Src::Projectile, 4), 100.0, 1e-3);
+    const float late = hit(8, 4018, Src::Projectile);
+    CHECK(late > 71.0f && late < 90.0f);
+    // another damage kind: no curve and no stamp
+    CHECK_NEAR(hit(9, 5000, Src::Projectile), 100.0, 1e-3);
+    CHECK_NEAR(hit(9, 5000, Src::Projectile, 2, uint8_t{7}), 100.0, 1e-3);
+    CHECK_NEAR(hit(9, 5009, Src::Projectile, 2, uint8_t{7}), 100.0, 1e-3);
+    const float late7 = hit(9, 5018, Src::Projectile);
+    CHECK(late7 > 71.0f && late7 < 90.0f);
     // Slots 44 / 45: min range rejection and the footprint half-extent along the line of sight.
     TargetWorld t;
     UnitDesc mr = t.w.data.units[t.attacker];

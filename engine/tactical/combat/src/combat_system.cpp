@@ -3528,20 +3528,27 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
     // until the flush [M]) loses its incognito bit and its CAUSE_DAMAGE applies whether or not it had the bit; a
     // non-projectile source only when it has the bit - cleared, then CAUSE_DAMAGE. The victim's clear ran first, so a
     // self hit (source == victim, not a projectile) gets no CAUSE_DAMAGE. kUnitSkipTargeting is not read here any more.
+    // s78n t13 (§8.4.1 step 10, side finding): the same branch sets the diminishing-firepower allow flag := the
+    // source's ALLOW_TARGET_DIMINISHING_FIREPOWER (0x397f60(S, 3), default true). Every other hit (no source, a shooter
+    // that is gone, a plain non-projectile source) leaves it false.
     Unit* const src = unit(r.source);
+    bool dim_allowed = false;
     if (src && (r.source_is_projectile || (src->flags & kUnitIncognito))) {
         src->flags &= ~kUnitIncognito;
         x = x * mult(*src, ModKind::CauseDamage);
+        const UnitAbilityDesc* ab[2] = {ability(*src, 0), ability(*src, 1)};
+        const bool act[2] = {src->ability_active[0] != 0, src->ability_active[1] != 0};
+        dim_allowed = ability_flag(ab, act, kFlagAllowDiminishingFirepower);
     }
     if (v.flags & kUnitInBaseShield) x = x * cfg_.base_shield_vulnerability;  // 6
-    if (k == kKindNormal && !r.no_diminishing) {  // 7 diminishing firepower (ALLOW_TARGET_DIMINISHING_FIREPOWER, default true)
-        bool allow = true;
-        if (src) {
-            const UnitAbilityDesc* ab[2] = {ability(*src, 0), ability(*src, 1)};
-            const bool act[2] = {src->ability_active[0] != 0, src->ability_active[1] != 0};
-            allow = ability_flag(ab, act, kFlagAllowDiminishingFirepower);
-        }
-        if (allow) x = x * diminishing(frame, v);
+    // 7 diminishing firepower (retail step 11). s78n t13 (HERO_CLASH §8.4.1, TACTICAL_GAPS §3.3): only for kind 1 and only
+    // when step 10 set the allow flag - a projectile with a found shooter, or an incognito non-projectile source. The
+    // victim's last-hit stamp (+0x304) is written only then, and here: before the damage-enabled gate, the listeners and
+    // the health test (the factor is read first, then the stamp).
+    if (k == kKindNormal && dim_allowed) {
+        x = x * diminishing(frame, v);
+        v.ever_hit = 1;
+        v.last_hit_frame = frame;
     }
     if (v.flags & kUnitUnderConstruction) x = x * cfg_.under_construction_damage_multiplier;  // 8
     if (v.flags & kUnitRetreating) x = x * player(v.owner).retreat_damage_mod;               // 9 (cu8 t03: per faction)
@@ -3566,8 +3573,6 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
         return out;
     }
     out.after_multipliers = x;
-    v.ever_hit = 1;
-    v.last_hit_frame = frame;
     // 14-16 shields, armor, hull [H]
     uint16_t hull_armor = vd.armor_type;
     for (int s = 1; s >= 0; --s) {  // active ability armor override, slot 1 before slot 0 [M]

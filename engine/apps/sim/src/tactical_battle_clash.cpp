@@ -192,8 +192,7 @@ public:
         r.amount = amount;
         r.kind = tc::kKindNormal;
         r.source = source;
-        r.source_is_projectile = false;
-        r.no_diminishing = true;  // HERO_CLASH §3.7: no diminishing firepower for this source
+        r.source_is_projectile = false;  // s78n t13: a non-projectile source without +0x3a1 & 0x10 - no diminishing firepower
         b_.hero_clash_hits_.push_back(r);
     }
 
