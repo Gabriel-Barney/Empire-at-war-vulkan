@@ -2242,7 +2242,7 @@ the order.
    state 0x19 (Deployed); every other locomotor returns 0 (0x13b7d0). Extents 0x371d20: x = `Custom_Hard_XExtent_Deployed`
    × `Scale_Factor` when > 0, else the normal x (0x371be0); **y = `Custom_Hard_YExtent_Deployed` × `Scale_Factor`
    whenever XExtent_Deployed > 0** (also when YExtent_Deployed ≤ 0), else the normal y. FoC sets no
-   `Custom_Hard_XExtent_Deployed` (one type sets only `Custom_Hard_YExtent_Deployed`), so no FoC footprint changes.
+   `Custom_Hard_XExtent_Deployed` (two types, `MPTL` and `MAL_Rocket_Vehicle`, set only `Custom_Hard_YExtent_Deployed`; TACTICAL_COMBAT §5.4.6), so no FoC footprint changes.
    Port: deploying / deployed = the DEPLOY ability active (`AbilitySystem::deployed`) [M: the +0x2b3 byte];
    `drop_deployed_extents`.
 2. **Persist flag.** `Create_Cinematic_Transport`'s `persist` is TransportDataPack +0xc9 (TACTICAL_GAPS §4.2.2 item 3).

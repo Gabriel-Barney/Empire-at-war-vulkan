@@ -1273,12 +1273,12 @@ of from / to are read.
 6. **Per hit**, in list order:
    - O = the object by id; skip it if gone or typeless;
    - m = the type's model for the current mode (0x3729f0; land model type +0x2a0); skip if none;
-   - (lo, hi) = m's bounding box (vf +0x58: min xyz, max xyz, model space);
-   - v = (lo.z + hi.z) × `Scale_Factor` (type +0x658) + O.z (obj +0x80);
+   - (c, h) = m's collision bound (vf +0x58: **centre xyz, half size xyz**, model space; corrected 2026-11-10,
+     TACTICAL_COMBAT §5.4.6: box[2] / box[5] are centre z and half z, not min z / max z);
+   - v = (c.z + h.z) × `Scale_Factor` (type +0x658) + O.z (obj +0x80), the scaled top of the collision bound;
    - if v ≥ M: M = v.
 
-   The term is lo.z + **hi.z** (a sum, not hi − lo): for a box starting at z = 0 it is the scaled top; a box centred
-   on 0 gives O.z. There is no `Hover_Offset`, no fade and no margin. The reduction is a max, so the hit order (tree
+   The term is c.z + h.z = the bound's top z (scaled), plus the object's z. There is no `Hover_Offset`, no fade and no margin. The reduction is a max, so the hit order (tree
    order) does not matter.
 7. Return M. There is no terrain, water or floor term here: those come only from steps 3 and 8.
 

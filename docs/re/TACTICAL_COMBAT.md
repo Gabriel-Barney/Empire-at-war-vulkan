@@ -2990,6 +2990,209 @@ LAND_OBSTACLE that is not a land squad container:
 3. |f·u| > 0.7071 (f = facing = nose, u = line of sight, both unit) → E = E_along, else E_across. In range ⇔
    sqrtf(dx² + dy²) ≤ R + E (unchanged).
 
+#### 5.4.6 Object half-extents 0x371be0 / 0x396850 and the _Deployed range extents (s78n t10, 2026-11-10) [H unless tagged]
+Read from the decompiled code and the retail FoC exe's disassembly (0x371be0, 0x371d20, 0x371f30, 0x372100, 0x396850,
+0x404450, 0x38de80, 0x264920). Callers come from a byte scan of the whole `.text` (every E8 / E9 rel32 and every
+8-byte pointer). Box layout as in §5.4.5: ModelClass vf +0x58 (0x264920) writes **centre (box[0..2]) and half
+(box[3..5])** of the collision bound (alHModel +0x120; centre 0, half 1 when the render object is not an alHModel).
+Shipped data from the FoC XML.
+
+**1. 0x371be0(type T, out hx, out hy): the type's half-extents.** s = `Scale_Factor` (T +0x658).
+1. `Custom_Hard_XExtent` (+0x16bc) > 0 **and** `Custom_Hard_YExtent` (+0x16c0) > 0 → hx = s × X, hy = s × Y. No model is
+   read.
+2. Else m = 0x3729f0(T, current mode, 0) (galactic +0x288, land +0x2a0, space +0x2a8; no fallback to another mode's
+   model). **m = null → hx = hy = 0**, even when one of the two customs is set.
+3. Else box = m vf +0x58, and per axis:
+   - hx = s × X when X > 0, else s × |box[3]| (**collision-bound half x**, rsp+0x2c);
+   - hy = s × Y when Y > 0, else s × |box[4]| (**collision-bound half y**, rsp+0x30).
+
+   The half size is used, not |max|; the bound's centre offset is ignored.
+- **Axis pairing differs from the range extents.** 0x371e70 / 0x372040 (§5.4.5) pair `Custom_Hard_XExtent` with the
+  model's half **y**. 0x371be0 pairs it with the model's half **x**. Every reader of both families applies the X value
+  along the facing (cos θ, sin θ) (0x38de80, 0x404450, the clearance hit test, slot 43 / 46). So for a type **with**
+  Custom_Hard extents the two families agree. For a type **without** them, the 0x371be0 rectangle is the collision
+  bound turned by 90° (models face −Y, §5.4.5): its hull width lies along the nose. That is retail; copy it.
+- No shipped FoC type sets exactly one of the pair once variants inherit (`SPMAT_Walker_*_Death_Clone` set only X but
+  inherit Y 18.0 from `SPMAT_Walker`). So step 2's "one custom set, no model → 0" has no vanilla effect.
+
+**2. 0x371d20(T, out hx, out hy): the deployed pair.**
+- `Custom_Hard_XExtent_Deployed` (+0x16cc) > 0 **and** `Custom_Hard_YExtent_Deployed` (+0x16d0) > 0 → both deployed
+  values × s.
+- Else (h'x, h'y) = 0x371be0(T). Then hx = s × +0x16cc when **+0x16cc** > 0, else h'x; hy = s × +0x16d0 when **+0x16cc**
+  > 0, else h'y. The second test reads +0x16cc again (disassembly 0x371da6). So the deployed Y is used only together
+  with the deployed X: with only `Custom_Hard_YExtent_Deployed` set it is ignored; with only the X set, hy = s × 0 = 0.
+- FoC sets no `Custom_Hard_XExtent_Deployed`. Two types set only `Custom_Hard_YExtent_Deployed` 24.0: `MPTL` and
+  `MAL_Rocket_Vehicle` (A1_READINGS §35.4 item 1 counts one). So **0x371d20 always equals 0x371be0 in FoC**.
+
+**3. 0x371f30 / 0x372100: the deployed range extents** (slot 43 / 46, through 0x396a30 / 0x396b70). Per axis, with
+no shared test:
+- **0x371f30 (X, along the facing):** `Custom_Hard_XExtent_Deployed` > 0 → × s; else `Custom_Hard_XExtent` > 0 → × s;
+  else s × |box[4]| (half y). This is 0x371e70 with one more custom in front.
+- **0x372100 (Y, across):** `Custom_Hard_YExtent_Deployed` > 0 → × s; else `Custom_Hard_YExtent` > 0 → × s; else
+  s × |box[3]| (half x).
+- Unlike 0x371d20, the deployed Y works alone. So **a deployed `MPTL` / `MAL_Rocket_Vehicle` is wider for range
+  tests** (worked example, item 6).
+
+**4. Selection in 0x396850(obj, out hx, out hy).** 0x396a30 / 0x396b70 (one component each) run the same branches.
+1. The object has TEAM (behaviour 0x16) and its locomotor (behaviour 1) answers vf +0x230 true (a land squad
+   container) → the joint box 0x404450 (§5.4.4): hx = the box's half along the container's facing (+0x18), hy = the
+   half across (+0x1c). An empty member array leaves the 0x20cfb0 defaults: (0, 0). 0x396a30 / 0x396b70 also return 0
+   then.
+2. T = obj +0x298. T null → (0, 0).
+3. **Deployed variant** when T `Deploys` (+0xd1) and the object has a locomotor (obj +0x333 ≠ −1) and any of:
+   - locomotor vf +0x130 (Walk 0x61df60: state 0x18 **Deploying**);
+   - locomotor vf +0x120 (Walk 0x61df40: state 0x19 **Deployed**);
+   - the locomotor pack (obj +0xa8) deploy-pending byte +0x2b3 is set (only with `Max_Dist_Walk_While_Deployed`
+     > 0, which no FoC unit sets; MOVEMENT §3.2).
+
+   Only `WalkLocomotorBehaviorClass` implements these vfuncs; every other locomotor answers false. Undeploying (state
+   0x1A) uses the normal extents. 0x396850 calls 0x371d20; 0x396a30 / 0x396b70 jump to 0x371f30 / 0x372100.
+4. Else 0x396850 calls 0x371be0; 0x396a30 / 0x396b70 jump to 0x371e70 / 0x372040.
+- **What the slot 43 / 46 E is.** For a land squad container: the joint box (both families agree). For a deployed
+  `Deploys` walker: 0x371f30 / 0x372100. Otherwise: 0x371e70 / 0x372040 (§5.4.5).
+
+**5. Callers.**
+
+*0x371be0* (on a type; no TEAM or deployed branch):
+
+| Caller | Role |
+|---|---|
+| 0x396850 / 0x371d20 | object half-extents (item 4) |
+| 0x371df0, 0x371e30 | the type's hard radius √(hx² + hy²) (0x371df0 is called from the formation code 0x40e99b / 0x40f8f8 and from movement 0x686b99 / 0x686ba5; 0x371e30 from 0x5ac3c4, the team re-lay) |
+| 0x3b6170 (twice) | land drop validity (TACTICAL_GAPS §4.2.1): the first member type's extents for the 0x5abc00 team layout, and each slot's box (member type M, +0x1b60 substitute) |
+| 0x41b170 | the grid cell (2·hx/20 + FS, 2·hy/20 + FS), FS = `FormationSpacing` (0x371b10), for 0x40f970 |
+| 0x643130 | transport unload layout (0x5abc00), as 0x3b6170 |
+| 0x4d6fd0 (twice) | space drop validity: the query box of the tracking-layer test 0x538330 (space model). For a type with `Space_Layer` 0 and a unit list (+0x978 / +0x980) it is the maximum over the units of \|offset\| + their extents [M: the list's tag] |
+| 0x418d90 | single-object formation start: the query box of 0x538330 for the moving object's type [M: role] |
+| 0x59a900, 0x59d4a0 | space planner search / per-request setup: the planner's object box (MOVEMENT §2) |
+| 0x685e10 | land re-route (MOVEMENT "Path Around"): hx + 5 [M: role] |
+| 0x502770 | presentation: max(hx, hy) scales a direction [L] |
+| 0x58cf90 | audio: a sound position turned by the yaw [M] |
+
+*0x396850* (on an object):
+
+| Caller | Role |
+|---|---|
+| 0x38de80 | **the oriented footprint rectangle**: centre P + R(θ)·s·(`Custom_Hard_XExtent_Offset`, `_YExtent_Offset`), half (hx along a = (cos θ, sin θ), hy along b = (−sin θ, cos θ)). Callers: fog multisample 0x35df03 (FOG_OF_WAR §5.2), the land drop blockers 0x3b6170, 0x442540, 0x685e9c, 0x686500 and 0x39a620 / 0x39a840 / 0x39aa60, 0x40e7f1, 0x4249f3, 0x42e400, 0x43a81d, 0x5323ac, 0x5c7241, 0x5e9f30, 0x642302, 0x64300f, 0x677650, 0x67f350, 0x684813, 0x6a4fba [M: these roles not classified] |
+| 0x3bdd90 | the same rectangle without the offsets |
+| 0x404450 | the joint box: member term (§5.4.4) |
+| 0x3969b0 | hx, hy and √(hx² + hy²). Its one caller is 0x6b3b00, the object-tracking entry: (ex, ey) = (hx, hy) + an expansion argument, used by the clearance hit test of FIGHTER_FLYING §6.3.1 |
+| 0x3969f0 | the hard radius √(hx² + hy²) (about 40 call sites: push, MOVEMENT's maxStep, formations, avoidance) |
+| 0x397780 | TEAM land container: √(hx² + hy²) of the joint box (else 0x373b30, not this function) |
+| 0x397830 | TEAM land container: max(hx, hy) / 20 (cells) |
+| 0x63b640 | the clearance query box (qx, qy) of the flyer (FIGHTER_FLYING §6.3.1) |
+| 0x417520, 0x41ece0, 0x41b4a0 | formation grid cell (2·h/20 + FS) per object; 0x41b4a0 multiplies the two |
+| 0x414d90 | `Compute_Oriented_Formup_Box` for a one-object formation: the box is the object's (hx, hy) |
+| 0x411640 | a formation's world AABB: member P ± (hx, hy) on the **world** axes (not turned) [M] |
+| 0x43aac0 | formation area Σ 4·hx·hy |
+| 0x43a070, 0x43d6a0 | land formation footprint check: each object's box (hx, hy) + a constant expansion [M] |
+| 0x441750, 0x441b60, 0x442540 | Walk path checks, the push prediction (both objects), the MovingVsMoving predictor (both objects) [M for 0x441750] |
+| 0x4267e0 | the query box of a land tracking-layer test 0x538330 [M] |
+| 0x4f6e40 | arrival tolerance min(hx, hy) of a formation's goal object [M] |
+| 0x679aa0, 0x6807e0 | land destination proximity and a land blocking direction test [M] |
+| 0x67ea40 | two objects of the same movement class: false when B's h + 10·FS < A's h on either axis [M] |
+| 0x2a8fb0 | GOM radius query (infection spread, crush): a candidate's world-axis box P ± (hx, hy) [M] |
+| 0x532140 | a grid-cell lookup with the object's extents [L] |
+| 0x677340 | extents of the global object 0x140a443a8, min(hx, hy) + 0.5 [L] |
+
+**Not 0x396850:** the space composition 0x5d58f0 (MOVEMENT §4.6.4, "[M: which extent]") uses the world AABB 0x3982b0
+(SPACE_AVOIDANCE §3.1) for the seed and each candidate. That is a TEAM container's team box (team +0x8c centre,
++0x98 half); else the collision bound through the model's world matrix (rotation and scale, half_i = Σ|M_ij·h_j|);
+no model → [P, P + 0.1]. The test compares **box centres** (|cc − cs|), not object positions. `Custom_Hard` extents
+are not read there (CU8K_T03_T08_T09_RE §3 item 3, confirmed).
+
+**Side finding: the clearance hit value (FIGHTER_FLYING §6.3.1 step 6).** It reads vf +0x58's box[2] and box[5]
+(local_40 = +8, local_34 = +0x14). Those are the collision bound's **centre z and half z**, not min z and max z. So v =
+(c.z + h.z) × `Scale_Factor` + O.z, the scaled top of the collision bound. That settles the "a sum, not hi − lo" note
+there.
+
+**6. Worked examples.**
+- **Nebulon_B_Frigate** (s 0.70, no customs; collision half (33.54, 157.07, 95.52), |max| (33.54, 159.80)):
+
+  | Function | Along the facing | Across |
+  |---|---|---|
+  | 0x396850 / 0x371be0 | 0.7 × 33.54 = **23.48** | 0.7 × 157.07 = **109.95** |
+  | 0x371e70 / 0x372040 | 109.95 | 23.48 |
+  | the port's \|max\| (`clearance_half_extents`, `drop_half_extents`) | 23.48 | 0.7 × 159.80 = 111.86 |
+
+  So its fog multisample rectangle (when `Multisample_FOW_Check` is set) and its 0x6b3b00 tracking entry are 23.48
+  along the nose and 109.95 across.
+- **MPTL** (`Custom_Hard_XExtent` 30, `_YExtent` 15, `_YExtent_Deployed` 24, s 1.1, `Deploys`, WALK_LOCOMOTOR):
+
+  | Function | Undeployed | Deploying / deployed |
+  |---|---|---|
+  | 0x396850 (0x371be0 / 0x371d20) | (33.0, 16.5) | (33.0, 16.5): the deployed Y is ignored |
+  | slot 43 / 46 (0x396a30 / 0x396b70) | X 33.0, Y 16.5 | X 33.0, **Y 26.4** |
+
+  A shooter on the MPTL's flank (|f·u| ≤ 0.7071) reaches it at R + 26.4 once it is deploying or deployed, instead of
+  R + 16.5. `MAL_Rocket_Vehicle` (30 / 15 / 24, s 0.7): Y 10.5 → **16.8**.
+- **Stormtrooper squad member** (`Stormtrooper` 2.0 / 2.0, s 1.5; infantry do not deploy): 0x396850 = (3.0, 3.0), the
+  member term of the joint box.
+
+***Port spec (s78n t10).*** Let h = the collision-bound half of the type's model for the battle's mode
+(`AvoidModel::bound_h` of `avoid_model(t, space)`: Land_Model_Name in land, Space_Model_Name in space, no fallback;
+(1, 1, 1) with no collision mesh). **H(T)** = 0x371be0:
+- both customs > 0 → s × (X, Y);
+- else no model for the mode → (0, 0);
+- else per axis: X > 0 ? s·X : s·|h.x|, and Y > 0 ? s·Y : s·|h.y|.
+
+**H_obj** = 0x396850: the joint box for a land squad container, H_dep for a deploying / deployed `Deploys` walker
+(the 0x371d20 rule), else H(T).
+1. **`TacticalBattle::clearance_info` / `mv::clearance_half_extents`** (0x63b640 query box, 0x6b3b00 entries →
+   0x396850). The axis mapping is right (x → hx).
+   - *Port must change* the measure: use |h.x|, |h.y| of the collision bound, not |max x / y| of `model_info`'s
+     bind-pose box of all meshes.
+   - *Port must change* the no-model rule: (0, 0) unless both customs are set.
+   - *Port must change* the hit value (side finding): `box_lo_z` := `bound_c.z`, `box_hi_z` := `bound_h.z`, so
+     `clearance_top` = (c.z + h.z) × s + O.z.
+   - No team or deployed branch is needed: flyers and Corvette-layer objects are neither.
+2. **`drop_half_extents`** (tactical_battle.cpp; 0x3b6170 slot boxes, 0x41b170 cells, 0x5abc00 / 0x643130 layouts →
+   0x371be0). The axis mapping is right.
+   - *Port must change* to H(T): |h| of the **land** collision bound instead of |max| of `model_info(type, false,
+     true)`.
+   - *Port must change:* no fallback to the space or galactic model (0x3729f0 reads the land slot only; the +0x1b60
+     substitution happens before, in `land_drop_shape`).
+   - *Port must change:* (0, 0) without a land model unless both customs are set.
+   - *Port's current rule is right:* `drop_deployed_extents` matches 0x371d20, including the +0x16cc test for Y. It
+     changes nothing in FoC. Blockers (0x38de80) also need the joint box for a land squad container (H_obj) [M:
+     whether 0x3b6170's tree query returns containers was not traced].
+3. **`fog_footprint_samples`** (0x38de80 → 0x396850). *Port's current rule is right* for H(T): |bound_h.x| along the
+   facing, |bound_h.y| across, the half size. *Port must change* to H_obj:
+   - the joint box for a land squad container. No FoC team type sets `Multisample_FOW_Check`, so no vanilla effect;
+   - 0x371d20 when deploying / deployed. No FoC effect;
+   - (0, 0) without a model unless both customs are set. The `extent_box` stand-in stays [port] for types whose model
+     is not loaded.
+4. **`MovementSystem::compose_space` candidate extents** (`c.ex` / `c.ey` = hard extent else radius). Retail is not
+   0x396850 but the world AABB 0x3982b0. *Port must change:*
+   - (c.pos, c.ex, c.ey) := the x / y of `box_c` / `box_h` of the space-avoid world box (space_avoid.cpp: collision
+     bound through yaw, `Scale_Factor`, position; [P, P + 0.1] without a model);
+   - for a squadron key: the union box of its fighters' world boxes (team +0x8c / +0x98, 0x405b10) [M: the union rule
+     there];
+   - the seed / candidate offsets |cc − cs| use these box centres; the 0.33·D `reach` term is unchanged (D as in
+     CU8K_T03_T08_T09_RE §3 item 3);
+   - drop the "[M: which extent]".
+5. **`SquadSlot` hx / hy** (host `land_squad_slots`, 0x404450's member term → 0x396850 of the member). *Port must
+   change* (fill the host): hx = H_obj(member).x (applied ± along the slot's along offset +0x114), hy = H_obj(member).y
+   (± the side offset +0x118). The member is never a container. Stormtrooper: (3.0, 3.0). Skip null members and members
+   without a locomotor pack. *Port's current rule is right* in `squad_joint_half_extents` (box from (0, 0), half span +
+   `MaxJiggleDistance`).
+6. **CombatSystem slot 43 / 46 `_Deployed` extents** (`footprint_extents`, `target_extent`, `min_range_geometry`).
+   *Port must change:* when the target's type `Deploys`, it has a locomotor, and the Walk state is 0x18 Deploying or
+   0x19 Deployed (port: the DEPLOY ability active, `AbilitySystem::deployed` as in A1_READINGS §35.4 item 1; the
+   pending byte +0x2b3 is never set in vanilla):
+   - ex = `Custom_Hard_XExtent_Deployed` × s when > 0, else the normal ex;
+   - ey = `Custom_Hard_YExtent_Deployed` × s when > 0, else the normal ey.
+
+   Each axis is independent (0x371f30 / 0x372100, not 0x371d20's shared test). Not while undeploying (0x1A); not for
+   a land squad container (the joint box comes first).
+   - FoC effect: the deployed `MPTL` across extent 16.5 → 26.4, `MAL_Rocket_Vehicle` 10.5 → 16.8. This holds for
+     ability `Target_In_Range` too (§5.4.2, slot 43).
+   - `UnitDesc` needs the two deployed values × s.
+
+**Confidence.** [H] items 1–4, the axis pairings, the 0x371d20 +0x16cc quirk and the side finding (all from the
+disassembly). [M] the caller roles tagged [M] in the tables, and the squadron union rule of port spec item 4. [L]
+0x502770, 0x532140, 0x677340.
+
 ---
 
 ## 6. Port checklist (implementer summary)
