@@ -348,9 +348,23 @@ bool TacticalBattle::teleport(TacticalMode& mode, objects::ObjectId id, Vec3 pos
     st.set_facing(h, facing);
     // s78n review (TACTICAL_COMBAT §5.4.4 item 2.4: position setters move a land squad container too [M]): a squad
     // container is no battle unit but has a mover of its own, which commit() writes back to the store - so it moves with
-    // the mover (its members then recover to their slots around the new place).
-    if (const Unit* u = unit_by_id(id); movement_ && ((u && u->movable) || (!u && movement_->is_land_team_container(id))))
+    // the mover. s78n t18 (FIGHTER_FLYING §7.4, 0x3abb80): its members go with it, each at the new place + its old
+    // offset from the container (MovementSystem::teleport); their store / combat positions and tree boxes follow here.
+    const Unit* u = unit_by_id(id);
+    const bool squad = !u && movement_ && movement_->is_land_team_container(id);
+    if (movement_ && ((u && u->movable) || squad))
         movement_->teleport(id, {position.x, position.y}, position.z, yaw_deg_of(facing), frame_);
+    if (squad) {
+        for (const Unit& m : units_) {
+            if (!m.alive || m.retreated || m.container >= containers_.size() || containers_[m.container].id != id) continue;
+            if (!movement_->has_unit(m.id) || !st.alive(m.h)) continue;
+            const mv::UnitView v = movement_->view(m.id);
+            const Vec3 p{v.pos.x, v.pos.y, map_.terrain.sample_height(v.pos.x, v.pos.y)};
+            st.set_position(m.h, p);
+            if (combat_ && combat_->has_unit(m.id)) combat_->set_position(m.id, to_t(p));
+            mode.trees().update(static_cast<tactical::EntityHandle>(m.id), mode.bounds_of(m.h));
+        }
+    }
     if (combat_ && combat_->has_unit(id)) {
         combat_->set_position(id, to_t(position));
         combat_->set_facing(id, to_t(facing));

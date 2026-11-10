@@ -880,6 +880,7 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u->hold_until = 0;
     u->nudge_frames = 0;
     end_push(*u);  // a1k t03 [port]: a teleport ends a pushed move
+    const V2 old = u->m.pos;
     u->m.pos = pos;
     u->m.yaw = wrap_deg(yaw_deg);
     u->z = z;
@@ -906,6 +907,27 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
                 u->fs.hold = 0;
             }
         }
+    }
+    if (cfg_.mode == MoveMode::Land && u->d.team_container) {
+        // s78n t18 (FIGHTER_FLYING §7.4, 0x3abb80(K, pos)): every member of the container's TEAM list is put at pos +
+        // (m.P - K.P), its offset from the container kept, with its locomotor idle; member facings are not written. The
+        // steering members and the members suspended for a hero clash ([port] they are TEAM entries too); a parked
+        // (garrisoned) member is not in the system and keeps its stored offset. Start delays, jiggle, the slots and the
+        // laid-out flag are untouched.
+        const ObjectId k = u->d.id;
+        const auto place = [&](Unit& m) {
+            m.m.pos = pos + (m.m.pos - old);
+            m.m.speed = 0.0f;
+            m.m.state = LocoState::WalkStopped;
+            m.recovery = 0;
+            if (height_) m.z = height_(m.m.pos.x, m.m.pos.y);
+            update_tree(m);
+        };
+        for (Unit& m : units_)
+            if (m.anchor == k) place(m);
+        for (const LandTeamSlot& p : parked_)
+            if (p.container == k)
+                if (Unit* m = unit_ptr(p.member)) place(*m);
     }
     if (cfg_.mode == MoveMode::Land) update_tree(*u);
     else park_space(*u, frame);

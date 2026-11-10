@@ -3298,16 +3298,19 @@ static void test_land_squad_review() {
         CHECK(goal_frames > 10 && wall_frames > 0);  // it walked, on impassable cells too
         CHECK((!sys.view(100).has_goal && !sys.view(1).has_goal && length(sys.view(1).pos - sp0) <= 4.0f));  // and is on its slot
         CHECK(!sys.grid().passable_world(sp0, mask));
-        // the container is teleported to open ground: the member recovers to its slot there
+        // the container is teleported to open ground: s78n t18 (0x3abb80) the member goes with it, at its offset - it
+        // stands on its slot there and has nothing to recover
         const V2 there = cell_center(20, 30);
+        const V2 off1 = sys.view(1).pos - sys.view(100).pos;
         CHECK(sys.teleport(100, there, 0.0f, 0.0f, 200));
+        CHECK(sys.view(1).pos == there + off1);
         bool again = false;
         for (uint32_t f = 200; f < 700; ++f) {
             sys.tick(f, rng, serial_for);
             again = again || sys.view(1).has_goal;
         }
         const V2 sp{there.x - 20.0f, there.y};  // slot (-20, 0) at yaw 0, no jiggle (the team never moved)
-        CHECK(again && !sys.view(1).has_goal && length(sys.view(1).pos - sp) <= 4.0f);
+        CHECK(!again && !sys.view(1).has_goal && length(sys.view(1).pos - sp) <= 4.0f);
         std::printf("land squad review: slot in a wall - recovering %u frames, on impassable cells %u frames\n", goal_frames,
                     wall_frames);
     }
@@ -4333,6 +4336,59 @@ static void test_land_squad_review_fixes() {
     }
 }
 
+// s78n t18 item 8 (FIGHTER_FLYING §7.4, 0x3abb80): a teleport of the container puts every member at the new place + its
+// old offset from the container, with its locomotor idle; member facings are not written; a parked member's stored
+// offset is not touched.
+static void test_land_squad_teleport() {
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    const V2 at = cell_center(20, 20);
+    t14b_squad(sys, at, 1);
+    SimRng rng(51);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = cell_center(40, 24);
+    sys.move(o, rng, 1);
+    for (uint32_t f = 1; f < 100; ++f) sys.tick(f, rng, serial_for);  // marching (an early order starts at frame 61)
+    CHECK(sys.view(100).speed > 0.0f && sys.view(1).speed > 0.0f);
+    V2 off4;
+    CHECK(sys.park_team_member(4) && sys.parked_offset(4, off4));
+    const UnitView k0 = sys.view(100);
+    UnitView m0[4];
+    for (ObjectId id = 1; id <= 3; ++id) m0[id] = sys.view(id);
+    const V2 to = cell_center(60, 50);
+    CHECK(sys.teleport(100, to, 0.0f, 90.0f, 100));
+    const UnitView k1 = sys.view(100);
+    CHECK(k1.pos == to && k1.yaw == 90.0f && k1.speed == 0.0f && !k1.has_goal);
+    for (ObjectId id = 1; id <= 3; ++id) {
+        const UnitView m = sys.view(id);
+        const V2 want = to + (m0[id].pos - k0.pos);  // the same expression the system evaluates
+        CHECK(m.pos == want && m.speed == 0.0f && m.yaw == m0[id].yaw);
+    }
+    V2 off4b;
+    CHECK(sys.parked_offset(4, off4b) && off4b == off4);
+    // a member in recovery (0x2A) has it cleared by the teleport
+    for (uint32_t f = 100; f < 110; ++f) sys.tick(f, rng, serial_for);
+    const V2 m1 = sys.view(1).pos;
+    CHECK(sys.teleport(1, {m1.x + 40.0f, m1.y}, 0.0f, 0.0f, 110));
+    bool recovering = false;
+    for (uint32_t f = 110; f < 210 && !recovering; ++f) {
+        sys.tick(f, rng, serial_for);
+        recovering = sys.view(1).has_goal && sys.view(1).speed > 0.0f;
+    }
+    CHECK(recovering);
+    const V2 kp = sys.view(100).pos, mp = sys.view(1).pos;
+    const V2 to2 = cell_center(30, 60);
+    CHECK(sys.teleport(100, to2, 0.0f, 90.0f, 210));
+    CHECK(sys.view(1).pos == to2 + (mp - kp) && sys.view(1).speed == 0.0f && !sys.view(1).has_goal);
+    // a suspended member (a hero clash) is a TEAM entry: it moves with the container too
+    CHECK(sys.suspend_team_member(2));
+    const V2 kp2 = sys.view(100).pos, sp2 = sys.view(2).pos;
+    CHECK(sys.teleport(100, at, 0.0f, 0.0f, 211));
+    CHECK(sys.view(2).pos == at + (sp2 - kp2));
+    std::printf("land squad teleport: members keep their offsets, speeds 0, facings kept, parked offset kept\n");
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -4373,6 +4429,7 @@ int main() {
     test_land_squad_part_b();       // s78n t14 part B
     test_land_squad_speed_step();   // s78n t16
     test_land_squad_review_fixes(); // s78n review
+    test_land_squad_teleport();     // s78n t18 item 8
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

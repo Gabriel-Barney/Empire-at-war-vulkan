@@ -389,15 +389,9 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             exec_move(mode, one, so.to.x, so.to.y, *bt_rng_, mv::kNoFacing, false, mv::kMoveFlagSkipValidation);
             continue;
         }
+        // s78n t18 (0x3abb80): the container's teleport takes its members along, each at its offset
         const Vec3 to{so.to.x, so.to.y, map_.terrain.sample_height(so.to.x, so.to.y)};
         (void)teleport(mode, so.container, to, store.facing(store.find(so.container)));
-        for (const mv::MovementSystem::LandTeamSlot& t : movement_->land_team(so.container)) {
-            const objects::ObjectHandle mh = store.find(t.member);
-            if (!store.alive(mh)) continue;
-            const Vec3 p = store.position(mh);
-            const float x = p.x + (to.x - so.at.x), y = p.y + (to.y - so.at.y);
-            (void)teleport(mode, t.member, Vec3{x, y, map_.terrain.sample_height(x, y)}, store.facing(mh));
-        }
     }
     if (captures_) {
         const std::vector<tg::CaptureEvent> caps(captures_->events().begin(), captures_->events().end());

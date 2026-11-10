@@ -1271,6 +1271,7 @@ void test_land_squad_garrison() {
     float out_gap = -1.0f;
     bool settle_target = false;  // s78n t14: a member has a target when the squad stopped (no recovery, §7.3 item 6)
     bool inside_ok = false, rejoined = false, ordered = false, store_ok = true, teleported = false, walking_out = false;
+    bool tele_members = false;  // s78n t18: the container's teleport moved its members with it
     std::vector<std::pair<mv::ObjectId, mv::V2>> in_slots;  // each member's slot when it went in (team_slot)
     std::vector<mv::V2> in_off;                            // and its offset from the container (parked_offset)
     Vec3 exit_x{};
@@ -1431,18 +1432,26 @@ void test_land_squad_garrison() {
             // commit() wrote the old position back); the members then recover to their slots there
             const Vec3 p = st.position(th);
             tele_to = Vec3{p.x + 60.0f, p.y + 40.0f, p.z};
+            std::vector<mv::V2> off0;
+            for (const auto id : members) off0.push_back(ms.view(id).pos - k.pos);
             CHECK(b->teleport(*tm, team_id, tele_to, st.facing(th)));
+            // s78n t18 (FIGHTER_FLYING 7.4, 0x3abb80): every member at the new place + its old offset, store = mover
+            tele_members = true;
+            for (size_t m = 0; m < members.size(); ++m) {
+                const mv::UnitView v = ms.view(members[m]);
+                const Vec3 sp = st.position(st.find(members[m]));
+                tele_members = tele_members && std::fabs(v.pos.x - (tele_to.x + off0[m].x)) < 1e-3f &&
+                               std::fabs(v.pos.y - (tele_to.y + off0[m].y)) < 1e-3f && sp.x == v.pos.x && sp.y == v.pos.y &&
+                               v.speed == 0.0f;
+            }
             stage = 6;
             stage_frame = b->frame();
             continue;
         }
         if (b->frame() < stage_frame + 2) continue;
         const Vec3 p = st.position(th);
-        teleported = k.pos.x == tele_to.x && k.pos.y == tele_to.y && p.x == tele_to.x && p.y == tele_to.y;
-        // recovering to the new slots - s78n t14: only while the team has no target (§7.3 item 6)
-        bool tgt_now = false;
-        for (const auto id : members) tgt_now = tgt_now || b->combat().current_target(id) != tc::kNoObject;
-        for (const auto id : members) teleported = teleported && (tgt_now || ms.view(id).has_goal);
+        // s78n t18: the members went with the container (each at its offset), so the squad stands as it stood
+        teleported = k.pos.x == tele_to.x && k.pos.y == tele_to.y && p.x == tele_to.x && p.y == tele_to.y && tele_members;
         done = true;
     }
     std::printf("  land squad garrison: stage %d, %zu members inside %d, walker drove %.1f, rejoined %d, container %.1f from the "

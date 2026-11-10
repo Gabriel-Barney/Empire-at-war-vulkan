@@ -371,6 +371,8 @@ public:
     // L1 systems: Teleport (0x3a8f90; Start_Cinematic_Space_Retreat line-up, Lua Teleport): the unit stops (its
     // order is dropped) and is placed at `pos` / `z` with yaw `yaw_deg`; land: the collision tree entry moves; space:
     // a stationary occupancy track from `frame`. No draws. False when the unit is unknown.
+    // s78n t18 (FIGHTER_FLYING §7.4, 0x3abb80): a land squad container takes its members along - each steering (or
+    // suspended) member is put at `pos` + its old offset from the container, speed 0, its facing kept.
     bool teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint32_t frame);
     // S7 t06 / t14 (MOVEMENT §3.1.1, 0x3a9910): swap a Uses_Multiple_Locomotors unit to its secondary locomotor (true)
     // or back to its primary (false); see "multi" in the header comment. Returns false when the unit is unknown, the mode
