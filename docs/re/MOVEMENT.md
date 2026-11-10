@@ -1621,7 +1621,9 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
 
 **Step 2: formations.** Inside each bucket, repeat until the bucket is empty:
 1. **Seed.** The remaining member nearest the bucket centroid (`0x4f7060`); ties keep the earlier one in the vector.
-2. **Destination.** The clamped order point, validated as a passable cell for the seed's MovementClass and OccupationStyle (`0x50f480`, search radius 30) unless flag 0x20 is set. Locomotors that answer vf +0x240 use the position finder at `0x1409cf220` instead.
+2. **Destination.** The clamped order point P (`0x583150`: the block's goal point, for an object goal the object's position, clamped to the playable box), **validated against the seed's zone** by `0x50f480`(P, the seed's position, the seed type's OccupationStyle, its MovementClass, 30) unless flag 0x20 is set. The rule is §4.3.1 item 7: P is kept when its cell is in the same zone as the seed's cell; otherwise it becomes the centre of the nearest-to-the-seed cell of the seed's zone on the first ring around P that has one. *(Corrected s78n t20: this said "validated as a passable cell"; the test is zone equality, not passability, and the result is used only for position goals.)* Locomotors that answer vf +0x240 use the position finder at `0x1409cf220` instead.
+   - Validation fails (no such cell within 29 rings): the composition pass **returns at once**. Formations already made in this pass stay; this seed and every member not yet placed get no formation for this order, and the destination check of §4.3.1 is not run [H for the return, M for the effect].
+   - Use: for a **position goal (block kind 1) without flag 0x20** whose validated point V differs from P, the formation's block is a fresh kind-1 block at V carrying only the order's flags word (+0x48); the order's final facing is not carried over (block +0x5c = 0) [H]. In every other case (V = P, an object goal, flag 0x20) the block is a copy of the order: for an object goal the validated point is thrown away.
 3. **Stagger** (`PathFrameDelay`, synced random), see §1.6.
 4. **Recruitment.** Only when the seed's `FormationGrouping` (+0x16a4) is not Solo. A candidate from the same bucket joins when all of these hold:
    - the seed is not an engaged short-range attacker;
@@ -1665,7 +1667,7 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
    - Re-sort the kept members by lateral projection (`0x420790`), so units keep their left/right order and never cross.
 3. **Lateral placement.** gap = (2·half-width − Σ widths)/(count + 1). Member k is offset by (cumulative gaps + widths − half-width) × 20. The next row steps back by this row's largest width × 20.
 4. **Store.**
-   - Land: the slot's world position is quantised to the grid (`0x423ec0`).
+   - Land: the member's **form-up point** (its slot in the form-up box at the path start, `0x414d90`) is stored as a world position in a second object-ID-keyed hash (formation +0x140…+0x170, `0x423ec0`). *(Corrected s78n t20: this said "quantised to the grid". Nothing is rounded: the box is kept in cell units, and the point is converted with world = cells × 20 − 10 as a float. `0x423ec0` only erases and re-inserts the hash entry.)*
    - Space: slot z = the member's `Layer_Z_Adjust`.
    - Offsets live in an **object-ID-keyed hash** (formation +0x108…+0x130; insert `0x423ae0`, lookup `0x41a8d0`). It is never iterated.
 5. **Footprint check**: *(corrected s78n t19, 2026-11-10; the earlier text "`0x40eb90` → `0x43a070`, non-members
@@ -1695,11 +1697,14 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
    Object goals (kind 3) go to `0x438c10` (item 5); every other kind to `0x439360`.
 3. **`0x439360`** takes every descriptor whose first member's `Space_Layer` is Land (`0x397900`(m, 1) = 0x10).
    **No member-count gate: one squad container or one vehicle qualifies.** The descriptors are sorted nearest
-   first to the group centroid C and the first is test-planned (`0x41c1a0`(R, 1)); a path of fewer than 2 nodes
+   first to the group centroid C and the first, R, is test-planned (`0x41c1a0`(R, 1)); a path of fewer than 2 nodes
    ends the pass with nothing changed. Axis a = that path's last segment direction d1, or the order's facing when
    it has one; φ = the signed angle from the path's first to its last segment. Passes n = 0 … 40 over the
-   **centre** Dn: D (the ordered goal) for n = 0, else D + 20·⌈n / 8⌉·(cos, sin)((n mod 8)·45°); Dn must be passable
-   (`0x50e180`), zone-connected to D and reachable by a straight line or a path ≤ 1.8 × the distance. Each
+   **centre** Dn: D for n = 0, else D + 20·⌈n / 8⌉·(cos, sin)((n mod 8)·45°). **D = the goal point of R's own
+   block** (`0x583150` on `0x41a4e0`(R)), i.e. for a position order the point **validated** for R's seed in §4.2
+   step 2 (item 7), not the raw order point *(s78n t20; "the ordered goal" before)*. Pass 0 tests nothing about D
+   itself. For n ≥ 1, Dn must be passable (`0x50e180`, R's formation class F +0x1c4), zone-connected to D
+   (`0x50ee10`, item 7) and reachable by a straight line or a path ≤ 1.8 × the distance. Each
    formation i is placed by `0x43d6a0` with step direction v_i = normalise(rotate(centroid_i − C, φ)), or −d1 when
    it is the only formation or that offset is zero. Any formation failing → next n. After n = 40 one forced pass at
    D accepts everything. **The order is never refused.**
@@ -1723,7 +1728,16 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
      table (`0x505020`, §5.2 item 6) and the member cannot crush it (`0x5c8900`). **Reject iff Σ over blockers of
      hx·hy (their unexpanded half extents) > 0.15 × (HX + S)(HY + S)** (0.15 at `0x140865dc0`).
    - Accept: the formation's block goal := the centre (`0x423e70`), its rectangle is stored (formation +0x258) and
-     appended to the taken list.
+     appended to the taken list. The centre is used **as computed, unrounded** (s78n t20).
+   - Ground state of the tries (s78n t20, [H]). "Met" is set by the first try whose centre cell or R is
+     impassable; the next try on passable ground turns it into "crossed". Only while "crossed" is a try tested for
+     zone connection **to Dn** and for the line / 1.8 × path from Dn. A try that fails after the ground tests
+     (zone, path or object test) while "crossed", followed later by another impassable try, **ends the tries at
+     once** (fail). Before "met", the first formation uses the halved, alternating offsets of the first bullet;
+     from "met" on it uses the full step t.
+   - Forced pass (the last argument set): the same 40 tries run and the first accepted one is taken as usual. Only
+     when none is accepted the block goal := the centre of the **last try that reached the object test**, or Dn
+     when no try got that far, and that rectangle goes to the taken list.
 5. **`0x43a070`** is the attack-arc slot test of object goals (`0x438c10` → `0x43d380` → `0x43b520`, 5° steps,
    `Base_Land_Targeting_Arc_Angle_Coefficient`): a slot needs a passable point, zone connection and a clear line to
    the target, and passes iff Σ (hx + S)(hy + S) < 0.15·HX·HY over the objects in the rectangle (HX + E, HY + E)
@@ -1731,6 +1745,74 @@ Read from `0x40eb90`, `0x410e90`, `0x41c1a0`, `0x43c1b0`, `0x439360`, `0x43d6a0`
 6. **Single-member shortcut in the plan `0x41c1a0`:** block kind ≠ 3, flags without 0x10 and 0x20, and the 2-D
    distance to the goal < √(hx² + hy²) (`0x3969f0`): with one block the formation signals 10 (arrived), stops and
    goes to state 3; with more blocks the block is popped. (A unit ordered onto its own footprint does not move.)
+
+7. **Zone validation `0x50f480`, zone connection `0x50ee10` and where the path ends (s78n t20 RE, 2026-11-10; read
+   from `0x50f480`, `0x50ead0`, `0x50ecd0`, `0x50da90`, `0x50e180`, `0x50e280`, `0x43c1b0`, `0x439360`, `0x43d6a0`,
+   `0x417520`, `0x414720`, `0x41c1a0`, `0x40e260`, `0x5a2e00`, `0x5a1910`, `0x5a3020`, `0x5a3ba0`, `0x5a49c0`,
+   `0x41ece0`, `0x423ec0`) [H unless tagged].**
+   - **Zones** (`0x50da90`, rebuilt with the regions): per OccupationStyle layer and per MovementClass every
+     region gets a zone id: **0 when the region's passability bits fail the class mask**, else a component number
+     ≥ 1 from a flood fill over adjacent passable regions [M: that the fill graph is the region adjacency of
+     §1.4]. A cell's zone is its region's; "none" (−1) when the cell is outside the grid, in the uncovered last
+     row / column, the class is −1, the mode is not land, or the **style is not 0**.
+   - **`0x50ee10`(A, B, class, style)** "zone-connected": true outright when the mode is not land; otherwise true
+     iff both cells have regions, **both regions pass the class mask** and their zone ids are equal. An impassable
+     end point is never zone-connected to anything.
+   - **`0x50f480`(P, Q, style, class, 30, out)**, cells by trunc((x + 10) / 20):
+     1. zone(Q) = none and Q's cell lies outside the grid, **or zone(Q) = zone(P)** → out := P unchanged, true.
+        Passability is not looked at: with Q on impassable ground (zone 0) an impassable P is kept; with style ≠
+        0 both are "none" and P is always kept.
+     2. Otherwise rings r = 1 … 29 (the 30 is an exclusive bound in **cells**: up to 580 world units) of the
+        square around P's cell. Candidate order within a ring: for i = −r … r the cell (px + i, py + r) and then
+        its mirror (px − i, py − r); then for j = 1 − r … r − 1 the cell (px + r, py + j) and then its mirror
+        (px − r, py − j). A candidate is kept when it is inside the grid and **its zone id equals zone(Q)**. As
+        decompiled, a mirror cell is only looked at when the first cell of its pair is inside the grid and has a
+        region.
+     3. The first ring with at least one kept candidate decides: out := the centre (cell × 20, z = 0) of the
+        kept cell **nearest to Q** (straight distance to the cell centre; strict <, so the earliest candidate
+        wins a tie), true. No later ring is looked at even when it holds a nearer cell.
+     4. No ring has one → false, out untouched.
+     5. Quirk [H as read, M for the effect]: with Q on impassable ground and P passable, step 2 looks for cells
+        of zone 0, i.e. the result is an **impassable** cell near P.
+   - **Callers.** (a) Composition, §4.2 step 2: Q = the seed's position, class / style of the seed's type. (b)
+     The formation path `0x417520`, every (re)plan: goal G = the block's goal point for the lead (`0x5833e0`; for
+     an object goal the object's position, or its hardpoint / stored point) after staging `0x40e260` (which only
+     moves G when a member stands inside its minimum range of an object goal); when G is not zone-connected to
+     the lead for the formation's class F +0x1c4: G := `0x50f480`(G, the lead's position, style 0, that class, 30),
+     and the plan fails when that fails. So **a path to an object goal on impassable ground (a structure) ends
+     on the reachable cell next to it that is nearest to the lead**, before any trimming (§4.3.2). (c) `0x414720`
+     picks F +0x1c4 at every plan: the class with the most mask bits among those whose mask is contained in the
+     intersection of all members' masks (`0x4779e0`); when the goal is zone-connected to the lead for it (or
+     validates), and is also zone-connected for the best class without the Shield bit 0x40 (`0x477b00`), that
+     class instead.
+   - **What reaches the destination check.** D (item 3) is R's validated point, so it is normally passable and
+     in R's zone, and the check runs as written. D can still be impassable only when R's seed itself stands on
+     impassable ground (zone 0 = zone 0), when the seed's OccupationStyle is not 0, or when the seed is outside
+     the grid. Then: every try of pass 0 fails (the centre is impassable, or after "crossed" it is not
+     zone-connected to D), passes 1 … 40 fail their own zone test, and the forced pass, finding no try that
+     reached the object test, **keeps D**. The check changes nothing for an impassable D.
+   - **Test plan to an impassable goal** (`0x41c1a0`(R, 1) → `0x417520`): the lead on passable ground → G is
+     re-validated as in (b) and the path has ≥ 2 nodes. The lead on impassable ground too → the region search
+     `0x5a3020` fails unless start and goal share one region (it needs the **start region** to pass the class mask
+     and never enters an impassable region), the path is left empty and the destination check ends with nothing
+     changed. The single-member shortcut of item 6 (a unit ordered onto its own footprint) returns before any
+     path as well.
+   - **Where the formation path ends.** The request goal is G as a float point; `0x5a1910` only derives the start
+     and goal **cell indices** from the request (goal cell = trunc((G + 10) / 20); the start cell likewise, or
+     for an object-less / negative-turn-rate request the best-aligned of the up to four cells around the start).
+     The same-region builder `0x5a3ba0` emits start, start cell centre, goal cell centre, **exact G**; the
+     region-path builder `0x5a0550` appends the exact goal too (§1.4); the visibility pass `0x5a49c0` always
+     keeps the last point. So **the path ends exactly on the block goal** (the
+     accepted centre of item 4, the validated point, or the ring cell centre of step 3), not on a cell centre
+     [H for the request and the raw point list, M that the shortcut pass `0x5a4130` never moves the last point].
+     Slot offsets (hash +0x108, `0x423ae0`) are float world offsets (depth, lateral); nothing in `0x41ece0`
+     rounds a slot to a cell.
+
+***Port spec (zone validation):*** before the destination check, replace a position goal P that is not in the
+lead's zone (impassable for its class, or cut off) by the cell centre of step 3 above: nearest to the unit among
+the cells of the unit's zone on the first square ring (1 … 29 cells) around P that has any. Run the destination
+check from that point. Do the same in the path builder for an object goal's point. Do not round an accepted
+centre or a member slot to a cell.
 
 ***Port spec (destination check):*** at a land move order without the forced flag and without an object goal, for
 every formation of the order (a lone squad or single vehicle included) whose lead is on the Land layer, test the
@@ -1742,9 +1824,10 @@ back). Units count at their **destinations** when they have a path. The collisio
 forced-path moves, attack orders and non-Land formations. Nothing runs at arrival: a squad or unit simply ends its
 path where the (possibly cut) path ends.
 
-*Not read:* the passability primitives' rules; block +0x5f (set by `0x417520`; the object test then never rejects
+*Not read:* block +0x5f (set by `0x417520`; the object test then never rejects
 and only records a per-member flag via `0x423fe0`) [L]; whether taken rectangles of a failed pass n are cleared
-before pass n + 1 [M].
+before pass n + 1 [M]; the rectangle passability test `0x17dc70`; the position finder `0x440f90` used for vf +0x240
+locomotors and forced paths; `0x5a0550` beyond its last two points.
 
 **Port note:** the rank sort is unstable. Use a stable sort with a final tie-break on object ID. Exact retail tie order cannot be reproduced without MSVC's introsort; ties are rare because of the name tie-break.
 
