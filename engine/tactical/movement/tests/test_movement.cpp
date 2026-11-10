@@ -1250,7 +1250,11 @@ static void test_land_group() {
     s4.move(d, rng, 0);
     bool g4ok = true;
     run_land(s4, 0, 2000, rng, serial_for, g4ok);
-    CHECK(s4.view(1).arrived && distance(s4.view(1).pos, cell_center(30, 30)) < 36.0f + 60.0f + 1.0f && s4.stats().early_arrivals == 1);
+    // s78n t18 review: the bound the comment derives - the first clear point is 41 .. 46 before the standing unit (steps of
+    // 5 from the path end), the cut takes 3 more, and the walker stops on the cut path's end: 44 .. 49
+    const float d4 = distance(s4.view(1).pos, cell_center(30, 30));
+    std::printf("early arrival: stopped %.3f before the standing unit\n", static_cast<double>(d4));
+    CHECK(s4.view(1).arrived && d4 >= 44.0f - 1e-3f && d4 <= 49.0f + 1e-3f && s4.stats().early_arrivals == 1);
 
     // a1j t02 (A1_READINGS §36.4): a Giant Vehicle pushes a stopped unit it does not crush aside (0x684f90 -> 0x6859a0)
     // and keeps its path: no path-around, it arrives at its destination, the parked infantry stands off the line.
@@ -2669,6 +2673,16 @@ static void test_real_data() {
         CHECK(dt3.has_secondary_locomotor && dt3.alt_max_speed == 1.8f && dt3.alt_turn_rate == 2.0f);
         CHECK(!dt1.uses_multiple_locomotors && !dt1.has_secondary_locomotor);
         CHECK(locomotor_kind_from_type(types, types.resolve_name("Dark_Trooper_PhaseII"), MoveMode::Land) == LocomotorKind::Default);
+        // s78n t18 review (MOVEMENT 5.3 "Hover state"): the FoC hover types are the Lancet and the HTT (Hover_Height 80, Walk
+        // locomotor: raised from their first move on - no MovingVsStopped record against grounded standing units, no
+        // MovingVsMoving record with grounded movers). MAL_Rocket_Vehicle's tag is commented out in
+        // UNITS_LAND_UNDERWORLD_MAL.XML (<!--<Hover_Height>3.0</Hover_Height> -->): not read, the MAL does not hover.
+        const UnitDesc mal = desc("MAL_Rocket_Vehicle"), lancet = desc("Lancet_Air_Artillery"), htt = desc("Gallofree_HTT_Transport");
+        CHECK(mal.hover_height == 0.0f && lancet.hover_height == 80.0f && htt.hover_height == 80.0f);
+        for (const char* name : {"MAL_Rocket_Vehicle", "Lancet_Air_Artillery", "Gallofree_HTT_Transport"}) {
+            CHECK(types.resolve_name(name) < types.size());
+            CHECK(locomotor_kind_from_type(types, types.resolve_name(name), MoveMode::Land) == LocomotorKind::Default);
+        }
     }
     const auto maps = fs->list("Data\\Art\\Maps\\*.ted");
     uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0;

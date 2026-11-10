@@ -229,6 +229,10 @@ struct UnitView {
     // angles equal the target angles (0x386170), 0 still slewing, -2 the aim yaw is beyond the (deployed) rotate extent
     // (the can-aim test 0x631cc0 fails; s78f t08), -1 no turret model or not aiming. Derived from the turret state.
     int8_t turret_aim = -1;
+    // s78n t18 review (FIGHTER_FLYING §7.7 items 5 - 6; squad containers only): team_coast - a new order arrived while
+    // it moved and it still brakes straight on before that order's path starts; team_final_turn - it turns in place to
+    // the order's final facing before it arrives.
+    bool team_coast = false, team_final_turn = false;
 };
 
 // OI tactical: one crush this tick (§5.5). The host applies kCrushDamage of the crusher type's Squash_Damage_Type
@@ -724,11 +728,15 @@ public:
     // port, so not tested here: landing transports (taking off / the units they unloaded) and build pads.
     //   set_pair_gate(id, host, hidden): the unit's garrison host while it walks to it or enters it (GarrisonDataPack +0xc
     //     in states 1 / 2 / 5; -1 none) and whether it is hidden (a squad container whose whole squad is inside). Host-set
-    //     every tick before tick(); transient (not saved, not hashed). A hidden unit does not walk and ignores move orders.
+    //     every tick before tick(); transient (not saved, not hashed). A hidden unit does not walk and ignores move orders,
+    //     so the host also sets it whenever its garrison state changes and right after read() (s78n t18 review: an order
+    //     given between a load and the next tick meets the same gates as in the saving run). pair_gate() reads them back
+    //     (false: unknown unit).
     //   set_garrison_exit(id, host): the host a unit has just left (state 4 on): kept until the unit's next move order or
     //     stop, or the arrival of its current (walk-out) move if that comes first; Teleport does not clear it. Saved and
     //     hashed while set. False: unknown unit.
     bool set_pair_gate(ObjectId id, ObjectId garrison_host, bool hidden);
+    bool pair_gate(ObjectId id, ObjectId& garrison_host, bool& hidden) const;
     bool set_garrison_exit(ObjectId id, ObjectId host);
     // Hover state (pack +0x2a8) of a Walk unit whose type has Hover_Height: 0 grounded (spawn), 2 rising (set by the
     // start of a move while not raised: the unit stands for Hover_Height / its max speed frames, then is 1 raised), 3
@@ -797,9 +805,10 @@ public:
     // the same map stamps, the same space / air boxes and static entries, every hook (set_height_fn, set_hostility,
     // set_threat_fn, set_anim_length_fn, set_flying_hooks, set_fighter_avoid_fn, set_fighter_formation_hooks,
     // set_scatters_fn); then read() replaces ALL mutable state, so no host call is needed after it (no relink:
-    // cross-references are object ids, hooks are not touched). One per-tick host input is not saved: set_pair_gate (a
-    // unit's garrison host while it walks in, and "hidden") is unset after read() until the host sets it again before
-    // the next tick(), as it does on every tick.
+    // cross-references are object ids, hooks are not touched). One host input is not saved: set_pair_gate (a unit's
+    // garrison host while it walks in, and "hidden") is unset by read(). The host sets it again right after read() (s78n
+    // t18 review: move() drops orders for hidden units, so it must hold before the first command, not only before the
+    // next tick()), from the same state it sets it from on every tick.
     // Units added by the rebuild are replaced by the saved ones (read() is not additive).
     // Layout: u32 version, u8 mode (must equal mode()), then sections (u32 length + bytes):
     //   grid    PassabilityGrid::write (stamps + version; the map-derived part is checked by digest, not restored)
@@ -962,8 +971,8 @@ private:
         // turns in place to the order's final facing before it arrives; path_started: the order path was started (pack
         // path +0x6d; a pushed path over a started path ends without braking). Hashed for containers.
         bool coast = false, fturn = false, path_started = false;
-        // s78n t18 (MOVEMENT §5.3 "+0x3a7"): hidden - garrisoned with its whole squad (host-set every tick: set_pair_gate;
-        // transient). A hidden unit is no layer object and does not walk.
+        // s78n t18 (MOVEMENT §5.3 "+0x3a7"): hidden - garrisoned with its whole squad (host-set every tick, at every
+        // garrison change and after a load: set_pair_gate; transient). A hidden unit is no layer object and does not walk.
         bool hidden = false;
         // s78n t18 (MOVEMENT §5.3.1, TACTICAL_COMBAT §5.4.4): a squad container's live joint slot box 0x404450 (half
         // extents; team_boxed: it has team entries) and a member suspended for a hero clash (still a TEAM entry, never a
@@ -998,10 +1007,16 @@ private:
         uint32_t other = 0;
     };
     void team_steer_recs(std::vector<SteerRec>& out) const;  // every participant's objects, by key, list order kept
-    // 0x509810 for member `a` at `pa` (speed / max speed for the 0x5c6d40 ratio), `pos` = positions by units_ index.
+    // s78n t18 review: a unit's position and height as the steering vector reads the OTHER units - the land tick's
+    // start-of-tick snapshot (the parallel walk moves them), by units_ index.
+    struct SteerPos {
+        V2 pos;
+        float z = 0.0f;
+    };
+    // 0x509810 for member `a` at `pa` (speed / max speed for the 0x5c6d40 ratio), `pos` = the snapshot by units_ index.
     V2 member_avoid(const Unit& a, V2 pa, float speed, float vmax, V2 dir, std::span<const SteerRec> recs,
-                    std::span<const V2> pos) const;
-    V2 member_side_steps(const Unit& a, V2 pa, V2 dir, uint32_t other, std::span<const V2> pos) const;  // 0x5c6d40 sum
+                    std::span<const SteerPos> pos) const;
+    V2 member_side_steps(const Unit& a, V2 pa, V2 dir, uint32_t other, std::span<const SteerPos> pos) const;  // 0x5c6d40 sum
     // 0x397780: sqrt(HX^2 + HY^2) of the joint slot box for a squad container, the soft footprint radius for any other unit
     float steer_radius(const Unit& u) const;
     // s78n t14 (FIGHTER_FLYING §7.2): Rows 0x5ac970 / Dartboard 0x5ac2a0 on the container's steering members (no flag test).
@@ -1009,9 +1024,10 @@ private:
     bool lay_out_dartboard(const Unit& k, V2 dir, uint32_t frame, std::vector<std::pair<Unit*, V2>>& out);
     void team_relay_pass(uint32_t frame);  // s78n t14: the re-lays of this tick (serial, ascending id)
     WalkResult team_walk(Unit& u, uint32_t frame) const;  // s78n t18: one frame of a squad container's walk (land_team.cpp)
+    float team_rate(const Unit& k) const;  // s78n t16: the container's rate 0x5ab540 (0 = none; land_team.cpp)
     ObjectId order_id(ObjectId id) const;  // s78n t03: a steering member's container, else id
     // s78n t03: one member frame (writes only u); s78n t14 part B: + the tick's steering records and start positions
-    void steer_member(Unit& u, const TeamSnap& k, std::span<const SteerRec> recs, std::span<const V2> pos0) const;
+    void steer_member(Unit& u, const TeamSnap& k, std::span<const SteerRec> recs, std::span<const SteerPos> pos0) const;
     // cu8j t01 (MOVEMENT §4.6): an order's formations waiting for the coordinator update (creation order). Land: `forms`
     // = the split's formations, seed first; space: forms[0] = the order's units in order and `offsets` their start
     // offsets. `moves` false: fighter_new_order (nobody moves: draws and fighter timers only).

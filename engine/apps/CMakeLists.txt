@@ -299,6 +299,9 @@ if(_alamo_sim)
     # holds (a record answering speed 0) of 30 frames or more: 3 / 1 / 1 / 3 / 2 / 2 per seed, the longest 86 / 44 / 1581 /
     # 35 / 34 / 49 frames (seed 3: one squad in Try Again Later for 1581 frames at the battle start, its destination under a
     # standing friendly squad that could not be pushed). Still pinned to seed 2.
+    # s78n t18 review (2026-11-10): MovementPredictionInterval for every mover type, the stale TEAM entry / coast / pair gate
+    # fixes. Re-measured, seeds 1-6: Rebel wins at 15272 / 11734 / 13857 / 20202 / 14665 / 15810 frames (seed 4: 20202
+    # frames in 20203 ticks; the other five as above). Still pinned to seed 2.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_end
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
                      --seed 2)

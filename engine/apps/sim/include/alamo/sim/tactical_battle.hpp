@@ -1472,6 +1472,9 @@ private:
     void unit_gone(TacticalMode& mode, Unit& u);  // container bookkeeping after a death / retreat
     // S10-int steps
     void apply_speed_factors();
+    // s78n t18 review: the movement system's pair gates / "hidden" from the garrison state (tactical_battle.cpp): every
+    // tick, after garrison events, at the tick end and after a load.
+    void feed_pair_gates();
     void drop_locked(std::vector<objects::ObjectId>& ids) const;  // OI follow-up t03: group moves skip locked units
     // OI follow-up t03: per bridge owner, registration order (not saved: the bridges' own state)
     std::vector<std::pair<const void*, std::function<bool(objects::ObjectId)>>> script_locks_;

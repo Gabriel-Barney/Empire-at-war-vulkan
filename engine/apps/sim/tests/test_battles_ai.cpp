@@ -1033,7 +1033,7 @@ void test_land_squad_container() {
     Vec3 start{}, goal{};
     bool collided = false;  // the container had a collision object during the move
     float off_line = 0.0f, off_path = 0.0f, max_lead = 0.0f, team_speed = 0.0f, late_along = 0.0f, settle_err = 0.0f;
-    uint32_t store_mismatch = 0, moving_frames = 0, recover_frames = 0;
+    uint32_t store_mismatch = 0, moving_frames = 0, recover_frames = 0, box_mismatch = 0;
     float start_error = -1.0f, recovered_error = -1.0f;
     std::vector<float> along_ref;  // s78n t14: each member's along error 120 frames into the move
     bool settle_target = false;    // a member has a target when the team stopped (no recovery, §7.3 item 6)
@@ -1085,6 +1085,11 @@ void test_land_squad_container() {
             CHECK(b->squad_joint_box(st, team_id, ex, ey));
             const float wx = (hx - lx) * 0.5f + 0.75f, wy = (hy - ly) * 0.5f + 0.75f;
             CHECK(std::fabs(ex - wx) < 1e-4f && std::fabs(ey - wy) < 1e-4f && ex >= 3.75f && ey >= 3.75f);
+            {  // s78n t18 review: the movement system's joint box (team_joint_box: the squad's collision footprint) is
+               // the same box as the host's (squad_joint_slots: fog footprint, Bribe's E_T) while every member steers
+                float mx = 0.0f, my = 0.0f;
+                CHECK(ms.team_joint_box(team_id, mx, my) && std::fabs(mx - ex) < 1e-4f && std::fabs(my - ey) < 1e-4f);
+            }
             float nx = 0.0f, ny = 0.0f;
             CHECK(!b->squad_joint_box(st, members[0], nx, ny));  // a member is no squad container
             std::printf("  land squad: team %d, %zu members, slots", static_cast<int>(team_id), slots.size());
@@ -1162,6 +1167,11 @@ void test_land_squad_container() {
                 if (path.size() == 1) dmin = std::sqrt((k.pos.x - path[0].x) * (k.pos.x - path[0].x) + (k.pos.y - path[0].y) * (k.pos.y - path[0].y));
                 // s78n t18 (MOVEMENT 5.4.1 / 5.4.2): the container stays on its path through its collision objects too (no
                 // LandTeamContainer code uses a collision vector; Repulsion / Repulse leave it at full speed on its path)
+                {  // s78n t18 review: on the march too (the slots are re-laid at the move start and at waypoints)
+                    float ex = 0.0f, ey = 0.0f, mx = 0.0f, my = 0.0f;
+                    CHECK(b->squad_joint_box(st, team_id, ex, ey) && ms.team_joint_box(team_id, mx, my));
+                    if (std::fabs(mx - ex) > 1e-4f || std::fabs(my - ey) > 1e-4f) ++box_mismatch;
+                }
                 bool rec_now = false;
                 for (const mv::CollisionObject& co : ms.collisions().list()) rec_now = rec_now || co.a == team_id || co.b == team_id;
                 collided = collided || rec_now;
@@ -1214,6 +1224,7 @@ void test_land_squad_container() {
     // collision objects: no nudge off the path, no repath against infantry (before t18 a MovingVsMoving object with another
     // squad's container side-stepped it up to about 16 off the path)
     CHECK(moving_frames > 60 && off_path < 0.5f);
+    CHECK(box_mismatch == 0);  // s78n t18 review: squad_joint_slots and team_joint_box agreed on every moving frame
     CHECK(max_lead > 1.0f);   // the container leads (its members steer from its start-of-tick state)
     CHECK(along_ref.size() == members.size() && late_along < 4.0f);  // and the members hold the formation
     CHECK(settle_target || settle_err <= 4.0f);  // s78n t14: they recover to their slots only while the team has no target
@@ -1314,6 +1325,10 @@ void test_land_squad_garrison() {
             slots = ms.land_team_slots(team_id);
             CHECK(slots.size() == members.size());
             CHECK(b->squad_joint_box(st, team_id, box_x, box_y) && box_x > 0.0f && box_y > 0.0f);
+            {  // s78n t18 review: the movement system's joint box agrees
+                float mx = 0.0f, my = 0.0f;
+                CHECK(ms.team_joint_box(team_id, mx, my) && std::fabs(mx - box_x) < 1e-4f && std::fabs(my - box_y) < 1e-4f);
+            }
             CHECK(b->order_garrison(*tm, 0, members, walker, host.random().synced()) == commands::RejectReason::None);
             stage = 1;
             stage_frame = b->frame();
@@ -1361,6 +1376,15 @@ void test_land_squad_garrison() {
             for (const auto id : members) inside_ok = inside_ok && !ms.has_unit(id) && ms.team_member_parked(id);
             float ex = -1.0f, ey = -1.0f;
             inside_ok = inside_ok && ms.land_team(team_id).empty() && b->squad_joint_box(st, team_id, ex, ey) && ex == 0.0f && ey == 0.0f;
+            {  // s78n t18 review: the absent members stay TEAM entries of the movement system - its box is the one they
+               // went in with - and the container is hidden from the entry on (no wait for the next tick's feed)
+                float mx = 0.0f, my = 0.0f;
+                mv::ObjectId gh = -1;
+                bool hidden = false;
+                inside_ok = inside_ok && ms.team_joint_box(team_id, mx, my) && std::fabs(mx - box_x) < 1e-4f &&
+                            std::fabs(my - box_y) < 1e-4f && ms.team_entries(team_id).size() == members.size() &&
+                            ms.pair_gate(team_id, gh, hidden) && hidden && gh == walker;
+            }
             // the walker drives 300 off with the squad inside
             const Vec3 wp = st.position(st.find(walker));
             walker_at = wp;
@@ -1393,6 +1417,11 @@ void test_land_squad_garrison() {
             }
             float ex = 0.0f, ey = 0.0f;
             CHECK(b->squad_joint_box(st, team_id, ex, ey) && ex > 0.0f && ey > 0.0f);
+            {  // s78n t18 review: out again, every member steers: the two boxes agree (inside, the host's box is empty -
+               // it reads the live steering members - while the movement system keeps the absent members' entries)
+                float mx = 0.0f, my = 0.0f;
+                CHECK(ms.team_joint_box(team_id, mx, my) && std::fabs(mx - ex) < 1e-4f && std::fabs(my - ey) < 1e-4f);
+            }
             exit_gap = std::sqrt((kp.x - wp.x) * (kp.x - wp.x) + (kp.y - wp.y) * (kp.y - wp.y));
             walking_out = ms.view(team_id).has_goal;
             stage = 3;
@@ -3280,6 +3309,241 @@ void test_vehicle_landing_exit() {
     CHECK(turned > 0);
 }
 
+// s78n t18 review: the land squad garrison battle of test_land_squad_garrison (squad_types(true): the human's squads and
+// the garrison vehicle S10_Walker against the invading squads) as a session that can be saved and loaded.
+struct SquadGarrisonScene {
+    ClashSession s;
+    uint32_t walker_t;
+    objects::ObjectId team = objects::kNoObjectId, walker = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    TacticalBattle* b = nullptr;
+    TacticalMode* tm = nullptr;
+
+    static CampaignBattleOptions options() {
+        CampaignBattleOptions opt;
+        opt.conflict.human_choice = galactic::BattleChoice::Fight;
+        opt.battle.max_frames = 5000;
+        opt.battle.skip_human_units = true;  // the stand-in leaves the human's units to the test's orders
+        return opt;
+    }
+    SquadGarrisonScene(const Data& d, bool launch) : s(d, 0, options(), {"S10_Walker_Co"}, {}, launch), walker_t(type_of(d, "S10_Walker")) {}
+    bool tick() {
+        b = s.tick();
+        tm = s.host->tactical();
+        return b && tm && b->frame() >= 1;
+    }
+    // Runs until the battle stands, then finds the human's first squad (>= 2 members, lowest team id) and the walker.
+    bool start() {
+        for (int i = 0; i < 12000; ++i) {
+            if (!tick() || b->frame() < 3) continue;
+            const objects::ObjectStore& st = tm->primary();
+            const tc::CombatSystem& cs = b->combat();
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t k = 0; k < cs.unit_count(); ++k) {
+                const auto id = cs.unit_id_at(k);
+                if (!cs.alive(id)) continue;
+                if (cs.team(id) != 0) teams[cs.team(id)].push_back(id);
+                if (st.type(st.find(id)) == walker_t) walker = id;
+            }
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() >= 2 && team == objects::kNoObjectId && st.alive(th) && st.owner(th) == 0) {
+                    team = static_cast<objects::ObjectId>(tid);
+                    members = m;
+                }
+            }
+            return team != objects::kNoObjectId && walker != objects::kNoObjectId;
+        }
+        return false;
+    }
+    size_t inside() const {
+        size_t n = 0;
+        for (const auto id : members) n += b->garrison_holder_of(id) == walker ? 1u : 0u;
+        return n;
+    }
+};
+
+// s78n t18 review (items 6, 9, 10): a battle-level save / load while a squad garrisons - during the approach, during the
+// entry fade, with the whole squad inside (its container hidden) and during the walk-out. Each loaded session has, right
+// after the load and before any tick, the saving session's digest and the same movement pair gates / "hidden" for the
+// container and every member still a mover (the host feeds them after a load: an order then meets the same gates), and
+// runs on tick for tick with the saving session - through the entry, the leave order and the walk-out. Last: a garrison
+// order on a hostile host is refused before the units' queues are cleared and before they are sent walking.
+void test_land_squad_garrison_save_load() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, false, true);
+    SquadGarrisonScene a(*d, true);
+    CHECK(a.s.gs != nullptr);
+    if (!a.s.gs || !a.start()) {
+        CHECK(false);
+        return;
+    }
+    namespace tg = alamo::tactical::garrison;
+    const auto gates_equal = [&](const SquadGarrisonScene& f) {
+        std::vector<objects::ObjectId> ids = a.members;
+        ids.push_back(a.team);
+        ids.push_back(a.walker);
+        for (const auto id : ids) {
+            mv::ObjectId ha = -2, hf = -2;
+            bool hida = false, hidf = false;
+            const bool ia = a.b->movement().pair_gate(id, ha, hida), jf = f.b->movement().pair_gate(id, hf, hidf);
+            if (ia != jf || ha != hf || hida != hidf) return false;
+        }
+        return true;
+    };
+    const auto same_now = [&](const SquadGarrisonScene& f) {
+        if (clash_digest(*a.b) != clash_digest(*f.b) || !gates_equal(f)) return false;
+        for (const auto id : a.members)
+            if (a.b->garrison_holder_of(id) != f.b->garrison_holder_of(id)) return false;
+        return true;
+    };
+    // Saves the running session and loads it into a fresh one (null on failure); checked equal before any tick.
+    const auto load_copy = [&](const char* what) -> std::unique_ptr<SquadGarrisonScene> {
+        SaveFile save;
+        std::string why;
+        CHECK(a.s.host->save_allowed(&why));
+        const bool saved = a.s.host->save(save, &why);
+        if (!saved) std::printf("  squad garrison save (%s): %s\n", what, why.c_str());
+        CHECK(saved);
+        if (!saved) return nullptr;
+        auto f = std::make_unique<SquadGarrisonScene>(*d, false);
+        CHECK(f->s.gs != nullptr);
+        if (!f->s.gs) return nullptr;
+        std::string err;
+        LoadReport rep;
+        const bool loaded = f->s.host->load(save, &err, &rep);
+        if (!loaded) std::printf("  squad garrison load (%s): %s\n", what, rep.text().c_str());
+        CHECK(loaded && f->s.host->frame() == a.s.host->frame());
+        if (!loaded) return nullptr;
+        f->s.invaded = true;
+        f->team = a.team;
+        f->walker = a.walker;
+        f->members = a.members;
+        f->b = f->s.battles->battle();
+        f->tm = f->s.host->tactical();
+        CHECK(f->b && f->tm);
+        if (!f->b || !f->tm) return nullptr;
+        const bool same = same_now(*f);
+        if (!same) std::printf("  squad garrison load (%s): the loaded session differs before its first tick\n", what);
+        CHECK(same);
+        return f;
+    };
+    // `ticks` ticks of both sessions; true when every one ended equal.
+    const auto lockstep = [&](SquadGarrisonScene& f, int ticks, const char* what) {
+        int same = 0;
+        for (int i = 0; i < ticks; ++i) {
+            const bool ta_ok = a.tick(), tf_ok = f.tick();
+            CHECK(ta_ok && tf_ok);
+            if (!ta_ok || !tf_ok) return false;
+            if (same_now(f)) ++same;
+            else if (same == i) std::printf("  squad garrison load (%s): differs %d tick(s) after the load\n", what, i + 1);
+        }
+        CHECK(same == ticks);
+        return same == ticks;
+    };
+    const mv::MovementSystem& ms = a.b->movement();
+    const auto gate = [](const SquadGarrisonScene& x, objects::ObjectId id, mv::ObjectId& host) {
+        bool hidden = false;
+        host = -1;
+        CHECK(x.b->movement().pair_gate(id, host, hidden));
+        return hidden;
+    };
+    SimRng& rng = a.s.host->random().synced();
+    CHECK(a.b->order_garrison(*a.tm, 0, a.members, a.walker, rng) == commands::RejectReason::None);
+    // 1. the approach: the members walk to the host (pending, not entering), the container's garrison host is the walker
+    for (int i = 0; i < 3; ++i) CHECK(a.tick());
+    bool approaching = a.inside() == 0;
+    for (const auto id : a.members) approaching = approaching && a.b->garrison().pending_holder(id) == a.walker && !a.b->garrison().entering(id);
+    CHECK(approaching && ms.view(a.team).has_goal);
+    mv::ObjectId gh = -1;
+    CHECK(!gate(a, a.team, gh) && gh == a.walker);
+    const uint32_t approach_frame = a.b->frame();
+    if (auto f = load_copy("approach")) {
+        CHECK(!gate(*f, a.team, gh) && gh == a.walker);  // fed after the load: no collision object with the host
+        lockstep(*f, 40, "approach");
+    }
+    // 2. the entry fade (30 frames from EnterStarted)
+    bool entering = false;
+    for (int i = 0; i < 1500 && !entering && a.inside() == 0; ++i) {
+        CHECK(a.tick());
+        for (const auto id : a.members) entering = entering || a.b->garrison().entering(id);
+    }
+    CHECK(entering && a.inside() == 0);
+    const uint32_t enter_frame = a.b->frame();
+    uint32_t inside_frame = 0;
+    if (auto f = load_copy("entry")) {
+        bool ef = false;
+        for (const auto id : a.members) ef = ef || f->b->garrison().entering(id);
+        CHECK(ef);
+        // both run through the rest of the fade: the whole squad is inside on the same tick, the container hidden at once
+        bool ok = true;
+        for (int i = 0; i < 60 && ok && a.inside() != a.members.size(); ++i) ok = lockstep(*f, 1, "entry");
+        CHECK(ok && a.inside() == a.members.size() && f->inside() == a.members.size());
+        inside_frame = a.b->frame();
+        CHECK(gate(a, a.team, gh) && gh == a.walker && gate(*f, a.team, gh) && gh == a.walker);
+    }
+    for (int i = 0; i < 60 && a.inside() != a.members.size(); ++i) CHECK(a.tick());  // (only when the load above failed)
+    CHECK(a.inside() == a.members.size());
+    // 3. the whole squad inside: the container is hidden in the saving session and, before any tick, in the loaded one
+    for (int i = 0; i < 5; ++i) CHECK(a.tick());
+    CHECK(gate(a, a.team, gh));
+    bool walked_out = false;
+    uint32_t leave_frame = 0, out_frame = 0;
+    if (auto f = load_copy("inside")) {
+        CHECK(gate(*f, a.team, gh) && gh == a.walker);
+        for (const auto id : a.members) CHECK(!f->b->movement().has_unit(id) && f->b->movement().team_member_parked(id));
+        lockstep(*f, 20, "inside");
+        CHECK(gate(a, a.team, gh) && gate(*f, a.team, gh));  // still hidden, in both
+        // the leave order in both, on the same tick: the squad leaves as one and its container walks out
+        const objects::ObjectId one[] = {a.members.front()};
+        CHECK(a.b->order_leave_garrison(*a.tm, 0, one) == commands::RejectReason::None);
+        CHECK(f->b->order_leave_garrison(*f->tm, 0, one) == commands::RejectReason::None);
+        leave_frame = a.b->frame();
+        CHECK(same_now(*f) && a.inside() == 0 && f->inside() == 0);
+        CHECK(!gate(a, a.team, gh) && !gate(*f, a.team, gh));  // unhidden with its squad, at once
+        CHECK(ms.view(a.team).has_goal && f->b->movement().view(a.team).has_goal);
+        lockstep(*f, 3, "leave");
+        // 4. the walk-out: a second save while the container walks to the exit point
+        CHECK(ms.view(a.team).has_goal);
+        if (auto g = load_copy("walk-out")) {
+            CHECK(g->b->movement().view(a.team).has_goal);
+            bool ok = true;
+            for (int i = 0; i < 600 && ok && ms.view(a.team).has_goal; ++i) ok = lockstep(*g, 1, "walk-out") && f->tick() && same_now(*f);
+            walked_out = ok && !ms.view(a.team).has_goal && ms.view(a.team).arrived && g->b->movement().view(a.team).arrived;
+            out_frame = a.b->frame();
+            CHECK(walked_out);
+            if (ok) lockstep(*g, 30, "after the walk-out");
+        }
+    }
+    std::printf("  land squad garrison save / load: approach saved at frame %u, entry at %u, all inside at %u, leave at %u, walked out "
+                "at %u (%d)\n", approach_frame, enter_frame, inside_frame, leave_frame, out_frame, walked_out ? 1 : 0);
+    // 5. a hostile host: the walker changes sides - the garrison order is refused before any side effect (the squad's
+    // order queue, its move and the synced RNG are untouched)
+    for (int i = 0; i < 200 && ms.view(a.team).has_goal; ++i) CHECK(a.tick());
+    if (!a.b || !a.tm) return;
+    objects::ObjectStore& st = a.tm->primary();
+    bool alive = a.b->combat().alive(a.walker);
+    for (const auto id : a.members) alive = alive && a.b->combat().alive(id);
+    CHECK(alive);
+    if (!alive) return;
+    const Vec3 p = st.position(st.find(a.team));
+    CHECK(a.b->order_move(*a.tm, 0, a.members, p.x + 80.0f, p.y, rng) == commands::RejectReason::None);
+    CHECK(a.b->order_move(*a.tm, 0, a.members, p.x + 80.0f, p.y + 80.0f, rng, mv::kNoFacing, false, true) == commands::RejectReason::None);
+    CHECK(a.tick());
+    CHECK(a.b->can_garrison(a.members.front(), a.walker));  // its own side's walker: allowed
+    CHECK(a.b->script_change_owner(*a.tm, st.find(a.walker), 1));
+    CHECK(!a.b->can_garrison(a.members.front(), a.walker) && a.b->garrison().masks_match(a.members.front(), a.walker));
+    const size_t queued0 = a.b->queued_orders(a.members.front()).size();
+    CHECK(queued0 == 1);
+    const mv::UnitView v0 = ms.view(a.team);
+    const uint64_t draws0 = rng.draws();
+    CHECK(a.b->order_garrison(*a.tm, 0, a.members, a.walker, rng) == commands::RejectReason::InvalidTarget);
+    const mv::UnitView v1 = ms.view(a.team);
+    CHECK(rng.draws() == draws0);
+    for (const auto id : a.members) CHECK(a.b->queued_orders(id).size() == queued0 && a.b->garrison().pending_holder(id) == objects::kNoObjectId);
+    CHECK(v0.has_goal && v1.has_goal && v1.goal == v0.goal && v1.pos == v0.pos && v1.start_frame == v0.start_frame && v1.speed == v0.speed);
+}
+
 // S7 t22 / t25 (FIGHTER_FLYING §4.10 A, TACTICAL_COMBAT §2.8 "Targets of opportunity"): the response-range test 0x4160a0.
 
 int main(int argc, char** argv) {
@@ -3333,6 +3597,8 @@ int main(int argc, char** argv) {
     }
     test_land_squad_container();  // s78n t03 / t09
     test_land_squad_garrison();   // s78n review
+    std::printf("s78n t18 review: a squad's garrison approach, entry, stay and walk-out through a save / load; a hostile host\n");
+    test_land_squad_garrison_save_load();
     test_vehicle_landing_exit();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);

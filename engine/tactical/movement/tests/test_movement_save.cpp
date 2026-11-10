@@ -465,7 +465,18 @@ Coverage check_resume(const Scenario& s, uint32_t save_at, uint32_t dirty) {
         }
     }
     CHECK(bad == UINT32_MAX);
-    if (bad != UINT32_MAX) std::printf("  %s: resumed run from %u diverged at frame %u\n", s.name, save_at, bad);
+    if (bad != UINT32_MAX) {
+        std::printf("  %s: resumed run from %u diverged at frame %u\n", s.name, save_at, bad);
+        for (const ObjectId id : a.sys.unit_ids()) {  // which unit (diagnostic)
+            const UnitView x = a.sys.view(id), y = b.sys.view(id);
+            if (!(x.pos == y.pos) || x.yaw != y.yaw || x.speed != y.speed || x.has_goal != y.has_goal)
+                std::printf("    unit %d: pos (%.4f, %.4f) / (%.4f, %.4f), yaw %.4f / %.4f, speed %.4f / %.4f, goal %d / %d\n",
+                            static_cast<int>(id), static_cast<double>(x.pos.x), static_cast<double>(x.pos.y),
+                            static_cast<double>(y.pos.x), static_cast<double>(y.pos.y), static_cast<double>(x.yaw),
+                            static_cast<double>(y.yaw), static_cast<double>(x.speed), static_cast<double>(y.speed),
+                            x.has_goal ? 1 : 0, y.has_goal ? 1 : 0);
+        }
+    }
     std::printf("%s: saved at %u (%zu bytes, %zu units%s), %u ticks identical (crushes %zu, collisions <= %zu, fighter "
                 "events %zu, locks %zu, hyperspace events %zu)\n",
                 s.name, save_at, saved_bytes, saved_units, dirty ? ", dirty loader" : "", ticks, cov.crushes,
@@ -1044,6 +1055,375 @@ Scenario t18_scenario() {
     return s;
 }
 
+// s78n t18 review: a squad for the save scenarios - container `cid` (Rows, Max_Speed `cspeed`, squashable) facing `yaw`,
+// members cid + 1 .. cid + 4 (Max_Speed `mspeed`, OverrideDeceleration `decel`, half-extents 3) on slots (+-6, +-6).
+void save_squad(World& w, ObjectId cid, V2 at, float yaw, int32_t owner, float cspeed, float mspeed, float decel) {
+    UnitDesc c = land_unit(cid, at, 0, cspeed, 12.0f, kUccInfantry);
+    c.team_container = true;
+    c.container_arrangement = 0;
+    c.yaw_deg = yaw;
+    c.owner = owner;
+    c.squashable = true;
+    CHECK(w.sys.add_unit(c));
+    const V2 fw = dir_from_deg(yaw), lf{-fw.y, fw.x};
+    std::vector<ObjectId> ids;
+    std::vector<V2> slots;
+    for (int32_t i = 0; i < 4; ++i) {
+        const V2 sl{i < 2 ? 6.0f : -6.0f, i % 2 == 0 ? 6.0f : -6.0f};
+        UnitDesc m = land_unit(cid + 1 + i, at + fw * sl.x + lf * sl.y, 0, mspeed, 3.0f, kUccInfantry);
+        m.accel = m.decel = decel;
+        m.yaw_deg = yaw;
+        m.owner = owner;
+        m.formation_spacing = 0.3f;
+        CHECK(w.sys.add_unit(m));
+        CHECK(w.sys.set_team_member_shape(m.id, 3.0f, 3.0f, 3.0f, 3.0f));
+        ids.push_back(m.id);
+        slots.push_back(sl);
+    }
+    CHECK(w.sys.set_land_team(cid, ids, slots));
+}
+
+// s78n t18 review: the record states and walk states the first t18 scenario does not pass through, each in its own lane
+// (250 apart: no shared candidates or crowd boxes):
+//  * Try Again Later - squad 100 on a forced path (flag 0x20) against vehicle 70 that cannot be pushed (Max_Speed 0);
+//  * Speed Slave Only - squad 200 behind the slower squad 300 on the same heading;
+//  * Crusher (state 4) - the crusher 60 against the hostile squad 400 that cannot be pushed (its one push attempt fails);
+//  * the final-facing turn - squad 500's order carries a final facing 90 degrees off.
+void build_t18_states(World& w) {
+    PassabilityGrid g;
+    g.init(100, 100);
+    w.sys.set_grid(std::move(g));
+    w.rng = SimRng(43);
+    save_squad(w, 100, cell_center(10, 10), 0.0f, 1, 0.8f, 1.0f, 0.05f);
+    UnitDesc v = land_unit(70, cell_center(24, 10), 7, 0.0f, 20.0f, kUccVehicle);
+    v.owner = 1;
+    CHECK(w.sys.add_unit(v));
+    save_squad(w, 200, cell_center(10, 35), 0.0f, 1, 0.8f, 1.0f, 0.05f);
+    save_squad(w, 300, cell_center(14, 35), 0.0f, 1, 0.8f, 0.4f, 0.05f);
+    save_squad(w, 400, cell_center(25, 60), 0.0f, 1, 0.0f, 0.0f, 0.0f);
+    UnitDesc cr = land_unit(60, cell_center(8, 60), 7, 1.0f, 10.0f, kUccVehicle);
+    cr.crusher = true;
+    cr.owner = 2;
+    CHECK(w.sys.add_unit(cr));
+    save_squad(w, 500, cell_center(10, 85), 0.0f, 1, 0.8f, 1.0f, 0.05f);
+}
+
+void t18_states_before(World& w, uint32_t f) {
+    const auto team = [&w](ObjectId cid, float cspeed) {  // the host's set_team of every tick
+        for (ObjectId id = cid; id <= cid + 4; ++id)
+            if (w.sys.has_unit(id)) CHECK(w.sys.set_team(id, cid, 1.0f, cspeed));
+    };
+    team(100, 0.8f);
+    team(200, 0.8f);
+    team(300, 0.8f);
+    team(400, 0.0f);
+    team(500, 0.8f);
+    if (f != 1) return;  // (frame 0 laid the squads out)
+    const auto order = [&w, f](ObjectId unit, V2 to, uint8_t flags, float final_facing) {
+        MoveOrder o;
+        o.units = {unit};
+        o.destination = to;
+        o.flags = flags;
+        o.final_facing_deg = final_facing;
+        w.sys.move(o, w.rng, f);
+    };
+    order(101, cell_center(60, 10), kMoveFlagSkipValidation, kNoFacing);
+    order(201, cell_center(55, 35), 0, kNoFacing);
+    order(301, cell_center(58, 35), 0, kNoFacing);
+    order(60, cell_center(60, 60), 0, kNoFacing);
+    order(501, cell_center(25, 85), 0, 90.0f);
+}
+
+Scenario t18_states_scenario() {
+    Scenario s;
+    s.name = "land squad record states and the final-facing turn (s78n t18 review)";
+    s.build = build_t18_states;
+    s.before = t18_states_before;
+    s.after = squad_after;
+    s.frames = 400;
+    return s;
+}
+
+void test_t18_states() {
+    const Scenario sc = t18_states_scenario();
+    World v(sc.cfg);
+    sc.build(v);
+    // first / last frame (after the tick) each state was seen in
+    uint32_t tal[2] = {0, 0}, slave[2] = {0, 0}, crusher[2] = {0, 0}, turn[2] = {0, 0};
+    const auto seen = [](uint32_t* r, uint32_t f) {
+        if (r[0] == 0) r[0] = f + 1;
+        r[1] = f + 1;
+    };
+    for (uint32_t f = 0; f < sc.frames; ++f) {
+        step(sc, v, f, serial_for);
+        for (const CollisionObject& c : v.sys.collisions().list()) {
+            if (c.kind == CollisionKind::MovingVsStopped && c.a == 100 && c.b == 70 && c.state == CollisionState::TryAgainLater) seen(tal, f);
+            if (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::SpeedSlave) seen(slave, f);
+            if (c.kind == CollisionKind::MovingVsStopped && c.a == 60 && c.b == 400 && c.state == CollisionState::Crusher) seen(crusher, f);
+        }
+        if (v.sys.view(500).team_final_turn) seen(turn, f);
+    }
+    std::printf("land squad t18 state saves: Try Again Later %u..%u, Speed Slave Only %u..%u, Crusher %u..%u, final-facing turn %u..%u\n",
+                tal[0], tal[1], slave[0], slave[1], crusher[0], crusher[1], turn[0], turn[1]);
+    CHECK(tal[0] > 0 && tal[1] >= tal[0] + 40);        // held: re-decided every 30 frames
+    CHECK(slave[0] > 0 && slave[1] >= slave[0] + 10);
+    CHECK(crusher[0] > 0 && crusher[1] >= crusher[0] + 3);
+    CHECK(turn[0] > 0 && turn[1] >= turn[0] + 3 && v.sys.view(500).arrived);
+    if (tal[0] == 0 || slave[0] == 0 || crusher[0] == 0 || turn[0] == 0) return;
+    const auto in_state = [&](uint32_t at, int which) {  // the save taken after `at` ticks holds the state
+        World c(sc.cfg);
+        sc.build(c);
+        for (uint32_t f = 0; f < at; ++f) step(sc, c, f, serial_for);
+        bool ok = which == 3 && c.sys.view(500).team_final_turn;
+        for (const CollisionObject& co : c.sys.collisions().list()) {
+            ok = ok || (which == 0 && co.a == 100 && co.b == 70 && co.state == CollisionState::TryAgainLater);
+            ok = ok || (which == 1 && co.kind == CollisionKind::MovingVsMoving && co.state == CollisionState::SpeedSlave);
+            ok = ok || (which == 2 && co.a == 60 && co.b == 400 && co.state == CollisionState::Crusher);
+        }
+        CHECK(ok);
+        check_resume(sc, at, 0);
+    };
+    // Try Again Later: just decided, just before its 30-frame re-decide, right after it
+    for (const uint32_t at : {tal[0], tal[0] + 29u, tal[0] + 31u}) in_state(at, 0);
+    for (const uint32_t at : {slave[0], (slave[0] + slave[1]) / 2}) in_state(at, 1);
+    for (const uint32_t at : {crusher[0], crusher[1]}) in_state(at, 2);
+    for (const uint32_t at : {turn[0], (turn[0] + turn[1]) / 2, turn[1]}) in_state(at, 3);
+    check_resume(sc, (turn[0] + turn[1]) / 2, 41);  // a loader that already ran
+}
+
+// s78n t18 review: a TEAM entry that goes without a steering member leaving - a member suspended for a hero clash that
+// is removed (0), a garrisoned (parked) member that dies inside (1), a rejoin the system refuses (2: the unit is not in
+// it) - leaves the entry list at once: the joint box, the container's radius and the rate 0x5ab540 are those a loaded
+// copy rebuilds, right away and over the next ticks.
+void test_stale_team_entries() {
+    const auto build = [](World& w) {
+        PassabilityGrid g;
+        g.init(80, 80);
+        w.sys.set_grid(std::move(g));
+        w.rng = SimRng(47);
+        UnitDesc c = land_unit(100, cell_center(10, 20), 0, 2.0f, 12.0f, kUccInfantry);
+        c.team_container = true;
+        CHECK(w.sys.add_unit(c));
+        const V2 slots[2] = {{10.0f, 0.0f}, {-10.0f, 0.0f}};
+        std::vector<ObjectId> ids;
+        for (ObjectId id = 1; id <= 2; ++id) {
+            UnitDesc m = land_unit(id, cell_center(10, 20) + slots[id - 1], 0, 1.0f, 3.0f, kUccInfantry);
+            m.accel = m.decel = id == 1 ? 0.05f : 0.02f;  // member 2 holds the squad's rate down while it is an entry
+            CHECK(w.sys.add_unit(m));
+            CHECK(w.sys.set_team_member_shape(id, 3.0f, 3.0f, 3.0f, 3.0f));
+            ids.push_back(id);
+        }
+        CHECK(w.sys.set_land_team(100, ids, slots));
+    };
+    const auto host = [](World& w) {
+        for (const ObjectId id : {ObjectId{100}, ObjectId{1}, ObjectId{2}})
+            if (w.sys.has_unit(id)) CHECK(w.sys.set_team(id, 100, 1.0f, 2.0f));
+    };
+    const float mult = MovementConstants{}.land_speed_multiplier;
+    for (int mode = 0; mode < 3; ++mode) {
+        World a{MovementConfig{}};
+        build(a);
+        uint32_t f = 0;
+        for (; f < 6; ++f) {
+            host(a);
+            a.sys.tick(f, a.rng, serial_for);
+        }
+        float hx = 0.0f, hy = 0.0f;
+        CHECK(a.sys.team_entries(100).size() == 2 && a.sys.team_joint_box(100, hx, hy) && hx == 13.0f && hy == 3.0f);
+        if (mode == 0) {
+            CHECK(a.sys.suspend_team_member(2) && a.sys.team_entries(100).size() == 2);
+            CHECK(a.sys.remove_unit(2));
+        } else if (mode == 1) {
+            CHECK(a.sys.park_team_member(2) && a.sys.team_entries(100).size() == 2);
+            CHECK(!a.sys.remove_unit(2) && !a.sys.team_member_parked(2));  // (not in the system: the record goes)
+        } else {
+            CHECK(a.sys.park_team_member(2) && a.sys.team_entries(100).size() == 2);
+            CHECK(!a.sys.rejoin_land_team(2) && !a.sys.team_member_parked(2));  // refused: no such unit; the record goes
+        }
+        // at once: member 1's slot alone (x from 0 to 13, y +-3)
+        CHECK(a.sys.team_entries(100).size() == 1 && a.sys.team_entries(100)[0].member == 1);
+        CHECK(a.sys.team_joint_box(100, hx, hy) && hx == 6.5f && hy == 3.0f);
+        World b{MovementConfig{}};
+        build(b);
+        const bool loaded = load_world(b, a);  // (write -> read -> write equal: the container's saved radius included)
+        CHECK(loaded);
+        if (!loaded) continue;
+        float bx = 0.0f, by = 0.0f;
+        CHECK(b.sys.team_joint_box(100, bx, by) && bx == hx && by == hy && b.sys.team_entries(100).size() == 1);
+        CHECK(world_crc(a) == world_crc(b) && world_bytes(a) == world_bytes(b));
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(40, 20);
+        a.sys.move(o, a.rng, f);
+        b.sys.move(o, b.rng, f);
+        float first = 0.0f;
+        bool same = true;
+        const ParallelFor pf4 = make_thread_pf(4);
+        for (uint32_t n = 0; n < 120; ++n, ++f) {
+            host(a);
+            host(b);
+            a.sys.tick(f, a.rng, serial_for);
+            b.sys.tick(f, b.rng, pf4);
+            if (first == 0.0f) first = a.sys.view(100).speed;
+            same = same && world_crc(a) == world_crc(b) && world_bytes(a) == world_bytes(b);
+        }
+        CHECK(same);
+        CHECK(first == 0.05f * mult);  // the rate is member 1's (0.078), not the gone member's 0.0312
+        std::printf("stale team entries (mode %d): box %.1f x %.1f, first speed step %.4f, 120 ticks identical %d\n", mode,
+                    static_cast<double>(hx), static_cast<double>(hy), static_cast<double>(first), same ? 1 : 0);
+    }
+}
+
+// s78n t18 review: "hidden" (a squad container garrisoned with its whole squad) is host-fed and not saved. The host feeds
+// it before every tick and right after a load, so an order to the hidden container directly after the load is ignored,
+// as it was before the save; read() itself leaves it unset.
+void test_hidden_after_load() {
+    const auto build = [](World& w) {
+        PassabilityGrid g;
+        g.init(80, 80);
+        w.sys.set_grid(std::move(g));
+        w.rng = SimRng(53);
+        save_squad(w, 100, cell_center(10, 20), 0.0f, 1, 0.8f, 1.0f, 0.05f);
+        CHECK(w.sys.add_unit(land_unit(71, cell_center(14, 20), 7, 1.0f, 18.0f, kUccVehicle)));  // the garrison host
+    };
+    const auto feed = [](World& w) {  // the host's feed: its whole squad is inside host 71
+        CHECK(w.sys.set_team(100, 100, 1.0f, 0.8f));
+        CHECK(w.sys.set_pair_gate(100, 71, true));
+    };
+    World a{MovementConfig{}};
+    build(a);
+    uint32_t f = 0;
+    for (; f < 4; ++f) a.sys.tick(f, a.rng, serial_for);
+    for (ObjectId id = 101; id <= 104; ++id) CHECK(a.sys.park_team_member(id));  // every member went in
+    for (; f < 8; ++f) {
+        feed(a);
+        a.sys.tick(f, a.rng, serial_for);
+    }
+    MoveOrder o;
+    o.units = {100};
+    o.destination = cell_center(40, 40);
+    {  // before the save: the hidden container takes no order
+        World pre{MovementConfig{}};
+        build(pre);
+        CHECK(load_world(pre, a));
+        feed(pre);
+        pre.sys.move(o, pre.rng, f);
+        CHECK(!pre.sys.view(100).has_goal);
+    }
+    World b{MovementConfig{}}, raw{MovementConfig{}};
+    build(b);
+    build(raw);
+    CHECK(load_world(b, a) && load_world(raw, a));
+    ObjectId gh = 0;
+    bool hidden = true;
+    CHECK(raw.sys.pair_gate(100, gh, hidden) && !hidden && gh == -1);  // read() leaves the host input unset ...
+    feed(b);                                                           // ... so the host feeds it right after the load
+    CHECK(b.sys.pair_gate(100, gh, hidden) && hidden && gh == 71);
+    const uint64_t draws = b.rng.draws();
+    a.sys.move(o, a.rng, f);
+    b.sys.move(o, b.rng, f);
+    CHECK(!a.sys.view(100).has_goal && !b.sys.view(100).has_goal && b.rng.draws() == draws);  // ignored in both
+    bool same = world_crc(a) == world_crc(b) && world_bytes(a) == world_bytes(b);
+    const V2 p0 = a.sys.view(100).pos;
+    for (uint32_t n = 0; n < 40; ++n, ++f) {
+        feed(a);
+        feed(b);
+        a.sys.tick(f, a.rng, serial_for);
+        b.sys.tick(f, b.rng, serial_for);
+        same = same && world_crc(a) == world_crc(b) && world_bytes(a) == world_bytes(b);
+    }
+    CHECK(same && a.sys.view(100).pos == p0 && b.sys.view(100).pos == p0);
+    // (without the feed the loaded copy would take the order: that is what the host's feed after a load prevents)
+    raw.sys.move(o, raw.rng, f);
+    CHECK(raw.sys.view(100).has_goal);
+}
+
+// s78n t18 review (save 17 hygiene): a hover state above 3 or a garrison-exit host below -1 is rejected; the parked
+// record's entry data (half-extents, Max_Speed, OverrideDeceleration) is in the hash.
+void test_t18_review_rejections() {
+    const Scenario t18 = t18_scenario();
+    World a(t18.cfg);
+    t18.build(a);
+    for (uint32_t f = 0; f < 100 && a.sys.hover_state(74) != 2; ++f) step(t18, a, f, serial_for);
+    CHECK(a.sys.hover_state(74) == 2);  // rising
+    const Bytes base = bytes_of(a.sys);
+    const auto diff = [&base](const Bytes& other) {
+        std::vector<size_t> at;
+        for (size_t i = 0; i < base.size() && i < other.size(); ++i)
+            if (base[i] != other[i]) at.push_back(i);
+        return at;
+    };
+    World t(t18.cfg);
+    t18.build(t);
+    {  // the hover state byte: found by the one byte hover_lower changes (2 -> 3)
+        World h(t18.cfg);
+        t18.build(h);
+        CHECK(load(h.sys, base) && h.sys.hover_lower(74));
+        const Bytes lowered = bytes_of(h.sys);
+        const std::vector<size_t> at = diff(lowered);
+        CHECK(lowered.size() == base.size() && at.size() == 1 && base[at[0]] == 2 && lowered[at[0]] == 3);
+        if (at.size() == 1) {
+            Bytes bad = base;
+            for (const uint8_t v : {uint8_t{4}, uint8_t{9}, uint8_t{255}}) {
+                bad[at[0]] = v;
+                CHECK(rejects(t.sys, bad));
+            }
+            for (const uint8_t v : {uint8_t{0}, uint8_t{1}, uint8_t{3}}) {
+                bad[at[0]] = v;
+                CHECK(load(t.sys, bad));
+            }
+        }
+    }
+    {  // the garrison-exit host of container 100 (71): found by the four bytes set_garrison_exit(-1) changes
+        World e(t18.cfg);
+        t18.build(e);
+        CHECK(load(e.sys, base) && e.sys.set_garrison_exit(100, -1));
+        const Bytes cleared = bytes_of(e.sys);
+        const std::vector<size_t> at = diff(cleared);
+        CHECK(cleared.size() == base.size() && at.size() == 4 && at[3] == at[0] + 3 && base[at[0]] == 71);
+        if (at.size() == 4) {
+            World fresh(t18.cfg);
+            t18.build(fresh);
+            Bytes bad = base;
+            put_u32(bad, at[0], 0xFFFFFFFEu);  // -2
+            CHECK(rejects(fresh.sys, bad));
+            put_u32(bad, at[0], 0x80000000u);  // INT32_MIN
+            CHECK(rejects(fresh.sys, bad));
+            put_u32(bad, at[0], 0xFFFFFFFFu);  // -1: none
+            CHECK(load(fresh.sys, bad));
+            put_u32(bad, at[0], 73u);  // another object id
+            CHECK(load(fresh.sys, bad));
+        }
+    }
+    {  // the hash: two battles that differ only in a parked member's entry data
+        const auto digest = [](float decel, float half) {
+            World w{MovementConfig{}};
+            PassabilityGrid g;
+            g.init(40, 40);
+            w.sys.set_grid(std::move(g));
+            save_squad(w, 100, cell_center(10, 20), 0.0f, 1, 0.8f, 1.0f, 0.05f);
+            CHECK(w.sys.remove_unit(104));
+            UnitDesc m = land_unit(104, cell_center(10, 20) + V2{-6.0f, -6.0f}, 0, 1.0f, 3.0f, kUccInfantry);
+            m.accel = 0.05f;
+            m.decel = decel;
+            CHECK(w.sys.add_unit(m));
+            CHECK(w.sys.set_team_member_shape(104, half, 3.0f, 3.0f, 3.0f));
+            const ObjectId ids[4] = {101, 102, 103, 104};
+            const V2 slots[4] = {{6.0f, 6.0f}, {6.0f, -6.0f}, {-6.0f, 6.0f}, {-6.0f, -6.0f}};
+            CHECK(w.sys.set_land_team(100, ids, slots));
+            StateHasher before;
+            w.sys.hash_units(before);
+            CHECK(w.sys.park_team_member(104));
+            StateHasher after;
+            w.sys.hash_units(after);
+            return std::pair<uint64_t, uint64_t>{before.digest(), after.digest()};
+        };
+        const auto ref = digest(0.05f, 3.0f), dec = digest(0.07f, 3.0f), box = digest(0.05f, 4.0f);
+        CHECK(ref.first == dec.first && ref.first == box.first);  // static member data is not hashed while it steers ...
+        CHECK(ref.second != dec.second && ref.second != box.second && dec.second != box.second);  // ... the parked record's is
+    }
+}
+
 // ---------------------------------------------------------------- rejection and corruption
 void test_rejections() {
     const Scenario land = land_scenario();
@@ -1222,8 +1602,8 @@ int main() {
             const Scenario t18 = t18_scenario();
             World v(t18.cfg);
             t18.build(v);
-            bool repulsion = false, around = false, coast = false, rising = false, lowering = false;
-            uint32_t rep_at = 0, around_at = 0;
+            bool repulsion = false, around = false, rising = false, lowering = false;
+            uint32_t rep_at = 0, around_at = 0, coast_first = 0, coast_last = 0;
             for (uint32_t f = 0; f < t18.frames; ++f) {
                 step(t18, v, f, serial_for);
                 for (const CollisionObject& c : v.sys.collisions().list()) {
@@ -1236,15 +1616,29 @@ int main() {
                         around_at = f;
                     }
                 }
-                coast = coast || (f > 230 && f < 245 && v.sys.view(100).speed > 0.0f && v.sys.view(100).start_frame == kStartPending);
+                if (v.sys.view(100).team_coast) {  // s78n t18 review: the braking coast after the new order of frame 230
+                    if (coast_first == 0) coast_first = f + 1;
+                    coast_last = f + 1;
+                    CHECK(v.sys.view(100).speed > 0.0f && v.sys.view(100).has_goal);
+                }
                 rising = rising || v.sys.hover_state(74) == 2;
                 lowering = lowering || v.sys.hover_state(74) == 3;
             }
             CHECK(repulsion && around && rising && lowering);
             CHECK(v.sys.team_member_parked(4) && !v.sys.has_unit(4));
-            (void)coast;
-            for (uint32_t at : {rep_at + 2u, around_at + 2u, 100u, 151u, 201u, 233u, 240u, 301u, 325u, 400u}) check_resume(t18, at, 0);
-            check_resume(t18, 236, 29);
+            // s78n t18 review: the coast is really there (from the order of frame 230 for several frames), and the saves
+            // below land in it - at its first frame, in its middle and at its last frame
+            CHECK(coast_first == 231 && coast_last >= coast_first + 4);
+            std::printf("land squad t18 saves: coast frames %u..%u\n", coast_first, coast_last);
+            for (const uint32_t at : {coast_first, (coast_first + coast_last) / 2, coast_last}) {
+                World c(t18.cfg);
+                t18.build(c);
+                for (uint32_t f = 0; f < at; ++f) step(t18, c, f, serial_for);
+                CHECK(c.sys.view(100).team_coast);  // the state the save holds
+                check_resume(t18, at, 0);
+            }
+            for (uint32_t at : {rep_at + 2u, around_at + 2u, 100u, 151u, 201u, coast_last + 1u, 301u, 325u, 400u}) check_resume(t18, at, 0);
+            check_resume(t18, (coast_first + coast_last) / 2, 29);
         }
         {
             World v(sp.cfg);
@@ -1263,6 +1657,10 @@ int main() {
         std::printf("land squad saves: container moving %u of %u frames, members recovering %u frames (last %u)\n", moving, sq.frames,
                     recovering, last_recovering);
     }
+    test_t18_states();              // s78n t18 review
+    test_stale_team_entries();      // s78n t18 review
+    test_hidden_after_load();       // s78n t18 review
+    test_t18_review_rejections();   // s78n t18 review
     test_rejections();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

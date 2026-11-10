@@ -257,14 +257,19 @@ bool GarrisonSystem::entering(ObjectId unit) const {
     return ui >= 0 && units_[static_cast<size_t>(ui)].state == State::Entering;
 }
 
-bool GarrisonSystem::order_enter(ObjectId unit, ObjectId holder) {
+bool GarrisonSystem::enter_allowed(ObjectId unit, ObjectId holder) const {
     const int32_t ui = unit_index(unit), hi = holder_index(holder);
     if (ui < 0 || hi < 0 || unit == holder) return false;
-    Unit& u = units_[static_cast<size_t>(ui)];
+    const Unit& u = units_[static_cast<size_t>(ui)];
     const Holder& h = holders_[static_cast<size_t>(hi)];
     if (u.state == State::Inside || u.state == State::Entering) return false;
     if (thief_holder(h) || u.d.value == kBoardOnlyValue) return false;  // s78n t12 review: entered only through board()
-    if (!host_open(h, u.owner) || !mask_ok(category_of(u), h.d.accepts)) return false;
+    return host_open(h, u.owner) && mask_ok(category_of(u), h.d.accepts);
+}
+
+bool GarrisonSystem::order_enter(ObjectId unit, ObjectId holder) {
+    if (!enter_allowed(unit, holder)) return false;
+    Unit& u = units_[static_cast<size_t>(unit_index(unit))];
     u.state = State::Moving;
     u.host = holder;
     return true;

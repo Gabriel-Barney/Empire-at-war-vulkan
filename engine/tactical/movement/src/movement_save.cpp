@@ -937,7 +937,8 @@ void MovementSystem::write_unit(ByteWriter& w, const Unit& u) {
 bool MovementSystem::read_unit(ByteReader& r, Unit& u) {
     In in(r);
     io_unit(in, u);
-    return r.ok() && valid_object_id(u.d.id);
+    // s78n t18 review: the hover state is 0 .. 3 (pack +0x2a8) and the garrison-exit host an object id or -1
+    return r.ok() && valid_object_id(u.d.id) && u.hover <= 3 && u.exit_host >= -1;
 }
 
 void MovementSystem::write(ByteWriter& w) const {

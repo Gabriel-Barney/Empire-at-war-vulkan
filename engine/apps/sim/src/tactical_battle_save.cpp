@@ -242,10 +242,16 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             // The combat hooks' tick context (the synced RNG + the global frame of the last battle tick) is used by
             // command-phase hooks before the next battle tick: as in the saving run.
             resume_tick_context();
+            // s78n t18 review: the movement system's pair gates / "hidden" are host-fed, not saved - set them from the
+            // loaded units, containers and garrison state now (after each of the three parts: whichever is read last
+            // sees all of them), so a command before the next tick meets them as in the saving run.
+            feed_pair_gates();
             return true;
         }
         case SavePart::Movement:
-            return get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done();
+            if (!(get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done())) return false;
+            feed_pair_gates();
+            return true;
         case SavePart::Combat:
             l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
             if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_))) return false;
@@ -274,7 +280,9 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             if (has_captures && !captures_) s4_init();
             if (has_captures != (captures_ != nullptr)) return false;
             if (captures_ && !get_section(r, [this](ByteReader& sub) { return read_system(*captures_, sub); })) return false;
-            return r.done();
+            if (!r.done()) return false;
+            feed_pair_gates();
+            return true;
         }
         case SavePart::Hangar:
             return get_system(r, hangars_.get()) && get_system(r, contents_.get()) && get_system(r, production_.get()) &&

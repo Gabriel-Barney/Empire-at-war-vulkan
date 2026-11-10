@@ -91,9 +91,15 @@ void test_rules() {
     CHECK(g.masks_match(1, 10) && !g.masks_match(3, 10) && g.masks_match(3, 20) && g.masks_match(3, 30));
     CHECK(g.can_garrison(1, 10) && g.can_garrison(5, 10) && !g.can_garrison(4, 10) && g.can_garrison(4, 30) && !g.can_garrison(1, 40));
     CHECK(!g.can_garrison(20, 20) && !g.can_garrison(3, 10));
+    // s78n t18 review: enter_allowed = order_enter's test without the order (the host refuses before it sends units
+    // walking): own / allied host yes, hostile host no, mask mismatch no, unknown ids and the unit itself no; no state.
+    CHECK(g.enter_allowed(1, 10) && g.enter_allowed(5, 10) && !g.enter_allowed(4, 10) && g.enter_allowed(4, 30));
+    CHECK(!g.enter_allowed(3, 10) && !g.enter_allowed(1, 999) && !g.enter_allowed(999, 10) && !g.enter_allowed(20, 20));
+    CHECK(g.pending_holder(1) == kNoObject && g.pending_holder(4) == kNoObject && g.reserved(10) == 0);
     // Lua capacity rule: free - reserved - value > 0. The bunker (3 slots): walkers reserve.
     CHECK(g.order_enter(1, 10) && g.order_enter(2, 10) && g.reserved(10) == 2);
     CHECK(!g.can_garrison(6, 10));  // 3 - 2 - 1 = 0: Can_Garrison false ...
+    CHECK(g.enter_allowed(6, 10));  // (no capacity test at order time)
     CHECK(g.order_enter(6, 10));    // ... but the order is accepted (no capacity test at order time)
     CHECK(!g.order_enter(4, 10));   // hostile host
     // Approach point: host + facing x half diagonal (no Enter_Dist) = (20, 0); reach = max(radius 0, slack 10) + 5.
@@ -109,6 +115,7 @@ void test_rules() {
     CHECK(g.entering(1) && !g.entering(2) && g.pending_holder(2) == 10 && g.holder_of(1) == kNoObject);
     CHECK(g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::EnterStarted && g.events()[0].unit == 1);
     CHECK(!g.cancel_enter(1) && !g.order_enter(1, 20));  // an entering unit is committed
+    CHECK(!g.enter_allowed(1, 20) && g.enter_allowed(2, 20) == g.masks_match(2, 20));  // (a walking unit may be re-ordered)
     g.clear_events();
     g.service(30, pose);
     CHECK(g.holder_of(1) == kNoObject);  // 30 frames of fade: enters at frame 31
@@ -415,7 +422,7 @@ void test_vehicle_thief_holder() {
     CHECK(g.add_unit(1, 1, inf) && g.add_unit(2, 1, inf));  // the thief and an allied trooper
     const Vec3 at{100.0f, 50.0f, 0.0f}, face{0.0f, 1.0f, 0.0f};
     // closed to orders: nobody walks in, no free slot, the Lua rule says no
-    CHECK(!g.can_garrison(1, 50) && !g.order_enter(1, 50) && g.pending_holder(1) == kNoObject);
+    CHECK(!g.can_garrison(1, 50) && !g.enter_allowed(1, 50) && !g.order_enter(1, 50) && g.pending_holder(1) == kNoObject);
     CHECK(g.capacity(50) == 0 && g.free_slots(50) == 0);
     // the boarding is the only way in
     CHECK(g.board(1, 50, at, 7) && g.holder_of(1) == 50 && g.occupants(50).size() == 1);

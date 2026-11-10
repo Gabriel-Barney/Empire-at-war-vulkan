@@ -194,6 +194,10 @@ public:
     // Approach (the caller moves the unit to approach_point): false when the unit / host is unknown, the unit is inside
     // or entering, the host is hostile or the masks do not match. Replaces an earlier approach.
     bool order_enter(ObjectId unit, ObjectId holder);
+    // s78n t18 review: order_enter's test without the order (the host refuses a garrison order before it sends the
+    // units walking): both known, the unit not inside / entering, the host no thief's vehicle, the unit no board-only
+    // one, the host open to the unit's owner and the masks matching.
+    bool enter_allowed(ObjectId unit, ObjectId holder) const;
     bool cancel_enter(ObjectId unit);  // a new move / stop order replaces an approach (not an entering unit)
     // Vehicle_Thief (TACTICAL_GAPS §2.3.10, VEHICLE_THIEF 0x32): `unit` is inside `holder` at once (Entered event at
     // `at`), whatever the owners, masks and free slots [port: the original's board path is not modelled]. A pending

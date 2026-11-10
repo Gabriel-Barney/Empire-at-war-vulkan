@@ -427,8 +427,13 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
 
 bool MovementSystem::remove_unit(ObjectId id) {
     // s78n review: a parked squad member removed for good (it died inside its garrison) gives up its team place.
-    std::erase_if(parked_, [id](const LandTeamSlot& p) { return p.member == id; });
-    return remove_impl(id);
+    const size_t dropped = std::erase_if(parked_, [id](const LandTeamSlot& p) { return p.member == id; });
+    const bool removed = remove_impl(id);
+    // s78n t18 review: the record was a TEAM entry (a member suspended for a hero clash, or absent in a garrison - neither
+    // is a steering member, so remove_impl did not rebuild): the entry list, the joint box and the container's radius
+    // follow at once, as a load would rebuild them.
+    if (dropped > 0) team_ix_rebuild();
+    return removed;
 }
 
 bool MovementSystem::remove_impl(ObjectId id) {
@@ -485,6 +490,8 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.start_frame = u->start_frame;  // OI tactical
     v.formation_speed = u->formation_speed;
     v.team_speed = u->team_cap;  // s78k t03
+    v.team_coast = u->d.team_container && u->coast;  // s78n t18 review
+    v.team_final_turn = u->d.team_container && u->fturn;
     v.arrival_turn = u->aturn != LocoState::None;  // s78l t02
     v.arrival_turn_ended = u->aturn_ended;
     v.large_hover_index = u->large_hover_index;
@@ -1223,8 +1230,8 @@ bool MovementSystem::mvm_contact(const Unit& a, const Unit& b) const {
 
 // MovingVsStopped contact: distance along a's remaining path to touching b within the look-ahead, or -1. s78n t14 part B
 // (MOVEMENT §5.3 0x683790): the look-ahead is max(MovingVsMovingLookAheadTime, the type's MovementPredictionInterval) -
-// [port] the interval is read for squad containers only (other FoC users: AT-AT 12, T4B, SPMAT, HAV, Pod walkers) - plus
-// 1.5 s when the mover can push the obstacle (0x5c8900 crushes, 0x5c8890 scatters).
+// s78n t18 review: of every mover type (FoC: AT-AT and Veers 5.0, Pod Walker 12, SPMA-T 4.0, Juggernaut 3.0, T4-B 3.0),
+// not only of squad containers - plus 1.5 s when the mover can push the obstacle (0x5c8900 crushes, 0x5c8890 scatters).
 // s78n t18 (MOVEMENT §5.3.1 item 2, 0x441b60): the swept-point test of the mover's path against the obstacle's
 // rectangle centre with the directional radii rho(mover, cos to the segment direction) + rho(obstacle, cos to its
 // facing); hit when the path length d to the contact has d / max speed < the look-ahead frames. While the mover turns in
@@ -1234,7 +1241,7 @@ float MovementSystem::mvs_look_distance(const Unit& a, const Unit& b) const {
     // 0x683790: d / max speed < fps x max(MovingVsMovingLookAheadTime, the type's MovementPredictionInterval), + 1.5 s
     // when the mover can push the obstacle (it crushes it and the obstacle scatters)
     float secs = cfg_.constants.moving_vs_moving_look_ahead_time;
-    if (a.d.team_container) secs = std::max(secs, a.d.movement_prediction_interval);
+    secs = std::max(secs, a.d.movement_prediction_interval);
     if (crushes(a, b) && scatters(b)) secs += 1.5f;
     const float vmax = a.d.team_container && a.team_cap < kInf ? a.team_cap : a.lp.max_speed;
     return vmax * secs * 30.0f;
@@ -1547,7 +1554,10 @@ float MovementSystem::slave_speed(const Unit& x, const Unit& y, bool& touch) con
     if (gap == 0.0f) touch = true;
     float tau = gap / -(cx + cy);
     const float follow = cx == 0.0f ? 0.0f : std::clamp(std::fabs(cy / cx) * vmax * 0.8f, vmin, vmax);
-    const float dec = x.d.team_container ? (x.team_accel > 0.0f ? x.team_accel : vmax) : x.lp.decel;
+    // s78n t18 review: a squad container's rate 0x5ab540 taken here (team_rate), not Unit::team_accel - that is the
+    // walk's copy of the tick before (the driver runs first) and is not saved, so a loaded battle had 0 in its first tick
+    const float rate = x.d.team_container ? team_rate(x) : 0.0f;
+    const float dec = x.d.team_container ? (rate > 0.0f ? rate : vmax) : x.lp.decel;
     if (follow < v && dec > 0.0f) tau = std::max(0.0f, tau - (v - follow) / dec);
     const float k = std::clamp(tau / (30.0f * cfg_.constants.moving_vs_moving_look_ahead_time), 0.0f, 1.0f);
     if (cy > 0.0f) return gap <= 0.0f ? 0.0f : follow + (vmax - follow) * k;  // y moves away along the line
@@ -1811,6 +1821,14 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
             c.state = S::PathAround;
             return;
         }
+        // s78n t18 review: only b is stamped with this frame. The list has one stamp, so an older entry that step 3 no
+        // longer accepts (its unit changed paths at or after the old stamp, or is gone) is dropped first - the new stamp
+        // would make it count as planned around again.
+        std::erase_if(a.around, [&](ObjectId id) {
+            if (id == b.d.id) return false;
+            const Unit* o = unit_ptr(id);
+            return !o || !(o->path_change < a.around_frame);
+        });
         if (std::find(a.around.begin(), a.around.end(), b.d.id) == a.around.end()) a.around.push_back(b.d.id);
         a.around_frame = frame;
         c.state = S::Resolved;
@@ -2106,10 +2124,10 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     // start-of-tick positions (the members' steering vectors read other units, which the parallel walk moves).
     std::vector<SteerRec> recs;
     team_steer_recs(recs);
-    std::vector<V2> pos0;
+    std::vector<SteerPos> pos0;  // s78n t18 review: with the heights (the side steps' 3-D distance)
     if (!recs.empty()) {
         pos0.reserve(units_.size());
-        for (const Unit& u : units_) pos0.push_back(u.m.pos);
+        for (const Unit& u : units_) pos0.push_back({u.m.pos, u.z});
     }
     // s78n t18 (MOVEMENT §5.4.1): each unit's own records - a Walk unit that is no squad member adds the vector to its
     // heading (a container uses none; its members read its records through their TeamSnap).
@@ -2254,7 +2272,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 const Unit* u;
                 float vmax;
                 std::span<const SteerRec> recs;
-                std::span<const V2> pos;
+                std::span<const SteerPos> pos;
             } actx{this, &u, lp.max_speed, {}, pos0};
             if (!u.d.team_container && own[i].second > own[i].first) {
                 actx.recs = std::span<const SteerRec>(recs).subspan(own[i].first, own[i].second - own[i].first);
@@ -2601,6 +2619,10 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.f32(p.slot.y);
             h.f32(p.off.x);  // s78n t14
             h.f32(p.off.y);
+            h.f32(p.hx);  // s78n t18 review: the absent member's entry data (the joint box and the rate read them)
+            h.f32(p.hy);
+            h.f32(p.max_speed);
+            h.f32(p.decel);
         }
     }
     if (cfg_.mode == MoveMode::Land) coll_.hash(h);  // S7 collision layer (land only: the space format is unchanged)

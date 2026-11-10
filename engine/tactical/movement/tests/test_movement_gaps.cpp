@@ -4360,6 +4360,14 @@ static std::vector<T16Member> t18_storm() {
     return mem;
 }
 
+// s78n t18 review: the squad container's braking frames above speed 0 from the team speed `vmax` with the rate `a` - the
+// speed step 0x5aaf70 while braking (target = the rate), replayed in floats: v -= min(a, v - a) while v > a.
+static uint32_t t18_brake_steps(float vmax, float a) {
+    uint32_t n = 0;
+    for (float v = vmax; v > a && n < 1000; ++n) v -= std::min(a, v - a);
+    return n;
+}
+
 // s78n t18 items 2 / 6 (MOVEMENT §5.3.1 / §5.3.2, FIGHTER_FLYING §7.8): the squad's footprint is its live joint slot box
 // (0x404450) - a rectangle centred on the container and turned by its yaw; members are in no collision or occupancy query,
 // the container is in all of them with that rectangle.
@@ -4662,6 +4670,9 @@ static void test_land_squad_repulsion() {
         }
         CHECK(slave > 0 && !wrong_master && slowed > 0);
         CHECK(min_gap > 0.0f);  // the rear container never passes the front one
+        // s78n t18 review: nor do the two joint boxes ever overlap (HX 9 each: the slave speed is 0 at once when the
+        // footprints touch), and the rear squad did close up from its start gap of 40
+        CHECK(min_gap >= 18.0f && min_gap < 40.0f - 10.0f);
         std::printf("land squad repulsion: following squads - Speed Slave Only %u frames, rear slowed %u, closest %.2f\n", slave,
                     slowed, static_cast<double>(min_gap));
     }
@@ -4770,11 +4781,21 @@ static void test_land_squad_repulsion() {
         sys.move(o, rng, 2);
         std::vector<float> v_at;
         bool tal = false;
+        uint32_t crowd_frames = 0, crowd_other = 0;
         for (uint32_t f = 2; f < 600; ++f) {
             sys.tick(f, rng, serial_for);
             v_at.push_back(sys.view(100).speed);
-            for (const CollisionObject& c : sys.collisions().list()) tal = tal || c.state == CollisionState::TryAgainLater;
+            for (const CollisionObject& c : sys.collisions().list()) {
+                tal = tal || c.state == CollisionState::TryAgainLater;
+                // s78n t18 review (MOVEMENT 5.3.2, the crowd box query on layer 0x10): the 9-member squad counts once, as
+                // its container, with the vehicle: 5 x 2 (the members are no layer objects: 5 x 11 would be 55)
+                if (c.a == 100 && c.b == 70) {
+                    if (c.crowd == 10.0f) ++crowd_frames;
+                    else ++crowd_other;
+                }
+            }
         }
+        CHECK(crowd_frames > 100 && crowd_other == 0);
         size_t top = 0;
         while (top < v_at.size() && !near(v_at[top], vmax, 1e-5f)) ++top;
         size_t d0 = top;
@@ -4867,14 +4888,17 @@ static void test_land_squad_speed_order() {
         for (size_t i = 0; i < v.size(); ++i)
             if (near(v[i], vmax, 1e-5f)) c = i;
         // the braking steps, then the rate itself when the last step left more than it (always for the Rebel squad; for
-        // the Stormtrooper squad only when the float sum 16 x 0.078 lands a hair above 1.248 - 15 x 0.078), then the zero
-        (void)rate_step;
-        CHECK(arrived && c > 0 && c + full + 2 <= v.size() && v.size() <= c + full + 3);
+        // the Stormtrooper squad because the float sum lands a hair above 1.248 - 15 x 0.078), then the zero.
+        // s78n t18 review: the frame count is pinned exactly - the speed step 0x5aaf70 replayed in floats from the team
+        // speed with the rate (v -= min(a, v - a) while v > a), then the frame that zeroes it.
+        const uint32_t brake = t18_brake_steps(vmax, a);
+        CHECK(brake == full + (rate_step ? 1u : 0u));
+        CHECK(arrived && c > 0 && v.size() == c + brake + 2);
         const size_t frames = v.size() - 1 - c;
-        bool steps = c + full + 1 < v.size();
+        CHECK(frames == brake + 1u);
+        bool steps = c + brake + 1 < v.size();
         for (uint32_t k = 1; steps && k <= full; ++k) steps = near(v[c + k], vmax - a * static_cast<float>(k), 2e-5f);
-        if (steps && frames == full + 2) steps = near(v[c + full + 1], a, 1e-5f);
-        if (rate_step) CHECK(frames == full + 2);
+        if (steps && brake == full + 1) steps = near(v[c + full + 1], a, 1e-5f);
         CHECK(steps && v.back() == 0.0f);
         CHECK(p.back() == p[p.size() - 2]);  // the arrival frame takes no step: no snap
         const float off = length(p.back() - cell_center(30, 20));
@@ -4882,7 +4906,9 @@ static void test_land_squad_speed_order() {
         std::printf("land squad speed order: %s - %zu braking frames, stopped %.3f from the goal\n", name, frames,
                     static_cast<double>(off));
     };
-    path_end("Stormtrooper squad", 0, 0.8f, t18_storm(), 0.05f * mult, 0.8f * mult, 15, false);
+    // Stormtrooper: 15 steps of the rate leave 0.07800007 > 0.078, so the rate itself follows (17 frames with the zero);
+    // Rebel: 13 steps leave 0.1404, then the rate, then the zero (15 frames)
+    path_end("Stormtrooper squad", 0, 0.8f, t18_storm(), 0.05f * mult, 0.8f * mult, 15, true);
     path_end("Rebel squad", 1, 1.1f, rebel, 0.07f * mult, 1.0f * mult, 13, true);
     const float a = 0.05f * mult, vmax = 0.8f * mult;
     {  // the MovingVsMoving stand-in's yield to a crossing vehicle with a lower id: speed 0 in the tick the hold is set
@@ -4941,19 +4967,21 @@ static void test_land_squad_speed_order() {
         for (ObjectId id = 1; id <= 9; ++id) CHECK(sys.team_start_delay(id) == 0);  // no start delays (the squad moves)
         CHECK(rng.draws() == draws0);
         const float x0 = sys.view(100).pos.x, yaw0 = sys.view(100).yaw;
-        bool steps = true;
+        bool steps = sys.view(100).team_coast;
         for (uint32_t k = 1; k <= 15; ++k, ++f) {  // 15 frames of the rate while it coasts straight on
             sys.tick(f, rng, serial_for);
-            steps = steps && near(sys.view(100).speed, vmax - a * static_cast<float>(k), 2e-5f) && sys.view(100).yaw == yaw0;
+            steps = steps && near(sys.view(100).speed, vmax - a * static_cast<float>(k), 2e-5f) && sys.view(100).yaw == yaw0 &&
+                    sys.view(100).team_coast;
         }
-        float coast = sys.view(100).pos.x - x0;
+        // s78n t18 review: exactly as the path-end braking - the float sum left a hair more than the rate, so one more
+        // step of the rate itself follows (t18_brake_steps = 16), then 0x15 zeroes the speed with no step
+        CHECK(t18_brake_steps(vmax, a) == 16);
+        sys.tick(f++, rng, serial_for);
+        steps = steps && near(sys.view(100).speed, a, 1e-5f) && sys.view(100).team_coast;
+        const float coast = sys.view(100).pos.x - x0;
         sys.tick(f++, rng, serial_for);  // 0x15: the speed (<= the rate) is zeroed, no step
-        if (sys.view(100).speed > 0.0f) {  // (the float sum left a hair more than the rate: one more step of the rate)
-            steps = steps && near(sys.view(100).speed, a, 1e-5f);
-            coast = sys.view(100).pos.x - x0;
-            sys.tick(f++, rng, serial_for);
-        }
-        CHECK(steps && coast > 120.0f * a - 0.01f && coast < 121.0f * a + 0.01f);
+        CHECK(!sys.view(100).team_coast);
+        CHECK(steps && coast > 121.0f * a - 0.01f && coast < 121.0f * a + 0.01f);
         CHECK(sys.view(100).speed == 0.0f && sys.view(100).pos.x - x0 == coast);
         bool turned = false, arrived = false;
         for (uint32_t n = 0; n < 900 && !arrived; ++n, ++f) {
@@ -5229,6 +5257,253 @@ static void test_land_squad_gates() {
     }
 }
 
+// s78n t18 review:
+//  * the raised-state gate with a synthetic hover type (Hover_Height 6.0; the FoC hover types are the Lancet and the HTT,
+//    both 80, see the real-data test of alamo_tactical_movement_tests): raised four frames into its first move and for
+//    good - no MovingVsStopped record against a grounded standing unit, no MovingVsMoving record with a grounded mover
+//    (MOVEMENT 5.3 [H] as written);
+//  * a squad container coasting after a new order with a team speed multiplier of 0 (rate 0) stops at once;
+//  * decision step 10 stamps only the obstacle it decides: an older entry whose unit changed paths since is not revived;
+//  * MovementPredictionInterval widens the MovingVsStopped look-ahead of every mover type, not only a squad container's;
+//  * the push spot's occupancy: a foreign squad's member on the spot is no occupant, a foreign squad's container is.
+static void test_land_squad_t18_review() {
+    const MovementConstants kc{};
+    const float mult = kc.land_speed_multiplier;
+    {  // the raised-state gate (a synthetic hover type)
+        struct Out {
+            uint32_t rise = 0, records = 0;
+            uint8_t state = 0;
+            bool arrived = false;
+            float off_line = 0.0f;
+        };
+        // other: 0 a grounded vehicle standing on the path, 1 a grounded vehicle walking the same line the other way
+        const auto run = [&](float hover, int other) {
+            Out r;
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            const V2 at = cell_center(10, 20);
+            UnitDesc m = unit(1, at, 2, 1.0f, 12.0f, LocomotorKind::Default);
+            m.collision_class = kUccVehicle;
+            m.hover_height = hover;
+            UnitDesc o = unit(2, other == 0 ? cell_center(30, 20) : cell_center(50, 20), 2, 1.0f, 12.0f, LocomotorKind::Default);
+            o.collision_class = kUccVehicle;
+            o.yaw_deg = other == 0 ? 0.0f : 180.0f;
+            CHECK(sys.add_unit(m) && sys.add_unit(o));
+            SimRng rng(91);
+            MoveOrder first;  // its first move raises it
+            first.units = {1};
+            first.destination = cell_center(11, 20);
+            sys.move(first, rng, 1);
+            uint32_t f = 1;
+            for (; f < 200 && !sys.view(1).arrived; ++f) {
+                sys.tick(f, rng, serial_for);
+                if (sys.hover_state(1) == 2) ++r.rise;
+            }
+            CHECK(sys.view(1).arrived);
+            r.state = sys.hover_state(1);
+            const uint32_t before = sys.stats().collisions_created;
+            MoveOrder go;
+            go.units = {1};
+            go.destination = cell_center(50, 20);
+            sys.move(go, rng, f);
+            if (other == 1) {
+                MoveOrder back;
+                back.units = {2};
+                back.destination = cell_center(10, 20);
+                sys.move(back, rng, f);
+            }
+            for (uint32_t n = 0; n < 900 && !r.arrived; ++n, ++f) {
+                sys.tick(f, rng, serial_for);
+                r.arrived = sys.view(1).arrived && (other == 0 || sys.view(2).arrived);
+                r.off_line = std::max(r.off_line, std::fabs(sys.view(1).pos.y - at.y));
+            }
+            r.records = sys.stats().collisions_created - before;
+            return r;
+        };
+        for (int other = 0; other < 2; ++other) {
+            const Out hov = run(6.0f, other), plain = run(0.0f, other);
+            // 6.0 at 1.56 per frame: the start frame and three steps stand in state 2, the fourth step raises it
+            CHECK(hov.rise == 4 && hov.state == 1 && plain.rise == 0 && plain.state == 0);
+            CHECK(hov.arrived && hov.records == 0 && hov.off_line < 1e-4f);  // raised: straight through, no record
+            CHECK(plain.arrived && plain.records > 0);                       // the same walker without the tag: records
+            std::printf("t18 review: a raised hover unit against a grounded %s - records %u (without the tag %u), rose in %u frames\n",
+                        other == 0 ? "standing unit" : "mover", hov.records, plain.records, hov.rise);
+        }
+    }
+    {  // coast with rate 0
+        const float vmax = 0.8f * mult;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(10, 20);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm(), 1);
+        const auto team = [&](float factor) {
+            CHECK(sys.set_team(100, 100, factor, 0.8f));
+            for (ObjectId id = 1; id <= 9; ++id) CHECK(sys.set_team(id, 100, factor, 0.8f));
+        };
+        SimRng rng(92);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(45, 20);
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        for (; f < 300 && !(near(sys.view(100).speed, vmax, 1e-5f) && sys.view(100).pos.x > at.x + 100.0f); ++f) sys.tick(f, rng, serial_for);
+        CHECK(near(sys.view(100).speed, vmax, 1e-5f));
+        team(0.0f);  // the team speed multiplier drops to 0: team speed 0, rate 0
+        MoveOrder back;
+        back.units = {1};
+        back.destination = at;
+        sys.move(back, rng, f);
+        CHECK(sys.view(100).team_coast && near(sys.view(100).speed, vmax, 1e-5f));  // the order is not taken at once
+        const V2 p0 = sys.view(100).pos;
+        bool still = true;
+        for (uint32_t n = 0; n < 40; ++n, ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView k = sys.view(100);
+            still = still && k.speed == 0.0f && k.pos == p0 && !k.team_coast;  // stopped in the first tick, no slide
+        }
+        CHECK(still && sys.view(100).has_goal);
+        team(1.0f);  // the multiplier is back: the new order's path starts from speed 0
+        bool arrived = false;
+        for (uint32_t n = 0; n < 900 && !arrived; ++n, ++f) {
+            sys.tick(f, rng, serial_for);
+            arrived = sys.view(100).arrived;
+        }
+        CHECK(arrived && length(sys.view(100).pos - at) <= 8.0f * 0.05f * mult + 1e-3f);
+        std::printf("t18 review: coast with rate 0 - stood %d, then arrived %d\n", still ? 1 : 0, arrived ? 1 : 0);
+    }
+    {  // step 10's stamp: vehicle 1 walks a walled lane (60 wide: no way around a standing vehicle of radius 20) through
+       // the hostile standing vehicles 2 and 3 - Path Around fails, a hostile unit is not pushed, so step 10 resolves the
+       // record: the mover keeps its path and the unit counts as planned around until it changes paths
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g = open_grid(100, 100);
+        for (int32_t x = 0; x < 100; ++x) {
+            g.set_base(x, 18, kPassImpassable);
+            g.set_base(x, 22, kPassImpassable);
+        }
+        sys.set_grid(std::move(g));
+        sys.set_anim_length_fn(anim_len);
+        const auto veh = [&](ObjectId id, int32_t cx, int32_t owner, float radius) {
+            UnitDesc d = unit(id, cell_center(cx, 20), 2, 1.0f, radius, LocomotorKind::Default);
+            d.collision_class = kUccVehicle;
+            d.owner = owner;
+            CHECK(sys.add_unit(d));
+        };
+        veh(1, 3, 0, 18.0f);
+        veh(2, 15, 1, 20.0f);
+        veh(3, 45, 1, 20.0f);
+        SimRng rng(94);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(95, 20);
+        sys.move(o, rng, 1);
+        uint32_t f = 1, other_states = 0;
+        const auto run_to = [&](float x) {
+            for (uint32_t n = 0; n < 1500 && sys.view(1).pos.x < x && !sys.view(1).arrived; ++n, ++f) {
+                sys.tick(f, rng, serial_for);
+                // (a record step 10 resolved is dropped in the same pass: no state is ever left on the list)
+                for (const CollisionObject& c : sys.collisions().list()) other_states += c.state != CollisionState::Active ? 1u : 0u;
+            }
+            return sys.stats().dynamic_repaths;
+        };
+        const uint32_t n1 = run_to(cell_center(15, 20).x + 80.0f);  // past unit 2: one decision (Path Around fails, step 10)
+        // unit 2 changes paths after vehicle 1 planned around it, and now stands farther along the lane
+        CHECK(sys.teleport(2, cell_center(70, 20), 0.0f, 0.0f, f));
+        const uint32_t n2 = run_to(cell_center(45, 20).x + 80.0f);  // past unit 3: its decision stamps unit 3 only
+        const uint32_t n3 = run_to(cell_center(70, 20).x + 80.0f);  // unit 2 again: a full decision, not "planned around"
+        for (uint32_t n = 0; n < 900 && !sys.view(1).arrived; ++n, ++f) sys.tick(f, rng, serial_for);
+        const MovementStats& st = sys.stats();
+        std::printf("t18 review: step 10 stamp - dynamic re-paths %u / %u / %u past the first, second and moved unit, pushes %u, "
+                    "push failures %u, early arrivals %u\n", n1, n2, n3, st.pushes, st.push_failures, st.early_arrivals);
+        CHECK(n1 == 1 && n2 == 2 && n3 == 3);
+        CHECK(other_states == 0 && st.pushes == 0 && st.push_failures == 0 && st.early_arrivals == 0);  // step 10 each time
+        CHECK(sys.view(1).arrived && sys.view(2).pos == cell_center(70, 20) && sys.view(3).pos == cell_center(45, 20));
+    }
+    {  // MovementPredictionInterval of a vehicle that is no squad container (FoC: AT-AT 5.0, SPMA-T 4.0, Pod Walker 12 ...).
+       // A slow one (0.468 per frame), so that the look-ahead stays inside the 160 x 160 candidate box.
+        const float vmax = 0.3f * mult;
+        const auto first_record = [&](float interval) {
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            UnitDesc m = unit(1, cell_center(20, 20), 2, 0.3f, 12.0f, LocomotorKind::Default);
+            m.collision_class = kUccVehicle;
+            m.movement_prediction_interval = interval;
+            UnitDesc o = unit(2, cell_center(30, 20), 2, 1.0f, 12.0f, LocomotorKind::Default);
+            o.collision_class = kUccVehicle;
+            CHECK(sys.add_unit(m) && sys.add_unit(o));
+            SimRng rng(95);
+            MoveOrder go;
+            go.units = {1};
+            go.destination = cell_center(45, 20);
+            sys.move(go, rng, 1);
+            for (uint32_t f = 1; f < 900; ++f) {
+                sys.tick(f, rng, serial_for);
+                if (sys.stats().collisions_created > 0) return distance(sys.view(1).pos, sys.view(2).pos);
+            }
+            return -1.0f;
+        };
+        // the record appears on the first check frame (every FramesPerCollisionCheck frames) with the two circles (12
+        // each) closer along the path than max speed x 30 x max(MovingVsMovingLookAheadTime, the interval)
+        const float step = static_cast<float>(kc.frames_per_collision_check) * vmax;
+        const float look0 = vmax * 30.0f * kc.moving_vs_moving_look_ahead_time, look4 = vmax * 30.0f * 4.0f;
+        const float d0 = first_record(0.0f), d4 = first_record(4.0f), d1 = first_record(1.0f);
+        CHECK(kc.moving_vs_moving_look_ahead_time < 4.0f && kc.moving_vs_moving_look_ahead_time > 1.0f);
+        CHECK(look4 + 24.0f < 0.5f * kCollisionCrowdBox + 12.0f);  // inside the candidate box (+ the unit's record box)
+        // (the check runs before the walk of its tick: the mover is one step closer when the record is first seen)
+        CHECK(d0 + vmax <= look0 + 24.0f + 1e-3f && d0 + vmax > look0 + 24.0f - step - 1e-3f);
+        CHECK(d4 + vmax <= look4 + 24.0f + 1e-3f && d4 + vmax > look4 + 24.0f - step - 1e-3f);
+        CHECK(d1 == d0);  // an interval below the global look-ahead changes nothing (the larger of the two)
+        std::printf("t18 review: MovementPredictionInterval - first record %.2f apart (none), %.2f (4.0 s), %.2f (1.0 s)\n",
+                    static_cast<double>(d0), static_cast<double>(d4), static_cast<double>(d1));
+    }
+    {  // push-spot occupancy: giant 1 pushes infantry 2 off its path
+        struct Res {
+            V2 spot;
+            bool pushed = false, arrived = false;
+        };
+        // what: 0 nothing else; 1 a foreign squad's member (201; its container 200 far away) alone on `near_spot`; 2 the
+        // foreign container 10 beside `near_spot` (away from the giant's path): its joint box covers the spot's query box
+        const auto run = [&](int what, V2 near_spot) {
+            Res r;
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            UnitDesc gv = unit(1, cell_center(5, 20), 2, 1.0f, 14.0f, LocomotorKind::Default);
+            gv.collision_class = kUccGiantVehicle;
+            gv.owner = 0;
+            UnitDesc b = unit(2, {cell_center(30, 20).x, cell_center(30, 20).y - 1.0f}, 2, 1.5f, 5.0f, LocomotorKind::Default);
+            b.owner = 0;
+            CHECK(sys.add_unit(gv) && sys.add_unit(b));
+            if (what != 0) {
+                t18_squad(sys, 200, cell_center(80, 80), 0.0f, 0);
+                CHECK(sys.set_team_target(200, true));  // its members stand where they are put (no recovery to the slots)
+                if (what == 1) CHECK(sys.teleport(201, near_spot, 0.0f, 0.0f, 0));
+                else CHECK(sys.teleport(200, V2{near_spot.x, near_spot.y - 10.0f}, 0.0f, 0.0f, 0));
+            }
+            SimRng rng(93);
+            MoveOrder o;
+            o.units = {1};
+            o.destination = cell_center(55, 20);
+            sys.move(o, rng, 1);
+            for (uint32_t f = 1; f < 1500 && !r.arrived; ++f) {
+                if (what != 0) CHECK(sys.set_team_target(200, true));
+                sys.tick(f, rng, serial_for);
+                r.pushed = r.pushed || sys.view(2).pushed;
+                r.arrived = sys.view(1).arrived && !sys.view(2).pushed;
+                if (what == 1) CHECK(sys.view(201).pos == near_spot);  // the member stood on the spot all the time
+            }
+            r.spot = sys.view(2).pos;
+            return r;
+        };
+        const Res free_run = run(0, V2{});
+        CHECK(free_run.pushed && free_run.arrived && free_run.spot.y < cell_center(30, 20).y - 15.0f);  // off the path, to its side
+        const Res member = run(1, free_run.spot), container = run(2, free_run.spot);
+        CHECK(member.pushed && member.arrived && member.spot == free_run.spot);  // a squad member is no occupant
+        CHECK(container.pushed && container.arrived && length(container.spot - free_run.spot) > 1.0f);  // a container is
+        std::printf("t18 review: push spot (%.2f, %.2f); a foreign member on it (%.2f, %.2f); a foreign container at it (%.2f, %.2f)\n",
+                    static_cast<double>(free_run.spot.x), static_cast<double>(free_run.spot.y), static_cast<double>(member.spot.x),
+                    static_cast<double>(member.spot.y), static_cast<double>(container.spot.x), static_cast<double>(container.spot.y));
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -5274,6 +5549,7 @@ int main() {
     test_land_squad_repulsion();    // s78n t18 items 1 / 7
     test_land_squad_speed_order();  // s78n t18 item 3
     test_land_squad_gates();        // s78n t18 items 4 / 5
+    test_land_squad_t18_review();   // s78n t18 review
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

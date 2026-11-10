@@ -485,6 +485,9 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             story_captured_.push_back({c.point, c.old_owner, c.new_owner});
         }
     }
+    // s78n t18 review: who is inside / walking in changed - the movement pair gates and "hidden" follow at once (a
+    // command right after this batch, or a save and load, meets the same gates)
+    if (!events.empty()) feed_pair_gates();
 }
 
 void TacticalBattle::s4_tick(TacticalMode& mode, SimRng&) {
@@ -607,6 +610,7 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
                     std::find(all.begin(), all.end(), m.id) == all.end())
                     all.push_back(m.id);
     std::vector<objects::ObjectId> ids;
+    bool refused_host = false;
     for (const objects::ObjectId id : all) {
         Unit* u = unit_by_id(id);
         if (!u || !u->alive || u->retreated || !u->movable || store.owner(u->h) != static_cast<int32_t>(player)) continue;
@@ -616,9 +620,15 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
         // s78n t06 review [port]: a hero in a clash (+0x3b4) is not sent into a garrison (its locked movement keeps it in
         // the duel; retail's group move leaves a locked unit out, so it never reaches the host).
         if (combat_->has_unit(id) && (combat_->flags(id) & tc::kUnitHeroClash)) continue;
+        // s78n t18 review: a host that would refuse the unit's approach (hostile to it: GarrisonSystem::order_enter's
+        // rule) is refused here too, before the queues are cleared and the units are sent walking
+        if (!garrison_.enter_allowed(id, holder)) {
+            refused_host = true;
+            continue;
+        }
         ids.push_back(id);
     }
-    if (ids.empty()) return R::InvalidUnit;
+    if (ids.empty()) return refused_host ? R::InvalidTarget : R::InvalidUnit;  // InvalidTarget: hostile host
     clear_queues(ids);
     raise_order_replaced(ids);  // S7 t31: garrison enter (A1_READINGS §33.3 [M: raised at the order])
     const Vec3 a = garrison_.approach_point(holder, store.position(hh), store.facing(hh));
