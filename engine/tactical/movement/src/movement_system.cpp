@@ -741,13 +741,17 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             for (const Slot& s : lf.slots) {
                 Unit& u = units_[idx[s.member]];
                 u.large_hover_index = -1;
-                V2 target = slot_world(lf.centre, fwd, s);
-                if (!(order.flags & kMoveFlagSkipValidation)) target = pick_land_slot(u, target, taken);
+                const V2 exact = slot_world(lf.centre, fwd, s);
+                V2 target = exact;
+                // s78n t20 F5 (MOVEMENT §4.3.1: the block goal := the accepted centre): the cell snap only for slots the
+                // destination check did not place ([port] unchecked orders keep the older slot search)
+                if (!(order.flags & kMoveFlagSkipValidation) && !lf.checked) target = pick_land_slot(u, target, taken);
                 // s78n t20 (MOVEMENT §5.4.4 item 5, §4.3.1 item 6): the formation identity and the slot in its frame;
                 // the single-member shortcut of the plan (no flag 0x20, no object goal; [port] flag 0x10 has no sender)
                 u.form_id = form_id;
                 u.form_slot = {-s.back, s.lateral};
                 u.self_arrive = f.size() == 1 && !(order.flags & kMoveFlagSkipValidation) && !order.skip_destination_check;
+                u.self_goal = exact;  // s78n t20 F5: the shortcut measures to the exact goal, not a snapped cell
                 u.goal = target;
                 u.has_goal = true;
                 u.need_path = true;
@@ -900,7 +904,10 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
             ok = place_formation(idx, lf, dn, v, axis, r == 0, several, comp, taken, centres[r]);
         }
         if (!ok) continue;
-        for (size_t r = 0; r < ord.size(); ++r) forms[ord[r]].centre = centres[r];
+        for (size_t r = 0; r < ord.size(); ++r) {
+            forms[ord[r]].centre = centres[r];
+            forms[ord[r]].checked = true;  // s78n t20 F5
+        }
         return;
     }
 }
@@ -1324,7 +1331,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
         if (!u.need_path || frame < u.start_frame) continue;
         // s78n t20 (MOVEMENT §4.3.1 item 6, the plan 0x41c1a0): a one-member formation whose goal lies inside its own
         // footprint radius 0x3969f0 (2-D) signals "arrived" and stops: a unit ordered onto its own footprint does not move
-        if (u.self_arrive && !is_air(u) && u.d.locomotor == LocomotorKind::Default && distance(u.m.pos, u.goal) < foot_radius(u)) {
+        if (u.self_arrive && !is_air(u) && u.d.locomotor == LocomotorKind::Default && distance(u.m.pos, u.self_goal) < foot_radius(u)) {
             u.need_path = false;
             u.has_goal = false;
             u.arrived = true;
@@ -3449,6 +3456,10 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.f32(u.form_slot.x);
             h.f32(u.form_slot.y);
             h.boolean(u.self_arrive);
+            if (u.self_arrive) {  // s78n t20 F5
+                h.f32(u.self_goal.x);
+                h.f32(u.self_goal.y);
+            }
         }
         if (u.pushed) {  // a1k t03: hashed only while a collision-owned record is on top of the stack
             if (u.push_flee) h.u8(0x07);  // s78n t14 part B: a crush-flee path (kind 7)

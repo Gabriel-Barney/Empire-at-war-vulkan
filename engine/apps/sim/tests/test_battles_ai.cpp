@@ -1290,15 +1290,15 @@ void test_land_squad_container() {
     CHECK(max_step <= team_speed + 1e-3f);
     std::printf("  land squad: Path Around detour %d, largest step %.3f\n", detoured ? 1 : 0, static_cast<double>(max_step));
     // s78n t20 item 6: ordered onto a standing squad - the goal is off its footprint (the two joint boxes, each
-    // + BetweenFormationSpacing on the mover's side, do not overlap at the goal; the slot search may shift it by half a
-    // cell), the squad arrives, and no collision record ever holds it for 30 frames
+    // + BetweenFormationSpacing on the mover's side, do not overlap at the goal; s78n t20 F5: the accepted centre, no
+    // cell snap), the squad arrives, and no collision record ever holds it for 30 frames
     if (onto == 2 && battles.battle() != nullptr && battles.battle()->movement().has_unit(team_id)) {
         const mv::UnitView k2 = battles.battle()->movement().view(team_id);
         const float gx = std::fabs(onto_goal.x - other_pos.x), gy = std::fabs(onto_goal.y - other_pos.y);
         std::printf("  land squad: ordered onto squad %d at (%.0f, %.0f) - goal (%.0f, %.0f), arrived %d, longest collision hold %u frames\n",
                     static_cast<int>(other_team), static_cast<double>(other_pos.x), static_cast<double>(other_pos.y),
                     static_cast<double>(onto_goal.x), static_cast<double>(onto_goal.y), k2.arrived ? 1 : 0, hold_max);
-        CHECK(gx > own_hx + other_hx + 5.0f - 10.0f || gy > own_hy + other_hy + 5.0f - 10.0f);
+        CHECK(gx > own_hx + other_hx + 5.0f || gy > own_hy + other_hy + 5.0f);
         CHECK(k2.arrived && hold_max < 30);
     } else {
         std::printf("  land squad: ordered onto a standing squad - not run (state %d: no second standing squad, or one died)\n", onto);

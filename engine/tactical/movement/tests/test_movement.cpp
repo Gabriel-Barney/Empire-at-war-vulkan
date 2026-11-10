@@ -3016,7 +3016,8 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // now + acc + r - 30, not before now); space unchanged.
 // cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
 // their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
-static constexpr uint64_t kGoldenLand = 0xe707c35727ea50a6ull;  // s78n t20 batch A: the path stack top, the destination check, Path Around, the early-arrival cut, StoppedVsStopped (MOVEMENT 1.5.1 / 4.3.1 / 5.4.3 - 5.4.5)
+// s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the exact single-member goal is hashed).
+static constexpr uint64_t kGoldenLand = 0x4bb8134961f368d2ull;  // s78n t20 batch A: the path stack top, the destination check, Path Around, the early-arrival cut, StoppedVsStopped (MOVEMENT 1.5.1 / 4.3.1 / 5.4.3 - 5.4.5)
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

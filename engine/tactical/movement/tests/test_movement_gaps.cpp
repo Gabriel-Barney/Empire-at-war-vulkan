@@ -1958,7 +1958,8 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // cu8i t02 (2026-11-08): moved (land formations draw the FormationClass ctor int(1, 30); start now + acc + r - 30).
 // cu8j t01 / t02 (2026-11-08): compositions at the next coordinator update (draws, start frames, the jetpack swap's draw)
 // and the hash's pending composition / adopt state.
-static constexpr uint64_t kGoldenMixed = 0xbcd741c14dcb1b8dull;  // s78n t20: the path stack top, formation identity, the destination check
+// s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the single-member shortcut's exact goal is hashed).
+static constexpr uint64_t kGoldenMixed = 0xa9fed96a7302da92ull;  // s78n t20: the path stack top, formation identity, the destination check; F5
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -5581,7 +5582,6 @@ static void test_t20_destination_check() {
         }
         return dest;
     };
-    const auto cell_of = [](V2 p) { return cell_center(world_to_cell(p.x), world_to_cell(p.y)); };
     struct Out {
         V2 goal;
         bool arrived = false;
@@ -5637,9 +5637,9 @@ static void test_t20_destination_check() {
         const Out s = run(0, serial_for), p = run(0, make_thread_pf(4));
         const V2 c = first_centre(dest, 15.0f, 15.0f);
         CHECK(near(c.x, dest.x - 48.0f, 1e-3f) && c.y == dest.y);  // try 22: 28 short + min(HX + S, HY + S) west
-        CHECK(s.goal == cell_of(c) && s.goal == (V2{560.0f, 400.0f}));
+        CHECK(s.goal == c);  // s78n t20 F5: the accepted centre itself (no cell snap)
         CHECK(s.arrived && s.tal == 0 && s.crc == p.crc);
-        CHECK(std::fabs(s.end.y - dest.y) < 1e-3f && std::fabs(s.end.x - 560.0f) < 8.0f);  // (a container brakes to a stop: no snap)
+        CHECK(std::fabs(s.end.y - dest.y) < 1e-3f && std::fabs(s.end.x - c.x) < 8.0f);  // (a container brakes to a stop)
         std::printf("t20 destination check: onto a standing squad - goal (%.1f, %.1f), stopped at %.2f, records %u, Try Again Later %u\n",
                     static_cast<double>(s.goal.x), static_cast<double>(s.goal.y), static_cast<double>(s.end.x), s.records, s.tal);
     }
@@ -5649,7 +5649,7 @@ static void test_t20_destination_check() {
     }
     {  // (iii) a third squad was ordered to the empty goal first: displaced as in (i)
         const Out s = run(2, serial_for);
-        CHECK(s.goal == cell_of(first_centre(dest, 15.0f, 15.0f)));
+        CHECK(s.goal == first_centre(dest, 15.0f, 15.0f));
     }
     {  // (iv) one standing infantry unit: 3 x 3 = 9 is inside the 15 % allowance (60) - the goal stays
         const Out s = run(3, serial_for);
@@ -5659,8 +5659,7 @@ static void test_t20_destination_check() {
         CHECK(run(4, serial_for).goal == dest && run(5, serial_for).goal == dest);
     }
     {  // (vi) three single-vehicle formations ordered to one point: three goals whose rectangles (HX + 5, HY + 5) are
-       // apart and none on the ordered point (the goals are quantised to cells: each may sit up to 10 off its centre on
-       // either axis, so the test allows that slack)
+       // apart and none on the ordered point (s78n t20 F5: the accepted centres, not quantised to cells)
         MovementSystem sys{MovementConfig{}};
         land_system(sys, 100);
         const V2 starts[3] = {cell_center(10, 20), cell_center(12, 34), cell_center(12, 6)};
@@ -5680,7 +5679,7 @@ static void test_t20_destination_check() {
         bool apart = true, off_point = true;
         for (int i = 0; i < 3; ++i) {
             off_point = off_point && !(g[i] == dest);
-            for (int j = i + 1; j < 3; ++j) apart = apart && distance(g[i], g[j]) > 2.0f * 11.0f - 20.0f;
+            for (int j = i + 1; j < 3; ++j) apart = apart && distance(g[i], g[j]) >= 2.0f * 11.0f;
         }
         CHECK(apart && off_point);
         bool all = false;
@@ -5796,6 +5795,75 @@ static void test_t20_detour_start_inside() {
                 s.ended ? 1 : 0, s.end_frame, s.arrived ? 1 : 0, s.failed ? 1 : 0, s.pushed ? 1 : 0, s.st.replans, s.st.dynamic_repaths);
     CHECK(s.crc == p.crc && s.end_frame == p.end_frame);
     CHECK(s.ended && (s.arrived || s.failed));
+}
+
+// s78n t20 F5 (MOVEMENT §4.3.1: the block goal := the accepted centre): a checked order takes no cell snap. One
+// vehicle (10 x 6) ordered from (303, 607) to (603, 607): (a) nothing there - the goal is (603, 607) and the vehicle ends
+// there; (b) a standing vehicle (10 x 6) at (605, 607), over the goal - the goal is the first try the spec's procedure
+// accepts (the slot rectangle (15, 11) clear of the stander's (10, 6), or the stander's area 60 within 15 % of 15 x 11),
+// unsnapped (the stander sits 2 off the goal so that no try lies on a touching boundary); (c) a queued order (no check)
+// keeps the snap. Serial = 4 workers.
+static void test_t20_unsnapped_goal() {
+    const V2 at{303.0f, 607.0f}, dest{603.0f, 607.0f}, stander{605.0f, 607.0f};
+    const auto first_try = [&]() {
+        float t = 0.0f;
+        const V2 v{-1.0f, 0.0f};
+        const V2 axes[4] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+        for (uint32_t k = 0; k < 40; ++k) {
+            const float half = 0.5f * ((k % 2u) == 0u ? 1.0f : -0.75f);
+            V2 c = dest;
+            if (k % 8u < 4u) {
+                c = dest + v * (t * half);
+                t += 7.0f;
+            } else {
+                c = dest + v * ((t - 28.0f) * half) + axes[k % 8u - 4u] * 11.0f;
+            }
+            const bool overlap = std::fabs(c.x - stander.x) <= 15.0f + 10.0f && std::fabs(c.y - stander.y) <= 11.0f + 6.0f;
+            if (!(overlap && 10.0f * 6.0f > 0.15f * 15.0f * 11.0f)) return c;
+        }
+        return dest;
+    };
+    struct Out {
+        V2 goal0, goal1, end;
+        bool arrived = false;
+        uint64_t crc = 0;
+    };
+    const auto run = [&](int what, const ParallelFor& pf) {
+        Out r;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, at, 1)));
+        if (what == 1) CHECK(sys.add_unit(t20_vehicle(11, stander, 1)));
+        SimRng rng(204);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        if (what == 2) o.flags = kMoveFlagQueue;
+        sys.move(o, rng, 1);
+        r.goal0 = sys.view(10).goal;
+        for (uint32_t f = 1; f < 2000 && !r.arrived; ++f) {
+            sys.tick(f, rng, pf);
+            r.arrived = sys.view(10).arrived;
+        }
+        r.goal1 = sys.view(10).goal;
+        r.end = sys.view(10).pos;
+        StateHasher h;
+        sys.hash_units(h);
+        r.crc = h.digest();
+        return r;
+    };
+    const Out a = run(0, serial_for), ap = run(0, make_thread_pf(4));
+    const Out b = run(1, serial_for), bp = run(1, make_thread_pf(4));
+    const Out q = run(2, serial_for);
+    const V2 want = first_try();
+    std::printf("t20 F5: unsnapped goals - free (%.2f, %.2f) ended (%.2f, %.2f); stander: first accepted try (%.2f, %.2f), "
+                "goal (%.2f, %.2f); queued (%.2f, %.2f)\n",
+                static_cast<double>(a.goal1.x), static_cast<double>(a.goal1.y), static_cast<double>(a.end.x), static_cast<double>(a.end.y),
+                static_cast<double>(want.x), static_cast<double>(want.y), static_cast<double>(b.goal0.x), static_cast<double>(b.goal0.y),
+                static_cast<double>(q.goal0.x), static_cast<double>(q.goal0.y));
+    CHECK(a.goal0 == dest && a.goal1 == dest && a.arrived && distance(a.end, dest) < 1.0f && a.crc == ap.crc);
+    CHECK(!(want == dest) && b.goal0 == want && b.goal1 == want && b.arrived && b.crc == bp.crc);
+    CHECK(q.goal0 == cell_center(world_to_cell(dest.x), world_to_cell(dest.y)));  // unchecked: the slot search's cell
 }
 
 static void test_t20_path_around() {
@@ -6615,6 +6683,7 @@ int main() {
     test_land_squad_t18_review();   // s78n t18 review
     test_t20_destination_check();   // s78n t20 item 6
     test_t20_path_around();         // s78n t20 item 3
+    test_t20_unsnapped_goal();       // s78n t20 F5
     test_t20_detour_start_inside();  // s78n t20 F3
     test_t20_early_arrival();       // s78n t20 item 4
     test_t20_decision_leftovers();  // s78n t20 item 5

@@ -938,9 +938,12 @@ private:
         // none; unique per formation of an order) and its slot there (x = along the formation's forward axis, y = to
         // its right); self_arrive = a one-member formation whose order has neither flag 0x20 nor an object goal (the
         // single-member shortcut of the plan 0x41c1a0: ordered onto its own footprint it does not move).
+        // s78n t20 F5 (save version 19): self_goal = the slot's exact point (before any cell snap), which the shortcut
+        // measures to.
         uint32_t form_id = 0;
         V2 form_slot;
         bool self_arrive = false;
+        V2 self_goal;
         CollisionInfo ci;  // s78n t20: set_collision_info (transient, host-set every tick)
         // space
         std::vector<SpaceWaypoint> wps;
@@ -1406,6 +1409,7 @@ private:
         V2 fwd;
         std::vector<Slot> slots;
         V2 centre;
+        bool checked = false;  // s78n t20 F5: the destination check accepted `centre` (its slots take no cell snap)
     };
     void destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms, V2 group_c);
     bool place_formation(const std::vector<uint32_t>& idx, const LandForm& f, V2 dn, V2 v, V2 axis, bool first, bool several,

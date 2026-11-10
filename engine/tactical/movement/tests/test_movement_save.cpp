@@ -1605,7 +1605,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 17);  // 17: before the s78n t20 top path record / formation identity / type extents (18)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 19);
+    put_u32(bad, 0, 18);  // 18: before the s78n t20 F5 exact single-member goal Unit::self_goal (19)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 20);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
