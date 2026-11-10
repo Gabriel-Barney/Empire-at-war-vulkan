@@ -605,7 +605,9 @@ container contribution through 0x4160a0 can also accept).
     cell is occupied by the target (0x59efa0), snaps to the cell grid, E = √200 ≈ 14.14.
 - **Slot 45 → slot 46 (0x5683a0):** same geometry with r = slot 41 (0x566eb0) = `Targeting_Min_Attack_Distance`
   (type +0x504) or the pending ability's vfunc +0xd0 (`Activation_Min_Range`); false when r ≤ 0; forwards to
-  the nearest member of a squad-member target's container.
+  the nearest member of a squad-member target's container. Not quite the same geometry (TACTICAL_COMBAT §5.4.4
+  item 1, 2026-11-10): the facing test is unnormalised (so E is in practice the X half-extent), a LAND_OBSTACLE
+  target gets no E, and a land squad container's E is its joint-box half-extent, not +10.
 - **Port:** replace "XY ≤ R + target radius" by R + orientation-dependent footprint half-extent, and add the
   min-range rejection (only types with `Targeting_Min_Attack_Distance` > 0).
   **A1j t04 (2026-11-02):** the extent getters are 0x371e70 (X: `Custom_Hard_XExtent` +0x16bc) and 0x372040 (Y:

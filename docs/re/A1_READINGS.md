@@ -956,7 +956,8 @@ Team data pack = obj +0x110 (TeamDataPackClass, ctor 0x4ec680 zeroes +0x50 / +0x
 - Position = the container's own position (obj +0x78 / +0x7c).
   - At spawn it is the members' centroid.
   - After that, each TEAM service (0x405b10) sets it to the centre of the members' joint bounding box. It is skipped
-    when the locomotor's vf+0x230 says so [M: when that applies].
+    when the locomotor's vf+0x230 is true, i.e. for every land squad container (LandTeamContainer), which its own
+    locomotor moves instead (TACTICAL_COMBAT §5.4.4 item 2, 2026-11-10).
   - Re-projection follows the container's transform (§14).
 
 ### 29.5 Values for one fresh team (9 live members, land)

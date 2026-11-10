@@ -2430,7 +2430,8 @@ and ascending-category summation are kept.
   (`Set_Ability_Enabled`, 0x37df00).
 - **Manager:** `SpecialAbilityManagerClass` (0x865c20) is the signal hub.
 - **Auras** (CombatBonus and the like) are **event-driven**: they apply and remove on unit add, remove and
-  mode signals. **No radius scan and no periodic recheck** was found [M]. The modifier semantics are in §4.3.
+  mode signals. **No radius scan and no periodic recheck** (confirmed, §5.4.4 item 3: offers only at object creation
+  and map load). The modifier semantics are in §4.3.
   CombatBonus's target test runs the applicable filter 0x48e290 like any targeted ability (§5.4.3 item 4).
 - About 92 ability classes exist (SUBSYSTEMS.md "abilities"). Only CombatBonus, BattlefieldModifier, tractor
   beam and the reduce-production pair were read in this pass.
@@ -2538,8 +2539,8 @@ used at all**. Otherwise slot 43 0x5673b0(P_U, X, h, offset 0):
 **overridden by A vf +0xd0 (`Activation_Min_Range`) only when that is > 0** (same pending match as above). Melee
 redirect as step 1. Without the override, a target that is a team member is retested against the member of its
 container nearest P_U. r ≤ 0 → **false**; d = 0 on all three axes → true; else too close ⇔ d ≤ r + E, E = the X / Y extent as above
-(no +10 rule here: for a land squad container 0x396a30 / 0x396b70 take the members' joint box (0x404450) [M: which
-half-extent]) or the LAND_OBSTACLE step-back. Consequence [H]: **an ability with `Activation_Min_Range` 0 inherits the
+(no +10 rule here: for a land squad container 0x396a30 / 0x396b70 take the members' joint box (0x404450); which
+half-extent, the unnormalised facing test and E = 0 for LAND_OBSTACLE targets: §5.4.4 item 1). Consequence [H]: **an ability with `Activation_Min_Range` 0 inherits the
 user's weapon min range** (e.g. a unit with `Targeting_Min_Attack_Distance` > 0 cannot use it closer than that + E).
 Tyber has neither, so his bribe is never too close [M: the type default of +0x504 is 0, not read].
 
@@ -2564,9 +2565,9 @@ Then the accept, cost and credits of §5.4.1.
 - **Where P_T is** [H for the gate, M for the rest]: the TEAM service 0x405b10 moves the container to the centre of
   its members' joint box **only when the container's locomotor vf +0x230 is false**, so a land squad container is
   never re-centred on its members; its position is its own LAND_TEAM_CONTAINER locomotor's (the run: a standing
-  squad's container stayed on its spawn point, the target member's position). For a moving squad, where that point
-  sits relative to the members was not traced [M]; the port must use the same container position it uses for
-  movement.
+  squad's container stayed on its spawn point, the target member's position). For a moving squad the container is
+  the formation anchor walking its own path (§5.4.4 item 2); the port must use the same container position it uses
+  for movement.
 
 **Retry and movement.** The order (command 40, ABILITIES_HARDPOINTS §2.9) stores the pending ability; every
 targeting service (one per frame) runs 0x565de0 first, which calls the apply until it returns true, so the bribe
@@ -2643,17 +2644,17 @@ Chewbacca), so in vanilla it never refuses a hack.
    "...otherwise this ability won't affect any units at all" (it does not patch a default in);
 2. owner: when ability +0x1c0 is null, X allied with U's owner (0x39a230, own player included; there is **no
    `Apply_To_All_Allies` test** here); when +0x1c0 is set, X's owner's faction (player +0x68) must equal it and the
-   ally test is skipped [M: +0x1c0 is `Specific_Faction`, the only extra tag in shipped CombatBonus XML: two props
-   in PROPS_GENERIC buffing Rebel / Empire `LandHero` units];
+   ally test is skipped (+0x1c0 is `Specific_Faction`, confirmed in §5.4.4 item 3a; the only extra tag in shipped
+   CombatBonus XML: two props in PROPS_GENERIC buffing Rebel / Empire `LandHero` units);
 3. X's type is neither U type's `Unique_Ground_Unit` (+0x1b60) nor `Unique_Space_Unit` (+0x1b50) (TACTICAL_GAPS
    §4.2.2);
 4. then it makes sure X has a targeting data pack (0x390fc0) and returns true.
 All 130 shipped `Combat_Bonus_Ability` entries name a non-empty filter, so the no-filter case never occurs in vanilla.
-How the manager picks the candidate units it offers on unit add was not traced [M]. `EnhanceDefenseAbilityClass`
+How the manager picks the candidate units: §5.4.4 item 3b. `EnhanceDefenseAbilityClass`
 (0x8c7130) is **not** a unit aura: its accept slot is the constant-false stub 0x13b7d0, and its apply 0x6fa920
-requires a null target and inserts one permanent entry (value `Enhancement_Percentage` +0x178, keyed by +0x17c)
-into a per-player table for the owner, or every allied player when +0x180 is set [M: what reads that table]. No
-filter is involved.
+requires a null target and inserts one permanent entry (value `Enhancement_Percentage` +0x178, keyed by
+`Stacking_Category` +0x17c) into list 0 (defense) of the player's tactical ModifierSet, for the owner or every allied
+player when +0x180 is set; reader, stacking and (no) removal: §5.4.4 item 3c. No filter is involved.
 
 **5. Smaller items.**
 - **+0x3a2 & 0x04 = converted by a convert projectile:** the only writer is the convert per-victim step 0x4ca2f0
@@ -2692,6 +2693,232 @@ filter is involved.
   allies with +0x180), not a per-unit modifier.
 - **Bribe cost default (item 5):** an absent `Tactical_Bribe_Cost` is 0 (unbribable). *Port's current rule is
   right* for real data; its `-1 = no cost data` host fallback is a port convenience, not retail.
+
+#### 5.4.4 s78n RE: min range vs squads, container position, CombatBonus leftovers (2026-11-10) [H unless tagged]
+Read from the decompiled code. Slot 46, the Create_Object aura loop, remove-all and the Detach loop were also read from
+the retail FoC exe's disassembly. The call sites of 0x37cab0, 0x2b38c0, 0x37ce30, 0x6fae20 and 0x6faf60 come from a
+byte scan of the whole `.text` (every E8 / E9 rel32 and every 8-byte pointer). Settles the [M] tags of §5.4.2 (the
+joint-box half-extent, "Where P_T is") and of §5.4.3 item 4.
+
+**1. Slot 46 (0x5683a0, "inside min range") in full, and squad targets (t02).** Arguments (TARGETING of U, P_U, X,
+hardpoint h). In order:
+1. h = 0, U is melee (0x372210, §5.4.2 step 1) and X has TEAM (+0x348 ≠ −1): M = 0x404fc0(X's TEAM, P_U); M ≠ null →
+   return slot 46(U, M) (vf +0x170 is slot 46 itself).
+2. Q = X +0x78 (with h: 0x396ce0). d = Q − P_U, all three components kept; D = sqrtf(dx² + dy²).
+3. r = slot 41 (`Targeting_Min_Attack_Distance`, type +0x504). The pending-ability override is slot 43's (§5.4.2 step
+   3) with A vf +0xd0: when it is > 0, r = `Activation_Min_Range` and the override flag is set.
+4. X is a team member (0x39b1a0) and the override is not set: M = 0x404fc0(the TEAM of X's container, P_U). M ≠ null
+   and M ≠ X → **return slot 46(U, M)**: the whole test again on M (its position, its own E). A container X is not a
+   member, so this step never fires for Bribe's T.
+5. r ≤ 0 → false. dx = dy = dz = 0 → true.
+6. X without LAND_OBSTACLE (+0x346 = 0xFF): p = |cos θ_X·(−dx) + sin θ_X·(−dy)|, θ_X = X's yaw (0x41c000 on X +0x84).
+   **d is not normalised here** (slot 43 normalises it with the fast inverse square root; slot 46 has no normalise
+   between 0x5687dc and the compare at 0x568840 with the float 0.7071 at 0x899c44). p > 0.7071 → E = 0x396a30(X), the X
+   half-extent; else E = 0x396b70(X), the Y half-extent. **Too close ⇔ D ≤ r + E.** p is U's offset from X along X's
+   facing in world units, so the Y half-extent is used only when U stands within 0.7071 of the line through Q at right
+   angles to X's facing: **in practice E is the X half-extent.**
+7. X with LAND_OBSTACLE: the step-back loop of slot 43 runs (Q moves toward U in 20-unit cells while 0x59efa0 says the
+   cell holds X), but its result is never used. **Too close ⇔ D ≤ r**: centre distance, no E, no √200.
+
+**The joint box of a land squad container (0x404450).** 0x396a30 / 0x396b70 (and 0x396850) use it when X has TEAM and
+its locomotor vf +0x230 is true, that is for every land squad container (§5.4.2 step 5). Body:
+- The box [min x, max x] × [min y, max y] starts at **(0, 0, 0, 0)**, so it always holds the container's own point.
+- For each member m in the container's member array (container +0x110: array +0x10, count +0x18; null entries and
+  members without a locomotor pack obj +0xa8 skipped): s = m's **formation slot offset** (pack +0x114 along / +0x118
+  side, in the container's frame: FIGHTER_FLYING §7); (hx, hy) = 0x396850(m) = m's footprint half-extents
+  (`Custom_Hard_X/YExtent` × `Scale_Factor`, model-box fallback, deployed variants; FOG_OF_WAR §5.2). The box grows to
+  hold [s.x − hx, s.x + hx] × [s.y − hy, s.y + hy].
+- **X half-extent = (max x − min x) / 2 + J; Y half-extent = (max y − min y) / 2 + J**, where J = the container type's
+  `MaxJiggleDistance` (+0x16ac).
+- The members' live positions are not read. The box is the slot layout, not where the members stand. The rectangle is
+  centred on the container's own position and turned by its yaw (the rectangle of FOG_OF_WAR §5.2).
+- Example: slots spread over [−a, a] along the facing, Squad_Stormtrooper half-extent 3.0 (2.0 × 1.5) → X half-extent
+  = a + 3.0 + J. `Stormtrooper_Team` has no `MaxJiggleDistance` tag (type default, not read). The slot layout itself
+  (`ContainerArrangement` +0x1684: 0 → 0x5ac970, 1 → 0x5ac2a0, centred offsets) was not traced [M], so no number for a.
+
+**Nearest member 0x404fc0(TEAM, P).** It walks the member array in index order (unrolled by 4, same order) and skips
+null entries. The distance is **3-D: dx² + dy² + dz²**. The best starts at 1e18 and is replaced only by a strictly
+smaller value, so **ties keep the lowest index (list order)**. It does no alive or dying test [M: whether a dying member
+is still in the array was not traced]. Every caller uses this rule: slots 43 and 46, 0x566aa0, 0x568120, 0x568230,
+0x54ade0.
+
+The weapon min range (`Targeting_Min_Attack_Distance` > 0, TACTICAL_GAPS §3.1 "Slot 45 → slot 46") uses this same
+slot 46, so steps 6 and 7 also hold for ordinary targeting, not only for abilities.
+
+**2. Where a land squad container is (t03).**
+- **Confirmed:** the TEAM service 0x405b10 writes the container's position (0x3a8f90, the box centre) only when the
+  container has no locomotor or its vf +0x230 is false. A land squad container (LandTeamContainer, vf +0x230 true) is
+  **never** re-centred on its members. This settles A1_READINGS §29.4 [M]. The service still computes the members' box
+  every call: team data +0x8c centre, +0x98 half extents (member model bounds 0x264ab0; a member without a model counts
+  as its point), and +0x40 = 2 × the largest half extent. No land reader of +0x8c was found [M]. In space, the
+  container is placed at that centre (FIGHTER_FLYING §4.10 B).
+- **The container's position over time:**
+  1. **Creation** (team spawn helper 0x2a5a60, one container per chunk of `Max_Squad_Size`): the mean of the chunk's
+     member positions (float sums in list order, × 1/n). In land mode it is then moved by the free-position search
+     0x440f90 (A1_READINGS §40.2), set up with the container type's +0x1688 [M: its movement class], so it can sit
+     beside the centroid when the centroid is blocked. Its orientation is the first member's (+0x84).
+  2. **Locomotor init** 0x5abac0: walk state 0x16, speed 0, its own coordinator and a Move_To to its own position
+     (CU8K_T02_T06_RE §1).
+  3. **After that, only its own locomotor moves it.** LandTeamContainer vf6 0x5ad690 runs the walk states (0x16 / 0
+     start, 0x10 accelerate, 0x13 move, 0x14 brake, 0x15 arrive). The move step 0x5adfb0 advances **the container
+     itself** along its own current path (pack +0xa8 path stack):
+     - by its speed: pack +0xec, maximum 0x370f00 = min(member max speed, team speed), × the fleeing factor when
+       0x39a5a0;
+     - passability-tested for its own movement class (0x50e280). On failure it reports the collision (0x509090) and
+       does not move that frame;
+     - written through vf +0x2f8.
+
+     It turns along the path with 0x5ac120, which re-lays the members' slots when the heading changes by more than
+     acos 0.99. The container is therefore **the formation's anchor**: it walks the formation path, and each member
+     steers to "container position + (slot + jiggle) turned by the container's yaw" (LandTeamInfantry 0x62d620,
+     FIGHTER_FLYING §7; MOVEMENT §3.7). Members that lag trail it and catch up at up to their max speed. A standing
+     squad's container stays where its last path ended (in the run of §5.4.2, on its spawn point).
+  4. Position setters that work on any object (scripts, teleports, ability moves) also move it [M: not enumerated].
+- **Readers of the container's position in combat and abilities** (container +0x78):
+  1. **Team targeting** (`TeamTargetingBehaviorClass` 0x62eeb0, land containers only, §2.1). Acquire_Target 0x568a00
+     scans the AABB of §2.2 centred on the container. The team target's in-range and too-close tests (vf +0x160 /
+     +0x168, slots 44 / 45) and the ordered-target pre-check all use P_U = the container. So **a squad acquires and
+     keeps targets by distance from its container**.
+  2. **Range tests with the container as target:** slot 43 (+10) and slot 46 (the joint box, item 1). That covers
+     Bribe's T test (§5.4.2) and any order whose target object is the container [M: which orders store the container
+     rather than a member was not enumerated].
+  3. **Fog:** `FOW_Object_Hidden` 0x35f470 samples the container position, plus the 8 corners of its joint-box
+     rectangle with `Multisample_FOW_Check` (FOG_OF_WAR §5.2). Team targeting calls it on its target.
+  4. **AI perception:** the threat-entry position (A1_READINGS §29.4).
+
+  These do not read it: CombatBonus and EnhanceDefense (no position, item 3); Hack (no container substitution,
+  §5.4.3 item 5); the nearest-member redirects (they use member positions).
+
+**3. CombatBonus leftovers (t04).**
+
+*(a) +0x1c0 is `Specific_Faction`.*
+- The `Combat_Bonus_Ability` field table puts `Specific_Faction` as a string at **+0x1a0** (xml_field_tables.md; the
+  three rows above the "Combat_Bonus_Ability" heading belong to `Enhance_Defense_Ability`, because the segment
+  boundaries there are shifted).
+- The validate 0x6f4ff0 (slot 29) resolves a non-empty string (length +0x1b0 ≠ 0) by name with 0x3303d0 (registry
+  0x140a172d0) into **+0x1c0**. When no faction matches, it logs "Error: (%s) Unrecognized faction given for
+  Specific_Faction value." and +0x1c0 stays null, so the ally test applies.
+- The accept 0x6f4bf0 compares +0x1c0 with the target owner's faction (player +0x68).
+
+*(b) How the candidates are offered.*
+- **The slot 18 / 19 path is galactic.** The manager's unit add / remove 0x37ce30 / 0x37cf20 (slot 18 / 19 per
+  ability) are reached only from `PlanetaryBehaviorClass` (0x3f53a0 / 0x3fd9e0 through 0x3a04a0 / 0x3a04d0): an object
+  arriving at or leaving a planet.
+- **Tactical offer** = 0x37cab0(manager of S, X). For each ability of S's type, in list order, that is allowed in the
+  mode (0x37c270) and ready (0x37be10):
+  - when S's manager is disabled (+0x20 = 1, `Cancel_Special_Ability`): run the accept and 0x39b0b0, then only
+    register the effect (0x48cca0 without applying; log "...will apply his/her %s effect to %s if its ability
+    cancellation is lifted");
+  - else slot 20 (vf +0xa0). For CombatBonus that is 0x6f40b0, a jump to apply vf30 0x6f42d0(S, X), which runs the
+    accept first (§5.4.3 item 4). EnhanceDefense and the base class have the false stub 0x13b7d0 there.
+- **0x37cab0 has exactly three call sites** (byte scan, no pointer reference):
+  1. **Create_Object 0x29f810**, for a new object N whose type has `Abilities` (0x374da0) and which has a SAP. N joins
+     the GOM ability-owner list (+0x1c8). Then, while the global 0x140b15490 is clear (always in the shipped game),
+     for each object O in the GOM object list (+0x40, list order) with `CategoryMask` (type +0x1648) ≠ 0, and O ≠ N
+     unless N's type has `Apply_Special_Ability_To_Self_On_Creation` (+0xe8): 0x37cab0(N, O). **A new source offers
+     its auras to every existing object**, enemies included (the accept filters them).
+  2. **0x2b38c0**, from the same Create_Object, for every new N with `CategoryMask` ≠ 0, with or without abilities:
+     for each S in the ability-owner list (its own order) with S ≠ N and a SAP: 0x37cab0(S, N). **Every existing
+     source offers its auras to the new object.**
+  3. **The Load_Map tail 0x2b4440** runs the same two loops per loaded object [M for the loop bounds: the first loop
+     stops at the current object's list index; the second runs only when GOM +0x63e is set].
+- **Nothing else re-offers.** The owner change 0x38e5a0 raises signal 0x1a and calls each behaviour's vf +0x90, and
+  none of these reaches 0x37cab0. There is no radius test, no periodic recheck and no trigger on movement. So:
+  - a CombatBonus is **battle-wide**: every object that passes the accept when either side is created gets it,
+    wherever it stands;
+  - a unit that changes owner (Bribe, Hack, convert, vehicle thief) **keeps** the entries it has from its old side's
+    sources and gets **none** from the new side's existing sources. Only sources created later judge it under its new
+    owner;
+  - the source does not buff itself: no shipped type sets `Apply_Special_Ability_To_Self_On_Creation` (FoC XML,
+    2026-11-10).
+- **Removal:**
+  - The apply registers X in S's SAP effect list (0x48cca0 → 0x55e100).
+  - On S's Detach (0x3a8380 → 0x37cc50, flag 0x02, after the death sequence or on despawn), for each allowed and ready
+    ability: remove-all vf +0x78 (0x48f1e0) with reason 0. It is skipped only when ability +0x41 = 1; the base
+    constructor 0x48c780 sets it to 0 [M: +0x41's tag]. Remove-all calls vf31 (0x6f4cf0) on each registered target
+    still in the object store and drops the entries of vanished targets.
+  - `Die` 0x39bdb0 calls no manager entry, so **the bonus lasts while the source plays its death and ends at Detach**
+    [M: Detach timing, OBJECT_RUNTIME §2.2].
+
+*(c) `EnhanceDefenseAbilityClass` (0x8c7130): a permanent per-player defense entry.*
+- **Fields:** `Enhancement_Percentage` +0x178 (the validate 0x6fb080 sets a negative value to 0 with an error),
+  `Stacking_Category` **+0x17c**, `Apply_To_All_Allies` +0x180. `Unit_Strength_Category` (in all shipped entries) is
+  not read by the apply.
+- **Shipped data:** 7 entries (the field commanders), all `Ground_Automatic`, 0.25, category 0, `Apply_To_All_Allies`
+  No.
+- **When it applies:** only through SAP init 0x37c050 (`Init_From_Type`, at the source's creation, map-loaded
+  objects included). For styles 1–5 and 12 that are allowed in the mode (style 5: land only), 0x48cc30 calls the apply
+  0x6fa920(S, null). The offers of item (b) never reach it: its accept and its slot 20 are false stubs, and slot 18's
+  apply(S, X) refuses a non-null target.
+- **Apply 0x6fa920:** needs S with a type and a null target.
+  1. p = S's owner. When p is the neutral player (0x294aa0, the first player whose faction has `Is_Neutral`), p becomes
+     the battle's defender (0x28a910, BATTLE_TRANSITIONS); −1 → nothing.
+  2. Then 0x6faa60(i) for p alone, or, with +0x180, for every player i whose relation to p is 0 (0x2823c0: i +0x370[p]
+     = 0, p itself included), in player-list order.
+- **0x6faa60(i):** PS = mode vf +0x220(i), the player's tactical ModifierSet (§4.1). In **list 0 (defense, at PS +0)**,
+  under key `Stacking_Category` (0x3f3520, created on demand), it appends {value `Enhancement_Percentage`, expiry −1
+  (permanent), CRC of S's type name (type +0x120), source (ability, S) (0x48e1e0)}. Then the presentation 0x48e4d0.
+- **Reader:** every list-0 read of an object owned by i. `Gather_Modifiers` 0x395c70 copies the owner player's set
+  and merges the object's own (§4.2); `Get_Damage_Multiplier` 0x38e0c0 then uses (1 − list 0) of the victim, capped at
+  0.75 (§3.6 step 12, §4.3). So it covers **every object the player owns**, of any category and anywhere. It follows
+  ownership automatically: a unit the player gains gets it, a unit it loses drops it.
+- **Stacking:** the usual max-then-sum of list 0. An EnhanceDefense entry and a unit's CombatBonus
+  `Defense_Bonus_Percentage` in the same category count once (the larger); different categories add, up to the 0.75
+  cap. Two field commanders (0.25, category 0) give 0.25.
+- **Never removed.**
+  - The remove vf31 0x6fae20 (same player choice, then 0x6faf60: erase every entry of that category with this source)
+    is reached only through the vtable (pointer at 0x8c7228, no direct call).
+  - Slot 31 is called only by slot 19 (0x48e3e0, with a non-null target, refused) and by remove-all 0x48f1e0, which
+    visits only targets registered through 0x48cca0. EnhanceDefense's apply never registers one.
+  - So the entry **outlives the source** and stays for the rest of the battle; each further source appends another
+    entry [H for these paths; M that no other vf31 caller passes a null target].
+- **Not tactical:** slot 14 0x6fad90 (from SAP init and `Set_Ability_Enabled`) also copies `Enhancement_Percentage`
+  into SAP +0x90 (styles 1, 2, 5) or +0x94 (style 4). Only `CombatantBehaviorClass` vf42 / vf43 (0x6387a0 /
+  0x638960: the maximum over the object and its transported units) read these.
+
+***Port spec (s78n):***
+- **Min-range target term (item 1, t02).** *Port must change* `AbilitySystem::in_range` (ability_system.cpp) and
+  `CombatSystem::inside_min_range` (combat_system.cpp):
+  - Do not reuse slot 43's E (`range_geometry_of`) for "too close". Use E = the X footprint half-extent, or the Y
+    half-extent when |along-facing offset of U from X| ≤ 0.7071 (unnormalised).
+  - LAND_OBSTACLE targets: too close ⇔ D ≤ r (no E).
+- **Bribe's T (item 1).** *Port must change* the T branch (`too_close && dt <= r`) to dt ≤ r + E_T, with E_T = the
+  joint-box half-extent above: ½ the span of member slot offsets ± member half-extents, the container's own point
+  included, + `MaxJiggleDistance`. This needs the member slot offsets from the movement host; port uses 0 today. No
+  vanilla effect for Tyber (r = 0). It matters for an ability with `Activation_Min_Range` > 0, or a user with
+  `Targeting_Min_Attack_Distance` > 0, against a squad container.
+- **Nearest-member retest and melee redirect (item 1).** *Port must change* the distance in the shared nearest-member
+  pick of `AbilitySystem::in_range` (`nearest_member`, used by the min-range retest and by s78n t01's melee redirect)
+  to 3-D (dx² + dy² + dz²) instead of `distance_xy`, then run the whole test again on that member (its own E).
+  *Port's current rule is right* on ties: the first in the container's member list, strict <.
+- **Container position (item 2, t03).** Retail's container is the formation anchor that walks the path at the team
+  speed; it is not the members' box centre. `TacticalBattle::bt_team_positions` (tactical_battle_bt.cpp) is therefore
+  not retail. The two positions agree only while the squad stands formed up on slots centred on the container. While
+  moving, the retail anchor runs ahead of lagging members.
+  - Whichever the port picks, the readers of item 2 (team targeting scan centre and range tests, slot 43 / 46 against
+    a container, fog sample point, AI threat position, Bribe's T) must all use one and the same position.
+  - The retail-faithful choice is to stop re-centring and move the container with its own locomotor along the
+    formation path, members steering to slots (MOVEMENT §3.7, FIGHTER_FLYING §7). A separately tracked "retail
+    container position" would need the same path-walk anyway.
+- **`aura_target` / `aura_on` / `auras_unit_added` (item 3, t04):**
+  - *Port must change:* implement `Specific_Faction` (+0x1c0 confirmed). With a resolvable faction name, the target
+    owner's faction must equal it and the ally test is skipped; an unknown name behaves as unset.
+  - *Port must change* `aura_on` to skip the source itself (unless `Apply_Special_Ability_To_Self_On_Creation`).
+  - *Port's current rule is right:*
+    - the triggers are source creation and object creation only;
+    - no radius;
+    - no re-evaluation in `set_owner`;
+    - removal at the source's removal (`AbilitySystem::remove`), not at death;
+    - ascending-id order (the per-category maximum makes order matter only between equal values).
+- **EnhanceDefense (item 3c).** *Port must change:*
+  - drop it from `aura_target`, `aura_on`, `aura_off` and `class_remove`;
+  - at the source's creation (land only for the shipped `Ground_Automatic`), insert into
+    `CombatSystem::player_modifiers(p)` list 0 (defense) one permanent entry: value `Enhancement_Percentage`, key
+    `Stacking_Category`, source = the source object;
+  - p = the owner (a neutral owner → the battle's defender; none → nothing), or with `Apply_To_All_Allies` every player
+    with relation 0 to the owner, owner included;
+  - never remove it;
+  - invalidate the per-unit modifier cache of that player's units on insert.
 
 ---
 
