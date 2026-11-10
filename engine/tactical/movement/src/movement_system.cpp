@@ -1591,9 +1591,10 @@ void MovementSystem::detect_collisions(uint32_t frame) {
                     if (!mvm_contact(a, b)) continue;
                     kind = CollisionKind::MovingVsMoving;
                 } else {
-                    // OI tactical: a crusher drives through units it can crush (§5.4 case 3 "push/crush attempt" [port]);
-                    // the crush pass (§5.5) kills them. s78n t14 part B: not through a squad container (it is pushed).
-                    if (drives_through(a, b)) continue;
+                    // s78n t20 (MOVEMENT §5.4.5 item 4): a crusher takes a record with a standing unit it crushes like any
+                    // pair (the detection has no crush test; the look-ahead adds 1.5 s when the victim scatters). The
+                    // decision pushes a scattering victim once (a crush-flee path), then - or otherwise - the crusher
+                    // drives on at full speed (state 4); the crush pass (§5.5) kills what it runs over.
                     if (mvs_contact(a, b) < 0.0f) continue;
                     kind = CollisionKind::MovingVsStopped;
                 }
@@ -2452,9 +2453,10 @@ bool MovementSystem::mvs_path_around(const CollisionObject& c, Unit& a, const Un
 }
 
 // MovingVsStopped decision 0x684f90 (MOVEMENT §5.4.1; a = mover, b = obstacle), first match wins. Not modelled ([port]):
-// the "target" clauses of step 4 (the movement layer knows no target ids or ranges), the death-clone obstacle branch
-// (no such movement unit) and the hero-clash test of step 8; step 10's units-ignoring detour 0x685490 (state 8) is a
-// stand-in (see there). s78n t20: the spare point 0x5c6ba0 and the Path Around calls are §1.5.1's.
+// the death-clone obstacle branch (no such movement unit yet); step 10's units-ignoring detour 0x685490 (state 8) is a
+// stand-in (see there). s78n t20: the spare point 0x5c6ba0 and the Path Around calls are §1.5.1's; §5.4.5 - the target
+// clause of step 4, the hero-clash test of step 8 and the crusher's record (set_collision_info gives the target, the
+// range, "short-range" and the clash state).
 void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t frame) {
     using S = CollisionState;
     // 1. the contact test no longer holds
@@ -2477,8 +2479,11 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
         c.state = S::Resolved;
         return;
     }
-    // 4. a single infantry unit or a bike against single infantry: Repulsion at once (not a squad container)
-    if ((inf_a || ca == kUccBike) && inf_b && !a.d.team_container && !b.d.team_container) {
+    // 4. tgt := a's current target is b and (a's attack range < b's footprint radius, or a is short-range). An Infantry /
+    // Bike mover takes Repulsion at once against Infantry when it is no squad container and (b is none either, or tgt) -
+    // or, being Infantry, whenever tgt (a melee squad closing on its target)
+    const bool tgt = a.ci.target == b.d.id && (a.ci.attack_range < foot_radius(b) || a.ci.short_range);
+    if ((inf_a || ca == kUccBike) && ((inf_b && !a.d.team_container && (!b.d.team_container || tgt)) || (inf_a && tgt))) {
         c.state = S::Repulsion;
         return;
     }
@@ -2523,10 +2528,10 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
         }
     }
     // 8. a non-hostile blocker (or one that scatters from the crusher) is pushed - not by a single infantry mover, nor by
-    // a bike against infantry
+    // a bike against infantry, and never a blocker in a hero clash (+0x3b4; only this step tests it)
     const bool friendly = !hostile(a.d.owner, b.d.owner) || scat;
     const bool shove_ok = friendly && !(inf_a && !a.d.team_container) && !(ca == kUccBike && inf_b);
-    if (shove_ok && (!crush || scat) && !push_tried && push_aside(c, a, b, crush, frame)) {
+    if (shove_ok && (!crush || scat) && !b.ci.hero_clash && !push_tried && push_aside(c, a, b, crush, frame)) {
         c.state = S::Resolved;
         return;
     }

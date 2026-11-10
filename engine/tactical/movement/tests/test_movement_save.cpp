@@ -503,6 +503,8 @@ void build_land(World& w, uint32_t seed) {
     w.sys.grid().stamp(900, make_footprint(cell_center(40, 40), 30.0f, 60.0f, 30.0f, -30.0f, -15.0f, 0, 0, 1.0f, 0));
     w.sys.set_height_fn([](float x, float y) { return x > 1000.0f ? 40.0f : (y > 1500.0f ? 12.0f : 0.0f); });
     w.sys.set_anim_length_fn(anim_len);
+    // (s78n t20: the crusher lane's victims do not scatter, so the crusher drives over them - the crush events are saved)
+    w.sys.set_scatters_fn([](int32_t) { return false; });
     w.sys.set_threat_fn([](int32_t, V2 p) { return distance(p, cell_center(45, 45)) < 200.0f ? 30.0f : 0.0f; });
     const float hi = 95.0f * kCellSize;
     w.sys.air().set_box({0.0f, 0.0f}, {hi, hi});
@@ -581,7 +583,7 @@ void land_before(World& w, uint32_t f) {
             o = MoveOrder{};
             o.units = {200};
             o.destination = cell_center(88, 27);
-            o.flags = kMoveFlagSkipValidation;
+            // (s78n t20: an ordinary order - on a forced path decision step 2 pushes the victims aside instead)
             s.move(o, w.rng, f);
             o.flags = 0;
             o.units = {300};

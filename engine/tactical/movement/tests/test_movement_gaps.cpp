@@ -6151,6 +6151,197 @@ static void test_t20_early_arrival() {
     }
 }
 
+// s78n t20 item 5 (MOVEMENT 5.4.5): the decision's target clause (step 4), the hero-clash test (step 8) and the crusher's
+// record with a single unit it crushes.
+static void test_t20_decision_leftovers() {
+    const float mult = 1.56f;
+    const V2 start = cell_center(15, 20), dest = cell_center(30, 20);
+    {  // Step 4, a melee squad against its target: a squad ordered onto a standing enemy infantry unit that stands on its
+       // goal. Without a target the destination is blocked and the path is cut (step 6); with the unit as its target and
+       // a short-range (melee) squad it is Repulsion at once: no cut, it walks on to its goal.
+        struct Out {
+            bool arrived = false, repulsion = false;
+            V2 end;
+            MovementStats st;
+        };
+        const auto run = [&](bool melee_target) {
+            Out r;
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            t20_squad(sys, 100, start, 1);
+            SimRng rng(501);
+            sys.tick(1, rng, serial_for);
+            MoveOrder o;
+            o.units = {101};
+            o.destination = dest;
+            sys.move(o, rng, 2);
+            bool placed = false;
+            for (uint32_t f = 2; f < 1500 && !r.arrived; ++f) {
+                if (!placed && sys.view(100).pos.x > start.x + 60.0f) {
+                    UnitDesc x = unit(70, dest, 2, 1.0f, 6.0f, LocomotorKind::Default);
+                    x.owner = 2;
+                    CHECK(sys.add_unit(x));
+                    placed = true;
+                }
+                if (melee_target && placed) {
+                    MovementSystem::CollisionInfo ci;
+                    ci.target = 70;
+                    ci.target_pos = dest;
+                    ci.attack_range = 40.0f;  // (longer than the unit's footprint radius 6: only "short-range" makes the clause)
+                    ci.short_range = true;
+                    CHECK(sys.set_collision_info(100, ci));
+                }
+                sys.tick(f, rng, serial_for);
+                r.arrived = sys.view(100).arrived;
+                for (const CollisionObject& c : sys.collisions().list())
+                    r.repulsion = r.repulsion || (c.a == 100 && c.b == 70 && c.state == CollisionState::Repulsion);
+            }
+            r.end = sys.view(100).pos;
+            r.st = sys.stats();
+            return r;
+        };
+        const Out plain = run(false), melee = run(true);
+        CHECK(plain.arrived && plain.st.early_arrivals >= 1 && !plain.repulsion && plain.end.x < dest.x - 8.0f);
+        CHECK(melee.arrived && melee.st.early_arrivals == 0 && melee.repulsion && std::fabs(melee.end.x - dest.x) < 8.0f);
+        CHECK(melee.st.dynamic_repaths == 0 && melee.st.pushes == 0);
+        std::printf("t20 decision: melee squad on its target - stopped %.2f / %.2f before it (no target / target)\n",
+                    static_cast<double>(dest.x - plain.end.x), static_cast<double>(dest.x - melee.end.x));
+    }
+    {  // Step 4, a ranged infantry unit whose attack range (5) is shorter than its target's footprint radius (a standing
+       // vehicle (10, 6): 11.66): Repulsion. With a longer range, or another target, it paths around the vehicle.
+        // what: 0 no target info, 1 target = the vehicle with range 5, 2 the same with range 20
+        const auto run = [&](int what, bool& repulsion, bool& around) {
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            CHECK(sys.add_unit(unit(1, start, 2, 1.0f, 3.0f, LocomotorKind::Default)));
+            CHECK(sys.add_unit(t20_vehicle(11, cell_center(22, 20), 2)));
+            if (what != 0) {
+                MovementSystem::CollisionInfo ci;
+                ci.target = 11;
+                ci.target_pos = cell_center(22, 20);
+                ci.attack_range = what == 1 ? 5.0f : 20.0f;
+                CHECK(sys.set_collision_info(1, ci));
+            }
+            SimRng rng(502);
+            MoveOrder o;
+            o.units = {1};
+            o.destination = dest;
+            sys.move(o, rng, 1);
+            bool arrived = false;
+            for (uint32_t f = 1; f < 1500 && !arrived; ++f) {
+                sys.tick(f, rng, serial_for);
+                arrived = sys.view(1).arrived;
+                for (const CollisionObject& c : sys.collisions().list()) {
+                    repulsion = repulsion || (c.a == 1 && c.b == 11 && c.state == CollisionState::Repulsion);
+                    around = around || (c.a == 1 && c.b == 11 && c.state == CollisionState::PathAround);
+                }
+            }
+            CHECK(arrived);
+            return sys.stats().dynamic_repaths;
+        };
+        bool r0 = false, a0 = false, r1 = false, a1 = false, r2 = false, a2 = false;
+        const uint32_t n0 = run(0, r0, a0), n1 = run(1, r1, a1), n2 = run(2, r2, a2);
+        CHECK(!r0 && a0 && n0 >= 1);  // no target: Path Around (the classes are not both Infantry)
+        CHECK(r1 && !a1 && n1 == 0);  // range 5 < 11.66: Repulsion at once
+        CHECK(!r2 && a2 && n2 >= 1);  // range 20: no clause
+    }
+    {  // Step 8, the hero clash: a bike walking a pushed path (no order: it cannot path around) into a standing friendly
+       // bike that is in a hero clash - no push; both classes are at most Bike, so the record is Try Again Later (the mover
+       // brakes to 0) and is re-decided every 30 frames. Once the clash is over the next decision pushes the blocker.
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(20, cell_center(15, 20), 1)));  // the first pusher, on a forced path
+        UnitDesc bike = t20_vehicle(21, cell_center(22, 20), 1);
+        bike.collision_class = kUccBike;
+        bike.accel = bike.decel = 0.05f;
+        CHECK(sys.add_unit(bike));
+        SimRng rng(503);
+        MoveOrder o;
+        o.units = {20};
+        o.destination = cell_center(40, 20);
+        o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        for (; f < 400 && !sys.view(21).pushed; ++f) sys.tick(f, rng, serial_for);
+        CHECK(sys.view(21).pushed && sys.stats().pushes == 1);
+        const ObjectId pusher = 20;
+        sys.stop(std::span<const ObjectId>(&pusher, 1));
+        const std::vector<V2> top(sys.top_path(21).begin(), sys.top_path(21).end());
+        UnitDesc blocker = t20_vehicle(22, top.back(), 1);
+        blocker.collision_class = kUccBike;
+        CHECK(sys.add_unit(blocker));
+        MovementSystem::CollisionInfo clash;
+        clash.hero_clash = true;
+        CHECK(sys.set_collision_info(22, clash));
+        uint32_t tal = 0;
+        float last_speed = 1.0f;
+        for (uint32_t n = 0; n < 70; ++n, ++f) {
+            sys.tick(f, rng, serial_for);
+            for (const CollisionObject& c : sys.collisions().list())
+                if (c.a == 21 && c.b == 22 && c.state == CollisionState::TryAgainLater) ++tal;
+            last_speed = sys.view(21).speed;
+        }
+        CHECK(tal >= 60 && sys.stats().pushes == 1 && !sys.view(22).pushed);  // two decisions and more: never pushed
+        CHECK(last_speed == 0.0f && sys.view(21).pushed);                     // held (braked at its rate), still on its path
+        CHECK(sys.set_collision_info(22, MovementSystem::CollisionInfo{}));   // the clash is over
+        uint32_t waited = 0;
+        for (; waited < 40 && sys.stats().pushes == 1; ++waited, ++f) sys.tick(f, rng, serial_for);
+        CHECK(sys.stats().pushes == 2 && sys.view(22).pushed && waited <= 31);  // at the next retry
+        std::printf("t20 decision: hero clash - Try Again Later %u frames, pushed %u frames after the clash ended\n", tal, waited);
+    }
+    {  // A crusher against a standing enemy single infantry unit it can crush (MOVEMENT 5.4.5 item 4): a record is made.
+       // what: 0 the victim scatters -> exactly one push per record, onto a crush-flee path (kind 7), the record resolved;
+       //       1 it does not scatter -> no push at all, the record is in state 4 until the crusher has passed;
+       //       2 it scatters but cannot walk -> the one push fails, state 4, no second attempt
+        struct Out {
+            bool arrived = false, crusher_state = false, fled = false;
+            float min_speed = 3.0e38f;
+            uint32_t records_end = 0;
+            MovementStats st;
+        };
+        const auto run = [&](int what) {
+            Out r;
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            if (what == 1) sys.set_scatters_fn([](int32_t) { return false; });
+            UnitDesc cr = t20_vehicle(60, cell_center(8, 20), 2);
+            cr.crusher = true;
+            CHECK(sys.add_unit(cr));
+            UnitDesc v = unit(70, cell_center(25, 20), 2, what == 2 ? 0.0f : 1.0f, 3.0f, LocomotorKind::Default);
+            v.owner = 1;
+            v.squashable = true;
+            CHECK(sys.add_unit(v));
+            SimRng rng(504);
+            MoveOrder o;
+            o.units = {60};
+            o.destination = cell_center(45, 20);
+            sys.move(o, rng, 1);
+            bool cruising = false;
+            for (uint32_t f = 1; f < 1500 && !r.arrived; ++f) {
+                sys.tick(f, rng, serial_for);
+                const UnitView c = sys.view(60);
+                r.arrived = c.arrived;
+                cruising = cruising || near(c.speed, mult, 1e-5f);
+                if (cruising && c.pos.x < cell_center(44, 20).x) r.min_speed = std::min(r.min_speed, c.speed);
+                r.fled = r.fled || (sys.view(70).pushed && sys.view(70).push_flee);
+                for (const CollisionObject& co : sys.collisions().list())
+                    r.crusher_state = r.crusher_state || (co.a == 60 && co.b == 70 && co.state == CollisionState::Crusher);
+            }
+            r.records_end = static_cast<uint32_t>(sys.collisions().list().size());
+            r.st = sys.stats();
+            return r;
+        };
+        const Out scat = run(0), stay = run(1), stuck = run(2);
+        CHECK(scat.arrived && scat.st.pushes >= 1 && scat.fled && scat.st.push_failures == 0 && near(scat.min_speed, mult, 1e-5f));
+        CHECK(stay.arrived && stay.crusher_state && stay.st.pushes == 0 && stay.st.push_failures == 0 && stay.records_end == 0);
+        CHECK(near(stay.min_speed, mult, 1e-5f));
+        CHECK(stuck.arrived && stuck.crusher_state && stuck.st.pushes == 0 && stuck.st.push_failures == 1 && near(stuck.min_speed, mult, 1e-5f));
+        CHECK(scat.st.dynamic_repaths == 0 && stay.st.dynamic_repaths == 0 && scat.st.early_arrivals == 0 && stay.st.early_arrivals == 0);
+        std::printf("t20 decision: crusher - scattering victim pushed %u time(s), non-scattering: state 4, stuck: %u failed push\n",
+                    scat.st.pushes, stuck.st.push_failures);
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -6200,6 +6391,7 @@ int main() {
     test_t20_destination_check();   // s78n t20 item 6
     test_t20_path_around();         // s78n t20 item 3
     test_t20_early_arrival();       // s78n t20 item 4
+    test_t20_decision_leftovers();  // s78n t20 item 5
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

@@ -2349,6 +2349,9 @@ static void test_oi_land() {
         PassabilityGrid g;
         g.init(80, 40);
         sys.set_grid(std::move(g));
+        // (s78n t20, MOVEMENT 5.4.5 item 4: a victim whose faction scatters from crushers is pushed out of the way on a
+        // crush-flee path; these victims belong to one that does not - FoC: the Empire - so the crusher drives over them)
+        sys.set_scatters_fn([](int32_t) { return false; });
         UnitDesc atat = land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle);
         atat.crusher = true;
         atat.owner = 0;
@@ -2368,7 +2371,7 @@ static void test_oi_land() {
         MoveOrder o;
         o.units = {1};
         o.destination = cell_center(70, 20);
-        o.flags = kMoveFlagSkipValidation;
+        // (an ordinary order: on a forced path, flag 0x20, decision step 2 pushes every blocker aside instead)
         sys.move(o, rng, 0);
         std::vector<CrushEvent> all;
         for (uint32_t f = 0; f < 2000 && sys.view(1).has_goal; ++f) {
