@@ -633,6 +633,14 @@ enum class ObstacleCell : uint8_t {
 // `query(target, p, centre)`: the cell containing p against `target`'s stamp; always writes that cell's centre (XY; z
 // is free). Read-only: the targeting scan calls it from job workers.
 using ObstacleCellFn = std::function<ObstacleCell(ObjectId target, Vec3 p, Vec3& centre)>;
+// s78n t20 (FIGHTER_FLYING §4.11 E, 0x40edd0; MOVEMENT §4.3.2 item 7): the answer of the "can hit" query, in the order
+// the three tests run. NoTarget: a dead / unknown attacker or target, or an attacker without a weapon range (retail
+// skips members without TARGETING) - the formation rules read it as "can hit".
+enum class CanHit : uint8_t { Yes = 0, NoTarget, OutOfMaxRange, InsideMinRange, LineBlocked };
+// The land line-of-fire test 0x3b5ad0 (L1_S4_REMAINING §1.2): an active base shield holds exactly one of the two
+// points. `shield_damage` false: one of the attacker's projectiles does no shield damage (only shields whose pack +0xc
+// is set count [port: none]). Called from serial host code only.
+using ShieldSidesFn = std::function<bool(Vec3 from, Vec3 to, bool shield_damage)>;
 
 class CombatHooks {
 public:
@@ -1138,6 +1146,18 @@ public:
     // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids. s78n t02:
     // slot 46 in full (TACTICAL_COMBAT §5.4.4 item 1, min_range_hit).
     bool inside_min_range(ObjectId attacker, ObjectId target) const;
+    // s78n t20 (FIGHTER_FLYING §4.11 E "c" per member, 0x40edd0; the same three tests as the fire trim 0x410e90,
+    // MOVEMENT §4.3.2 item 7): can `attacker` hit `target` from where it stands / from `from`? Outside max range (slot
+    // 43), inside min range (slot 46), then on land a blocked line of fire (0x3b5ad0: the two points on opposite sides
+    // of an active base shield, both raised by their type's Ranged_Target_Z_Adjust; TACTICAL_COMBAT §2.7: there is no
+    // terrain test). The range tests are the targeting service's own (range_test: what sets targeting state 2), from
+    // the same position with the same weapon - a land team member answers for its team (the container's position, the
+    // head's weapon, else the first member's with one; 0x40edd0 tests a team container through its first member).
+    CanHit can_hit(ObjectId attacker, ObjectId target) const;
+    CanHit can_hit_from(ObjectId attacker, Vec3 from, ObjectId target) const;
+    // The position can_hit measures from (the unit's, or its land team container's).
+    Vec3 can_hit_origin(ObjectId attacker) const;
+    void set_shield_sides_query(ShieldSidesFn fn) { shield_sides_ = std::move(fn); }
     // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, slot 46 steps 6 / 7): the centre distance D (XY) from `from` to the target
     // and the min-range target term E: 0 for a LAND_OBSTACLE target (no aim walk, no sqrt(200)); else the X footprint
     // half-extent, or the Y half-extent when U's offset along X's facing (unnormalised, |f . (from - X)|) is <= 0.7071.
@@ -1843,6 +1863,11 @@ private:
     // S8 t10: slot 44 && !slot 45 for target `t` measured from `from` (the targeting object's position; a team's from its
     // head), with `u`'s weapon and range.
     bool in_attack_range(const Unit& u, Vec3 from, const Unit& t) const;
+    // s78n t20: the same test with its reason (Yes / OutOfMaxRange / InsideMinRange), max range first.
+    CanHit range_test(const Unit& u, Vec3 from, const Unit& t) const;
+    // s78n t20: the unit whose weapon a land team's range test uses (slot 42: the head's, else the first member's that
+    // has one, team list order; the head itself when none has).
+    const Unit& team_weapon_source(const Unit& head) const;
     // s78f t03: the targeting service (Service_Land 0x634810 / Service_Space 0x633ae0 after the scan; the TeamTargeting
     // service 0x62eeb0 for a land team head) and its helpers.
     void targeting_service(Unit& u, uint32_t frame, SimRng& rng);
@@ -1975,6 +2000,7 @@ private:
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order
     std::vector<Repairer> repairs_;
     ObstacleCellFn obstacle_cell_;                              // OI tactical / S8 t01: LAND_OBSTACLE aim walk
+    ShieldSidesFn shield_sides_;                                // s78n t20: line of fire 0x3b5ad0 (not saved: host query)
     PreciseHitFn precise_hit_;                                  // refixf t07: projectile segment entry test
     ScanRangeFn scan_range_;                                    // S8 t17: formation response range 0x4160a0
     std::function<ObjectId(ObjectId)> garrison_host_;           // S8 t10: garrison host query

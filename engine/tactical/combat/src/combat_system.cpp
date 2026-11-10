@@ -1726,6 +1726,10 @@ bool CombatSystem::unit_weapon_allowed(const Unit& u) const {
 }
 
 bool CombatSystem::in_attack_range(const Unit& u, Vec3 from, const Unit& t) const {
+    return range_test(u, from, t) == CanHit::Yes;
+}
+
+CanHit CombatSystem::range_test(const Unit& u, Vec3 from, const Unit& t) const {
     // Slot 44 && !slot 45 (TACTICAL_COMBAT §3.1.1 "Gate details" step 7, LOB_SOLVER §8 item 22): In_Max_Range (XY distance
     // <= R + E with the LAND_OBSTACLE aim walk; for a grenade weapon the lob solver alone, LOB_SOLVER §3.1) and not inside
     // Targeting_Min_Attack_Distance + E, from the targeting object's position (s78n t02: slot 46's own E, min_range_hit).
@@ -1735,12 +1739,60 @@ bool CombatSystem::in_attack_range(const Unit& u, Vec3 from, const Unit& t) cons
     if (!gw) range_geometry(t, from, d, E);
     if (gw) {
         LobSolution s;  // as lob_in_range (one pass at Max_Speed decides the yes / no)
-        if (!lob_solve(from, lob_target_point(t), gw->max_speed, lob_g(*gw), false, s)) return false;
+        if (!lob_solve(from, lob_target_point(t), gw->max_speed, lob_g(*gw), false, s)) return CanHit::OutOfMaxRange;
     } else {
         const float range = fire_range(base_attack_range(u), mod_r(u, ModList::FireRange));
-        if (!(d <= range + E)) return false;
+        if (!(d <= range + E)) return CanHit::OutOfMaxRange;
     }
-    return !min_range_hit(t, from, ud.min_attack_distance);
+    return min_range_hit(t, from, ud.min_attack_distance) ? CanHit::InsideMinRange : CanHit::Yes;
+}
+
+const CombatSystem::Unit& CombatSystem::team_weapon_source(const Unit& head) const {
+    if (desc_of(head).weapon_projectile >= 0) return head;
+    for (const Unit& m : units_)
+        if (&m != &head && !(m.flags & kUnitDead) && land_team_head(m) == &head && desc_of(m).weapon_projectile >= 0) return m;
+    return head;
+}
+
+Vec3 CombatSystem::can_hit_origin(ObjectId attacker) const {
+    const Unit* u = unit(attacker);
+    if (!u) return {};
+    const Unit* head = land_team_lead(*u);
+    return head ? scan_pos(*head) : u->pos;
+}
+
+CanHit CombatSystem::can_hit(ObjectId attacker, ObjectId target) const {
+    return can_hit_from(attacker, can_hit_origin(attacker), target);
+}
+
+CanHit CombatSystem::can_hit_from(ObjectId attacker, Vec3 from, ObjectId target) const {
+    const Unit* u = unit(attacker);
+    const Unit* t = unit(target);
+    if (!live(u) || !live(t)) return CanHit::NoTarget;
+    const Unit* head = land_team_lead(*u);
+    const Unit& src = head ? team_weapon_source(*head) : *u;
+    // no weapon range and no grenade arc: nothing to test (0x40edd0 skips members without TARGETING)
+    if (!grenade_weapon(src) && !(fire_range(base_attack_range(src), mod_r(src, ModList::FireRange)) > 0.0f)) return CanHit::NoTarget;
+    const CanHit r = range_test(src, from, *t);
+    if (r != CanHit::Yes) return r;
+    if (cfg_.mode == GameMode::Land && shield_sides_) {
+        // 0x3b5ad0's projectile gate: every projectile the attacker would fire (its WEAPON projectile and its live weapon
+        // hard points') must do shield damage for the shields to count
+        bool shield_damage = true;
+        const UnitDesc& ud = desc_of(src);
+        if (ud.weapon_projectile >= 0 && !data_->projectiles[static_cast<size_t>(ud.weapon_projectile)].does_shield_damage) shield_damage = false;
+        for (uint32_t i = 0; i < src.hp_count && shield_damage; ++i) {
+            const Hardpoint& h = hps_[src.hp_begin + i];
+            const HardpointDesc& hd = data_->hardpoints[h.desc];
+            if (hp_out(h) || !is_weapon(hd.kind) || hd.projectile < 0) continue;
+            if (!data_->projectiles[static_cast<size_t>(hd.projectile)].does_shield_damage) shield_damage = false;
+        }
+        Vec3 a = from, b = t->pos;
+        a.z = a.z + ud.ranged_target_z_adjust;
+        b.z = b.z + desc_of(*t).ranged_target_z_adjust;
+        if (shield_sides_(a, b, shield_damage)) return CanHit::LineBlocked;
+    }
+    return CanHit::Yes;
 }
 
 bool CombatSystem::attacking(ObjectId id) const {
@@ -2070,14 +2122,8 @@ void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rn
     uint8_t s = 0;
     if (live(t)) {
         // Slot 44 / 45 from the container's position with its projectile (slot 42: [port] the head's weapon, else the
-        // first member's).
-        const Unit* src = &head;
-        if (desc_of(head).weapon_projectile < 0)
-            for (const Unit* m : members)
-                if (desc_of(*m).weapon_projectile >= 0) {
-                    src = m;
-                    break;
-                }
+        // first member's; s78n t20: team_weapon_source, shared with can_hit).
+        const Unit* src = &team_weapon_source(head);
         s = 2;
         if (in_attack_range(*src, scan_pos(head), *t)) {  // s78n t03: P_U = the container
             if (head.flags & kUnitMoving) {

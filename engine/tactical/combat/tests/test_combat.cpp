@@ -1822,6 +1822,69 @@ void test_gaps_constants() {
     }
 }
 
+// s78n t20 stage A (FIGHTER_FLYING §4.11 E "c", 0x40edd0; MOVEMENT §4.3.2 item 7): can_hit runs outside max range (slot
+// 43), inside min range (slot 46), then on land the line of fire 0x3b5ad0 (the host's base-shield query: both points
+// raised by their type's Ranged_Target_Z_Adjust, the projectile shield-damage gate) - the first failing test answers. Unknown
+// ids answer NoTarget; space has no line test.
+void test_s78n_can_hit() {
+    for (const bool land : {true, false}) {
+        World w;
+        w.data.projectiles.push_back(ProjectileDesc{});
+        w.data.projectiles[0].max_speed = 10.0f;
+        w.data.projectiles.push_back(ProjectileDesc{});
+        w.data.projectiles[1].max_speed = 10.0f;
+        w.data.projectiles[1].does_shield_damage = false;
+        UnitDesc a;
+        a.tactical_health = 100.0f;
+        a.max_attack_distance = 200.0f;
+        a.min_attack_distance = 30.0f;
+        a.weapon_projectile = 0;
+        a.weapon_recharge = 100.0f;  // never fires during the test
+        a.ranged_target_z_adjust = 5.0f;
+        const uint32_t ad = push_unit(w.data, a);
+        a.weapon_projectile = 1;  // a projectile without shield damage
+        const uint32_t nd = push_unit(w.data, a);
+        UnitDesc t;
+        t.tactical_health = 100.0f;
+        t.ranged_target_z_adjust = 2.0f;
+        const uint32_t td = push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.mode = land ? GameMode::Land : GameMode::Space;
+        w.make(cfg);
+        w.add(1, ad, 0, Vec3{0, 0, 0});
+        w.add(2, td, 1, Vec3{150, 0, 0});
+        w.add(3, nd, 0, Vec3{0, 10, 0});
+        CHECK(w.sys->can_hit(1, 2) == CanHit::Yes);
+        w.sys->set_position(1, Vec3{-100, 0, 0});  // 250 from the target
+        CHECK(w.sys->can_hit(1, 2) == CanHit::OutOfMaxRange);
+        w.sys->set_position(1, Vec3{135, 0, 0});  // 15 from it, the min range is 30
+        CHECK(w.sys->can_hit(1, 2) == CanHit::InsideMinRange);
+        CHECK(w.sys->can_hit_from(1, Vec3{0, 0, 0}, 2) == CanHit::Yes);  // the position given, not the unit's
+        CHECK_F(w.sys->can_hit_origin(1).x, 135.0f);
+        w.sys->set_position(1, Vec3{0, 0, 0});
+        int calls = 0;
+        Vec3 qa{}, qb{};
+        bool qd = true;
+        w.sys->set_shield_sides_query([&](Vec3 f, Vec3 to, bool shield_damage) {
+            ++calls;
+            qa = f;
+            qb = to;
+            qd = shield_damage;
+            return f.x < 50.0f && to.x > 50.0f;  // a shield edge at x = 50
+        });
+        CHECK(w.sys->can_hit(1, 2) == (land ? CanHit::LineBlocked : CanHit::Yes));
+        CHECK(calls == (land ? 1 : 0));
+        if (land) CHECK(qa.z == 5.0f && qb.z == 2.0f && qd);
+        CHECK(w.sys->can_hit_from(1, Vec3{100, 0, 0}, 2) == CanHit::Yes);  // both points on one side
+        w.sys->set_position(1, Vec3{-100, 0, 0});
+        const int before = calls;
+        CHECK(w.sys->can_hit(1, 2) == CanHit::OutOfMaxRange && calls == before);  // the range tests come first
+        CHECK(w.sys->can_hit(3, 2) == (land ? CanHit::LineBlocked : CanHit::Yes));
+        if (land) CHECK(!qd);  // its projectile does no shield damage
+        CHECK(w.sys->can_hit(1, 99) == CanHit::NoTarget && w.sys->can_hit(99, 2) == CanHit::NoTarget);
+    }
+}
+
 // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 "inside min range" in full - E is the X half-extent, or the Y one when
 // U's UNNORMALISED offset along X's facing is <= 0.7071 (slot 43 normalises); a LAND_OBSTACLE target has no E (centre
 // distance, no aim walk); a team-member target is retested against its team's live member nearest U (3-D squared
@@ -7851,6 +7914,7 @@ int main(int argc, char** argv) {
     test_gaps_constants();
     test_land_obstacle_and_weapon_index();
     test_s78n_min_range_slot46();  // s78n t02
+    test_s78n_can_hit();  // s78n t20 stage A
     test_fog_filter();
     test_attack_move_object();
     test_hardpoint_fire_routing();

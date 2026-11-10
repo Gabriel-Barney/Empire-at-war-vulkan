@@ -484,6 +484,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.locomotor = u->d.locomotor;  // §4.3-4.7
     v.secondary_locomotor = u->on_secondary;  // S7 t06
     v.loco_state = u->sm.state;
+    v.walk_state = u->m.state;  // s78n t20
     v.anim = u->sm.anim.id;
     v.airborne = u->sm.airborne;
     attitude(id, v.roll, v.pitch);

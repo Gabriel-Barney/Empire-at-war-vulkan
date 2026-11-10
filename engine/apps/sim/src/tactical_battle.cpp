@@ -1030,6 +1030,10 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             return fighter_scan_range(tm->primary(), u, c, range, rr);
         });
     }
+    if (!space_)  // s78n t20 (FIGHTER_FLYING §4.11 E, 0x40edd0): can_hit's land line-of-fire term 0x3b5ad0 (L1_S4_REMAINING §1.2)
+        combat_->set_shield_sides_query([this](tactical::Vec3 a, tactical::Vec3 b, bool shield_damage) {
+            return opposite_sides_of_shield(sv(a), sv(b), -1, true, shield_damage);
+        });
     combat_->bind_rng(&rng);  // Take_Damage listeners called outside the tick (host damage) draw here
     hg_setup(mode);           // hangars: SPAWN_SQUADRON descriptors and the HangarSystem (before any unit exists)
     oi_install(mode, rng);    // OI abilities: AbilityHost hooks, the abilities' RNG, repair credit hooks
@@ -1538,7 +1542,9 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         if (!best) continue;
         const float range = std::max(u.range, 100.0f);
         const float dist = dmath::sqrt(best_d2);
-        if (dist <= 0.8f * range) continue;  // in range: hold, combat fires
+        // in range: hold, combat fires. s78n t20 stage A [port] (FIGHTER_FLYING §4.11 A, arrived re-check only): an arrived
+        // unit that cannot hit its nearest enemy from where it stands approaches again (no land stop here).
+        if (dist <= 0.8f * range && !standin_recheck(u, best->id)) continue;
         if (movement_locked(u.id)) continue;  // OI follow-up t03: a locked unit keeps its order (§28.9)
         const Vec3 ep = store.position(best->h);
         const float k = (dist - 0.7f * range) / dist;
@@ -1548,6 +1554,10 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         const tactical::Aabb& b = mode.bounds();
         o.destination.x = std::clamp(o.destination.x, b.min.x, b.max.x);
         o.destination.y = std::clamp(o.destination.y, b.min.y, b.max.y);
+        if (dist <= 0.8f * range) {  // s78n t20: a re-check approach whose goal is where the unit stands is skipped
+            const float ex = o.destination.x - up.x, ey = o.destination.y - up.y;
+            if (ex * ex + ey * ey < 10.0f * 10.0f) continue;
+        }
         o.skip_destination_check = true;  // s78n t20 fix (MOVEMENT 4.3.1 item 2): an attack approach, as attack_approach
         movement_->move(o, rng, frame_);
         fighter_order(o.units, 0, Vec3{o.destination.x, o.destination.y, 0.0f});  // S7 t22
@@ -1681,13 +1691,19 @@ uint32_t TacticalBattle::exec_attack(TacticalMode& mode, std::span<const objects
         if (!movement_locked(u->id))  // S7 t22: an object block (flags 0); a locked unit keeps its formation (as Move_To)
             fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, block);
         ++n;
-        attack_approach(mode, *u, tp, rng, block);
+        attack_approach(mode, *u, tp, rng, block, tu->id);
+        attack_block_set(u->id, ct ? ct->id : tu->id, 0, tp);  // s78n t20 stage A
     }
     return n;
 }
 
-void TacticalBattle::attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal) {
+void TacticalBattle::attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal,
+                                     objects::ObjectId target) {
     if (!u.movable || movement_locked(u.id)) return;  // a locked unit fires from where it stands (§28.9 [M])
+    if (!space_ && target != objects::kNoObjectId && combat_) {  // s78n t20 stage A (MOVEMENT §4.3.2 item 6)
+        (void)land_attack_plan(mode, u, target, tp, 0, rng);
+        return;
+    }
     const tactical::Aabb& bb = mode.bounds();
     const Vec3 up = mode.primary().position(u.h);
     const float dx = tp.x - up.x, dy = tp.y - up.y, d = dmath::sqrt(dx * dx + dy * dy);
@@ -1756,6 +1772,7 @@ void TacticalBattle::team_attack_set(objects::ObjectId attacker, objects::Object
 }
 
 void TacticalBattle::team_attack_drop(std::span<const objects::ObjectId> ids) {
+    attack_block_drop(ids);  // s78n t20 stage A: the same writers end the land attack block
     if (team_attacks_.empty()) return;
     for (const objects::ObjectId id : ids) {
         const auto it = std::lower_bound(team_attacks_.begin(), team_attacks_.end(), id,
@@ -1816,7 +1833,7 @@ void TacticalBattle::team_attack_service(TacticalMode& mode, SimRng& rng) {
             const Vec3 tp = st.position(unit_by_id(m)->h);
             if (!movement_locked(u->id) && !movement_->fighter_squad(ct->id))
                 fighter_order(std::span<const objects::ObjectId>(&u->id, 1), 0, tp, m);
-            attack_approach(mode, *u, tp, rng);
+            attack_approach(mode, *u, tp, rng, objects::kNoObjectId, m);
         }
         return true;
     };
@@ -1824,6 +1841,159 @@ void TacticalBattle::team_attack_service(TacticalMode& mode, SimRng& rng) {
     for (size_t i = 0; i < team_attacks_.size(); ++i)
         if (keep(team_attacks_[i])) team_attacks_[w++] = team_attacks_[i];
     team_attacks_.resize(w);
+}
+
+// ---- s78n t20 stage A: land attack blocks (tactical_battle.hpp AttackBlock) -------------------------------------------
+
+bool TacticalBattle::standin_recheck(const Unit& u, objects::ObjectId enemy) const {
+    if (space_ || !combat_ || !movement_ || !combat_->has_unit(u.id)) return false;
+    const objects::ObjectId mover = attack_mover(u.id);
+    if (!movement_->has_unit(mover)) return false;
+    const mv::UnitView v = movement_->view(mover);
+    if (v.has_goal || v.pushed) return false;
+    const tc::CanHit c = combat_->can_hit(u.id, enemy);
+    return c != tc::CanHit::Yes && c != tc::CanHit::NoTarget;
+}
+
+objects::ObjectId TacticalBattle::attack_mover(objects::ObjectId unit) const {
+    objects::ObjectId c = objects::kNoObjectId;
+    mv::V2 slot;
+    return movement_ && movement_->team_slot(unit, c, slot) && c >= 0 ? c : unit;
+}
+
+void TacticalBattle::attack_block_set(objects::ObjectId unit, objects::ObjectId target, uint8_t flags, Vec3 goal) {
+    if (space_ || !movement_ || target == objects::kNoObjectId) return;
+    const Unit* u = unit_by_id(unit);
+    if (!u || !u->movable) return;
+    const objects::ObjectId mover = attack_mover(unit);
+    if (!movement_->has_unit(mover)) return;
+    auto it = std::lower_bound(attack_blocks_.begin(), attack_blocks_.end(), mover,
+                               [](const AttackBlock& r, objects::ObjectId v) { return r.mover < v; });
+    if (it == attack_blocks_.end() || it->mover != mover) it = attack_blocks_.insert(it, AttackBlock{});
+    // [port] the first check 30 frames after the order (the formation timer F +0x1d8 is set at its first state-1 step)
+    *it = AttackBlock{mover, target, flags, frame_ + 30u, goal.x, goal.y};
+}
+
+void TacticalBattle::attack_block_drop(std::span<const objects::ObjectId> ids) {
+    if (attack_blocks_.empty()) return;
+    for (const objects::ObjectId id : ids) {
+        const objects::ObjectId mover = attack_mover(id);
+        const auto it = std::lower_bound(attack_blocks_.begin(), attack_blocks_.end(), mover,
+                                         [](const AttackBlock& r, objects::ObjectId v) { return r.mover < v; });
+        if (it != attack_blocks_.end() && it->mover == mover) attack_blocks_.erase(it);
+    }
+}
+
+TacticalBattle::AttackPlan TacticalBattle::land_attack_plan(TacticalMode& mode, const Unit& u, objects::ObjectId target, Vec3 tp,
+                                                           uint8_t flags, SimRng& rng) {
+    if (!u.movable || movement_locked(u.id)) return AttackPlan::None;
+    const objects::ObjectId mover = attack_mover(u.id);
+    if (!movement_->has_unit(mover)) return AttackPlan::None;
+    const mv::UnitView v = movement_->view(mover);
+    const float dx = tp.x - v.pos.x, dy = tp.y - v.pos.y, d = dmath::sqrt(dx * dx + dy * dy);
+    const float range = std::max(u.range, 100.0f);
+    // MOVEMENT §4.3.2 item 6 [H]: a land plan of an object block whose members can all hit (0x40edd0) clears their paths and
+    // issues none. [port] an attacker or target unknown to combat (NoTarget) keeps the older 80 % distance rule.
+    const tc::CanHit c = combat_->can_hit(u.id, target);
+    const bool need = c == tc::CanHit::NoTarget ? d > 0.8f * range : c != tc::CanHit::Yes;
+    const objects::ObjectId one[] = {u.id};
+    if (!need) {
+        if (!v.has_goal) return AttackPlan::None;
+        movement_->stop(one);
+        return AttackPlan::Stopped;
+    }
+    // [port] the approach point: the target's own position for an Attack_Move, else 70 % of the range short of it (the arc
+    // slots of §4.3.2 items 2 - 5 and the fire trim of item 7 are not modelled; the early-arrival cut's range clause and the
+    // land stop end the walk where the unit can fire)
+    const float k = (flags & mv::kMoveFlagAttackMove) || !(d > 0.0f) ? 1.0f : (d - 0.7f * range) / d;
+    const tactical::Aabb& bb = mode.bounds();
+    const mv::V2 dest{std::clamp(v.pos.x + dx * k, bb.min.x, bb.max.x), std::clamp(v.pos.y + dy * k, bb.min.y, bb.max.y)};
+    const float ex = dest.x - v.pos.x, ey = dest.y - v.pos.y;
+    if (ex * ex + ey * ey < 10.0f * 10.0f) return AttackPlan::Skipped;  // the goal is where the mover stands
+    mv::MoveOrder o;
+    o.units = {u.id};
+    o.destination = dest;
+    o.flags = flags;
+    o.goal_object = (flags & mv::kMoveFlagAttackMove) ? target : -1;
+    o.skip_destination_check = true;  // MOVEMENT §4.3.1 item 2: an object-goal block
+    movement_->move(o, rng, frame_);
+    return AttackPlan::Moved;
+}
+
+void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
+    if (attack_blocks_.empty() || space_ || !combat_ || !movement_) return;
+    const objects::ObjectStore& st = mode.primary();
+    const auto live = [&](const Unit* x) { return x && x->alive && !x->retreated && st.alive(x->h) && combat_->has_unit(x->id); };
+    const auto keep = [&](AttackBlock& r) {
+        if (!movement_->has_unit(r.mover)) return false;
+        const Container* ct = team_target(r.target);
+        if (!ct && !live(unit_by_id(r.target))) return false;  // the target died (signal 0x10)
+        // The unit the target is attacked through: the target itself, or (a TEAM container) the member the lead's order names.
+        const auto names = [&](const Unit* x) -> objects::ObjectId {
+            if (!live(x)) return objects::kNoObjectId;
+            for (const tc::ObjectId o : {combat_->ordered_target(x->id), combat_->attack_goal(x->id)}) {
+                if (o == tc::kNoObject) continue;
+                if (!ct) {
+                    if (o == r.target) return o;
+                    continue;
+                }
+                const Unit* ou = unit_by_id(o);
+                if (live(ou) && ou->container < containers_.size() && &containers_[ou->container] == ct) return o;
+            }
+            return objects::kNoObjectId;
+        };
+        const Unit* lead = nullptr;
+        objects::ObjectId tid = objects::kNoObjectId;
+        if (movement_->is_land_team_container(r.mover)) {
+            for (const auto& [mid, slot] : movement_->land_team_slots(r.mover)) {
+                (void)slot;
+                const Unit* m = unit_by_id(mid);
+                tid = names(m);
+                if (tid != objects::kNoObjectId) {
+                    lead = m;
+                    break;
+                }
+            }
+        } else {
+            lead = unit_by_id(r.mover);
+            tid = names(lead);
+        }
+        if (!lead || tid == objects::kNoObjectId) return false;  // the order no longer names the target
+        if (frame_ < r.next) return true;
+        r.next = frame_ + 30u;  // 0x410a60 / 0x4192b0: frame + int(FPS + 0.5)
+        if (movement_locked(lead->id)) return true;
+        const Vec3 tp = st.position(unit_by_id(tid)->h);
+        const mv::UnitView v = movement_->view(r.mover);
+        const tc::CanHit c = combat_->can_hit(lead->id, tid);
+        const bool can = c == tc::CanHit::Yes || c == tc::CanHit::NoTarget;  // NoTarget: nothing tested (0x40edd0 true)
+        const float gx = tp.x - r.gx, gy = tp.y - r.gy, R = 0.5f * lead->range;
+        const bool far = gx * gx + gy * gy > R * R;
+        bool plan = false;
+        if (!v.has_goal) {
+            plan = !v.pushed && !can;  // arrived and some member cannot hit (FIGHTER_FLYING §4.11 A)
+        } else {
+            const bool stopping = v.walk_state == mv::LocoState::WalkEndMove;
+            if (can && !stopping && !far) {  // §4.11 E: the land stop
+                const objects::ObjectId one[] = {lead->id};
+                movement_->stop(one);
+                ++stats_.attack_land_stops;
+            } else if ((stopping && !can) || far) {
+                plan = true;
+            }
+        }
+        if (plan) {
+            r.gx = tp.x;
+            r.gy = tp.y;
+            const AttackPlan p = land_attack_plan(mode, *lead, tid, tp, r.flags, rng);
+            if (p == AttackPlan::Moved) ++stats_.attack_reissues;
+            else if (p == AttackPlan::Skipped) ++stats_.attack_reissue_skips;
+        }
+        return true;
+    };
+    size_t w = 0;
+    for (size_t i = 0; i < attack_blocks_.size(); ++i)
+        if (keep(attack_blocks_[i])) attack_blocks_[w++] = attack_blocks_[i];
+    attack_blocks_.resize(w);
 }
 
 cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x,
@@ -4801,6 +4971,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         complete_retreat(mode, static_cast<uint8_t>(retreat_side_));
     }
     profile::lap("tac.orders");
+    attack_block_service(mode, rng);  // s78n t20 stage A: serial, ascending mover, before the collision feed and the movement tick
     // 4. speed factors, movement, positions into the store and the trees, locomotor animation.
     apply_speed_factors();
     feed_collision_info(store);  // s78n t20: targets / ranges / hero clashes for the land collision decisions
@@ -5316,6 +5487,17 @@ void TacticalBattle::hash(StateHasher& h) const {
         for (const auto& [type, player] : vm_queue_) {
             h.u8(type);
             h.i32(player);
+        }
+    }
+    if (!attack_blocks_.empty()) {  // s78n t20 stage A (absent while none: space and older land states hash as before)
+        h.u32(static_cast<uint32_t>(attack_blocks_.size()));
+        for (const AttackBlock& r : attack_blocks_) {
+            h.i32(r.mover);
+            h.i32(r.target);
+            h.u8(r.flags);
+            h.u32(r.next);
+            h.f32(r.gx);
+            h.f32(r.gy);
         }
     }
     h.u32(placed_[0]);

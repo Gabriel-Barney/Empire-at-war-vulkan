@@ -235,6 +235,8 @@ struct UnitView {
     // stop / new order / teleport / locomotor swap dropped a running turn since the tick before (reported on the next
     // tick). False otherwise. The host treats arrival_turn || arrival_turn_ended as "the turn owns the clip".
     bool arrival_turn_ended = false;
+    // s78n t20 (FIGHTER_FLYING §4.11 E "stopping"): the land Walk state (LandMotion::state; WalkEndMove = braking for the end)
+    LocoState walk_state = LocoState::None;
     int32_t large_hover_index = -1;      // land: index (+0x22c) of its LargeHover formation in the last order, else -1
     // REMAINING_GAPS §4.3-4.7: special locomotors
     LocomotorKind locomotor = LocomotorKind::Default;  // the active locomotor

@@ -1055,6 +1055,11 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                                       ct && b_->movement_->fighter_squad(ct->id) ? ct->id : tu->id);
                 ++n;
                 if (!u->movable) continue;
+                if (!b_->space_) {  // s78n t20 stage A (MOVEMENT §4.3.2 item 6, FIGHTER_FLYING §4.11 A / E): no path when it can hit
+                    b_->attack_approach(*mode_, *u, tp, host_->random().synced(), objects::kNoObjectId, tu->id);
+                    b_->attack_block_set(u->id, ct ? ct->id : tu->id, 0, tp);
+                    continue;
+                }
                 const Vec3 up = st.position(u->h);
                 const float dx = tp.x - up.x, dy = tp.y - up.y, d = dmath::sqrt(dx * dx + dy * dy);
                 const float range = std::max(u->range, 100.0f);
@@ -1192,7 +1197,33 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             // Guard_Target on an object build a kind-3 block, which never takes the position destination check;
             // Move_To(object) is a kind-1 position snapshot and takes it (the same split as `fobj` above)
             const bool object_block = fobj != objects::kNoObjectId;
-            if (tw != cmd::kNoObject && !point_goal) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
+            // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 item 6): a land Attack_Move on an attackable enemy
+            // object is an attack block of each mover (TacticalBattle::AttackBlock, whose 30-frame checks re-path it: the
+            // object follow below leaves it out), and a unit that can already hit it from where it stands takes no path.
+            const TacticalBattle::Unit* atu = tw != cmd::kNoObject && tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
+            const bool attack_block = !b_->space_ && order == lua::LuaOrder::AttackMove && !point_goal && atu && atu->alive &&
+                                      !atu->retreated && b_->combat_->has_unit(atu->id) && hostile_owner(player, st.owner(atu->h));
+            if (attack_block) {
+                const Vec3 tp = st.position(atu->h);
+                std::vector<objects::ObjectId> path_units;
+                for (const objects::ObjectId id : group.units) {
+                    b_->attack_block_set(id, atu->id, mv::kMoveFlagAttackMove, tp);
+                    const tc::CanHit c = b_->combat_->has_unit(id) ? b_->combat_->can_hit(id, atu->id) : tc::CanHit::NoTarget;
+                    if (c != tc::CanHit::Yes) {
+                        path_units.push_back(id);
+                        continue;
+                    }
+                    const objects::ObjectId mover = b_->attack_mover(id);
+                    if (!b_->movement_locked(id) && b_->movement_->has_unit(mover) && b_->movement_->view(mover).has_goal) {
+                        const objects::ObjectId one[] = {id};
+                        b_->movement_->stop(one);
+                    }
+                }
+                group.units = std::move(path_units);
+                if (group.units.empty()) return R::None;
+                u = b_->unit_by_id(group.units.front());
+            }
+            if (tw != cmd::kNoObject && !point_goal && !attack_block) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
                 // s78f t10: fighters given an object block follow it in their own formation (0x4192b0 steps 3 / 4,
                 // FIGHTER_FLYING §4.11); the follow's re-issued plain move would replace that block with a flags-0 position
@@ -1720,10 +1751,13 @@ void BattleAi::standin_orders() {
         }
         if (!best) continue;
         const float range = std::max(u.range, 100.0f), dist = dmath::sqrt(best_d2);
-        if (dist <= 0.8f * range) continue;
+        // s78n t20 stage A [port] (FIGHTER_FLYING §4.11 A, arrived re-check only): an arrived unit that cannot hit its
+        // nearest enemy from where it stands approaches again (no land stop here)
+        if (dist <= 0.8f * range && !b_->standin_recheck(u, best->id)) continue;
         const Vec3 ep = st.position(best->h);
         const float k = (dist - 0.7f * range) / dist;
         const Vec3 dest{up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k, 0.0f};
+        if (dist <= 0.8f * range && (dest.x - up.x) * (dest.x - up.x) + (dest.y - up.y) * (dest.y - up.y) < 10.0f * 10.0f) continue;
         move_unit(u.id, dest.x, dest.y, mv::kThreatOff, 0, objects::kNoObjectId, true);  // s78n t20 fix: an attack approach
         if (!b_->movement_locked(u.id)) b_->fighter_order(std::span<const objects::ObjectId>(&u.id, 1), 0, dest);  // S7 t22
         ++b_->stats_.orders;

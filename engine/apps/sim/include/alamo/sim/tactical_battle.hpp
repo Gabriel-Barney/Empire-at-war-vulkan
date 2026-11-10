@@ -173,6 +173,9 @@ struct BattleStats {
     // cu8l t03: the campaign space fleet placement (objects placed, their adopt draws), the vf82 pass's TEAM-container lock
     // adopt draws, the arrivals started and the arrival ends that registered a new coordinator.
     uint32_t fleet_placed = 0, fleet_adopts = 0, fleet_lock_adopts = 0, fleet_arrivals = 0, fleet_arrival_ends = 0;
+    // s78n t20 stage A (land attack blocks; not saved): approaches re-issued by the 30-frame checks, land stops, and
+    // re-approaches skipped because their goal was where the mover stood.
+    uint32_t attack_reissues = 0, attack_land_stops = 0, attack_reissue_skips = 0;
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -1075,6 +1078,8 @@ public:
     const BattleStats& stats() const { return stats_; }
     // cu8l t03: the attacker's hyperspace arrivals still running (records; a squadron container counts until its members end).
     size_t arrivals_pending() const { return arrivals_.size(); }
+    // s78n t20 stage A: the land attack blocks alive (AttackBlock records, one per mover).
+    size_t attack_blocks() const { return attack_blocks_.size(); }
     // HARDPOINT_DISABLED.md §9.1 (presentation): units whose engines came back online this tick (EnginesOnline: an ENGINE
     // hardpoint repaired to max) - the host restarts their SFXEvent_Engine_Idle_Loop. Not hashed.
     const std::vector<objects::ObjectId>& engines_restarted() const { return engines_restarted_; }
@@ -1600,9 +1605,40 @@ private:
     void team_attack_set(objects::ObjectId attacker, objects::ObjectId container, objects::ObjectId member, bool goal);
     void team_attack_drop(std::span<const objects::ObjectId> ids);
     void team_attack_service(TacticalMode& mode, SimRng& rng);  // after the combat tick's events
+    // ---- s78n t20 stage A: land attack blocks (FIGHTER_FLYING §4.11 A / E [H], MOVEMENT §4.3.2 items 6 / 8) ----
+    // One record per mover (a steering squad's container, else the unit) that was given an attack on an object: the
+    // Attack order (human and AI) and the AI's Attack_Move on an attackable enemy object. Every 30 frames (serial, ascending
+    // mover, before the collision feed and the movement tick), with c = CombatSystem::can_hit of the lead (the first unit of
+    // the mover whose combat order or attack goal still names the target), D = |recorded goal - target position| and
+    // R = half the lead's attack range:
+    //   - arrived (no goal, no collision-owned top record) and not c -> plan again (0x410a60);
+    //   - moving, c, not braking for its end (Walk End Move) and D <= R -> land stop (0x4192b0 / 0x40e7a0);
+    //   - moving and (braking and not c, or D > R) -> plan again.
+    // A plan (land_attack_plan) issues no path when c holds (the members stop: §4.3.2 item 6); else [port] the 0.7 x range
+    // point toward the target (Attack) or the target's position (Attack_Move), skipped when that is where the mover stands.
+    // Dropped by team_attack_drop (every new order and Stop), the target's death or when the lead's order no longer
+    // names it. Saved (battle state 12), hashed while any exists.
+    struct AttackBlock {
+        objects::ObjectId mover = objects::kNoObjectId;   // ascending
+        objects::ObjectId target = objects::kNoObjectId;  // the target unit, or a TEAM container (TeamAttack)
+        uint8_t flags = 0;                                // block flags: mv::kMoveFlagAttackMove for an Attack_Move
+        uint32_t next = 0;                                // next check frame (order frame + 30, then every 30)
+        float gx = 0.0f, gy = 0.0f;                       // recorded goal: the target's position at the last plan
+    };
+    std::vector<AttackBlock> attack_blocks_;
+    objects::ObjectId attack_mover(objects::ObjectId unit) const;  // the squad container `unit` steers to, else `unit`
+    // The stand-in loops' arrived re-check (land): `u`'s mover has no goal and no top record, and u cannot hit `enemy`.
+    bool standin_recheck(const Unit& u, objects::ObjectId enemy) const;
+    void attack_block_set(objects::ObjectId unit, objects::ObjectId target, uint8_t flags, Vec3 goal);  // land only
+    void attack_block_drop(std::span<const objects::ObjectId> ids);
+    void attack_block_service(TacticalMode& mode, SimRng& rng);
+    enum class AttackPlan : uint8_t { None, Stopped, Moved, Skipped };
+    AttackPlan land_attack_plan(TacticalMode& mode, const Unit& u, objects::ObjectId target, Vec3 tp, uint8_t flags, SimRng& rng);
     // exec_attack's approach: a movable, unlocked unit farther than 80 % of max(range, 100) from `tp` moves to 70 %. With a
     // `goal` (the order's object block), a fighter's move names it, and in range the fighter still gets a new formation.
-    void attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal = objects::kNoObjectId);
+    // s78n t20 stage A: on land with a `target` the plan is land_attack_plan (no path when the unit can already hit).
+    void attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal = objects::kNoObjectId,
+                         objects::ObjectId target = objects::kNoObjectId);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
     // --- end queueable unit actions ---
