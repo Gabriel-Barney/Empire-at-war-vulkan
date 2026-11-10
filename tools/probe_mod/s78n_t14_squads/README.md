@@ -9,9 +9,45 @@ Retail check of the land-squad port guesses in `docs/re/FIGHTER_FLYING.md` sec. 
   game this shows as start frames staggered by up to 6.
 - **Q3 layout.** `Stormtrooper_Team` uses **Rows**: a 3 x 3 grid of pitch 12 with the member `FormationSpacing` 0.3,
   or pitch 26 with the container's 1.0. `Rebel_Trooper_Team` uses **Dartboard**: a Halton (bases 2 and 3) scatter
-  seeded with container id x frame. The kit reads where the slots sit relative to the container after a move. It
-  also checks the re-lay rule: the layout is laid again only when dot(new heading, last laid heading) <= 0.99, so a
-  30 deg turn re-lays it and a 0 or 5 deg turn does not.
+  seeded with container id x NOW (sec. 7.2). The kit reads where the slots sit relative to the container after a
+  move and fits the exact sec. 7.2 scatter to them. It also checks the re-lay rule: the layout is laid again only when
+  dot(new heading, last laid heading) <= 0.99 (8.11 deg), so a 30 deg turn re-lays it and a 0 or 5 deg turn does not.
+- **7.7 container speed.** The container accelerates and brakes at the member `OverrideDeceleration` x 1.56, and its
+  speed is capped while a member straggles behind the layout box (the straggler cap 0x5ab640).
+
+## Changes for the second run (roadmap s78n t17)
+
+The first run (`out\20261110-043421`, `docs/re/S78N_T14_RUN.md`) could not test the Dartboard seed: the records
+carried only the mode clock, and the jiggle (3.5) hid the slots. This version:
+
+- **NOW clock.** Every poll and every order also records g = `GetCurrentTime.Frame()` x 30 (the logic frame NOW, the
+  Halton seed's frame), next to f = `GetCurrentTime()` x 30. The call runs under pcall: if it fails, one APIERR
+  `api=GetCurrentTime.Frame` is recorded, g is left out from then on and the script keeps running.
+- **No jiggle for the Rebel troopers.** The probe mod's copy of `GROUNDINFANTRY.XML` sets `Squad_Rebel_Trooper`
+  `FormationRaggedness` and `MaxJiggleDistance` to 0 (shipped 1.6 and 3.5), so the settled slots are the Halton
+  points themselves. Only the mod's copy changes; `--keep-jiggle` builds the mod without the patch.
+- **Dartboard fit as sec. 7.2.** For each leg the analyser lays the scatter in float32 exactly as sec. 7.2: k = ceil
+  sqrt n, m = ceil(n / k), L / Wd from the spacing and the member half-extents, minimum distance 5 + r, up to 1000
+  tries, the radical inverse in float32 with bases 2 and 3 from the same index, seed = (int32) container id x NOW
+  (wrapping). NOW is searched only in [g, g + 10] of the spawn and of each order up to that leg. The points are
+  assigned to the members in the retail order (sec. 7.2 step 6: points by x descending, members by projection
+  descending, groups by x[i] - x[j] <= Wd / m sorted by side, the next group from i = j + 1). The fit is compared
+  with 200 NOW values far from the leg (their 5 % quantile, since Halton scatters repeat at some index offsets).
+- **Re-lay rule from the actual path.** The turn from the last laid layout uses the container's measured heading at
+  the start of each leg; turns within 1.5 deg of 8.11 deg are not judged.
+- **7.7 checks.** The container's start and braking ramps (a parabola fitted to the distance walked) against the
+  member `OverrideDeceleration` x 1.56, and the straggler cap solved for HX at each steady poll against the layout.
+- **Q1 CLOSES / STAYS OPEN** skips a leg without settled slots (the first run's STAYS OPEN came from such a leg).
+- Records from before this version (no g) still analyse; the NOW checks then print n/a.
+
+### Expected values (FIGHTER_FLYING 7.7, printed by `--dry-run`)
+
+| Kind | Team speed / frame | Container acceleration = braking / frame | Straggler box HX |
+|---|---|---|---|
+| Rows (Stormtroopers) | 1.248 | 0.078 (0.05 x 1.56) | 15.0 (3 x 3 grid pitch 12, half-extent 3; first run 14.9) |
+| Dartboard (Rebel troopers) | 1.56 | 0.1092 (0.07 x 1.56) | per layout: (max - min) / 2 of the laid points' x +- 3, jiggle 0; the report prints predicted vs measured per leg |
+
+The first run already measured 0.078 / 0.109 and HX 14.9; the re-run must repeat them with the patched XML.
 
 ## Run (one land battle, about 4.3 minutes in battle, hands-off)
 
@@ -76,9 +112,11 @@ Options:
 ## How it works
 
 ### The mod
-`build_s78n_t14_mod.py` builds `Mods\S78NT14Probe` from the install, adding only two files and the marker:
+`build_s78n_t14_mod.py` builds `Mods\S78NT14Probe` from the install, adding only three files and the marker:
 - `Data\Scripts\FreeStore\BusyTacticalFreeStore.lua`: the shipped free store with the probe appended.
 - `Data\Text\MasterTextFile_English.dat`: the shipped text plus the two probe messages.
+- `Data\XML\GROUNDINFANTRY.XML`: the shipped file with `Squad_Rebel_Trooper` `FormationRaggedness` and
+  `MaxJiggleDistance` set to 0 (read back after patching; not with `--keep-jiggle`).
 
 ### The corridor
 The builder parses the map placements (`ted_owners`) and the passability grid (`build_oi_mod`). It picks a straight,
@@ -107,7 +145,8 @@ The builder reads these values from the game XML (see `--dry-run`). The fallback
 ### The probe Lua (`s78n_t14_probe.lua`)
 - **Arming.** The probe runs only in the Rebel AI's free store, only in a Land battle, and only when the Empire is
   human. Otherwise it records SKIP.
-- **Polling.** The service rate is 0.05, so the probe polls every 3 frames. f = `GetCurrentTime()` x 30.
+- **Polling.** The service rate is 0.05, so the probe polls every 3 frames. f = `GetCurrentTime()` x 30 (mode
+  frame), g = `GetCurrentTime.Frame()` x 30 (NOW) in every record; the HB record also carries both raw times.
 - **Spawning.** Each trial spawns the company for the human player at the corridor start. It finds the team
   container through `Get_Parent_Object` of the members and despawns any extra teams. It then makes the squad
   invulnerable, points the camera at it and lets it settle for 180 frames.
@@ -127,9 +166,10 @@ The report is `out\<run>\report.txt`; `report.json` holds the same numbers.
 
 - **Header.**
   - Script state (ARMED / DONE / SKIP, ERR, APIERR).
-  - **Dartboard layout fit** over all Dartboard legs of the run. The fit computes one frame offset (logic frame
-    minus f) and its mean RMS, then repeats the same search at far offsets as a baseline. It reports **MATCH** when
-    the best RMS is at most 0.6 x the baseline's best.
+  - **Clock.** The range of g - f (NOW minus the mode frame), or a note that no record carries g.
+  - **Dartboard layout fit** per Dartboard leg: the best NOW in [g, g + 10] of the spawn or an order, its score
+    (along-weighted RMS, a common along shift up to 2 allowed), the baseline's 5 % quantile and the plain RMS. A leg
+    matches when the score is at most 0.75 and at most 0.5 x the baseline.
 - **Per trial:** the company, container id, member count and poll count. It also counts how often the container
   position was readable and how often it equalled a member position.
 - **Per leg:**
@@ -145,9 +185,13 @@ The report is `out\<run>\report.txt`; `report.json` holds the same numbers.
   - **Close-up times.** The frames until all members are within 4 + `MaxJiggleDistance` of their slot, while
     marching and after the stop.
   - **Q3 settled slots** (along, side). For Rows: the RMS to the member-spacing grid and to the container-spacing
-    grid. For Dartboard: the bounds check and the Halton RMS with the event it was laid at (spawn or a leg order).
-    Also the change from the previous leg's slots: the set RMS (layout change) and the per-member RMS (members
-    swapped).
+    grid. For Dartboard: the bounds check and the Halton score with the event it was laid at (spawn or a leg order)
+    and the NOW offset. Also the change from the previous leg's slots: the set RMS (layout change) and the per-member
+    RMS (members swapped).
+  - **Path heading** at the start and the stop of the leg.
+  - **7.7 container speed step.** The start and braking ramps per frame and the polls each was fitted through.
+  - **7.7 straggler cap.** HX solved at each steady poll (median and range) against the predicted HX (Rows grid,
+    fitted Halton points, or the settled slots).
 - **Summary per squad kind, with the verdicts:**
 
   | Question | Verdicts and evidence |
@@ -155,8 +199,12 @@ The report is `out\<run>\report.txt`; `report.json` holds the same numbers.
   | Q1 | **TIGHT / LOOSE / TRAILING** from the steady march against the predicted slots (or the settled slots if no prediction); settled centroid along the heading; **catch-up YES/NO** (peak ratio > 1.05); **CLOSES / STAYS OPEN** after the stop |
   | Q2 | **STAGGERED / SIMULTANEOUS** from the start spread on the straight leg 2 (>= 2.5 or <= 1.0 frames); a histogram of rounded start frames; the min / max over all legs |
   | Q3 Rows | **MATCH** when the member-spacing RMS is at most 1.5 + jiggle and below the container-spacing RMS (the port uses the member spacing) |
-  | Q3 Dartboard | **MATCH** (the Halton run fit matches), **INSIDE BOUNDS ONLY** or **DIFFERS** |
-  | Re-lay rule | **MATCH** when leg 2 keeps the leg 1 layout and legs 3 and 4 use the layout laid at the leg 3 order, as in the port and the RE (`FIGHTER_FLYING` 7.2) |
+  | Q1 close | **CLOSES / STAYS OPEN** over the legs with settled slots; legs without them are counted as skipped |
+  | Q3 Dartboard | **MATCH** (every leg's NOW fit matches), **PARTIAL** (some legs), **NO MATCH**, or **n/a** for records without g |
+  | Q3 slot order | **MATCH** when, on every matched leg laid at an order, the retail order (sec. 7.2 step 6) scores within 0.5 of the best assignment |
+  | Re-lay rule | **MATCH** when each matched leg was laid at the event the 8.11 deg rule picks from the measured headings (`FIGHTER_FLYING` 7.2) |
+  | 7.7 acceleration | **MATCH** when every start and braking ramp fitted through 4 or more polls is within 10 % of the expected value; ramps from 3 polls are printed in brackets and not judged |
+  | 7.7 straggler | **MATCH** when each leg's median HX is within 1.0 of the predicted HX |
 
   The set change per leg is printed too: legs 2 and 4 should show jiggle only; leg 3 should show a new scatter for
   Dartboard, and the same grid (members may swap) for Rows.
@@ -179,13 +227,19 @@ The selftest:
 - checks that the probe uses no `math.`, `#` or `%`;
 - checks the XML values and that the run fits in 9000 frames.
 
-It then runs the probe against a stubbed engine with a squad model in five worlds:
+It also checks the probe mod's XML patch and the analyser's float32 maths (radical inverse, `dart_dims`, the
+Dartboard points, the retail slot order with the i = j + 1 skip, the Rows grid HX of 15.0). It then runs the probe
+against a stubbed engine with a squad model in seven worlds. The stub's NOW runs 1234 frames ahead of the mode clock,
+lays a Dartboard scatter at the container's next service after an order (NOW + 1) with the sec. 7.2 seed and order,
+and moves the container with the 7.7 acceleration and straggler cap.
 
 | World | What it models | Expected result |
 |---|---|---|
-| retail-like | members catch up at 1.5 x the team speed, recover past 4 units, delays 0..6 | Q1 TIGHT / CLOSES / catch-up YES, Q2 STAGGERED, Q3 MATCH for both kinds, Dartboard fit at offset 0, re-lay rule MATCH |
-| port-like | members limited to the team speed | Rows TRAILING / STAYS OPEN / catch-up NO |
+| retail | members at their own Max_Speed, recover past 4 units, delays 0..6, 7.7 acceleration and cap | Q1 TIGHT / CLOSES, Q2 STAGGERED, Q3 MATCH for both kinds, every Dartboard leg fitted at NOW + 1 of the spawn or the leg 3 order, slot order and re-lay rule MATCH, 7.7 acceleration and straggler MATCH, g - f = 1234 |
+| port | members limited to the team speed, no recovery, no cap, the container type's own acceleration | Rows TRAILING / STAYS OPEN / catch-up NO, 7.7 acceleration DIFFERS |
 | nodelay | no start delays | Q2 SIMULTANEOUS |
+| badseed | Dartboard seeded with id x (NOW + 777) | Dartboard Q3 NO MATCH, no leg matched |
+| noframe | `GetCurrentTime.Frame` missing | one APIERR, Dartboard Q3 n/a, Rows 7.7 acceleration still MATCH |
 | space | a Space battle | SKIP, nothing analysed |
 | menu | Empire not human | SKIP, nothing analysed |
 
@@ -218,12 +272,13 @@ would do.
 
 - **Poll granularity.** Polls come every 3 frames. Start frames are interpolated from a 1.5-unit crossing, so the
   Q2 starts are good to about 1 frame. A spread below 1 frame reads as SIMULTANEOUS.
-- **Jiggle noise.** Settled slots carry the jiggle (`MaxJiggleDistance` 2 for Stormtroopers, 3.5 for Rebel
-  troopers) and up to the 4-unit recovery dead band. So the Rows grid match allows 1.5 + jiggle, and the Dartboard
-  fit uses the slots during the steady march (where members steer to the slot itself) instead.
-- **Halton seed frame.** The seed uses the logic frame (NOW), but the records carry f = `GetCurrentTime()` x 30.
-  The fit therefore searches one run-wide offset (+-60 frames, then +-3 per leg). A Dartboard "no match" can also
-  mean that the seed is not container id x NOW.
+- **Jiggle noise.** Stormtrooper slots carry the jiggle (`MaxJiggleDistance` 2) and up to the 4-unit recovery dead
+  band, so the Rows grid match allows 1.5 + jiggle. The Rebel troopers run with jiggle 0 in the probe mod.
+- **Halton seed frame.** The fit searches NOW in [g, g + 10] of each event; with g missing (old records or a failed
+  `GetCurrentTime.Frame`) it cannot run and prints n/a. A Dartboard NO MATCH with g present means the seed, the
+  float32 maths or the event that lays the scatter differs from sec. 7.2.
+- **Ramps from few polls.** At 3-frame polls a short ramp may hold only 3 polls; such a ramp is printed but not
+  judged.
 - **Container on a member.** At spawn the container position may equal a member's position. The header counts
   this, and the analysis then uses the container position as given.
 - **Starting state.** Members may still be moving at the leg 1 order, after the 180-frame settle from the spawn. The

@@ -17,8 +17,9 @@
 -- and only when Find_Player(SN_CFG.human_faction) (Empire) is human, so the main-menu background battle never arms
 -- it. ServiceRate is lowered to 0.05 s (every free-store service, every 3rd frame); while it runs the shipped
 -- FreeStoreService / On_Unit_Service bodies are skipped.
--- Output: Lua strings "S8Q|<KIND>|sid=<script id>|n=<n>|f=<mode frame>|...|END" kept in SN_LOG; s78n_t14_run.py
--- finds them with a read-only heap scan. f = GetCurrentTime() * 30 rounded.
+-- Output: Lua strings "S8Q|<KIND>|sid=<script id>|n=<n>|f=<mode frame>|g=<NOW>|...|END" kept in SN_LOG;
+-- s78n_t14_run.py finds them with a read-only heap scan. f = GetCurrentTime() * 30 rounded (the mode frame), g =
+-- GetCurrentTime.Frame() * 30 rounded (NOW, the global frame of the Dartboard seed; s78n t17), "?" when unread.
 -- Retail rules kept (earlier runs): Lua 5.0 (no '#', no '%', no math library); every engine call on an object is
 -- gated by Is_Valid (a failed engine read stops a retail script, pcall cannot catch it); objects use Get_Object_ID
 -- (Get_ID is a player method); Spawn_Unit of a company returns its team containers (s78m run 20261108-215525);
@@ -50,22 +51,58 @@ function SN_Frame()
 	return nil
 end
 
+-- NOW, the global logic frame the Dartboard Halton seed uses (FIGHTER_FLYING 7.2; S78N_T14_RUN.md "rerun"):
+-- GetCurrentTime() is the MODE frame / 30, GetCurrentTime.Frame() is NOW / 30 (the shipped GameScoring.lua call form).
+-- Read only once the probe is armed (not at script load). The first failed call records one APIERR and switches the
+-- read off for the rest of the run (records then carry g=?).
+SN_NOW_OK = nil
+function SN_NowRaw()
+	if SN_NOW_OK == false or not SN.on then
+		return nil
+	end
+	local ok, t = pcall(function() return GetCurrentTime.Frame() end)
+	if ok and type(t) == "number" then
+		SN_NOW_OK = true
+		return t
+	end
+	SN_NOW_OK = false
+	SN_ApiFail("GetCurrentTime.Frame", t)
+	return nil
+end
+
+function SN_Now()
+	local t = SN_NowRaw()
+	if t then
+		return tonumber(string.format("%.0f", t * 30))
+	end
+	return nil
+end
+
+-- every record: f = mode frame (GetCurrentTime() x 30), g = NOW (GetCurrentTime.Frame() x 30), both rounded
 function SN_Rec(kind, fields)
 	pcall(function()
 		if SN_N >= SN_MAX_RECORDS and kind ~= "DONE" then
 			return
 		end
-		SN_N = SN_N + 1
-		local body = fields or ""
-		if string.len(body) > 440 then
-			body = string.sub(body, 1, 440) .. "~"
-		end
+		-- the clocks first: a failed NOW read records its APIERR before this record takes its index
 		local f = SN_Frame()
 		local fs = "?"
 		if f then
 			fs = tostring(f)
 		end
-		SN_LOG[SN_N] = "S8Q|" .. kind .. "|sid=" .. SN_SID .. "|n=" .. SN_N .. "|f=" .. fs .. "|" .. body .. "|END"
+		local g = SN_Now()
+		local gs = "?"
+		if g then
+			gs = tostring(g)
+		end
+		SN_N = SN_N + 1
+		local idx = SN_N
+		local body = fields or ""
+		if string.len(body) > 440 then
+			body = string.sub(body, 1, 440) .. "~"
+		end
+		SN_LOG[idx] = "S8Q|" .. kind .. "|sid=" .. SN_SID .. "|n=" .. idx .. "|f=" .. fs .. "|g=" .. gs .. "|" .. body ..
+			"|END"
 	end)
 end
 
@@ -696,7 +733,14 @@ function SN_Tick(src)
 	SN.f = F
 	if SN.hb == nil or F - SN.hb >= 30 then
 		SN.hb = F
-		SN_Rec("HB", "src=" .. src)
+		-- the raw clocks (seconds) next to the rounded f / g: a check that both run at 30 frames a second
+		local tm, tg = "?", "?"
+		pcall(function() tm = string.format("%.4f", GetCurrentTime()) end)
+		local raw = SN_NowRaw()
+		if raw then
+			tg = string.format("%.4f", raw)
+		end
+		SN_Rec("HB", "src=" .. src .. "|t_mode=" .. tm .. "|t_now=" .. tg)
 	end
 	local ok, err = pcall(SQ_Tick, F)
 	if not ok then

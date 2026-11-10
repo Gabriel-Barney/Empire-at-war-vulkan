@@ -11,14 +11,19 @@ is installed).
 3. The probe (SN_CFG + s78n_t14_probe.lua, without the shipped free store) runs under a stubbed engine with a squad
    model after FIGHTER_FLYING sec. 7 - 7.3: Spawn_Unit of a company returns its team container, the members stand 25
    behind their slots at the drop, Move_To on the container draws per-member start delays (0..6) when it stands, the
-   Rows / Dartboard layout of sec. 7.2 (Dartboard: Halton, seed id x frame; re-lay when the heading changes by more
-   than acos 0.99), the container turns at 12 deg a frame then walks (accel / brake), members steer with the sec. 7
-   speed rule and the side pull. Worlds:
-     retail   member vmax 1.5 x the team speed, recovery to the slot while idle: Q1 TIGHT, CLOSES, catch-up YES,
-              Q2 STAGGERED, Q3 Rows MATCH, Dartboard MATCH (Halton), re-lay on leg 3 only;
-     port     member vmax = the team speed and no recovery (the port with a target nearby): Rows Q1 TRAILING,
-              STAYS OPEN, catch-up NO;
+   Rows / Dartboard layout of sec. 7.2 (Dartboard: float Halton seeded id x NOW, laid at the container's next service
+   after an order, retail slot order; re-lay when the heading changes by more than acos 0.99), the container turns at
+   12 deg a frame then walks with the 7.7 acceleration (member OverrideDeceleration x 1.56) and straggler cap, members
+   steer with the sec. 7 speed rule and the side pull. NOW (GetCurrentTime.Frame) runs 1234 frames ahead of the mode
+   clock. Also checked: the mod's XML patch (Squad_Rebel_Trooper jiggle / raggedness 0) and the analyser's float32
+   maths. Worlds:
+     retail   members at their own Max_Speed, recovery to the slot while idle: Q1 TIGHT, CLOSES, Q2 STAGGERED, Q3 Rows
+              MATCH, Dartboard MATCH on every leg at NOW + 1, retail slot order and re-lay rule MATCH, 7.7 MATCH;
+     port     member vmax = the team speed, no recovery, no cap, the container's own acceleration: Rows Q1 TRAILING,
+              STAYS OPEN, catch-up NO, 7.7 acceleration DIFFERS;
      nodelay  as retail with Max_Move_Frame_Delay 0: Q2 SIMULTANEOUS;
+     badseed  Dartboard seeded id x (NOW + 777): no Dartboard leg matches;
+     noframe  no GetCurrentTime.Frame: one APIERR, the run goes on, Dartboard n/a, Rows 7.7 acceleration MATCH;
      space    a space battle: SKIP only; menu: Empire not human: SKIP only.
    Each run's records go through s78n_t14_analyse.py.
 Ends with S78N T14 SELFTEST OK, or lists the failures (exit 1).
@@ -46,7 +51,13 @@ OUT = io.open(LOGFILE, "w")
 NOW = 0
 FRAME = 0
 math.randomseed(SEED or 7)
-function GetCurrentTime() return NOW end
+-- GetCurrentTime() = the mode frame / 30; GetCurrentTime.Frame() = the global frame NOW / 30 = (FRAME + GOFF) / 30
+if FRAMEAPI then
+	GetCurrentTime = setmetatable({}, { __call = function() return NOW end })
+	GetCurrentTime.Frame = function() return (FRAME + GOFF) / 30 end
+else
+	function GetCurrentTime() return NOW end
+end
 function Game_Message(s) MSGS = (MSGS or "") .. s .. ";" end
 function Point_Camera_At(p) if type(p) ~= "table" or p.x == nil then error("camera needs a position") end end
 OBJS = {}
@@ -99,12 +110,35 @@ end
 function Get_Game_Mode() return MODE end
 
 -- ---- the squad model ----
+-- cv = team speed min(container, member Max_Speed) x 1.56; mv = the member's own 1.0 x 1.56 (FIGHTER_FLYING 7 step 4);
+-- cacc = the member OverrideDeceleration x 1.56 (7.7 item 1); pacc = the container type's own acceleration (the port)
 COMPANIES = {
 	Imperial_Medium_Stormtrooper_Squad = { team = "Stormtrooper_Team", member = "Squad_Stormtrooper", n = 9,
-		arr = "Rows", cv = 0.8 * 1.57, cacc = 0.1, macc = 0.05, hx = 3, hy = 3, g = 0.3 },
+		arr = "Rows", cv = 0.8 * 1.56, mv = 1.56, cacc = 0.05 * 1.56, pacc = 0.1, macc = 0.05, hx = 3, hy = 3, g = 0.3 },
 	Rebel_Mini_Infantry_Squad = { team = "Rebel_Trooper_Team", member = "Squad_Rebel_Trooper", n = 5,
-		arr = "Dartboard", cv = 1.1 * 1.57, cacc = 0.08, macc = 0.07, hx = 3, hy = 3, g = 0.5 },
+		arr = "Dartboard", cv = 1.0 * 1.56, mv = 1.56, cacc = 0.07 * 1.56, pacc = 0.08, macc = 0.07, hx = 3, hy = 3,
+		g = 0.5 },
 }
+function VMAX(c)
+	if OWNV then return c.mv end
+	return c.cv
+end
+function CACC(c)
+	if PORTACC then return c.pacc end
+	return c.cacc
+end
+-- stable insertion sort of a[lo..hi], gt(x, y) = x before y (MSVC std::sort on <= 32 elements)
+function ISORT(a, lo, hi, gt)
+	for i = lo + 1, hi do
+		local v = a[i]
+		local j = i - 1
+		while j >= lo and gt(v, a[j]) do
+			a[j + 1] = a[j]
+			j = j - 1
+		end
+		a[j + 1] = v
+	end
+end
 function CEILSQRT(n)
 	local s = math.floor(math.sqrt(n))
 	if s * s == n then return s end
@@ -144,6 +178,7 @@ function RADINV(i, b)
 	end
 	return f
 end
+-- FIGHTER_FLYING 7.2 Dartboard (in double here; the analyser fits in float32): the accepted points, Wd, m
 function DART(n, hx, hy, g, seed)
 	local k = CEILSQRT(n)
 	local m = math.floor(n / k)
@@ -166,34 +201,64 @@ function DART(n, hx, hy, g, seed)
 		end
 		if ok then table.insert(pts, { a = x, s = y }) end
 	end
-	return pts
+	return pts, Wd, m
 end
--- slots by projection: the members sorted front-most first (rows: then by side), points front-most first
+-- the layout at the container's next service (7.2 callers 1 / 2) with that frame's NOW
 function LAYOUT(K, dx, dy)
 	local c = K.sq
-	local pts
-	if c.arr == "Rows" then
-		pts = ROWS(c.n, c.hx, c.hy, c.g)
-	else
-		pts = DART(c.n, c.hx, c.hy, c.g, math.mod(K.id * FRAME, 4294967296))
-	end
-	local ms = {}
+	local n = c.n
 	for _, m in ipairs(K.members) do
 		m.proj = (m.x - K.x) * dx + (m.y - K.y) * dy
 		m.sproj = -(m.x - K.x) * dy + (m.y - K.y) * dx
-		table.insert(ms, m)
 	end
-	table.sort(ms, function(a, b)
-		if math.abs(a.proj - b.proj) > 4 then return a.proj > b.proj end
-		return a.sproj < b.sproj
-	end)
-	table.sort(pts, function(a, b)
-		if math.abs(a.a - b.a) > 4 then return a.a > b.a end
-		return a.s < b.s
-	end)
-	for i, m in ipairs(ms) do m.slot = pts[i] end
+	local pts, Wd, mm = nil, nil, nil
+	if c.arr ~= "Rows" then
+		pts, Wd, mm = DART(n, c.hx, c.hy, c.g, math.mod(K.id * (FRAME + GOFF + SEEDOFF), 4294967296))
+		if table.getn(pts) < n then pts = nil end
+	end
+	if pts == nil then
+		-- Rows: members front-most first then by side, points the same (the layout's own rule is not tested here)
+		pts = ROWS(n, c.hx, c.hy, c.g)
+		local ms = {}
+		for _, m in ipairs(K.members) do table.insert(ms, m) end
+		table.sort(ms, function(a, b)
+			if math.abs(a.proj - b.proj) > 4 then return a.proj > b.proj end
+			return a.sproj < b.sproj
+		end)
+		table.sort(pts, function(a, b)
+			if math.abs(a.a - b.a) > 4 then return a.a > b.a end
+			return a.s < b.s
+		end)
+		for i, m in ipairs(ms) do m.slot = pts[i] end
+	else
+		-- 7.2 Dartboard step 6: points by x descending, members by projection descending; groups with the
+		-- i = j + 1 skip, each sorted by side / y descending; member q gets point q
+		local P, M = {}, {}
+		for q = 1, n do P[q] = pts[q] end
+		for q = 1, n do M[q] = K.members[q] end
+		ISORT(P, 1, n, function(a, b) return a.a > b.a end)
+		ISORT(M, 1, n, function(a, b) return a.proj > b.proj end)
+		local lim = Wd / mm
+		local i = 1
+		repeat
+			local j = i
+			while j <= n and P[i].a - P[j].a <= lim do j = j + 1 end
+			ISORT(M, i, j - 1, function(a, b) return a.sproj > b.sproj end)
+			ISORT(P, i, j - 1, function(a, b) return a.s > b.s end)
+			i = j + 1
+		until i > n
+		for q = 1, n do M[q].slot = P[q] end
+	end
+	-- 7.7 item 2: the joint slot box half-length (box seeded with 0) + the container's MaxJiggleDistance (0)
+	local hi, lo = 0, 0
+	for _, m in ipairs(K.members) do
+		hi = math.max(hi, m.slot.a + c.hx)
+		lo = math.min(lo, m.slot.a - c.hx)
+	end
+	K.hxbox = (hi - lo) / 2
 	K.laid = true
 	K.ldx, K.ldy = dx, dy
+	LAYOUTS = (LAYOUTS or 0) + 1
 end
 function Spawn_Unit(ty, pos, player)
 	local c = COMPANIES[ty.name]
@@ -220,11 +285,14 @@ function ORDER(K, p)
 	if l < 0.01 then return end
 	dx, dy = dx / l, dy / l
 	K.tx, K.ty = p.x, p.y
+	K.brk = nil
 	K.dx, K.dy = dx, dy
 	if K.v == 0 then
 		for _, m in ipairs(K.members) do m.delay = math.random(0, MAXD) end
 	end
-	if not K.laid or dx * K.ldx + dy * K.ldy <= 0.99 then LAYOUT(K, dx, dy) end
+	if not K.laid or dx * K.ldx + dy * K.ldy <= 0.99 then
+		K.pend, K.pdx, K.pdy = true, dx, dy
+	end
 	K.state = "turn"
 end
 function TURNK(K)
@@ -243,12 +311,28 @@ function TURNK(K)
 end
 function MOVEK(K)
 	local c = K.sq
+	local a = CACC(c)
 	local rx, ry = K.tx - K.x, K.ty - K.y
 	local rem = math.sqrt(rx * rx + ry * ry)
-	if rem <= K.v * K.v / (2 * c.cacc) + 0.01 then
-		K.v = math.max(c.cacc, K.v - c.cacc)
+	-- 7.7 item 2: the straggler cap from the members' start-of-frame positions along the container's facing
+	local T = c.cv
+	if CAP then
+		local lim = -(K.hxbox + 2)
+		for _, m in ipairs(K.members) do
+			local p = K.fx * (m.x - K.x) + K.fy * (m.y - K.y)
+			if p < lim then
+				T = math.min(T, (1 - math.min((lim - p) / 10, 1)) * c.cv)
+			end
+		end
+	end
+	-- braking latches once it starts (a constant-rate ramp to the plateau at v = a, 7.7 item 3)
+	if K.brk or rem <= K.v * K.v / (2 * a) + 0.01 then
+		K.brk = true
+		K.v = math.max(a, K.v - a)
+	elseif T > K.v then
+		K.v = K.v + math.min(a, T - K.v)
 	else
-		K.v = math.min(c.cv, K.v + c.cacc)
+		K.v = K.v - math.min(a, K.v - T)
 	end
 	if rem <= K.v then
 		K.x, K.y = K.tx, K.ty
@@ -260,7 +344,7 @@ function MOVEK(K)
 end
 function STEER(K, m)
 	local c = K.sq
-	local vmax = c.cv * VMAXF
+	local vmax = VMAX(c)
 	local dx, dy = m.x - K.x, m.y - K.y
 	local ae = m.slot.a - (K.fx * dx + K.fy * dy)
 	local se = m.slot.s - (-K.fy * dx + K.fx * dy)
@@ -289,7 +373,7 @@ function RECOVERM(K, m)
 	m.v = 0
 	if d > 4 or (m.rec and d > 0.5) then
 		m.rec = true
-		local st = math.min(d, K.sq.cv * VMAXF)
+		local st = math.min(d, VMAX(K.sq))
 		m.x, m.y = m.x + dx / d * st, m.y + dy / d * st
 	else
 		m.rec = false
@@ -299,6 +383,10 @@ function SQUADS(f)
 	for _, K in ipairs(OBJS) do
 		if K.valid and K.sq then
 			if not K.laid then LAYOUT(K, K.fx, K.fy) end
+			if K.pend then
+				K.pend = false
+				LAYOUT(K, K.pdx, K.pdy)
+			end
 			if K.state == "turn" then TURNK(K) elseif K.state == "move" then MOVEK(K) end
 			for _, m in ipairs(K.members) do
 				if m.valid then
@@ -324,14 +412,26 @@ PLAYERS = { EMPIRE = PLAYER("Empire", HUMAN_EMPIRE), REBEL = PLAYER("Rebel", fal
 PlayerObject = PLAYERS.REBEL
 function WORLD(f) SQUADS(f) end
 '''
+RETAIL = dict(OWNV='true', RECOVER='true', MAXD='6', DROP_BACK='25', HUMAN_EMPIRE='true', CAP='true',
+              PORTACC='false', GOFF='1234', SEEDOFF='0', FRAMEAPI='true')
+
+
+def world(land=LAND, **kw):
+    """The world flags (RETAIL with the overrides) as Lua globals, then the land setup. They go before the stub."""
+    flags = dict(RETAIL, **{k: str(v) for k, v in kw.items()})
+    return ''.join('%s = %s\n' % kv for kv in sorted(flags.items())), land
+
+
 WORLDS = {
-    'retail': 'VMAXF = 1.5\nRECOVER = true\nMAXD = 6\nDROP_BACK = 25\nHUMAN_EMPIRE = true\n' + LAND,
-    'port': 'VMAXF = 1.0\nRECOVER = false\nMAXD = 6\nDROP_BACK = 25\nHUMAN_EMPIRE = true\n' + LAND,
-    'nodelay': 'VMAXF = 1.5\nRECOVER = true\nMAXD = 0\nDROP_BACK = 25\nHUMAN_EMPIRE = true\n' + LAND,
-    'space': 'VMAXF = 1.5\nRECOVER = true\nMAXD = 6\nDROP_BACK = 25\nHUMAN_EMPIRE = true\n' +
-             LAND.replace('MODE = "Land"', 'MODE = "Space"'),
-    'menu': 'VMAXF = 1.5\nRECOVER = true\nMAXD = 6\nDROP_BACK = 25\nHUMAN_EMPIRE = false\n' + LAND,
+    'retail': world(),
+    'port': world(OWNV='false', RECOVER='false', CAP='false', PORTACC='true'),
+    'nodelay': world(MAXD=0),
+    'badseed': world(SEEDOFF=777),
+    'noframe': world(FRAMEAPI='false'),
+    'space': world(LAND.replace('MODE = "Land"', 'MODE = "Space"')),
+    'menu': world(HUMAN_EMPIRE='false'),
 }
+FULL = ('retail', 'port', 'nodelay', 'badseed', 'noframe')
 
 DRIVE = r'''
 Base_Definitions()
@@ -357,6 +457,71 @@ def run_lua(lua, workdir, name, chunks):
 
 def lua_str(p):
     return p.replace('\\', '/')
+
+
+def check_xml_patch(cfg, out):
+    """The probe mod's XML: Squad_Rebel_Trooper with FormationRaggedness / MaxJiggleDistance 0, the rest of the file
+    as shipped; the config carries the values the mod runs with."""
+    fails = []
+    rel = 'Data\\XML\\GROUNDINFANTRY.XML'
+    if rel not in cfg['files']:
+        return ['the mod has no %s (files %s)' % (rel, cfg['files'])]
+    text = open(os.path.join(out, rel), 'rb').read().decode('latin-1')
+    for tag in ('FormationRaggedness', 'MaxJiggleDistance'):
+        v = B._num(B._tag([text], 'Squad_Rebel_Trooper', tag))
+        if v != 0.0:
+            fails.append('patched Squad_Rebel_Trooper %s = %s, expected 0' % (tag, v))
+    if B._num(B._tag([text], 'Squad_Stormtrooper', 'MaxJiggleDistance')) != 2.0:
+        fails.append('patched file changed Squad_Stormtrooper MaxJiggleDistance')
+    xd = cfg['xml']['dart']
+    if (xd['m_jiggle'], xd['m_ragged'], xd['m_jiggle_shipped'], xd['m_ragged_shipped']) != (0.0, 0.0, 3.5, 1.6):
+        fails.append('config dart jiggle / raggedness %s / %s (shipped %s / %s), expected 0 / 0 (3.5 / 1.6)' % (
+            xd['m_jiggle'], xd['m_ragged'], xd['m_jiggle_shipped'], xd['m_ragged_shipped']))
+    for key, a in (('rows', 0.078), ('dart', 0.1092)):
+        if abs((cfg['xml'][key].get('c_accel') or 0) - a) > 1e-6:
+            fails.append('config %s container acceleration %s, expected %s' % (key, cfg['xml'][key].get('c_accel'), a))
+    return fails
+
+
+def check_math():
+    """The analyser's float32 Halton, the Dartboard dims and the retail slot order on fixed cases."""
+    fails = []
+    third, two_ninths = A.f32(1.0 / 3.0), A.f32(2.0 / A.f32(9.0))
+    for i, b, want in ((1, 2, 0.5), (5, 2, 0.625), (1, 3, third), (0, 3, 0.0), (7, 3, A.f32(third + two_ninths))):
+        got = A.radical_inverse(i, b)
+        if got != want:
+            fails.append('radical_inverse(%d, %d) = %r, expected %r' % (i, b, got, want))
+    # float accumulation: a large index differs from the double result, but by less than 1e-6
+    big = 0xFFFFFFFF
+    exact = 0.0
+    i, bk = big, 3.0
+    while i:
+        exact += (i % 3) / bk
+        i //= 3
+        bk *= 3
+    got = A.radical_inverse(big, 3)
+    if got == exact or abs(got - exact) > 1e-6 or got != A.f32(got):
+        fails.append('radical_inverse(2^32 - 1, 3) = %r vs double %r: expected a float32 within 1e-6' % (got, exact))
+    d = A.dart_dims(5, 3.0, 3.0, 0.5)
+    if (d['k'], d['m'], d['L'], d['Wd'], d['r']) != (3, 2, 29.0, 16.0, A.f32(18 ** 0.5)):
+        fails.append('dart_dims(5, 3, 3, 0.5) = %s, expected k 3, m 2, L 29, Wd 16, r sqrtf(18)' % d)
+    pts = A.dartboard_points(5, 3.0, 3.0, 0.5, (41004 * 3000) & 0xFFFFFFFF)
+    if not pts or len(pts) != 5 or any(abs(x) > 14.5 or abs(y) > 8.0 for x, y in pts) or \
+            min(((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5 for i, a in enumerate(pts) for b in pts[i + 1:]) \
+            < 5.0 + 18 ** 0.5 - 1e-5:
+        fails.append('dartboard_points: %s (5 points inside +-14.5 x +-8, >= 9.24 apart expected)' % pts)
+    # 7.2 step 6 with the i = j + 1 skip: points A..E, members m0..m4 (container at 0, facing +x, Wd / m = 8):
+    # group {m0, m1} x {A, B} by side, m2 -> C (skipped index), group {m3, m4} x {D, E}
+    P = [(10.0, 5.0), (9.0, -5.0), (-3.0, 6.0), (-4.0, -6.0), (-12.0, 0.0)]
+    Mx = [(20.0, -1.0), (19.0, 1.0), (0.0, 2.0), (-1.0, 3.0), (-20.0, 0.0)]
+    got = A.retail_assign(P, Mx, (0.0, 0.0), (1.0, 0.0), 16.0, 2)
+    want = [P[1], P[0], P[2], P[4], P[3]]
+    if got != want:
+        fails.append('retail_assign: %s, expected %s (the i = j + 1 skip)' % (got, want))
+    hx = A.joint_hx([a for a, _ in A.rows_slots(9, 3.0, 3.0, 0.3)], 3.0)
+    if hx != 15.0:
+        fails.append('joint_hx of the 3 x 3 Rows grid: %s, expected 15.0 (FIGHTER_FLYING 7.7)' % hx)
+    return fails
 
 
 def main():
@@ -398,6 +563,8 @@ def main():
             xv['rows']['hx'], xv['rows']['m_spacing'], xv['dart']['m_spacing']))
     if cfg['est_frames'] > 5 * 1800:
         fails.append('estimated battle time %.1f minutes (> 5)' % (cfg['est_frames'] / 1800.0))
+    fails += check_xml_patch(cfg, out)
+    fails += check_math()
     probe = open(os.path.join(HERE, 's78n_t14_probe.lua'), encoding='ascii').read()
     code = '\n'.join(line.split('--')[0] for line in probe.splitlines())
     for bad in ('math.', '_MessagePopup', '#'):
@@ -411,12 +578,12 @@ def main():
     sp = cfg['sq']
     frames = cfg['est_frames'] + 1500
     results = {}
-    for name in ('retail', 'port', 'nodelay', 'space', 'menu'):
+    for name in FULL + ('space', 'menu'):
         log = os.path.join(work, name + '.log')
         consts = 'SPAWN_RAD = %r\nSEED = 11\n' % (sp['theta0'] * 3.141592653589793 / 180.0)
-        chunks = ['LOGFILE = "%s"' % lua_str(log), 'FRAMES = %d' % (frames if name in ('retail', 'port', 'nodelay')
-                                                                    else 900),
-                  consts, STUB, WORLDS[name], B.lua_config(cfg), probe, DRIVE]
+        flags, land = WORLDS[name]
+        chunks = ['LOGFILE = "%s"' % lua_str(log), 'FRAMES = %d' % (frames if name in FULL else 900),
+                  consts, flags, STUB, land, B.lua_config(cfg), probe, DRIVE]
         rc, msg = run_lua(lua, work, 'run_' + name, chunks)
         if rc != 0:
             fails.append('stub run %s failed: %s' % (name, msg[:600]))
@@ -430,14 +597,18 @@ def main():
     def vv(name, key, field):
         return (results[name][1]['verdicts'].get(key) or {}).get(field)
 
-    for name in ('retail', 'port', 'nodelay'):
+    for name in FULL:
         if name not in results:
             continue
         text, res = results[name]
         log = os.path.join(work, name + '.log')
-        nerr = sum(1 for line in open(log) if line.startswith(('S8Q|ERR|', 'S8Q|APIERR|')))
-        if nerr:
-            fails.append('%s run recorded %d APIERR / ERR records' % (name, nerr))
+        errs = [line for line in open(log) if line.startswith(('S8Q|ERR|', 'S8Q|APIERR|'))]
+        if name == 'noframe':
+            # GetCurrentTime.Frame missing: one APIERR, the run goes on with g=?
+            if len(errs) != 1 or 'api=GetCurrentTime.Frame' not in errs[0]:
+                fails.append('noframe run: expected one APIERR for GetCurrentTime.Frame, got %s' % errs[:3])
+        elif errs:
+            fails.append('%s run recorded %d APIERR / ERR records' % (name, len(errs)))
         if not any(s['done'] for s in res['scripts']):
             fails.append('%s run did not reach DONE' % name)
         if len(res['trials']) != len(sp['order']):
@@ -451,9 +622,11 @@ def main():
                     fails.append('%s trial %s leg %s: heading %s deg off the plan' % (name, t['k'], L['leg'],
                                                                                     L.get('dev_deg')))
     want = {
+        # as the retail run 20261110-043421: Stormtrooper members (vmax 1.25 x the team) catch up, Rebel members
+        # (vmax = the team speed) do not and close up only while the container brakes
         'retail': [('rows', 'Q1', 'TIGHT'), ('rows', 'Q1_close', 'CLOSES'), ('rows', 'catch_up', 'YES'),
-                   ('rows', 'q1_ref', 'pred'), ('dart', 'Q1', 'TIGHT'), ('dart', 'Q1_close', 'CLOSES'),
-                   ('dart', 'q1_ref', 'pred')],
+                   ('rows', 'q1_ref', 'pred'), ('dart', 'Q1', 'LOOSE'), ('dart', 'Q1_close', 'CLOSES'),
+                   ('dart', 'catch_up', 'NO')],
         'port': [('rows', 'Q1', 'TRAILING'), ('rows', 'Q1_close', 'STAYS OPEN'), ('rows', 'catch_up', 'NO')],
         'nodelay': [('rows', 'Q2', 'SIMULTANEOUS'), ('dart', 'Q2', 'SIMULTANEOUS')],
     }
@@ -471,22 +644,53 @@ def main():
                 fails.append('retail: %s Q2 %s, expected STAGGERED' % (key, v[key].get('Q2')))
             if not str(v[key].get('Q3', '')).startswith('MATCH'):
                 fails.append('retail: %s Q3 %s, expected MATCH' % (key, v[key].get('Q3')))
+        # the re-lay is judged by the fitted layouts (relay_rule below: leg 3 laid at its order, legs 2 and 4 keep the
+        # last layout); the settled slot set change only has to rise on the 30 deg leg against the 5 deg one
         rel = v['dart']['relay']
-        for leg, lo, hi in ((2, None, 2.5), (3, 4.0, None), (4, None, 2.5)):
-            for setc, _mem in rel.get(leg, []) or [(None, None)]:
-                if setc is None or (lo is not None and setc < lo) or (hi is not None and setc > hi):
-                    fails.append('retail: dart leg %d slot set change %s, expected %s' % (
-                        leg, setc, '> %.1f (re-lay)' % lo if lo else '< %.1f (no re-lay)' % hi))
-        if not str(v['dart'].get('relay_rule', '')).startswith('MATCH'):
-            fails.append('retail: dart re-lay rule %s, expected MATCH' % v['dart'].get('relay_rule'))
+        for (c3, _m3), (c4, _m4) in zip(rel.get(3, []) or [], rel.get(4, []) or []):
+            if c3 is None or c4 is None or not c3 > c4:
+                fails.append('retail: dart slot set change leg 3 %s vs leg 4 %s, expected leg 3 larger (re-lay)' % (c3, c4))
+        if not rel.get(3) or not rel.get(4):
+            fails.append('retail: dart slot set change missing for legs 3 / 4')
+        for field in ('relay_rule', 'Q3_order'):
+            if not str(v['dart'].get(field, '')).startswith('MATCH'):
+                fails.append('retail: dart %s %s, expected MATCH' % (field, v['dart'].get(field)))
+        for key in ('rows', 'dart'):
+            for field in ('Q77_accel', 'Q77_straggler'):
+                if not str(v[key].get(field, '')).startswith('MATCH'):
+                    fails.append('retail: %s %s %s, expected MATCH' % (key, field, v[key].get(field)))
         df = results['retail'][1].get('dart_fit') or {}
-        if df.get('o') != 0 or not df.get('match'):
-            fails.append('retail: Dartboard run fit offset %s match %s (stub: 0, True)' % (df.get('o'), df.get('match')))
+        if not df.get('n_fit') or df.get('n_match') != df.get('n_fit'):
+            fails.append('retail: Dartboard NOW fit %s / %s legs match, expected all' % (df.get('n_match'),
+                                                                                     df.get('n_fit')))
+        # the stub lays the slots at the container's next frame: NOW of the spawn / order + 1
         for h in v['dart'].get('halton', []):
             want_ev = 'leg 3 order' if h['leg'] >= 3 else 'spawn'
-            if h['event'] != want_ev or abs(h['df']) > 1:
-                fails.append('retail: trial %d leg %d laid out at %s %+d, expected %s +0 / +1' % (
-                    h['k'], h['leg'], h['event'], h['df'], want_ev))
+            if h.get('event') != want_ev or h.get('dnow') != 1:
+                fails.append('retail: trial %d leg %d laid at %s +%s, expected %s +1' % (
+                    h['k'], h['leg'], h.get('event'), h.get('dnow'), want_ev))
+        ck = results['retail'][1].get('clock') or {}
+        if (ck.get('g_minus_f_min'), ck.get('g_minus_f_max')) != (1234, 1234):
+            fails.append('retail: g - f %s..%s, expected the stub offset 1234' % (ck.get('g_minus_f_min'),
+                                                                                ck.get('g_minus_f_max')))
+    if 'port' in results:
+        v = results['port'][1]['verdicts']
+        for key in ('rows', 'dart'):
+            if not str(v[key].get('Q77_accel', '')).startswith('DIFFERS'):
+                fails.append('port: %s Q77_accel %s, expected DIFFERS (the container type\'s own acceleration)' % (
+                    key, v[key].get('Q77_accel')))
+    if 'badseed' in results:
+        v = results['badseed'][1]['verdicts']
+        df = results['badseed'][1].get('dart_fit') or {}
+        if not str(v['dart'].get('Q3', '')).startswith('NO MATCH') or df.get('n_match'):
+            fails.append('badseed: dart Q3 %s (%s legs match), expected NO MATCH' % (v['dart'].get('Q3'),
+                                                                                   df.get('n_match')))
+    if 'noframe' in results:
+        v = results['noframe'][1]['verdicts']
+        if not str(v['dart'].get('Q3', '')).startswith('n/a'):
+            fails.append('noframe: dart Q3 %s, expected n/a (no NOW)' % v['dart'].get('Q3'))
+        if not str(v['rows'].get('Q77_accel', '')).startswith('MATCH'):
+            fails.append('noframe: rows Q77_accel %s, expected MATCH (needs no NOW)' % v['rows'].get('Q77_accel'))
     for name in ('space', 'menu'):
         if name in results:
             res = results[name][1]
