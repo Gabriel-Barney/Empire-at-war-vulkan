@@ -1417,7 +1417,7 @@ of from / to are read.
 
 ---
 
-## 7. Infantry-team slot geometry (LandTeamInfantry 0x62d620) [H; M for 0x509810]
+## 7. Infantry-team slot geometry (LandTeamInfantry 0x62d620) [H]
 Called from the member service 0x62ca10 (MOVEMENT §3.7). Let K be the container. The slot comes from the
 container's locomotor.
 
@@ -1440,13 +1440,256 @@ container's locomotor.
    - w = clamp(|side| / 10, 0, 0.5) (0x140a44314 / 0x140a44318);
    - perp = (−s, c) when side > 0, else (s, −c);
    - dir = (c + w·(perp.x − c), (perp.y − s)·w + s, 0).
-   - Add the collision steering vector from the mode's +0x230 system (0x509810) [M].
+   - Add the collision steering vector from the mode's +0x230 system (0x509810, §7.5).
    - Yaw target = angles(0 → dir).yaw.
 7. **Turn:** 0x5ad5a0 turns yaw by at most the turn rate (× GC +0x150c `Fleeing_Infantry_Speed_Bonus` when fleeing,
-   0x62c3d0) and sets the orientation to (0, 0, wrap360(yaw)).
-8. **Move:** P' = (cos(yaw)·v + P.x, sin(yaw)·v + P.y, P.z + 0) through vf +0x2f8 (conform).
+   0x62c3d0, §7.1) and sets the orientation to (0, 0, wrap360(yaw)).
+8. **Move:** P' = (cos(yaw)·v + P.x, sin(yaw)·v + P.y, P.z + 0) through vf +0x2f8 (conform). vf +0x2f8 is 0x42d6a0
+   (MOVEMENT §3.6, terrain conform and commit): **there is no passability test on a member's step** (s78n t14).
 9. Constants (read from the image): 1.0, 10.0, 10.0, 0.5 at 0x140a4430c / 10 / 14 / 18. The recovery threshold
    0x140a4431c = **4.0** (MOVEMENT §8 item 5).
+
+### 7.1 s78n t14: "fleeing" = the crush-flee path, kind 7 (0x39a5b0) [H unless tagged]
+Read from 0x39a5b0, 0x62c3d0, 0x683140, 0x6859a0, 0x5c8900, 0x5c8890, 0x5ad690, 0x5adfb0, 0x62bbf0, 0x62bef0,
+0x62d190, 0x370f00 (MOVEMENT §3.4).
+- **Test 0x39a5b0(obj):** the locomotor data pack of obj's container when obj +0x2b0 is set (a squad member: its team
+  container), else obj's own pack; its current (top) path 0x5569b0 has kind +0x48 == **7**. A member never reads its
+  own path: it flees exactly while its container's current path is kind 7.
+- **Who writes kind 7** (the path kinds: 1 formation move, 3 TerrainCollision, 4 push, 5 locomotor-internal, 7):
+  1. The push 0x6859a0 (MovingVsStopped resolution, MOVEMENT §5.4): the pushed blocker b gets a path to the free spot
+     with kind 4, or **7 when 0x5c8900(pusher m, b)**: m's owner is hostile to b's (0x2824f0), m has the SQUASH
+     behaviour (0x26) and (b's type `Is_Squashable` +0x18, or m's type `Is_Supercrusher` +0x19 and b's
+     `Is_Squashable_By_Supercrusher` +0x1a).
+  2. 0x683140, called from 0x682d00 = MovingVsMoving vf +0x20 (vftable 0x8b5090): the collision path of participant
+     +0x80 away from participant +0x7c with kind 4, or **7 when 0x5c8900(+0x7c, +0x80) and 0x5c8890(+0x80)**:
+     0x5c8890(b) = b's owner's faction has `Scatters_From_Crushers` (+0x2f88; FoC: true in every faction entry but one) and
+     b's SPREAD_OUT ability (7) is not active (0x39b950(b, 7, 1); for a container: its members' state).
+  So "fleeing" is **infantry scattering from a hostile crusher** (AT-AT, AT-ST, MAL). No order, AI script or morale
+  sets it. A squad flees when its **container** is the pushed blocker: the container is a registered collision mover
+  (§7.5 item 1), FoC team containers are `Is_Squashable` with `UnitCollisionClass` Infantry. The kind-7 path ends like
+  any push path (popped at its end; MOVEMENT §5.4).
+- **Factor:** GC +0x150c `Fleeing_Infantry_Speed_Bonus` (read as a float at 0x140b16d0c; FoC GameConstants.xml **2**).
+- **Where it multiplies** (every reader of 0x39a5b0 in the team code):
+  1. the container's speed: the team speed chain 0x370f00 (MOVEMENT §3.4, step 3) on the container;
+  2. the container's turn rate: state 0x10 (0x5ad690 case 0x10) and the move step 0x5adfb0 (Max_Rate_Of_Turn × mode
+     multiplier 0x372560 × 2);
+  3. a member's max speed vmax (0x370f00 on the member: its 0x39a5b0 reads the container's path), so §7 step 4's
+     catch-up speed and the recovery speed;
+  4. a member's turn rate 0x62c3d0 (= 0x372560(member type) × 2): §7 step 7, the recovery turn 0x29 (0x62ca10) and
+     move 0x2A (0x62d190), the recovery decision threshold (§7.3 item 5) and the turn-clip blend 0x62bef0.
+- ***Port spec:*** the factor can only fire once a container takes part in land collision (§7.5 ***Port spec*** item
+  1); until then 1 is exact for the port. Then: `MovementSystem::push_aside` (0x6859a0) marks the pushed path
+  "crush-flee" when `crushes(a, b)`; the MovingVsMoving response (`mvm_response`, 0x683140) does the same only with
+  b's faction `Scatters_From_Crushers` and SPREAD_OUT off; `TeamSnap` gets `fleeing` (the container's current path is
+  crush-flee) and `MovementSystem::steer_member` multiplies `rate` and `vmax` by `Fleeing_Infantry_Speed_Bonus`; the
+  container's own walk turn rate and its team speed (`apply_speed_factors` / `team_caps`) take the same factor.
+
+### 7.2 s78n t14: slot layout and re-lay on turns (0x5ac120, Rows 0x5ac970, Dartboard 0x5ac2a0) [H unless tagged]
+**0x5ac120(K locomotor, teleport, dir)** (K = the container; P = its data pack obj +0xa8):
+1. dir is normalised (sqrtf, × 1/len when len > 0). If dot(dir, P +0xd8..+0xe0) > **0.99** and the laid-out flag
+   P +0x2a4 is set → return false (no change; a heading change ≤ acos 0.99 ≈ 8.11° keeps the slots).
+2. Arrangement = K's type `ContainerArrangement` (+0x1684; OBJECT_TYPES: None −1, **Rows 0**, **Dartboard 1**):
+   0 → 0x5ac970, 1 → 0x5ac2a0, anything else → false.
+3. On success: P +0xd8 := dir, P +0x2a4 := 1.
+
+FoC data: `Stormtrooper_Team`, `Empire_Field_Commander_Team` and `Tactical_R2_3PO_Team` are **Rows**; every other land
+team container (Rebel, Plex, pirates, Hutt, Underworld, indigenous, civilian, slave teams) is **Dartboard**.
+
+**Callers (when the slots are re-laid).** All pass teleport = 0, so the slots are only written; the members walk.
+1. Container vf6 0x5ad690, state 0 (start/resume a move): dir = the wanted facing 0x5ab840 (toward the current
+   waypoint; the container's own facing when that vector is 0 or there is no path), before the turn state 0x10.
+2. 0x5ad690 states 0x13 / 0x16 / fall-through with no path, and the end of the switch: when P +0x2a4 is clear, dir =
+   the container's facing (0x41c000 on obj +0x84). This is the **first layout** (the first container service after
+   creation, so with the first member's facing) and the re-lay after a clear.
+3. The move step 0x5adfb0, on reaching a waypoint: dir = the next segment's direction (0x5c5850; the path below on
+   the stack when this one ends).
+4. The path-set hook 0x5ad140: a path whose kind (input +0x30) is **not** 1 and has ≥ 2 waypoints: dir =
+   normalise(wp1 − wp0). (Kind 1 instead draws the start delays, §7.3 item 2.)
+5. P +0x2a4 is cleared by the data-pack ctor / resets (0x553f00, 0x55d530, 0x55da50) and by the SPREAD_OUT handler
+   0x3a3500 (both on and off), so toggling SPREAD_OUT re-lays at the next container service (caller 2). No clear on
+   a member's death was found [M: 0x592d00 / 0x5931b0 also clear a +0x2a4 of an object at +0x100, not identified].
+
+**Common rules.** The member list is TEAM behaviour 0x16 (0x405300 count, 0x4052d0(i)), null entries skipped. The
+sort comparator 0x5ad4d0(a, b) = proj(a) > proj(b), proj(o) = dot(o.P − K.P, v) (z term × 0) for a global vector
+v; member lists are ≤ 32, where MSVC `std::sort` is an insertion sort, so **ties keep member index order**. SPREAD_OUT
+active on K (0x39b950(K, 7, 1)) gives f = GC +0x153c `Spread_Out_Spacing_Coefficient` (FoC **1.8**), else f = 1.
+Slots are (along +0x114, side +0x118, +0x11c := 0) in the container frame of §7 step 3. **Which member gets which
+slot depends on where the members stand at layout time** (a projection sort), not on the team index.
+
+**Rows 0x5ac970(K, teleport, dir):**
+1. A = the members, sorted by proj onto dir, descending (front-most first). k = ceil(√n) with the float rule of
+   0x5abc00 ((uint)sqrtf(n), + 1 unless squared = n). k = 0 → false.
+2. along := 0. While A is not empty: R = the first min(k, |A|) of A (removed from A); sort R by proj onto
+   (dir.y, −dir.x), descending, so **R runs from the most negative side to the most positive**. For each m in R:
+   hy_m = 0x396b70(m), hx_m = 0x396a30(m) (the member object's half-extents, TACTICAL_COMBAT §5.4.6, deployed
+   variants included), g_m = `FormationSpacing`(m's **own** type +0x16d4) × 20 × f.
+   - HX = max hx_m, G = max g_m over R (both start at 0).
+   - Width W: |R| = 1 → W = 2·hy; else, in R order from W = 0, the first and last add g_m/2 + 2·hy_m and the others
+     2·hy_m + g_m.
+   - First row: HX0 := HX, along stays 0. Later rows: along −= G/2 + HX before placing.
+   - When A is now empty: D := HX0 − (along − HX) (= HX0 + |along| + HX of the last row).
+   - side := −W/2; for each m in R order: |R| = 1 → side = 0; first → side += hy_m; others → side += g_m/2 + hy_m;
+     write (along, side); then side += g_m/2 + hy_m (only for a member with a pack).
+   - After the row: along −= G/2 + HX.
+3. Then for every member in **index** order: along += D/2 − HX0 (rows centred; row 0 at the front, +along).
+   teleport ≠ 0 (no caller): P_m = K.P + along·dir + side·(−dir.y, dir.x), orientation := K's.
+4. Returns true. With identical members and f = 1 this is exactly the drop layout 0x5abc00 (TACTICAL_GAPS §4.2.1:
+   (2ex + g) row and column pitch, the same float order).
+
+**Dartboard 0x5ac2a0(K, teleport, dir):** a Halton scatter.
+1. n = member count; F = member 0's type (null member or type → false). k = ceil(√n) (same rule); m = ceil(n / k)
+   (n / k, + 1 when n % k ≠ 0). (hx, hy) = 0x371be0(F) (type half-extents, TACTICAL_COMBAT §5.4.6); r =
+   sqrtf(hx² + hy²) (0x371e30); g = F's `FormationSpacing` (+0x16d4).
+2. L = (k − 1)·g·20 + k·hx (along range), Wd = (m − 1)·g·20 + m·hy (side range) - **half**-extents, not 2hx.
+   SPREAD_OUT active: L, Wd and r × 1.8.
+3. Two radical-inverse generators (0x241820 / 0x241830) with bases **2** and **3**, both starting at index
+   i0 = (int32) K.id (obj +0x50) × NOW (the logic frame 0x140b0a320), wrapping uint32. A draw at index i: f = 0, b_k =
+   (float)b; while i ≠ 0 { f += (float)(i % b) / b_k; i /= b; b_k ×= (float)b }; then index += 1 (i = 0 gives 0).
+4. Up to **1000** tries, stopping when n points are accepted: x = (h2 − 0.5)·L, y = (h3 − 0.5)·Wd (both draws every
+   try); accept unless some accepted p has sqrtf((y − p.y)² + (x − p.x)²) < **5.0** (0x140a43c48) + r. The points
+   are kept in acceptance order.
+5. Fewer than n points → **Rows 0x5ac970 with the same dir** (its result is returned).
+6. Assignment:
+   - points sorted by x descending (0x5aa880); members sorted by proj onto dir descending (front-most first);
+   - groups: i = 0; repeat { j = i; while j < n and x[i] − x[j] ≤ Wd / m: j += 1; sort members [i, j) by proj onto
+     (−dir.y, dir.x) (side) descending and points [i, j) by y descending (0x5aabf0); i = j + 1 } while i < n.
+     **i = j + 1 skips index j**: that member and point keep their x-order places and join no group sort (a retail
+     quirk; copy it);
+   - member q gets point q: along = x, side = y. teleport ≠ 0 (no caller): placed as in Rows.
+7. A new layout (every turn > 8.11°, every move start, every SPREAD_OUT toggle) is a new scatter, because NOW
+   differs; the members are re-assigned by where they stand.
+
+**Spawn.** The drop (TACTICAL_GAPS §4.2.1) places the members with 0x5abc00 in index order; the container's first
+service then lays out with its own facing (caller 2). For a Rows team of identical members whose drop orientation
+equals the container's, the projection sort reproduces the index order, so nothing moves; a Dartboard team, or a Rows
+team with mixed members (the field-commander teams), walks from the drop slots to the new layout at once.
+
+***Port spec:*** a new `MovementSystem::lay_out_land_team(container, dir, frame)` in `land_team.cpp` (Rows / Dartboard
+exactly as above; inputs per member: half-extents (`unit_half_extents`), `FormationSpacing` of its own type; per
+container: `ContainerArrangement`, the SPREAD_OUT state, `Spread_Out_Spacing_Coefficient`; Halton seed = container id ×
+frame, the port's ids). Keep a laid-out flag and the last dir on the container `Unit` (saved and hashed). Call it
+from the container's walk at the callers 1-4 above and clear the flag on a SPREAD_OUT toggle (host). It writes
+`Unit::tslot` of each member and must refresh `team_ix_` (`team_ix_rebuild`), because `land_team()` /
+`squad_joint_slots` (Bribe's E_T) read the slot copies there. `TacticalBattle::mv_squad_add` keeps `drop_team` only
+for the initial `set_land_team` call; the first container tick replaces it.
+
+### 7.3 s78n t14: what the copied walk states drive on a member (0x62ca10) [H unless tagged]
+Each member service first maps the container's state (when obj +0x2b0 has a pack) and sets it as its own
+(0x559250): container 0 / 0x15 / 0x16 → the recovery decision 0x62bbf0 (0, 0x29 or 0x2A); 0x10 → 0x10; 0x13 →
+0x13; 0x14 → 0x14; any other → 0. Then by the member's state:
+1. **0 (idle):** pack +0xe8 and +0xec (speed) := 0; if the current clip (0x3956a0) is 2, 0x42 or 0x43 (walk
+   clips), the clip speed := 1 and the idle clip is played (blend GC 0x140b16d20); and the engine-audio idle loop
+   is started / the moving loop stopped on every member (0x3a7cf0(m, 1), 0x3a7e30(m, 0); audio only). No movement.
+2. **Start delay** (new): the container's path-set hook 0x5ad140, for a **kind-1 (formation) path while the container
+   speed +0xec is 0**, sets every member's pack **+0xe4 := synced int [0, `Max_Move_Frame_Delay`]** (GC +0x1538, FoC
+   **6**; 0x1ffb40 on the synced LCG 0x140a13e24, inclusive, rejection-masked), in member index order, members without
+   a pack skipped (no draw). Nothing else resets +0xe4 (state 0 clears +0xe8 / +0xec only).
+3. **0x10 (container turning in place):** if +0xe4 ≠ 0: +0xe4 −= 1 and nothing else (no steer, no turn, the
+   member stands). Else §7 0x62d620 (v = 0: the member only turns toward its heading) and the turn clip 0x62bef0
+   (TURNL 3 / TURNR 4, or 0x48 / 0x49 while SPREAD_OUT is active; blend min(|Δ| / rate × 0.03333, GC 0x140b16d28)).
+4. **0x13 (moving):** if +0xe4 ≠ 0: +0xe4 −= 1 and nothing else. Else §7 0x62d620, the walk clip 0x62cf90 (move clip
+   chosen by 0x62c420, its speed scaled by the member speed) and the moving audio loop on every member.
+5. **0x14 (braking):** §7 0x62d620 and the walk clip; +0xe4 is not read (no delay).
+6. **Recovery decision 0x62bbf0** (container in 0 / 0x15 / 0x16), only when the container is laid out (+0x2a4) and has
+   no current target (0x397a40(K, 0) = null [M: the formation's / obj +0xf0 target]): d = |slot point 0x62c180 − P|
+   (2-D). d > 4.0: |angle to the slot| > **0.5 × rate** (0x62c3d0) → 0x29, else 0x2A; d = 4.0 → 0x2A; d < 4.0 and
+   the member is in 0x2A: stays 0x2A while |P + (cos yaw, sin yaw)·v − slot| ≤ d and the deceleration (0x373080)
+   ≤ v, else 0.
+7. **0x29 (recovery turning):** speed := 0; turn toward the slot point by rate (0x5ad5a0) and the turn clip.
+   **0x2A (recovery moving) 0x62d190:** turn toward the slot point by rate; speed step (0x62d520) toward vmax, or
+   toward 0 when d < v² / (2·decel); step P += (cos yaw, sin yaw)·v through vf +0x2f8 (no passability test); walk
+   clip.
+So the copies decide **which step runs** (and the delay gates); the only speed / facing rule tied to a state inside
+the steering is 0x10's v = 0. Animations and audio are presentation.
+
+***Port spec:*** `MovementSystem::steer_member`: (a) a per-member `start_delay` (saved, hashed) drawn with the sim RNG
+for each member in team index order when the container gets a formation-move path while its speed is 0 (the container
+move path in `move_land`); while the container turns in place (port `WalkStartTurn` / `WalkTurning`) or moves, a
+member with `start_delay > 0` decrements it and does nothing else; braking does not read it; (b) the recovery decision
+of item 6 (0.5 × rate turn threshold instead of `err > rate && err > close_enough_angle`; no recovery while the
+container has a target; keep moving while closing in); (c) the 0x2A speed: brake inside v² / (2·decel). Clips and
+audio stay with the presentation layer.
+
+### 7.4 s78n t14: where a garrisoned squad container is [H]
+- **Entry** GarrisonUnitBehavior 0x4446b0 (host H, entering object = the container K): stop K's locomotor (vf +0x140),
+  then **0x3abb80(K, H.P)**: every member is put at H.P + (m.P − K.P) (its offset from K kept, recursion), K's
+  team data (obj +0x110) +0xa4 / +0xb0 := H.P, K itself is moved through its locomotor (vf +0x2f8) and adopted (0x39bcb0). Then
+  0x379d30: K joins H's garrison list, **K +0x2b0 := H** (the members keep +0x2b0 = K), and 0x37ade0 hides K and each
+  member (+0x3a7 := 1, out of the player's list, the coordinator system 0x426d50 and the mode's object grid 0x539470;
+  positions are not touched). **While inside, K sits at H's position; members at H.P + their old offsets.** This
+  settles LOB_SOLVER §5.2's [M] on where a garrisoned container's obj +0x78 sits (probe s78f t09: the bunker centre)
+  as [H].
+- **Exit** 0x444dd0 (one call for the whole squad): 0x37a8d0 unhides K and its members (+0x3a7 := 0, K +0x2b0 := 0).
+  0x444830: the exit point E = H.P, or the exit bone of K's garrison slot (K +0x210 → +0x30 indexes H's type bone list
+  +0x2390 / count +0x2398 [M: field names]) with yaw = direction H.P → bone (else H's yaw); dist = H's type
+  `Garrison_Exit_Dist` (+0x2364) when > 0, else the length of H's model half-extent vector (0x3982b0); the walk-out
+  point X = E + dist·(cos yaw, sin yaw). Admitted K (0x425e30): **0x3abb80(K, E)** (members keep their offsets) and a
+  Move_To X with flags 0x20 through the coordinator; else 0x3abb80(K, X) only. The Move_To gives a kind-1 path, so the
+  members get start delays (§7.3 item 2) and a re-lay at the move start (§7.2 caller 1).
+- **Host destroyed / release all** 0x37a060: K and every member := H.P and H's orientation, then adopted.
+- ***Port spec:*** the port parks members one by one (`park_team_member` / `rejoin_land_team`). Retail garrisons the
+  container: `TacticalBattle` should, at entry, teleport the container mover to the host position (members to it + their
+  offsets) and keep it there while parked; at exit, teleport it (`TacticalBattle::teleport` → `MovementSystem::teleport`)
+  to the exit bone point E (or the host) with the members at their offsets, then order the container to X. The [port]
+  "first member out moves the container to its exit point" becomes "the squad leaves as one".
+
+### 7.5 s78n t14: the member collision steering vector 0x509810 [H unless tagged]
+1. **Registration** 0x504880: the collision system's mover list (+0xd8) takes an object only when its type has
+   `Avoidance_Disabled` (+0xd3) false and `UnitCollisionClass` (+0x169c) ≠ −1, and its locomotor is none or (the
+   object has no TEAM slot or its locomotor vf +0x230 is true) **and vf +0x228 is false**. LandTeamInfantry (vftable
+   0x8af8d0) answers vf +0x228 true, LandTeamContainer (0x8a3630) vf +0x230 true. So **members are never collision
+   checkers; the squad container is** (FoC containers: `UnitCollisionClass` Infantry, `MovementClass` Infantry,
+   `Is_Squashable`, `MovementPredictionInterval` 4.0). Detection candidates (0x508170) have no team-member filter and
+   members are in the mode's object grid (0x37ade0 removes them from it), so a member can be the stopped / moving
+   partner of another unit's check [M: the effect - a push gives the member's own locomotor a path, which 0x62ca10
+   never follows].
+2. **0x509810(system, out, dir, obj)** (dir = §7 step 6's unnormalised heading): the key is obj's id, or for a team
+   member (locomotor vf +0x228) its container's (obj +0x2b0). The id-keyed hash (+0x80, Park-Miller hash of
+   id ^ 0xdeadbeef) gives the key's active collision objects, in list order. For each record c:
+   - weight w = c vf +0x30: MovingVsMoving 1.0, MovingVsStopped 2.0, StoppedVsStopped 3.0, TerrainCollision 4.0;
+   - vector v = c vf +0x38(obj, dir): MovingVsMoving only in states 3 (Repulse) or 11; MovingVsStopped unless obj is
+     participant +0x7c and the state ≠ 2 (Repulsion); StoppedVsStopped only in state 1 and obj = +0x7c;
+     TerrainCollision 0. Each calls 0x5c6ca0(c, obj, dir, 1.0): needs exactly 2 participants and obj's type
+     `Avoidance_Disabled` false; O = the first participant that is not obj and whose TEAM does not hold obj
+     (0x5c7100), then 0x5c6d40(obj, dir, O, 1.0);
+   - kept only if both segments P → P + 25·normalise(v) and P → P + 25·(v + dir) pass 0x5a4c10 for obj's movement
+     class (type +0x1688);
+   - best = the kept record with the largest w (a tie goes to the longer v).
+   Result = best + Σ the other kept v with dot(best, v) ≥ −0.5 (the exclusion compares the record loop index with the
+   kept-list index, so after a dropped record the wrong entry can be skipped: copy it); for a team member also +
+   0x5c6d40(obj, dir, its container, 1.0). No key entry → 0.
+3. **0x5c6d40(a, dir, O, s):** a's type `Avoidance_Disabled` → 0. O a land team container (vf +0x230 and TEAM): Σ
+   over O's members m ≠ a of 0x5c71a0(a, m, dir, s); else 0x5c71a0(a, O, dir, s). Then × clamp(a's speed / a's max
+   speed (0x370f00), 0, 1).
+4. **0x5c71a0(a, b, dir, s)** = a side-step: 0 when a and b share a container (+0x2b0), so **the own-container term of
+   item 2 is always 0**. t = clamp(1 − |a.P − b.P| / ((r_a + r_b)·1.3·s), 0, 1), r = 0x397780 (hard radius); when
+   0x4261d0 / 0x41cf50 relate a and b [M: meaning] t = clamp(footprint overlap 0x20d7a0, 0, 1). t = 0 → 0. Else
+   0x5c66a0 tests the two side steps of length (r_a + r_b)·1.3 for a's movement class: b on a's right side
+   (cross(dir, b − a) < 0) and the left step free → t·(−dir.y, dir.x); otherwise the right step free →
+   t·(dir.y, −dir.x); else 0.
+So a member's vector is: side-steps (≤ 1 each, scaled by its speed ratio) away from the other party (or that party's
+members) of each of its **container's** collision objects. Members get no vector from their own team.
+
+***Port spec:*** (1) `MovementSystem::ground_collider` / `detect_collisions`: the container is a collision checker
+and a partner (its type's `UnitCollisionClass`, `Is_Squashable`, `MovementPredictionInterval`), members stay out as
+checkers (as now); members as partners stay out until the [M] of item 1 is traced. (2) `MovementSystem::steer_member`:
+after step 6's dir, add Σ of items 2-4 over the container's collision objects (`coll_`, in creation order; the
+container's start-of-tick state, so it stays read-only for the parallel walk). (3) Retail tests no passability on a
+member's step (§7 step 8, §7.3 item 7): the port's `steer_commit` wall slide is a [port] choice to keep or drop.
+
+### 7.6 s78n t14: jetpack and multi-locomotor squads [H]
+- No FoC land team container has such members. Every squad with `Create_Team_Type` naming a
+  LAND_TEAM_CONTAINER_LOCOMOTOR container lists LAND_TEAM_INFANTRY_LOCOMOTOR members, except four with
+  **WALK_LOCOMOTOR** members (`Sandpeople_War_Party`: 2 × `Sand_Person_Sniper_A`; `Twilek_Slave_Company`;
+  `Pyngani_Slave_Company`; `Rebel_Prisoner_Team`: `Prisoner_Rebel_01`). The jetpack / `Uses_Multiple_Locomotors`
+  infantry (Dark Trooper companies, Boba Fett, IG-88, Bossk, Silri, Tyber Zann, Urai Fen) have no team container.
+- Retail never re-centres a container whose locomotor answers vf +0x230 (TEAM service 0x405b10, TACTICAL_COMBAT §5.4.4
+  item 2), whatever its members are: such a container always walks its own path. Only LandTeamInfantry members run
+  0x62ca10 / 0x62d620; a member on another locomotor is not slot-steered and is admitted to the coordinator on its own
+  (0x425e30 refuses only a vf +0x228 member of a vf +0x230 container) [M: how the container's orders reach it].
+- ***Port spec:*** none for FoC data. `TacticalBattle::mv_squad_add` may keep `bt_team_positions` for squads it
+  refuses; for the four Walk-member squads retail's container still walks its own path while the Walk members act on
+  their own [M], so the re-centred stand-in is a [port] choice there.
 
 ---
 

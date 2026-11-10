@@ -2735,7 +2735,7 @@ its locomotor vf +0x230 is true, that is for every land squad container (§5.4.2
   centred on the container's own position and turned by its yaw (the rectangle of FOG_OF_WAR §5.2).
 - Example: slots spread over [−a, a] along the facing, Squad_Stormtrooper half-extent 3.0 (2.0 × 1.5) → X half-extent
   = a + 3.0 + J. `Stormtrooper_Team` has no `MaxJiggleDistance` tag (type default, not read). The slot layout itself
-  (`ContainerArrangement` +0x1684: 0 → 0x5ac970, 1 → 0x5ac2a0, centred offsets) was not traced [M], so no number for a.
+  (`ContainerArrangement` +0x1684: 0 → 0x5ac970, 1 → 0x5ac2a0, centred offsets) was not traced here; settled in FIGHTER_FLYING §7.2 (s78n t14, 2026-11-10: Rows vs Dartboard, re-lay rule 0x5ac120).
 
 **Nearest member 0x404fc0(TEAM, P).** It walks the member array in index order (unrolled by 4, same order) and skips
 null entries. The distance is **3-D: dx² + dy² + dz²**. The best starts at 1e18 and is replaced only by a strictly

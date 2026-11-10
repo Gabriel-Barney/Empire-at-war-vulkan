@@ -1345,8 +1345,17 @@ turns on arrival. Missing: the arrival turn above (threshold 10°, stopped turn 
 - **Container:** a squad is a LAND_TEAM_CONTAINER object (e.g. Stormtrooper_Team: Max_Speed 0.8, Max_Rate_Of_Turn 12). Its speed is the minimum of its members (§3.4).
 - **Members** (LandTeamInfantry service `0x62ca10`):
   - copy the container's walk states 0x10/0x13/0x14 into their own data pack, and recompute idle states (`0x62bbf0`);
-  - steer to a slot computed by `0x62d620` (slot geometry not traced).
-- **Recovery:** when the team is idle and a member is farther than the threshold `0x140a4431c` from its slot, the member enters Recovery Turning (0x29) or Recovery Moving (0x2A). The recovery turn rate is multiplied by the fleeing bonus.
+    what each copy drives, and the per-member start delay (0..`Max_Move_Frame_Delay` frames, synced draws): FIGHTER_FLYING §7.3;
+  - steer to a slot by `0x62d620` (FIGHTER_FLYING §7). The slots are laid out by the container (`0x5ac120` →
+    `ContainerArrangement` Rows `0x5ac970` / Dartboard `0x5ac2a0`) at its first service, at every move start, at every
+    waypoint where the heading turns by more than acos 0.99, and after a SPREAD_OUT toggle: FIGHTER_FLYING §7.2;
+  - add the collision steering vector `0x509810` from their **container's** collision objects; members are never
+    collision checkers and their steps have no passability test: FIGHTER_FLYING §7.5.
+- **Recovery:** when the team is idle and a member is farther than the threshold `0x140a4431c` from its slot, the member enters Recovery Turning (0x29) or Recovery Moving (0x2A) (decision rules: FIGHTER_FLYING §7.3 item 6). The recovery turn rate is multiplied by the fleeing bonus.
+- **Fleeing** (s78n t14) = the container's current path is kind 7, the crush-flee push from a hostile crusher; it
+  doubles (`Fleeing_Infantry_Speed_Bonus` 2) the container's and the members' speed and turn rate: FIGHTER_FLYING §7.1.
+- **Garrison:** the container itself is garrisoned; it sits at the host's position while inside and leaves from the
+  exit bone with a move to `Garrison_Exit_Dist`: FIGHTER_FLYING §7.4. Jetpack / multi-locomotor squads: §7.6 there.
 
 ### 3.8 Layer_Z_Adjust (+0xdfc) [M]
 
@@ -1802,6 +1811,7 @@ Pair classes:
 **There is no rigid-body physics.** Collision means detecting a future conflict along the planned paths and resolving it by behaviour.
 
 ### 5.2 Detection (`0x508170`, per frame) [H]
+*(s78n t14, 2026-11-10: the candidate list has no team-member filter; which units register (squad containers yes, their members no) is FIGHTER_FLYING §7.5.)*
 
 For each registered mover, **in registration-list order**:
 1. Skip a multi-locomotor unit whose active locomotor answers vf +0x240.
