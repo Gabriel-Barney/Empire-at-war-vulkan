@@ -1392,7 +1392,12 @@ static void test_walk_step_t20() {
 
 // Collision objects inside MovementSystem: creation, crowd box / refresh, cancellation, budget fallback.
 static void test_collision_system() {
-    // StoppedVsStopped: two overlapping parked units; crowd = 5 x ground units in the 160 x 160 box on their midpoint.
+    // StoppedVsStopped (s78n t20, MOVEMENT 5.4.3): two overlapping parked units of radius 40. No instant displacement: the
+    // cheaper one to move - both would back straight away from the other; unit 2 already faces that way, unit 1 would
+    // have to turn 180 degrees first - walks a path to the first free spot of the ring search around itself (rings 0, 1,
+    // 2.8, 5.4, 8.8, 13, 18, 23.8, 30.4, 37.8, 46, 55, 64.8, 74.8, 84.8: the step grows by 0.8 up to 10; the first ring
+    // whose sample along its escape direction is more than 40 + 40 from the other's centre, 5 behind it, is 84.8). The
+    // record is Resolving while it walks and gone when the path is popped.
     {
         MovementSystem s{MovementConfig{}};
         PassabilityGrid g;
@@ -1400,33 +1405,35 @@ static void test_collision_system() {
         s.set_grid(std::move(g));
         s.add_unit(land_unit(1, {400.0f, 400.0f}, 7, 1.0f, 40.0f, kUccVehicle));
         s.add_unit(land_unit(2, {405.0f, 400.0f}, 7, 1.0f, 40.0f, kUccVehicle));
-        s.add_unit(land_unit(3, {402.0f, 470.0f}, 0, 1.0f, 6.0f, kUccInfantry));  // inside the box (y 320 .. 480)
-        s.add_unit(land_unit(4, {600.0f, 400.0f}, 0, 1.0f, 6.0f, kUccInfantry));  // outside
         SimRng rng(1);
         s.tick(0, rng);
         CHECK(s.collisions().list().size() == 1);
         if (s.collisions().list().size() == 1) {
             const CollisionObject& c = s.collisions().list()[0];
-            CHECK(c.kind == CollisionKind::StoppedVsStopped && c.a == 1 && c.b == 2 && c.created == 0);
-            // s78n t20 (MOVEMENT 5.4.1 driver): a StoppedVsStopped record never takes the quota pass, so it gets no
-            // crowd and no priority
-            CHECK(c.crowd == 0.0f && c.crowd_frame == 0 && c.state == CollisionState::Active);
+            CHECK(c.kind == CollisionKind::StoppedVsStopped && c.a == 1 && c.b == 2 && c.created == 0 && c.retry == 30);
+            // a StoppedVsStopped record never takes the quota pass: no crowd, no priority; decided on its first service
+            CHECK(c.crowd == 0.0f && c.crowd_frame == 0 && c.state == CollisionState::Resolving && c.master == 1);
         }
-        // Both were pushed apart (each on its own check frames: one push per FramesPerCollisionCheck frames).
-        CHECK(s.view(1).pos.x < 400.0f && s.view(2).pos.x > 405.0f);
-        // A unit entering the box is seen only at the 30-frame refresh.
-        CHECK(s.teleport(4, {402.0f, 330.0f}, 0.0f, 0.0f, 10));
-        bool before = true;
-        for (uint32_t f = 1; f < 30; ++f) {
-            s.tick(f, rng);
-            before = before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 0.0f;
+        // nobody was displaced in the decision frame; unit 2 holds the record's path (kind 3) to the spot
+        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && s.view(2).pos.y == 400.0f && s.view(2).pos.x < 405.0f + 1.56f + 1e-3f);
+        CHECK(s.view(2).pushed && s.view(2).push_kind == 3 && !s.view(1).pushed);
+        float ring = 0.0f, step = 1.0f;
+        while (5.0f + ring <= 80.0f) {
+            ring += step;
+            step = std::min(step + 0.8f, 10.0f);
         }
-        s.tick(30, rng);
-        CHECK(before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 0.0f);
-        // Pushed apart until the overlap ratio drops to 0.15: the collision no longer applies and is cancelled.
-        for (uint32_t f = 31; f < 200 && !s.collisions().list().empty(); ++f) s.tick(f, rng);
-        CHECK(s.collisions().list().empty() && s.stats().collisions_cancelled == 1 && s.stats().collisions_created == 1);
+        CHECK(std::fabs(ring - 84.8f) < 1e-3f);
+        const std::span<const V2> top = s.top_path(2);
+        CHECK(top.size() >= 2 && std::fabs(top.back().x - (405.0f + ring)) < 1e-2f && std::fabs(top.back().y - 400.0f) < 1e-3f);
+        uint32_t f = 1;
+        for (; f < 300 && !s.collisions().list().empty(); ++f) s.tick(f, rng);
+        CHECK(s.collisions().list().empty() && s.stats().collisions_created == 1 && s.stats().collisions_resolved == 1 &&
+              s.stats().collisions_cancelled == 0);
+        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && !s.view(2).pushed && std::fabs(s.view(2).pos.x - (405.0f + ring)) < 1e-2f);
         CHECK(overlap_ratio(s.view(1).pos, 40.0f, s.view(2).pos, 40.0f) <= 0.15f);
+        // no new record afterwards (they no longer overlap)
+        for (uint32_t n = 0; n < 20; ++n) s.tick(++f, rng);
+        CHECK(s.collisions().list().empty() && s.stats().collisions_created == 1);
     }
     // s78n t18 (MOVEMENT 5.4.1): a MovingVsStopped record lives across frames in its state - Path Around while the mover
     // holds the detour made for it - and ends by its state: once the mover is stopped (no path left) it is Resolved.
@@ -2979,7 +2986,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // now + acc + r - 30, not before now); space unchanged.
 // cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
 // their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
-static constexpr uint64_t kGoldenLand = 0x3d688f6bbd7d4613ull;  // s78n t20: the path stack top, the destination check, Path Around (MOVEMENT 1.5.1 / 4.3.1)
+static constexpr uint64_t kGoldenLand = 0xe707c35727ea50a6ull;  // s78n t20 batch A: the path stack top, the destination check, Path Around, the early-arrival cut, StoppedVsStopped (MOVEMENT 1.5.1 / 4.3.1 / 5.4.3 - 5.4.5)
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

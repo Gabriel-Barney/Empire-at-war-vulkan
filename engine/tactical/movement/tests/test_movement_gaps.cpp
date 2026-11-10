@@ -6342,6 +6342,182 @@ static void test_t20_decision_leftovers() {
     }
 }
 
+// s78n t20 item 1 (MOVEMENT 5.4.3): StoppedVsStopped - who moves, where to, and that it walks there.
+static void test_t20_stopped_vs_stopped() {
+    const float mult = 1.56f;
+    const V2 p0 = cell_center(20, 20), p1{p0.x + 8.0f, p0.y};
+    const float r = std::sqrt(136.0f);  // footprint radius of (10, 6)
+    // what: 0 plain; 1 the cheaper unit (11) has a target; 2 the cheaper unit is deployed
+    struct Out {
+        uint64_t crc = 0;
+        uint8_t master = 9;
+        CollisionState state0 = CollisionState::Active;
+        bool still0 = false, pushed = false, kind3 = true, gone = false;
+        V2 spot, end10, end11;
+        std::vector<float> speeds;
+        MovementStats st;
+    };
+    const auto run = [&](int what, const ParallelFor& pf) {
+        Out o;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        for (ObjectId id = 10; id <= 11; ++id) {
+            UnitDesc d = t20_vehicle(id, id == 10 ? p0 : p1, 1);
+            d.accel = d.decel = 0.05f;
+            CHECK(sys.add_unit(d));
+        }
+        if (what == 1) {
+            MovementSystem::CollisionInfo ci;
+            ci.target = 500;
+            ci.target_pos = {p1.x, p1.y + 300.0f};
+            ci.attack_range = 400.0f;
+            CHECK(sys.set_collision_info(11, ci));
+        }
+        if (what == 2) CHECK(sys.deploy(11, true, 0) == MovementSystem::DeployResult::Deploying);
+        SimRng rng(101);
+        sys.tick(1, rng, pf);
+        if (sys.collisions().list().size() == 1) {
+            o.master = sys.collisions().list()[0].master;
+            o.state0 = sys.collisions().list()[0].state;
+        }
+        const ObjectId mover = o.master == 0 ? 10 : 11;
+        // nothing is displaced in one step: the other unit stands, the mover has made at most its first walk step
+        o.still0 = sys.view(mover == 10 ? 11 : 10).pos == (mover == 10 ? p1 : p0) && distance(sys.view(mover).pos, mover == 10 ? p0 : p1) <= 0.05f * mult + 1e-4f;
+        if (!sys.top_path(mover).empty()) o.spot = sys.top_path(mover).back();
+        for (uint32_t f = 2; f < 400 && !o.gone; ++f) {
+            const UnitView v = sys.view(mover);
+            if (v.pushed) {
+                o.pushed = true;
+                o.kind3 = o.kind3 && v.push_kind == 3;
+                o.speeds.push_back(v.speed);
+            }
+            sys.tick(f, rng, pf);
+            o.gone = sys.collisions().list().empty();
+        }
+        for (uint32_t f = 400; f < 420; ++f) sys.tick(f, rng, pf);  // no new record afterwards
+        o.gone = o.gone && sys.collisions().list().empty();
+        o.end10 = sys.view(10).pos;
+        o.end11 = sys.view(11).pos;
+        o.st = sys.stats();
+        StateHasher h;
+        sys.hash_units(h);
+        o.crc = h.digest();
+        return o;
+    };
+    {  // the plain case: both would back straight away from the other; unit 11 faces that way already
+        // costs 0x686b20, restated: v x (d . D) < 0 and |D| = 8 <= R = 2 r -> t = (R - 8) / (8 v); + the turn to d
+        const float t = (2.0f * r - 8.0f) / (8.0f * mult), turn_rate = 6.0f * mult;
+        const float cost11 = 0.0f / turn_rate + t, cost10 = 180.0f / turn_rate + t;
+        CHECK(near(cost11, 1.2277f, 1e-3f) && cost11 <= cost10);  // the cheaper one first: unit 11 (p1)
+        // the spot: the first free sample of the ring search around unit 11 along +x (cone 3 pi / 4, outside 0.75);
+        // occupied = the other rectangle's centre within r + its directional radius of the sample
+        const FootRect other = foot_rect(p0, 0.0f, 10.0f, 6.0f);
+        RingSetup rs;
+        rs.centre = p1;
+        rs.dir = {1.0f, 0.0f};
+        rs.r = r;
+        rs.cone = 2.3561945f;
+        rs.outside = 0.75f;
+        V2 want = p1;
+        CHECK(ring_search(rs, [&](V2 p, uint32_t) { return !ring_blocked(p, r, other); }, want));
+        CHECK(near(want.x, p1.x + 18.0f, 1e-3f) && near(want.y, p1.y, 1e-3f));  // rings 1 .. 13 blocked (8 + 13 <= 21.66), 18 free
+        const Out s = run(0, serial_for), p = run(0, make_thread_pf(4));
+        CHECK(s.crc == p.crc);
+        CHECK(s.master == 1 && s.state0 == CollisionState::Resolving && s.still0);
+        CHECK(distance(s.spot, want) < 1e-3f);
+        CHECK(s.pushed && s.kind3 && s.gone && s.st.collisions_created == 1 && s.st.pushes == 0);
+        // it walks: the speed rises by its acceleration per frame (0.05 x 1.56), no jump
+        CHECK(s.speeds.size() >= 5 && near(s.speeds[0], 0.05f * mult, 1e-5f) && near(s.speeds[1], 0.10f * mult, 1e-5f) &&
+              near(s.speeds[2], 0.15f * mult, 1e-5f));
+        CHECK(s.end10 == p0 && distance(s.end11, want) < 1e-3f);
+        CHECK(near(foot_gap(foot_rect(s.end10, 0.0f, 10.0f, 6.0f), foot_rect(s.end11, 0.0f, 10.0f, 6.0f)), 6.0f, 1e-3f));
+        std::printf("t20 stopped vs stopped: unit 11 walked to (%.2f, %.2f), costs %.3f / %.3f\n", static_cast<double>(s.end11.x),
+                    static_cast<double>(s.end11.y), static_cast<double>(cost11), static_cast<double>(cost10));
+    }
+    {  // exactly one has a target: the one without moves, whatever the costs; it backs straight away (-x), turning first
+        const Out s = run(1, serial_for);
+        CHECK(s.master == 0 && s.state0 == CollisionState::Resolving && s.gone && s.end11 == p1);
+        CHECK(near(s.end10.x, p0.x - 18.0f, 1e-2f) && near(s.end10.y, p0.y, 1e-2f));
+    }
+    {  // a deploying / deployed unit never moves: the other one does
+        const Out s = run(2, serial_for);
+        CHECK(s.master == 0 && s.gone && s.end11 == p1 && near(s.end10.x, p0.x - 18.0f, 1e-2f));
+    }
+    {  // two Infantry-class units that both have targets: nobody moves - Try Again Later, re-decided every 30 frames
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(unit(1, p0, 2, 1.0f, 6.0f, LocomotorKind::Default)));
+        CHECK(sys.add_unit(unit(2, {p0.x + 4.0f, p0.y}, 2, 1.0f, 6.0f, LocomotorKind::Default)));
+        MovementSystem::CollisionInfo ci;
+        ci.target = 500;
+        ci.target_pos = {p0.x, p0.y + 200.0f};
+        CHECK(sys.set_collision_info(1, ci) && sys.set_collision_info(2, ci));
+        SimRng rng(102);
+        std::vector<uint32_t> retries;
+        bool tal = true, nobody = true;
+        for (uint32_t f = 1; f <= 100; ++f) {
+            sys.tick(f, rng, serial_for);
+            CHECK(sys.collisions().list().size() == 1);
+            if (sys.collisions().list().size() != 1) break;
+            const CollisionObject& c = sys.collisions().list()[0];
+            tal = tal && (c.state == CollisionState::TryAgainLater || c.state == CollisionState::Active);
+            nobody = nobody && c.master == 2;
+            if (retries.empty() || retries.back() != c.retry) retries.push_back(c.retry);
+        }
+        CHECK(tal && nobody && retries.size() >= 3);
+        for (size_t i = 1; i < retries.size(); ++i) CHECK(retries[i] - retries[i - 1] >= 30 && retries[i] - retries[i - 1] <= 31);
+        CHECK(sys.view(1).pos == p0 && sys.view(2).pos == (V2{p0.x + 4.0f, p0.y}) && !sys.view(1).pushed && !sys.view(2).pushed);
+        CHECK(sys.stats().collisions_created == 1);
+    }
+    {  // The cone: X stands in the upper right corner of a dead-end lane (walls right of it and above it, the lane open to
+       // the left), overlapping an immobile unit 4 to its left, so its escape direction is +x, into the wall. The only
+       // free ground lies behind it, 170 degrees and more off that direction: inside the Infantry cone (pi), outside the
+       // cone of every other class (3 pi / 4), whose samples there sit 0.75 from the unit. An Infantry-class X walks to
+       // the spot behind; a Vehicle-class X of the same shape finds none (Try Again Later). [port] The record of a
+       // failed resolution ends at a retry once the two no longer overlap.
+        const auto corner = [&](int32_t cls, bool& moved, bool& tal, float& angle, uint32_t& records_after_apart) {
+            MovementSystem sys{MovementConfig{}};
+            PassabilityGrid g = open_grid(60, 60);
+            for (int32_t y = 0; y < 60; ++y)
+                for (int32_t x = 0; x < 60; ++x)
+                    if (!(y == 20 && x >= 10 && x <= 20)) g.set_base(x, y, kPassImpassable);  // the lane: cells (10 .. 20, 20)
+            sys.set_grid(std::move(g));
+            sys.set_anim_length_fn(anim_len);
+            const V2 xp = cell_center(20, 20) + V2{5.0f, 5.0f};
+            UnitDesc x = unit(1, xp, 2, 1.0f, 6.0f, LocomotorKind::Default);
+            x.collision_class = cls;
+            CHECK(sys.add_unit(x));
+            CHECK(sys.add_unit(unit(2, {xp.x - 4.0f, xp.y}, 2, 0.0f, 3.0f, LocomotorKind::Default)));  // cannot walk
+            SimRng rng(103);
+            moved = tal = false;
+            angle = 0.0f;
+            uint32_t f = 1;
+            for (; f < 200; ++f) {
+                sys.tick(f, rng, serial_for);
+                if (sys.view(1).pushed && !moved) {
+                    moved = true;
+                    const V2 d = sys.top_path(1).back() - xp;
+                    angle = std::fabs(heading_deg(d));
+                }
+                for (const CollisionObject& c : sys.collisions().list()) tal = tal || c.state == CollisionState::TryAgainLater;
+            }
+            // the other unit goes away: a record left in Try Again Later ends at its next retry
+            CHECK(sys.teleport(2, cell_center(10, 20), 0.0f, 0.0f, f));
+            for (uint32_t n = 0; n < 40; ++n, ++f) sys.tick(f, rng, serial_for);
+            records_after_apart = static_cast<uint32_t>(sys.collisions().list().size());
+        };
+        bool moved_i = false, tal_i = false, moved_v = false, tal_v = false;
+        float ang_i = 0.0f, ang_v = 0.0f;
+        uint32_t left_i = 9, left_v = 9;
+        corner(kUccInfantry, moved_i, tal_i, ang_i, left_i);
+        corner(kUccVehicle, moved_v, tal_v, ang_v, left_v);
+        CHECK(moved_i && ang_i > 135.0f && ang_i <= 180.0f && left_i == 0);
+        CHECK(!moved_v && tal_v && left_v == 0);
+        std::printf("t20 stopped vs stopped: cone - Infantry spot %.1f degrees off its escape direction, Vehicle: Try Again Later %d\n",
+                    static_cast<double>(ang_i), tal_v ? 1 : 0);
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -6392,6 +6568,7 @@ int main() {
     test_t20_path_around();         // s78n t20 item 3
     test_t20_early_arrival();       // s78n t20 item 4
     test_t20_decision_leftovers();  // s78n t20 item 5
+    test_t20_stopped_vs_stopped();  // s78n t20 item 1
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

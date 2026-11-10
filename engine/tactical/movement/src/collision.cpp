@@ -284,6 +284,10 @@ uint32_t CollisionLayer::add(CollisionKind kind, ObjectId a, ObjectId b, uint32_
     c.b = b;
     c.created = frame;
     c.crowd_frame = frame;
+    if (kind == CollisionKind::StoppedVsStopped) {  // s78n t20 (MOVEMENT §5.4.3): record +0x80 := NOW + 30, +0x7c := nobody
+        c.retry = frame + 30;
+        c.master = 2;
+    }
     list_.push_back(c);
     return c.seq;
 }

@@ -1270,7 +1270,7 @@ private:
     float mvs_contact(const Unit& a, const Unit& b) const;
     float mvs_look_distance(const Unit& a, const Unit& b) const;
     bool collision_applies(const CollisionObject& c, uint32_t frame) const;  // [port] the stand-in kinds' keep test
-    void resolve_collision(CollisionObject& c, bool full, uint32_t frame, std::vector<uint8_t>& acted, SimRng& rng);
+    void resolve_collision(CollisionObject& c, bool full, uint32_t frame, SimRng& rng);
     void mvm_response(Unit& x, const Unit& y, uint32_t frame);
     // s78n t14 part B: flee = the path is crush-flee (kind 7); s78n t18: `frame` stamps the blocker's path change; s78n
     // t20: `c` = the record that owns the pushed path
@@ -1364,7 +1364,15 @@ private:
     bool svs_overlap(const Unit& a, const Unit& b) const;  // StoppedVsStopped contact 0x686500 (gate + coefficient)
     // A crusher drives through units it crushes, except a squad container (pushed instead; its members are crushed).
     bool drives_through(const Unit& c, const Unit& v) const { return crushes(c, v) && !v.d.team_container; }
-    bool push_spot(const Unit& b, V2 dir, V2& out) const;  // free-position search 0x440f90 (A1_READINGS §40.2)
+    // The free-position search 0x440f90 around unit b itself (A1_READINGS §40.2): the push's set-up (cone pi / 4, outside
+    // radius 0.33) and StoppedVsStopped's (Infantry class pi / 1.0, others 3 pi / 4 / 0.75; MOVEMENT §5.4.3)
+    bool push_spot(const Unit& b, V2 dir, float cone, float outside, V2& out) const;
+    // s78n t20 (MOVEMENT §5.4.3): StoppedVsStopped 0x687570 / 0x687720 - the service, who moves 0x687010 (0 = a, 1 = b, 2 =
+    // nobody), the cost 0x686b20 and the escape direction 0x5c74b0
+    void svs_service(CollisionObject& c, Unit& a, Unit& b, uint32_t frame);
+    uint8_t svs_pick_mover(const CollisionObject& c, const Unit& p0, const Unit& p1) const;
+    float svs_cost(const Unit& x, const Unit& y, V2 d) const;
+    V2 svs_escape_dir(const Unit& x, const Unit& o) const;
     static void end_push(Unit& u);
     void update_tree(const Unit& u);
     V2 pick_land_slot(const Unit& u, V2 slot, std::vector<uint64_t>& taken) const;

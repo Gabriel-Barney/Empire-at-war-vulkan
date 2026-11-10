@@ -525,13 +525,13 @@ void MovementSystem::team_steer_recs(std::vector<SteerRec>& out) const {
     // collision list is insertion order). vf +0x30 weights: MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3. vf
     // +0x38 (s78n t18, FIGHTER_FLYING §7.5 corrections): MovingVsStopped - the obstacle side in every state, the mover
     // side only in Repulsion (state 2); MovingVsMoving - both sides in Repulse (state 3; state 11 is not modelled);
-    // StoppedVsStopped - state 1 and the unit being moved ([port] its walked resolution is not modelled: never).
+    // StoppedVsStopped (s78n t20, 0x686f80) - only the unit being moved, while the record is Resolving (state 1).
     out.clear();
     for (const CollisionObject& c : coll_.list()) {
         const int32_t ia = find(c.a), ib = find(c.b);
         if (ia < 0 || ib < 0) continue;
         float w = 3.0f;
-        bool va = false, vb = false;
+        bool va = c.state == CollisionState::Resolving && c.master == 0, vb = c.state == CollisionState::Resolving && c.master == 1;
         if (c.kind == CollisionKind::MovingVsMoving) {
             w = 1.0f;
             va = vb = c.state == CollisionState::Repulsion;
