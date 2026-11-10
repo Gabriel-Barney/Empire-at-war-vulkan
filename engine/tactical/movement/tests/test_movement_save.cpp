@@ -1025,7 +1025,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 14);  // 14: before the s78n t14 squad layout / start delay / recovery fields (15)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 16);
+    put_u32(bad, 0, 15);  // 15: before the s78n t14 part B crush-flee / prediction interval fields (16)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 17);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
@@ -1130,7 +1132,8 @@ int main() {
                     }
             }
         }
-        CHECK(moving > 40 && recovering > 3 && w.sys.view(100).arrived);
+        // s78n t16: the container waits for stragglers (0x5ab640), so the members stop near their slots: a short recovery
+        CHECK(moving > 40 && recovering > 1 && w.sys.view(100).arrived);
         for (uint32_t at : {5u, 60u, 151u, 200u, 300u, last_recovering - 1u}) check_resume(sq, at, 0);
         check_resume(sq, 120, 33);
         // s78n review: a move ordered exactly on the resume frame (the first tick after the load) reads the saved team

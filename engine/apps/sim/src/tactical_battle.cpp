@@ -818,6 +818,12 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
     movement_->set_deferred_composition(true);
     // OI tactical: crush hostility = the combat relation (player +0x370 table, MOVEMENT.md 5.5).
     movement_->set_hostility([this](int32_t a, int32_t b) { return combat_ && combat_->is_enemy(a, b); });
+    // s78n t14 part B (FIGHTER_FLYING §7.1, 0x5c8890): Scatters_From_Crushers of the owner's faction ([port] false for an
+    // owner without a galactic player).
+    movement_->set_scatters_fn([this](int32_t owner) {
+        if (!galaxy_ || !rules_ || owner < 0 || static_cast<size_t>(owner) >= galaxy_->players().size()) return false;
+        return rules_->faction(galaxy_->players()[static_cast<size_t>(owner)].faction).scatters_from_crushers;
+    });
     // cu8l t03 (CU8K_T03_T08_T09_RE §1.10 rule 1): the movement lock of the start fleet's hyperspace arrival (arrivals_).
     movement_->set_locked_fn([this](mv::ObjectId key) { return arrival_locked(key); });
     // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): a Deploys unit's TURRET aims at its live current combat
@@ -2462,7 +2468,9 @@ bool TacticalBattle::mv_squad_add(TacticalMode& mode, size_t ci, uint32_t object
     d.team_member = false;
     d.locomotor = mv::LocomotorKind::Default;
     d.uses_multiple_locomotors = d.has_secondary_locomotor = false;
-    d.crusher = d.supercrusher = d.squashable = d.squashable_by_supercrusher = false;
+    // s78n t14 part B (FIGHTER_FLYING §7.5 item 1): the container keeps its type's UnitCollisionClass, Is_Squashable and
+    // MovementPredictionInterval - it is a land collision checker / partner, and a crusher pushes it aside (crush-flee).
+    d.crusher = d.supercrusher = false;
     d.turret = false;
     d.movement_class = fm.movement_class;  // [port] the container type's +0x1688 [M]: the first member's class
     // The formation layout reads the container's hard radius 0x397780: sqrt(hx^2 + hy^2) of the joint box.
@@ -3287,7 +3295,8 @@ void TacticalBattle::apply_speed_factors() {
         const bool in_team = u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed;
         const auto team = in_team ? static_cast<uint32_t>(containers_[u.container].id) : 0u;
         // s78l t01 (MOVEMENT §3.4 "Team cap, exact"): the container type's raw Max_Speed is in the team minimum (-1: no
-        // tag / not in a team). [port] the container's further chain factors (fleeing, ...) have no host state here.
+        // tag / not in a team). [port] the container's further chain factors have no host state here (fleeing is the movement
+        // layer's, s78n t14 part B).
         float cmax = -1.0f;
         if (in_team && containers_[u.container].type < catalog_->types().size()) {
             const auto ct = static_cast<objects::TypeIndex>(containers_[u.container].type);
@@ -3314,6 +3323,31 @@ void TacticalBattle::apply_speed_factors() {
         const bool tgt = (combat_ && combat_->has_unit(c.id) && combat_->current_target(c.id) != tc::kNoObject) ||
                          std::binary_search(targeted.begin(), targeted.end(), c.id);
         (void)movement_->set_team_target(c.id, tgt);
+    }
+    // s78n t14 part B (MOVEMENT §5.3: the garrison exclusion gate of the land contact tests; [port] rule): a squad container
+    // is a collision checker now, so it must not be stopped by, or block, the garrison host its members walk into or sit
+    // in. One host per squad (the first member's, unit order); the whole squad inside: the container is no collider.
+    if (!space_) {
+        namespace tg = alamo::tactical::garrison;
+        std::vector<tg::ObjectId> link(containers_.size(), tg::kNoObject);
+        std::vector<uint8_t> outside(containers_.size(), 0);
+        for (const Unit& u : units_) {
+            if (!u.alive || u.retreated || u.container >= containers_.size()) continue;
+            const Container& c = containers_[u.container];
+            if (!c.team || c.removed) continue;
+            const tg::ObjectId in = garrison_.holder_of(u.id);
+            if (in == tg::kNoObject) outside[u.container] = 1;
+            const tg::ObjectId h = in != tg::kNoObject ? in : garrison_.pending_holder(u.id);
+            if (h != tg::kNoObject && link[u.container] == tg::kNoObject) link[u.container] = h;
+        }
+        for (size_t i = 0; i < containers_.size(); ++i) {
+            const Container& c = containers_[i];
+            if (!c.team || c.removed || !movement_->has_unit(c.id)) continue;
+            const mv::ObjectId ex = link[i] == tg::kNoObject ? mv::ObjectId{-1}
+                                    : outside[i] != 0        ? static_cast<mv::ObjectId>(link[i])
+                                                             : mv::MovementSystem::kCollisionExemptAll;
+            (void)movement_->set_collision_exempt(c.id, ex);
+        }
     }
 }
 

@@ -23,6 +23,8 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     d.formation_order = t.get_int(ti, "FormationOrder");
     // s78n t14 (FIGHTER_FLYING §7.2): ContainerArrangement (None -1 when unset)
     d.container_arrangement = t.get_string(ti, "ContainerArrangement").empty() ? -1 : t.get_enum(ti, "ContainerArrangement");
+    d.movement_prediction_interval = t.get_float(ti, "MovementPredictionInterval");  // s78n t14 part B
+    d.avoidance_disabled = t.get_bool(ti, "Avoidance_Disabled");
     const uint64_t layer = t.get_mask(ti, "Space_Layer");
     d.space_layer = layer != 0 ? static_cast<uint32_t>(layer) : static_cast<uint32_t>(kLayerFrigate);
     d.layer_z = t.get_float(ti, "Layer_Z_Adjust");

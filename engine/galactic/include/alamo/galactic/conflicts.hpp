@@ -84,6 +84,9 @@ struct ConflictFactionInfo {
     // 4.0 / 2.0, Underworld 2.0 / 2.0; 1.0 [port] for factions without the tag (none of them retreats).
     float space_retreat_damage_mod = 1.0f;
     float land_retreat_damage_mod = 1.0f;
+    // s78n t14 part B (FIGHTER_FLYING §7.1, 0x5c8890): Scatters_From_Crushers (+0x2f88): the faction's infantry squads flee
+    // from a hostile crusher's collision path. FoC: true for every faction entry but the Empire; [port] false when unset.
+    bool scatters_from_crushers = false;
     int32_t map_faction = 0;                  // random-map faction index: Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5
     // Land_Skirmish_Unit_Cap_By_Player_Count (+0x2cd8): (player count, unit cap) keys in file order (shipped 0,10, 1,10, 8,5).
     // t50 / skai: unit_cap_for_players() evaluates it (SKIRMISH_SETUP §6: linear, 0 outside the keys, integer part).

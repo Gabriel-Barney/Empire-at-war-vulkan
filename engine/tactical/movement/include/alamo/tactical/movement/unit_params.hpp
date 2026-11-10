@@ -41,11 +41,18 @@ struct UnitDesc {
     bool team_member = false;
     // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7; save version 14): a land squad container (LandTeamContainer
     // locomotor). It walks its own path at the team speed (its own passability test) and is the formation's anchor its
-    // members steer around (MovementSystem::set_land_team). It takes no part in land collision, crush or arrival turns.
+    // members steer around (MovementSystem::set_land_team). It takes no part in crush (as a victim) or arrival turns; s78n
+    // t14 part B: it is a land collision checker and partner (its own UnitCollisionClass / Is_Squashable), its members not.
     bool team_container = false;
     // s78n t14 (FIGHTER_FLYING §7.2; save version 15): ContainerArrangement (+0x1684) of a team container: None -1, Rows 0,
     // Dartboard 1 (unset: -1). Read only by MovementSystem::lay_out_land_team.
     int32_t container_arrangement = -1;
+    // s78n t14 part B (MOVEMENT §5.3, FIGHTER_FLYING §7.5; save version 16): MovementPredictionInterval (+0x3c8, seconds;
+    // 0 = unset), the MovingVsStopped look-ahead max(MovingVsMovingLookAheadTime, this) - [port] read only for a team
+    // container (FoC containers 4.0); and Avoidance_Disabled (+0xd3): no member collision steering vector (0x5c6ca0 /
+    // 0x5c6d40) for such a type.
+    float movement_prediction_interval = 0.0f;
+    bool avoidance_disabled = false;
     uint32_t space_layer = kLayerFrigate;  // Space_Layer
     float layer_z = 0.0f;         // Layer_Z_Adjust
     // ---- OI tactical (PHASE4 S7 open items) ----

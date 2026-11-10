@@ -563,14 +563,39 @@ public:
     //   - the container walks its own path (the Walk step: start turn, speed control, its own passability test) at the
     //     team speed (set_team(container, container, ...) gives it the team cap) and is the formation unit of its squad:
     //     move / stop / the coordinator calls on a member act on its container (order_id);
-    //   - the container is never re-centred on its members and takes no part in land collision, crush or arrival turns;
+    //   - the container is never re-centred on its members and takes no part in crush (as a victim) or arrival turns;
     //     s78n review [port]: a steering member is no collision checker and no collision partner (moving or stopped
-    //     checkers skip it: it is neither stopped nor pathing; FIGHTER_FLYING §7's steering vector 0x509810 is [M]);
+    //     checkers skip it: it is neither stopped nor pathing);
+    //   - s78n t14 part B (FIGHTER_FLYING §7.5 item 1, 0x504880): the CONTAINER is a land collision checker and partner
+    //     (its type's UnitCollisionClass, Is_Squashable; its MovingVsStopped look-ahead is max(MovingVsMovingLookAheadTime,
+    //     MovementPredictionInterval)); other movers avoid / push the container, never a member. A crusher (SQUASH) does
+    //     not drive through a squad container it crushes (only through the members, which the crush pass kills): a stopped
+    //     container in its way is pushed aside (0x6859a0) on a crush-flee path (kind 7), a moving one gets the collision
+    //     path away from it (0x683140: the same push, crush-flee only while its owner's faction Scatters_From_Crushers
+    //     (set_scatters_fn) and SPREAD_OUT is off). While the container's current path is a crush-flee push (0x39a5b0) the
+    //     squad flees: Fleeing_Infantry_Speed_Bonus multiplies the container's team speed, acceleration and turn rate on
+    //     that path and each member's max speed, acceleration and turn rate (FIGHTER_FLYING §7.1); it ends with the push
+    //     path (arrived, blocked, a new order, stop or teleport);
     //   - each member steers per frame (LandTeamInfantry 0x62d620) toward container + R(yaw) (slot + jiggle) from the
     //     container's state at the start of the tick [port: members precede their container in service order], with the
     //     speed rule of FIGHTER_FLYING §7 step 4 (v = 0 while the container turns in place, port state WalkStartTurn for
-    //     retail 0x10), the heading rule of step 6 (no collision steering vector [M]) and its own turn rate; [port] the
-    //     move is passability-tested (a blocked move tries each axis alone, else the member stays);
+    //     retail 0x10), the heading rule of step 6 and its own turn rate; [port] the move is passability-tested (a blocked
+    //     move tries each axis alone, else the member stays). s78n t14 part B: step 6 adds the collision steering vector
+    //     0x509810 (team_member_avoid) from its container's collision objects;
+    //   - s78n t16 (FIGHTER_FLYING §7.7, 0x5aaf70; confirmed by the retail runs in S78N_T14_RUN.md): the container's speed
+    //     step. Acceleration = deceleration = 0x5ab540 = the minimum over its steering members of the member's
+    //     OverrideDeceleration x (min(member Max_Speed, the members' smallest raw Max_Speed) x the mode multiplier x the
+    //     container factor) / member Max_Speed (the bare OverrideDeceleration when its Max_Speed is 0); a minimum not > 0
+    //     (a member type without the tag) = the team speed (full speed in one frame); the container type's own
+    //     acceleration tags are not used (FoC: 0.05 x 1.56 = 0.078 Stormtrooper squads, 0.07 x 1.56 = 0.109 Rebel
+    //     squads per frame). Straggler cap 0x5ab640: the target speed is at most (1 - t) x the team speed, t the largest
+    //     clamp(((-HX - 2) - p) / 10, 0, 1) over the members with p < -(HX + 2), p = (member - container) . the
+    //     container's facing, HX = the joint slot box half-length (0x404450: the box holds (0, 0) and every slot x +/- the
+    //     member's half-extent; set_team_member_shape) + the container's MaxJiggleDistance. Both are computed serially from
+    //     the positions at the start of the tick and apply to the order path and a pushed path alike (on a crush-flee
+    //     path both x Fleeing_Infantry_Speed_Bonus, with the team speed). [port] a member whose straight line to its slot
+    //     point is not passable for its movement class is left out of the cap (the port's members are passability-tested,
+    //     retail's are not: a member held by a wall must not stop the squad for good);
     //   - s78n t14 (FIGHTER_FLYING §7.3): the member's step follows the container's walk state (start of the tick): turning
     //     in place (port WalkStartTurn / WalkTurning = retail 0x10) or moving (0x13): a member with a start delay counts it
     //     down and stands; else it steers (v = 0 while turning). Braking (WalkEndMove = 0x14): it steers, delay ignored.
@@ -640,6 +665,14 @@ public:
     // clears +0x2a4 on both on and off), so the next tick re-lays with the container's facing. Saved and hashed. The host
     // sets it every tick before tick() [port: polled, so a toggle that does not change the state does not re-lay].
     bool set_team_spread_out(ObjectId container, bool on);
+    // s78n t14 part B (MOVEMENT §5.3: the "garrison / attachment exclusions" gate of the contact tests; the exact rule is
+    // not in the spec, [port]): the squad container `container` takes no collision object with `other`, in either order,
+    // and does not path around it (kCollisionExemptAll: with nobody - it is no land collider; -1: none). The host sets it
+    // every tick before tick() for a squad walking into, or sitting in, a garrison host; transient (not saved, not
+    // hashed). A squad container that starts inside a stopped unit's footprint and moves away from it (the garrison
+    // leave starts at the host's centre) takes no MovingVsStopped contact with it either. False: not a team container.
+    static constexpr ObjectId kCollisionExemptAll = -2;
+    bool set_collision_exempt(ObjectId container, ObjectId other);
     // The container has a current target (0x397a40(K, 0) [M]): its members do not recover to their slots while it idles.
     // Set by the host every tick before tick(); saved and hashed. False: not a team container.
     bool set_team_target(ObjectId container, bool has_target);
@@ -647,6 +680,21 @@ public:
     // index order) when its stopped container (speed 0) gets a move order; counts down while the container turns in
     // place or moves (the member stands); braking ignores it. 0 for a non-member.
     uint32_t team_start_delay(ObjectId member) const;
+    // ---- s78n t14 part B (FIGHTER_FLYING §7.1 / §7.5): fleeing and the member collision steering vector ----
+    // Scatters_From_Crushers (Faction +0x2f88) of an owner's faction, for 0x5c8890 (with the container's SPREAD_OUT off).
+    // Called from the serial collision passes only. Unset: every owner scatters (FoC: every faction but the Empire).
+    using ScattersFn = std::function<bool(int32_t owner)>;
+    void set_scatters_fn(ScattersFn fn) { scatters_ = std::move(fn); }
+    // The squad flees (0x39a5b0): the container's current path is a crush-flee push (kind 7). False: not a team container.
+    bool team_fleeing(ObjectId container) const;
+    // The collision steering vector 0x509810 of steering member `member` for the unnormalised heading `dir` (FIGHTER_FLYING
+    // §7 step 6), from the current positions and its container's collision objects in list order: per object the weight
+    // (MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3) and the vector (MovingVsStopped only: side steps 0x5c71a0
+    // away from the other participant, or that participant's members when it is a squad container, x clamp(speed / max
+    // speed, 0, 1)); objects whose vectors fail the 25-unit passability probes are dropped; best = the largest weight (a
+    // tie: the longer vector), plus every other kept vector with dot(best, v) >= -0.5 (retail's index quirk copied).
+    // The steering tick calls the same code with the start-of-tick positions. {0, 0}: not a steering member / no objects.
+    V2 team_member_avoid(ObjectId member, V2 dir) const;
     void hash_speed(StateHasher& h) const;
     // ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): clips of the Walk arrival turn ----
     // Every clip play the arrival turn asks for this tick, ascending id (at most one per unit and tick). The clip data
@@ -748,6 +796,11 @@ private:
         float team_factor = 1.0f;    // s78k t03: the container's speed factor (set_team)
         float team_cap = 3.0e38f;    // s78k t03: land team locomotor cap, rebuilt each land tick (team_caps)
         float team_max = -1.0f;      // s78l t01: the container's raw Max_Speed (set_team; < 0 unknown)
+        // s78n t16 (FIGHTER_FLYING §7.7): a squad container's speed step inputs, rebuilt each land tick before the walk
+        // (team_speed_steps; transient: not saved, not hashed) - its acceleration = deceleration 0x5ab540 (0: full speed
+        // in one frame) and the straggler factor of 0x5ab640 (cap = factor x the team speed; 1 = no straggler).
+        float team_accel = 0.0f;
+        float straggle = 1.0f;
         // s78l t02 (MOVEMENT §3.5.1, save version 12): the Walk arrival turn state (None, 0x0F begin, 0x10 turn, 0x11 end;
         // the wanted yaw is turn_to), the band rate pack +0xe8 (0 = the stopped rate), the clip the turn last played
         // (kAnimNone before the first: treated as idle-class), its start frame and play speed. tplay = this tick's play
@@ -809,7 +862,11 @@ private:
         V2 lay_dir;
         bool spread = false;
         bool team_target = false;
-        // s78n t14: this tick's re-lay requests of a container (layout dirs in order; written by its own walk or a push,
+        // s78n t14 part B (FIGHTER_FLYING §7.1, save version 16): the pushed move is a crush-flee path (kind 7; else kind 4).
+        bool push_flee = false;
+        // s78n t14 part B: set_collision_exempt (transient, host-set every tick): -1 none, kCollisionExemptAll, or a unit.
+        ObjectId exempt = -1;
+    // s78n t14: this tick's re-lay requests of a container (layout dirs in order; written by its own walk or a push,
         // consumed by the serial pass after the walk). Transient: empty between ticks, not saved.
         std::vector<V2> relay;
     };
@@ -822,13 +879,30 @@ private:
         bool has_goal = false;
         bool laid_out = false;  // s78n t14: the recovery decision needs the laid-out flag and no target
         bool has_target = false;
+        bool fleeing = false;  // s78n t14 part B: the container's current path is a crush-flee push (0x39a5b0)
+        uint32_t rec_begin = 0, rec_end = 0;  // s78n t14 part B: its collision objects in the tick's SteerRec list
     };
+    // s78n t14 part B (FIGHTER_FLYING §7.5): one collision object of a squad container, as its members' steering vector reads
+    // it: weight (vf +0x30), whether it gives a member a vector (vf +0x38) and the other participant (units_ index).
+    struct SteerRec {
+        ObjectId container = -1;
+        float w = 0.0f;
+        bool vec = false;
+        uint32_t other = 0;
+    };
+    void team_steer_recs(std::vector<SteerRec>& out) const;  // every container's objects, by container, list order kept
+    // 0x509810 for member `a` at `pa` (speed / max speed for the 0x5c6d40 ratio), `pos` = positions by units_ index.
+    V2 member_avoid(const Unit& a, V2 pa, float speed, float vmax, V2 dir, std::span<const SteerRec> recs,
+                    std::span<const V2> pos) const;
+    V2 member_side_steps(const Unit& a, V2 pa, V2 dir, uint32_t other, std::span<const V2> pos) const;  // 0x5c6d40 sum
+    float team_hard_radius(const Unit& u) const;  // 0x397780: a member's shape (set_team_member_shape), else its footprint
     // s78n t14 (FIGHTER_FLYING §7.2): Rows 0x5ac970 / Dartboard 0x5ac2a0 on the container's steering members (no flag test).
     bool lay_out_rows(const Unit& k, V2 dir, std::vector<std::pair<Unit*, V2>>& out);
     bool lay_out_dartboard(const Unit& k, V2 dir, uint32_t frame, std::vector<std::pair<Unit*, V2>>& out);
     void team_relay_pass(uint32_t frame);  // s78n t14: the re-lays of this tick (serial, ascending id)
     ObjectId order_id(ObjectId id) const;  // s78n t03: a steering member's container, else id
-    void steer_member(Unit& u, const TeamSnap& k) const;  // s78n t03: one member frame (writes only u)
+    // s78n t03: one member frame (writes only u); s78n t14 part B: + the tick's steering records and start positions
+    void steer_member(Unit& u, const TeamSnap& k, std::span<const SteerRec> recs, std::span<const V2> pos0) const;
     // cu8j t01 (MOVEMENT §4.6): an order's formations waiting for the coordinator update (creation order). Land: `forms`
     // = the split's formations, seed first; space: forms[0] = the order's units in order and `offsets` their start
     // offsets. `moves` false: fighter_new_order (nobody moves: draws and fighter timers only).
@@ -877,6 +951,7 @@ private:
     // the mode multiplier when set_team gave one.
     float team_base_speed(const Unit& u) const;
     void team_caps();                            // s78k t03: Unit::team_cap of every land unit (serial, units_ order)
+    void team_speed_steps();  // s78n t16: Unit::team_accel / straggle of every squad container (serial, after team_caps)
     void land_arrival_turn(Unit& u) const;       // s78k t01: MOVEMENT §3.5.1 state 0x15 test on arrival
     // s78l t02: the arrival turn states 0x0F / 0x10 / 0x11 / 0x15 of one frame (serial), the clip helpers, the reset.
     void arrival_turn_frame(Unit& u, uint32_t frame) const;
@@ -1007,7 +1082,13 @@ private:
     void resolve_collision(CollisionObject& c, bool full, uint32_t frame, std::vector<uint8_t>& acted);
     void mvm_response(Unit& x, const Unit& y, uint32_t frame);
     bool resolve_blocker(Unit& a, uint32_t blocker, float contact, uint32_t frame, bool full);
-    bool push_aside(const Unit& a, Unit& b);
+    bool push_aside(const Unit& a, Unit& b, bool flee);  // s78n t14 part B: flee = the path is crush-flee (kind 7)
+    // s78n t14 part B (0x5c8890): b's owner's faction has Scatters_From_Crushers and b's SPREAD_OUT is off.
+    bool scatters(const Unit& b) const { return (!scatters_ || scatters_(b.d.owner)) && !b.spread; }
+    // s78n t14 part B: set_collision_exempt - the pair takes no collision object (either order).
+    bool pair_exempt(const Unit& a, const Unit& b) const { return a.exempt == b.d.id || b.exempt == a.d.id; }
+    // A crusher drives through units it crushes, except a squad container (pushed instead; its members are crushed).
+    bool drives_through(const Unit& c, const Unit& v) const { return crushes(c, v) && !v.d.team_container; }
     bool push_spot(const Unit& b, V2 dir, V2& out) const;  // free-position search 0x440f90 (A1_READINGS §40.2)
     static void end_push(Unit& u);
     void update_tree(const Unit& u);
@@ -1029,8 +1110,13 @@ private:
     mutable QueryContext qctx_;
     uint32_t quota_used_ = 0;
     CollisionLayer coll_;  // S7: persistent land collision objects (hashed)
+    // s78n t14 part B: the objects with a squad container that this tick's driver resolved (dropped from coll_ at once),
+    // in resolution order; the members' steering vector of the same tick reads them with coll_. Transient (refilled by
+    // every land tick before the walk; not saved, not hashed).
+    std::vector<CollisionObject> coll_done_;
     MovementStats stats_;
     HostileFn hostile_;              // OI tactical
+    ScattersFn scatters_;            // s78n t14 part B: Scatters_From_Crushers by owner (host; not saved)
     LockedFn locked_;                // cu8l t03: the space composition's seed lock (host)
     std::vector<CrushEvent> crush_;  // OI tactical: this tick
     OwnerThreatFn threat_;           // REMAINING_GAPS §4.2

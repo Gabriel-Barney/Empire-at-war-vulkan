@@ -1187,7 +1187,9 @@ void test_land_squad_container() {
     if (!done) return;
     CHECK(store_mismatch == 0);
     CHECK(start_error > 4.0f && recovered_error >= 0.0f && recovered_error <= 4.0f);  // idle recovery (> 4.0 from the slot)
-    CHECK(moving_frames > 60 && off_line < 0.5f);
+    // s78n t14 part B: the container is a land collision checker now - it walks its own path (never re-centred on its
+    // members), but paths around another squad's container standing near its goal (about 16 off the straight line here)
+    CHECK(moving_frames > 60 && off_line < 30.0f);
     CHECK(max_lead > 1.0f);   // the container leads (its members steer from its start-of-tick state)
     CHECK(along_ref.size() == members.size() && late_along < 4.0f);  // and the members hold the formation
     CHECK(settle_target || settle_err <= 4.0f);  // s78n t14: they recover to their slots only while the team has no target

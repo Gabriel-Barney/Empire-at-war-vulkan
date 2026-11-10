@@ -58,6 +58,9 @@ struct MovementConstants {
     float infantry_formation_recruitment_distance = 60.0f;
     float vehicle_formation_recruitment_distance = 100.0f;
     float double_click_move_max_speed_ratio = 1.25f;
+    // s78n t14 part B (FIGHTER_FLYING §7.1, MOVEMENT §3.4): Fleeing_Infantry_Speed_Bonus (GC +0x150c, read as a float; FoC 2),
+    // the factor on a fleeing squad's speeds and turn rates (its container's current path is a crush-flee push, kind 7).
+    float fleeing_infantry_speed_bonus = 2.0f;
     // Mode speed multipliers (§3.4)
     float land_speed_multiplier = 1.56f;
     float space_speed_multiplier = 1.2f;

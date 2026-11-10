@@ -13,7 +13,11 @@ bool MovementSystem::is_air(const Unit& u) const {
 }
 
 bool MovementSystem::ground_collider(const Unit& u) const {
-    if (u.d.team_container) return false;  // s78n t03: a squad container takes no part in land collision or crush
+    // s78n t14 part B (FIGHTER_FLYING §7.5 item 1): a squad container is a land collision checker and partner (it registers:
+    // LandTeamContainer vf +0x230); its members never check (detect_collisions) and are no partner (as before). The crush
+    // pass skips the container as a victim (its members are crushed). [port] Not while its whole squad is inside a garrison
+    // (set_collision_exempt: MOVEMENT §5.3 garrison exclusion gate).
+    if (u.exempt == kCollisionExemptAll) return false;
     switch (u.d.locomotor) {
         case LocomotorKind::Flying:
         case LocomotorKind::LandBomber: return cfg_.mode != MoveMode::Land;
@@ -203,7 +207,8 @@ bool MovementSystem::land_spot_free(const Unit& u, V2 p) const {
         const int32_t oi = find(static_cast<ObjectId>(h));
         if (oi < 0) continue;
         const Unit& o = units_[static_cast<size_t>(oi)];
-        if (o.d.id == u.d.id || !ground_collider(o)) continue;
+        // s78n t14 part B [port]: a squad container is not an occupant here (its members are), as before part B.
+        if (o.d.id == u.d.id || !ground_collider(o) || o.d.team_container) continue;
         const float rr = r + o.d.radius;
         if (length_sq(o.m.pos - p) < rr * rr) return false;
     }

@@ -6,6 +6,7 @@
 
 #include "alamo/data/game_database.hpp"
 #include "alamo/core/ascii.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
@@ -179,6 +180,8 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
         ci.land_retreat_countdown = num("Land_Retreat_Countdown_Seconds", ci.land_retreat_countdown);
         ci.space_retreat_damage_mod = num("Space_Retreat_Units_Damaged_Mod_Factor", ci.space_retreat_damage_mod);
         ci.land_retreat_damage_mod = num("Land_Retreat_Units_Damaged_Mod_Factor", ci.land_retreat_damage_mod);
+        if (const std::string_view sc = fr.xml_text("Scatters_From_Crushers"); !sc.empty())  // s78n t14 part B
+            ci.scatters_from_crushers = data::parse_type_bool(data::trim(sc));  // bool code 0x0: "1" or Y / y / T / t
         {  // t50: "players, cap, players, cap, ..." (numbers separated by commas / blanks)
             const std::string_view curve = fr.xml_text("Land_Skirmish_Unit_Cap_By_Player_Count");
             std::vector<float> v;

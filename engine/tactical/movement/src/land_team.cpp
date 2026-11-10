@@ -39,6 +39,12 @@ bool steer_commit(const PassabilityGrid& grid, LandMotion& m, V2 to, uint32_t ma
     return false;
 }
 
+// s78n t14 part B: the passability probe 0x5a4c10 of the steering vector for a movement class: every cell the segment
+// touches passes the mask (the start cell included).
+bool steer_probe_ok(const PassabilityGrid& grid, V2 a, V2 b, uint32_t mask) {
+    return walk_cells(a, b, [&](int32_t cx, int32_t cy) { return grid.passable_cell(cx, cy, mask); });
+}
+
 }  // namespace
 
 void MovementSystem::attach_member(Unit& u, ObjectId container, V2 slot, uint32_t tindex) {
@@ -393,6 +399,13 @@ bool MovementSystem::set_team_target(ObjectId container, bool has_target) {
     return true;
 }
 
+bool MovementSystem::set_collision_exempt(ObjectId container, ObjectId other) {
+    Unit* k = unit_ptr(container);
+    if (!k || !k->d.team_container) return false;
+    k->exempt = other;
+    return true;
+}
+
 uint32_t MovementSystem::team_start_delay(ObjectId member) const {
     const Unit* u = unit_ptr(member);
     return u && u->anchor >= 0 ? u->start_delay : 0u;
@@ -406,19 +419,211 @@ bool MovementSystem::parked_offset(ObjectId member, V2& off) const {
     return true;
 }
 
+// ---- s78n t14 part B (FIGHTER_FLYING §7.1 / §7.5): fleeing and the member collision steering vector 0x509810 ----
+
+bool MovementSystem::team_fleeing(ObjectId container) const {
+    const Unit* k = unit_ptr(container);
+    return k && k->d.team_container && k->pushed && k->push_flee;
+}
+
+float MovementSystem::team_hard_radius(const Unit& u) const {
+    // 0x397780 (hard radius): sqrt(hx^2 + hy^2) of the unit's half-extents - a steering member's shape from the host
+    // (set_team_member_shape); [port] otherwise the Custom_Hard extents, else the soft radius (the push's footprint).
+    if (u.team_hx > 0.0f || u.team_hy > 0.0f) return std::sqrt(u.team_hx * u.team_hx + u.team_hy * u.team_hy);
+    if (u.d.hard_x > 0.0f || u.d.hard_y > 0.0f) return std::sqrt(u.d.hard_x * u.d.hard_x + u.d.hard_y * u.d.hard_y);
+    return u.d.radius;
+}
+
+void MovementSystem::team_steer_recs(std::vector<SteerRec>& out) const {
+    // The id-keyed collision hash (+0x80) gives a squad container's active collision objects in list order (the port's
+    // collision list is insertion order). vf +0x30 weights: MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3. vf
+    // +0x38 for a member (never participant +0x7c): MovingVsStopped always; StoppedVsStopped never (state 1 and obj = +0x7c
+    // only); MovingVsMoving only in the Repulse (3) / 11 states, which the port's MovingVsMoving stand-in does not model, so
+    // [port] never. [port] The port's resolutions end a MovingVsStopped object at once (Resolved: dropped after the driver
+    // pass) where retail keeps it through its Path Around / Existing Path states [M], so the members read the container's
+    // live objects plus those this tick's driver resolved (coll_done_), all in creation (seq) order.
+    out.clear();
+    std::vector<const CollisionObject*> all;
+    all.reserve(coll_.list().size() + coll_done_.size());
+    for (const CollisionObject& c : coll_.list()) all.push_back(&c);
+    for (const CollisionObject& c : coll_done_) all.push_back(&c);
+    std::sort(all.begin(), all.end(), [](const CollisionObject* x, const CollisionObject* y) { return x->seq < y->seq; });
+    for (const CollisionObject* cp : all) {
+        const CollisionObject& c = *cp;
+        const int32_t ia = find(c.a), ib = find(c.b);
+        if (ia < 0 || ib < 0) continue;
+        const float w = c.kind == CollisionKind::MovingVsMoving ? 1.0f : c.kind == CollisionKind::MovingVsStopped ? 2.0f : 3.0f;
+        const bool vec = c.kind == CollisionKind::MovingVsStopped;
+        if (units_[static_cast<size_t>(ia)].d.team_container) out.push_back({c.a, w, vec, static_cast<uint32_t>(ib)});
+        if (units_[static_cast<size_t>(ib)].d.team_container) out.push_back({c.b, w, vec, static_cast<uint32_t>(ia)});
+    }
+    std::stable_sort(out.begin(), out.end(), [](const SteerRec& x, const SteerRec& y) { return x.container < y.container; });
+}
+
+V2 MovementSystem::member_side_steps(const Unit& a, V2 pa, V2 dir, uint32_t other, std::span<const V2> pos) const {
+    // 0x5c6d40(a, dir, O, 1.0) without its speed ratio: O a land team container -> the sum over O's members m != a of
+    // 0x5c71a0(a, m) in team index order; else 0x5c71a0(a, O). 0x5c71a0(a, b): 0 when a and b share a container; t =
+    // clamp(1 - |a - b| / ((r_a + r_b) x 1.3), 0, 1); t = 0 -> 0; b on a's right (cross(dir, b - a) < 0) and the left side
+    // step free -> t (-dir.y, dir.x); else the right step free -> t (dir.y, -dir.x); else 0. [port] the side-step probe
+    // (0x5c66a0) is the segment a -> a + (r_a + r_b) x 1.3 x normalise(side) for a's movement class; the footprint-overlap t
+    // of related pairs (0x4261d0 / 0x41cf50 [M]) is not modelled.
+    const float ra = team_hard_radius(a);
+    const auto side_step = [&](const Unit& b, V2 pb) -> V2 {
+        if (b.anchor >= 0 && b.anchor == a.anchor) return {};
+        const float reach = (ra + team_hard_radius(b)) * 1.3f;
+        if (!(reach > 0.0f)) return {};
+        const float t = std::clamp(1.0f - length(pa - pb) / reach, 0.0f, 1.0f);
+        if (!(t > 0.0f)) return {};
+        const V2 left{-dir.y, dir.x}, right{dir.y, -dir.x};
+        const auto free = [&](V2 side) { return steer_probe_ok(grid_, pa, pa + normalize_retail(side) * reach, a.lp.mask); };
+        if (cross(dir, pb - pa) < 0.0f && free(left)) return left * t;
+        if (free(right)) return right * t;
+        return {};
+    };
+    const Unit& o = units_[other];
+    if (!o.d.team_container) return side_step(o, pos[other]);
+    V2 sum{};
+    for (const LandTeamSlot& e : land_team(o.d.id)) {
+        if (e.member == a.d.id) continue;
+        const int32_t mi = find(e.member);
+        if (mi < 0) continue;
+        sum = sum + side_step(units_[static_cast<size_t>(mi)], pos[static_cast<size_t>(mi)]);
+    }
+    return sum;
+}
+
+V2 MovementSystem::member_avoid(const Unit& a, V2 pa, float speed, float vmax, V2 dir, std::span<const SteerRec> recs,
+                                std::span<const V2> pos) const {
+    // 0x509810(system, out, dir, obj) for a team member (key = its container): see team_member_avoid in the header.
+    if (recs.empty() || a.d.avoidance_disabled) return {};  // no key entry; 0x5c6ca0 needs Avoidance_Disabled false
+    const float ratio = vmax > 0.0f ? std::clamp(speed / vmax, 0.0f, 1.0f) : 0.0f;  // 0x5c6d40's speed scale
+    std::vector<V2> kept;
+    kept.reserve(recs.size());
+    size_t best_rec = 0;
+    bool have = false;
+    V2 best{};
+    float best_w = 0.0f;
+    for (size_t i = 0; i < recs.size(); ++i) {
+        const SteerRec& r = recs[i];
+        V2 v{};
+        if (r.vec) v = member_side_steps(a, pa, dir, r.other, pos) * ratio;
+        // kept only if P -> P + 25 normalise(v) and P -> P + 25 (v + dir) pass a's movement class (0x5a4c10)
+        if (!steer_probe_ok(grid_, pa, pa + normalize_retail(v) * 25.0f, a.lp.mask) ||
+            !steer_probe_ok(grid_, pa, pa + (v + dir) * 25.0f, a.lp.mask))
+            continue;
+        kept.push_back(v);
+        if (!have || r.w > best_w || (r.w == best_w && length_sq(v) > length_sq(best))) {
+            have = true;
+            best_rec = i;  // the RECORD loop index (retail compares it with the kept-list index below)
+            best = v;
+            best_w = r.w;
+        }
+    }
+    if (!have) return {};
+    V2 out = best;
+    for (size_t j = 0; j < kept.size(); ++j) {
+        if (j == best_rec) continue;  // retail quirk (copied): after a dropped record this skips the wrong entry
+        if (dot(best, kept[j]) >= -0.5f) out = out + kept[j];
+    }
+    // + 0x5c6d40(obj, dir, its container, 1.0): every term is 0x5c71a0 of two members of one container = 0.
+    return out;
+}
+
+V2 MovementSystem::team_member_avoid(ObjectId member, V2 dir) const {
+    const Unit* u = unit_ptr(member);
+    if (!u || u->anchor < 0 || !unit_ptr(u->anchor)) return {};
+    std::vector<SteerRec> recs;
+    team_steer_recs(recs);
+    const auto lo = std::lower_bound(recs.begin(), recs.end(), u->anchor,
+                                     [](const SteerRec& e, ObjectId c) { return e.container < c; });
+    auto hi = lo;
+    while (hi != recs.end() && hi->container == u->anchor) ++hi;
+    std::vector<V2> pos;
+    pos.reserve(units_.size());
+    for (const Unit& o : units_) pos.push_back(o.m.pos);
+    const float flee = team_fleeing(u->anchor) ? cfg_.constants.fleeing_infantry_speed_bonus : 1.0f;
+    return member_avoid(*u, u->m.pos, u->m.speed, loco_max_speed(*u) * flee, dir,
+                        std::span<const SteerRec>(recs).subspan(static_cast<size_t>(lo - recs.begin()),
+                                                                static_cast<size_t>(hi - lo)),
+                        pos);
+}
+
+// s78n t16 (FIGHTER_FLYING §7.7): the inputs of the squad containers' speed step 0x5aaf70, serial, before the parallel walk
+// (start-of-tick positions and slots). Minima only, so the member order does not matter (retail: team index order).
+void MovementSystem::team_speed_steps() {
+    const float mult = mode_mult();
+    for (Unit& k : units_) {
+        k.team_accel = 0.0f;
+        k.straggle = 1.0f;
+        if (!k.d.team_container) continue;
+        const std::span<const LandTeamSlot> team = land_team(k.d.id);
+        if (team.empty()) continue;  // 0x5ab540: no member -> the full-speed fallback; 0x404450 fails -> no cap
+        // The members' smallest raw Max_Speed (0x4049e0), as team_caps takes it.
+        float raw = 3.0e38f;
+        for (const LandTeamSlot& e : team) {
+            const int32_t mi = find(e.member);
+            if (mi >= 0) raw = std::min(raw, std::max(units_[static_cast<size_t>(mi)].d.max_speed, 0.0f));
+        }
+        // Item 1, 0x5ab540: min over the members of 0x373080(member type, K) = OverrideDeceleration x E / Max_Speed, E =
+        // 0x370f00(member type, K) = min(member Max_Speed, the members' minimum) x K's chain (mode multiplier, container
+        // factor; the fleeing factor is applied by the walk); the bare OverrideDeceleration when Max_Speed is 0. The
+        // first value is taken, then the minimum; not > 0 -> K's effective max speed (team_accel 0).
+        // Item 2, 0x404450: the joint box starts at 0 and holds every slot x +/- the member's half-extent.
+        bool first = true;
+        float a = 0.0f, lx = 0.0f, ux = 0.0f;
+        for (const LandTeamSlot& e : team) {
+            const int32_t mi = find(e.member);
+            if (mi < 0) continue;
+            const Unit& m = units_[static_cast<size_t>(mi)];
+            const float ms = m.d.max_speed;
+            float v = m.d.decel;
+            if (ms != 0.0f) v = v * (std::min(ms, raw) * mult * k.team_factor) / ms;
+            a = first ? v : std::min(a, v);
+            first = false;
+            lx = std::min(lx, m.tslot.x - m.team_hx);
+            ux = std::max(ux, m.tslot.x + m.team_hx);
+        }
+        if (first) continue;
+        if (a > 0.0f) k.team_accel = a;
+        // Item 2, 0x5ab640: a member more than HX + 2 behind the container along its facing caps the target speed at
+        // (1 - clamp(((-HX - 2) - p) / 10, 0, 1)) x the team speed.
+        const float edge = -((ux - lx) * 0.5f + k.d.max_jiggle_distance) - 2.0f;
+        const V2 f = dir_from_deg(k.m.yaw);
+        float fac = 1.0f;
+        for (const LandTeamSlot& e : team) {
+            const int32_t mi = find(e.member);
+            if (mi < 0) continue;
+            const Unit& m = units_[static_cast<size_t>(mi)];
+            const float p = f.x * (m.m.pos.x - k.m.pos.x) + f.y * (m.m.pos.y - k.m.pos.y);
+            if (!(p < edge)) continue;
+            // [port] retail members are not passability-tested, the port's are (steer_commit): a member whose straight line
+            // to its slot point is blocked cannot close up by steering, so it does not hold the container.
+            const V2 off{m.tslot.x + m.jiggle.x, m.tslot.y + m.jiggle.y};
+            const V2 slot{k.m.pos.x + f.x * off.x - f.y * off.y, k.m.pos.y + f.y * off.x + f.x * off.y};
+            if (!steer_probe_ok(grid_, m.m.pos, slot, m.lp.mask)) continue;
+            fac = std::min(fac, 1.0f - std::clamp((edge - p) / 10.0f, 0.0f, 1.0f));
+        }
+        k.straggle = fac;
+    }
+}
+
 // One member frame (FIGHTER_FLYING §7 / §7.3, MOVEMENT §3.7). Reads only `k` (the container's state at the start of the
 // tick) and writes only `u`, so it runs in the parallel walk.
-void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
-    const float vmax = loco_max_speed(u);
-    const float accel = u.lp.accel > 0.0f ? u.lp.accel : vmax;
-    const float decel = u.lp.decel > 0.0f ? u.lp.decel : vmax;
+void MovementSystem::steer_member(Unit& u, const TeamSnap& k, std::span<const SteerRec> recs, std::span<const V2> pos0) const {
+    // s78n t14 part B (FIGHTER_FLYING §7.1): while the container's current path is a crush-flee push (0x39a5b0 reads the
+    // container's path for a member) Fleeing_Infantry_Speed_Bonus multiplies the member's max speed 0x370f00 (the catch-up
+    // and recovery speeds), so its acceleration / deceleration (0x372fe0 / 0x373080: x effective / Max_Speed), and its turn
+    // rate 0x62c3d0 (steering, recovery turn / move, the 0.5 x rate recovery threshold). x 1 is exact otherwise.
+    const float flee = k.fleeing ? cfg_.constants.fleeing_infantry_speed_bonus : 1.0f;
+    const float vmax = loco_max_speed(u) * flee;
+    const float accel = u.lp.accel > 0.0f ? u.lp.accel * flee : vmax;
+    const float decel = u.lp.decel > 0.0f ? u.lp.decel * flee : vmax;
     // Step 1: (c, s) = normalise(cos yaw, sin yaw) by sqrtf and 1 / len (FIGHTER_FLYING §7 item 1).
     const V2 cs = dir_from_deg(k.yaw);
     const float inv = 1.0f / std::sqrt(cs.x * cs.x + cs.y * cs.y);
     const float c = cs.x * inv, s = cs.y * inv;
-    // Step 7 / MOVEMENT §3.7: [port] the turn rate x Fleeing_Infantry_Speed_Bonus while the member's (or its team's) path
-    // is kind 7 (0x39a5b0) is not applied - the port has no fleeing path kind (no flee order), so the factor is always 1.
-    const float rate = u.lp.turn_rate;
+    // Step 7: the member's own turn rate (0x62c3d0 = 0x372560 x the fleeing factor).
+    const float rate = u.lp.turn_rate * flee;
     const V2 off{u.tslot.x + u.jiggle.x, u.tslot.y + u.jiggle.y};
     // s78n t14 (FIGHTER_FLYING §7.3): the container's state copied to the member. Port Walk states: WalkStartTurn /
     // WalkTurning = retail 0x10 (the port's Walk turns in place in 0x0F), WalkMoving = 0x13, WalkEndMove = 0x14; WalkStopped
@@ -518,7 +723,11 @@ void MovementSystem::steer_member(Unit& u, const TeamSnap& k) const {
     // Step 6: heading = the team facing pulled toward the side error (w <= 0.5).
     const float w = std::clamp(std::fabs(side) / 10.0f, 0.0f, 0.5f);
     const V2 perp = side > 0.0f ? V2{-s, c} : V2{s, -c};
-    const V2 dir{c + w * (perp.x - c), (perp.y - s) * w + s};
+    V2 dir{c + w * (perp.x - c), (perp.y - s) * w + s};
+    // s78n t14 part B (FIGHTER_FLYING §7.5): + the collision steering vector 0x509810 of the container's collision objects
+    // (start-of-tick positions; the member's new speed for the 0x5c6d40 ratio).
+    if (k.rec_end > k.rec_begin)
+        dir = dir + member_avoid(u, u.m.pos, sp, vmax, dir, recs.subspan(k.rec_begin, k.rec_end - k.rec_begin), pos0);
     // Step 7: turn by at most the turn rate.
     u.m.yaw = turn_toward(u.m.yaw, heading_deg(dir), rate);
     if (!(sp > 0.0f)) {

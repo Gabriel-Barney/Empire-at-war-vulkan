@@ -69,6 +69,7 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.vehicle_formation_recruitment_distance =
         gc.get_float("VehicleFormationRecruitmentDistance", c.vehicle_formation_recruitment_distance);
     c.double_click_move_max_speed_ratio = gc.get_float("DoubleClickMoveMaxSpeedRatio", c.double_click_move_max_speed_ratio);
+    c.fleeing_infantry_speed_bonus = gc.get_float("Fleeing_Infantry_Speed_Bonus", c.fleeing_infantry_speed_bonus);  // s78n t14
     c.land_speed_multiplier = gc.get_float("Object_Max_Speed_Multiplier_Land", c.land_speed_multiplier);
     c.space_speed_multiplier = gc.get_float("Object_Max_Speed_Multiplier_Space", c.space_speed_multiplier);
     c.space_guard_range = gc.get_float("Space_Guard_Range", c.space_guard_range);  // S7 t37
