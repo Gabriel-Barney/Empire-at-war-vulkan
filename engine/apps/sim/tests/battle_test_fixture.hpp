@@ -413,7 +413,18 @@ inline std::string hack_types() {
                  "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living><LandBehavior>WALK_LOCOMOTOR</LandBehavior>"
                  "<Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius><Custom_Hard_XExtent>6</Custom_Hard_XExtent>"
                  "<Custom_Hard_YExtent>6</Custom_Hard_YExtent></GroundInfantry>\n"
-                 " <GroundCompany Name=\"S10_HeroB_Co\"><Company_Units>S10_HeroB</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
+                 " <GroundCompany Name=\"S10_HeroB_Co\"><Company_Units>S10_HeroB</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 // s78n t06 review: a garrisonable named hero (S10_HeroA as a GARRISON_UNIT, like Vader / Obi-Wan) and a
+                 // one-slot garrison vehicle company for it (S10_Speeder_Stolen); only test_hero_clash_garrison uses them.
+                 " <GroundInfantry Name=\"S10_HeroC\"><Tactical_Health>500</Tactical_Health><Max_Speed>1.0</Max_Speed>"
+                 "<Is_Named_Hero>Yes</Is_Named_Hero><AI_Combat_Power>50</AI_Combat_Power><CategoryMask>Infantry</CategoryMask>"
+                 "<MovementClass>Infantry</MovementClass><Behavior>SELECTABLE</Behavior>"
+                 "<Collidable_By_Projectile_Living>Yes</Collidable_By_Projectile_Living>"
+                 "<LandBehavior>WALK_LOCOMOTOR, GARRISON_UNIT</LandBehavior><Garrison_Category>Infantry</Garrison_Category>"
+                 "<Custom_Soft_Footprint_Radius>6</Custom_Soft_Footprint_Radius><Custom_Hard_XExtent>6</Custom_Hard_XExtent>"
+                 "<Custom_Hard_YExtent>6</Custom_Hard_YExtent></GroundInfantry>\n"
+                 " <GroundCompany Name=\"S10_HeroC_Co\"><Company_Units>S10_HeroC</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n"
+                 " <GroundCompany Name=\"S10_HeroHold_Co\"><Company_Units>S10_Speeder_Stolen</Company_Units><Population_Value>1</Population_Value></GroundCompany>\n");
     return t;
 }
 

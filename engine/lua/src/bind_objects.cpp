@@ -2199,6 +2199,9 @@ void script_unlock(Call& c, ObjectHandle h) {
         return;
     }
 #endif
+    // s78n t06 review (A1_READINGS §28.9 item 4): a member locked by its hero clash - retail's decrement frees its movement
+    // although +0x3b4 stays set (only the TEAM path reaches a clashing unit: Unlock on the hero itself is the error).
+    if (b && b->remaining && b->remaining->release_hero_clash_lock && b->remaining->release_hero_clash_lock(h)) return;
     if (detail::movement_locked(c, id)) return;
     const std::string name(object_type_name(c, h));
     c.vm->message("SCRIPT WARNING: GameObjectWrapper::Unlock_Current_Orders - object " + name + " is not locked.");
@@ -3055,9 +3058,10 @@ bool movement_locked(Call& c, ObjectId id) {
     if (!b) return false;
     const RemainingScriptHooks* hk = b->remaining;
     const objects::ObjectStore* st = store(c);
-    if (hk && hk->in_hero_clash) {  // s78n t06: the clash's movement lock (HERO_CLASH §3.2)
+    // s78n t06: the clash's movement lock (HERO_CLASH §3.2); review: while its share is held (a TEAM Unlock releases it).
+    if (hk && (hk->hero_clash_locked || hk->in_hero_clash)) {
         const ObjectHandle h = st->find(id);
-        if (h && hk->in_hero_clash(h)) return true;
+        if (h && (hk->hero_clash_locked ? hk->hero_clash_locked(h) : hk->in_hero_clash(h))) return true;
     }
     std::function<bool(ObjectId, Vec3&)> goal;
     if (hk && hk->move_goal)

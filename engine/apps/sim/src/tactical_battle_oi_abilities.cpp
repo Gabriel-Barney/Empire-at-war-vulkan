@@ -180,7 +180,9 @@ void TacticalBattle::oi_install(TacticalMode& mode, SimRng& rng) {
 #endif
     // OI follow-up t03 (A1_READINGS Â§28.9): the script's shares of the movement lock (Lock_Current_Orders, a Divert).
     // a1i t04: + the unload exit path of a landing object's unloaded units (Â§35.2, the locomotor's forced-move term).
-    h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id) || landing_locked(id); };
+    // s78n t06 review: + the hero clash's share (0x39ad40 reads the one counter the clash Begin 0x6abde0 raises), so
+    // AbilitySystem::locked (can(HUNT), the behaviour switch-ons, the Lure follower filter) sees a duelling hero locked.
+    h.movement_locked = [this](tc::ObjectId id) { return script_movement_locked(id) || landing_locked(id) || hero_clash_locked(id); };
     // S8 t06 (LOB_SOLVER §3.5): Remote_Bomb range tests against a garrisoned target's host. S8 t10 (§5.1): the host's gun
     // bones of its current ALT entry (Num_Garrison_Guns FP_0<i>_ALT<a>, CombatSystem::garrison_fire_bones; s78f t03: world
     // position and x-axis yaw of the current pose).

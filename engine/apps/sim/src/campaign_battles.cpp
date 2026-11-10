@@ -1384,6 +1384,14 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         const objects::ObjectId id = tm->primary().id(u);
         return battle_->combat().has_unit(id) && (battle_->combat().flags(id) & tactical::combat::kUnitHeroClash) != 0;
     };
+    story_remaining_.hero_clash_locked = [this, h](objects::ObjectHandle u) {  // s78n t06 review
+        TacticalMode* tm = h->tactical();
+        return battle_ && tm && tm->primary().alive(u) && battle_->hero_clash_locked(tm->primary().id(u));
+    };
+    story_remaining_.release_hero_clash_lock = [this, h](objects::ObjectHandle u) {  // s78n t06 review: a TEAM Unlock
+        TacticalMode* tm = h->tactical();
+        return battle_ && tm && tm->primary().alive(u) && battle_->release_hero_clash_lock(tm->primary().id(u));
+    };
     story_remaining_.move_goal = [this, h](objects::ObjectHandle u, Vec3& goal) {
         TacticalMode* tm = h->tactical();
         if (!battle_ || !tm || !tm->primary().alive(u)) return false;

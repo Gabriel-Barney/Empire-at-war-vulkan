@@ -169,6 +169,10 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
         if (!ast->alive(u) || !bt->combat_->has_unit(ast->id(u))) return false;
         return (bt->combat_->flags(ast->id(u)) & tactical::combat::kUnitHeroClash) != 0;
     };
+    remaining_.hero_clash_locked = [bt, ast](objects::ObjectHandle u) { return ast->alive(u) && bt->hero_clash_locked(ast->id(u)); };
+    remaining_.release_hero_clash_lock = [bt, ast](objects::ObjectHandle u) {  // s78n t06 review: a TEAM Unlock
+        return ast->alive(u) && bt->release_hero_clash_lock(ast->id(u));
+    };
     remaining_.move_goal = [bt, ast](objects::ObjectHandle u, Vec3& goal) {
         if (!ast->alive(u) || !bt->movement_->has_unit(ast->id(u))) return false;
         const mv::UnitView v = bt->movement_->view(ast->id(u));

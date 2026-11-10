@@ -822,6 +822,11 @@ enum UnitFlag : uint32_t {
     // every target / fire / ability accept between it and others applies the pairing rule (clash_allows). Area damage is
     // not filtered. Saved and hashed with the other flags.
     kUnitHeroClash = 1u << 24,
+    // s78n t06 review (A1_READINGS §28.9 item 4): the clash's share of the movement lock was released by a Lua
+    // Unlock_Current_Orders through the hero's land TEAM object (retail decrements each locked member's counter, so the
+    // duelling hero moves again while +0x3b4 stays set). Read only by the host's movement lock; cleared with
+    // kUnitHeroClash. Saved and hashed with the other flags.
+    kUnitHeroClashUnlocked = 1u << 25,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
 inline constexpr uint32_t kUnitHostMirrorFlags =

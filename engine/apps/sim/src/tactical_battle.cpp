@@ -1539,9 +1539,23 @@ bool TacticalBattle::script_movement_locked(objects::ObjectId id) const {
 bool TacticalBattle::movement_locked(objects::ObjectId id) const {
     if (abilities_ && abilities_->immobilize_count(id) > 0) return true;
     // s78n t06 (HERO_CLASH §3.2): a hero in a clash has its movement orders locked (0x3a8e50(h, 1) with +0x3b4).
-    if (combat_ && combat_->has_unit(id) && (combat_->flags(id) & tc::kUnitHeroClash)) return true;
+    if (hero_clash_locked(id)) return true;
     if (!landings_.empty() && landing_locked(id)) return true;  // a1i t04: the unload exit move (§35.2)
     return script_movement_locked(id);
+}
+
+bool TacticalBattle::hero_clash_locked(objects::ObjectId id) const {
+    // s78n t06 review: the clash's share of the lock - +0x3b4 set and not released by a Lua TEAM Unlock (A1_READINGS §28.9
+    // item 4, kUnitHeroClashUnlocked).
+    if (!combat_ || !combat_->has_unit(id)) return false;
+    const uint32_t f = combat_->flags(id);
+    return (f & tc::kUnitHeroClash) && !(f & tc::kUnitHeroClashUnlocked);
+}
+
+bool TacticalBattle::release_hero_clash_lock(objects::ObjectId id) {
+    if (!hero_clash_locked(id)) return false;
+    combat_->set_flag(id, tc::kUnitHeroClashUnlocked, true);
+    return true;
 }
 
 void TacticalBattle::drop_locked(std::vector<objects::ObjectId>& ids) const {
@@ -2950,6 +2964,14 @@ void TacticalBattle::advance_queues(TacticalMode& mode, SimRng& rng) {
     for (int pass = 0; pass < 8 && !queues_.empty(); ++pass) {
         std::vector<Start> starts;  // first-appearance order over ascending ids
         for (OrderQueue& q : queues_) {
+            // s78n t06 review (A1_READINGS §28.9, HERO_CLASH §3.2): a movement-locked unit (hero clash, script lock, ability
+            // immobilize, landing exit) takes no queued order. [port] Its queue is dropped, not kept for after the lock:
+            // retail's lock callers leave every coordinator (Stop, the clash Begin 0x6abde0) or replace the move (Confuse),
+            // which discards the formation's queued moves, and a locked unit's coordinator Move_To is dropped.
+            if (movement_locked(q.id)) {
+                q.orders.clear();
+                continue;
+            }
             if (order_busy(q.id, &q)) continue;
             while (!q.orders.empty() && !runnable(q.id, q.orders.front())) q.orders.erase(q.orders.begin());
             if (q.orders.empty()) continue;

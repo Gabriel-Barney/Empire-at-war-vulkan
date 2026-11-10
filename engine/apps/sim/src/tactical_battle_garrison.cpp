@@ -421,6 +421,9 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
         if (!u || !u->alive || u->retreated || !u->movable || store.owner(u->h) != static_cast<int32_t>(player)) continue;
         if (std::find(ids.begin(), ids.end(), id) != ids.end() || garrison_.garrisoned(id) || garrison_.entering(id)) continue;
         if (!garrison_.masks_match(id, holder)) continue;
+        // s78n t06 review [port]: a hero in a clash (+0x3b4) is not sent into a garrison (its locked movement keeps it in
+        // the duel; retail's group move leaves a locked unit out, so it never reaches the host).
+        if (combat_->has_unit(id) && (combat_->flags(id) & tc::kUnitHeroClash)) continue;
         ids.push_back(id);
     }
     if (ids.empty()) return R::InvalidUnit;

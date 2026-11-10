@@ -520,6 +520,12 @@ public:
     // Registered per bridge owner `key` (an empty fn removes it; the battle outlives its AI / story bridges).
     void set_script_movement_lock(const void* key, std::function<bool(objects::ObjectId)> fn);
     bool script_movement_locked(objects::ObjectId id) const;  // the bridges' shares only
+    // s78n t06 review: the hero clash's share of the lock (+0x3b4, HERO_CLASH §3.2) while it is held. release_hero_clash_lock
+    // = a Lua Unlock_Current_Orders through the hero's land TEAM object (A1_READINGS §28.9 item 4: retail's decrement of
+    // the member's counter): the hero's movement orders are free again while +0x3b4 stays set (until the clash release
+    // clears both). False when the clash holds no share.
+    bool hero_clash_locked(objects::ObjectId id) const;
+    bool release_hero_clash_lock(objects::ObjectId id);
     // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): a Lua Lock_Current_Orders that took the obj +0x3a8 counter 0 -> 1 (the bridge's
     // script share, lua::TacticalScriptHooks::movement_first_lock): the first lock's split / adopt (at most one draw of
     // the battle's synced RNG, at the call).

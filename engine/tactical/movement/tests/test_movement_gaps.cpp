@@ -3012,6 +3012,36 @@ static void test_land_squad_review() {
         CHECK(sys.park_team_member(3) && sys.team_member_parked(3) && !sys.remove_unit(3) && !sys.team_member_parked(3));
         CHECK(sys.park_team_member(1) && sys.remove_unit(100) && !sys.team_member_parked(1) && sys.land_team(100).empty());
     }
+    {  // s78n t06 review: suspend / rejoin (a squad-member hero in a clash): orders act on the member itself meanwhile
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 at = cell_center(10, 20);
+        const V2 slots[3] = {{0.0f, 15.0f}, {0.0f, 0.0f}, {0.0f, -15.0f}};
+        const V2 starts[3] = {at + slots[0], at + slots[1], at + slots[2]};
+        squad(sys, at, slots, starts);
+        ObjectId tc = -1;
+        V2 ts;
+        CHECK(sys.team_slot(2, tc, ts) && tc == 100);
+        CHECK(!sys.suspend_team_member(100));  // not a steering member: nothing done
+        CHECK(sys.suspend_team_member(2) && sys.has_unit(2) && sys.team_member_parked(2));
+        CHECK(!sys.team_slot(2, tc, ts) && sys.land_team(100).size() == 2);
+        SimRng rng(8);
+        MoveOrder o;
+        o.units = {2};
+        o.destination = cell_center(10, 40);
+        sys.move(o, rng, 1);
+        CHECK(sys.view(2).has_goal && !sys.view(100).has_goal);  // the member walks, its squad stays
+        for (uint32_t f = 2; f < 400; ++f) sys.tick(f, rng, serial_for);
+        CHECK(sys.view(2).arrived && length(sys.view(2).pos - cell_center(10, 40)) < 2.0f && length(sys.view(100).pos - at) < 0.5f);
+        const ObjectId stop_ids[1] = {2};
+        sys.stop(stop_ids);
+        CHECK(!sys.view(100).has_goal);
+        CHECK(sys.rejoin_land_team(2) && !sys.team_member_parked(2));
+        CHECK(sys.team_slot(2, tc, ts) && tc == 100 && ts == slots[1] && sys.land_team(100).size() == 3);
+        for (uint32_t f = 400; f < 900; ++f) sys.tick(f, rng, serial_for);
+        CHECK(length(sys.view(2).pos - (at + slots[1])) <= 4.0f);  // recovered to its slot
+        std::printf("land squad review: suspended member walked alone and recovered to its slot\n");
+    }
 }
 
 static void test_determinism() {

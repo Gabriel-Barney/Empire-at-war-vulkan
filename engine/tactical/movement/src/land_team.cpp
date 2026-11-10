@@ -120,15 +120,33 @@ bool MovementSystem::is_land_team_container(ObjectId id) const {
     return u && u->d.team_container;
 }
 
+void MovementSystem::park_record(const Unit& u) {
+    const ObjectId member = u.d.id;
+    const auto it = std::lower_bound(parked_.begin(), parked_.end(), member,
+                                     [](const LandTeamSlot& e, ObjectId m) { return e.member < m; });
+    const LandTeamSlot p{u.anchor, u.tindex, member, u.tslot};
+    if (it != parked_.end() && it->member == member) *it = p;
+    else parked_.insert(it, p);
+}
+
 bool MovementSystem::park_team_member(ObjectId member) {
     const Unit* u = unit_ptr(member);
     if (!u || u->anchor < 0) return false;
-    const auto it = std::lower_bound(parked_.begin(), parked_.end(), member,
-                                     [](const LandTeamSlot& e, ObjectId m) { return e.member < m; });
-    const LandTeamSlot p{u->anchor, u->tindex, member, u->tslot};
-    if (it != parked_.end() && it->member == member) *it = p;
-    else parked_.insert(it, p);
+    park_record(*u);
     return remove_impl(member);
+}
+
+bool MovementSystem::suspend_team_member(ObjectId member) {
+    Unit* u = unit_ptr(member);
+    if (!u || u->anchor < 0) return false;
+    park_record(*u);
+    u->anchor = -1;
+    u->recovering = false;
+    u->steer_blocked = 0;
+    u->m.speed = 0.0f;
+    u->m.state = LocoState::WalkStopped;
+    team_ix_rebuild();
+    return true;
 }
 
 bool MovementSystem::team_member_parked(ObjectId member) const {

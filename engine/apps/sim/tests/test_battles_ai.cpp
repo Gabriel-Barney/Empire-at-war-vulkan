@@ -1717,32 +1717,20 @@ void test_vehicle_thief() {
 // s78n t06 (HERO_CLASH §2-§6): two enemy named heroes (S10_HeroA defends, S10_HeroB invades) and a melee entry with a
 // map-wide Clash_Range. The clash starts at a detection frame (global frame % 15 == 0), both heroes get +0x3b4 (combat
 // kUnitHeroClash): movement locked, no current target, nobody targets them; they slide to their spots Combat_Distance
-// apart and exchange until one dies; the survivor is released. `workers` runs the same battle on another worker count;
-// the per-tick battle / combat / movement hashes are returned for the comparison.
-struct HeroClashRun {
-    bool started = false, flagged = true, locked = true, untargeted = true, ended = false, released = false;
-    uint32_t start_frame = 0, end_frame = 0, exchanges = 0;
-    float health_a = 0.0f, health_b = 0.0f;
-    std::vector<uint64_t> digests;
-};
-HeroClashRun run_hero_clash_battle(uint32_t workers) {
-    namespace tc = alamo::tactical::combat;
-    HeroClashRun out;
-    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
-    jobs::JobSystem js(jobs::JobSystemConfig{static_cast<int32_t>(workers)});
-    SimConfig cfg;
-    cfg.seed = 2026;
-    cfg.players = 4;
-    SimHost host(d->types, js, cfg);
-    galactic::GalacticSetup setup = make_setup(*d, true);
-    const uint32_t a_co = type_of(*d, "S10_HeroA_Co"), b_co = type_of(*d, "S10_HeroB_Co");
-    const uint32_t a_t = type_of(*d, "S10_HeroA"), b_t = type_of(*d, "S10_HeroB");
-    CHECK(a_co < d->types.size() && b_co < d->types.size());
-    setup.forces.push_back({0, 1, a_co});
-    setup.forces.insert(setup.forces.begin(), {1, 2, b_co});
-    galactic::GalacticSim* gs = host.start_galactic(d->rules, setup);
-    CHECK(gs != nullptr);
-    if (!gs) return out;
+// apart and exchange until one dies; the survivor is released. The per-tick battle / combat / movement hashes are returned
+// for the worker-count check (one ctest entry per worker count: the --hero-clash mode of main).
+// s78n t06 review:
+//   * the abilities see the clash's lock (AbilitySystem::locked: can(HUNT) refused while locked, allowed after release);
+//   * `save_load`: the session is saved mid-fight and loaded into a fresh session, which then runs on with the
+//     original's per-tick digests and CRC log, bit for bit;
+//   * `queue`: hero A (left to the test's orders) has a move and three shift-queued moves when the clash data comes on:
+//     the queue is dropped at the lock (A1_READINGS §28.9: a locked unit takes no queued order) and never popped into a
+//     move while the clash runs or after it (before: the snap / hold cleared the goal and the queue drained into moves).
+namespace tc = alamo::tactical::combat;
+namespace mv = alamo::tactical::movement;
+namespace ta = alamo::tactical::abilities;
+
+std::shared_ptr<tc::HeroClashData> hero_clash_data(const char* first, const char* second) {
     auto data = std::make_shared<tc::HeroClashData>();
     tc::HeroClashEntry e;
     e.name = "S10_Duel";
@@ -1754,102 +1742,380 @@ HeroClashRun run_hero_clash_battle(uint32_t workers) {
     e.second_win = 0.3f;
     e.first_multiplier = 2.5f;
     e.second_multiplier = 1.0f;
-    e.first_type = "S10_HeroA";
-    e.second_type = "S10_HeroB";
+    e.first_type = first;
+    e.second_type = second;
     e.first_anims = {"HC_WIN", "HC_LOSE", "HC_DRAW", "IDLE"};
     e.second_anims = e.first_anims;
     data->entries.push_back(e);
-    CampaignBattleOptions opt;
-    opt.conflict.human_choice = galactic::BattleChoice::Fight;
-    opt.battle.max_frames = 3000;
-    opt.hero_clash = data;
-    CampaignBattles battles(host, d->crules, *d->catalog,
-                            [](const std::string& name, terrain::MapData& m) {
-                                if (name != "S10_Land_B") return false;
-                                m = land_map();
-                                return true;
-                            },
-                            opt);
-    CHECK(battles.attach(nullptr));
-    std::vector<objects::ObjectHandle> up;
-    for (objects::ObjectHandle h : gs->planets()[2].surface)
-        if (gs->store().owner(h) == 1) up.push_back(h);
-    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
-    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
-    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    return data;
+}
+
+// One campaign session with a land battle at S10_B: `defenders` companies for player 0 at planet 1, `invaders` for
+// player 1 at planet 2. `launch`: the invasion fleet is launched and moved (a fresh session that loads a save does not).
+struct ClashSession {
+    std::unique_ptr<jobs::JobSystem> js;
+    std::unique_ptr<SimHost> host;
+    galactic::GalacticSim* gs = nullptr;
+    std::unique_ptr<CampaignBattles> battles;
     bool invaded = false;
-    objects::ObjectId ha = objects::kNoObjectId, hb = objects::kNoObjectId;
-    uint32_t after_end = 0;
-    for (uint64_t t = 0; t < 8000 && after_end < 30; ++t) {
-        host.tick_once();
-        if (!invaded && host.modes().depth() == 1) {
+
+    ClashSession(const Data& d, uint32_t workers, const CampaignBattleOptions& opt, std::initializer_list<const char*> defenders,
+                 std::initializer_list<const char*> invaders, bool launch) {
+        js = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{static_cast<int32_t>(workers)});
+        SimConfig cfg;
+        cfg.seed = 2026;
+        cfg.players = 4;
+        host = std::make_unique<SimHost>(d.types, *js, cfg);
+        galactic::GalacticSetup setup = make_setup(d, true);
+        for (const char* co : defenders) setup.forces.push_back({0, 1, type_of(d, co)});
+        for (const char* co : invaders) setup.forces.insert(setup.forces.begin(), {1, 2, type_of(d, co)});
+        gs = host->start_galactic(d.rules, setup);
+        CHECK(gs != nullptr);
+        if (!gs) return;
+        battles = std::make_unique<CampaignBattles>(*host, d.crules, *d.catalog,
+                                                    [](const std::string& name, terrain::MapData& m) {
+                                                        if (name != "S10_Land_B") return false;
+                                                        m = land_map();
+                                                        return true;
+                                                    },
+                                                    opt);
+        CHECK(battles->attach(nullptr));
+        if (!launch) return;
+        std::vector<objects::ObjectHandle> up;
+        for (objects::ObjectHandle h : gs->planets()[2].surface)
+            if (gs->store().owner(h) == 1) up.push_back(h);
+        CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+        const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+        if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    }
+    // One tick; the invasion once the fleet is in orbit. The running battle (null between battles).
+    TacticalBattle* tick() {
+        host->tick_once();
+        if (!invaded && gs && host->modes().depth() == 1) {
             const std::vector<uint32_t> f = gs->fleets_at(1, 1);
             if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
         }
-        TacticalBattle* b = battles.battle();
-        TacticalMode* tm = host.tactical();
+        return battles ? battles->battle() : nullptr;
+    }
+    objects::ObjectId find(const TacticalBattle& b, uint32_t type) const {
+        const objects::ObjectStore& st = host->tactical()->primary();
+        const tc::CombatSystem& cs = b.combat();
+        for (size_t i = 0; i < cs.unit_count(); ++i) {
+            const auto id = cs.unit_id_at(i);
+            const objects::ObjectHandle h = st.find(id);
+            if (st.alive(h) && st.type(h) == type) return id;
+        }
+        return objects::kNoObjectId;
+    }
+};
+
+uint64_t clash_digest(const TacticalBattle& b) {
+    StateHasher hs;
+    b.hash(hs);
+    b.combat().hash_units(hs);
+    b.movement().hash_units(hs);
+    return hs.digest();
+}
+
+bool goal_at(const mv::UnitView& v, const std::vector<Vec3>& points) {
+    for (const Vec3& q : points)
+        if (v.has_goal && std::fabs(v.goal.x - q.x) < 1.0f && std::fabs(v.goal.y - q.y) < 1.0f) return true;
+    return false;
+}
+
+struct HeroClashRun {
+    bool started = false, flagged = true, locked = true, untargeted = true, ended = false, released = false;
+    bool hunt_locked = true, hunt_after = false;                       // review finding 3
+    bool save_ok = false, load_ok = false, load_same = false;          // review finding 7
+    bool queued = false, queue_dropped = false, queue_moved = false;   // review finding 1
+    uint32_t start_frame = 0, end_frame = 0, exchanges = 0, save_tick = 0, compared = 0;
+    float health_a = 0.0f, health_b = 0.0f;
+    std::vector<uint64_t> digests;
+};
+
+HeroClashRun run_hero_clash_battle(const Data& d, uint32_t workers, bool save_load = false, bool queue = false) {
+    HeroClashRun out;
+    const uint32_t a_t = type_of(d, "S10_HeroA"), b_t = type_of(d, "S10_HeroB");
+    CHECK(a_t < d.types.size() && b_t < d.types.size());
+    const auto data = hero_clash_data("S10_HeroA", "S10_HeroB");
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.hero_clash = queue ? nullptr : data;        // queue: the clash data comes on once the moves are queued
+    if (queue) opt.battle.skip_human_units = true;  // hero A (the human's) is left to the test's orders
+    ClashSession s(d, workers, opt, {"S10_HeroA_Co"}, {"S10_HeroB_Co"}, true);
+    if (!s.gs) return out;
+    objects::ObjectId ha = objects::kNoObjectId, hb = objects::kNoObjectId;
+    std::vector<Vec3> queued_at;
+    SaveFile save;
+    std::vector<uint64_t> after_save;  // the original's digests of the ticks after its save
+    uint32_t after_end = 0;
+    for (uint64_t t = 0; t < 8000 && after_end < 30; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
         if (!b || !tm || b->frame() < 1) {
             if (out.started) break;  // the battle ended
             continue;
         }
         objects::ObjectStore& st = tm->primary();
         const tc::CombatSystem& cs = b->combat();
-        if (ha == objects::kNoObjectId || hb == objects::kNoObjectId) {
-            for (size_t i = 0; i < cs.unit_count(); ++i) {
-                const auto id = cs.unit_id_at(i);
-                const objects::ObjectHandle h = st.find(id);
-                if (!st.alive(h)) continue;
-                if (st.type(h) == a_t) ha = id;
-                if (st.type(h) == b_t) hb = id;
-            }
-        }
-        StateHasher hs;
-        b->hash(hs);
-        cs.hash_units(hs);
-        b->movement().hash_units(hs);
-        out.digests.push_back(hs.digest());
+        if (ha == objects::kNoObjectId) ha = s.find(*b, a_t);
+        if (hb == objects::kNoObjectId) hb = s.find(*b, b_t);
+        const uint64_t dg = clash_digest(*b);
+        out.digests.push_back(dg);
+        if (out.save_ok) after_save.push_back(dg);
         const tc::HeroClashManager& m = b->hero_clashes();
+        if (queue && !out.queued && ha != objects::kNoObjectId && hb != objects::kNoObjectId && m.empty()) {
+            // a move away and three queued moves, then the clash data on (the next detection frame starts the clash)
+            const uint8_t owner = static_cast<uint8_t>(st.owner(st.find(ha)));
+            const Vec3 p = st.position(st.find(ha));
+            const objects::ObjectId one[1] = {ha};
+            CHECK(b->order_move(*tm, owner, one, p.x + 300.0f, p.y, s.host->random().synced()) == commands::RejectReason::None);
+            for (int k = 1; k <= 3; ++k) {
+                const Vec3 q{p.x + 40.0f * static_cast<float>(k), p.y + 200.0f, p.z};
+                CHECK(b->order_move(*tm, owner, one, q.x, q.y, s.host->random().synced(), mv::kNoFacing, false, true) ==
+                      commands::RejectReason::None);
+                queued_at.push_back(q);
+            }
+            CHECK(b->queued_orders(ha).size() == 3);
+            b->set_hero_clash_data(data);
+            out.queued = true;
+            out.queue_dropped = true;
+        }
         if (!m.empty()) {
-            if (!out.started) out.start_frame = static_cast<uint32_t>(host.frame());
+            if (!out.started) out.start_frame = static_cast<uint32_t>(s.host->frame());
             out.started = true;
             const tc::HeroClashManager::Clash& c = m.clashes()[0];
             out.exchanges = c.exchanges;
             CHECK(c.hero1 == ha && c.hero2 == hb);
+            if (queue && cs.alive(ha)) {
+                if (!b->queued_orders(ha).empty()) out.queue_dropped = false;  // dropped in the tick the clash started
+                if (goal_at(b->movement().view(ha), queued_at)) out.queue_moved = true;
+            }
             for (const objects::ObjectId h : {ha, hb}) {
                 // the loser dies in combat phase D; its clash ends at the next update (the removal path), so a dead
                 // hero is not checked here
                 if (!cs.has_unit(h) || !cs.alive(h)) continue;
                 if (!(cs.flags(h) & tc::kUnitHeroClash)) out.flagged = false;
                 if (!b->movement_locked(h)) out.locked = false;
+                if (b->abilities().can_activate(h, ta::kHunt, false, false, b->frame())) out.hunt_locked = false;
                 if (cs.current_target(h) != tc::kNoObject) out.untargeted = false;
                 for (size_t i = 0; i < cs.unit_count(); ++i) {
                     const auto id = cs.unit_id_at(i);
                     if (id != ha && id != hb && cs.alive(id) && cs.current_target(id) == h) out.untargeted = false;
                 }
             }
+            if (save_load && !out.save_ok && c.state == tc::HeroClashManager::kFight && c.exchanges >= 2) {
+                std::string why;
+                if (s.host->save_allowed(&why)) {
+                    out.save_ok = s.host->save(save, &why);
+                    if (!out.save_ok) std::printf("  hero clash save: %s\n", why.c_str());
+                    out.save_tick = static_cast<uint32_t>(s.host->frame());
+                }
+            }
         } else if (out.started && !out.ended) {
             out.ended = true;
-            out.end_frame = static_cast<uint32_t>(host.frame());
+            out.end_frame = static_cast<uint32_t>(s.host->frame());
             out.health_a = cs.alive(ha) ? cs.health(ha) : 0.0f;
             out.health_b = cs.alive(hb) ? cs.health(hb) : 0.0f;
             const objects::ObjectId survivor = cs.alive(ha) ? ha : hb;
             out.released = (cs.alive(ha) != cs.alive(hb)) && !(cs.flags(survivor) & tc::kUnitHeroClash) &&
                            !b->movement_locked(survivor);
+            out.hunt_after = b->abilities().can_activate(survivor, ta::kHunt, false, false, b->frame());
         }
+        if (queue && out.ended && cs.alive(ha) && goal_at(b->movement().view(ha), queued_at)) out.queue_moved = true;
         if (out.ended) ++after_end;
+    }
+    if (!save_load || !out.save_ok) return out;
+    // A fresh session (same data, setup and options; nothing launched: the save holds the galaxy and the battle), the
+    // save loaded, then as many ticks as the original ran after its save: the same digests every tick.
+    ClashSession f(d, workers, opt, {"S10_HeroA_Co"}, {"S10_HeroB_Co"}, false);
+    if (!f.gs) return out;
+    std::string err;
+    LoadReport rep;
+    out.load_ok = f.host->load(save, &err, &rep);
+    if (!out.load_ok) std::printf("  hero clash load: %s\n", rep.text().c_str());
+    f.invaded = true;
+    out.load_same = out.load_ok && f.host->frame() == out.save_tick;
+    for (size_t i = 0; out.load_ok && i < after_save.size(); ++i) {
+        TacticalBattle* b = f.tick();
+        if (!b || b->frame() < 1) {
+            out.load_same = false;
+            break;
+        }
+        ++out.compared;
+        if (clash_digest(*b) != after_save[i]) {
+            if (out.load_same) std::printf("  hero clash load: digest differs %zu tick(s) after the load\n", i + 1);
+            out.load_same = false;
+        }
+    }
+    // the host CRC logs (every registered system) agree too, over the same ticks
+    const auto window = [&out](const CrcLog& from) {
+        CrcLog w;
+        for (const CrcRecord& r : from.records)
+            if (r.tick >= out.save_tick && r.tick < out.save_tick + out.compared) w.records.push_back(r);
+        w.systems = from.systems;
+        w.parity_parts = from.parity_parts;
+        return w;
+    };
+    const CrcLog log_a = window(s.host->crc_log()), log_b = window(f.host->crc_log());
+    if (log_a.records.size() + 2 < out.compared) out.load_same = false;  // the original logged those ticks
+    const CrcDivergence dv = first_divergence(log_a, log_b);
+    if (dv.diverged) {
+        std::printf("  hero clash load: %s\n", dv.message.c_str());
+        out.load_same = false;
     }
     return out;
 }
 
-void test_hero_clash_battle() {
-    const HeroClashRun a = run_hero_clash_battle(0);
-    std::printf("  hero clash: start frame %u, end frame %u, %u exchanges, health A %.1f B %.1f\n", a.start_frame, a.end_frame,
-                a.exchanges, static_cast<double>(a.health_a), static_cast<double>(a.health_b));
+void test_hero_clash_battle(const Data& d) {
+    const HeroClashRun a = run_hero_clash_battle(d, 0, true);
+    std::printf("  hero clash: start frame %u, end frame %u, %u exchanges, health A %.1f B %.1f; saved at %u, %u ticks after the "
+                "load %s\n",
+                a.start_frame, a.end_frame, a.exchanges, static_cast<double>(a.health_a), static_cast<double>(a.health_b),
+                a.save_tick, a.compared, a.load_same ? "identical" : "DIFFER");
     CHECK(a.started && a.ended && a.flagged && a.locked && a.untargeted && a.released);
-    CHECK(a.exchanges >= 2);  // 500 health against 188 / 75 per lost exchange: never one exchange
-    // the same battle on four workers: per-tick battle / combat / movement hashes identical
-    const HeroClashRun b = run_hero_clash_battle(4);
-    CHECK(b.digests == a.digests && b.end_frame == a.end_frame);
+    CHECK(a.exchanges >= 2);               // 500 health against 188 / 75 per lost exchange: never one exchange
+    CHECK(a.hunt_locked && a.hunt_after);  // review finding 3: the abilities' lock test sees the clash
+    CHECK(a.save_ok && a.load_ok && a.load_same && a.compared > 0);  // review finding 7: mid-fight save / load
+    const HeroClashRun q = run_hero_clash_battle(d, 0, false, true);
+    std::printf("  hero clash with queued moves: start frame %u, end frame %u; queue dropped %d, moved to a queued point %d\n",
+                q.start_frame, q.end_frame, q.queue_dropped ? 1 : 0, q.queue_moved ? 1 : 0);
+    CHECK(q.queued && q.started && q.ended && q.locked && q.queue_dropped && !q.queue_moved);  // review finding 1
+}
+
+// --hero-clash mode (the worker-count check, alamo_add_worker_count_check in engine/apps/CMakeLists.txt): one run of the
+// hero-clash battle on `workers`; --crc-out writes its per-tick digests (one hex value per line), --golden compares.
+int hero_clash_worker_check(int argc, char** argv) {
+    uint32_t workers = 0;
+    std::string out_path, golden_path;
+    for (int i = 1; i + 1 < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--workers") workers = static_cast<uint32_t>(std::strtoul(argv[i + 1], nullptr, 10));
+        else if (a == "--crc-out") out_path = argv[i + 1];
+        else if (a == "--golden") golden_path = argv[i + 1];
+    }
+    static std::string prefix;  // a fixture folder per worker count (the entries run side by side under ctest -j)
+    prefix = "alamo_sim_battle_ai_clash_w" + std::to_string(workers);
+    g_temp_prefix = prefix.c_str();
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
+    const HeroClashRun r = run_hero_clash_battle(*d, workers);
+    CHECK(r.started && r.ended && r.released && !r.digests.empty());
+    std::printf("hero clash on %u workers: %zu ticks, end frame %u\n", workers, r.digests.size(), r.end_frame);
+    if (!out_path.empty()) {
+        std::ofstream f(out_path, std::ios::binary | std::ios::trunc);
+        for (const uint64_t v : r.digests) f << std::hex << v << "\n";
+        CHECK(static_cast<bool>(f));
+    }
+    if (!golden_path.empty()) {
+        std::ifstream f(golden_path, std::ios::binary);
+        std::vector<uint64_t> want;
+        uint64_t v = 0;
+        while (f >> std::hex >> v) want.push_back(v);
+        CHECK(!want.empty());
+        size_t first = 0;
+        while (first < want.size() && first < r.digests.size() && want[first] == r.digests[first]) ++first;
+        if (want != r.digests) {
+            std::printf("hero clash on %u workers: digests differ from the 0-worker run at tick %zu (%zu vs %zu ticks)\n", workers,
+                        first, r.digests.size(), want.size());
+            ++g_fail;
+        }
+    }
+    std::error_code ec;
+    remove_all_long(d->root, ec);
+    if (g_fail) {
+        std::printf("%d check(s) FAILED\n", g_fail);
+        return 1;
+    }
+    return 0;
+}
+
+// s78n t06 review finding 2 (HERO_CLASH §2.2 [port]): a garrisoned hero (S10_HeroC, a GARRISON_UNIT, inside a one-slot
+// garrison vehicle of its own side) is no clash candidate; once out, the clash starts; a garrison order in progress at the
+// clash start (approach or entry fade) is cancelled (Begin leaves the coordinators), and a garrison order for a clashing hero is refused, so
+// the hero is never garrisoned while it duels. The human's units are left to the test (skip_human_units); the clash data
+// comes on once the hero is inside.
+void test_hero_clash_garrison(const Data& d) {
+    const uint32_t c_t = type_of(d, "S10_HeroC"), b_t = type_of(d, "S10_HeroB"), v_t = type_of(d, "S10_Speeder_Stolen");
+    CHECK(c_t < d.types.size() && b_t < d.types.size() && v_t < d.types.size());
+    const auto data = hero_clash_data("S10_HeroC", "S10_HeroB");
+    data->entries[0].damage_percentage = 0.0f;  // no exchange damage: the clash runs until the test is done
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.skip_human_units = true;
+    ClashSession s(d, 0, opt, {"S10_HeroC_Co", "S10_HeroHold_Co"}, {"S10_HeroB_Co"}, true);
+    if (!s.gs) return;
+    using R = commands::RejectReason;
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId hc = objects::kNoObjectId, hold = objects::kNoObjectId;
+    bool inside_no_clash = true, never_in_while_flagged = true, refused = false, approach_cancelled = false;
+    auto in_clash = [](const TacticalBattle& b, objects::ObjectId id) {
+        return b.combat().has_unit(id) && (b.combat().flags(id) & tc::kUnitHeroClash) != 0;
+    };
+    for (uint64_t t = 0; t < 8000 && stage < 5; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 1) {
+            if (stage > 0) break;
+            continue;
+        }
+        const objects::ObjectStore& st = tm->primary();
+        const tc::HeroClashManager& m = b->hero_clashes();
+        SimRng& rng = s.host->random().synced();
+        if (stage == 0) {  // order the hero into the vehicle
+            hc = s.find(*b, c_t);
+            hold = s.find(*b, v_t);
+            CHECK(hc != objects::kNoObjectId && s.find(*b, b_t) != objects::kNoObjectId && hold != objects::kNoObjectId);
+            if (hc == objects::kNoObjectId || hold == objects::kNoObjectId) break;
+        }
+        const objects::ObjectId one[1] = {hc};
+        const auto owner = static_cast<uint8_t>(st.owner(st.find(hc)));
+        if (in_clash(*b, hc) && b->garrison_holder_of(hc) != objects::kNoObjectId) never_in_while_flagged = false;
+        if (stage == 0) {
+            CHECK(b->order_garrison(*tm, owner, one, hold, rng) == R::None);
+            stage = 1;
+            stage_frame = b->frame();
+        } else if (stage == 1) {  // inside: the clash data on, then three detection frames
+            if (b->garrison_holder_of(hc) == hold) {
+                b->set_hero_clash_data(data);
+                stage = 2;
+                stage_frame = b->frame();
+            } else if (b->frame() > stage_frame + 600) {
+                CHECK(false);  // never got in
+                break;
+            }
+        } else if (stage == 2) {
+            if (!m.empty()) inside_no_clash = false;
+            if (b->frame() >= stage_frame + 46) {
+                // out (the leave is immediate) and at once back toward the vehicle: its 30-frame entry fade covers the
+                // next detection frame
+                CHECK(b->order_leave_garrison(*tm, owner, one) == R::None && b->garrison_holder_of(hc) == objects::kNoObjectId);
+                CHECK(m.empty() && b->order_garrison(*tm, owner, one, hold, rng) == R::None);
+                stage = 4;
+                stage_frame = b->frame();
+            }
+        } else if (stage == 4) {  // the clash starts within 15 frames, while the hero walks back or fades in
+            if (in_clash(*b, hc)) {
+                approach_cancelled = !b->garrison().entering(hc) && b->garrison_holder_of(hc) == objects::kNoObjectId;
+                refused = b->order_garrison(*tm, owner, one, hold, rng) == R::InvalidUnit;
+                stage = 5;
+            } else if (b->frame() > stage_frame + 40) {
+                CHECK(false);  // no clash
+                break;
+            }
+        }
+    }
+    for (int k = 0; k < 60 && stage == 5; ++k) {  // a few more ticks of the duel: still outside
+        TacticalBattle* b = s.tick();
+        if (!b) break;
+        if (in_clash(*b, hc) && b->garrison_holder_of(hc) != objects::kNoObjectId) never_in_while_flagged = false;
+    }
+    std::printf("  hero clash garrison: stage %d, no clash while inside %d, approach cancelled %d, order refused %d, never inside "
+                "while duelling %d\n",
+                stage, inside_no_clash ? 1 : 0, approach_cancelled ? 1 : 0, refused ? 1 : 0, never_in_while_flagged ? 1 : 0);
+    CHECK(stage == 5 && inside_no_clash && approach_cancelled && refused && never_in_while_flagged);
 }
 
 // s78j t04 (TACTICAL_COMBAT §3.1.1 "other spawns"): a land reserve drop without a landing object (S10_Squad has no
@@ -2521,8 +2787,10 @@ void test_vehicle_landing_exit() {
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     g_temp_prefix = "alamo_sim_battle_ai_tests";
-    for (int i = 1; i < argc; ++i)
+    for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--regen") g_regen = true;
+        if (std::string(argv[i]) == "--hero-clash") return hero_clash_worker_check(argc, argv);  // s78n t06 review
+    }
     auto d = make_data();
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     std::printf("OI host: BattleAi MoveToObject, hijack_unit, AI Change_Owner\n");
@@ -2555,7 +2823,11 @@ int main(int argc, char** argv) {
     test_team_hack_bribe(false);
     test_team_hack_bribe(true);
     test_vehicle_thief();  // s78n t05
-    test_hero_clash_battle();  // s78n t06
+    {  // s78n t06 (+ review): hero clashes in a land battle (the worker-count check is its own ctest entries, --hero-clash)
+        auto hd = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, true);
+        test_hero_clash_battle(*hd);
+        test_hero_clash_garrison(*hd);
+    }
     test_land_squad_container();  // s78n t03 / t09
     test_land_squad_garrison();   // s78n review
     test_vehicle_landing_exit();

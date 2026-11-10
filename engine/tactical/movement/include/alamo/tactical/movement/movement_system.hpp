@@ -596,6 +596,10 @@ public:
     // container's removal. Saved (version 14) and hashed while any exists. False: not a steering member (nothing done) /
     // no record, the container is gone, or the unit does not qualify (set_land_team's member rule).
     bool park_team_member(ObjectId member);
+    // s78n t06 review (hero clashes): the same record, but the member stays in this system as an ordinary unit where it
+    // stands (anchor dropped, no own order: as attach_member leaves it), so move / stop / stop_and_leave act on the member
+    // itself instead of its container; rejoin_land_team ends it. False: not a steering member (nothing done).
+    bool suspend_team_member(ObjectId member);
     bool rejoin_land_team(ObjectId member);
     bool team_member_parked(ObjectId member) const;
     void hash_speed(StateHasher& h) const;
@@ -989,6 +993,7 @@ private:
     void team_ix_rebuild();
     bool remove_impl(ObjectId id);  // remove_unit without dropping a parked record
     void attach_member(Unit& u, ObjectId container, V2 slot, uint32_t tindex);  // set_land_team's per-member part
+    void park_record(const Unit& u);  // park_team_member / suspend_team_member: the (member, container, slot, index) record
     bool deferred_compose_ = false;           // cu8j t01: the host runs coordinator_update (not saved: host setup)
     FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6

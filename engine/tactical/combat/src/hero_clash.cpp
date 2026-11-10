@@ -482,9 +482,21 @@ void HeroClashManager::hash(StateHasher& h) const {
         h.u32(c.entry);
         h.i32(c.hero1);
         h.i32(c.hero2);
+        h.i32(c.type1);
+        h.i32(c.type2);
         h.u8(c.state);
         h.f32(c.health1);
         h.f32(c.health2);
+        // s78n t06 review: every saved field is hashed (spots, snap start / target poses, the exchange clip rate).
+        for (const Vec3& v : {c.spot1, c.spot2, c.snap_pos1, c.snap_pos2}) {
+            h.f32(v.x);
+            h.f32(v.y);
+            h.f32(v.z);
+        }
+        h.f32(c.snap_yaw1);
+        h.f32(c.snap_yaw2);
+        h.f32(c.want_yaw1);
+        h.f32(c.want_yaw2);
         h.u32(c.snap_start);
         h.u32(c.snap_end);
         h.u8(c.outcome);
@@ -495,6 +507,7 @@ void HeroClashManager::hash(StateHasher& h) const {
         h.boolean(c.playing);
         h.u32(c.ex_start);
         h.u32(c.ex_frames);
+        h.f32(c.ex_fps);
         h.u32(c.exchanges);
     }
 }

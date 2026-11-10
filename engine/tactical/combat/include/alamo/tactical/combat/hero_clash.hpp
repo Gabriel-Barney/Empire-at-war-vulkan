@@ -171,7 +171,7 @@ public:
         changed_ = false;
         return c;
     }
-    std::vector<EndEvent> take_ended() { return std::move(ended_); }
+    std::vector<EndEvent> take_ended() { return std::exchange(ended_, {}); }
     uint32_t started_total() const { return started_; }
 
     void clear();

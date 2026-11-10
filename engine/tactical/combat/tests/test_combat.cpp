@@ -7232,6 +7232,34 @@ void test_hero_clash_fire_refused() {
         shots += static_cast<uint32_t>(w.sys->shot_events().size());
     }
     CHECK(shots == 0 && w.sys->current_target(1) == kNoObject);
+    // s78n t06 review: the own weapon (WeaponBehavior, fire_unit_weapon) applies the same pairing rule. [port] The per-tick
+    // target drop already takes a joining clash hero away before any weapon service, so this covers the path only.
+    World u;
+    u.data.projectiles.push_back(pj);
+    UnitDesc gunner;
+    gunner.tactical_health = 100.0f;
+    gunner.max_attack_distance = 2000.0f;
+    gunner.weapon_projectile = 0;
+    gunner.weapon_recharge = 0.2f;
+    push_unit(u.data, gunner);
+    push_unit(u.data, tg);
+    u.make(cfg);
+    u.add(1, 0, 0, Vec3{-600.0f, 0.0f, 0.0f});
+    u.add(2, 1, 1, Vec3{0.0f, 0.0f, 0.0f});
+    u.sys->order_attack(1, 2);
+    shots = 0;
+    for (int i = 0; i < 60; ++i) {
+        u.tick();
+        shots += static_cast<uint32_t>(u.sys->shot_events().size());
+    }
+    CHECK(shots > 0);
+    u.sys->set_flag(2, kUnitHeroClash, true);
+    shots = 0;
+    for (int i = 0; i < 60; ++i) {
+        u.tick();
+        shots += static_cast<uint32_t>(u.sys->shot_events().size());
+    }
+    CHECK(shots == 0 && u.sys->current_target(1) == kNoObject);
 }
 
 void test_hero_clash_foc_data() {

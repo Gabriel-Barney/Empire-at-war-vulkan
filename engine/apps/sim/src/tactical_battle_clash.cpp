@@ -33,8 +33,12 @@ public:
 
     void candidates(int32_t type, std::vector<tc::ObjectId>& out) override {
         // Battle units only: team containers are not battle units ([port], HeroClashHost::candidates).
+        // s78n t06 review [port]: a garrisoned unit (obj +0x3a7, hidden in its host) is no candidate. 0x56c540 has no
+        // +0x3a7 test (HERO_CLASH §2.2), but a garrisoned hero takes no damage (Take_Damage returns at +0x3a7, §8.4.1
+        // step 7), so such a clash could never end by an exchange, and its snap would move a unit inside its host.
         for (const TacticalBattle::Unit& u : b_.units_)
-            if (u.alive && !u.retreated && st_.exists(u.h) && static_cast<int32_t>(st_.type(u.h)) == type) out.push_back(u.id);
+            if (u.alive && !u.retreated && st_.exists(u.h) && static_cast<int32_t>(st_.type(u.h)) == type && !garrisoned(u.id))
+                out.push_back(u.id);
     }
     bool alive(tc::ObjectId id) override {
         // Not dying / a death clone / removed: a live, non-retreated battle unit whose combat unit is not dead (the combat
@@ -99,8 +103,30 @@ public:
     }
     void set_in_clash(tc::ObjectId id, bool on) override {
         // +0x3b4 = the combat flag: TARGETING suspended (CombatSystem::targeting_idle / phase D), the movement orders locked
-        // (TacticalBattle::movement_locked), the pairing rule (CombatSystem::clash_allows).
-        if (b_.combat_->has_unit(id)) b_.combat_->set_flag(id, tc::kUnitHeroClash, on);
+        // (TacticalBattle::movement_locked), the pairing rule (CombatSystem::clash_allows). A new flag or a release also
+        // ends a Lua TEAM Unlock's release of the clash's lock share (kUnitHeroClashUnlocked, s78n t06 review).
+        if (b_.combat_->has_unit(id)) {
+            b_.combat_->set_flag(id, tc::kUnitHeroClash, on);
+            b_.combat_->set_flag(id, tc::kUnitHeroClashUnlocked, false);
+        }
+        if (on) {
+            // s78n t06 review: Begin 0x6abde0 leaves the hero's coordinators, which ends a garrison order in progress.
+            // [port] Both its approach and its entry fade end (as the exit order cancels them, GarrisonSystem::order_exit),
+            // so a duelling hero is never garrisoned; order_garrison also refuses a clashing unit.
+            if (const tactical::garrison::ObjectId ph = b_.garrison_.pending_holder(id);
+                ph != tactical::garrison::kNoObject && !b_.garrison_.garrisoned(id)) {
+                const objects::ObjectHandle hh = st_.find(ph);
+                const Vec3 hp = st_.exists(hh) ? st_.position(hh) : Vec3{};
+                const Vec3 hf = st_.exists(hh) ? st_.facing(hh) : Vec3{1.0f, 0.0f, 0.0f};
+                if (b_.garrison_.order_exit(id, hp, hf, b_.frame_)) b_.s4_apply(mode_);
+            }
+            // s78n t06 review [port]: a land-squad steering member (mod data) leaves its squad's steering for the clash, so
+            // the clash's move / snap / hold act on the hero itself (not on its container, the squad's formation unit);
+            // the release steers it back to its slot (MovementSystem::suspend_team_member / rejoin_land_team).
+            if (b_.movement_->has_unit(id)) (void)b_.movement_->suspend_team_member(id);
+        } else if (b_.movement_->team_member_parked(id) && b_.movement_->has_unit(id) && alive(id)) {
+            (void)b_.movement_->rejoin_land_team(id);
+        }
     }
     void move_to(tc::ObjectId id, tactical::Vec3 spot) override {
         // Begin 0x6abde0: leave the coordinators, a new coordinator with a Move_To to the spot (no draw here; its
@@ -172,6 +198,10 @@ public:
     }
 
 private:
+    bool garrisoned(tc::ObjectId id) const {
+        return b_.garrison_.garrisoned(id) || (b_.combat_->has_unit(id) && (b_.combat_->flags(id) & tc::kUnitGarrisoned));
+    }
+
     TacticalBattle& b_;
     TacticalMode& mode_;
     objects::ObjectStore& st_;

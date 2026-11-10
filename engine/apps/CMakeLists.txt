@@ -124,6 +124,11 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
       add_test(NAME ${_exe} COMMAND ${_exe})
       set_tests_properties(${_exe} PROPERTIES TIMEOUT 900)
     endforeach()
+    # s78n t06 review: the hero-clash land battle per worker count (alamo_add_worker_count_check; the exe's --hero-clash
+    # mode writes / compares its per-tick battle digests; each count has its own fixture folder).
+    alamo_add_worker_count_check(alamo_sim_battle_ai_hero_clash
+        COMMAND alamo_sim_battle_ai_tests --hero-clash
+        TIMEOUT 600)
     # --- L1 systems (owner: tactical-systems agent): special weapons / TSW / hyperspace / engines in a campaign battle ---
     add_executable(alamo_sim_l1_tests sim/tests/test_battle_l1.cpp)
     target_link_libraries(alamo_sim_l1_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)

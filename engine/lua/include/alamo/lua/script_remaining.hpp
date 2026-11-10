@@ -93,6 +93,12 @@ struct RemainingScriptHooks {
     // clash (detail::movement_locked) and Unlock_Current_Orders refuses ("...is locked by a hero clash.  Cannot unlock.").
     // Unset: no hero clashes.
     std::function<bool(objects::ObjectHandle unit)> in_hero_clash;
+    // s78n t06 review (A1_READINGS §28.9 item 4): the clash's share of the unit's movement lock is held (unset: in_hero_clash
+    // answers), and its release: Unlock_Current_Orders through a land TEAM object decrements each locked member's lock
+    // counter, so a duelling member's clash share goes (its +0x3b4 stays set); true when a share was released. Unset:
+    // nothing to release.
+    std::function<bool(objects::ObjectHandle unit)> hero_clash_locked;
+    std::function<bool(objects::ObjectHandle unit)> release_hero_clash_lock;
     // ---- builds / build pads (§2.2, §3.6) ----
     // GameObjectWrapper.Build(type, check_rules) on a pad: 1 started, 0 refused by the game rules (check_rules only),
     // -1 start failed. Unset: the binding's own start build [port] (rules check, the UC type created at the pad,

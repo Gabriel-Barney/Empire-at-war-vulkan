@@ -614,6 +614,26 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(said("Lock_Current_Orders - Trooper is already locked.  Script cannot stack locks.") == 2);
     CHECK(run(vm, "team.Unlock_Current_Orders() team.Unlock_Current_Orders() c1 = members[1].Can_Move() and 1 or 0") == "");
     CHECK(gnum(vm, "c1") == 1.0 && said("Unlock_Current_Orders - object Trooper is not locked.") == 2);
+    {  // s78n t06 review (A1_READINGS §28.9 item 4): a land TEAM Unlock decrements each locked member's counter, so a member
+       // locked only by its hero clash moves again (its +0x3b4 stays: Unlock on the member itself is still the error)
+        RemainingScriptHooks hk;
+        bool held = true;
+        CHECK(run(vm, "hm = members[1].Get_Object_ID()") == "");
+        const objects::ObjectHandle hm = s.store.find(static_cast<objects::ObjectId>(gnum(vm, "hm")));
+        hk.in_hero_clash = [hm](objects::ObjectHandle h) { return h == hm; };
+        hk.hero_clash_locked = [hm, &held](objects::ObjectHandle h) { return h == hm && held; };
+        hk.release_hero_clash_lock = [hm, &held](objects::ObjectHandle h) {
+            if (h != hm || !held) return false;
+            held = false;
+            return true;
+        };
+        s.bridge.remaining = &hk;
+        CHECK(run(vm, "c1 = members[1].Can_Move() and 1 or 0") == "" && gnum(vm, "c1") == 0.0);
+        CHECK(run(vm, "team.Unlock_Current_Orders() c1 = members[1].Can_Move() and 1 or 0") == "");
+        CHECK(!held && gnum(vm, "c1") == 1.0 && said("Unlock_Current_Orders - object Trooper is not locked.") == 3);  // member 2 only
+        CHECK(contains(run_stop(vm, "members[1].Unlock_Current_Orders()"), "is locked by a hero clash.  Cannot unlock."));
+        s.bridge.remaining = nullptr;
+    }
     CHECK(run(vm, "sq = Spawn_Unit(Find_Object_Type('Squad'), mk, p1)[1] sm = Find_All_Objects_Of_Type('Squaddie') "
                   "sq.Lock_Current_Orders() q1 = sq.Can_Move() and 1 or 0 m1 = sm[1].Can_Move() and 1 or 0 "
                   "sm[2].Lock_Current_Orders() sq.Unlock_Current_Orders() q2 = sq.Can_Move() and 1 or 0") == "");

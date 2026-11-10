@@ -2478,6 +2478,7 @@ void CombatSystem::fire_unit_weapon(Unit& u, uint32_t frame, SimRng& rng) {
         }
         if ((tp->flags & kUnitStealthed) && !ud.target_stealth_units && tp->owner != u.owner) return;
         if (!is_enemy(u.owner, tp->owner)) return;
+        if (!clash_allows(u.id, tp->id)) return;  // s78n t06 review: Fire_At 0x3825b0's pairing rule, as fire_hardpoint
     }
     const ObjectId tid = tp ? tp->id : kNoObject;
     // S9: the ordered hardpoint (command 40 index) of the ordered target, while it is alive.
