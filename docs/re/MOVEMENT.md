@@ -472,12 +472,13 @@ MovingVsMoving `0x682e80` (flag 1, kind 4, flags 0), `0x683140` (flag 0, kind 4,
      other obstacle's tracker rectangle; (iii) two "escape" vertices on the nearest edge when the start is inside a
      relation-0x10 obstacle's rect2 [M]; (iv) the start (inside another obstacle the search starts at the nearest
      vertex instead); (v) the goal (inside a rect2: the nearest vertex).
-   - Edges (`0x678e80`), every pair i < j: not the two diagonals of one rectangle; not when the direction from a
-     corner lies within about 44° of that corner's outward diagonal (threshold 0.7679 [M: radians through cos]);
-     the terrain line test `0x5a4c10` for u's movement class must pass.
+   - Edges (`0x678e80`), every pair i < j: not the two diagonals of one rectangle; between vertices of
+     **different** obstacles (or a corner and the start / goal / a terrain corner) not when the direction from a
+     corner lies within 44° of that corner's **inward** bisector (item 4a; *corrected s78n t20: this said
+     "outward diagonal"*); the terrain line test `0x5a4c10` for u's movement class must pass.
    - Cost multiplier (`0x67a3d0`): 1, or **`DynamicObstacleOverlapPenalty` (15)** plus a "crossing" mark when the
-     segment crosses any obstacle other than the two end points' own; the front edge (corners +a ±b) of an
-     obstacle in relation 2 / 4 / 8 / 0x20 is always 1.
+     segment crosses any obstacle other than the two end points' own (item 4a); the front edge (corners +a ±b) of
+     an obstacle in relation 2 / 4 / 8 / 0x20 is always 1.
    - A\* (`0x67b8a0`): g = Σ 3-D length × multiplier, h = straight distance to the goal; binary heap on f (insert
      stops at parent.f ≤ f; sift-down swaps only on a strictly smaller child, left before right); neighbours in
      ascending vertex index; closed vertices are not reopened. **Pass 1 skips every edge with the crossing mark;
@@ -486,6 +487,62 @@ MovingVsMoving `0x682e80` (flag 1, kind 4, flags 0), `0x683140` (flag 0, kind 4,
      the quota only decides, in the driver (§5.4.1), whether a state-0 record may decide this frame.
    - Failure: u's max speed 0, no base path / no accepted rejoin candidate, 5 windows without a feasible flood
      fill, start = goal, the heap runs empty or the node pool (3 × vertices) is exhausted.
+4a. **Edge and cost rules in full (s78n t20 RE, 2026-11-10; `0x675240` / `0x675ed0` vertex creation, `0x678e80`,
+   `0x67a3d0`, tracker `0x6b4810` / `0x6b3b00` / `0x6b1d00`, rectangle helpers `0x20d1c0`…`0x20d2b0`, `0x20d690` /
+   `0x20d710`) [H unless tagged].**
+   - **Vertex record.** Type (+0x18): 3 = corner (+a +b), 2 = (+a −b), 1 = (−a −b), 0 = (−a +b) (created in this
+     order; a = the obstacle rectangle's first axis, for a unit its facing); 5 = start; 6 = goal; 7 / 8 = the two
+     escape vertices [M: 7 on the +b side, 8 on the −b side, from which corners they may link to]; terrain corners
+     have another type with no obstacle. Obstacle pointer (+0x20): the obstacle for types 0-3 and 7 / 8, null
+     otherwise. Two positions: the rect1 corner (+0x00) and the **rect2 corner (+0x0c)**; the edge tests and the
+     crossing test use the rect2 corner (the same point while f = 0). Corner vector n (+0x30):
+     the unit vector of (−sa·a − sb·b) for the corner at (sa·ha, sb·hb), sa, sb = ±1. It points from the corner
+     **into** the rectangle at 45° to its axes (it is not the true diagonal to the centre unless the rectangle is
+     square).
+   - **Pairs with the same obstacle pointer** (two corners of one rectangle; also two obstacle-less vertices such
+     as start and goal, or a terrain corner and the start): **no cone test.** No edge for the two diagonals (0-2,
+     1-3). The four sides are edges. [M] escape vertices: 7 never links to corner 1, 2 or to 8; 8 never links to
+     corner 0, 3 or to 7. Then the terrain line test.
+   - **Pairs with different obstacle pointers** (corner ↔ corner of another obstacle, corner ↔ start / goal /
+     terrain corner). With d = the 2-D unit vector from the corner V to the other vertex W (fast inverse square
+     root, two Newton steps): **no edge when d · n_V ≥ cos(0.7679449 rad) = cos 44° = 0.71934** (`cosf` 0x776150 of
+     the float 0x3f449809). Tested from V when V is a corner (types 0-3), and from W whenever W has an obstacle. So
+     exactly one cone per corner is excluded: the **inward** one, 44° either side of n, i.e. the rectangle's
+     interior quadrant less 1° at each side. The outward cone is **not** excluded. An escape vertex (7 / 8) as the
+     lower index links only to the start; as the higher index it also needs the other vertex on the negative
+     side of its own vector (dot < −0.001). Then the terrain line test.
+   - [M] When the start lies inside some obstacle's rect2 and pathfinder +0x194 is set, corners and terrain
+     corners get no edge to the start (only escape vertices and the goal do), and the direct start-goal edge
+     costs × 15 **without** the crossing mark. Not read: what sets +0x194.
+   - **Crossing test** (`0x6b1d00`): the segment as a zero-width oriented box against the temporary tracker
+     records (built once per graph by `0x6b4810`: the shape of item 3 with both half extents + min(hx_u, hy_u) +
+     0.5, + f when the expansion flag is set; **not rect1**). Separating-axis test with a closed comparison, so
+     **touching counts**. Records whose id equals either end vertex's id are **skipped inside the query**: the id
+     of a corner / escape vertex is its obstacle's id, of the start is u's own id, of the goal or a terrain corner
+     none. The ids of the records met go to a list.
+   - **Multiplier** (`0x67a3d0`, one call per direction; the result is the same both ways): 1.0 when the list is
+     empty. Otherwise each listed object that is not u, not the from-vertex's obstacle and not the to-vertex's
+     obstacle makes the edge **crossing**: multiplier := GC `DynamicObstacleOverlapPenalty` (15), crossing mark
+     (edge +0x10) := 1. "Own" therefore = the obstacle objects of the edge's two end vertices plus u; the start
+     and the goal own nothing else. Exceptions decided before the list is looked at: the side between corners 2
+     and 3 of one obstacle whose relation code (`0x679750`) is 2, 4, 8 or 0x20 → 1.0; an edge between an escape
+     vertex and the start → 1.0.
+   - **Consequence.** An edge can never leave a corner into its own rectangle: the inward cone removes it in both
+     passes, before any cost is looked at. The "own obstacle is free" rule only covers what the cone leaves: the
+     four sides, and the 1° slivers along them. An edge that crosses a **third** obstacle exists, marked, at × 15,
+     and is usable in pass 2 only.
+   - **Worked example.** One standing obstacle, rect1 = rect2 = [−10, 10] × [−5, 5], a = +x, start S = (20, 0),
+     goal G behind the centre, e.g. (−30, 0); corners c3 = (10, 5), c2 = (10, −5), c1 = (−10, −5), c0 = (−10, 5),
+     n(c3) = (−0.7071, −0.7071), n(c0) = (0.7071, −0.7071).
+     - S ↔ c3 (front corner): d from c3 = (0.894, −0.447), d · n = −0.316 < 0.7193 → **edge, × 1**.
+     - S ↔ c0 (rear corner, the segment passes through the rectangle): d from c0 = (0.986, −0.164), d · n = 0.814
+       ≥ 0.7193 → **no edge, in either pass**.
+     - c3 ↔ G: d from c3 = (−0.992, −0.124), d · n = 0.789 ≥ 0.7193 → **no edge**.
+     - c3 ↔ c0 (a side of one rectangle): **edge, × 1**. c0 ↔ G: d · n = −0.514 → **edge, × 1**.
+     - S ↔ G direct: both obstacle-less, so an edge whenever the terrain line passes; the obstacle's tracker
+       record is met → **× 15, crossing**, pass 2 only.
+     - Pass 1 result: S, (10, 5), (−10, 5), G (or its mirror image; the tie falls to the A\* rules of item 4),
+       cost = the sum of the three lengths, no crossing.
 5. **Output and splice.**
    - Points (`0x674870`) = the vertex positions start → goal, **unsmoothed**; started from a nearest vertex: the
      real start and the foot of the start on the first segment first; goal inside an obstacle: one more point 1
@@ -524,16 +581,20 @@ squad members; crushable units, same-way-not-slower movers and, for Infantry / G
 the named obstacle is forced when flag 1) as oriented rectangles of half extents (hx + 1, hy + 1), swept for a
 closing mover, grown by hy_mover + 0.5 (+ `MovementBoxExpansionFactor`). Nodes: the grown rectangles' corners (kept
 when passable and not inside another obstacle), convex / concave corner cells of impassable terrain in the window,
-start and goal, in the order of item 4. Edges: terrain-passable segments, not a rectangle's diagonal, not into the
-outward ~44° cone of a corner. A\* with the tie rules of item 4; first without segments that cross a third
+start and goal, in the order of item 4. Edges: terrain-passable segments, not a rectangle's diagonal, and (between
+different obstacles, or a corner and the start / goal) not from a corner into its **inward** 44° cone (item 4a:
+d · n ≥ 0.71934, n = the inward 45° bisector); a rectangle's own sides are always edges and its own rectangle
+never makes an edge "crossing". A\* with the tie rules of item 4; first without segments that cross a third
 obstacle, and only if that fails with them at × 15. Emit the corners unsmoothed, tag front-corner waypoints with
 the obstacle id and hold line, drop the rejoin point when the last corner sees the next original waypoint. Push the
 detour above the ordered path after removing older collision-owned paths; when it ends, resume the ordered path at
 the first waypoint line not yet crossed. Failure leaves the unit untouched (the callers then push, hold or retry,
 §5.4.1 / §5.4.6). [port] the plain window numbers and the corner-pruning masks may differ; record them.
 
-*Not read:* the tracker internals `0x6b4810` / `0x6b1d00` / `0x6b4cb0` (temporary obstacle records, crossing
-count), `0x41cf40`, `0x509370`, the escape-vertex edge rules, the exact terrain-corner pruning masks.
+*Not read:* the tracker's tree build and point query (`0x6b4cb0`, `0x6b3580`, `0x6b6070`; the record contents and
+the segment query are in item 4a), `0x41cf40`, `0x509370`, where the escape vertices are placed and what sets
+pathfinder +0x194, the exact terrain-corner pruning masks, whether the emitted points are the rect1 or the rect2
+corners when f > 0.
 
 ### 1.6 Request budgets, staggering and re-path triggers
 
