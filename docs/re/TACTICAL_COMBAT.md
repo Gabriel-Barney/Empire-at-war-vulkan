@@ -3043,7 +3043,10 @@ no shared test:
    - locomotor vf +0x130 (Walk 0x61df60: state 0x18 **Deploying**);
    - locomotor vf +0x120 (Walk 0x61df40: state 0x19 **Deployed**);
    - the locomotor pack (obj +0xa8) deploy-pending byte +0x2b3 is set (only with `Max_Dist_Walk_While_Deployed`
-     > 0, which no FoC unit sets; MOVEMENT §3.2).
+     > 0; MOVEMENT §3.2). *Corrected s78n t20, 2026-11-10: this said "which no FoC unit sets". In vanilla FoC
+     `Destroyer_Droid` sets it to **150.0** (`UNITS_LAND_UNDERWORLD_DESTROYERDROIDS.XML`) and its variant
+     `Destroyer_Droid_Attack` inherits it; no other type has the tag. So the byte is live for the Destroyer Droid.
+     Neither type has deployed extents, so its footprint does not change (MOVEMENT §5.3).*
 
    Only `WalkLocomotorBehaviorClass` implements these vfuncs; every other locomotor answers false. Undeploying (state
    0x1A) uses the normal extents. 0x396850 calls 0x371d20; 0x396a30 / 0x396b70 jump to 0x371f30 / 0x372100.

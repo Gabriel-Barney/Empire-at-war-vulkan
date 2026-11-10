@@ -1248,7 +1248,8 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
     len − cur − 1 − rate when reversing out of 0x19), plus `0x3a0580`, with the same turret wait. When it has
     ended → state 0 and signal 0x29.
   - 0x16 with pending set → 0x19 directly, with the animation on its last frame. This is the walk-while-deployed
-    case (`Max_Dist_Walk_While_Deployed` > 0); no vanilla FoC unit sets that field.
+    case (`Max_Dist_Walk_While_Deployed` > 0). *Corrected s78n t20: "no vanilla FoC unit sets that field" was
+    wrong; `Destroyer_Droid` sets 150.0 and `Destroyer_Droid_Attack` inherits it (they are the only ones).*
 - **Window length** ≈ the turret recentre wait + ceil(max(count − 2, 0) / (clip rate × `Deployment_Anim_Rate`)) sim
   frames, following the ABILITIES_HARDPOINTS §4.13 convention [M on the exact end test].
 - **FoC `Deploys = Yes`** (all WALK_LOCOMOTOR): AT_AT, Veers AT_AT, AT_AA (rate 2.0), SPMAT (2.0), MPTL (1.5),
