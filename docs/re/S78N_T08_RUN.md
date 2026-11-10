@@ -58,3 +58,14 @@ The kit assumed every player's units take Lua damage unscaled; in retail the **E
 - **Removing the source removes the bonus, current health kept [H].** Matches the port (removal at Detach).
 - Side finding: Easy AI units take 2.5x Lua `Take_Damage`; probes that compare health drops across players must
   correct for the AI difficulty (or use Hard / human-owned controls).
+
+## Re-run of (A), space only (2026-11-10, run `out/20261109-204743`)
+`run_s78n.cmd --space-only`: both ships teleported to exact spots, the target faced at once (`Face_Immediate`),
+facing read from two hull bones every 15 frames (settled before the order, no turn after), target stepped 1 unit per
+poll when out of range. **VERDICT (A) PASS, 10 / 10 trials**, A0-A3 all PASS:
+- along the facing (|f.u| = 1.0): in at 950 / 1095 / 1105, out at 1115 / 1125, threshold **[1109, 1111)** (§5.4.5
+  predicts 1109.95; the old port rule 1023.48 is out);
+- across (|f.u| = 0.0): in at 950 / 1010 / 1018, out at 1029 / 1037, threshold **[1023, 1025)** (predicts 1023.48; the
+  old port rule 1111.86 is out).
+So §5.4.5 is confirmed [H]: E along the facing = collision-bound Y half x Scale_Factor, across = X half x
+Scale_Factor; the old port rule agreed on 4 / 10 trials only. The locked user (Suspend_Locomotor) still fired.
