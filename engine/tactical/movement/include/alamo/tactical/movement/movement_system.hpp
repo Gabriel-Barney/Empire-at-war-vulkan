@@ -781,6 +781,8 @@ public:
         bool hero_clash = false;
     };
     bool set_collision_info(ObjectId id, const CollisionInfo& info);
+    // s78n t20: the info the host set last (false for an unknown id; tests).
+    bool collision_info(ObjectId id, CollisionInfo& out) const;
     // The radius 0x397780 of a land unit: sqrt(HX^2 + HY^2) of the joint slot box for a squad container, the soft
     // footprint radius for any other unit; 0 for an unknown id.
     float collision_radius(ObjectId id) const;

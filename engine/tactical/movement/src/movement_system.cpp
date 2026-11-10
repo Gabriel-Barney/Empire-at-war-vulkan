@@ -1870,6 +1870,13 @@ bool MovementSystem::set_collision_info(ObjectId id, const CollisionInfo& info) 
     return true;
 }
 
+bool MovementSystem::collision_info(ObjectId id, CollisionInfo& out) const {
+    const Unit* u = unit_ptr(id);
+    if (!u) return false;
+    out = u->ci;
+    return true;
+}
+
 std::span<const V2> MovementSystem::top_path(ObjectId id) const {
     const Unit* u = unit_ptr(id);
     if (!u || !u->pushed) return {};

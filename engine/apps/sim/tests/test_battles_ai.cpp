@@ -3,6 +3,8 @@
 
 #include "battle_test_fixture.hpp"
 
+#include <array>
+
 namespace {
 
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
@@ -3457,15 +3459,28 @@ struct SquadGarrisonScene {
 //   ordered from range + 150, ends where it can hit and fires within 300 frames of that.
 //   save_load (test iii): saved 10 frames after the teleport (the block alive), loaded into a fresh session, both run
 //   400 ticks in lockstep with the same digest every tick.
+//   use_ai (s78n t20 step 5): the blockers case with the order given through BattleAi (the AI host's Attack).
+// s78n t20 step 5: every tick the movement collision info the host fed (TacticalBattle::feed_collision_info) is checked
+// for the squad container and its first member: a target inside a squad is named by its container, at the targeted
+// member's position, with the container's collision radius and the shooter's attack range; after the load the fed
+// info equals the uninterrupted run's tick for tick.
 struct LandAttackBlockRun {
     bool ordered = false, gated = false, teleported = false, regoal = false, fired = false, ended_in_range = false;
-    bool saved = false, loaded = false, same = false;
+    bool saved = false, loaded = false, same = false, info_same = true;
     uint32_t regoal_frames = 0, fire_frames = 0, end_frame = 0, compared = 0;
+    uint32_t info_frames = 0, info_bad = 0;
     size_t blocks_at_save = 0;
     float range = 0.0f;
 };
 
-LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save_load) {
+// The fed info of `id` as a comparable tuple.
+std::array<float, 6> fed_info(const mv::MovementSystem& ms, objects::ObjectId id) {
+    mv::MovementSystem::CollisionInfo ci;
+    if (!ms.collision_info(id, ci)) return {-2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    return {static_cast<float>(ci.target), ci.target_pos.x, ci.target_pos.y, ci.target_radius, ci.attack_range, ci.short_range ? 1.0f : 0.0f};
+}
+
+LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save_load, bool use_ai = false) {
     LandAttackBlockRun out;
     CampaignBattleOptions opt;
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
@@ -3487,6 +3502,14 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
     Vec3 dir{};
     SaveFile save;
     std::vector<uint64_t> after_save;
+    std::vector<std::array<float, 6>> info_after_save;
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };  // no AI player: orders only
     for (uint64_t t = 0; t < 9000 && stage < 9; ++t) {
         TacticalBattle* b = s->tick();
         TacticalMode* tm = s->host->tactical();
@@ -3497,7 +3520,32 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
         objects::ObjectStore& st = tm->primary();
         auto& cs = const_cast<tc::CombatSystem&>(b->combat());
         const mv::MovementSystem& ms = b->movement();
-        if (out.saved) after_save.push_back(clash_digest(*b));
+        if (out.saved) {
+            after_save.push_back(clash_digest(*b));
+            info_after_save.push_back(fed_info(ms, team));
+        }
+        if (stage >= 2 && cs.alive(target)) {
+            // the fed info (this tick's feed ran before the movement tick): the squad and its first member
+            for (const objects::ObjectId id : {team, members.front()}) {
+                mv::MovementSystem::CollisionInfo ci;
+                if (!ms.collision_info(id, ci) || ci.target < 0) continue;
+                ++out.info_frames;
+                // (the feed ran before this tick's movement and combat: the targeted member may have moved a step or
+                // the shooter switched to another member since, so the member is any of the named squad's members
+                // within 3 of the fed position)
+                bool member_there = false;
+                for (size_t i = 0; i < cs.unit_count() && !member_there; ++i) {
+                    const auto mid = cs.unit_id_at(i);
+                    if (!cs.alive(mid) || cs.team(mid) != static_cast<uint32_t>(ci.target)) continue;
+                    const Vec3 mp = st.position(st.find(static_cast<objects::ObjectId>(mid)));
+                    member_there = std::fabs(mp.x - ci.target_pos.x) <= 3.0f && std::fabs(mp.y - ci.target_pos.y) <= 3.0f;
+                }
+                const bool ok = ms.is_land_team_container(ci.target) && member_there &&
+                                ci.target_radius == ms.collision_radius(ci.target) && ci.target_radius > 0.0f &&
+                                ci.attack_range == out.range && !ci.short_range;
+                if (!ok) ++out.info_bad;
+            }
+        }
         if (stage == 0) {
             // the human's squads (ascending container id) and the invader's lowest-id squad member
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
@@ -3545,7 +3593,14 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
                 fired = fired || (ev.shooter == id && (ev.target == target || cs.team(ev.target) == cs.team(target)));
         if (stage == 1) {
             if (b->frame() < stage_frame + 2) continue;
-            out.ordered = b->order_attack(*tm, 0, members, target, s->host->random().synced()) == commands::RejectReason::None;
+            if (use_ai) {
+                std::vector<uint32_t> wire;
+                for (const objects::ObjectId m : members) wire.push_back(static_cast<uint32_t>(m));
+                BattleAi bai(*b, *tm, *s->host, ts);
+                out.ordered = bai.execute(0, commands::ev::attack(static_cast<uint32_t>(target), wire)) == commands::RejectReason::None;
+            } else {
+                out.ordered = b->order_attack(*tm, 0, members, target, s->host->random().synced()) == commands::RejectReason::None;
+            }
             CHECK(out.ordered);
             // the order-time gate: from 150 the squad can hit, so it takes no path (blockers: it is out of range and walks)
             out.gated = blockers ? ms.view(team).has_goal : !ms.view(team).has_goal;
@@ -3630,6 +3685,7 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
             if (out.same) std::printf("  land attack block load: digest differs %zu tick(s) after the load\n", i + 1);
             out.same = false;
         }
+        if (i < info_after_save.size() && fed_info(b->movement(), team) != info_after_save[i]) out.info_same = false;
     }
     return out;
 }
@@ -3646,11 +3702,21 @@ void test_land_attack_blocks() {
     CHECK(a.regoal && a.regoal_frames <= 31);
     CHECK(a.fired && a.fire_frames <= 300);
     CHECK(a.saved && a.blocks_at_save >= 1 && a.loaded && a.same && a.compared == 400);
+    std::printf("  land attack blocks: fed collision info checked on %u unit-frames, %u off, same after the load %d\n",
+                a.info_frames, a.info_bad, a.info_same ? 1 : 0);
+    CHECK(a.info_frames > 100 && a.info_bad == 0 && a.info_same);
     const LandAttackBlockRun c = run_land_attack_block(*d, true, false);
     std::printf("  land attack blocks (ii): friendly squads at 0.76 / 0.92 x range: ordered %d, walking %d, ended in range %d "
                 "after %u frame(s), fired %d (%u frame(s) after the end)\n",
                 c.ordered ? 1 : 0, c.gated ? 1 : 0, c.ended_in_range ? 1 : 0, c.end_frame, c.fired ? 1 : 0, c.fire_frames);
     CHECK(c.ordered && c.gated && c.ended_in_range && c.fired && c.fire_frames <= 300);
+    // s78n t20 step 5: the same through the AI host's Attack (BattleAi::execute): it ends in weapon range
+    const LandAttackBlockRun e = run_land_attack_block(*d, true, false, true);
+    std::printf("  land attack blocks (AI Attack): ordered %d, walking %d, ended in range %d after %u frame(s), fired %d (%u frame(s) "
+                "after the end), fed info %u unit-frames, %u off\n",
+                e.ordered ? 1 : 0, e.gated ? 1 : 0, e.ended_in_range ? 1 : 0, e.end_frame, e.fired ? 1 : 0, e.fire_frames, e.info_frames,
+                e.info_bad);
+    CHECK(e.ordered && e.gated && e.ended_in_range && e.fired && e.fire_frames <= 300 && e.info_bad == 0);
 }
 
 void test_land_squad_garrison_save_load() {
