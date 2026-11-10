@@ -85,9 +85,15 @@ float remaining_length(const LandMotion& m);
 //                 frame, the direction is the segment direction pulled along the path normal by
 //                 formation_side_correction(error), error = the slot's lateral offset (0: the member's path already
 //                 leads to its slot [port]) - the member's signed lateral distance from the segment.
+//   avoid       - s78n t18 (MOVEMENT §5.4.1 "How Walk combines the vector"): the collision steering vector 0x509810
+//                 for the unit's heading `dir` (unit length), asked on every leg but the last. With a non-zero vector the
+//                 unit moves along normalise(dir + vector), and a waypoint it passes abeam - it crosses the waypoint's
+//                 line, the bisector of the two segments - counts as passed (it does not turn back for it).
 struct WalkExtras {
     V2 jiggle;
     bool side_error = false;
+    V2 (*avoid)(const void* ctx, V2 dir) = nullptr;
+    const void* avoid_ctx = nullptr;
 };
 
 WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, const PassabilityGrid* grid,

@@ -1958,7 +1958,7 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // cu8i t02 (2026-11-08): moved (land formations draw the FormationClass ctor int(1, 30); start now + acc + r - 30).
 // cu8j t01 / t02 (2026-11-08): compositions at the next coordinator update (draws, start frames, the jetpack swap's draw)
 // and the hash's pending composition / adopt state.
-static constexpr uint64_t kGoldenMixed = 0x1f923da0fa12c9f2ull;
+static constexpr uint64_t kGoldenMixed = 0x15ed89d5cf5f37eeull;  // s78n t18: land collision records
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -4062,19 +4062,21 @@ static V2 t14b_avoid_ref(const MovementSystem& sys, ObjectId member, V2 dir, flo
     std::vector<CollisionObject> recs;
     for (const CollisionObject& c : sys.collisions().list())
         if (c.a == k || c.b == k) recs.push_back(c);
-    for (const CollisionObject& c : sys.resolved_team_collisions())
-        if (c.a == k || c.b == k) recs.push_back(c);
     std::sort(recs.begin(), recs.end(), [](const CollisionObject& x, const CollisionObject& y) { return x.seq < y.seq; });
     const UnitView a = sys.view(member);
     const float ratio = vmax > 0.0f ? std::clamp(a.speed / vmax, 0.0f, 1.0f) : 0.0f;
-    const float ra = std::sqrt(3.0f * 3.0f + 3.0f * 3.0f);  // the member's shape (3, 3)
+    const float ra = 3.0f;  // s78n t18: the member's soft footprint radius (0x397780 of a unit that is no container)
     std::vector<V2> vecs;
     std::vector<float> weights;
     for (const CollisionObject& c : recs) {
         const ObjectId other = c.a == k ? c.b : c.a;
         CHECK(!sys.is_land_team_container(other));
         V2 v{};
-        if (c.kind == CollisionKind::MovingVsStopped) {
+        // s78n t18: MovingVsStopped - the obstacle side always, the mover side only in Repulsion; MovingVsMoving - Repulse
+        const bool gives = c.kind == CollisionKind::MovingVsStopped   ? c.b == k || c.state == CollisionState::Repulsion
+                           : c.kind == CollisionKind::MovingVsMoving ? c.state == CollisionState::Repulsion
+                                                                     : false;
+        if (gives) {
             const UnitView b = sys.view(other);
             const float reach = (ra + 12.0f) * 1.3f;  // the obstacles of this test have radius 12 and no hard extents
             const float t = std::clamp(1.0f - length(a.pos - b.pos) / reach, 0.0f, 1.0f);
@@ -4220,8 +4222,6 @@ static void test_land_squad_review_fixes() {
                 CHECK(sys.set_collision_exempt(100, exempt));  // host-set every tick
                 sys.tick(f, rng, serial_for);
                 for (const CollisionObject& c : sys.collisions().list())
-                    if ((c.a == 100 && c.b == 70) || (c.a == 70 && c.b == 100)) ++r.objects;
-                for (const CollisionObject& c : sys.resolved_team_collisions())
                     if ((c.a == 100 && c.b == 70) || (c.a == 70 && c.b == 100)) ++r.objects;
                 r.off_line = std::max(r.off_line, std::fabs(sys.view(100).pos.y - at.y));
             }
@@ -4389,6 +4389,487 @@ static void test_land_squad_teleport() {
     std::printf("land squad teleport: members keep their offsets, speeds 0, facings kept, parked offset kept\n");
 }
 
+// ---- s78n t18 ------------------------------------------------------------------------------------------------------
+// FoC squads of the t16 fixtures: Stormtrooper (Rows 3 x 3, slots at pitch 12, half-extents 3, Max_Speed 1.0 capped by
+// the container's 0.8, OverrideDeceleration 0.05: team speed 1.248, rate 0.078) and Rebel (Dartboard, 5 members, rate
+// 0.1092, team speed 1.56).
+static std::vector<T16Member> t18_storm() {
+    std::vector<T16Member> mem;
+    for (int32_t ix = 1; ix >= -1; --ix)
+        for (int32_t iy = 1; iy >= -1; --iy)
+            mem.push_back({V2{12.0f * static_cast<float>(ix), 12.0f * static_cast<float>(iy)}, 1.0f, 0.05f, 0.3f, 0.0f});
+    return mem;
+}
+
+// s78n t18 items 2 / 6 (MOVEMENT §5.3.1 / §5.3.2, FIGHTER_FLYING §7.8): the squad's footprint is its live joint slot box
+// (0x404450) - a rectangle centred on the container and turned by its yaw; members are in no collision or occupancy query,
+// the container is in all of them with that rectangle.
+static void test_land_squad_footprint() {
+    const V2 at = cell_center(10, 20);
+    {  // the joint box: slots at pitch 12 with half-extents 3 -> (15, 15); SPREAD_OUT x 1.8 on the spacing; a lost row
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm());
+        float hx = 0.0f, hy = 0.0f;
+        CHECK(sys.team_joint_box(100, hx, hy) && near(hx, 15.0f, 1e-4f) && near(hy, 15.0f, 1e-4f));
+        CHECK(!sys.team_joint_box(1, hx, hy));  // not a container
+        SimRng rng(61);
+        sys.tick(1, rng, serial_for);  // the first layout (Rows, the container's facing): the same grid
+        CHECK(sys.team_joint_box(100, hx, hy) && near(hx, 15.0f, 1e-3f) && near(hy, 15.0f, 1e-3f));
+        CHECK(sys.set_team_spread_out(100, true));
+        sys.tick(2, rng, serial_for);  // re-laid: pitch 6 + 0.3 x 20 x 1.8 = 16.8 -> 16.8 + 3
+        CHECK(sys.team_joint_box(100, hx, hy) && near(hx, 19.8f, 1e-3f) && near(hy, 19.8f, 1e-3f));
+        CHECK(sys.set_team_spread_out(100, false));
+        sys.tick(3, rng, serial_for);
+        CHECK(sys.team_joint_box(100, hx, hy) && near(hx, 15.0f, 1e-3f));
+        // the three members of the front row (slot x = +12) go: x from -15 to max(0, 0 + 3) -> HX 9; y unchanged
+        uint32_t gone = 0;
+        for (const auto& [id, slot] : sys.land_team_slots(100))
+            if (slot.x > 6.0f) {
+                CHECK(sys.remove_unit(id));
+                ++gone;
+            }
+        CHECK(gone == 3 && sys.team_joint_box(100, hx, hy) && near(hx, 9.0f, 1e-3f) && near(hy, 15.0f, 1e-3f));
+    }
+    // A container marching +x past a stopped Vehicle-class unit of radius 20 (no hard extents: a 20 x 20 footprint): a
+    // collision object only when the unit is nearer the path than 15 + 20 (the circle of the box's radius 21.2 would
+    // reach 41.2); with SPREAD_OUT the box is 19.8: 39.8.
+    const auto pass = [&](float lateral, bool spread) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm());
+        UnitDesc v = unit(70, {at.x + 200.0f, at.y + lateral}, 2, 1.0f, 20.0f, LocomotorKind::Default);
+        v.collision_class = kUccVehicle;
+        CHECK(sys.add_unit(v));
+        SimRng rng(62);
+        CHECK(sys.set_team_spread_out(100, spread));
+        sys.tick(1, rng, serial_for);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = {at.x + 400.0f, at.y};
+        sys.move(o, rng, 2);
+        for (uint32_t f = 2; f < 500; ++f) {
+            CHECK(sys.set_team_spread_out(100, spread));
+            sys.tick(f, rng, serial_for);
+        }
+        return sys.stats().collisions_created;  // (the only possible pair: the container and the unit)
+    };
+    const uint32_t far = pass(38.0f, false), near_by = pass(33.0f, false), spread = pass(38.0f, true);
+    CHECK(far == 0 && near_by > 0 && spread > 0);
+    std::printf("land squad footprint: objects with a unit 38 / 33 beside the path %u / %u, 38 with SPREAD_OUT %u\n", far, near_by,
+                spread);
+    {  // occupancy (0x538200, the push spot's box query): a squad member is no occupant, a container's box is
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm());
+        UnitDesc j = unit(80, cell_center(30, 30), 0, 2.0f, 6.0f, LocomotorKind::Jetpack);
+        CHECK(sys.add_unit(j));
+        SimRng rng(63);
+        sys.tick(1, rng, serial_for);
+        // members of a squad whose container stands far away: a second squad is not needed - move the container off
+        CHECK(sys.teleport(100, cell_center(60, 60), 0.0f, 0.0f, 1));  // members go with it (item 8)
+        // put member 1 alone at a spot and ask whether the jetpack may land there
+        const V2 spot = cell_center(20, 30);
+        CHECK(sys.teleport(1, spot, 0.0f, 0.0f, 1));
+        CHECK(sys.land_spot_clear(80, spot));                       // only a squad member stands there: free
+        CHECK(!sys.land_spot_clear(80, cell_center(60, 60)));       // the container's point: inside its joint box
+        const V2 edge{cell_center(60, 60).x + 15.0f + 6.0f - 1.0f, cell_center(60, 60).y};  // box 15 + lander 6, overlapping by 1
+        CHECK(!sys.land_spot_clear(80, edge));
+        const V2 off{cell_center(60, 60).x + 15.0f + 6.0f + 1.0f, cell_center(60, 60).y};
+        CHECK(sys.land_spot_clear(80, off));
+    }
+}
+
+// A second FoC-sized squad for the s78n t18 tests: container `cid` (Rows, Max_Speed 0.8, Infantry, squashable) facing
+// `yaw` with 2 x 2 members cid + 1 .. cid + 4 (Max_Speed 1.0, OverrideDeceleration 0.05, half-extents 3, slots +-6).
+static void t18_squad(MovementSystem& sys, ObjectId cid, V2 at, float yaw, int32_t owner, float member_speed = 1.0f) {
+    const float cspeed = member_speed > 0.0f ? 0.8f : 0.0f;  // (Max_Speed 0: a squad that cannot be pushed)
+    UnitDesc c = unit(cid, at, 2, cspeed, 12.0f, LocomotorKind::Default);
+    c.team_container = true;
+    c.container_arrangement = 0;
+    c.yaw_deg = yaw;
+    c.owner = owner;
+    c.squashable = true;
+    CHECK(sys.add_unit(c));
+    const V2 f = dir_from_deg(yaw), l{-f.y, f.x};
+    std::vector<ObjectId> ids;
+    std::vector<V2> slots;
+    for (int32_t i = 0; i < 4; ++i) {
+        const V2 s{i < 2 ? 6.0f : -6.0f, i % 2 == 0 ? 6.0f : -6.0f};
+        UnitDesc d = unit(cid + 1 + i, at + f * s.x + l * s.y, 2, member_speed, 3.0f, LocomotorKind::Default);
+        d.accel = d.decel = member_speed > 0.0f ? 0.05f : 0.0f;
+        d.yaw_deg = yaw;
+        d.owner = owner;
+        d.formation_spacing = 0.3f;
+        CHECK(sys.add_unit(d));
+        CHECK(sys.set_team_member_shape(d.id, 3.0f, 3.0f, 3.0f, 3.0f));
+        ids.push_back(d.id);
+        slots.push_back(s);
+    }
+    CHECK(sys.set_land_team(cid, ids, slots));
+    CHECK(sys.set_team(cid, cid, 1.0f, cspeed));
+    for (ObjectId id : ids) CHECK(sys.set_team(id, cid, 1.0f, cspeed));
+}
+
+// s78n t18 items 1 / 7 (MOVEMENT §5.4.1 / §5.4.2, FIGHTER_FLYING §7.8 item 5): what a squad container does in its
+// collision records.
+//  * moving against a standing Infantry-class unit with a free destination: Repulsion - it walks on along its path at
+//    full speed, its members side-step, the obstacle stays; the record ends when the obstacle is behind by the two radii;
+//  * with a blocked destination: the early-arrival cut (its box (HX + 5, HY) clear of the standing unit);
+//  * two squads on opposed headings: Repulse (both at full speed, no hold, members' vectors); on the same heading: Speed
+//    Slave Only (the rear one follows);
+//  * against a standing vehicle: Path Around, never a shove; a crusher's one push attempt, then it drives on;
+//  * a failed resolution: Try Again Later - speed 0 at the braking rate, re-decided every 30 frames;
+//  * a single infantry unit against single infantry: Repulsion at once, the vector bends its own heading.
+static void test_land_squad_repulsion() {
+    const float a = 0.05f * 1.56f, vmax = 0.8f * 1.56f;
+    const V2 at = cell_center(10, 20);
+    struct Out {
+        uint64_t crc = 0;
+        float off_line = 0.0f, min_cruise = 3.0e38f, obstacle_moved = 0.0f;
+        uint32_t repulsion_frames = 0, vec_frames = 0, records_after = 0, other_states = 0;
+        bool arrived = false;
+        MovementStats st;
+    };
+    // obstacle: 0 a standing infantry unit dead ahead, 1 a standing second squad (container 200, members 201..204)
+    const auto through = [&](int obstacle, const ParallelFor& pf) {
+        Out r;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm(), 1);
+        const V2 op{at.x + 200.0f, at.y};
+        if (obstacle == 0) {
+            UnitDesc x = unit(70, op, 2, 1.0f, 6.0f, LocomotorKind::Default);
+            x.owner = 1;
+            CHECK(sys.add_unit(x));
+        } else {
+            t18_squad(sys, 200, op, 90.0f, 1);
+        }
+        const ObjectId oid = obstacle == 0 ? 70 : 200;
+        SimRng rng(71);
+        sys.tick(1, rng, pf);
+        const V2 o0 = sys.view(oid).pos;
+        MoveOrder o;
+        o.units = {1};
+        o.destination = {at.x + 500.0f, at.y};
+        sys.move(o, rng, 2);
+        bool cruising = false;
+        for (uint32_t f = 2; f < 900 && !r.arrived; ++f) {
+            sys.tick(f, rng, pf);
+            const UnitView k = sys.view(100);
+            r.arrived = k.arrived;
+            r.off_line = std::max(r.off_line, std::fabs(k.pos.y - at.y));
+            if (near(k.speed, vmax, 1e-5f)) cruising = true;
+            if (cruising && k.pos.x < at.x + 440.0f) r.min_cruise = std::min(r.min_cruise, k.speed);
+            bool rep = false;
+            for (const CollisionObject& c : sys.collisions().list())
+                if (c.a == 100 && c.b == oid) {
+                    if (c.kind == CollisionKind::MovingVsStopped && c.state == CollisionState::Repulsion) rep = true;
+                    else ++r.other_states;
+                    if (k.pos.x > op.x + 80.0f) ++r.records_after;
+                }
+            if (rep) ++r.repulsion_frames;
+            const V2 fw = dir_from_deg(k.yaw);
+            for (ObjectId id = 1; id <= 9; ++id)
+                if (length_sq(sys.team_member_avoid(id, fw)) > 0.0f) ++r.vec_frames;
+        }
+        r.obstacle_moved = length(sys.view(oid).pos - o0);
+        r.st = sys.stats();
+        StateHasher h;
+        sys.hash_units(h);
+        r.crc = h.digest();
+        return r;
+    };
+    for (int obstacle = 0; obstacle < 2; ++obstacle) {
+        const Out s = through(obstacle, serial_for), p = through(obstacle, make_thread_pf(4));
+        CHECK(s.crc == p.crc);
+        CHECK(s.arrived && s.off_line < 1e-4f);                 // on its path, straight through the footprint
+        CHECK(near(s.min_cruise, vmax, 1e-5f));                 // never slowed
+        CHECK(s.repulsion_frames > 0 && s.other_states == 0 && s.records_after == 0);  // Repulsion while passing, then gone
+        CHECK(s.vec_frames > 0);                                // the members side-step
+        CHECK(s.obstacle_moved == 0.0f);                        // the standing unit / squad stays where it is
+        CHECK(s.st.dynamic_repaths == 0 && s.st.pushes == 0 && s.st.early_arrivals == 0);
+        std::printf("land squad repulsion: obstacle %d - Repulsion %u frames, member vectors %u, off its line %.5f\n", obstacle,
+                    s.repulsion_frames, s.vec_frames, static_cast<double>(s.off_line));
+    }
+    {  // blocked destination: a standing infantry unit on the spot the squad is ordered to -> the early-arrival cut
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm(), 1);
+        const V2 goal = cell_center(25, 20);
+        UnitDesc x = unit(70, goal, 2, 1.0f, 6.0f, LocomotorKind::Default);
+        x.owner = 1;
+        CHECK(sys.add_unit(x));
+        SimRng rng(72);
+        sys.tick(1, rng, serial_for);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = goal;
+        sys.move(o, rng, 2);
+        bool arrived = false;
+        for (uint32_t f = 2; f < 900 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            arrived = sys.view(100).arrived;
+        }
+        const UnitView k = sys.view(100);
+        // the box (15 + 5, 15) at the stop point clears the unit's circle of 6: the centre at least 26 before it; the
+        // search steps back by 5 and the cut takes 3 more, the walk stops within 5 of the cut path's end
+        const float gap = goal.x - k.pos.x;
+        CHECK(arrived && sys.stats().early_arrivals == 1 && sys.stats().dynamic_repaths == 0 && sys.stats().pushes == 0);
+        CHECK(gap >= 26.0f && gap < 26.0f + 5.0f + 3.0f + 5.0f + 1.0f && std::fabs(k.pos.y - goal.y) < 1e-3f);
+        CHECK(sys.view(70).pos == goal);
+        std::printf("land squad repulsion: blocked destination - stopped %.2f before the standing unit\n", static_cast<double>(gap));
+    }
+    {  // two squads head-on (MovingVsMoving, opposed headings): Repulse - both on their lines at full speed, both arrive
+        struct Res {
+            uint64_t crc = 0;
+            float off = 0.0f, min_a = 3.0e38f, min_b = 3.0e38f;
+            uint32_t repulse = 0, other = 0, vec = 0;
+            bool arrived = false;
+        };
+        const auto run = [&](const ParallelFor& pf) {
+            Res r;
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            const V2 pa = cell_center(10, 20), pb = cell_center(35, 20);
+            t18_squad(sys, 100, pa, 0.0f, 1);
+            t18_squad(sys, 200, pb, 180.0f, 1);
+            SimRng rng(73);
+            sys.tick(1, rng, pf);
+            MoveOrder oa, ob;
+            oa.units = {101};
+            oa.destination = pb;
+            ob.units = {201};
+            ob.destination = pa;
+            sys.move(oa, rng, 2);
+            sys.move(ob, rng, 2);
+            bool ca = false, cb = false;
+            for (uint32_t f = 2; f < 900 && !r.arrived; ++f) {
+                sys.tick(f, rng, pf);
+                const UnitView ka = sys.view(100), kb = sys.view(200);
+                r.arrived = ka.arrived && kb.arrived;
+                r.off = std::max(r.off, std::max(std::fabs(ka.pos.y - pa.y), std::fabs(kb.pos.y - pa.y)));
+                ca = ca || near(ka.speed, vmax, 1e-5f);
+                cb = cb || near(kb.speed, vmax, 1e-5f);
+                if (ca && ka.pos.x < pb.x - 60.0f) r.min_a = std::min(r.min_a, ka.speed);
+                if (cb && kb.pos.x > pa.x + 60.0f) r.min_b = std::min(r.min_b, kb.speed);
+                for (const CollisionObject& c : sys.collisions().list()) {
+                    if (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::Repulsion) ++r.repulse;
+                    else ++r.other;
+                }
+                const V2 fw = dir_from_deg(ka.yaw);
+                for (ObjectId id = 101; id <= 104; ++id)
+                    if (length_sq(sys.team_member_avoid(id, fw)) > 0.0f) ++r.vec;
+            }
+            StateHasher h;
+            sys.hash_units(h);
+            r.crc = h.digest();
+            return r;
+        };
+        const Res s = run(serial_for), p = run(make_thread_pf(4));
+        CHECK(s.crc == p.crc);
+        CHECK(s.arrived && s.off < 1e-4f && s.repulse > 0 && s.other == 0 && s.vec > 0);
+        CHECK(near(s.min_a, vmax, 1e-5f) && near(s.min_b, vmax, 1e-5f));  // neither is slowed or held
+        std::printf("land squad repulsion: head-on squads - Repulse %u frames, member vectors %u\n", s.repulse, s.vec);
+    }
+    {  // two squads on the same heading, the rear one faster: Speed Slave Only - it follows and never overlaps
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        const V2 pa = cell_center(10, 20), pb = cell_center(14, 20);
+        t18_squad(sys, 100, pa, 0.0f, 1);            // rear: team speed 0.8 x 1.56
+        t18_squad(sys, 200, pb, 0.0f, 1, 0.4f);      // front: its members cap the team at 0.4 x 1.56
+        SimRng rng(74);
+        sys.tick(1, rng, serial_for);
+        MoveOrder oa, ob;
+        oa.units = {101};
+        oa.destination = cell_center(45, 20);
+        ob.units = {201};
+        ob.destination = cell_center(48, 20);
+        sys.move(oa, rng, 2);
+        sys.move(ob, rng, 2);
+        uint32_t slave = 0, slowed = 0;
+        float min_gap = 3.0e38f;
+        bool wrong_master = false;
+        for (uint32_t f = 2; f < 500; ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView ka = sys.view(100), kb = sys.view(200);
+            min_gap = std::min(min_gap, kb.pos.x - ka.pos.x);
+            for (const CollisionObject& c : sys.collisions().list())
+                if (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::SpeedSlave) {
+                    ++slave;
+                    wrong_master = wrong_master || (c.master == 0 ? c.a : c.b) != 200;  // the one farther ahead
+                    if (ka.speed < vmax - 1e-3f && kb.speed > 0.0f) ++slowed;
+                }
+        }
+        CHECK(slave > 0 && !wrong_master && slowed > 0);
+        CHECK(min_gap > 0.0f);  // the rear container never passes the front one
+        std::printf("land squad repulsion: following squads - Speed Slave Only %u frames, rear slowed %u, closest %.2f\n", slave,
+                    slowed, static_cast<double>(min_gap));
+    }
+    {  // against a standing friendly vehicle on the path (destination free): Path Around - the vehicle is never moved, the
+       // mover's members get no vector from that record (the mover side gives one only in Repulsion)
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm(), 1);
+        const V2 vp{at.x + 200.0f, at.y};
+        UnitDesc v = unit(70, vp, 2, 1.0f, 20.0f, LocomotorKind::Default);
+        v.collision_class = kUccVehicle;
+        v.owner = 1;
+        CHECK(sys.add_unit(v));
+        SimRng rng(75);
+        sys.tick(1, rng, serial_for);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = {at.x + 500.0f, at.y};
+        sys.move(o, rng, 2);
+        bool arrived = false, vectors = false, around = false;
+        for (uint32_t f = 2; f < 1200 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            arrived = sys.view(100).arrived;
+            for (const CollisionObject& c : sys.collisions().list()) {
+                CHECK(c.state != CollisionState::Repulsion);  // non-infantry pairs never get Repulsion
+                around = around || c.state == CollisionState::PathAround;
+            }
+            const V2 fw = dir_from_deg(sys.view(100).yaw);
+            for (ObjectId id = 1; id <= 9; ++id) vectors = vectors || length_sq(sys.team_member_avoid(id, fw)) > 0.0f;
+        }
+        CHECK(arrived && around && !vectors && sys.stats().dynamic_repaths >= 1 && sys.stats().pushes == 0);
+        CHECK(sys.view(70).pos == vp);
+    }
+    {  // a vehicle (no crusher) against a standing squad: Path Around; the container is never displaced in one step
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, cell_center(20, 20), 0, 0.8f, 0.0f, t18_storm(), 1);
+        UnitDesc v = unit(70, cell_center(8, 20), 2, 1.0f, 20.0f, LocomotorKind::Default);
+        v.collision_class = kUccVehicle;
+        v.owner = 1;
+        CHECK(sys.add_unit(v));
+        SimRng rng(76);
+        sys.tick(1, rng, serial_for);
+        MoveOrder o;
+        o.units = {70};
+        o.destination = cell_center(35, 20);
+        sys.move(o, rng, 2);
+        float max_step = 0.0f;
+        bool arrived = false;
+        for (uint32_t f = 2; f < 1200 && !arrived; ++f) {
+            const V2 k0 = sys.view(100).pos;
+            sys.tick(f, rng, serial_for);
+            max_step = std::max(max_step, length(sys.view(100).pos - k0));
+            arrived = sys.view(70).arrived;
+        }
+        CHECK(arrived && max_step <= vmax + 1e-4f);
+    }
+    {  // a crusher against a hostile squad that cannot be pushed (Max_Speed 0): one push attempt, then it drives on at
+       // full speed - no hold, no arrival cut, no repath, no retry
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t18_squad(sys, 200, cell_center(25, 20), 0.0f, 1, 0.0f);
+        UnitDesc cr = unit(60, cell_center(8, 20), 2, 1.0f, 10.0f, LocomotorKind::Default);
+        cr.collision_class = kUccVehicle;
+        cr.crusher = true;
+        cr.owner = 2;
+        CHECK(sys.add_unit(cr));
+        SimRng rng(77);
+        sys.tick(1, rng, serial_for);
+        MoveOrder o;
+        o.units = {60};
+        o.destination = cell_center(45, 20);
+        sys.move(o, rng, 2);
+        bool arrived = false, cruising = false, crusher_state = false;
+        float min_speed = 3.0e38f;
+        for (uint32_t f = 2; f < 1200 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView c = sys.view(60);
+            arrived = c.arrived;
+            cruising = cruising || near(c.speed, 1.56f, 1e-5f);
+            if (cruising && c.pos.x < cell_center(44, 20).x) min_speed = std::min(min_speed, c.speed);
+            for (const CollisionObject& co : sys.collisions().list()) crusher_state = crusher_state || co.state == CollisionState::Crusher;
+        }
+        const MovementStats& st = sys.stats();
+        std::printf("land squad repulsion: crusher - arrived %d, state 4 seen %d, min cruise %.3f, push failures %u, pushes %u\n",
+                    arrived ? 1 : 0, crusher_state ? 1 : 0, static_cast<double>(min_speed), st.push_failures, st.pushes);
+        CHECK(arrived && crusher_state && near(min_speed, 1.56f, 1e-5f));
+        CHECK(st.push_failures == 1 && st.pushes == 0 && st.early_arrivals == 0 && st.dynamic_repaths == 0);
+        CHECK(length(sys.view(60).pos - cell_center(45, 20)) < 1.0f);
+    }
+    {  // Try Again Later: a squad on a forced path (flag 0x20) against a vehicle that cannot be pushed (Max_Speed 0) - the
+       // speed answer 0 is taken at the braking rate, not at once, and the record is re-decided every 30 frames
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        t16_squad(sys, at, 0, 0.8f, 0.0f, t18_storm(), 1);
+        UnitDesc v = unit(70, {at.x + 250.0f, at.y}, 2, 0.0f, 20.0f, LocomotorKind::Default);
+        v.collision_class = kUccVehicle;
+        v.owner = 1;
+        CHECK(sys.add_unit(v));
+        SimRng rng(78);
+        sys.tick(1, rng, serial_for);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = {at.x + 500.0f, at.y};
+        o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 2);
+        std::vector<float> v_at;
+        bool tal = false;
+        for (uint32_t f = 2; f < 600; ++f) {
+            sys.tick(f, rng, serial_for);
+            v_at.push_back(sys.view(100).speed);
+            for (const CollisionObject& c : sys.collisions().list()) tal = tal || c.state == CollisionState::TryAgainLater;
+        }
+        size_t top = 0;
+        while (top < v_at.size() && !near(v_at[top], vmax, 1e-5f)) ++top;
+        size_t d0 = top;
+        while (d0 + 1 < v_at.size() && near(v_at[d0 + 1], vmax, 1e-5f)) ++d0;  // the last cruise frame
+        bool steps = d0 + 17 < v_at.size();
+        for (size_t i = 1; steps && i <= 16; ++i) steps = near(v_at[d0 + i], vmax - a * static_cast<float>(i), 1e-4f);
+        CHECK(tal && steps && v_at.back() == 0.0f && sys.view(100).has_goal);  // 16 steps of the rate down to 0, then held
+        CHECK(sys.stats().push_failures >= 3 && sys.stats().push_failures <= 2 + 600 / 30);  // re-decided every 30 frames
+        CHECK(sys.view(100).pos.x < at.x + 250.0f - 35.0f);  // it stopped before the vehicle
+        CHECK(sys.view(70).pos == (V2{at.x + 250.0f, at.y}));
+    }
+    {  // single infantry against single infantry: Repulsion at once - no repath, no push; on a leg that is not its last
+       // the vector bends the mover's own heading (MOVEMENT 5.4.1 "How Walk combines the vector")
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g = open_grid(100, 100);
+        for (int32_t y = 10; y <= 40; ++y) g.set_base(30, y, kPassImpassable);  // a wall: the path has two legs or more
+        sys.set_grid(std::move(g));
+        sys.set_anim_length_fn(anim_len);
+        CHECK(sys.add_unit(unit(1, cell_center(20, 20), 2, 1.0f, 6.0f, LocomotorKind::Default)));
+        SimRng rng(79);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(45, 25);
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        for (; f < 200 && !(sys.view(1).speed > 0.0f); ++f) sys.tick(f, rng, serial_for);
+        const std::vector<V2> path(sys.land_path(1).begin(), sys.land_path(1).end());
+        CHECK(path.size() >= 3);
+        if (path.size() >= 3) {
+            const V2 t = normalize_retail(path[1] - path[0]), left{-t.y, t.x};
+            const V2 spot = path[0] + (path[1] - path[0]) * 0.5f + left * -2.0f;  // on the first leg, 2 to its right
+            CHECK(sys.add_unit(unit(2, spot, 2, 1.0f, 6.0f, LocomotorKind::Default)));
+            float bend = 0.0f;
+            uint32_t repulsion = 0, other = 0;
+            bool arrived = false;
+            for (; f < 1500 && !arrived; ++f) {
+                sys.tick(f, rng, serial_for);
+                const UnitView v = sys.view(1);
+                arrived = v.arrived;
+                if (dot(v.pos - path[0], t) < length(path[1] - path[0]) * 0.75f) bend = std::max(bend, dot(v.pos - path[0], left));
+                for (const CollisionObject& c : sys.collisions().list()) {
+                    if (c.a == 1 && c.b == 2 && c.state == CollisionState::Repulsion) ++repulsion;
+                    else ++other;
+                }
+            }
+            CHECK(arrived && length(sys.view(1).pos - cell_center(45, 25)) < 1.0f);
+            CHECK(repulsion > 0 && other == 0 && bend > 0.5f);  // it side-stepped to the left, away from the unit on its right
+            CHECK(sys.view(2).pos == spot && sys.stats().dynamic_repaths == 0 && sys.stats().pushes == 0);
+            std::printf("land squad repulsion: single infantry - Repulsion %u frames, side step up to %.2f\n", repulsion,
+                        static_cast<double>(bend));
+        }
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -4430,6 +4911,8 @@ int main() {
     test_land_squad_speed_step();   // s78n t16
     test_land_squad_review_fixes(); // s78n review
     test_land_squad_teleport();     // s78n t18 item 8
+    test_land_squad_footprint();    // s78n t18 items 2 / 6
+    test_land_squad_repulsion();    // s78n t18 items 1 / 7
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

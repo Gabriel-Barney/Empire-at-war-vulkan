@@ -827,6 +827,73 @@ static void test_collision_helpers() {
     CHECK(std::fabs(d - 140.0f) < 1e-3f);
     CHECK(path_contact_distance({0, 0}, path, 1, {300, 300}, 10.0f, 1000.0f) < 0.0f);
     CHECK(overlap_ratio({0, 0}, 10, {30, 0}, 10) == 0.0f && std::fabs(overlap_ratio({0, 0}, 10, {10, 0}, 10) - 0.5f) < 1e-6f);
+    {  // s78n t18 (MOVEMENT 5.3.1): footprint rectangles and the three contact tests
+        const auto nearf = [](float x, float y, float eps = 1e-4f) { return std::fabs(x - y) <= eps; };
+        const FootRect r1 = foot_rect({0.0f, 0.0f}, 0.0f, 10.0f, 5.0f);
+        // R(rect, n) = |a . n| hx + |b . n| hy
+        CHECK(nearf(foot_extent(r1, {1.0f, 0.0f}), 10.0f) && nearf(foot_extent(r1, {0.0f, 1.0f}), 5.0f));
+        const FootRect r2 = foot_rect({12.0f, 0.0f}, 0.0f, 10.0f, 5.0f);
+        // overlap coefficient: x axis 1 - 12 / 20, y axis 1 -> 0.4; gap 0
+        CHECK(foot_overlap(r1, r2) && nearf(foot_overlap_coefficient(r1, r2), 0.4f) && foot_gap(r1, r2) == 0.0f);
+        const FootRect r3 = foot_rect({25.0f, 0.0f}, 0.0f, 10.0f, 5.0f);
+        CHECK(!foot_overlap(r1, r3) && foot_overlap_coefficient(r1, r3) == 0.0f && nearf(foot_gap(r1, r3), 5.0f));
+        const FootRect touch = foot_rect({20.0f, 0.0f}, 0.0f, 10.0f, 5.0f);  // touching counts as overlap; coefficient 0
+        CHECK(foot_overlap(r1, touch) && foot_overlap_coefficient(r1, touch) == 0.0f && foot_gap(r1, touch) == 0.0f);
+        const FootRect r4 = foot_rect({12.0f, 0.0f}, 90.0f, 10.0f, 5.0f);  // turned: its x extent is 5 -> 1 - 12 / 15
+        CHECK(nearf(foot_overlap_coefficient(r1, r4), 0.2f, 1e-3f));
+        CHECK(nearf(foot_overlap_coefficient(r1, r1), 1.0f));
+        // directional radius rho = hy + (hx - hy) cos^2
+        CHECK(foot_rho(10.0f, 5.0f, 1.0f) == 10.0f && foot_rho(10.0f, 5.0f, 0.0f) == 5.0f &&
+              nearf(foot_rho(10.0f, 5.0f, 0.70710678f), 7.5f));
+        // the swept point against a radius running linearly r0 -> r1
+        CHECK(std::fabs(foot_swept_contact({-100.0f, 0.0f}, {100.0f, 0.0f}, 18.0f, 18.0f) - 0.82) < 1e-6);
+        CHECK(foot_swept_contact({-10.0f, 0.0f}, {100.0f, 0.0f}, 18.0f, 18.0f) == 0.0);       // already inside
+        CHECK(foot_swept_contact({-100.0f, 30.0f}, {200.0f, 0.0f}, 18.0f, 18.0f) < 0.0);      // passes 30 to the side
+        CHECK(std::fabs(foot_swept_contact({-100.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, 200.0f) - 0.5) < 1e-6);  // the radius grows
+        // MovingVsStopped: a (10, 5) mover along +x; head-on against an (8, 4) box end-on: hx_a + hx_b = 18 -> 82;
+        // against its side (the box turned 90 degrees): hx_a + hy_b = 14 -> 86
+        const std::vector<V2> px{{0.0f, 0.0f}, {200.0f, 0.0f}};
+        const V2 ha{10.0f, 5.0f};
+        CHECK(nearf(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 1000.0f), 82.0f, 1e-2f));
+        CHECK(nearf(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 0.0f}, 90.0f, 8.0f, 4.0f), 1000.0f), 86.0f, 1e-2f));
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 80.0f) < 0.0f);  // beyond the look-ahead
+        // beside the path: hy_a + hy_b = 9 abeam, a little more ahead of abeam (the cos^2 blend): 8.5 touches, 10.5 not
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 8.5f}, 0.0f, 8.0f, 4.0f), 1000.0f) >= 0.0f);
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 10.5f}, 0.0f, 8.0f, 4.0f), 1000.0f) < 0.0f);
+        // turning in place: one zero-length segment at the mover's position
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({17.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 1000.0f, 0.0f) == 0.0f);
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({19.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 1000.0f, 0.0f) < 0.0f);
+        // MovingVsMoving: two (5, 5) movers head-on at speed 2 each, 100 apart: touch at 10 after 22.5 frames (< 45);
+        // 300 apart: not inside 45 frames, inside 90
+        const std::vector<V2> pp{{0.0f, 0.0f}, {400.0f, 0.0f}};
+        const auto track = [](V2 pos, float yaw, const std::vector<V2>& path, float hx, float hy) {
+            FootTrack t;
+            t.pos = pos;
+            t.yaw = yaw;
+            t.path = path;
+            t.next = 1;
+            t.speed = 2.0f;
+            t.max_speed = 2.0f;
+            t.hx = hx;
+            t.hy = hy;
+            return t;
+        };
+        const std::vector<V2> q1{{100.0f, 0.0f}, {-300.0f, 0.0f}}, q2{{300.0f, 0.0f}, {-100.0f, 0.0f}};
+        CHECK(foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 5.0f, 5.0f), track({100.0f, 0.0f}, 180.0f, q1, 5.0f, 5.0f), 45));
+        CHECK(!foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 5.0f, 5.0f), track({300.0f, 0.0f}, 180.0f, q2, 5.0f, 5.0f), 45));
+        CHECK(foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 5.0f, 5.0f), track({300.0f, 0.0f}, 180.0f, q2, 5.0f, 5.0f), 90));
+        // lane rule: (10, 5) movers passing on parallel lines 12 apart keep their side radius hy (5 + 5 < 12): no contact;
+        // 9 apart they touch
+        const std::vector<V2> l12{{100.0f, 12.0f}, {-300.0f, 12.0f}}, l9{{100.0f, 9.0f}, {-300.0f, 9.0f}};
+        CHECK(!foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f), track({100.0f, 12.0f}, 180.0f, l12, 10.0f, 5.0f), 45));
+        CHECK(foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f), track({100.0f, 9.0f}, 180.0f, l9, 10.0f, 5.0f), 45));
+        // neither moves: the rectangle overlap
+        FootTrack s1 = track({0.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f), s2 = track({12.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f);
+        s1.next = s2.next = 2;
+        CHECK(foot_moving_contact(s1, s2, 45));
+        s2.pos = {25.0f, 0.0f};
+        CHECK(!foot_moving_contact(s1, s2, 45));
+    }
     // Dynamic local pathfinder around a blocker on the straight line.
     PassabilityGrid g;
     g.init(64, 64);
@@ -998,12 +1065,10 @@ static void test_collision_system() {
         CHECK(s.collisions().list().empty() && s.stats().collisions_cancelled == 1 && s.stats().collisions_created == 1);
         CHECK(overlap_ratio(s.view(1).pos, 40.0f, s.view(2).pos, 40.0f) <= 0.15f);
     }
-    // MovingVsStopped kept while it applies (zero quota: it waits in try-again-later), cancelled once it no longer
-    // does - the mover stops, or the blocker starts moving.
-    for (int variant = 0; variant < 2; ++variant) {
-        MovementConfig cfg;
-        cfg.constants.dynamic_land_complexity_quota = 0;
-        MovementSystem s(cfg);
+    // s78n t18 (MOVEMENT 5.4.1): a MovingVsStopped record lives across frames in its state - Path Around while the mover
+    // holds the detour made for it - and ends by its state: once the mover is stopped (no path left) it is Resolved.
+    {
+        MovementSystem s{MovementConfig{}};
         PassabilityGrid g;
         g.init(60, 40);
         s.set_grid(std::move(g));
@@ -1023,29 +1088,17 @@ static void test_collision_system() {
                 if (s.collisions().list()[0].seq == seq && ++kept == 3) break;  // persisted across frames
             }
         }
-        CHECK(seq != UINT32_MAX && kept == 3 && s.collisions().list()[0].state == CollisionState::TryAgainLater);
-        const uint32_t cancelled0 = s.stats().collisions_cancelled;
-        if (variant == 0) {
-            const ObjectId one = 1;
-            s.stop(std::span<const ObjectId>(&one, 1));
-            s.tick(++f, rng);
-            CHECK(s.collisions().list().empty() && s.stats().collisions_cancelled == cancelled0 + 1);
-        } else {
-            MoveOrder away;
-            away.units = {2};
-            away.destination = cell_center(12, 35);
-            s.move(away, rng, f + 1);
-            bool gone = false;
-            for (uint32_t n = 0; n < 20 && !gone; ++n) {
-                s.tick(++f, rng);
-                gone = true;
-                for (const CollisionObject& c : s.collisions().list()) gone = gone && c.seq != seq;
-            }
-            CHECK(gone && s.stats().collisions_cancelled >= cancelled0 + 1 && s.view(2).has_goal);
-        }
+        CHECK(seq != UINT32_MAX && kept == 3 && s.collisions().list()[0].state == CollisionState::PathAround);
+        CHECK(s.stats().dynamic_repaths == 1);  // one search for the record, not one per check
+        const uint32_t resolved0 = s.stats().collisions_resolved;
+        const ObjectId one = 1;
+        s.stop(std::span<const ObjectId>(&one, 1));
+        s.tick(++f, rng);
+        CHECK(s.collisions().list().empty() && s.stats().collisions_resolved == resolved0 + 1 && s.stats().collisions_cancelled == 0);
     }
-    // Budget fallback: with a zero quota every MovingVsStopped resolution is the fallback (try again later, then push
-    // the blocker aside); no dynamic search runs, and the mover still gets through.
+    // Quota (s78n t18, MOVEMENT 5.4.1 driver step 2): with a zero quota a record is never decided - it stays in state
+    // None, which answers max speed, so the mover walks on through the blocker's footprint; no dynamic search runs and
+    // nothing is displaced (retail has no instant shove).
     {
         MovementConfig cfg;
         cfg.constants.dynamic_land_complexity_quota = 0;
@@ -1070,7 +1123,7 @@ static void test_collision_system() {
         }
         CHECK(all_fallback && s.stats().dynamic_repaths == 0 && s.stats().quota_deferrals > 0);
         CHECK(ground && s.view(1).arrived && distance(s.view(1).pos, cell_center(55, 20)) < 1.0f);
-        CHECK(distance(s.view(2).pos, cell_center(30, 20)) > 1.0f);  // the blocker was pushed aside
+        CHECK(s.view(2).pos == cell_center(30, 20));  // the blocker stands where it stood
     }
 }
 
@@ -1182,7 +1235,9 @@ static void test_land_group() {
     CHECK(g3ok && s3.view(1).arrived && distance(s3.view(1).pos, cell_center(55, 20)) < 1.0f && s3.stats().dynamic_repaths >= 1);
     CHECK(distance(s3.view(2).pos, cell_center(30, 20)) < 1.0f);  // the blocker was not pushed
 
-    // Destination occupied by a stopped unit: early arrival within LandDestinationProximity.
+    // Destination occupied by a stopped unit (s78n t18, MOVEMENT 5.4.1 0x684710 / 0x685e10): the early-arrival cut - the
+    // path ends at the last point where the mover's box (hx + 5, hy) is clear of the standing unit (18 + 5 + 18 = 41,
+    // found in steps of 5, cut 3 more).
     MovementSystem s4{MovementConfig{}};
     PassabilityGrid g4;
     g4.init(40, 40);
@@ -1192,7 +1247,6 @@ static void test_land_group() {
     MoveOrder d;
     d.units = {1};
     d.destination = cell_center(30, 30);
-    d.flags = kMoveFlagSkipValidation;
     s4.move(d, rng, 0);
     bool g4ok = true;
     run_land(s4, 0, 2000, rng, serial_for, g4ok);
@@ -2553,7 +2607,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // now + acc + r - 30, not before now); space unchanged.
 // cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
 // their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
-static constexpr uint64_t kGoldenLand = 0x6f15bccad0625e26ull;
+static constexpr uint64_t kGoldenLand = 0x4a45d9d2a287e640ull;  // s78n t18: land collision records (MOVEMENT 5.3.1 / 5.4.1 / 5.4.2)
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

@@ -1027,7 +1027,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 15);  // 15: before the s78n t14 part B crush-flee / prediction interval fields (16)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 17);
+    put_u32(bad, 0, 16);  // 16: before the s78n t18 collision states / record answers / squad walk and gate fields (17)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 18);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

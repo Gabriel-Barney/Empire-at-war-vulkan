@@ -14,9 +14,9 @@ bool MovementSystem::is_air(const Unit& u) const {
 
 bool MovementSystem::ground_collider(const Unit& u) const {
     // s78n t14 part B (FIGHTER_FLYING §7.5 item 1): a squad container is a land collision checker and partner (it registers:
-    // LandTeamContainer vf +0x230); its members never check (detect_collisions) and are no partner (as before). The crush
-    // pass skips the container as a victim (its members are crushed). [port] Not while its whole squad is inside a garrison
-    // (set_collision_exempt: MOVEMENT §5.3 garrison exclusion gate).
+    // LandTeamContainer vf +0x230); its members are neither (land_layer_object: they are not in tracking layer 0x10). The
+    // crush pass skips the container as a victim (its members are crushed). [port] Not while its whole squad is inside a
+    // garrison (set_collision_exempt: MOVEMENT §5.3 garrison exclusion gate).
     if (u.exempt == kCollisionExemptAll) return false;
     switch (u.d.locomotor) {
         case LocomotorKind::Flying:
@@ -83,7 +83,6 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
         end_push(u);  // a1k t03 [port]
         u.blocked_frames = 0;
         u.replans = 0;
-        u.waits = 0;
         if (u.has_goal) {
             u.need_path = true;
         } else {
@@ -199,20 +198,29 @@ float MovementSystem::air_altitude(const Unit& u, uint32_t frame) const {
     return step_altitude(u.z, target, u.sp.max_lift, terrain(u.m.pos), map_floor_);
 }
 
+bool MovementSystem::land_layer_object(const Unit& u) const {
+    return ground_collider(u) && u.anchor < 0 && !u.team_suspended;
+}
+
 bool MovementSystem::land_spot_free(const Unit& u, V2 p) const {
     if (!grid_.passable_world(p, u.lp.mask)) return false;  // movement-class test (0x50e280)
-    const float r = std::max(u.d.radius, 1.0f);
-    const tactical::Aabb q{{p.x - r - 80.0f, p.y - r - 80.0f, -1.0f}, {p.x + r + 80.0f, p.y + r + 80.0f, 1.0f}};
-    for (EntityHandle h : tree_.query_aabb(q, QueryFilter{}, qctx_)) {  // occupancy (0x538200) [port: ground units]
-        const int32_t oi = find(static_cast<ObjectId>(h));
-        if (oi < 0) continue;
-        const Unit& o = units_[static_cast<size_t>(oi)];
-        // s78n t14 part B [port]: a squad container is not an occupant here (its members are), as before part B.
-        if (o.d.id == u.d.id || !ground_collider(o) || o.d.team_container) continue;
-        const float rr = r + o.d.radius;
-        if (length_sq(o.m.pos - p) < rr * rr) return false;
+    // s78n t18 (MOVEMENT §5.3.2): the occupancy query 0x538200 on tracking layer 0x10 - the lander's own footprint
+    // rectangle moved to the point against every layer object's rectangle (separating-axis overlap; moving ones count
+    // too). A squad is there as its container's joint box; a spot where only a squad member stands is free. Nothing is
+    // ignored: the airborne lander is no layer object itself.
+    const FootRect mine = foot_at(u, p);
+    std::vector<uint32_t> cand;
+    layer_box_query(p, foot_radius(u), cand);
+    for (uint32_t oi : cand) {
+        const Unit& o = units_[oi];
+        if (o.d.id != u.d.id && foot_overlap(mine, foot_of(o))) return false;
     }
     return true;
+}
+
+bool MovementSystem::land_spot_clear(ObjectId id, V2 p) const {
+    const Unit* u = unit_ptr(id);
+    return u && land_spot_free(*u, p);
 }
 
 // ---------------------------------------------------------------- §4.3 JETPACK_LOCOMOTOR (vf6 0x641910)

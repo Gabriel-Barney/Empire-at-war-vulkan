@@ -83,6 +83,7 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     V2 pos = m.pos;
     uint32_t next = m.next;
     V2 travel{};
+    bool steered = false;
     while (budget > 0.0f && next < m.path.size()) {
         const V2 aim = wp(next);
         const V2 d = aim - pos;
@@ -107,10 +108,32 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
                     }
                 }
             }
+            if (x && x->avoid && next >= 1 && static_cast<size_t>(next) + 1 < m.path.size()) {
+                // s78n t18 (MOVEMENT 5.4.1 "How Walk combines the vector", not on the last leg): the heading is the
+                // segment direction + the lane term that brings the unit back to its line (0x41dbb0: the side error over
+                // FormationMaximumSideError past FormationMinimumSideError), renormalised, + the vector 0x509810.
+                const V2 from = wp(next - 1);
+                const V2 sd = normalize_retail(aim - from);
+                if (length_sq(sd) > 0.0f) {
+                    const V2 base = normalize_retail(sd + perp_left(sd) * formation_side_correction(-cross(sd, pos - from)));
+                    const V2 v = x->avoid(x->avoid_ctx, base);
+                    if (v.x != 0.0f || v.y != 0.0f) {
+                        dir = normalize_retail(base + v);
+                        heading_vec = dir;
+                        steered = true;
+                    }
+                }
+            }
             pos = pos + dir * budget;
             budget = 0.0f;
             travel = heading_vec;
         }
+    }
+    if (steered && next >= 1 && static_cast<size_t>(next) + 1 < m.path.size()) {
+        // a deflected unit passes its waypoint by crossing the waypoint's line (normal = the bisector of the two segments)
+        const V2 w = wp(next);
+        const V2 n = normalize_retail(normalize_retail(w - wp(next - 1)) + normalize_retail(wp(next + 1) - w));
+        if (length_sq(n) > 0.0f && dot(pos - w, n) >= 0.0f) ++next;
     }
     // Passability check before commit (§3.5 step 4).
     if (m.next >= m.escape_until && !move_ok(grid, m.pos, pos, p.mask)) {

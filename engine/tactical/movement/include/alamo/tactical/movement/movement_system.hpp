@@ -23,17 +23,18 @@
 //      against the 160 x 160 square of candidates (SpatialTree query, ascending id); a qualifying
 //      pair without a collision object gets one (CollisionLayer, collision.hpp: MovingVsMoving /
 //      MovingVsStopped / StoppedVsStopped, creation frame recorded);
-//   3b. collision driver (TACTICAL_GAPS §6.7): collisions that no longer apply are cancelled, the
-//      rest sorted ascending by crowd - age ([port] stable by insertion order) and resolved in
-//      that order - full resolution while the DynamicLandComplexityQuota (100 per 5 frames)
-//      allows, else the fallback. Per-type resolutions (the pre-layer port behaviours):
-//      MovingVsMoving = speed slaving / yield / side-step for each participant (untraced; same
-//      full and fallback); MovingVsStopped = arrival-at-blocked-destination
-//      (LandDestinationProximity), the dynamic local pathfinder (full only), else try again later
-//      (FramesPerCollisionCheck) and a push after repeated waits; StoppedVsStopped = push both
-//      apart. [port] Each unit acts on its own collision-check frames (one blocker resolution / one
-//      push / its MovingVsMoving response per check, effects lasting to its next check), so the
-//      per-unit cadence stays FramesPerCollisionCheck. The layer is hashed (land only);
+//   3b. collision driver (TACTICAL_GAPS §6.7; s78n t18: MOVEMENT §5.4.1 / §5.4.2): records whose participants are gone
+//      or left the layer are dropped, the rest sorted ascending by crowd - age ([port] stable by insertion order) and
+//      serviced every frame in that order; a record that is not decided yet (state None) is decided only while the
+//      DynamicLandComplexityQuota (100 per 5 frames) allows. MovingVsStopped = the decision 0x684f90 (Repulsion, the
+//      early-arrival cut, Path Around through the dynamic local pathfinder, a push of the blocker onto a walked path,
+//      the crusher driving on, Try Again Later with a re-decide every 30 frames; no instant displacement) and its
+//      per-state service; a record ends by its state only. MovingVsMoving of two Infantry / Bike movers = the chooser
+//      0x67f7b0 (Path Around for a forced path, Speed Slave Only within 60 degrees, else Repulse) and its states; other
+//      MovingVsMoving pairs keep the port's stand-in (speed slaving / yield / side-step on each unit's check frames,
+//      dropped when the pair stops predicting contact) and StoppedVsStopped still pushes both apart ([port]). Each
+//      record answers its participants a speed and an "at once" flag, folded per unit before the walk. The layer is
+//      hashed (land only);
 //   4. walk locomotor step of every unit IN PARALLEL (each unit writes only itself);
 //   5. serial commit in ascending id: terrain height, arrivals, blocked -> re-plan after 10
 //      blocked frames (§1.6 re-path trigger), candidate tree refit.
@@ -533,9 +534,6 @@ public:
     void commit(objects::ObjectStore& store) const;
     const MovementStats& stats() const { return stats_; }
     const CollisionLayer& collisions() const { return coll_; }  // land: live collision objects, last driver order
-    // s78n t14 part B: the squad containers' collision objects the last land tick's driver resolved (dropped from
-    // collisions() in the same pass); the members' steering vector 0x509810 reads both lists in creation (seq) order.
-    std::span<const CollisionObject> resolved_team_collisions() const { return coll_done_; }
 
     // ---- S10-int: effective-speed factor from the host (MOVEMENT.md 3.4: Mod_Multiplier Speed x
     // Engines_Disabled_Speed_Modifier x (1 + modifier list 5); 0 while immobilised). Scales max speed and
@@ -643,6 +641,17 @@ public:
     };
     std::span<const LandTeamSlot> land_team(ObjectId container) const;
     bool is_land_team_container(ObjectId id) const;  // a unit added with UnitDesc::team_container
+    // s78n t18 (TACTICAL_COMBAT §5.4.4, 0x404450; FIGHTER_FLYING §7.8 item 2): the container's live joint slot box - the box
+    // starts at (0, 0, 0, 0), each team entry grows it to hold slot.x +- its half-extent x and slot.y +- its half-extent y
+    // (set_team_member_shape); HX = (max x - min x) / 2 + the container's MaxJiggleDistance, HY likewise. It is the
+    // container's collision footprint: a rectangle centred on the container and turned by its yaw (live member positions
+    // are not read). The container's UnitDesc::radius follows it (sqrt(HX^2 + HY^2): the formation layout, the dynamic
+    // repath's circle). False: not a container, or one without team entries ([port] it keeps its last radius as a circle).
+    bool team_joint_box(ObjectId container, float& hx, float& hy) const;
+    // s78n t18 (MOVEMENT §5.3.2, the occupancy query 0x538200 of the jetpack landing 0x6420e0): the point passes the
+    // unit's movement class and no land layer object's footprint rectangle (moving or standing; a squad container's joint
+    // box, never a squad member) overlaps the unit's own rectangle placed at `p`. False: unknown unit.
+    bool land_spot_clear(ObjectId id, V2 p) const;
     // s78n review (garrisons): a steering member leaving this system for a while (the garrison entry) keeps its team
     // place: park_team_member records (member, container, slot, team index) and removes the unit (as remove_unit);
     // rejoin_land_team, after the host's add_unit of the same id, steers it to that slot again (as set_land_team does for
@@ -705,11 +714,18 @@ public:
     bool team_fleeing(ObjectId container) const;
     // The collision steering vector 0x509810 of steering member `member` for the unnormalised heading `dir` (FIGHTER_FLYING
     // §7 step 6), from the current positions and its container's collision objects in list order: per object the weight
-    // (MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3) and the vector (MovingVsStopped only: side steps 0x5c71a0
-    // away from the other participant, or that participant's members when it is a squad container, x clamp(speed / max
-    // speed, 0, 1)); objects whose vectors fail the 25-unit passability probes are dropped; best = the largest weight (a
-    // tie: the longer vector), plus every other kept vector with dot(best, v) >= -0.5 (retail's index quirk copied).
-    // The steering tick calls the same code with the start-of-tick positions. {0, 0}: not a steering member / no objects.
+    // (MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3) and the vector - s78n t18 (§7.5 corrections): a
+    // MovingVsStopped object gives one on the obstacle's side in every state and on the mover's side only in Repulsion, a
+    // MovingVsMoving object on both sides in Repulse only - the side steps 0x5c71a0 away from the other participant, or
+    // that participant's members when it is a squad container, x clamp(speed / max speed, 0, 1); objects whose vectors
+    // fail the 25-unit passability probes are dropped; best = the largest weight (a tie: the longer vector), plus every
+    // other kept vector with dot(best, v) >= -0.5 (retail's index quirk copied). Side step of a against b: t = clamp(1 -
+    // |a - b| (3-D) / ((r_a + r_b) x 1.3), 0, 1) with r = the soft footprint radius (0x397780 of a non-container); with L
+    // = (r_a + r_b) x 1.3 and left = (-dir.y, dir.x), a side is free when the segment B -> B + L side and the corridor
+    // from B + L side - L dir to B + L side + L dir pass a's movement class; b on a's right and left free -> + t left,
+    // else right free -> - t left, else 0. The steering tick calls the same code with the start-of-tick positions. A Walk
+    // unit that is no squad member adds the same vector (key: itself) to its heading on every leg but the last
+    // (MOVEMENT §5.4.1; `member` may be such a unit here). {0, 0}: unknown unit / no objects.
     V2 team_member_avoid(ObjectId member, V2 dir) const;
     void hash_speed(StateHasher& h) const;
     // ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): clips of the Walk arrival turn ----
@@ -785,10 +801,26 @@ private:
         uint32_t start_frame = 0;
         float formation_speed = 3.0e38f;
         int32_t large_hover_index = -1;  // P1 double-click: formation +0x22c (not hashed; no modelled consumer)
-        uint32_t blocked_frames = 0, replans = 0, waits = 0;
+        uint32_t blocked_frames = 0, replans = 0;
         int32_t check_countdown = 0;
+        // [port] the MovingVsMoving stand-in (pairs that are not Infantry / Bike): the speed slave cap and the yield
+        // hold (speed 0 until this frame), set on the unit's check frames.
         float speed_cap = 3.0e38f;
-        uint32_t hold_until = 0;  // try again later: speed 0 until this frame
+        uint32_t hold_until = 0;
+        // s78n t18 (0x509ea0): the lowest speed this tick's collision records answer the unit (3e38: none) and the "at
+        // once" flag of the last record that writes one. Rebuilt by every land tick's driver before the walk (transient:
+        // not saved, not hashed; the records' own answers are).
+        float coll_speed = 3.0e38f;
+        bool coll_now = false;
+        // s78n t18 (MOVEMENT §5.4.1, save version 17): Path Around bookkeeping - the collision record (seq; kNoDetour
+        // none) the current detour was spliced in for and the path index where it ends (the unit "holds the path made
+        // for the record" while next < detour_end); the units the path was planned around and the frame of that plan
+        // (decision step 3); the frame of the unit's last path push or pop (pack +0x288).
+        uint32_t detour_seq = 0xFFFFFFFFu;
+        uint32_t detour_end = 0;
+        std::vector<ObjectId> around;
+        uint32_t around_frame = 0;
+        uint32_t path_change = 0;
         V2 nudge;
         uint32_t nudge_frames = 0;
         // a1k t03 (A1_READINGS §40.3): the pushed move (push 0x6859a0), the top record of the locomotor's path stack: the
@@ -881,6 +913,12 @@ private:
         bool push_flee = false;
         // s78n t14 part B: set_collision_exempt (transient, host-set every tick): -1 none, kCollisionExemptAll, or a unit.
         ObjectId exempt = -1;
+        // s78n t18 (MOVEMENT §5.3.1, TACTICAL_COMBAT §5.4.4): a squad container's live joint slot box 0x404450 (half
+        // extents; team_boxed: it has team entries) and a member suspended for a hero clash (still a TEAM entry, never a
+        // layer object). Derived from the team lists (team_ix_rebuild): not saved, not hashed.
+        float team_box_hx = 0.0f, team_box_hy = 0.0f;
+        bool team_boxed = false;
+        bool team_suspended = false;
         // s78n t14: this tick's re-lay requests of a container (layout dirs in order; written by its own walk or a push,
         // consumed by the serial pass after the walk). Transient: empty between ticks, not saved.
         std::vector<V2> relay;
@@ -898,20 +936,22 @@ private:
         bool fleeing = false;  // s78n t14 part B: the container's current path is a crush-flee push (0x39a5b0)
         uint32_t rec_begin = 0, rec_end = 0;  // s78n t14 part B: its collision objects in the tick's SteerRec list
     };
-    // s78n t14 part B (FIGHTER_FLYING §7.5): one collision object of a squad container, as its members' steering vector reads
-    // it: weight (vf +0x30), whether it gives a member a vector (vf +0x38) and the other participant (units_ index).
+    // s78n t14 part B (FIGHTER_FLYING §7.5): one collision object of a participant (key: a squad container for its
+    // members, a Walk unit for itself), as the steering vector 0x509810 reads it: weight (vf +0x30), whether it gives a
+    // vector on that side (vf +0x38) and the other participant (units_ index).
     struct SteerRec {
         ObjectId container = -1;
         float w = 0.0f;
         bool vec = false;
         uint32_t other = 0;
     };
-    void team_steer_recs(std::vector<SteerRec>& out) const;  // every container's objects, by container, list order kept
+    void team_steer_recs(std::vector<SteerRec>& out) const;  // every participant's objects, by key, list order kept
     // 0x509810 for member `a` at `pa` (speed / max speed for the 0x5c6d40 ratio), `pos` = positions by units_ index.
     V2 member_avoid(const Unit& a, V2 pa, float speed, float vmax, V2 dir, std::span<const SteerRec> recs,
                     std::span<const V2> pos) const;
     V2 member_side_steps(const Unit& a, V2 pa, V2 dir, uint32_t other, std::span<const V2> pos) const;  // 0x5c6d40 sum
-    float team_hard_radius(const Unit& u) const;  // 0x397780: a member's shape (set_team_member_shape), else its footprint
+    // 0x397780: sqrt(HX^2 + HY^2) of the joint slot box for a squad container, the soft footprint radius for any other unit
+    float steer_radius(const Unit& u) const;
     // s78n t14 (FIGHTER_FLYING §7.2): Rows 0x5ac970 / Dartboard 0x5ac2a0 on the container's steering members (no flag test).
     bool lay_out_rows(const Unit& k, V2 dir, std::vector<std::pair<Unit*, V2>>& out);
     bool lay_out_dartboard(const Unit& k, V2 dir, uint32_t frame, std::vector<std::pair<Unit*, V2>>& out);
@@ -982,6 +1022,22 @@ private:
     float land_wanted_yaw(const Unit& u) const;  // s78k t01: the final facing through Movement_Directions_Count
     float loco_turn_rate(const Unit& u) const;
     bool ground_collider(const Unit& u) const;  // takes part in land collision / crush
+    // s78n t18 (MOVEMENT §5.3.2, FIGHTER_FLYING §7.8 item 1): an object of tracking layer 0x10 - a registered mover on the
+    // Land layer that is not hidden: squad containers yes, their members never. Every collision candidate, crowd count,
+    // occupancy and dynamic-repath query reads this.
+    bool land_layer_object(const Unit& u) const;
+    // The footprint rectangle 0x38de80 (MOVEMENT §5.3.1): half extents 0x396850 (a squad container: its joint slot box;
+    // else the hard extents, [port] a circle of the soft radius when the type has none: FootRect::round), its bounding
+    // radius 0x3969f0 and the rectangle at the unit's position and yaw ([port] no hard-extent offsets, no deployed extents).
+    V2 foot_half(const Unit& u) const;
+    float foot_radius(const Unit& u) const;
+    FootRect foot_of(const Unit& u) const;
+    FootRect foot_at(const Unit& u, V2 p) const;  // the same rectangle placed at `p`
+    float tree_half(const Unit& u) const;  // the collision tree's half box: covers the footprint and the soft radius
+    // Box query 0x5d7a00 on layer 0x10: the layer objects whose record box (centre +- its footprint radius) overlaps the
+    // box centre +- half (strict), ascending id (units_ index).
+    void layer_box_query(V2 centre, float half, std::vector<uint32_t>& out) const;
+    void team_box_refresh(Unit& k);  // the joint box of one container from its team entries
     void tick_special(uint32_t frame, SimRng& rng);
     void step_jetpack(Unit& u, uint32_t frame);
     void step_flying(Unit& u, uint32_t frame, SimRng& rng);
@@ -1093,12 +1149,33 @@ private:
     bool checker_moving(const Unit& u, uint32_t frame) const;
     static bool other_moving(const Unit& u);
     bool mvm_contact(const Unit& a, const Unit& b) const;
-    float mvs_contact(const Unit& a, const Unit& b) const;
-    bool collision_applies(const CollisionObject& c, uint32_t frame) const;
+    float mvs_contact(const Unit& a, const Unit& b, uint32_t frame) const;
+    float mvs_look_distance(const Unit& a, const Unit& b) const;
+    bool collision_applies(const CollisionObject& c, uint32_t frame) const;  // [port] the stand-in kinds' keep test
     void resolve_collision(CollisionObject& c, bool full, uint32_t frame, std::vector<uint8_t>& acted);
     void mvm_response(Unit& x, const Unit& y, uint32_t frame);
-    bool resolve_blocker(Unit& a, uint32_t blocker, float contact, uint32_t frame, bool full);
-    bool push_aside(const Unit& a, Unit& b, bool flee);  // s78n t14 part B: flee = the path is crush-flee (kind 7)
+    // s78n t14 part B: flee = the path is crush-flee (kind 7); s78n t18: `frame` stamps the blocker's path change
+    bool push_aside(const Unit& a, Unit& b, bool flee, uint32_t frame);
+    // s78n t18 (MOVEMENT §5.4.1 / §5.4.2; movement_system.cpp)
+    static constexpr uint32_t kNoDetour = 0xFFFFFFFFu;
+    bool collision_valid(const CollisionObject& c, uint32_t frame) const;
+    bool mvm_infantry_pair(const Unit& a, const Unit& b) const;
+    bool unit_moving(const Unit& u, uint32_t frame) const;
+    float walk_max_speed(const Unit& u) const;
+    V2 wanted_dir(const Unit& u) const;
+    float record_cap(const Unit& u) const;
+    bool mvs_behind(const Unit& a, const Unit& b) const;
+    bool mvm_passed(const Unit& a, const Unit& b) const;
+    float slave_speed(const Unit& x, const Unit& y, bool& touch) const;
+    bool near_path_end(const Unit& a, const Unit& b) const;
+    bool destination_blocked(const Unit& a, const Unit& b) const;
+    bool side_step_ok(const Unit& a, const Unit& b, const CollisionObject& self) const;
+    bool early_arrival(Unit& a, const Unit& b, uint32_t frame);
+    bool path_around(const CollisionObject& c, Unit& a, const Unit& b, float contact, uint32_t frame);
+    void mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t frame);
+    void mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame);
+    CollisionState mvm_choose(const CollisionObject& c, const Unit& a, const Unit& b, bool& master_a) const;
+    void mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame);
     // s78n t14 part B (0x5c8890): b's owner's faction has Scatters_From_Crushers and b's SPREAD_OUT is off.
     bool scatters(const Unit& b) const { return (!scatters_ || scatters_(b.d.owner)) && !b.spread; }
     // s78n t14 part B: set_collision_exempt - the pair takes no collision object (either order).
@@ -1126,10 +1203,6 @@ private:
     mutable QueryContext qctx_;
     uint32_t quota_used_ = 0;
     CollisionLayer coll_;  // S7: persistent land collision objects (hashed)
-    // s78n t14 part B: the objects with a squad container that this tick's driver resolved (dropped from coll_ at once),
-    // in resolution order; the members' steering vector of the same tick reads them with coll_. Transient (refilled by
-    // every land tick before the walk; not saved, not hashed).
-    std::vector<CollisionObject> coll_done_;
     MovementStats stats_;
     HostileFn hostile_;              // OI tactical
     ScattersFn scatters_;            // s78n t14 part B: Scatters_From_Crushers by owner (host; not saved)

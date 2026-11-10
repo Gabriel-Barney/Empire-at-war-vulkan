@@ -234,6 +234,176 @@ std::vector<uint32_t> find_crush_victims(std::span<const Box2> crusher_boxes, st
     return out;
 }
 
+// ---------------------------------------------------------------- s78n t18: footprint rectangles (MOVEMENT §5.3.1)
+float foot_extent(const FootRect& r, V2 n) {
+    if (r.round) return r.hx;
+    const V2 b = perp_left(r.a);
+    return std::fabs(dot(r.a, n)) * r.hx + std::fabs(dot(b, n)) * r.hy;
+}
+
+namespace {
+// The four separating axes of two rectangles: f(|D . n|, R1 + R2) per axis; a false from f stops the walk.
+template <class Fn>
+bool foot_axes(const FootRect& r1, const FootRect& r2, Fn&& f) {
+    const V2 d = r2.c - r1.c;
+    V2 line = normalize_retail(d);  // a round footprint's axes: the centre line and its normal
+    if (!(length_sq(line) > 0.0f)) line = {1.0f, 0.0f};
+    const V2 a1 = r1.round ? line : r1.a, a2 = r2.round ? line : r2.a;
+    const V2 axes[4] = {a1, perp_left(a1), a2, perp_left(a2)};
+    for (const V2& n : axes)
+        if (!f(std::fabs(dot(d, n)), foot_extent(r1, n) + foot_extent(r2, n))) return false;
+    return true;
+}
+}  // namespace
+
+bool foot_overlap(const FootRect& r1, const FootRect& r2) {
+    return foot_axes(r1, r2, [](float sep, float sum) { return sep <= sum; });
+}
+
+float foot_overlap_coefficient(const FootRect& r1, const FootRect& r2) {
+    float k = 1.0f;
+    foot_axes(r1, r2, [&k](float sep, float sum) {
+        const float v = sum > 0.0f && sep <= sum ? 1.0f - sep / sum : 0.0f;
+        k = std::min(k, v);
+        return true;
+    });
+    return k;
+}
+
+float foot_gap(const FootRect& r1, const FootRect& r2) {
+    float g = 0.0f;
+    foot_axes(r1, r2, [&g](float sep, float sum) {
+        g = std::max(g, std::max(0.0f, sep - sum));
+        return true;
+    });
+    return g;
+}
+
+double foot_swept_contact(V2 m, V2 d, float r0, float r1) {
+    const double mx = m.x, my = m.y, dx = d.x, dy = d.y, ra = r0, dr = static_cast<double>(r1) - static_cast<double>(r0);
+    const double c = mx * mx + my * my - ra * ra;
+    if (c <= 0.0) return ra >= 0.0 ? 0.0 : -1.0;
+    const double a = dx * dx + dy * dy - dr * dr;
+    const double b = mx * dx + my * dy - ra * dr;  // q(s) = a s^2 + 2 b s + c with c > 0; contact where q <= 0
+    const auto ok = [&](double s) { return s >= 0.0 && s <= 1.0 && ra + s * dr >= 0.0; };
+    if (a == 0.0) {
+        if (!(b < 0.0)) return -1.0;
+        const double s = -c / (2.0 * b);
+        return ok(s) ? s : -1.0;
+    }
+    const double disc = b * b - a * c;
+    if (disc < 0.0) return -1.0;
+    const double root = std::sqrt(disc);
+    const double s0 = (-b - root) / a, s1 = (-b + root) / a;
+    const double lo = std::min(s0, s1), hi = std::max(s0, s1);
+    if (ok(lo)) return lo;
+    if (ok(hi)) return hi;
+    return -1.0;
+}
+
+float foot_path_contact(V2 pos, std::span<const V2> path, uint32_t next, V2 ha, const FootRect& b, float max_dist,
+                        float turn_yaw) {
+    const auto radius = [&](V2 e, V2 t) {
+        const V2 u = normalize_retail(b.c - e);
+        return foot_rho(ha.x, ha.y, std::fabs(dot(u, t))) + foot_rho(b.hx, b.hy, std::fabs(dot(u, b.a)));
+    };
+    if (turn_yaw != kNoFacing) {  // a zero-length segment while the mover turns in place
+        const float r = radius(pos, dir_from_deg(turn_yaw));
+        return max_dist > 0.0f && foot_swept_contact(pos - b.c, V2{}, r, r) >= 0.0 ? 0.0f : -1.0f;
+    }
+    float acc = 0.0f;
+    V2 s = pos;
+    for (size_t i = next; i < path.size() && acc < max_dist; ++i) {
+        const V2 d = path[i] - s;
+        const float len = length(d);
+        if (!(len > 0.0f)) continue;
+        const V2 t = normalize_retail(d);
+        // the approximation's points lie kFootApproxStep apart along the segment
+        const uint32_t n = static_cast<uint32_t>(len / kFootApproxStep) + 1u;
+        V2 p0 = s;
+        float r0 = radius(p0, t);
+        for (uint32_t k = 1; k <= n && acc < max_dist; ++k) {
+            const V2 p1 = k == n ? path[i] : s + d * (static_cast<float>(k) * kFootApproxStep / len);
+            const float piece = distance(p0, p1);
+            const float r1 = radius(p1, t);
+            const double hit = foot_swept_contact(p0 - b.c, p1 - p0, r0, r1);
+            if (hit >= 0.0) {
+                const float at = acc + static_cast<float>(hit) * piece;
+                return at < max_dist ? at : -1.0f;
+            }
+            acc += piece;
+            p0 = p1;
+            r0 = r1;
+        }
+        s = path[i];
+    }
+    return -1.0f;
+}
+
+bool foot_moving_contact(const FootTrack& p, const FootTrack& q, int32_t frames) {
+    const V2 fp = dir_from_deg(p.yaw), fq = dir_from_deg(q.yaw);
+    const V2 dir = normalize_retail(q.pos - p.pos);
+    struct Cur {
+        const FootTrack* t;
+        V2 s;
+        uint32_t i;
+        float v;  // assumed speed: the effective max speed when facing toward the other party, else the current speed
+        bool moves() const { return v > 0.0f && i < t->path.size(); }
+        // One frame along the polyline; `dir_out` = the unit direction of the segment the frame starts on.
+        V2 advance(V2& dir_out) {
+            dir_out = V2{};
+            float budget = v;
+            V2 at = s;
+            bool first = true;
+            while (budget > 0.0f && i < t->path.size()) {
+                const V2 d = t->path[i] - at;
+                const float l = length(d);
+                if (first && l > 0.0f) {
+                    dir_out = normalize_retail(d);
+                    first = false;
+                }
+                if (l <= budget) {
+                    at = t->path[i];
+                    budget -= l;
+                    ++i;
+                } else {
+                    at = at + d * (budget / l);
+                    budget = 0.0f;
+                }
+            }
+            return at;
+        }
+    };
+    Cur a{&p, p.pos, p.next, dot(fp, dir) >= 0.0f ? p.max_speed : p.speed};
+    Cur b{&q, q.pos, q.next, dot(fq, dir) <= 0.0f ? q.max_speed : q.speed};
+    if (!a.moves() && !b.moves())  // both approximations empty of motion at the very start: the rectangle overlap
+        return foot_overlap(foot_rect(p.pos, p.yaw, p.hx, p.hy), foot_rect(q.pos, q.yaw, q.hx, q.hy));
+    // Lane rule: the other party at least hy to the side of this one's travel line at the start and on the same side at
+    // the end -> this one's radius is hy at both ends. (A standing unit has t = 0: its radius is hy.)
+    const auto radii = [](const FootTrack& t, V2 dir_t, V2 u0, V2 u1, V2 rel0, V2 rel1, float& r0, float& r1) {
+        r0 = foot_rho(t.hx, t.hy, std::fabs(dot(u0, dir_t)));
+        r1 = foot_rho(t.hx, t.hy, std::fabs(dot(u1, dir_t)));
+        const float c0 = cross(dir_t, rel0), c1 = cross(dir_t, rel1);
+        if (std::fabs(c0) >= t.hy && ((c0 > 0.0f && c1 > 0.0f) || (c0 < 0.0f && c1 < 0.0f))) r0 = r1 = t.hy;
+    };
+    // [port] one step per frame (the retail steps run from approximation point to approximation point, whole frames).
+    for (int32_t f = 0; f < frames; ++f) {
+        const bool am = a.moves(), bm = b.moves();
+        V2 ta{}, tb{};
+        const V2 ea = am ? a.advance(ta) : a.s, eb = bm ? b.advance(tb) : b.s;
+        const V2 m0 = b.s - a.s, m1 = eb - ea;
+        const V2 us = normalize_retail(m0), ue = normalize_retail(m1);
+        float ra0 = 0.0f, ra1 = 0.0f, rb0 = 0.0f, rb1 = 0.0f;
+        radii(p, ta, us, ue, m0, m1, ra0, ra1);
+        radii(q, tb, us, ue, V2{} - m0, V2{} - m1, rb0, rb1);
+        if (foot_swept_contact(m0, m1 - m0, std::max(0.0f, ra0 + rb0), std::max(0.0f, ra1 + rb1)) >= 0.0) return true;
+        if (!am && !bm) return false;  // both stand and do not touch
+        a.s = ea;
+        b.s = eb;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------- collision objects (TACTICAL_GAPS §6.7)
 float collision_priority(float crowd, uint32_t now, uint32_t created) {
     return crowd - static_cast<float>(now - created);
@@ -340,6 +510,11 @@ void CollisionLayer::hash(StateHasher& h) const {
         h.f32(c.crowd);
         h.f32(c.priority);
         h.u32(c.retry);
+        h.f32(c.speed_a);  // s78n t18
+        h.f32(c.speed_b);
+        h.boolean(c.now_a);
+        h.boolean(c.now_b);
+        h.u8(c.master);
     }
 }
 

@@ -4,11 +4,10 @@
 // this header holds the pure pieces and the persistent collision-object layer (priority order,
 // crowd refresh, budget gate; TACTICAL_GAPS.md §6.7).
 //
-// PROVISIONAL (§8 item 9, MovingVsMoving resolution / push-return / footprint semantics are not
-// traced): footprints are circles of the unit's soft radius; contact tests use closest approach
-// of straight-line extrapolation (moving vs moving) and distance along the remaining path
-// (moving vs stopped); the stopped-vs-stopped overlap ratio is the circle penetration depth over
-// the smaller diameter.
+// s78n t18 (MOVEMENT §5.3.1): footprints are oriented rectangles (FootRect) - a squad container's is its joint slot box,
+// any other unit's its hard extents; the three contact tests are foot_overlap_coefficient (stopped vs stopped),
+// foot_path_contact (moving vs stopped) and foot_moving_contact (moving vs moving). The older circle helpers below
+// (predict_moving_contact, path_contact_distance, overlap_ratio) are kept for their callers outside the land tick.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -68,6 +67,56 @@ struct Box2 {
 std::vector<uint32_t> find_crush_victims(std::span<const Box2> crusher_boxes, std::span<const Box2> victims);
 inline constexpr float kCrushDamage = 1000000.0f;
 
+// ---- s78n t18 (MOVEMENT §5.3.1): footprint rectangles of the three land contact tests ----
+// The rectangle 0x38de80(obj): axis a = (cos yaw, sin yaw), b = (-sin yaw, cos yaw), centre, half extents (hx along a, hy
+// along b). A squad container's half extents are its joint slot box (0x404450), any other unit's its hard extents.
+// [port] `round`: a unit whose type has no hard extents is a circle of its soft radius hx (= hy): its extent is hx along
+// every axis, and in the separating-axis tests it brings the centre line and its normal instead of its own two axes.
+struct FootRect {
+    V2 c;      // centre
+    V2 a;      // forward axis (unit)
+    float hx = 0.0f, hy = 0.0f;
+    bool round = false;
+};
+inline FootRect foot_rect(V2 centre, float yaw_deg, float hx, float hy) { return {centre, dir_from_deg(yaw_deg), hx, hy, false}; }
+inline FootRect foot_circle(V2 centre, float yaw_deg, float r) { return {centre, dir_from_deg(yaw_deg), r, r, true}; }
+// R(rect, n) = |a . n| hx + |b . n| hy (0x20d140), n a unit axis.
+float foot_extent(const FootRect& r, V2 n);
+// Overlap 0x20d690: |D . n| <= R1(n) + R2(n) on the four axes {a1, b1, a2, b2} (touching counts).
+bool foot_overlap(const FootRect& r1, const FootRect& r2);
+// Overlap coefficient 0x20d7a0 = min(1, min over the four axes of 1 - |D . n| / (R1 + R2)); an axis on which the two are
+// apart, or with R1 + R2 = 0, gives 0.
+float foot_overlap_coefficient(const FootRect& r1, const FootRect& r2);
+// Gap 0x20dc10 = max over the four axes of max(0, |D . n| - (R1 + R2)) (0 when they touch or overlap).
+float foot_gap(const FootRect& r1, const FootRect& r2);
+// Directional radius rho(h, c) = hy + (hx - hy) c^2, c = |cos| of the angle between the forward axis and the line to the
+// other party.
+inline float foot_rho(float hx, float hy, float c) { return hy + (hx - hy) * c * c; }
+// 0x4422f0 (in doubles): a point moving m -> m + d against the origin with the contact radius running linearly r0 -> r1:
+// the first s in [0, 1] with |m + s d| <= r0 + s (r1 - r0); already inside at s = 0 -> 0; none -> -1.
+double foot_swept_contact(V2 m, V2 d, float r0, float r1);
+inline constexpr float kFootApproxStep = 2.0f;  // ApproximationForwardDistance: the path approximation's point spacing
+// MovingVsStopped 0x441b60: the mover's path polyline from `pos` through path[next..] (its forward axis is the segment
+// direction; half extents ha = (hx, hy)) against the stopped rectangle `b`. Per segment the contact radius is rho(mover,
+// cos to the segment direction) + rho(b, cos to b's facing) at both ends, linear in between. Returns the path length to the
+// first contact when that is < max_dist, else -1. `turn_yaw` != kNoFacing: the mover turns in place - one zero-length
+// segment at `pos` with the forward axis dir(turn_yaw) (the caller swells ha toward a square).
+float foot_path_contact(V2 pos, std::span<const V2> path, uint32_t next, V2 ha, const FootRect& b, float max_dist,
+                        float turn_yaw = kNoFacing);
+// MovingVsMoving predictor 0x442540: both movers walked along their polylines in step at their assumed speeds (the
+// effective max speed when facing toward the other party, else the current speed), directional radii with the lane rule,
+// whole frames; true when they touch before `frames` (45; 90 for a crusher pair). With neither moving at the start: the
+// rectangle overlap of the two footprints. [port] one step per frame along each polyline.
+struct FootTrack {
+    V2 pos;
+    float yaw = 0.0f;
+    std::span<const V2> path;  // remaining waypoints are path[next..]
+    uint32_t next = 0;
+    float speed = 0.0f, max_speed = 0.0f;
+    float hx = 0.0f, hy = 0.0f;
+};
+bool foot_moving_contact(const FootTrack& p, const FootTrack& q, int32_t frames);
+
 // ---- S7 persistent collision objects (TACTICAL_GAPS.md §6.7, MOVEMENT.md §5.4, §1.5).
 // A collision object (MovingVsMoving / MovingVsStopped / StoppedVsStopped) lives across frames from the check that
 // found it (creation frame +0x64) until the driver cancels it (no longer applies) or its resolution finishes.
@@ -82,8 +131,15 @@ inline constexpr float kCrushDamage = 1000000.0f;
 //      quota counter < DynamicLandComplexityQuota), else the cheap fallback.
 // Containers are list-ordered vectors and a sorted vector of id pair keys (no pointer keys, no hashing).
 enum class CollisionKind : uint8_t { MovingVsMoving = 0, MovingVsStopped = 1, StoppedVsStopped = 2 };
-// [port] the retail per-class state enums (§5.4 table) are reduced to what the port's resolutions use.
-enum class CollisionState : uint8_t { Active = 0, TryAgainLater = 1, Resolved = 2 };
+// The retail per-class state enums (MOVEMENT §5.4 table) folded into one: Active = state 0 None (not decided yet),
+// Resolved = MovingVsStopped 5 / 6, MovingVsMoving 8 / 9 (the driver drops the record in the same pass). s78n t18
+// (§5.4.1 / §5.4.2): TryAgainLater = MovingVsStopped 7; Repulsion = MovingVsStopped 2 / MovingVsMoving 3 Repulse;
+// PathAround = state 1 of both; Crusher = MovingVsStopped 4 (the crusher drives on) / MovingVsMoving 7 (both at max
+// speed); SpeedSlave = MovingVsMoving 2 Speed Slave Only. StoppedVsStopped and the MovingVsMoving stand-in of pairs that
+// are not Infantry / Bike stay Active ([port]).
+enum class CollisionState : uint8_t {
+    Active = 0, TryAgainLater = 1, Resolved = 2, Repulsion = 3, PathAround = 4, Crusher = 5, SpeedSlave = 6,
+};
 
 inline constexpr uint32_t kCollisionCrowdRefreshFrames = 30;
 inline constexpr float kCollisionCrowdBox = 160.0f;  // side of the crowd box
@@ -100,7 +156,12 @@ struct CollisionObject {
     uint32_t crowd_frame = 0;  // next crowd refresh frame (+0x6c); = created, so the first sort refreshes
     float crowd = 0.0f;
     float priority = 0.0f;     // this frame's sort key
-    uint32_t retry = 0;        // TryAgainLater: resolution resumes at this frame
+    uint32_t retry = 0;        // TryAgainLater: the next re-decide frame (+0x80)
+    // s78n t18 (vf +0x40): the speed this record answers participant a / b (3e38 = its max speed) and the "at once"
+    // flag, as of its last service; MovingVsMoving: the master (0 = a, 1 = b). Saved and hashed.
+    float speed_a = 3.0e38f, speed_b = 3.0e38f;
+    bool now_a = false, now_b = false;
+    uint8_t master = 0;
 };
 
 // crowd - (float)(now - created).
