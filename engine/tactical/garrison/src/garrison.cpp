@@ -133,13 +133,26 @@ Vec3 GarrisonSystem::approach_destination(ObjectId holder, Vec3 pos, Vec3 facing
     return {pos.x + dx * l, pos.y + dy * l, pos.z};
 }
 
-Vec3 GarrisonSystem::exit_point(ObjectId holder, Vec3 pos, Vec3 facing) const {
+Vec3 GarrisonSystem::exit_point(ObjectId holder, Vec3 pos, Vec3 facing, int32_t bone) const {
+    // s78n t20 batch 2 (FIGHTER_FLYING §7.4 "Exit", 0x444830): E = the bone's world point with yaw = host -> bone, else
+    // the host position and yaw; X = E + dist (cos, sin)(yaw), dist = Garrison_Exit_Dist, else |model half-extent|.
     const HolderDesc* d = holder_desc(holder);
     if (!d) return pos;
     float dx = 0.0f, dy = 0.0f;
     dir2(facing, dx, dy);
-    const float r = d->exit_dist > 0.0f ? d->exit_dist : 2.0f * d->half_diagonal;
-    return {pos.x + dx * r, pos.y + dy * r, pos.z};
+    Vec3 e = pos;
+    if (bone >= 0 && static_cast<size_t>(bone) < d->bones.size()) {
+        const Vec3 b = d->bones[static_cast<size_t>(bone)];
+        e = {pos.x + b.x * dx - b.y * dy, pos.y + b.x * dy + b.y * dx, pos.z + b.z};
+        const float ox = e.x - pos.x, oy = e.y - pos.y, l2 = ox * ox + oy * oy;
+        if (l2 > 0.0f) {
+            const float k = 1.0f / dmath::sqrt(l2);
+            dx = ox * k;
+            dy = oy * k;
+        }
+    }
+    const float r = d->exit_dist > 0.0f ? d->exit_dist : d->extent_len;
+    return {e.x + dx * r, e.y + dy * r, e.z};
 }
 
 void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame, bool kill) {
@@ -188,13 +201,12 @@ void GarrisonSystem::set_owner(ObjectId id, int32_t owner, Vec3 pos, Vec3 facing
             // the rest are ejected in entry order at the exit point (see the header).
             if (!h.inside.empty() && !thief_holder(h)) {  // s78n t12 review: a stolen vehicle keeps its thief
                 const std::vector<ObjectId> inside = h.inside;
-                const Vec3 at = exit_point(id, pos, facing);
                 for (const ObjectId uid : inside) {
                     const int32_t ui = unit_index(uid);
                     if (ui < 0) continue;
                     Unit& u = units_[static_cast<size_t>(ui)];
                     if (allied(u.owner, owner)) continue;
-                    leave(u, holders_[static_cast<size_t>(hi)], GarrisonEventKind::Ejected, at, frame);
+                    leave(u, holders_[static_cast<size_t>(hi)], GarrisonEventKind::Ejected, exit_point(id, pos, facing, u.bone), frame);
                 }
             }
         }
@@ -379,7 +391,7 @@ bool GarrisonSystem::order_exit(ObjectId unit, Vec3 holder_pos, Vec3 holder_faci
     const int32_t hi = u.state == State::Inside ? holder_index(u.host) : -1;
     if (hi < 0) return false;
     if (thief_holder(holders_[static_cast<size_t>(hi)])) return false;  // s78n t12 review: no leave order for the thief
-    leave(u, holders_[static_cast<size_t>(hi)], GarrisonEventKind::Exited, exit_point(u.host, holder_pos, holder_facing), frame);
+    leave(u, holders_[static_cast<size_t>(hi)], GarrisonEventKind::Exited, exit_point(u.host, holder_pos, holder_facing, u.bone), frame);
     return true;
 }
 
@@ -389,12 +401,12 @@ uint32_t GarrisonSystem::eject_all(ObjectId holder, Vec3 holder_pos, Vec3 holder
     Holder& h = holders_[static_cast<size_t>(hi)];
     if (thief_holder(h)) return 0;  // s78n t12 review: Eject_Garrison does not reach a vehicle thief
     const std::vector<ObjectId> inside = h.inside;  // entry order
-    const Vec3 at = exit_point(holder, holder_pos, holder_facing);
     uint32_t n = 0;
     for (const ObjectId id : inside) {
         const int32_t ui = unit_index(id);
         if (ui < 0) continue;
-        leave(units_[static_cast<size_t>(ui)], h, GarrisonEventKind::Ejected, at, frame);
+        Unit& u = units_[static_cast<size_t>(ui)];
+        leave(u, h, GarrisonEventKind::Ejected, exit_point(holder, holder_pos, holder_facing, u.bone), frame);
         ++n;
     }
     return n;

@@ -3339,8 +3339,9 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // (3) the Walk state machine does not run (no turn, no speed step, no horizontal move). T = the ground height
             // at (x, y). Rising: z >= T + Hover_Height on entry -> z := that, raised (1), speed 0; else z += the effective
             // max speed, and z > T + Hover_Height -> z := that, raised, speed 0 (landing exactly costs one more frame;
-            // speed 0: the rise never ends). Lowering mirrors it toward T -> grounded (0). hover_off = z - T, the height
-            // above the ground (hashed, saved).
+            // speed 0: the rise never ends). Lowering: z <= T on entry -> grounded (0); else z -= the speed, clamped at
+            // T with state 0 (it lands on the frame it reaches T: the spec gives no extra frame here). hover_off = z - T,
+            // the height above the ground (hashed, saved).
             const bool hovers = u.d.hover_height > 0.0f && u.d.locomotor == LocomotorKind::Default;
             if (hovers && u.hover >= 2) {
                 const float step = u.lp.max_speed;
@@ -3351,7 +3352,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 bool done = reached(u.z);
                 if (!done) {
                     u.z = rising ? u.z + step : u.z - step;
-                    done = rising ? u.z > target : u.z < target;  // [port] lowering mirrors the rise's strict test
+                    done = rising ? u.z > target : u.z <= target;
                 }
                 if (done) {
                     u.z = target;

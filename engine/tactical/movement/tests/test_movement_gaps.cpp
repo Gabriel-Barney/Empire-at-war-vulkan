@@ -3779,7 +3779,15 @@ static void test_land_squad_part_b() {
         // (Fleeing_Infantry_Speed_Bonus is exactly 2: this fixture reaches its target speed in one frame). s78n t20 batch 2
         // (FIGHTER_FLYING §7.7 item 7): the flee now starts with the container's turn in place (B x 2); it then leaves its
         // members on the old slots and the straggler cap (0x5ab640, factor 0.90 .. 0.95 here) keeps it under 2x through
-        // the short flee - above the team speed, which only the bonus allows
+        // the short flee - above the team speed, which only the bonus allows.
+        // Why a range and not an exact value (s78n t20 batch 2 review): each flee frame the container's target is
+        // T = team x 2 (the bonus) x the straggler factor 1 - clamp((edge - p) / 10, 0, 1), p = the most-lagging member's
+        // offset along the container's facing, edge = -HX - 2. p comes out of the members' slot steering through the
+        // re-lay after the turn (collision vectors and jiggle included), so the factor is not a closed form of the
+        // fixture; the speed step reaches T in one frame (rate >= T here), hence cmax = 2 x team x the largest factor
+        // over the 11 flee frames. Bounds: factor <= 1 -> cmax <= 2 x team; cmax > team needs a frame with factor > 0.5,
+        // i.e. every member within 5 behind the edge. Measured (MSVC = clang, serial = 4 workers): 5.945 = 2 x 3.120 x
+        // 0.9527.
         CHECK(a.cmax > a.team && a.cmax <= 2.0f * a.team);
         CHECK(a.mmax == 2.0f * a.team);
         CHECK(a.final_err <= 5.0f);  // recovered (a member stops within the 4.0 recovery distance)

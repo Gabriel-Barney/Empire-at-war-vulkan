@@ -5,7 +5,7 @@
 //   occupant: GARRISON_UNIT behaviour; its own Garrison_Category and Garrison_Value.
 //   capture:  CAPTURE_POINT behaviour; Capture_Point_Radius, Capture_Point_Transition_Time_Seconds, sticky =
 //             REINFORCEMENT_POINT behaviour or Ownership_Sticks; Influences_Capture_Point (default true) on the units.
-// The host fills HolderDesc::half_diagonal and OccupantDesc::radius from its own bounds / movement data.
+// The host fills HolderDesc::extent_len (and the bones) from its own bounds / model data.
 #pragma once
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/tactical/garrison/capture.hpp"

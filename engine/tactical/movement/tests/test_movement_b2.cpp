@@ -430,7 +430,7 @@ void test_container_turn() {
 // 90, so it is still rising); tick 33 finds z >= 90: raised, speed 0; tick 34 is the first horizontal step, at z 90.
 // A unit 90 degrees off its path turns in place on the ground first (turn rate 6, close-enough angle 1: 14 turning ticks at z 10, the
 // 15th tick finds the error 6 <= the turn rate and rises). Lowering
-// falls 2.5 per tick with x / y / yaw frozen and grounds on the 33rd tick.
+// falls 2.5 per tick with x / y / yaw frozen and grounds on the 32nd tick (clamped at T on the frame it reaches it).
 void test_t20_hover_z() {
     ::alamo::test::section("hover z (rise, raised commit, turn on the ground, lowering)");
     constexpr float kGround = 10.0f;
@@ -491,7 +491,7 @@ void test_t20_hover_z() {
                         static_cast<double>(t[t0 + 1].z), static_cast<double>(t[t0 + 32].z), static_cast<double>(p0.x),
                         static_cast<double>(t[t0 + 34].pos.x));
         }
-        // lowering mid-move: x / y / yaw frozen, z falls 2.5 per tick, grounded on the 33rd tick
+        // lowering mid-move: x / y / yaw frozen, z falls 2.5 per tick, grounded on the 32nd tick
         const UnitView v0 = sys.view(1);
         CHECK(v0.has_goal && sys.hover_lower(1) && sys.hover_state(1) == 3);
         uint32_t f = 121, lowering = 0;
@@ -507,7 +507,7 @@ void test_t20_hover_z() {
                 z = v.z;
             }
         }
-        CHECK(frozen && falls && lowering == 32 && sys.hover_state(1) == 0 && sys.view(1).z == kGround);
+        CHECK(frozen && falls && lowering == 31 && sys.hover_state(1) == 0 && sys.view(1).z == kGround);
         // the move goes on: it rises again
         sys.tick(f, rng, serial_for);
         CHECK(sys.hover_state(1) == 2 && sys.view(1).pos == v0.pos);

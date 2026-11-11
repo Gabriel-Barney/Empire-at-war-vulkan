@@ -26,7 +26,10 @@
 //     30 [H rates, port count]); then the capacity check and Entered (STORY_GARRISON_UNIT), or OrderDropped. A cancel
 //     issues no stop; OrderDropped carries the state it ended (the host's hold follows only state 2).
 //   * leaving [H]: Leave_Garrison / command 52 with unit + 0x3FFFFF -> the unit leaves at once (Exited) to the exit point
-//     (host position + 2D facing x Garrison_Exit_Dist if > 0, else the full box diagonal) [port: no fade-in / walk-out,
+//     X = E + dist x (cos, sin)(yaw) (FIGHTER_FLYING §7.4 "Exit" 0x444830, s78n t20 batch 2): E = the unit's garrison bone
+//     (the approach's bone index) with yaw = the 2-D direction host -> bone, else the host position with the host's yaw;
+//     dist = Garrison_Exit_Dist if > 0, else the 3-D length of the host model box's half-extent vector [port: no fade-in /
+//     walk-out,
 //     no locomotor wait]; on a unit still approaching it cancels the approach. Eject_Garrison / command 52 with unit
 //     0x3FFFFF: every occupant (Ejected).
 //   * host death [H]: occupants are ejected (Ejected) when the host has a garrison behaviour, else killed (Killed: the
@@ -96,7 +99,7 @@ struct HolderDesc {
     float exit_dist = 0.0f;      // Garrison_Exit_Dist
     float radius = 0.0f;         // Garrison_Radius
     bool can_fire = false;       // Property_Flags GarrisonCanFire
-    float half_diagonal = 0.0f;  // half the host box diagonal (XY), from the host's bounds (the exit point)
+    float extent_len = 0.0f;     // the 3-D length of the host model box's half-extent vector (0x3982b0; the exit point)
     // s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 1): the entry bones - Garrison_Bone_Names resolved on the host's model,
     // names missing on it dropped - host-local (x forward, y left, z up) x Scale_Factor, list order.
     std::vector<Vec3> bones;
@@ -222,7 +225,8 @@ public:
     // copied.
     Vec3 approach_destination(ObjectId holder, Vec3 pos, Vec3 facing, Vec3 from, float extent_len, const ReachableFn& reachable,
                               int32_t& bone) const;
-    Vec3 exit_point(ObjectId holder, Vec3 pos, Vec3 facing) const;
+    // s78n t20 batch 2 (FIGHTER_FLYING §7.4 "Exit"): `bone` - the leaving unit's garrison bone (-1: none).
+    Vec3 exit_point(ObjectId holder, Vec3 pos, Vec3 facing, int32_t bone = -1) const;
 
     // ---- orders ----
     // Approach (the caller moves the unit to approach_destination): false when the unit / host is unknown, the unit is

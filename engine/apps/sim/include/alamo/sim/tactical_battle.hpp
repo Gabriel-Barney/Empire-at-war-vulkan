@@ -1478,6 +1478,8 @@ private:
     // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", death 0x391310): a GARRISON_HOVER host dying while not grounded
     // kills its occupants - called by the death paths before the host's mover is removed (the hover state goes with it).
     void s4_hover_death(objects::ObjectId id, Vec3 at, Vec3 facing);
+    // s78n t20 batch 2 (0x3982b0): the 3-D length of the object's model-box half-extent vector (TacticalMode::bounds_of)
+    float s4_extent_len(TacticalMode& mode, objects::ObjectHandle h) const;
     Vec3 s4_squad_leave(TacticalMode& mode, const tactical::garrison::GarrisonEvent& e, std::vector<SquadExit>& outs,
                         std::vector<tactical::garrison::GarrisonEvent>& events);
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved

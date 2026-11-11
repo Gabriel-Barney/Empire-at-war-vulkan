@@ -72,7 +72,7 @@ void test_rules() {
     bunker.slots = 3;
     bunker.exit_dist = 50.0f;
     bunker.can_fire = true;
-    bunker.half_diagonal = 20.0f;
+    bunker.extent_len = 20.0f;
     bunker.radius = 30.0f;
     HolderDesc jug;
     jug.kind = HolderKind::Vehicle;
@@ -385,7 +385,7 @@ struct GarrisonScene {
         bunker.slots = 3;
         bunker.exit_dist = 50.0f;
         bunker.can_fire = true;
-        bunker.half_diagonal = 20.0f;
+        bunker.extent_len = 20.0f;
         bunker.radius = 30.0f;  // s78n t20 batch 2: entering within 30 of the host (A = the host position)
         HolderDesc jug;
         jug.kind = HolderKind::Vehicle;
@@ -426,7 +426,7 @@ void test_vehicle_thief_holder() {
     g.set_allied([](int32_t a, int32_t b) { return a == b; });
     HolderDesc car;
     car.kind = HolderKind::VehicleThief;
-    car.half_diagonal = 10.0f;
+    car.extent_len = 10.0f;
     OccupantDesc inf;
     inf.category = kInf;
     inf.value = 1;
@@ -1004,6 +1004,20 @@ static void test_approach() {
         CHECK(p2.x == 100.0f && p2.y == 35.0f && p2.z == 2.0f);
         d = g2.approach_destination(50, hp, hf, {100.0f, 0.0f, 0.0f}, 40.0f, [](Vec3) { return false; }, bone);
         CHECK(bone == -1 && d.x == 100.0f && d.y == 55.0f);
+        // the exit point (FIGHTER_FLYING §7.4 "Exit"): E = the bone's point with yaw host -> bone, else the host position
+        // and yaw; + Garrison_Exit_Dist, else the 3-D half-extent length (20); the enter push does not apply
+        {
+            GarrisonSystem g3, g4;
+            HolderDesc he = h;
+            he.extent_len = 20.0f;
+            CHECK(g3.add_holder(50, 1, he));
+            he.exit_dist = 5.0f;
+            CHECK(g4.add_holder(50, 1, he));
+            const Vec3 e0 = g3.exit_point(50, hp, hf, 0), e1 = g3.exit_point(50, hp, hf, 1), en = g3.exit_point(50, hp, hf);
+            const Vec3 e2 = g4.exit_point(50, hp, hf, 2);
+            CHECK(e0.x == 100.0f && e0.y == 80.0f && e0.z == 2.0f && e1.x == 70.0f && e1.y == 50.0f && e1.z == 2.0f);
+            CHECK(en.x == 100.0f && en.y == 70.0f && en.z == 0.0f && e2.x == 100.0f && e2.y == 35.0f && e2.z == 2.0f);
+        }
         // the service reads A from the bone: a unit 3-D 12 from bone 0's point (z 2 above it) - r 5 <= 10 enters
         OccupantDesc o{kInf, 1};
         CHECK(g.add_unit(1, 1, o) && g.order_enter(1, 50, 0) && g.bone_of(1) == 0);

@@ -41,7 +41,7 @@ void GarrisonSystem::write(ByteWriter& w) const {
     w.u32(static_cast<uint32_t>(holders_.size()));
     for (const Holder& h : holders_) {
         w.i32(h.id).i32(h.owner).u8(static_cast<uint8_t>(h.d.kind)).u64(h.d.accepts).i32(h.d.slots);
-        w.f32(h.d.enter_dist).f32(h.d.exit_dist).f32(h.d.radius).boolean(h.d.can_fire).f32(h.d.half_diagonal);
+        w.f32(h.d.enter_dist).f32(h.d.exit_dist).f32(h.d.radius).boolean(h.d.can_fire).f32(h.d.extent_len);
         w.u32(static_cast<uint32_t>(h.d.bones.size()));
         for (const Vec3& b : h.d.bones) put_vec3(w, b);
         w.u32(static_cast<uint32_t>(h.inside.size()));
@@ -80,7 +80,7 @@ bool GarrisonSystem::read(ByteReader& r) {
         h.d.exit_dist = r.f32();
         h.d.radius = r.f32();
         h.d.can_fire = r.boolean();
-        h.d.half_diagonal = r.f32();
+        h.d.extent_len = r.f32();
         uint32_t nb = 0;
         if (!r.count(nb, 12)) return false;
         h.d.bones.resize(nb);
