@@ -135,10 +135,12 @@ DetourOut run_detour(const ParallelFor& pf) {
                 heading = heading_deg(top[1] - top[0]);
                 r.first_leg = heading;
             }
-            // End Move from the corner cap at fraction 0: one creep step at T = a; the turn that follows aims at the detour's
-            // waypoint 1 from where the creep ended
+            // End Move from the corner cap at fraction 0: one creep step at T = a. s78n t26.4 (MOVEMENT 3.5.2 C.6 / C.7 / C.10,
+            // 5.4.7 item 1): it turns by R first and steps along the new facing, still into the wall's clearance - that step
+            // fails too (no commit, speed 0, a second record: no duplicate rule); the turn that follows aims at the detour's
+            // waypoint 1 from where it stands
             if (top.size() >= 2) heading = heading_deg(top[1] - v.pos);
-            r.creep_ok = std::fabs(v.speed - 1.0f * 1.56f) < 1e-5f && std::fabs(distance(v.pos, b.pos) - v.speed) < 1e-3f && v.pushed;
+            r.creep_ok = v.speed == 0.0f && v.pos == b.pos && v.pushed && sys.stats().terrain_records == 2;
             turning = true;
             continue;
         }
@@ -179,7 +181,9 @@ void test_terrain_detour() {
     CHECK(s.detour_ok && s.rejoin_ahead >= ru + 42.0f - 1e-3f);
     CHECK(s.creep_ok && s.turn_frames >= 3 && s.turned_ok);
     CHECK(s.pop_frame > 0 && s.ended_ok && s.arrived);
-    CHECK(s.records == 1 && s.detours == 1 && s.replans == 0);
+    // s78n t26.4: the creep's record and the later lane-term steps into the wall's corner on the order path (each failed
+    // step makes a record, MOVEMENT 5.4.7 item 1); every one detours
+    CHECK(s.records >= 2 && s.detours == s.records && s.replans == 0);
     CHECK(s.crc == p.crc);
     std::printf("terrain detour: failed step at %u, rejoin %.2f ahead (>= r_u + 42 = %.2f), first leg %.2f deg, creep %d, %u turning "
                 "ticks, yaw at the first move %.4f, popped at %u, arrived %d, records %u, detours %u, re-plans %u, serial = 4 "

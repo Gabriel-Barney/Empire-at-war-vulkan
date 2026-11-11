@@ -396,6 +396,7 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
         if (forced_spot(*it, it->m.pos, spot)) it->m.pos = spot;
     }
     if (cfg_.mode == MoveMode::Land) {
+        it->prev_pos = it->m.pos;  // s78n t26.4: no displacement before the first frame
         const float r = tree_half(*it);
         const V2 p = it->m.pos;
         tree_.insert(static_cast<EntityHandle>(d.id), Aabb{{p.x - r, p.y - r, -1.0f}, {p.x + r, p.y + r, 1.0f}}, 1u);
@@ -1282,14 +1283,10 @@ void MovementSystem::brake_to_stop(Unit& u, uint32_t frame) {
         u.coast = false;
         return;
     }
-    end_push(u);
-    u.pushed = true;
-    u.push_kind = 1;
-    u.push_weight = 1;
-    u.push_owner = kNoDetour;  // no record owns it: any claim replaces it
-    u.push_path = {u.m.pos, u.m.pos + dir_from_deg(u.m.yaw) * (v * v / (2.0f * dec))};
-    u.push_next = 1;
-    u.path_change = frame;
+    // s78n t26.4 (MOVEMENT §3.5.2 C.1 / C.4, §5.4.1 "The impassable-cell rule" item 3): a Walk unit keeps its speed and
+    // state; with no started path its walk goes to End Move at T = a and coasts along its last frame's displacement to
+    // 0x15 (the t20 braking stub record is gone)
+    (void)frame;
 }
 
 // L1 systems: Teleport (0x3a8f90): stop, place, re-register (collision tree / stationary space track).
@@ -1575,6 +1572,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.turn_done = false;
             corner_pass(u);  // s78n t26.3
             plan_deploy_cap(u, frame);  // s78n t26.1
+            set_path_started(u);  // s78n t26.4
             continue;
         }
         if (out[r].ok) {
@@ -1586,6 +1584,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.goal = out[r].goal_used;
             corner_pass(u);  // s78n t26.3
             plan_deploy_cap(u, frame);  // s78n t26.1
+            set_path_started(u);  // s78n t26.4
         } else {
             ++stats_.path_failures;
             u.has_goal = false;
@@ -1647,6 +1646,29 @@ bool MovementSystem::deploy_gate_holds(const Unit& u) const {
 void MovementSystem::plan_deploy_cap(Unit& u, uint32_t frame) {
     if (!auto_deployer(u) || u.d.locomotor != LocomotorKind::Default || is_air(u)) return;
     deploy_cap_unit(u, path_length_3d(u.m.path), frame);
+}
+
+// s78n t26.4 (MOVEMENT §3.5.2 G, s78n t26 RE 2): the path set (0x42c680 / push 0x554310) does not set the started byte
+// +0x6d; 0x410170 sets it when the unit is aligned - waypoint 0's speed fraction > 0 and |delta| <= R or <= CE (delta from
+// the facing to the wanted yaw of path index 0: [port] the first leg's heading, the lane term is 0 at its start point and
+// the collision vector is not asked at the plan) - and keeps the locomotor state and speed. Only a unit moving in 0x12 -
+// 0x14 is affected: a standing one starts its path at its walk's 0x16 either way (then start rule A). A moving unit that is
+// not aligned coasts in End Move (C.1 / C.4), stops at 0x15 and starts the path from 0x16. [port] A squad container keeps
+// its own path_started (team_walk); the Walk byte is set for it and for every non-Walk locomotor.
+void MovementSystem::set_path_started(Unit& u) const {
+    LandMotion& m = u.m;
+    m.started = true;
+    if (u.d.team_container || is_air(u) || (u.d.locomotor != LocomotorKind::Default && u.d.locomotor != LocomotorKind::Bike)) return;
+    const bool moving = m.speed > 0.0f && (m.state == LocoState::WalkStartMove || m.state == LocoState::WalkMoving ||
+                                           m.state == LocoState::WalkEndMove);
+    if (!moving) return;
+    bool aligned = false;
+    if (m.path.size() >= 2 && wp_frac(m, 0) > 0.0f) {
+        const V2 d = m.path[1] - m.path[0];
+        const float err = length_sq(d) > 0.0f ? std::fabs(wrap_deg(heading_deg(d) - m.yaw)) : 0.0f;
+        aligned = err <= u.lp.turn_rate || err <= u.lp.close_enough_angle;
+    }
+    m.started = aligned;
 }
 
 // s78n t26.3 (MOVEMENT §3.5.2 D, s78n t26 RE 2): the corner-speed pass 0x5070b0 of the Walk path set vf +0x190 0x42c680
@@ -3944,6 +3966,12 @@ void MovementSystem::end_push(Unit& u) {
 }
 
 void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
+    // s78n t26.4 (MOVEMENT §3.5.2 C.4, s78n t26 RE 2): the object service's snapshot before the behaviours - the End Move
+    // coast vector is the whole previous frame's 2-D displacement P(end of N - 1) - P(end of N - 2)
+    for (Unit& u : units_) {
+        u.m.last_dir = u.m.pos - u.prev_pos;
+        u.prev_pos = u.m.pos;
+    }
     rebuild_regions_if_dirty(pf);
     tree_.maintain(static_cast<double>(frame) / 30.0);  // shape only; query results do not depend on it
     plan_land(frame, pf);
@@ -4029,22 +4057,22 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
         u.jiggle.y = std::clamp(u.jiggle.y + rng.range_float(-1.0f, 1.0f) * frac * rag, -mx, mx);
     }
     std::vector<WalkResult> res(units_.size());
-    // The walk of one unit that is no squad member / container (the parallel pass; s78n t26.2: also the serial start-turn
-    // pass below, for a start turn that ends in Start Move). Writes only units_[i] and res[i].
-    const auto walk_one = [&](uint32_t i) {
-        Unit& u = units_[i];
-        const bool bike = u.d.locomotor == LocomotorKind::Bike;
-        const float yaw0 = u.m.yaw;
-        // s78n t18 (MOVEMENT §5.4.1 "How Walk combines the vector"): a Walk unit with collision records adds the
-        // steering vector 0x509810 to its heading (start-of-tick positions; its new speed for the 0x5c6d40 ratio).
-        struct AvoidCtx {
-            const MovementSystem* sys;
-            const Unit* u;
-            float vmax;
-            std::span<const SteerRec> recs;
-            std::span<const SteerPos> pos;
-        } actx{this, &u, u.lp.max_speed, {}, pos0};
-        WalkExtras x;
+    // s78n t18 (MOVEMENT §5.4.1 "How Walk combines the vector"): a Walk unit with collision records adds the steering vector
+    // 0x509810 to its wanted direction (start-of-tick positions; its new speed for the 0x5c6d40 ratio).
+    struct AvoidCtx {
+        const MovementSystem* sys;
+        const Unit* u;
+        float vmax;
+        std::span<const SteerRec> recs;
+        std::span<const SteerPos> pos;
+    };
+    // s78n t26.4 (MOVEMENT §5.4.1 "How Walk combines" items 2 - 3, §3.5.2 C): the extras of unit i's walk on its top record -
+    // the lane term ([port] on every record of a unit with an order: the formation update 0x41dbb0 writes it for a member
+    // with a path; the jiggle and the formation speed only on the order path of a formation member), the steering vector,
+    // the "at once" flag, the forced flag, Movement_Directions_Count.
+    const auto walk_extras = [&](uint32_t i, bool order_rec, WalkExtras& x, AvoidCtx& actx) {
+        const Unit& u = units_[i];
+        actx = AvoidCtx{this, &u, u.lp.max_speed, {}, pos0};
         if (own[i].second > own[i].first) {
             actx.recs = std::span<const SteerRec>(recs).subspan(own[i].first, own[i].second - own[i].first);
             x.avoid = [](const void* c, V2 dir) -> V2 {
@@ -4054,47 +4082,86 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             x.avoid_ctx = &actx;
         }
         x.cap_now = u.coll_now;  // s78n t20 (MOVEMENT §3.5 step 2): the collision cap's "at once" flag
+        x.lane = u.has_goal;
+        x.directions = u.d.movement_directions;
+        if (order_rec) {
+            x.formation_path = u.in_formation;
+            if (u.in_formation) x.jiggle = u.jiggle;  // OI tactical: formation members
+            x.formation = u.formation_speed;
+            x.forced = u.forced;
+        }
+    };
+    // The walk of one unit that is no squad member / container (the parallel pass; s78n t26.2: also the serial start-turn
+    // pass below, for a start turn that ends in Start Move). Writes only units_[i] and res[i].
+    const auto walk_one = [&](uint32_t i) {
+        Unit& u = units_[i];
+        const bool bike = u.d.locomotor == LocomotorKind::Bike;
+        const float yaw0 = u.m.yaw;
+        AvoidCtx actx{this, &u, u.lp.max_speed, {}, pos0};
         // a1k t03 (A1_READINGS §40.3): the collision-owned record is the top of the path stack; the order path waits
         // under it. s78n t20 (MOVEMENT §1.5.1 item 5): it is walked as the order path is - the collision records'
-        // speed answer, the steering vector, the team cap - without the formation speed, jiggle or side error.
+        // speed answer, the steering vector, the team cap - without the formation speed or jiggle.
         // s78n t26.1 (MOVEMENT §3.2.1 item 5): a deployed unit with M > 0 walks a push deployed (the 0x19 branch first)
         if (u.pushed && (u.deploy == LocoState::None || deploy_walks(u))) {
             if (deploy_branch(u)) return;
-            // a started order path goes on under the record: no braking for the record's end. s78n t23 step 0 (t21
-            // review item 6): not under the End Move brake stub (brake_to_stop), which brakes to its end
-            if (u.has_goal && !u.need_path && frame >= u.start_frame && !u.push_path.empty() && !brake_stub(u)) {
-                size_t from = u.m.next;
-                if (u.push_kind == 2) from = std::max(from, static_cast<size_t>(u.push_resume));
-                if (from < u.m.path.size()) {
-                    x.tail = distance(u.push_path.back(), u.m.path[from]);
-                    for (size_t p = from + 1; p < u.m.path.size(); ++p) x.tail += distance(u.m.path[p - 1], u.m.path[p]);
-                    if (!(x.tail > 0.0f)) x.tail = 1e-3f;
-                }
-            }
+            WalkExtras x;
+            walk_extras(i, false, x, actx);
             std::swap(u.m.path, u.push_path);
             std::swap(u.m.next, u.push_next);
             std::swap(u.m.frac, u.push_frac);  // s78n t26.2: the record's fractions and turn-done byte
             std::swap(u.m.turn_done, u.push_turn_done);
+            const bool order_started = u.m.started;
+            u.m.started = true;  // a collision-owned record is started (MOVEMENT §5.4.1 "Push")
             const uint32_t escape = u.m.escape_until;
             u.m.escape_until = 0;
+            // s78n t26.4 (MOVEMENT §3.5.2 C.4 / C.11): a started order path under the record (Q) - no End Move for the
+            // record's end, and the walk pops the record and goes on along Q in the same call
+            LandMotion q;
+            const bool below = u.has_goal && !u.need_path && frame >= u.start_frame && order_started && !u.push_path.empty();
+            if (below) {
+                q.path = std::move(u.push_path);
+                q.next = u.push_next;
+                q.frac = std::move(u.push_frac);
+                q.turn_done = u.push_turn_done;
+                q.started = true;
+                x.below = &q;
+                x.below_kind = u.push_kind;
+                x.below_resume = u.push_resume;
+                x.below_forced = u.forced;
+            }
             // s78n t14 part B: on a crush-flee path (0x39a5b0) the speed (0x370f00) and with it the acceleration /
             // deceleration (0x372fe0 / 0x373080: x effective / Max_Speed) x Fleeing_Infantry_Speed_Bonus.
             LocomotorParams plp = u.lp;
             if (u.team_cap < kInf && u.speed_factor > 0.0f) plp.max_speed = u.team_cap;
-            if (u.walk_deployed) plp.max_speed = u.d.deployed_walk_speed;  // s78n t26.1
             if (u.push_flee) {
                 const float fb = cfg_.constants.fleeing_infantry_speed_bonus;
                 plp.max_speed *= fb;
                 plp.accel *= fb;
                 plp.decel *= fb;
             }
+            x.vmax_u = plp.max_speed;  // C.1: never the deployed speed
+            if (u.walk_deployed) plp.max_speed = u.d.deployed_walk_speed;  // s78n t26.1
             actx.vmax = plp.max_speed;
             res[i] = walk_step(u.m, plp, u.coll_speed, &grid_, &x);
+            if (below) {
+                u.push_path = std::move(q.path);
+                u.push_next = q.next;
+                u.push_frac = std::move(q.frac);
+                u.push_turn_done = q.turn_done;
+            }
             u.m.escape_until = escape;
-            std::swap(u.m.path, u.push_path);
-            std::swap(u.m.next, u.push_next);
-            std::swap(u.m.frac, u.push_frac);
-            std::swap(u.m.turn_done, u.push_turn_done);
+            if (res[i].popped) {
+                // u.m is the order path now (walked on in this call); the finished record is popped (0x557b10)
+                end_push(u);
+                u.around.clear();
+                u.path_change = frame;
+            } else {
+                u.m.started = order_started;
+                std::swap(u.m.path, u.push_path);
+                std::swap(u.m.next, u.push_next);
+                std::swap(u.m.frac, u.push_frac);
+                std::swap(u.m.turn_done, u.push_turn_done);
+            }
             start_turn_mark(u, res[i]);  // s78n t26.2
             if (bike) bike_frame(u, yaw0, true);
             return;
@@ -4131,19 +4198,56 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
         if (u.aturn != LocoState::None && !u.has_goal && u.d.locomotor == LocomotorKind::Default) return;
         // S8 t11: a Walk in a deploy state does not move (MovementSystem::deploy). s78n t26.1 (MOVEMENT §3.2.1 item 3):
         // but 0x19 with M > 0 and a path walks deployed.
-        if (!u.has_goal || u.need_path || frame < u.start_frame || (u.deploy != LocoState::None && !deploy_walks(u))) {
+        if (u.deploy != LocoState::None && !deploy_walks(u)) {
+            if (bike) bike_frame(u, yaw0, false);
+            return;
+        }
+        // s78k t03 / s78l t01: a team member walks at the team speed (team_caps) - the container's effective max speed
+        // replaces its own (no member factor enters), in a formation or not; a stunned member (factor 0) stays put.
+        // s78n t26.1 / t26.2 (MOVEMENT §3.2.1 item 3, §3.5.2 B.1): walking deployed, the speed controller's vmax is
+        // Deployed_Walk_Speed (raw); the acceleration / deceleration are the unit's own
+        LocomotorParams lp = u.lp;
+        if (u.team_cap < kInf && u.speed_factor > 0.0f) lp.max_speed = u.team_cap;
+        const float vmax_u = lp.max_speed;
+        if (u.walk_deployed) lp.max_speed = u.d.deployed_walk_speed;
+        if (!u.has_goal || u.need_path || frame < u.start_frame) {
+            // s78n t26.4 (MOVEMENT §3.5.2 C.1 / C.4, G): no started path (no order - a stop on a record owned by another,
+            // a cut, a halt -, a new order not planned yet, a start delay): a moving unit goes to End Move at T = a and
+            // coasts along its last frame's displacement to 0x15 (then idle); a standing one does nothing
+            if (u.m.speed > 0.0f) {
+                LandMotion c;
+                c.pos = u.m.pos;
+                c.yaw = u.m.yaw;
+                c.speed = u.m.speed;
+                c.state = u.m.state;
+                c.last_dir = u.m.last_dir;
+                c.started = false;
+                WalkExtras x;
+                walk_extras(i, false, x, actx);
+                x.lane = false;
+                x.vmax_u = vmax_u;
+                actx.vmax = lp.max_speed;
+                res[i] = walk_step(c, lp, u.coll_speed, &grid_, &x);
+                u.m.pos = c.pos;
+                u.m.yaw = c.yaw;
+                u.m.speed = c.speed;
+                u.m.state = c.state;
+                if (bike) bike_frame(u, yaw0, true);
+                return;
+            }
             if (bike) bike_frame(u, yaw0, false);
             return;
         }
         if (deploy_branch(u)) return;
+        WalkExtras x;
+        walk_extras(i, true, x, actx);
+        x.vmax_u = vmax_u;
         // s78n t18 / t20 batch 2 (Walk Start Move 0x61ff40): a Hover_Height unit that is not raised rises first; the
         // frame ends. A turn in place (0xf-0x11) comes before Start Move, so it runs on the ground: the start rule is
         // tried on a copy, and a frame that only turns is kept (the walk's own result), one that would move rises.
         if (hovers && u.hover != 1) {
             LandMotion probe = u.m;
-            WalkExtras hx;
-            if (u.in_formation) hx.jiggle = u.jiggle;
-            const WalkResult pr = walk_step(probe, u.lp, kInf, &grid_, &hx);
+            const WalkResult pr = walk_step(probe, u.lp, kInf, &grid_, &x);
             if (pr.turn) {
                 u.m = std::move(probe);
                 res[i] = pr;
@@ -4154,24 +4258,11 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             }
             return;
         }
-        // s78k t03 / s78l t01: a team member walks at the team speed (team_caps) - the container's effective max speed
-        // replaces its own (no member factor enters), in a formation or not; a stunned member (factor 0) stays put.
         // s78n t18 (0x509ea0): the collision records' speed answer is a target the walk brakes toward at its rate. s78n
         // t26.2 (MOVEMENT §3.5.2 B.2 / B.6): the formation speed is the order path's (a formation path) target, apart from
         // the collision cap
-        const float cap = u.coll_speed;
-        x.formation = u.formation_speed;
-        LocomotorParams lp = u.lp;
-        if (u.team_cap < kInf && u.speed_factor > 0.0f) lp.max_speed = u.team_cap;
-        // s78n t26.1 / t26.2 (MOVEMENT §3.2.1 item 3, §3.5.2 B.1): walking deployed, the speed controller's vmax is
-        // Deployed_Walk_Speed (raw); the acceleration / deceleration are the unit's own
-        if (u.walk_deployed) lp.max_speed = u.d.deployed_walk_speed;
-        if (u.in_formation) {  // OI tactical: formation members (jiggle, side-error steering)
-            x.jiggle = u.jiggle;
-            x.side_error = true;
-        }
         actx.vmax = lp.max_speed;
-        res[i] = walk_step(u.m, lp, cap, &grid_, &x);
+        res[i] = walk_step(u.m, lp, u.coll_speed, &grid_, &x);
         start_turn_mark(u, res[i]);  // s78n t26.2
         if (bike) bike_frame(u, yaw0, true);  // §4.5: states 0x20-0x25 and the lean (writes only u)
     };
@@ -4205,7 +4296,10 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
         if (u.aturn == LocoState::None || u.d.locomotor != LocomotorKind::Default || is_air(u)) continue;
         if (u.aturn_start) {
             float want = 0.0f;
-            if (!start_turn_want(u, frame, want)) {
+            WalkExtras sx;
+            AvoidCtx sctx{this, &u, u.lp.max_speed, {}, pos0};
+            walk_extras(i, !u.pushed, sx, sctx);
+            if (!start_turn_want(u, frame, sx, want)) {
                 arrival_reset(u);
                 if (u.m.state == LocoState::WalkStartTurn || u.m.state == LocoState::WalkTurning || u.m.state == LocoState::WalkEndTurn)
                     u.m.state = LocoState::WalkStopped;
@@ -4260,36 +4354,12 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                     }
                     land_arrival_turn(u);
                 }
-            } else if (brake_stub(u) && !r.moved && !(u.m.speed > 0.0f)) {
-                // s78n t24 [port]: the End Move brake stub held at speed 0 (a record's answer) is over: End Move at a speed
-                // <= the deceleration stops (0x14 -> 0x15, MOVEMENT §3.5.1) and the stub, which stands for that braking, is
-                // popped. (Before, nothing ended it: the unit stayed Moving at speed 0 and its holding records never
-                // ended - a land-group deadlock once TerrainCollision stops brake through the stub.)
-                end_push(u);
-                u.m.state = LocoState::WalkStopped;
-                u.path_change = frame;
             }
         } else {
-            // s78l t02 (MOVEMENT §3.5.1 step 1): End Move brought to a stop short of the last point (0x14 -> 0x15: the walk
-            // did not move this frame - blocked, or held at speed 0 by a cap) on the last segment within 5 units of the
-            // last point, measured along the segment, counts as arrived (the index steps on; the unit stays where it is).
-            // [port] Only frames the walk ran (no re-plan pending, not deploying, started, the locomotor not suspended), and
-            // only frames it did not move: retail also enters 0x15 at a speed in (0, decel], which the port's walker
-            // covers by walking on to the point; the blocked-frame case (no 0x14 speed test) is [M].
-            // s78n t18: a squad container's arrival is its own state 0x15 (team_walk)
-            const bool close = !u.d.team_container && !r.arrived && !r.moved && u.has_goal && !u.need_path &&
-                               frame >= u.start_frame &&
-                               (u.deploy == LocoState::None || u.walk_deployed) && u.speed_factor > 0.0f &&
-                               u.m.state == LocoState::WalkEndMove &&
-                               u.m.path.size() >= 2 && static_cast<size_t>(u.m.next) + 1 == u.m.path.size() &&
-                               dot(u.m.pos - u.m.path.back(),
-                                   normalize_retail(u.m.path.back() - u.m.path[u.m.path.size() - 2])) > -5.0f;
-            if (close) {
-                u.m.next = static_cast<uint32_t>(u.m.path.size());
-                u.m.speed = 0.0f;
-                u.m.state = LocoState::WalkStopped;
-            }
-            if (r.arrived || close) {
+            // s78n t26.4 (MOVEMENT §3.5.1 "Arrival turn, details" item 1): the walk's own 0x15 reports the arrival - End Move at
+            // a speed <= the deceleration on the last waypoint, or within 5 before its line (the t20 commit-loop rule is
+            // gone). s78n t18: a squad container's arrival is its own state 0x15 (team_walk)
+            if (r.arrived && u.has_goal) {
                 u.has_goal = false;
                 u.arrived = true;
                 u.around.clear();  // s78n t18: the path is popped
@@ -4299,11 +4369,16 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             }
             // s78n t24 (MOVEMENT §5.4.7): a failed step makes a TerrainCollision record; there is no count of blocked frames
             // and no re-plan of the order path (the a1k blocked-frames re-plan is gone)
-            if (r.blocked && !close) {
+            if (r.blocked) {
                 ++stats_.blocked_steps;
                 terrain_report(u, frame);
             }
         }
+        // s78n t26.4 (MOVEMENT §3.5.2 C): the walk's counters
+        if (r.coast) ++stats_.walk_coasts;
+        if (r.restart) ++stats_.walk_restarts;
+        stats_.walk_tau_skips += r.tau_skips;
+        stats_.walk_degen_skips += r.degen_skips;
         // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", commit 0x42d6a0): a raised hover unit stands at G + Hover_Height;
         // a rising / lowering one keeps the z its hover step wrote
         if (height_ && u.hover < 2) u.z = height_(u.m.pos.x, u.m.pos.y) + (u.hover == 1 ? u.d.hover_height : 0.0f);
@@ -4523,6 +4598,15 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.u32(static_cast<uint32_t>(u.m.frac.size()));
             for (const float f : u.m.frac) h.f32(f);
         }
+        // s78n t26.4 (land only): the coast vector, the previous tick's position and an unstarted order path
+        if (u.m.last_dir.x != 0.0f || u.m.last_dir.y != 0.0f || u.prev_pos.x != 0.0f || u.prev_pos.y != 0.0f || !u.m.started) {
+            h.u8(0xEB);
+            h.f32(u.m.last_dir.x);
+            h.f32(u.m.last_dir.y);
+            h.f32(u.prev_pos.x);
+            h.f32(u.prev_pos.y);
+            h.boolean(u.m.started);
+        }
         if (u.hover != 0 || u.hover_off != 0.0f) {  // s78n t18: the hover state, only once it left the ground
             h.u8(0xE8);
             h.u8(u.hover);
@@ -4693,27 +4777,22 @@ void MovementSystem::arrival_reset(Unit& u) {
 // s78n t26.2 (MOVEMENT §3.5.2 A): the start turn's wanted yaw - the direction to the current waypoint of the top path the
 // walk would take this frame (the collision-owned record, else the order path; a formation member's order path with its
 // jiggle, as walk_step aims).
-bool MovementSystem::start_turn_want(const Unit& u, uint32_t frame, float& want) const {
+bool MovementSystem::start_turn_want(const Unit& u, uint32_t frame, const WalkExtras& x, float& want) const {
     if (u.deploy != LocoState::None && !deploy_walks(u)) return false;
-    const std::vector<V2>* path = nullptr;
+    std::span<const V2> path;
     uint32_t next = 0;
-    bool jig = false;
     if (u.pushed) {
-        path = &u.push_path;
+        path = u.push_path;
         next = u.push_next;
-    } else if (u.has_goal && !u.need_path && frame >= u.start_frame) {
-        path = &u.m.path;
+    } else if (u.has_goal && !u.need_path && frame >= u.start_frame && u.m.started) {
+        path = u.m.path;
         next = u.m.next;
-        jig = u.in_formation && (u.jiggle.x != 0.0f || u.jiggle.y != 0.0f);
+    } else {
+        return false;
     }
-    if (!path || next >= path->size()) return false;
-    V2 w = (*path)[next];
-    if (jig && static_cast<size_t>(next) + 1 < path->size()) {
-        const V2 q = w + u.jiggle;
-        if (grid_.passable_world(q, u.lp.mask)) w = q;
-    }
-    const V2 to = w - u.m.pos;
-    want = length_sq(to) > 0.0f ? heading_deg(to) : u.m.yaw;
+    V2 dir;
+    if (!walk_wanted_dir(path, next, u.m.pos, &x, dir)) return false;
+    want = length_sq(dir) > 0.0f ? heading_deg(dir) : u.m.yaw;
     return true;
 }
 

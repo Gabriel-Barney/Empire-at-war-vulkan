@@ -9,9 +9,13 @@
 // items 3-5).
 // s78n t26.3: the corner-speed pass D (MOVEMENT 3.5.2 D with the RE 2 corrections): corner speeds, the merge and the aim
 // point, the probe step-downs, the brake pass, and Min_Speed_Fraction_For_Turn on an order path.
+// s78n t26.4: the Walk move step C (MOVEMENT 3.5.2 C, G, 3.5.1 0x15): the turn first, the travel along the facing to the
+// waypoint line, the tau = 0 skip, the End Move coast along the last displacement, the point test, the pop into the path
+// below, 0x15 within 5 / restart, no snap, the unaligned new order's coast, and a save inside the coast.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/sim_crc.hpp"
@@ -158,7 +162,10 @@ void test_droid() {
         deployed_always = deployed_always && v.deploy_state == LocoState::WalkDeployed;
     }
     CHECK(ev.empty());
-    CHECK(flag_after && deployed_always && sys.view(1).arrived && near(distance(sys.view(1).pos, p0), 100.0f, 1e-3f));
+    // s78n t26.4 (MOVEMENT 3.5.2 C.11, 3.5.1 item 1): no snap onto the goal - End Move brakes from v^2 / (2a) > rest and
+    // 0x15 at v <= a ends it where it stands, within one step (the 2.5 cap) of the goal
+    CHECK(flag_after && deployed_always && sys.view(1).arrived && near(distance(sys.view(1).pos, p0), 100.0f, 2.5f));
+    std::printf("droid deployed walk: stopped %.4f from the start (goal 100)\n", static_cast<double>(distance(sys.view(1).pos, p0)));
     CHECK(speed.size() > 6);
     if (speed.size() > 6) {
         CHECK(speed[0] == 0.0f && near(speed[1], 0.78f, 1e-5f) && near(speed[2], 1.56f, 1e-5f) && near(speed[3], 2.34f, 1e-5f) &&
@@ -876,6 +883,265 @@ void test_t26_start_turn() {
                 a.turn_ticks, a.first_step, b.turn_ticks, b.first_step, c.turn_ticks, d.begin_plays, d.clip_hold, d.turn_ticks);
 }
 
+// ---------------------------------------------------------------- s78n t26.4: the Walk move step C (pure walk_step)
+// R 10, v held at vmax 2 (acc = a = 1), path (0, 0), (10, 0), (10, 10), start (4, 0), yaw 30, state 0x13, lane term off.
+// The unit turns first and travels along its facing up to the waypoint line (x + y = 10, the bisector normal), s' = D /
+// tau (MOVEMENT 3.5.2 C.6 - C.11); on tick 3 it reaches yaw 0 exactly, crosses line 1 with s - s' left, and the facing
+// at right angles to segment 2 (tau = 0) skips waypoint 2 (C.9 quirk), so nothing is left to walk: End Move and the
+// coast of the rest along the last frame's displacement (C.4).
+void test_t26_walk_step() {
+    ::alamo::test::section("t26_walk_step");
+    LocomotorParams lp;
+    lp.max_speed = 2.0f;
+    lp.accel = lp.decel = 1.0f;
+    lp.turn_rate = 10.0f;
+    LandMotion m;
+    m.pos = {4.0f, 0.0f};
+    m.yaw = 30.0f;
+    m.speed = 2.0f;
+    m.state = LocoState::WalkMoving;
+    m.path = {{0.0f, 0.0f}, {10.0f, 0.0f}, {10.0f, 10.0f}};
+    m.next = 1;
+    std::vector<V2> pos{m.pos};
+    WalkResult r1 = walk_step(m, lp, 3.0e38f, nullptr);
+    pos.push_back(m.pos);
+    // tick 1: yaw 20; D = 6, tau = cos 20, s' = 6.385; pos = (4, 0) + 2 (cos 20, sin 20) (hand)
+    CHECK(m.yaw == 20.0f && r1.moved && !r1.coast && m.state == LocoState::WalkMoving && m.next == 1);
+    CHECK(near(m.pos.x, 5.879385f, 2e-5f) && near(m.pos.y, 0.684040f, 2e-5f));
+    m.last_dir = pos[1] - pos[0];
+    walk_step(m, lp, 3.0e38f, nullptr);
+    pos.push_back(m.pos);
+    // tick 2: yaw 10; s' = 3.489589 (hand)
+    CHECK(m.yaw == 10.0f && near(m.pos.x, 7.849001f, 3e-5f) && near(m.pos.y, 1.031337f, 3e-5f) && m.next == 1);
+    m.last_dir = pos[2] - pos[1];
+    const WalkResult r3 = walk_step(m, lp, 3.0e38f, nullptr);
+    // tick 3: yaw exactly 0 (the step that covers the rest lands exactly, no leftover: turn-done stays clear); line 1 is
+    // crossed at x 8.968663 with 0.880337 left; tau = 0 on segment 2 skips waypoint 2; the coast: 0.880337 along the last
+    // displacement unit(pos2 - pos1)
+    const V2 cross_pt{10.0f - pos[2].y, pos[2].y};  // the line x + y = 10 at y = pos2.y (t = (1, 0))
+    const float left = 2.0f - (cross_pt.x - pos[2].x);
+    const V2 cd = normalize_retail(pos[2] - pos[1]);
+    const V2 want = cross_pt + cd * left;
+    std::printf("t26.4 walk step: tick 3 crosses line 1 at (%.6f, %.6f), %.6f left, coast to (%.6f, %.6f); pos (%.6f, %.6f)\n",
+                static_cast<double>(cross_pt.x), static_cast<double>(cross_pt.y), static_cast<double>(left),
+                static_cast<double>(want.x), static_cast<double>(want.y), static_cast<double>(m.pos.x), static_cast<double>(m.pos.y));
+    CHECK(m.yaw == 0.0f && !m.turn_done && r3.tau_skips == 1 && r3.coast && m.state == LocoState::WalkEndMove && m.next == 3);
+    CHECK(near(cross_pt.x, 8.968663f, 3e-5f) && near(left, 0.880337f, 3e-5f));
+    CHECK(near(m.pos.x, want.x, 2e-5f) && near(m.pos.y, want.y, 2e-5f));
+
+    // The line rule (C.5): 0.0005 short of a waypoint line along its normal -> passed; 0.002 short -> not (a step of 0.0001,
+    // the cap taken at once).
+    const auto line_case = [&](float short_by) {
+        LandMotion k;
+        k.pos = {10.0f - short_by, 0.0f};
+        k.speed = 1.0f;
+        k.state = LocoState::WalkMoving;
+        k.path = {{0.0f, 0.0f}, {10.0f, 0.0f}, {20.0f, 0.0f}};
+        k.next = 1;
+        WalkExtras x;
+        x.cap_now = true;
+        walk_step(k, lp, 0.0001f, nullptr, &x);
+        return k.next;
+    };
+    CHECK(line_case(0.0005f) == 2 && line_case(0.002f) == 1);
+
+    // A waypoint is passed by its line, never by its point: a unit beside its segment (y 3) steps past waypoint 1 where it
+    // crosses the line x = 10 (straight path, normal (1, 0)) and walks on toward waypoint 2 without turning back.
+    {
+        LandMotion k;
+        k.pos = {9.0f, 3.0f};
+        k.speed = 2.0f;
+        k.state = LocoState::WalkMoving;
+        k.path = {{0.0f, 0.0f}, {10.0f, 0.0f}, {20.0f, 0.0f}};
+        k.next = 1;
+        walk_step(k, lp, 3.0e38f, nullptr);
+        CHECK(k.next == 2 && k.yaw == 0.0f && near(k.pos.x, 11.0f, 1e-4f) && k.pos.y == 3.0f);
+    }
+
+    // The point test of the new position (C.10, MOVEMENT 5.4.1 "The impassable-cell rule" item 5): a step from cell (0, 0)
+    // that ends in the passable cell (1, 1) is accepted although the straight line crosses the impassable cell (0, 1);
+    // a step that ends in an impassable cell is refused with no commit.
+    {
+        PassabilityGrid g;
+        g.init(4, 4);
+        g.set_base(0, 1, kPassImpassable);
+        LandMotion k;
+        k.pos = {9.0f, 9.5f};
+        k.yaw = 45.0f;
+        k.speed = 2.0f;
+        k.state = LocoState::WalkMoving;
+        k.path = {{9.0f, 9.5f}, {30.0f, 30.5f}};
+        k.next = 1;
+        const WalkResult ok = walk_step(k, lp, 3.0e38f, &g);
+        CHECK(!ok.blocked && ok.moved && world_to_cell(k.pos.x) == 1 && world_to_cell(k.pos.y) == 1);
+        g.set_base(1, 1, kPassImpassable);
+        LandMotion b = k;
+        b.pos = {9.0f, 9.5f};
+        const WalkResult no = walk_step(b, lp, 3.0e38f, &g);
+        CHECK(no.blocked && !no.moved && b.pos == (V2{9.0f, 9.5f}));
+    }
+
+    // The pop (C.4): a finished top record over a started path below (not in End Move) is popped in the step and the unit
+    // goes on along the path below with no more turning in that call; in End Move it coasts instead.
+    {
+        LandMotion k;
+        k.pos = {10.0f, 0.0f};
+        k.yaw = 0.0f;
+        k.speed = 2.0f;
+        k.state = LocoState::WalkMoving;
+        k.path = {{0.0f, 0.0f}, {10.0f, 0.0f}};
+        k.next = 1;
+        LandMotion q;
+        q.path = {{0.0f, 0.0f}, {100.0f, 0.0f}};
+        q.next = 1;
+        WalkExtras x;
+        x.below = &q;
+        LandMotion e = k;
+        LandMotion qe = q;
+        const WalkResult pr = walk_step(k, lp, 3.0e38f, nullptr, &x);
+        CHECK(pr.popped && k.path[1] == (V2{100.0f, 0.0f}) && q.path[1] == (V2{10.0f, 0.0f}) && k.yaw == 0.0f && near(k.pos.x, 12.0f, 1e-4f));
+        e.state = LocoState::WalkEndMove;
+        e.speed = 1.5f;
+        WalkExtras xe;
+        xe.below = &qe;
+        const WalkResult er = walk_step(e, lp, 3.0e38f, nullptr, &xe);
+        CHECK(!er.popped && er.coast && e.path[1] == (V2{10.0f, 0.0f}));
+    }
+}
+
+// The End Move end (0x15, MOVEMENT 3.5.1 "Arrival turn, details" item 1): at v <= a the unit stops; within 5 before the
+// last line (or past it) it has arrived where it stands, more than 5 short the move restarts from state 0.
+void test_t26_end_move() {
+    ::alamo::test::section("t26_end_move");
+    LocomotorParams lp;
+    lp.max_speed = 2.0f;
+    lp.accel = lp.decel = 1.0f;
+    lp.turn_rate = 10.0f;
+    const auto end_case = [&](float x0) {
+        LandMotion k;
+        k.pos = {x0, 0.0f};
+        k.speed = 1.0f;
+        k.state = LocoState::WalkEndMove;
+        k.path = {{0.0f, 0.0f}, {50.0f, 0.0f}};
+        k.next = 1;
+        const WalkResult r = walk_step(k, lp, 3.0e38f, nullptr);
+        return std::pair<WalkResult, LandMotion>(r, k);
+    };
+    const auto [ra, ka] = end_case(46.0f);  // 4 short: arrived, the index stepped on, no move
+    CHECK(ra.arrived && !ra.moved && ka.next == 2 && ka.speed == 0.0f && ka.state == LocoState::WalkStopped && ka.pos.x == 46.0f);
+    const auto [rb, kb] = end_case(44.0f);  // 6 short: restart (start rule, Start Move, the move step from speed 0)
+    CHECK(!rb.arrived && rb.restart && kb.next == 1 && kb.state == LocoState::WalkMoving && kb.speed == 1.0f);
+
+    // No snap (system): a vehicle ordered 50 ahead along +x ends where 0x15 finds it - past the last line or within 5 before
+    // it - never exactly on the goal point
+    MovementConfig cfg;
+    cfg.constants.land_speed_multiplier = 1.0f;
+    MovementSystem sys{cfg};
+    land_system(sys);
+    UnitDesc d = tank(1, cell_center(20, 50));
+    d.accel = d.decel = 0.3f;
+    CHECK(sys.add_unit(d));
+    SimRng rng(2604);
+    const V2 goal = cell_center(20, 50) + V2{50.0f, 0.0f};
+    order(sys, rng, {1}, goal, 1);
+    uint32_t f = 1;
+    float vmax_seen = 0.0f;
+    for (; f < 400 && !sys.view(1).arrived; ++f) {
+        sys.tick(f, rng);
+        vmax_seen = std::max(vmax_seen, sys.view(1).speed);
+    }
+    const UnitView v = sys.view(1);
+    std::printf("t26.4 no snap: arrived on tick %u at x %.4f (goal %.4f), max speed %.3f\n", f, static_cast<double>(v.pos.x),
+                static_cast<double>(goal.x), static_cast<double>(vmax_seen));
+    CHECK(v.arrived && v.speed == 0.0f && !(v.pos == goal) && v.pos.x > goal.x - 5.0f);
+
+    // A new order behind a moving AT-AT-like unit (Close_Enough_Angle_For_Move_Start 30): not aligned (3.5.2 G), so the
+    // path is not started - the unit coasts in End Move at T = a (its speed falls by a each tick, it moves along its last
+    // displacement), stops at 0x15 and then starts the new path (the turn in place, start rule A).
+    MovementSystem s2{cfg};
+    land_system(s2);
+    UnitDesc w = tank(2, cell_center(20, 50));
+    w.accel = w.decel = 0.3f;
+    w.close_enough_angle = 30.0f;
+    CHECK(s2.add_unit(w));
+    order(s2, rng, {2}, cell_center(20, 50) + V2{400.0f, 0.0f}, 1);
+    uint32_t g = 1;
+    for (; g < 300 && s2.view(2).speed < 3.0f; ++g) s2.tick(g, rng);  // (the order's composition delay first)
+    const float v0 = s2.view(2).speed;
+    CHECK(v0 >= 3.0f);
+    order(s2, rng, {2}, cell_center(20, 50) - V2{200.0f, 0.0f}, g);
+    std::vector<float> speeds;
+    std::vector<float> xs;
+    bool started_turn = false;
+    for (uint32_t end = g + 40; g < end; ++g) {
+        s2.tick(g, rng);
+        speeds.push_back(s2.view(2).speed);
+        xs.push_back(s2.view(2).pos.x);
+        if (s2.view(2).speed == 0.0f) {
+            started_turn = true;
+            break;
+        }
+    }
+    bool falls = speeds.size() >= 2;
+    for (size_t i = 0; i + 1 < speeds.size(); ++i) {
+        if (speeds[i + 1] == 0.0f) break;
+        falls = falls && near(speeds[i] - speeds[i + 1], 0.3f, 1e-4f) && xs[i + 1] > xs[i];
+    }
+    std::printf("t26.4 new order behind: speed %.3f -> coast %zu ticks (first %.3f)\n", static_cast<double>(v0), speeds.size(),
+                static_cast<double>(speeds.empty() ? 0.0f : speeds[0]));
+    CHECK(falls && started_turn && near(speeds[0], v0 - 0.3f, 1e-4f));
+    bool turned = false;
+    for (uint32_t end = g + 80; g < end; ++g) {
+        s2.tick(g, rng);
+        if (s2.view(2).pos.x < xs.back() - 1.0f) turned = true;
+    }
+    CHECK(turned);
+}
+
+// Save inside End Move with a coast: the loaded copy hashes equal and goes on identically.
+void test_t26_coast_save() {
+    ::alamo::test::section("t26_coast_save");
+    MovementConfig cfg;
+    cfg.constants.land_speed_multiplier = 1.0f;
+    MovementSystem sys{cfg};
+    land_system(sys);
+    UnitDesc d = tank(1, cell_center(20, 50));
+    d.accel = d.decel = 0.2f;
+    CHECK(sys.add_unit(d));
+    SimRng rng(2605);
+    order(sys, rng, {1}, cell_center(20, 50) + V2{400.0f, 0.0f}, 1);
+    uint32_t f = 1;
+    for (; f < 300 && sys.view(1).speed < 3.0f; ++f) sys.tick(f, rng);
+    const ObjectId one[] = {1};
+    sys.halt(one, f);  // stop with the speed kept: the walk coasts in End Move
+    sys.tick(f++, rng);
+    CHECK(sys.view(1).speed > 0.5f && sys.view(1).walk_state == LocoState::WalkEndMove);
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{cfg};
+    land_system(copy);
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done());
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest());
+    SimRng r2 = rng;
+    const V2 p0 = sys.view(1).pos;
+    for (uint32_t g = f; g < f + 30; ++g) {
+        sys.tick(g, rng);
+        copy.tick(g, r2);
+    }
+    StateHasher hc, hd;
+    sys.hash_units(hc);
+    copy.hash_units(hd);
+    CHECK(hc.digest() == hd.digest() && sys.view(1).pos == copy.view(1).pos);
+    CHECK(sys.view(1).speed == 0.0f && sys.view(1).pos.x > p0.x && sys.view(1).pos.y == p0.y);
+    CHECK(sys.stats().walk_coasts > 0);
+}
+
 }  // namespace
 
 int main() {
@@ -892,5 +1158,8 @@ int main() {
     test_t26_corner_pass();
     test_t26_start_rule();
     test_t26_start_turn();
+    test_t26_walk_step();
+    test_t26_end_move();
+    test_t26_coast_save();
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }

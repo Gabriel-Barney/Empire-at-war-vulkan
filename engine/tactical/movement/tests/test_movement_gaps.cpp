@@ -1394,7 +1394,8 @@ static void test_bike() {
     auto seen = [&](uint8_t s) { return std::find(states.begin(), states.end(), s) != states.end(); };
     CHECK(seen(0x20) && seen(0x21) && seen(0x22) && seen(0x24) && states.back() == 0x25 && lean_ok && max_lean > 0.0f);
     for (uint32_t g = 0; g < 40; ++g) sys.tick(f + 1 + g, rng);
-    CHECK(sys.view(1).roll == 0.0f && distance(sys.view(1).pos, o.destination) < 1.0f);
+    // s78n t26.4 (MOVEMENT 3.5.1 item 1): no snap - 0x15 ends the move where it stands, within 5 before the last line
+    CHECK(sys.view(1).roll == 0.0f && distance(sys.view(1).pos, o.destination) < 5.0f);
     std::printf("bike: %zu states, max lean %.2f\n", states.size(), static_cast<double>(max_lean));
 }
 
@@ -1959,7 +1960,7 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // cu8j t01 / t02 (2026-11-08): compositions at the next coordinator update (draws, start frames, the jetpack swap's draw)
 // and the hash's pending composition / adopt state.
 // s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the single-member shortcut's exact goal is hashed).
-static constexpr uint64_t kGoldenMixed = 0xb9c5bdcd4c3a9febull;  // s78n t26.3: the corner pass; s78n t26.2: the speed controller, the start turn (s78n t20: the path stack top, formation identity, the destination check; F5)
+static constexpr uint64_t kGoldenMixed = 0x751ad0e40bfa6deaull;  // s78n t26.4: the move step C (no snap); s78n t26.3: the corner pass; s78n t26.2: the speed controller, the start turn (s78n t20: the path stack top, formation identity, the destination check; F5)
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -2317,9 +2318,17 @@ static void test_arrival_turn() {
         sys.tick(f++, rng);
         CHECK(!sys.view(1).arrival_turn_ended);
     }
-    {  // a new order replaces the turn: walking back west ends on the travel heading
+    {  // a new order replaces the turn: walking back west. s78n t26.4 (MOVEMENT 3.5.2 A, C.6 / C.7, 5.4.1 "How Walk
+       // combines" item 2): CloseEnoughAngleForMoveStart 180 starts it at once - it turns on the move by the rate a frame
+       // through 180 (16 frames from 30), swinging north of its line, and the lane term then bends it back toward the line
+       // (heading south of west, approaching 180)
         const Run r = run(90.0f, 30.0f, 1, 1, true);
-        CHECK(r.after[0] == 30.0f && std::fabs(std::fabs(r.after.back()) - 180.0f) < 1e-3f);
+        CHECK(r.after.size() == 40 && r.after[0] == 30.0f);
+        bool rate_ok = true;
+        for (size_t k = 1; k <= 16 && k < r.after.size(); ++k)
+            rate_ok = rate_ok && std::fabs(r.after[k] - (30.0f + rate * static_cast<float>(k))) < 1e-3f;
+        CHECK(rate_ok && r.after.back() < -160.0f && r.after.back() > -180.0f);
+        std::printf("arrival turn: a new order turns on the move, yaw %.3f after 39 frames\n", static_cast<double>(r.after.back()));
     }
 }
 
@@ -2347,7 +2356,8 @@ static void test_forced_path() {
         std::printf("forced path %d: arrived %d at (%.1f, %.1f), failed %d\n", forced ? 1 : 0, arrived ? 1 : 0,
                     static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), v.failed ? 1 : 0);
         if (forced) {
-            CHECK(arrived && v.pos.x == cell_center(20, 12).x && v.pos.y == cell_center(20, 12).y);
+            // s78n t26.4 (MOVEMENT 3.5.1 item 1): arrived where 0x15 stopped it, within 5 before the last line
+            CHECK(arrived && distance(v.pos, cell_center(20, 12)) < 5.0f && v.goal == cell_center(20, 12));
         } else {
             CHECK(v.pos.x < 15.0f * kCellSize);  // the wall closes the map: the route ends on the near side
         }
@@ -2701,16 +2711,42 @@ static void test_arrival_turn_clips() {
     }
 }
 
-// s78l t02 (a, step 1): End Move brought to a stop short of the last point (here: a speed override of 0 holds it) on the
-// last segment within 5 units of the last point, along the segment, counts as arrived where it stands; further out the
-// move stays open.
+// s78n t26.4 (MOVEMENT 3.5.1 "Arrival turn, details" item 1, 3.5.2 C.1; replaces the s78l t02 arrival-close [port]): End
+// Move at v <= a (0x15) sets the speed to 0; heading for the last waypoint within 5 before its line the index steps on and
+// the unit has arrived where it stands; further out the move restarts from state 0 (no arrival). A speed override of 0 is
+// vmax_u = 0: the move step does nothing at all (C.1) - the unit neither moves nor arrives while it holds.
 static void test_arrival_close() {
-    const auto run = [](float stop_within) {
+    LocomotorParams p;
+    p.max_speed = 1.0f;
+    p.accel = 0.1f;
+    p.decel = 0.02f;
+    p.turn_rate = 10.0f;
+    const auto at_stop = [&](float short_by) {
+        LandMotion m;
+        m.path = {{0.0f, 0.0f}, {100.0f, 0.0f}};
+        m.next = 1;
+        m.pos = {100.0f - short_by, 0.0f};
+        m.speed = 0.015f;  // <= a
+        m.state = LocoState::WalkEndMove;
+        const WalkResult r = walk_step(m, p, 3.0e38f, nullptr);
+        return std::pair<WalkResult, LandMotion>{r, m};
+    };
+    {
+        const auto [r, m] = at_stop(3.784f);
+        CHECK(r.arrived && !r.restart && m.speed == 0.0f && m.state == LocoState::WalkStopped && m.next == 2);
+        CHECK(m.pos == (V2{100.0f - 3.784f, 0.0f}));  // where it stands
+        std::printf("arrival close: arrived %.3f units short of the last point\n", 3.784);
+    }
+    {
+        const auto [r, m] = at_stop(9.0f);
+        CHECK(!r.arrived && r.restart && m.next == 1 && m.state != LocoState::WalkStopped);
+    }
+    {  // the speed override 0 holds the unit in place, unarrived
         MovementSystem sys{MovementConfig{}};
         PassabilityGrid g = open_grid(60, 60);
         sys.set_grid(std::move(g));
         UnitDesc d = unit(1, cell_center(10, 10), 2, 1.0f, 6.0f, LocomotorKind::Default);
-        d.decel = 0.02f;  // a long End Move
+        d.decel = 0.02f;
         CHECK(sys.add_unit(d));
         SimRng rng(3);
         MoveOrder o;
@@ -2718,27 +2754,18 @@ static void test_arrival_close() {
         o.destination = cell_center(20, 10);
         sys.move(o, rng, 0);
         bool held = false;
+        V2 at{};
         uint32_t f = 1;
-        for (; f < 400 && !sys.view(1).arrived; ++f) {
+        for (; f < 400 && !held; ++f) {
             sys.tick(f, rng);
-            if (!held && sys.view(1).has_goal && sys.view(1).goal.x - sys.view(1).pos.x < stop_within) {
+            if (sys.view(1).has_goal && sys.view(1).goal.x - sys.view(1).pos.x < 4.0f) {
                 CHECK(sys.set_speed_override(1, 0.0f));
                 held = true;
             }
-            if (held && f > 300) break;
         }
-        const UnitView v = sys.view(1);
-        CHECK(held);
-        return std::pair<bool, float>{v.arrived, v.goal.x - v.pos.x};
-    };
-    {
-        const auto [arrived, short_by] = run(4.0f);
-        CHECK(arrived && short_by > 0.0f && short_by < 4.0f);
-        std::printf("arrival close: arrived %.3f units short of the last point\n", static_cast<double>(short_by));
-    }
-    {
-        const auto [arrived, short_by] = run(9.0f);
-        CHECK(!arrived && short_by >= 5.0f);
+        at = sys.view(1).pos;
+        for (uint32_t n = 0; n < 100; ++n) sys.tick(f++, rng);
+        CHECK(held && !sys.view(1).arrived && sys.view(1).pos == at);
     }
 }
 
@@ -2774,9 +2801,10 @@ static void test_forced_destination() {
         CHECK(v.arrived && !v.failed);
         CHECK(world_to_cell(v.pos.x) != 20 || world_to_cell(v.pos.y) != 12);
         CHECK(distance(v.pos, d) > 10.0f && distance(v.pos, d) < 30.0f);
-        CHECK(v.goal.x == v.pos.x && v.goal.y == v.pos.y);
-        // first ring that leaves the cell: R = 13 (0, 1, 2.8, 5.4, 8.8, 13), sample 0 at yaw 0 -> (d.x + 13, d.y)
-        CHECK(std::fabs(v.pos.x - (d.x + 13.0f)) < 1e-3f && std::fabs(v.pos.y - d.y) < 1e-3f);
+        // first ring that leaves the cell: R = 13 (0, 1, 2.8, 5.4, 8.8, 13), sample 0 at yaw 0 -> (d.x + 13, d.y); s78n
+        // t26.4 (MOVEMENT 3.5.1 item 1): the unit stops within 5 before it (no snap)
+        CHECK(std::fabs(v.goal.x - (d.x + 13.0f)) < 1e-3f && std::fabs(v.goal.y - d.y) < 1e-3f);
+        CHECK(distance(v.pos, v.goal) < 5.0f);
         std::printf("forced destination: placed at (%.2f, %.2f), %.2f from the blocked point\n", static_cast<double>(v.pos.x),
                     static_cast<double>(v.pos.y), static_cast<double>(distance(v.pos, d)));
     }
@@ -5762,7 +5790,8 @@ static void test_t20_destination_check() {
             started2 = started2 || sys.view(11).speed > 0.0f;
         }
         CHECK(moved == 0.0f && sys.view(10).arrived && !sys.view(10).has_goal && sys.land_path(10).empty());
-        CHECK(started2 && sys.view(11).arrived && near(moved2, 20.0f, 1e-3f));
+        // s78n t26.4 (MOVEMENT 3.5.2 C.4 / C.11, 3.5.1 item 1): no snap - it stops past its last line by at most one step
+        CHECK(started2 && sys.view(11).arrived && moved2 > 20.0f - 5.0f && moved2 < 20.0f + 1.56f);
         CHECK(sys.stats().paths_planned == 1);  // the unit on its own footprint was never planned
     }
 }
@@ -5897,7 +5926,7 @@ static void test_t20_path_around() {
         MovementStats st;
         V2 end, blocker;
         uint32_t resume_frame = 0;
-        V2 resume_dir;
+        V2 resume_dir, resume_pos;
     };
     const V2 start = cell_center(15, 20), goal = cell_center(40, 20), bp = cell_center(25, 20);  // y = 400 throughout
     const auto run = [&](const ParallelFor& pf) {
@@ -5929,6 +5958,7 @@ static void test_t20_path_around() {
                 r.resume_frame = f;
             } else if (r.resume_frame != 0 && f == r.resume_frame + 20) {
                 r.resume_dir = dir_from_deg(v.yaw);
+                r.resume_pos = v.pos;
             }
             was_pushed = v.pushed;
             for (const CollisionObject& c : sys.collisions().list())
@@ -5958,9 +5988,15 @@ static void test_t20_path_around() {
     }
     CHECK(s.tagged);  // the front corner carries the obstacle's hold line
     CHECK(s.min_y < 400.0f - 13.0f && s.max_y <= 400.0f + 1e-3f && !s.overlap);  // around the y < line side, never touching
-    // after the pop it heads for the ordered goal from the last corner (no way back to the line first)
-    const V2 want = normalize_retail(goal - V2{bp.x + 17.5f, 400.0f - 13.5f});
-    CHECK(s.resume_frame != 0 && dot(s.resume_dir, want) > 0.999f);
+    // after the pop it walks on along the ordered segment (+x, y = 400). s78n t26.4 (MOVEMENT 5.4.1 "How Walk combines"
+    // item 2, 3.5.2 C.6): its wanted direction is the segment's plus the lane term k (-d.y, d.x), k from its side offset
+    // e = 400 - y, which brings it back to its line; 20 frames after the pop the facing has caught up with it
+    const float k = formation_side_correction(400.0f - s.resume_pos.y);
+    const V2 want = normalize_retail(V2{1.0f, k});
+    CHECK(s.resume_frame != 0 && k > 0.0f && dot(s.resume_dir, want) > 0.999f);
+    std::printf("t20 path around: 20 frames after the pop at y %.2f, facing %.2f deg (lane term %.4f: %.2f deg)\n",
+                static_cast<double>(s.resume_pos.y), static_cast<double>(heading_deg(s.resume_dir)), static_cast<double>(k),
+                static_cast<double>(heading_deg(want)));
     CHECK(s.arrived && distance(s.end, goal) < 1.0f && s.blocker == bp);
     std::printf("t20 path around: detour %zu points, re-paths %u, y range %.2f .. %.2f, resumed at frame %u\n", s.detour.size(),
                 s.st.dynamic_repaths, static_cast<double>(s.min_y), static_cast<double>(s.max_y), s.resume_frame);
@@ -6170,7 +6206,10 @@ static void test_t20_early_arrival() {
         CHECK(distance(spare, dest) >= back);  // the spare point does not veto the stop point
         const Out r = vehicle_case(0);
         CHECK(r.arrived && r.st.early_arrivals == 1 && r.st.dynamic_repaths == 0 && r.st.pushes == 0 && !r.around && !r.pushed);
-        CHECK(near(r.end.x, dest.x - back - 3.0f, 1e-3f) && near(r.end.y, dest.y, 1e-3f) && r.path_end == r.end);
+        // s78n t26.4 (MOVEMENT 3.5.2 C.4 / C.11): no snap - the cut path ends 33 before the goal; the unit, past its rest
+        // test when the cut came, crosses the last line and coasts along its last displacement to 0x15 (v^2 / (2a) at most)
+        CHECK(near(r.path_end.x, dest.x - back - 3.0f, 1e-3f) && near(r.path_end.y, dest.y, 1e-3f) && near(r.end.y, dest.y, 1e-3f));
+        CHECK(r.end.x > r.path_end.x - 5.0f && r.end.x < r.path_end.x + mult * mult / (2.0f * 0.05f));
         CHECK(r.record_frames_after == 0);  // Resolved in the decision: gone the same frame
         // s78n t26.2 (MOVEMENT §3.5.2 B.5 / B.7 / C.11, §5.4.4 item 6): the "at once" flag only takes a lower target in
         // one frame, and the cut frame has none - the new last waypoint's fraction is 1.0 (no brake-ahead); the braking
@@ -6187,7 +6226,11 @@ static void test_t20_early_arrival() {
         const Out r = vehicle_case(1);
         CHECK(r.arrived && r.st.early_arrivals == 0 && r.around && r.pushed && r.st.dynamic_repaths >= 1);
         CHECK(r.path_end == dest);  // the ordered path was never cut
-        CHECK(distance(r.end, spare) < 1e-2f && r.min_gap > 0.0f);
+        // s78n t26.4 (MOVEMENT 3.5.2 C.4 / C.11): the record over the started order path ends with no End Move; the
+        // walk pops into the order path, already past its last line, and coasts to 0x15 - within v^2 / (2a) of the spare
+        CHECK(distance(r.end, spare) < mult * mult / (2.0f * 0.05f) && r.min_gap > 0.0f);
+        std::printf("t20 early arrival: Path Around to the spare point, coasted to (%.2f, %.2f)\n", static_cast<double>(r.end.x),
+                    static_cast<double>(r.end.y));
         std::printf("t20 early arrival: spare point (%.2f, %.2f) nearer than the stop point - Path Around to it\n", static_cast<double>(spare.x),
                     static_cast<double>(spare.y));
     }
@@ -6197,7 +6240,8 @@ static void test_t20_early_arrival() {
         CHECK(first_clear(10.0f, 6.0f, dest, 12.0f, 6.0f, start.x, 120.0f, V2{dest.x + 100.0f, dest.y}) < 0.0f);
         const Out r = vehicle_case(2);
         CHECK(r.arrived && r.st.early_arrivals == 0 && r.around && r.path_end == dest);
-        CHECK(near(r.end.x, dest.x + 30.0f, 1e-2f) && near(r.end.y, dest.y, 1e-2f));
+        // s78n t26.4: the same coast past the rejoin point (dest + 30), no snap
+        CHECK(distance(r.end, V2{dest.x + 30.0f, dest.y}) < mult * mult / (2.0f * 0.05f));
     }
     {  // (vi) even the mover's own position fails (a second unit stands on it): nothing is cut
         const Out r = vehicle_case(3);
@@ -6347,7 +6391,10 @@ static void test_t20_early_arrival() {
         // the stop point (30 before the goal) clears both units; the obstacle (60 before the goal) lies behind it: the cut
         // is made, the answer is false (no early arrival counted) and the record goes to Path Around
         CHECK(arrived && around && sys.stats().dynamic_repaths >= 1 && sys.stats().early_arrivals == 0);
-        CHECK(near(sys.land_path(10).back().x, dest.x - 33.0f, 1e-3f) && distance(sys.view(10).pos, V2{dest.x - 33.0f, dest.y}) < 1e-2f);
+        // s78n t26.4 (MOVEMENT 3.5.1 item 1): arrived where 0x15 stopped it - within 5 before the cut path's last line,
+        // still off to the detour's side (the lane term had not brought it back yet; no snap)
+        CHECK(near(sys.land_path(10).back().x, dest.x - 33.0f, 1e-3f) && sys.view(10).pos.x > dest.x - 33.0f - 5.0f &&
+              distance(sys.view(10).pos, V2{dest.x - 33.0f, dest.y}) < 13.5f + 5.0f);
         CHECK(sys.view(11).pos == (V2{dest.x - 60.0f, dest.y}) && sys.view(12).pos == dest);
     }
 }
@@ -6744,19 +6791,26 @@ static void test_t20_stopped_vs_stopped() {
         // it walks: the speed rises by its acceleration per frame (0.05 x 1.56), no jump
         CHECK(s.speeds.size() >= 5 && near(s.speeds[0], 0.05f * mult, 1e-5f) && near(s.speeds[1], 0.10f * mult, 1e-5f) &&
               near(s.speeds[2], 0.15f * mult, 1e-5f));
-        CHECK(s.end10 == p0 && distance(s.end11, want) < 1e-3f);
-        CHECK(near(foot_gap(foot_rect(s.end10, 0.0f, 10.0f, 6.0f), foot_rect(s.end11, 0.0f, 10.0f, 6.0f)), 6.0f, 1e-3f));
+        // s78n t26.4 (MOVEMENT 5.4.3 "The move", 3.5.2 C.7): X walks along its facing with the side-step vector away
+        // from O (weight 3), so it ends off the straight line, past the spot's line, where 0x15 stops it (no snap); the
+        // two footprints are at least the spot's 6 apart
+        CHECK(s.end10 == p0 && s.end11.x > want.x - 5.0f && distance(s.end11, want) < 6.0f);
+        CHECK(foot_gap(foot_rect(s.end10, 0.0f, 10.0f, 6.0f), foot_rect(s.end11, 0.0f, 10.0f, 6.0f)) >= 6.0f - 1e-3f);
         std::printf("t20 stopped vs stopped: unit 11 walked to (%.2f, %.2f), costs %.3f / %.3f\n", static_cast<double>(s.end11.x),
                     static_cast<double>(s.end11.y), static_cast<double>(cost11), static_cast<double>(cost10));
     }
     {  // exactly one has a target: the one without moves, whatever the costs; it backs straight away (-x), turning first
         const Out s = run(1, serial_for);
         CHECK(s.master == 0 && s.state0 == CollisionState::Resolving && s.gone && s.end11 == p1);
-        CHECK(near(s.end10.x, p0.x - 18.0f, 1e-2f) && near(s.end10.y, p0.y, 1e-2f));
+        // s78n t26.4 (MOVEMENT 3.5.2 A, C.6 / C.7): CloseEnoughAngleForMoveStart 180 - it turns on the move (a U-turn arc
+        // to the side) and stops past the spot's line (-x), off the straight line
+        CHECK(s.end10.x < p0.x - 18.0f + 5.0f && std::fabs(s.end10.y - p0.y) < 18.0f);
+        std::printf("t20 stopped vs stopped: target case - unit 10 ended at (%.2f, %.2f)\n", static_cast<double>(s.end10.x),
+                    static_cast<double>(s.end10.y));
     }
     {  // a deploying / deployed unit never moves: the other one does
         const Out s = run(2, serial_for);
-        CHECK(s.master == 0 && s.gone && s.end11 == p1 && near(s.end10.x, p0.x - 18.0f, 1e-2f));
+        CHECK(s.master == 0 && s.gone && s.end11 == p1 && s.end10.x < p0.x - 18.0f + 5.0f && std::fabs(s.end10.y - p0.y) < 18.0f);
     }
     {  // two Infantry-class units that both have targets: nobody moves - Try Again Later, re-decided every 30 frames
         MovementSystem sys{MovementConfig{}};

@@ -92,7 +92,9 @@ void squad(MovementSystem& sys, ObjectId cid, V2 at, int32_t owner, float cmax =
 }
 
 // ---------------------------------------------------------------- step 0: t21 review follow-ups
-// halt() keeps the speed: the unit brakes along its facing over v^2 / (2 decel) (the End Move brake stub), no order left.
+// halt() keeps the speed: no order and no path record left (s78n t26.4: the t20 End Move brake stub is gone) - the walk
+// goes to End Move at T = a and coasts along its last frame's displacement (MOVEMENT 3.5.2 C.1 / C.4), v falling by a per
+// frame to a, then 0x15: v - a + v - 2a + ... + a = v^2 / (2a) - v / 2 along the facing.
 void test_step0_halt_brake() {
     ::alamo::test::section("step0_halt_brake");
     MovementSystem sys{MovementConfig{}};
@@ -114,7 +116,7 @@ void test_step0_halt_brake() {
     const ObjectId one[] = {1};
     sys.halt(one, f);
     const UnitView h = sys.view(1);
-    CHECK(!h.has_goal && h.speed == v && h.pushed && h.push_kind == 1);
+    CHECK(!h.has_goal && h.speed == v && !h.pushed);
     float travelled = 0.0f;
     V2 p = h.pos;
     for (uint32_t n = 0; n < 200 && sys.view(1).speed > 0.0f; ++n) {
@@ -122,10 +124,10 @@ void test_step0_halt_brake() {
         travelled += distance(p, sys.view(1).pos);
         p = sys.view(1).pos;
     }
-    // the walk brakes along the stub (v^2 / (2 decel)) and stops at its end (one step of slack)
+    // the coast: v^2 / (2a) - v / 2 (within one step)
     CHECK(sys.view(1).speed == 0.0f && !sys.view(1).pushed && travelled > stub - v && travelled <= stub + 1e-3f);
     CHECK(std::fabs(p.y - v0.pos.y) < 1e-3f);
-    std::printf("step0 halt: braked %.3f along the facing (stub v^2 / 2a = %.3f)\n", static_cast<double>(travelled),
+    std::printf("step0 halt: coasted %.3f along the facing (v^2 / 2a = %.3f)\n", static_cast<double>(travelled),
                 static_cast<double>(stub));
 }
 
@@ -370,8 +372,8 @@ void test_t20_mvm_head_on() {
                 s.arrived ? 1 : 0, s.crc == p.crc ? 1 : 0);
 }
 
-// Two vehicles head-on with no order path below them (halted: each brakes along its End Move stub, a top record with no
-// order underneath), so no Path Around can start (MOVEMENT 1.5.1: no base path): the four attempts fail in the decision
+// Two vehicles head-on with no order path (halted: s78n t26.4, each coasts in End Move along its last frame's displacement,
+// MOVEMENT 3.5.2 C.4, no path record at all), so no Path Around can start (MOVEMENT 1.5.1: no base path): the four attempts fail in the decision
 // frame -> Try Again Later with one synced draw, retry - frame in [30, 45]; at the retry frame state 0 with a new draw,
 // and the next decision fails again with another. Face to face, both brake to 0 meanwhile. [port] The plan's one-cell
 // corridor does not stall in the port: Path Around's pass 2 takes the x 15 crossing edge (1.5.1 item 4) through the
@@ -380,12 +382,15 @@ void test_t20_mvm_try_again() {
     ::alamo::test::section("t20_mvm_try_again");
     MovementSystem sys{MovementConfig{}};
     land_system(sys, 100);
+    // s78n t26.4: halted, each coasts v^2 / (2a) - v / 2 = 1.56^2 / (2 x 0.00615 x 1.56) - 0.78 = 126 (MOVEMENT 3.5.2
+    // C.4, B.7) from about 259 apart, so they meet still moving and come to rest face to face in contact (0.004 coasted
+    // them through each other)
     UnitDesc w = vehicle(1, cell_center(20, 50), 0);
     w.accel = 0.05f;
-    w.decel = 0.004f;
+    w.decel = 0.00615f;
     UnitDesc e = vehicle(2, cell_center(60, 50), 0);
     e.accel = 0.05f;
-    e.decel = 0.004f;
+    e.decel = 0.00615f;
     e.yaw_deg = 180.0f;
     CHECK(sys.add_unit(w) && sys.add_unit(e));
     SimRng rng(323);
@@ -401,7 +406,7 @@ void test_t20_mvm_try_again() {
     for (; f < 600 && distance(sys.view(1).pos, sys.view(2).pos) > 260.0f; ++f) sys.tick(f, rng, serial_for);
     const ObjectId both[] = {1, 2};
     sys.halt(both, f);
-    CHECK(!sys.view(1).has_goal && !sys.view(2).has_goal && sys.view(1).pushed && sys.view(2).pushed);
+    CHECK(!sys.view(1).has_goal && !sys.view(2).has_goal && !sys.view(1).pushed && !sys.view(2).pushed);
     uint32_t first = 0, first_retry = 0, draws_first = 0, failures = 0;
     std::vector<uint32_t> draw_frames;
     bool range_ok = true, ref_ok = true, stood = true;

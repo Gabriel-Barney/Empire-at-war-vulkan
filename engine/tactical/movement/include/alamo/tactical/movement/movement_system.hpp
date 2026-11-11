@@ -294,6 +294,9 @@ struct MovementStats {
     // s78n t26.3 (MOVEMENT §3.5.2 D): the corner-speed pass's corners written with fraction 0 / with a fraction in (0, 1),
     // and its probe step-downs (v /= 1.5).
     uint32_t corner_zero = 0, corner_slowed = 0, corner_stepdowns = 0;
+    // s78n t26.4 (MOVEMENT §3.5.2 C): Walk move steps - End Move coast steps (C.4), 0x15 restarts away from the end, waypoints
+    // skipped by tau = 0 (C.9) and by a degenerate segment (C.8).
+    uint32_t walk_coasts = 0, walk_restarts = 0, walk_tau_skips = 0, walk_degen_skips = 0;
 };
 
 // s78n t14 (FIGHTER_FLYING §7.2 Dartboard step 3, 0x241820 / 0x241830): the radical inverse of `index` in `base` (f = 0,
@@ -342,7 +345,8 @@ public:
     void stop(std::span<const ObjectId> ids);
     // s78n t20 review follow-ups (MOVEMENT §4.3.2 item 6, FIGHTER_FLYING §4.11 E): the attack plan's "every member can
     // fire" gate and the land stop clear the path stack as stop() does, but the speed is not zeroed - a land Walk unit or
-    // squad container brakes through End Move (brake_to_stop). [port] Other locomotors (and space) stop as stop() does.
+    // squad container brakes through End Move (brake_to_stop; s78n t26.4: a Walk unit keeps its speed and state and its walk
+    // coasts in End Move, MOVEMENT §3.5.2 C.1 / C.4). [port] Other locomotors (and space) stop as stop() does.
     void halt(std::span<const ObjectId> ids, uint32_t frame);
     // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): FormationClass ctor 0x40d0d0, one synced int(1, FPS), for a
     // formation the host creates outside move() (the Load_Map-tail GOM post-load pass, TacticalBattle); and whether a unit
@@ -1111,6 +1115,10 @@ private:
         // turns in place to the order's final facing before it arrives; path_started: the order path was started (pack
         // path +0x6d; a pushed path over a started path ends without braking). Hashed for containers.
         bool coast = false, fturn = false, path_started = false;
+        // s78n t26.4 (MOVEMENT §3.5.2 C.4, save version 27): the position at the start of the previous land tick (pack
+        // +0x194..: the snapshot of the object service); m.last_dir = m.pos - prev_pos is taken at the start of each land
+        // tick. Set at add_unit in land mode only (hashed land-only, 0xEB).
+        V2 prev_pos;
         // s78n t18 (MOVEMENT §5.3 "+0x3a7"): hidden - garrisoned with its whole squad (host-set every tick, at every
         // garrison change and after a load: set_pair_gate; transient). A hidden unit is no layer object and does not walk.
         bool hidden = false;
@@ -1242,9 +1250,15 @@ private:
     float turn_clip_speed(const Unit& u) const;  // 0x3736a0
     float stopped_rate(const Unit& u) const;     // 0x374310 at speed 0: Stopped_Rate_Of_Turn, else R
     static void arrival_reset(Unit& u);
-    // s78n t26.2 (MOVEMENT §3.5.2 A): the wanted yaw of a start turn in place - the direction to the top path's current
-    // waypoint (the order path with the jiggle of a formation member, as walk_step aims); false: nothing left to walk.
-    bool start_turn_want(const Unit& u, uint32_t frame, float& want) const;
+    // s78n t26.2 / t26.4 (MOVEMENT §3.5.2 A, §5.4.1 "How Walk combines"): the wanted yaw of a start turn in place - the
+    // wanted direction 0x61d570 of the top path (segment direction + lane term + collision vector, walk_wanted_dir with
+    // the walk's extras `x`); false: nothing left to walk.
+    bool start_turn_want(const Unit& u, uint32_t frame, const WalkExtras& x, float& want) const;
+    // s78n t26.4 (MOVEMENT §3.5.2 G): the path set's "started" byte - a Walk unit moving in 0x12 - 0x14 keeps its state and
+    // speed and starts the new path (0x410170 "aligned") when waypoint 0's speed fraction is > 0 and the first leg's
+    // heading is within R or Close_Enough_Angle_For_Move_Start of its facing; else the path is not started (a moving unit
+    // coasts to a stop in End Move, a standing one starts it at its walk's 0x16).
+    void set_path_started(Unit& u) const;
     // s78n t26.2 (MOVEMENT §3.5.1 "Arrival turn, details" item 2): the arrival threshold's "current waypoint cap 0" - the
     // speed fraction of the top path's waypoint behind the unit (path +0x60).
     static bool cap_zero(const Unit& u);
@@ -1458,9 +1472,10 @@ private:
     // formation path included); the order ends as arrived ([port] the formation's signal 10: the member counts as done).
     // When the path owner is none or `c` (vf +0x170): state 0x16 and speed 0 at once; else brake_to_stop.
     void collision_stop(Unit& u, const CollisionObject& c, uint32_t frame);
-    // [port] End Move with no path record left (MOVEMENT §4.3.2 item 6, §5.4.1 impassable-cell item 3, §5.4.4 item 5): a
-    // squad container coasts (team_walk's End Move); a Walk unit gets an owner-less straight top record along its facing
-    // of the braking length v^2 / (2 decel) and brakes along it; without a speed or a deceleration it stops at once.
+    // End Move with no path record left (MOVEMENT §4.3.2 item 6, §5.4.1 impassable-cell item 3, §5.4.4 item 5): a squad
+    // container coasts (team_walk's End Move); s78n t26.4 (MOVEMENT §3.5.2 C.1 / C.4): a Walk unit keeps its speed and
+    // state - its walk finds no started path, goes to End Move at T = a and coasts along its last frame's displacement
+    // to 0x15 (replaces the t20 [port] braking stub record); without a speed or a deceleration it stops at once.
     void brake_to_stop(Unit& u, uint32_t frame);
     // s78n t24 (MOVEMENT §5.4.7): TerrainCollision. terrain_report = the failed-step report 0x509090 (the commit of the land
     // tick, serial, ascending index): speed 0 and a new one-participant record; terrain_service = its decision 0x687ff0
@@ -1479,11 +1494,6 @@ private:
     bool cut_order_path(Unit& u, float c, uint32_t frame);
     void cut_top_path(Unit& u, float c, uint32_t frame);
     void cut_finished(Unit& u, uint32_t frame);
-    // s78n t23 step 0: the End Move brake stub of brake_to_stop ([port], no retail record: kind 1, no owner, weight 1),
-    // which the walk brakes to its end even over a started order path
-    static bool brake_stub(const Unit& u) {
-        return u.pushed && u.push_kind == 1 && u.push_owner == 0xFFFFFFFFu && u.push_weight == 1;
-    }
     // s78n t20 (MOVEMENT §1.5.1): the Path Around call 0x5c80e0(record, u, o, flag, kind, flags) - a visibility-graph
     // detour from u (a point) to a rejoin point on its own current path, pushed as a record on top of its path stack
     // (kind 4; 7 = a crush-flee path). `o` = the obstacle of the record (null: none), forced into the obstacle set when

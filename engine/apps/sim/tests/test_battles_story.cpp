@@ -831,9 +831,12 @@ void test_story_battle(const Data& d) {
 //                    the battle's map (the loader records the name it was asked for)
 //   battle frame 5   Select the Empire troopers + MoveToPosition onto the capture post -> STORY_COMMAND_UNIT
 //   battle frame 40  Select one trooper + Escort another                              -> STORY_GUARD_UNIT
-//   battle frame 60  Garrison (52) of the last trooper (placed nearest the bunker; s78n t26.3: the first one, at the back
+//   battle frame 20  Garrison (52) of the last trooper (placed nearest the bunker; s78n t26.3: the first one, at the back
 //                    of the column, now turns in place before its move - the corner pass's corridor test - and reached
-//                    the bunker too late for the post's capture window) into the neutral bunker (also a capture
+//                    the bunker too late for the post's capture window; s78n t26.4: frame 20, not 60 - stopped beside
+//                    the post facing away, the trooper turns on the move (CloseEnoughAngleForMoveStart 180, MOVEMENT
+//                    §3.5.2 A / C.7) in a loop, and from frame 60 it took the bunker 10 frames before the Underworld came
+//                    within 300 of the post, too late for its 30-frame capture) into the neutral bunker (also a capture
 //                    point) -> approach, 30-frame
 //                    entering, STORY_GARRISON_UNIT; rule (b) makes the bunker the Empire's -> STORY_CAPTURE_STRUCTURE
 //   60 frames inside: Garrison (52) with garrison = 0x3FFFFF (leave)
@@ -1069,7 +1072,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
                     commands::EventData es(T::Escort);
                     es.set("target", static_cast<uint32_t>(troopers[2]));
                     host.submit(0, es);
-                } else if (f == 60) {
+                } else if (f == 20) {
                     out.can_query = b->can_garrison(troopers.back(), bunker) && !b->can_garrison(troopers.back(), post) &&
                                     b->can_garrison_fire(bunker) && b->contained_by(troopers.back()) == objects::kNoObjectId;
                     commands::EventData g(T::Garrison);
