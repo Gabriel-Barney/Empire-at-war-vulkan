@@ -167,7 +167,11 @@ void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame, 
             for (const ObjectId uid : inside)
                 if (const int32_t ui = unit_index(uid); ui >= 0) leave(units_[static_cast<size_t>(ui)], h, GarrisonEventKind::Ejected, pos, frame);
         } else {
-            eject_all(id, pos, facing, frame);
+            // s78n t26.1 (FIGHTER_FLYING §7.4, 0x37a060): a destroyed host puts every occupant at its position
+            (void)facing;
+            const std::vector<ObjectId> inside = h.inside;  // entry order
+            for (const ObjectId uid : inside)
+                if (const int32_t ui = unit_index(uid); ui >= 0) leave(units_[static_cast<size_t>(ui)], h, GarrisonEventKind::Ejected, pos, frame);
         }
         for (Unit& u : units_)
             if (u.host == id && u.state != State::Inside) {

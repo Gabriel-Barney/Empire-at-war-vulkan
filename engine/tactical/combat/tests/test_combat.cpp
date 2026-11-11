@@ -2754,6 +2754,29 @@ void test_take_damage() {
     }
 }
 
+// s78n t26.1 (MOVEMENT §3.2.1 item 6): Shielded_Only_When_Deployed (the Destroyer Droid) - the absorb runs only while
+// deployed (0x39a390: Walk 0x19, walking deployed included); not undeployed, deploying (0x18) or undeploying (0x1A).
+void test_shielded_only_when_deployed() {
+    const uint32_t s18 = kUnitDeployingIn | kUnitDeployTransition, s19 = kUnitDeploying, s1a = kUnitDeployTransition;
+    for (const uint32_t flags : {0u, s18, s19, s1a}) {
+        DamageWorld d;
+        UnitDesc& u = d.w.data.units[d.shielded];
+        u.shielded_only_when_deployed = true;
+        u.deploys = true;
+        u.has_locomotor = true;
+        CombatConfig cfg;
+        cfg.object_max_health_multiplier = 1.0f;
+        cfg.hardpoint_health_multiplier = 1.0f;
+        d.w.make(cfg);
+        d.w.add(1, d.shielded, 1, Vec3{});
+        if (flags) d.w.sys->set_flag(1, flags, true);
+        const DamageResult r = d.w.sys->take_damage(d.req(1, 100.0f), 10);
+        CHECK_F(r.absorbed, flags == s19 ? 20.0f : 0.0f);
+        CHECK_F(r.to_hull, flags == s19 ? 120.0f : 200.0f);
+        CHECK_F(d.w.sys->shield(1), flags == s19 ? 0.0f : 20.0f);
+    }
+}
+
 void test_shield_regen_system() {
     World w;
     UnitDesc s;
@@ -7985,6 +8008,7 @@ int main(int argc, char** argv) {
     test_hardpoint_fire_routing();
     test_precise_hit_hook();
     test_take_damage();
+    test_shielded_only_when_deployed();  // s78n t26.1
     test_shield_regen_system();
     test_hull_hardpoint_coupling();
     test_hardpoint_disabled();

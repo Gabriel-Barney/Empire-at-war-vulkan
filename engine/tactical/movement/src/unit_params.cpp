@@ -52,6 +52,11 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     d.alt_turn_rate = t.get_float(ti, "Alternate_Max_Rate_Of_Turn");
     // S8 t11: Deployment_Anim_Rate, unset -> the type ctor's 1.0 (MOVEMENT §3.2).
     if (t.value(ti, objects::find_type_field("Deployment_Anim_Rate")) != nullptr) d.deployment_anim_rate = t.get_float(ti, "Deployment_Anim_Rate");
+    // s78n t26.1 (MOVEMENT §3.2.1): walking while deployed (deploy_ability is the host's).
+    d.deploys = t.get_bool(ti, "Deploys");
+    d.auto_deploys = t.get_bool(ti, "Auto_Deploys");
+    d.max_walk_deployed = t.get_float(ti, "Max_Dist_Walk_While_Deployed");
+    d.deployed_walk_speed = t.get_float(ti, "Deployed_Walk_Speed");
     // s78k t01 (MOVEMENT §3.5.1): the arrival turn's stopped rate and the direction count (unset -> the type default 1).
     d.stopped_turn_rate = t.get_float(ti, "Stopped_Rate_Of_Turn");
     if (t.value(ti, objects::find_type_field("Movement_Directions_Count")) != nullptr)

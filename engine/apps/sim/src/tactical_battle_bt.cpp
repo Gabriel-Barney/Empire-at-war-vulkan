@@ -26,6 +26,7 @@ namespace alamo::sim {
 namespace tc = alamo::tactical::combat;
 namespace mv = alamo::tactical::movement;
 namespace cmd = alamo::commands;
+namespace ta = alamo::tactical::abilities;
 
 namespace {
 
@@ -582,6 +583,14 @@ void TacticalBattle::mv_type_extents(tactical::movement::UnitDesc& d, uint32_t t
     type_half_extents(type, hx, hy);
     d.type_hx = hx;
     d.type_hy = hy;
+    // s78n t26.1 (MOVEMENT §3.2.1 item 3, 0x3986b0(obj, 2)): the type has a DEPLOY unit ability (the droid has none, so it
+    // deploys at every stop)
+    d.deploy_ability = false;
+    for (const ta::AbilityObjectDesc& o : tables_->abilities.objects) {
+        if (o.object_type != static_cast<int32_t>(type)) continue;
+        for (const ta::UnitAbilityRecord& r : o.unit_abilities) d.deploy_ability = d.deploy_ability || r.type == ta::kDeploy;
+        break;
+    }
 }
 
 void TacticalBattle::unit_half_extents(const Unit& u, float& hx, float& hy) const {

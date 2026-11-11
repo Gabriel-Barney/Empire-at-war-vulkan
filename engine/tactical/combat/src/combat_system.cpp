@@ -865,8 +865,8 @@ bool CombatSystem::footprint_extents(const Unit& t, float& ex, float& ey) const 
     // s78n t11 (TACTICAL_COMBAT §5.4.6 items 3 / 4 and port spec item 6; 0x396a30 / 0x396b70 -> 0x371f30 / 0x372100): a
     // Deploys type with a locomotor in Walk state 0x18 Deploying (kUnitDeployingIn) or 0x19 Deployed (kUnitDeploying; not
     // 0x1A Undeploying) takes Custom_Hard_XExtent_Deployed / _YExtent_Deployed x Scale_Factor on each axis that sets one;
-    // the axes are independent (unlike 0x371d20's shared test). Not deployed_or_deploying(): that excludes 0x18. [port]
-    // the deploy-pending byte +0x2b3 is not modelled (Max_Dist_Walk_While_Deployed > 0 only; no FoC unit).
+    // the axes are independent (unlike 0x371d20's shared test). Not deployed_or_deploying(): that excludes 0x18. s78n t26.1:
+    // walking deployed (pack +0x2b3, the Destroyer Droid) keeps the host's state 0x19, so kUnitDeploying covers it.
     const bool dep = td.deploys && td.has_locomotor && (t.flags & (kUnitDeploying | kUnitDeployingIn)) != 0;
     const float dx = dep ? td.hard_x_extent_deployed : 0.0f, dy = dep ? td.hard_y_extent_deployed : 0.0f;
     if (!(dx > 0.0f) && !(dy > 0.0f) && !(td.hard_x_extent > 0.0f) && !(td.hard_y_extent > 0.0f) && td.model_x_extent < 0.0f) {
@@ -1704,7 +1704,9 @@ void CombatSystem::update_weapons(Unit& u, uint32_t frame, SimRng& rng, bool sus
 bool CombatSystem::deployed_or_deploying(const Unit& u) const {
     // 0x39a390 (S9_DEATH_CLONE_SHIELDS §1.2): Deploys, a locomotor, and deploy pending / Deployed (kUnitDeploying). S8 t11
     // (TACTICAL_COMBAT §3.1.1 "Step 3 correction"): the walk locomotor's vf +0x120 is state == 0x19 only, so Deploying
-    // (0x18) and Undeploying (0x1A) - kUnitDeployTransition - do not count (vanilla never sets the pending flag).
+    // (0x18) and Undeploying (0x1A) - kUnitDeployTransition - do not count. s78n t26.1 (MOVEMENT §3.2.1): the walking-deployed
+    // flag +0x2b3 keeps the movement state 0x19 (no deploy event), so a walking-deployed Destroyer Droid counts here. [port]
+    // the flag set while still deploying (0x18, an order shorter than M) is not reported: D from the clip end.
     const UnitDesc& ud = desc_of(u);
     return ud.deploys && ud.has_locomotor && (u.flags & kUnitDeploying) != 0 && (u.flags & kUnitDeployTransition) == 0;
 }
@@ -3650,7 +3652,8 @@ DamageResult CombatSystem::take_damage_inner(const DamageRequest& r, uint32_t fr
                                    : nullptr;
     const float sx = x * sf;
     float absorbed = 0.0f;
-    if (k != kKindBypassShield) {
+    // s78n t26.1 (MOVEMENT §3.2.1 item 6): Shielded_Only_When_Deployed gates the absorb on D (0x39a390)
+    if (k != kKindBypassShield && (!vd.shielded_only_when_deployed || deployed_or_deploying(v))) {
         const bool can = !r.source_is_projectile || (pd && pd->does_shield_damage);
         const bool lockout = (v.shield_depleted &&
                               shield_lockout_active(frame, v.shield_depleted_frame, cfg_.fps, cfg_.depleted_shield_disable_time)) ||

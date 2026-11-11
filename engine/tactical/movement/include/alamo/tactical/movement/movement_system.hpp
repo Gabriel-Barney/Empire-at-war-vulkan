@@ -129,6 +129,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
@@ -253,6 +254,9 @@ struct UnitView {
     // S8 t11 follow-up: the deploy clip the locomotor is timing (0x19 Deploy / 0x1A Undeploy; -1 none, also while 0x18 /
     // 0x1A wait for the turret). The host draws it (SimAnimation::deploy) when it is not the current animation.
     int32_t deploy_clip = -1;
+    // s78n t26.1 (MOVEMENT §3.2.1): walking while deployed (pack +0x2b3). deploy_state stays WalkDeployed meanwhile (every
+    // 0x39a390 reader sees it deployed); the walk runs with the Deployed_Walk_Speed cap and the host plays clip 115.
+    bool walk_deployed = false;
     // S8 t24: the TURRET's current elevation / yaw (degrees, relative to the body; UnitDesc::turret units only).
     float turret_elevation = 0.0f, turret_yaw = 0.0f;
     // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the TURRET's aim toward the host's aim point - 1 the current
@@ -412,6 +416,10 @@ public:
     // push 0x6859a0's first test, 0x391310(b, 1)), in the order of the pushes, each once. The host kills them by the
     // normal death after the tick and removes them (remove_unit).
     std::span<const ObjectId> push_kills() const { return push_kills_; }
+    // s78n t26.1 review: the units whose walk ended deployed this tick (Walk 0x16 -> 0x19 with the Deploy clip on its last
+    // frame, tick_deploy; ascending id). The host sets that clip (AnimBehaviors::deploy_at_end) whatever clip plays then
+    // (Deployed_Walk, a turn, an idle). Visual only: read in the same tick, not saved, not hashed.
+    std::span<const ObjectId> deploy_pose_events() const { return deploy_pose_; }
     // L1 systems: Teleport (0x3a8f90; Start_Cinematic_Space_Retreat line-up, Lua Teleport): the unit stops (its
     // order is dropped) and is placed at `pos` / `z` with yaw `yaw_deg`; land: the collision tree entry moves; space:
     // a stationary occupancy track from `frame`. No draws. False when the unit is unknown.
@@ -438,8 +446,13 @@ public:
     // finished" (signal 0x29). Reversing: Deploy(true) out of 0x1A starts the Deploy clip at count - cur - 1 (min 0), and
     // 0x1A out of a running Deploy clip starts the Undeploy clip at count - cur - 1 - step (min 0), cur = the reversed
     // clip's position. No clip data (DeployClipFn unset / false): count 0, so a clip ends on the frame it starts.
-    // While in 0x18 / 0x19 / 0x1A the walk does not move the unit [port: the Walk vf6 deploy states have no move branch;
-    // an order given meanwhile waits for the undeploy]. The locomotor swap (use_secondary_locomotor, both directions)
+    // While in 0x18 / 0x1A the walk does not move the unit (s78n t26.1, MOVEMENT §3.2.1 item 3: 0x1A entered from a walk
+    // freezes the position and yaw and keeps the speed; no move, turn or speed step). In 0x19 it walks only with
+    // Max_Dist_Walk_While_Deployed (M) > 0 and a path ("walking deployed", below); a 0x19 unit with M = 0 holds its path
+    // and stands. s78n t26.1 (§3.2.1 items 1 - 3): Deploy(true) does nothing while walking deployed; 0x1A clears the flag
+    // every frame; an idle Walk (no path) with the flag set returns to 0x19 at once with the Deploy clip on its last frame
+    // and no event, and an idle `Deploys` unit with M > 0 and no DEPLOY ability (UnitDesc::deploy_ability) deploys
+    // (Deploy(true)): the Destroyer Droid deploys at every stop. The locomotor swap (use_secondary_locomotor, both directions)
     // leaves the deploy states (JetPack answers "not deployed"; the Walk rebuilt on landing starts in 0x16) without a
     // signal. No draws.
     enum class DeployResult : uint8_t {
@@ -450,6 +463,19 @@ public:
         ReverseBlocked,  // 0x1A -> 0x19 at once (signal 0x29 raised)
     };
     DeployResult deploy(ObjectId id, bool on, uint32_t frame);
+    // s78n t26.1 (MOVEMENT §3.2.1 item 1, 0x3ac100): the walking-deployed cap test with path length d. A deployed or
+    // deploying unit (`Deploys` with a Walk) with d >= 0, M > 0 and d < M walks deployed (the flag only: no state change,
+    // no clip); every other case is Deploy(false) (0x18 / 0x19 / the flag -> 0x1A; a rolling unit is unchanged). The
+    // garrison hooks 0x636090 / 0x6360b0 call it with d = 0 on the host (Deploy(false) for M = 0: the HTT undeploys).
+    void deploy_cap(ObjectId id, float d, uint32_t frame);
+    // s78n t26.1 (§3.2.1 item 3, Take_Damage 0x3a9e30): a hit on an idle Walk (state 0x16, no path) `Deploys` unit with
+    // M > 0 and the flag clear deploys it (Deploy(true)); serial callers only (the host's damage listener).
+    void damage_deploy(ObjectId id, uint32_t frame);
+    // s78n t26.1 (§3.2.1 item 2, the group move 0x2a7b80 / waypoint queue 0x2a8240): a deployed (0x39a390: 0x19 or walking
+    // deployed) `Deploys` unit that is not an auto-deployer (`Auto_Deploys` + `Deploys`, 0x39a320) is skipped by a move
+    // order: not moved, not stopped, its orders kept (MovementSystem::move drops it; the host keeps its combat orders).
+    bool move_skips(ObjectId id) const;
+    bool walking_deployed(ObjectId id) const;  // the flag (pack +0x2b3)
     // The deploy state: None (also every non-Walk unit), WalkDeploying, WalkDeployed or WalkUndeploying.
     LocoState deploy_state(ObjectId id) const;
     // One deploy-state change (requests, clip ends and swaps), in the order they happen. `finished` = the change raises
@@ -725,6 +751,16 @@ public:
     // container's removal. Saved (version 14) and hashed while any exists. False: not a steering member (nothing done) /
     // no record, the container is gone, or the unit does not qualify (set_land_team's member rule).
     bool park_team_member(ObjectId member);
+    // s78n t26.1 review (MOVEMENT §3.2.1, FIGHTER_FLYING §7.4): a unit entering a garrison leaves this system, but retail
+    // keeps its locomotor pack - a droid deployed on entry walks out deployed. garrison_remove(id) keeps the Walk deploy
+    // state of a `Deploys` land unit that is not undeployed (the state, the walking-deployed flag, the deploy clip and its
+    // position at `frame`) and then parks (park_team_member) or removes the unit; restore_deploy(id), after the host's
+    // add_unit of the same id, puts that state back (the clip resumes at its kept position from `frame`). The record is
+    // dropped by restore_deploy and by remove_unit (the unit died inside). Saved (version 21) and hashed while any exists.
+    // garrison_remove: false when the unit is unknown. restore_deploy: false when there is no record or no such unit.
+    bool garrison_remove(ObjectId id, uint32_t frame);
+    bool restore_deploy(ObjectId id, uint32_t frame);
+    bool deploy_kept(ObjectId id) const;  // a garrison_remove record exists
     // s78n t06 review (hero clashes): the same record, but the member stays in this system as an ordinary unit where it
     // stands (anchor dropped, no own order: as attach_member leaves it), so move / stop / stop_and_leave act on the member
     // itself instead of its container; rejoin_land_team ends it. False: not a steering member (nothing done).
@@ -776,6 +812,10 @@ public:
     bool set_pair_gate(ObjectId id, ObjectId garrison_host, bool hidden);
     bool pair_gate(ObjectId id, ObjectId& garrison_host, bool& hidden) const;
     bool set_garrison_exit(ObjectId id, ObjectId host);
+    // s78n t26.1 (MOVEMENT §3.2.1 item 1): (unit, host) of every walk-out move that finished since the last call (a unit
+    // with a set_garrison_exit host arrived); the host runs the garrison host's +0xf8 hook (the cap test, d = 0). Drained
+    // every tick, not saved (empty between frames).
+    std::vector<std::pair<ObjectId, ObjectId>> take_exit_arrivals();
     // ---- s78n t20 (MOVEMENT §5.4.3 - §5.4.5, §1.5.1): what the land collision decisions read from the host ----
     // The unit's current target 0x397a40 (its formation's, else its own acquired one; -1 none) with its position, the
     // unit's attack range 0x3749d0, the target's radius 0x397780 when the unit has a weapon (else 0), "short-range"
@@ -1012,6 +1052,9 @@ private:
         int32_t dclip = -1;
         uint32_t dclip_start = 0;
         float dclip_pos0 = 0.0f;
+        // s78n t26.1 (MOVEMENT §3.2.1): walking while deployed (pack +0x2b3; save version 21). Set only with
+        // UnitDesc::max_walk_deployed > 0; `deploy` stays WalkDeployed meanwhile and `m.state` is a Walk move state.
+        bool walk_deployed = false;
         // S8 t24: TURRET state (TD +0x48..+0x5c current / target angles x, elevation, yaw; +0x6c idle time (s); +0x70
         // hold; +0xf6 aiming). Starts at Turret_Rest_Angle [port: the spawn pose is not traced] (save version 7).
         float tcur[3] = {0.0f, 0.0f, 0.0f};
@@ -1143,6 +1186,19 @@ private:
     void deploy_start_clip(Unit& u, int32_t anim, float pos0, uint32_t frame);
     void deploy_begin_clip(Unit& u, int32_t anim, uint32_t frame);  // start `anim`, reversing the current clip
     void deploy_set(Unit& u, LocoState to, bool finished);
+    // s78n t26.1 (deploy_system.cpp): D(x) = 0x39a390, the auto-deployer test 0x39a320(x, 1), the cap test 0x3ac100, the
+    // path start 0x61e570, the idle 0x16 rules and the 3-D length of a land path (heights from the height hook).
+    static bool deployed_d(const Unit& u) { return u.d.deploys && (u.walk_deployed || u.deploy == LocoState::WalkDeployed); }
+    static bool auto_deployer(const Unit& u) { return u.d.auto_deploys && u.d.deploys; }
+    void deploy_cap_unit(Unit& u, float d, uint32_t frame);
+    void deploy_path_start(Unit& u, float remaining, uint32_t frame);
+    float path_length_3d(std::span<const V2> path) const;
+    bool deploy_walks(const Unit& u) const;  // a 0x19 unit with M > 0 walks a path it holds (the 0x19 branch)
+    void walk_out_done(Unit& u);  // s78n t26.1: the move finished - the garrison-host gate ends (reported when set)
+    static bool deploy_immobile(const Unit& x);  // deployed / deploying with M <= 0 (push, StoppedVsStopped)
+    static bool deploy_branch(Unit& u);          // Walk 0x19 with a path: start walking deployed (true = the frame ends)
+    bool deploy_gate_holds(const Unit& u) const;  // the plan's gate (every member a deployed / deploying manual deployer)
+    void plan_deploy_cap(Unit& u, uint32_t frame);  // the plan's cap test for an auto-deployer
     void tick_deploy(uint32_t frame);
     void hash_deploy(StateHasher& h) const;
     void hash_turrets(StateHasher& h) const;  // S8 t24
@@ -1514,6 +1570,7 @@ private:
     ModelBoundFn model_bound_;       // s78n t10: the space composition's world boxes (host; not saved)
     std::vector<CrushEvent> crush_;  // OI tactical: this tick
     std::vector<ObjectId> push_kills_;  // s78n t20 batch 1: this tick (saved, hashed while any)
+    std::vector<ObjectId> deploy_pose_;  // s78n t26.1 review: this tick (not saved, not hashed)
     OwnerThreatFn threat_;           // REMAINING_GAPS §4.2
     AnimLengthFn anim_len_;          // §4.3-4.7
     SpaceOccupancy air_;
@@ -1531,6 +1588,15 @@ private:
     // s78n review: steering members parked while outside the system (garrison), ascending member id (saved, version 14;
     // hashed while any exists) - LandTeamSlot reused: (container, team index, member, slot).
     std::vector<LandTeamSlot> parked_;
+    // s78n t26.1 review: the Walk deploy state of units inside a garrison (garrison_remove), ascending id
+    struct DeployKeep {
+        ObjectId id = 0;
+        LocoState deploy = LocoState::None;
+        bool walk_deployed = false;
+        int32_t dclip = -1;
+        float dclip_pos = 0.0f;
+    };
+    std::vector<DeployKeep> deploy_kept_;
     // s78n review: the steering members by (container, team index, member) - derived from units_ (team_ix_rebuild).
     std::vector<LandTeamSlot> team_ix_;
     // s78n t18: every TEAM entry (steering, suspended, absent) by (container, team index, member) - derived from units_
@@ -1549,6 +1615,7 @@ private:
     TurretRestFn turret_rest_;
     TurretAimFn turret_aim_;
     std::vector<DeployEvent> devents_;  // since the last take_deploy_events()
+    std::vector<std::pair<ObjectId, ObjectId>> exit_arrivals_;  // s78n t26.1: since the last take_exit_arrivals()
     std::vector<TurnClipEvent> tevents_;  // s78l t02: since the last take_turn_clip_events()
 };
 

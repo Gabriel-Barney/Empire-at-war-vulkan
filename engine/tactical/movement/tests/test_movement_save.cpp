@@ -1629,7 +1629,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 21);  // 21: before the s78n t23 MovingVsMoving stand-in fields were dropped (22)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 23);
+    put_u32(bad, 0, 22);  // 22: before the s78n t26.1 walking-deployed fields (23)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 24);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

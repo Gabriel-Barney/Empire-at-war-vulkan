@@ -266,6 +266,9 @@ public:
     // ---- deploy / undeploy (0x61e930: 25 / 26, synced random variant, one-shot, blend 0.0333, speed
     // Deployment_Anim_Rate). Returns true if a clip started (current_frame_count gives its length). ----
     bool deploy(AnimWorld& w, ObjectId id, bool undeploy, float deployment_anim_rate, SimRng& rng, uint64_t frame);
+    // s78n t26.1 (MOVEMENT §3.2.1 item 3, Walk 0x16 with the walking-deployed flag): the Deploy clip (25) set on its last
+    // frame, blend 0.2, speed 1.0, one-shot ([port] variant 0: no draw). True if it started.
+    bool deploy_at_end(AnimWorld& w, ObjectId id, uint64_t frame);
 
     // ---- death / corpse ----
     // Die + DeathBehavior start. NoRow: `id` has no AnimWorld row (a corpse without clip is still recorded,

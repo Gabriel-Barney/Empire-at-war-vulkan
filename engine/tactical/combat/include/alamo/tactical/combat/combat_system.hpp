@@ -497,6 +497,9 @@ struct UnitDesc {
     bool hold_fire_for_special_ability = false;
     bool limited_turrets_turn = false;
     float max_dist_walk_while_deployed = 0.0f;    // Max_Dist_Walk_While_Deployed (+0x23b0): > 0 keeps an out-of-range target
+    // s78n t26.1 (MOVEMENT §3.2.1 item 6): Shielded_Only_When_Deployed - the shield absorb 0x549ac0 runs only while the unit
+    // is deployed (0x39a390: state 0x19, walking deployed included); not while deploying, undeploying or rolling.
+    bool shielded_only_when_deployed = false;
     // ---- s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the TURRET of a LOBBING_SUPERWEAPON unit (combat-side slew) ----
     // Turret_Rotate_Speed (+0x5a8, degrees per service; <= 0: [port] the aim is reached at once), the undeployed
     // Turret_Rotate_Extent_Degrees / Turret_Elevate_Extent_Degrees (+0x5a0 / +0x5a4; a unit without deploy states always

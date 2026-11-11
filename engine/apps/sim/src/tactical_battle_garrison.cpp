@@ -304,6 +304,7 @@ void TacticalBattle::s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 a
         md.yaw_deg = 0.0f;
         mv_type_extents(md, u->type);  // s78n t20
         movement_->add_unit(md);
+        (void)movement_->restore_deploy(unit, frame_);  // s78n t26.1 review: deployed on entry -> deployed on exit
         s4_rejoin_squad(mode, *u, at);
         // s78n t18 (MOVEMENT §5.3 "Garrison host id"): the host id lasts until the unit's next order - standing beside its
         // former host it forms no collision object with it (a squad: its container, s4_apply)
@@ -402,6 +403,36 @@ void TacticalBattle::s4_hold(TacticalMode& mode, objects::ObjectId holder) {
     (void)mv_adopt(mode, h->h, *bt_rng_, true);
 }
 
+// s78n t26.1 (MOVEMENT §5.3 "Hover in full"): GARRISON_HOVER vf +0xe0 0x635ee0 (slot reserve) / +0xe8 0x635fc0 (eject
+// request) lower the host and call 0x391260, which deploys a `Deploys` type (Walk Deploy(true): 0x18; the host times its
+// Deploy clip once it is down, then 0x19). Its undeploy comes from the +0xf0 / +0xf8 hooks below (or DEPLOY, or a move
+// order when it is an auto-deployer).
+void TacticalBattle::s4_hover_lower(objects::ObjectId holder) {
+    if (!movement_ || !movement_->hover_lower(holder)) return;
+    const Unit* h = unit_by_id(holder);
+    if (h && h->type < catalog_->types().size() && catalog_->types().get_bool(h->type, "Deploys"))
+        (void)movement_->deploy(holder, true, frame_);
+}
+
+// s78n t26.1 (MOVEMENT §3.2.1 item 1, s78n t26 RE 2): GarrisonVehicleBehaviorClass / GarrisonHoverTransportBehaviorClass
+// vftable slots +0xf0 (0x636090: after an entry, when no reservation is left) and +0xf8 (0x6360b0: an enter cancel in state
+// 2, the end of a walk-out move) call the cap test 0x3ac100(host, 0): Deploy(false) for M = 0 (the HTT rises again at its
+// next move; a deployed Juggernaut / AT-AT host undeploys). A structure has no locomotor: nothing.
+void TacticalBattle::s4_host_undeploy(objects::ObjectId holder) {
+    const tg::HolderDesc* hd = garrison_.holder_desc(holder);
+    if (!movement_ || !hd || (hd->kind != tg::HolderKind::Vehicle && hd->kind != tg::HolderKind::Hover) || !movement_->has_unit(holder))
+        return;
+    movement_->deploy_cap(holder, 0.0f, frame_);
+}
+
+void TacticalBattle::s4_exit_arrivals() {
+    if (!movement_) return;
+    for (const auto& [unit, holder] : movement_->take_exit_arrivals()) {
+        (void)unit;
+        s4_host_undeploy(holder);
+    }
+}
+
 void TacticalBattle::s4_apply(TacticalMode& mode) {
     objects::ObjectStore& store = mode.primary();
     std::vector<tg::GarrisonEvent> events(garrison_.events().begin(), garrison_.events().end());
@@ -474,7 +505,8 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                 }
                 if (objects::ObjectId k = objects::kNoObjectId; squad_first(e.unit, e.kind, k)) s4_hold(mode, e.holder);
                 // s78n review: a land squad member keeps its team place (container, slot, team index) for the leave.
-                if (!movement_->park_team_member(e.unit)) movement_->remove_unit(e.unit);
+                // s78n t26.1 review: the Walk deploy state is kept for the leave (retail keeps the locomotor pack)
+                (void)movement_->garrison_remove(e.unit, frame_);
                 s4_squad_enter(mode, *u, e.position);  // s78n t14: the last member in takes the container in
                 store.set_position(u->h, e.position);
                 mode.trees().update(static_cast<tactical::EntityHandle>(e.unit), mode.bounds_of(u->h));
@@ -489,6 +521,7 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                 if (abilities_->has_object(e.holder))
                     abilities_->set_garrison_count(e.holder, static_cast<int32_t>(garrison_.occupants(e.holder).size()));
                 story_garrisoned_.push_back({e.unit, e.holder});
+                if (garrison_.reserved(e.holder) == 0) s4_host_undeploy(e.holder);  // s78n t26.1: host +0xf0 (0x636090)
                 break;
             }
             case tg::GarrisonEventKind::Exited:
@@ -514,6 +547,7 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                 // the cancel 0x443560): host vf +0xf8 only when the state was 2 (or 4: not modelled)
                 if (e.was != 2) break;
                 if (objects::ObjectId k = objects::kNoObjectId; squad_first(e.unit, e.kind, k)) s4_hold(mode, e.holder);
+                s4_host_undeploy(e.holder);  // s78n t26.1: the same +0xf8 runs the cap test (0x6360b0)
                 break;
         }
     }
@@ -693,11 +727,9 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
     raise_order_replaced(ids);  // S7 t31: garrison enter (A1_READINGS §33.3 [M: raised at the order])
     const uint32_t n = s4_approach(mode, ids, holder, rng, false);
     // s78n t18 / t20 batch 2 (MOVEMENT §5.3 "Hover in full", GARRISON_HOVER vf +0xe0 0x635ee0): a hover transport whose
-    // slot a unit reserves is stopped (0x3a9880: s4_approach's reservation hold) and lowers. [port] retail then deploys a
-    // Deploys type (0x391260: Walk 0x18 Deploying) and its next move undeploys; the port's move start does not undeploy
-    // (a deployed Walk unit never walks), so the host is not deployed.
+    // slot a unit reserves is stopped (0x3a9880: s4_approach's reservation hold), lowers and (s78n t26.1) deploys.
     if (n > 0)
-        if (const tg::HolderDesc* hd = garrison_.holder_desc(holder); hd && hd->kind == tg::HolderKind::Hover) (void)movement_->hover_lower(holder);
+        if (const tg::HolderDesc* hd = garrison_.holder_desc(holder); hd && hd->kind == tg::HolderKind::Hover) s4_hover_lower(holder);
     return n > 0 ? R::None : R::InvalidTarget;  // hostile host
 }
 
@@ -800,10 +832,10 @@ cmd::RejectReason TacticalBattle::order_leave_garrison(TacticalMode& mode, uint8
             ++n;
             raise_order_replaced(id);  // S7 t31: garrison exit (A1_READINGS §33.3)
             // s78n t18 / t20 batch 2 (GARRISON_HOVER vf +0xe8 0x635fc0, MOVEMENT §5.3 "Hover in full"): a hover
-            // transport asked to eject is stopped (0x3a9880) and lowers. [port] no Deploying (see order_garrison).
+            // transport asked to eject is stopped (0x3a9880), lowers and (s78n t26.1) deploys.
             if (const tg::HolderDesc* hd = garrison_.holder_desc(holder); movement_ && hd && hd->kind == tg::HolderKind::Hover) {
                 s4_hold(mode, holder);
-                (void)movement_->hover_lower(holder);
+                s4_hover_lower(holder);
             }
         }
     }
@@ -817,10 +849,11 @@ uint32_t TacticalBattle::eject_garrison(TacticalMode& mode, objects::ObjectId ho
     const objects::ObjectHandle hh = store.find(holder);
     if (!store.exists(hh)) return 0;
     const uint32_t n = garrison_.eject_all(holder, store.position(hh), store.facing(hh), frame_);
-    // s78n t18 / t20 batch 2 (GARRISON_HOVER vf +0xe8 0x635fc0): a hover transport asked to eject is stopped and lowers
+    // s78n t18 / t20 batch 2 (GARRISON_HOVER vf +0xe8 0x635fc0): a hover transport asked to eject is stopped, lowers and
+    // (s78n t26.1) deploys
     if (const tactical::garrison::HolderDesc* hd = garrison_.holder_desc(holder); n > 0 && movement_ && hd && hd->kind == tactical::garrison::HolderKind::Hover) {
         s4_hold(mode, holder);
-        (void)movement_->hover_lower(holder);
+        s4_hover_lower(holder);
     }
     s4_apply(mode);
     return n;

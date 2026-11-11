@@ -258,6 +258,9 @@ public:
         return a_->lucky_shot(source, victim, hardpoint, impact, has_impact);
     }
     bool damage_listener(tc::ObjectId victim, tc::ObjectId source, int32_t projectile_desc, uint32_t frame, SimRng* rng) override {
+        // s78n t26.1 (MOVEMENT §3.2.1 item 3, Take_Damage 0x3a9e30): a hit deploys an idle Walk unit with
+        // Max_Dist_Walk_While_Deployed > 0 (the Destroyer Droid)
+        if (b_->movement_ && b_->movement_->has_unit(victim)) b_->movement_->damage_deploy(victim, frame);
         return a_->damage_listener(victim, source, projectile_desc, frame, rng);
     }
     // HARDPOINT_DISABLED.md §9: Set_System_Online offline (destroyed or disabled) / online (repaired to max).
@@ -1641,6 +1644,15 @@ int32_t TacticalBattle::first_hardpoint_of_type(objects::ObjectId target, int32_
 void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng,
                                float facing_deg, bool attack_move, uint8_t flags, bool switch_locomotor,
                                objects::ObjectId goal_object, bool no_destination_check) {
+    // s78n t26.1 (MOVEMENT §3.2.1 item 2, the group move 0x2a7b80): a deployed manual deployer is skipped entirely - its
+    // orders (garrison enter, attack, team target) are kept and it is not moved
+    std::vector<objects::ObjectId> admitted;
+    if (!space_ && movement_) {
+        for (const objects::ObjectId id : ids)
+            if (!movement_->move_skips(id)) admitted.push_back(id);
+        if (admitted.size() != ids.size()) ids = admitted;
+        if (ids.empty()) return;
+    }
     s4_cancel(ids);  // S4: a move replaces a pending garrison enter
     team_attack_drop(ids);  // q6: an ordered move clears the team target (FIGHTER_FLYING §4.10 B writer 3)
     const tactical::Aabb& bb = mode.bounds();
@@ -4503,6 +4515,11 @@ void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, u
                    ? u.container
                    : 0xFFFFFFFFu;
     };
+    // s78n t26.1 review (MOVEMENT §3.2.1 item 3): a walk that ended deployed this tick (0x16 -> 0x19) sets the Deploy clip on
+    // its last frame (blend 0.2, rate 1.0; [port] variant 0, no draw), whatever clip plays (Deployed_Walk, a turn, an idle)
+    for (const objects::ObjectId id : movement_->deploy_pose_events())
+        if (const Unit* du = unit_by_id(id); du && du->alive && !du->retreated && w->contains(id) && anim_->deploy_at_end(*gm, id, gframe))
+            ++stats_.anim_plays;
     std::vector<int8_t> head_moving(containers_.size(), -1);  // per team container: its first live member's gate
     idle_gate_.assign(units_.size(), 0);
     for (size_t i = 0; i < units_.size(); ++i) {
@@ -4540,16 +4557,22 @@ void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, u
         in.target = target;
         if (u.movable) {
             const mv::UnitView v = movement_->view(u.id);
-            if (v.deploy_state != mv::LocoState::None) {
+            // s78n t26.1 review: only 0x19 with the walking-deployed flag leaves the deploy states to the locomotor clips
+            // (clip 115); 0x18 with the flag set (an order shorter than M while deploying) keeps its Deploy clip.
+            if (v.deploy_state != mv::LocoState::None && !(v.deploy_state == mv::LocoState::WalkDeployed && v.walk_deployed)) {
                 // S8 t11 follow-up (MOVEMENT §3.2, 0x61e930): the Walk deploy states own the animation - the Deploy /
                 // Undeploy clip (synced random variant at Deployment_Anim_Rate) starts when the locomotor starts timing
                 // it; Deployed keeps the finished clip. [port] a reversed clip is drawn from its first frame.
                 // s78l t03: the IDLE deploy gate (deploying / undeploying / deployed) returns with nothing changed.
+                // s78n t26.1: the deployed pose after a deployed walk is set above (deploy_pose_events).
                 if (v.deploy_state != mv::LocoState::WalkDeployed && v.deploy_clip >= 0 && w->current_type(u.id) != v.deploy_clip &&
                     anim_->deploy(*gm, u.id, v.deploy_clip == static_cast<int32_t>(anim::kAnimUndeploy), rng, gframe))
                     ++stats_.anim_plays;
                 continue;
             }
+            // s78n t26.1 (MOVEMENT §3.2.1 item 3, state 0x13 0x61f840): walking deployed plays clip 115 (Deployed_Walk) at
+            // Deployed_Walk_Anim_Speed x the speed over the UNDEPLOYED effective max (the move step's f, §3.5.2 C.1)
+            in.deployed = v.walk_deployed;
             if (v.locomotor != mv::LocomotorKind::Default) {  // REMAINING_GAPS §4.3-4.7: the locomotor picks the clip
                 if (v.anim != mv::kAnimNone && w->current_type(u.id) != v.anim) {
                     anim::PlayRequest req;
@@ -5068,6 +5091,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     movement_->commit(store);
     kill_pushed_clones(mode);  // s78n t20 batch 1: the death clones a collision push killed
     play_turn_clip_events(rng, global_frame);  // s78l t02: the arrival turn's clip plays (synced variant draws), ascending id
+    s4_exit_arrivals();  // s78n t26.1: the garrison hosts' +0xf8 hook for the walk-out moves that finished
     oi_deploy_sync();  // S8 t11: deploy clip ends (Is_Active, deploy flags, signal 0x29) before the combat tick
     profile::lap("tac.movement");
     fighter_enter_idle();  // S7 t22 / t25: enter_idle drops the squadrons' team targets (§4.7 step 4, §4.10 D)

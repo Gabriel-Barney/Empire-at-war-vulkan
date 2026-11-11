@@ -1727,6 +1727,12 @@ private:
     void s4_set_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner);
     void s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 at, objects::ObjectId holder = objects::kNoObjectId);
     void s4_hold(TacticalMode& mode, objects::ObjectId holder);  // cu8l t02: a garrison host's stop-and-hold
+    // s78n t26.1 (MOVEMENT §3.2.1 item 1, §5.3 "Hover in full"): a hover transport lowers and a Deploys type deploys
+    // (0x635ee0 / 0x635fc0 -> 0x391260); a garrison vehicle / hover host's +0xf0 / +0xf8 hooks run the cap test with d = 0
+    // (Deploy(false) for M = 0); the walk-out moves that finished this tick run +0xf8.
+    void s4_hover_lower(objects::ObjectId holder);
+    void s4_host_undeploy(objects::ObjectId holder);
+    void s4_exit_arrivals();
     void s4_apply(TacticalMode& mode);  // garrison / capture events -> movement, combat, store, owners, story feeds
     // s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 1): the approach order of `ids` (live units of one player, squads
     // expanded) to `holder` - per key (squad container or unit) the destination and bone, one checked group move per bone,

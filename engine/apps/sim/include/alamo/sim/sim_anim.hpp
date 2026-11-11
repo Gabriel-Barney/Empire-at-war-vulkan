@@ -161,6 +161,8 @@ public:
     bool play_default_idle(const GameMode& mode, ObjectId id, uint64_t frame, const anim::PresenceIdleFn* presence = nullptr);
     // Deploy / undeploy clip (Deployment_Anim_Rate). True if a clip started.
     bool deploy(const GameMode& mode, ObjectId id, bool undeploy, SimRng& rng, uint64_t frame);
+    // s78n t26.1: the Deploy clip on its last frame (a walk that ends deployed, AnimBehaviors::deploy_at_end).
+    bool deploy_at_end(const GameMode& mode, ObjectId id, uint64_t frame);
     // Berserker ability state (AnimWorld::set_berserker).
     void set_berserker(const GameMode& mode, ObjectId id, bool active);
     // Per-object frozen flag (object +0x3a7 [L]): the row's advance is skipped.

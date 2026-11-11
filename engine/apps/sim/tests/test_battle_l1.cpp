@@ -8,6 +8,7 @@
 // With ALAMO_FOC_DATA: the FoC special-weapon types join space / land battle tables; retreat increments from FactionFiles.
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -25,8 +26,12 @@
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/core/sim_rng.hpp"
+#include "alamo/sim/battle_catalog.hpp"
 #include "alamo/sim/campaign_battles.hpp"
 #include "alamo/sim/sim_host.hpp"
+#include "alamo/tactical/movement/movement_system.hpp"
+#include "alamo/tactical/movement/unit_params.hpp"
 #ifdef ALAMO_SIM_HAVE_ANIM
 #include "alamo/sim/sim_anim.hpp"
 #endif
@@ -2081,6 +2086,87 @@ void test_sw_fire() {
     CHECK(r.target_fired && r.target_point);
 }
 
+// s78n t26.1 (MOVEMENT §3.2.1): the shipped Destroyer_Droid (Underworld; no measured land seed fields one) on the FoC
+// type data - movement parameters from the type, the land speed multiplier 1.56: idle it deploys; an order 100 away
+// (< Max_Dist_Walk_While_Deployed 150) walks deployed at Deployed_Walk_Speed 2.5 (0x19 throughout, no deploy event) and
+// ends deployed with no clip; an order 200 away undeploys first, rolls at 3.6 x 1.56 and deploys at the stop. The combat
+// table carries Shielded_Only_When_Deployed.
+void test_foc_destroyer_droid(const objects::GameObjectTypes& types, const BattleCatalog& catalog) {
+    namespace mv = tactical::movement;
+    const objects::TypeIndex ti = types.resolve_name("Destroyer_Droid");
+    CHECK(ti != objects::kNone && ti < types.size());
+    if (ti == objects::kNone || ti >= types.size()) return;
+    mv::UnitDesc d = mv::unit_desc_from_type(types, static_cast<uint32_t>(ti));
+    std::printf("foc Destroyer_Droid: speed %.2f accel %.2f deploys %d auto %d M %.0f walk speed %.2f anim rate %.1f\n",
+                static_cast<double>(d.max_speed), static_cast<double>(d.accel), d.deploys ? 1 : 0, d.auto_deploys ? 1 : 0,
+                static_cast<double>(d.max_walk_deployed), static_cast<double>(d.deployed_walk_speed),
+                static_cast<double>(d.deployment_anim_rate));
+    CHECK(d.max_speed == 3.6f && d.accel == 0.5f && d.deploys && d.auto_deploys && d.max_walk_deployed == 150.0f &&
+          d.deployed_walk_speed == 2.5f && d.deployment_anim_rate == 3.0f && !d.deploy_ability);
+    {
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(ti)}, idx, false);
+        CHECK(idx.size() == 1 && bt.combat.units[idx[0]].shielded_only_when_deployed && bt.combat.units[idx[0]].deploys);
+    }
+    mv::MovementSystem sys{mv::MovementConfig{}};
+    mv::PassabilityGrid g;
+    g.init(100, 100);
+    sys.set_grid(std::move(g));
+    sys.set_height_fn([](float, float) { return 0.0f; });
+    sys.set_deploy_clip_fn([](objects::ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    const mv::V2 p0 = mv::cell_center(20, 50);
+    d.id = 1;
+    d.pos = p0;
+    d.radius = 6.0f;
+    CHECK(sys.add_unit(d));
+    SimRng rng(26);
+    uint32_t f = 1, events = 0;
+    for (; f < 60; ++f) {
+        sys.tick(f, rng);
+        events += static_cast<uint32_t>(sys.take_deploy_events().size());
+    }
+    CHECK(events == 2 && sys.deploy_state(1) == mv::LocoState::WalkDeployed);
+    mv::MoveOrder o;
+    o.units = {1};
+    o.destination = p0 + mv::V2{100.0f, 0.0f};
+    sys.move(o, rng, f);
+    float vmax = 0.0f;
+    bool deployed = true, walked = false;
+    for (const uint32_t end = f + 200; f < end && !sys.view(1).arrived; ++f) {
+        sys.tick(f, rng);
+        events += static_cast<uint32_t>(sys.take_deploy_events().size());
+        vmax = std::max(vmax, sys.view(1).speed);
+        deployed = deployed && sys.deploy_state(1) == mv::LocoState::WalkDeployed;
+        walked = walked || sys.walking_deployed(1);
+    }
+    CHECK(sys.view(1).arrived && deployed && walked && vmax == 2.5f && events == 2);
+    const uint32_t walk_end = f;
+    for (const uint32_t end = f + 5; f < end; ++f) sys.tick(f, rng);
+    CHECK(!sys.walking_deployed(1) && sys.deploy_state(1) == mv::LocoState::WalkDeployed && sys.take_deploy_events().empty());
+    // 200 away: Undeploy (0x1A), the roll, the deploy at the stop
+    const mv::V2 p1 = sys.view(1).pos;
+    o.destination = p1 + mv::V2{200.0f, 0.0f};
+    sys.move(o, rng, f);
+    float roll = 0.0f;
+    bool undeploying = false, redeployed = false;
+    for (const uint32_t end = f + 400; f < end && !redeployed; ++f) {
+        sys.tick(f, rng);
+        for (const mv::MovementSystem::DeployEvent& e : sys.take_deploy_events()) {
+            undeploying = undeploying || e.to == mv::LocoState::WalkUndeploying;
+            redeployed = redeployed || e.to == mv::LocoState::WalkDeploying;
+        }
+        roll = std::max(roll, sys.view(1).speed);
+    }
+    std::printf("foc Destroyer_Droid: 100 walked deployed at %.2f (arrived frame %u); 200: undeploy %d, rolled at %.3f, deploy at "
+                "the stop %d (frame %u)\n",
+                static_cast<double>(vmax), walk_end, undeploying ? 1 : 0, static_cast<double>(roll), redeployed ? 1 : 0, f);
+    CHECK(undeploying && redeployed && std::fabs(roll - 3.6f * 1.56f) < 1e-4f && sys.view(1).arrived);
+}
+
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
@@ -2127,6 +2213,8 @@ void test_foc() {
     CHECK(ion != objects::kNone && types.get_float(ion, "Projectile_Fire_Recharge_Seconds") == 30.0f &&
           types.get_int(ion, "Projectile_Fire_Pulse_Count") == 3);
     CHECK(ds != objects::kNone && types.get_float(ds, "TSW_Attack_Distance_From_Target") == 5800.0f);
+    const BattleCatalog catalog(types, files.get(), &db.constants(), &diag);
+    test_foc_destroyer_droid(types, catalog);  // s78n t26.1
 }
 
 }  // namespace

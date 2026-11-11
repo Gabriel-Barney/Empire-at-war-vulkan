@@ -30,7 +30,7 @@ bool MovementSystem::turret_at_rest(const Unit& u) const {
 
 const float* MovementSystem::turret_rest_angle(const Unit& u) const {
     // Turret_Deployed_Rest_Angle when the type Deploys (only a Deploys type reaches these states) and the unit is deployed (0x39a390: state
-    // 0x19; [port] the pending flag is not modelled) or Deploying (0x39a400: 0x18); else Turret_Rest_Angle.
+    // 0x19 or the walking-deployed flag, which keeps 0x19 here: s78n t26.1) or Deploying (0x39a400: 0x18); else Turret_Rest_Angle.
     const bool dep = u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed;
     return dep ? u.d.turret_deployed_rest : u.d.turret_rest;
 }
@@ -150,8 +150,9 @@ MovementSystem::DeployResult MovementSystem::deploy(ObjectId id, bool on, uint32
     Unit& u = units_[static_cast<size_t>(i)];
     if (u.d.locomotor != LocomotorKind::Default) return DeployResult::NoWalk;  // JetPack / Bike / ...: 0x1fa90
     if (on) {
-        // Deploy(true) 0x61d300: nothing in 0x18 / 0x19 ([port] pending flag +0x2b3 and obj +0x3a1 & 0x40 not modelled).
-        if (u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed) return DeployResult::Ignored;
+        // Deploy(true) 0x61d300: nothing in 0x18 / 0x19 or with the walking-deployed flag +0x2b3 set (s78n t26.1; [port]
+        // obj +0x3a1 & 0x40 not modelled).
+        if (u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed || u.walk_deployed) return DeployResult::Ignored;
         if (u.deploy == LocoState::WalkUndeploying && !turret_at_rest(u)) {
             // Out of 0x1A with the turret off rest: straight to 0x19, the turret reset, signal 0x29 at once. [inferred]
             // the reset is the forced recentre 0x6319d0 (toward the deployed rest now).
@@ -163,16 +164,141 @@ MovementSystem::DeployResult MovementSystem::deploy(ObjectId id, bool on, uint32
         const ObjectId ids[] = {id};
         stop(ids);  // vf +0x140(0)
         deploy_set(u, LocoState::WalkDeploying, false);
+        // s78n t26.1 (MOVEMENT §5.3 "Hover in full"): a rising / lowering hover unit runs no Walk state; its Deploy clip is
+        // started by the 0x18 pass once it is down.
+        if (u.hover >= 2) {
+            u.dclip = kAnimNone;
+            return DeployResult::Deploying;
+        }
         // S8 t24 (MOVEMENT §3.2 "Where it gates"): the Deploy clip starts at once, with no turret wait (from 0 / 0x16; out
         // of 0x1A the turret is at rest here); reversing out of the Undeploy clip starts at count - cur - 1 (min 0).
         deploy_begin_clip(u, kAnimDeploy, frame);
         return DeployResult::Deploying;
     }
-    // Deploy(false): 0x18 / 0x19 -> 0x1A ([port] the slot +0x35b blocker 0x42e3b0 / 0x42e3d0 is not modelled). The
-    // Undeploy clip starts in the per-frame pass (turret wait).
-    if (u.deploy != LocoState::WalkDeploying && u.deploy != LocoState::WalkDeployed) return DeployResult::Ignored;
+    // Deploy(false): 0x18 / 0x19 / the walking-deployed flag -> 0x1A ([port] the slot +0x35b blocker 0x42e3b0 / 0x42e3d0 is
+    // not modelled). The Undeploy clip starts in the per-frame pass (turret wait). s78n t26.1 (MOVEMENT §3.2.1 item 3): only
+    // the state is written - no stop, no speed or path change; a unit walking deployed freezes where it is (the walk does
+    // not run in 0x1A) with its speed kept.
+    if (u.deploy != LocoState::WalkDeploying && u.deploy != LocoState::WalkDeployed && !u.walk_deployed) return DeployResult::Ignored;
     deploy_set(u, LocoState::WalkUndeploying, false);
     return DeployResult::Undeploying;
+}
+
+// ---- s78n t26.1 (MOVEMENT §3.2.1): walking while deployed ----
+
+float MovementSystem::path_length_3d(std::span<const V2> path) const {
+    // 0x54f610: the summed 3-D length of every segment ([port] the land path is 2-D; the heights come from the height hook
+    // at its points, 0 without one).
+    float l = 0.0f;
+    for (size_t k = 1; k < path.size(); ++k) {
+        const V2 a = path[k - 1], b = path[k];
+        const float dz = height_ ? height_(b.x, b.y) - height_(a.x, a.y) : 0.0f;
+        const float dx = b.x - a.x, dy = b.y - a.y;
+        l += std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    return l;
+}
+
+void MovementSystem::deploy_cap_unit(Unit& u, float d, uint32_t frame) {
+    // 0x3ac100(x, d): x `Deploys` with a Walk locomotor. Deployed (D) or deploying, d >= 0, M > 0 and d < M -> the flag
+    // only (no state change, no clip); every other case -> Deploy(false).
+    if (cfg_.mode != MoveMode::Land || u.d.locomotor != LocomotorKind::Default || !u.d.deploys) return;
+    const bool dep = deployed_d(u) || u.deploy == LocoState::WalkDeploying;
+    if (dep && d >= 0.0f && u.d.max_walk_deployed > 0.0f && d < u.d.max_walk_deployed) {
+        u.walk_deployed = true;
+        return;
+    }
+    (void)deploy(u.d.id, false, frame);
+}
+
+void MovementSystem::deploy_cap(ObjectId id, float d, uint32_t frame) {
+    if (Unit* u = unit_ptr(id)) deploy_cap_unit(*u, d, frame);
+}
+
+void MovementSystem::deploy_path_start(Unit& u, float remaining, uint32_t frame) {
+    // Walk vf +0x148 0x61e570 on a new top path: outside 0x18 / 0x19 / 0x1A with the flag clear -> the plain start (the
+    // port's walk starts it). Otherwise L (the remaining length of the top path) < M -> the flag and the plain start
+    // 0x42ced0, which acts in 0x19 when M > 0 (idle, 0x42c890): state 0 [port: m.state None; the walk runs on the next
+    // tick]; else Deploy(false).
+    if (cfg_.mode != MoveMode::Land || u.d.locomotor != LocomotorKind::Default || !u.d.deploys) return;
+    if (u.deploy == LocoState::None && !u.walk_deployed) return;
+    if (u.deploy == LocoState::WalkUndeploying) return;  // Deploy(false) changes nothing in 0x1A
+    if (u.d.max_walk_deployed > 0.0f && remaining < u.d.max_walk_deployed) {
+        u.walk_deployed = true;
+        if (u.deploy == LocoState::WalkDeployed) u.m.state = LocoState::None;
+        return;
+    }
+    (void)deploy(u.d.id, false, frame);
+}
+
+bool MovementSystem::deploy_walks(const Unit& u) const {
+    // §3.2.1 item 3: a 0x19 unit with M > 0 walks a top path (a started order path or a collision record) it holds.
+    return u.deploy == LocoState::WalkDeployed && u.d.max_walk_deployed > 0.0f && u.d.locomotor == LocomotorKind::Default &&
+           cfg_.mode == MoveMode::Land;
+}
+
+void MovementSystem::damage_deploy(ObjectId id, uint32_t frame) {
+    // Take_Damage 0x3a9e30: M > 0, Walk state 0x16, `Deploys`, the flag clear -> Deploy(true).
+    Unit* u = unit_ptr(id);
+    if (!u || cfg_.mode != MoveMode::Land || u->d.locomotor != LocomotorKind::Default || !u->d.deploys) return;
+    if (!(u->d.max_walk_deployed > 0.0f) || u->walk_deployed || u->deploy != LocoState::None) return;
+    if (u->has_goal || u->need_path || u->pushed || u->aturn != LocoState::None) return;
+    if (u->m.state != LocoState::WalkStopped && u->m.state != LocoState::None) return;
+    (void)deploy(id, true, frame);
+}
+
+bool MovementSystem::move_skips(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    return u && cfg_.mode == MoveMode::Land && deployed_d(*u) && !auto_deployer(*u);
+}
+
+bool MovementSystem::garrison_remove(ObjectId id, uint32_t frame) {
+    const Unit* u = unit_ptr(id);
+    if (!u) return false;
+    std::erase_if(deploy_kept_, [id](const DeployKeep& k) { return k.id == id; });
+    if (cfg_.mode == MoveMode::Land && u->d.locomotor == LocomotorKind::Default && u->d.deploys &&
+        (u->deploy != LocoState::None || u->walk_deployed)) {
+        DeployKeep k;
+        k.id = id;
+        k.deploy = u->deploy;
+        k.walk_deployed = u->walk_deployed;
+        k.dclip = u->dclip;
+        k.dclip_pos = u->dclip >= 0 ? deploy_clip_pos(*u, frame) : 0.0f;
+        const auto it = std::lower_bound(deploy_kept_.begin(), deploy_kept_.end(), id,
+                                         [](const DeployKeep& e, ObjectId v) { return e.id < v; });
+        deploy_kept_.insert(it, k);
+    }
+    if (!park_team_member(id)) (void)remove_impl(id);
+    return true;
+}
+
+bool MovementSystem::restore_deploy(ObjectId id, uint32_t frame) {
+    const auto it = std::lower_bound(deploy_kept_.begin(), deploy_kept_.end(), id,
+                                     [](const DeployKeep& e, ObjectId v) { return e.id < v; });
+    if (it == deploy_kept_.end() || it->id != id) return false;
+    const DeployKeep k = *it;
+    deploy_kept_.erase(it);
+    Unit* u = unit_ptr(id);
+    if (!u || u->d.locomotor != LocomotorKind::Default) return false;
+    // The state as it was at the entry (no deploy event: the host's ability / combat flags never changed); a clip that
+    // was timing resumes at its kept position ([port] retail's hidden unit keeps running its locomotor inside [M]).
+    u->deploy = k.deploy;
+    u->walk_deployed = k.walk_deployed;
+    u->dclip = k.dclip;
+    u->dclip_start = frame;
+    u->dclip_pos0 = k.dclip >= 0 ? k.dclip_pos : 0.0f;
+    return true;
+}
+
+bool MovementSystem::deploy_kept(ObjectId id) const {
+    const auto it = std::lower_bound(deploy_kept_.begin(), deploy_kept_.end(), id,
+                                     [](const DeployKeep& e, ObjectId v) { return e.id < v; });
+    return it != deploy_kept_.end() && it->id == id;
+}
+
+bool MovementSystem::walking_deployed(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    return u && u->walk_deployed;
 }
 
 LocoState MovementSystem::deploy_state(ObjectId id) const {
@@ -195,8 +321,33 @@ bool MovementSystem::snap_yaw(ObjectId id, float yaw_deg) {
 }
 
 void MovementSystem::tick_deploy(uint32_t frame) {
-    // Walk vf6 0x61e930, states 0x18 / 0x1A (serial, ascending id; each unit writes only itself and the event list).
+    // Walk vf6 0x61e930, states 0x16 (s78n t26.1), 0x18 / 0x1A (serial, ascending id; each unit writes only itself and the
+    // event list).
     for (Unit& u : units_) {
+        if (u.d.locomotor != LocomotorKind::Default) continue;
+        // s78n t26.1 (MOVEMENT §5.3 "Hover in full"): a rising / lowering unit runs no Walk state at all (an HTT that
+        // deploys as it lowers times its Deploy clip only once it is down).
+        if (u.hover >= 2) continue;
+        if (u.deploy == LocoState::WalkUndeploying) u.walk_deployed = false;  // §3.2.1 item 3: 0x1A clears the flag
+        // s78n t26.1 (§3.2.1 item 3): 0x16, idle with no path (after the arrival pop or a stop; the arrival turn first).
+        // The flag set -> clear it, 0x19 at once with the Deploy clip on its last frame, no signal 0x29 (no event);
+        // else a `Deploys` type with M > 0 and no DEPLOY ability deploys (Deploy(true)): the droid deploys at every stop.
+        const bool idle = !u.has_goal && !u.need_path && !u.pushed && u.aturn == LocoState::None && u.anchor < 0 &&
+                          !u.d.team_container && (u.m.state == LocoState::WalkStopped || u.m.state == LocoState::None);
+        if (idle && u.d.deploys && cfg_.mode == MoveMode::Land) {
+            if (u.walk_deployed && u.deploy == LocoState::WalkDeployed) {
+                u.walk_deployed = false;
+                u.m.speed = 0.0f;  // the 0x19 handler runs in the same frame (speed := 0)
+                const DeployClip c = deploy_clip(u, kAnimDeploy);
+                deploy_start_clip(u, kAnimDeploy, std::max(c.count - 1.0f, 0.0f), frame);
+                deploy_pose_.push_back(u.d.id);  // the host's Deploy clip at its last frame (units_ ascending)
+                continue;
+            }
+            if (u.deploy == LocoState::None && !u.walk_deployed && u.d.max_walk_deployed > 0.0f && !u.d.deploy_ability) {
+                (void)deploy(u.d.id, true, frame);
+                continue;
+            }
+        }
         if (u.deploy != LocoState::WalkDeploying && u.deploy != LocoState::WalkUndeploying) continue;
         const bool dep = u.deploy == LocoState::WalkDeploying;
         const int32_t anim = dep ? kAnimDeploy : kAnimUndeploy;
@@ -238,6 +389,7 @@ void MovementSystem::hash_deploy(StateHasher& h) const {
         h.i32(u.dclip);
         h.u32(u.dclip_start);
         h.f32(u.dclip_pos0);
+        if (u.walk_deployed) h.u8(0xB3);  // s78n t26.1: the walking-deployed flag (only when set)
     }
 }
 
