@@ -449,8 +449,8 @@ public:
     // Only the Walk locomotor (land, LocomotorKind::Default) deploys. deploy(id, true) = Walk vf +0x118 Deploy(true)
     // (0x61d300): in 0x18 / 0x19 nothing; out of 0x1A with the turret not at rest (TurretRestFn) straight to 0x19 and
     // "ability finished" at once (ReverseBlocked); else the unit stops (its order is dropped) and enters 0x18 Deploying.
-    // deploy(id, false): 0x18 / 0x19 -> 0x1A Undeploying ([port] the slot +0x35b blocker and the pending flag +0x2b3,
-    // never set in vanilla, are not modelled). Per tick (serial, ascending id, after the walk): 0x18 / 0x1A start their
+    // deploy(id, false): 0x18 / 0x19 -> 0x1A Undeploying ([port] the slot +0x35b blocker is not modelled; pack +0x2b3 is
+    // the walking-deployed flag Unit::walk_deployed, s78n t26.1, MOVEMENT §3.2.1). Per tick (serial, ascending id, after the walk): 0x18 / 0x1A start their
     // clip (anim 0x19 Deploy / 0x1A Undeploy) only once the turret is at rest (until then the turret recentres: the host's),
     // at Deployment_Anim_Rate; a clip's position after n frames is start + n x step, step = fps / 30 x rate (ABILITIES_
     // HARDPOINTS §4.13), and it has ended when position >= count - 2 - step (0x39a180). End of the Deploy clip: 0x19
