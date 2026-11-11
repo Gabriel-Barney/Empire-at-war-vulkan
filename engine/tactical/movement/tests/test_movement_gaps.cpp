@@ -3776,8 +3776,11 @@ static void test_land_squad_part_b() {
         CHECK(a.crc == b.crc && a.flee_frames == b.flee_frames);
         CHECK(a.flee_frames > 0 && a.ended && a.crusher_arrived);
         // the container's team speed and the members' max speed (= the team speed here) x 2 while fleeing
-        // (Fleeing_Infantry_Speed_Bonus is exactly 2: this fixture reaches its target speed in one frame)
-        CHECK(a.cmax == 2.0f * a.team);
+        // (Fleeing_Infantry_Speed_Bonus is exactly 2: this fixture reaches its target speed in one frame). s78n t20 batch 2
+        // (FIGHTER_FLYING §7.7 item 7): the flee now starts with the container's turn in place (B x 2); it then leaves its
+        // members on the old slots and the straggler cap (0x5ab640, factor 0.90 .. 0.95 here) keeps it under 2x through
+        // the short flee - above the team speed, which only the bonus allows
+        CHECK(a.cmax > a.team && a.cmax <= 2.0f * a.team);
         CHECK(a.mmax == 2.0f * a.team);
         CHECK(a.final_err <= 5.0f);  // recovered (a member stops within the 4.0 recovery distance)
         std::printf("land squad part B: crusher - fled %u frames, team %.3f, container max %.3f, member max %.3f, final slot "

@@ -713,7 +713,8 @@ void MovementSystem::team_speed_steps() {
 //     speed is zeroed (0x15) and the new path starts on the next tick. [port] the coast starts at the order (retail walks
 //     the old path until the formation plan resets the stack);
 //   * start (0x16 -> 0 -> 0x10): the path is started, the slots re-laid toward the first waypoint (relay request), then
-//     the port's start rule: turn in place until within one turn step or Close_Enough_Angle, then move in the same tick;
+//     the turn in place 0x10 (s78n t20 batch 2, FIGHTER_FLYING §7.7 item 7): a full turn to the current segment's heading
+//     at the turn rate, the first move step in the same tick when the turn leaves budget, no close-enough angle;
 //   * speed step 0x5aaf70 in the moving state and while braking above a: T = the team speed (x the fleeing bonus on a
 //     crush-flee path); the formation speed on the order path; min the collision cap (its "at once" flag = `now`); min the
 //     straggler cap; braking: T := a (replacing all of it); T > v: v += min(a, T - v); T < v: now ? v := T : v -= min(a,
@@ -810,16 +811,31 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
             u.relay.push_back(length_sq(to) > 0.0f ? to : dir_from_deg(m.yaw));
             u.path_started = true;
         }
-        const float desired = length_sq(to) > 0.0f ? heading_deg(to) : m.yaw;
+        // s78n t20 batch 2 (FIGHTER_FLYING §7.7 item 7, 0x5ab840 / 0x5ad5a0): the target is the current segment's
+        // direction d (not the direction to the waypoint) plus the lane term k on a formation path: (d.x - k d.y, d.y +
+        // k d.x), k = the move step's side correction. The budget B = the turn rate (x the fleeing bonus on a crush-flee
+        // path, in `rate`); |delta| > B: turn by B, no move; else yaw := the target and, with budget left (B - |delta| >
+        // 0), the move step runs in the same tick. No close-enough angle; B = 0 never leaves the turn. (The last-waypoint
+        // target - the final facing - is not reached here: the port pops the path at its last waypoint.) [port] a path
+        // with no segment behind its next waypoint (next = 0) aims at that waypoint.
+        float desired = length_sq(to) > 0.0f ? heading_deg(to) : m.yaw;
+        if (m.next >= 1) {
+            const V2 from = wp(m.next - 1);
+            const V2 sd = normalize_retail(wp(m.next) - from);
+            if (length_sq(sd) > 0.0f) {
+                const float k = form ? formation_side_correction(-cross(sd, m.pos - from)) : 0.0f;
+                desired = heading_deg(V2{sd.x - k * sd.y, sd.y + k * sd.x});
+            }
+        }
         const float err = std::fabs(wrap_deg(desired - m.yaw));
-        if (err <= rate || err <= u.lp.close_enough_angle) {
-            m.state = LocoState::WalkMoving;
-        } else {
+        if (err > rate || !(rate - err > 0.0f)) {
             m.state = LocoState::WalkStartTurn;
             m.yaw = turn_toward(m.yaw, desired, rate);
             m.speed = 0.0f;
             return finish();
         }
+        m.yaw = wrap_deg(desired);
+        m.state = LocoState::WalkMoving;
     }
     if (m.state == LocoState::WalkEndMove && !(m.speed > a)) {  // 0x15 (0x5adb50)
         m.speed = 0.0f;

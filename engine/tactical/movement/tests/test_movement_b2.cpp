@@ -1,6 +1,7 @@
 // alamo_tactical_movement_b2_tests (no framework; non-zero exit on failure).
 // s78n t20 batch 2: the order-time items of the land movement port - the zone validation of the ordered point and the
-// destination check's D, forced pass and try state (docs/re/MOVEMENT.md §4.2 step 2, §4.3.1 items 3, 4, 7).
+// destination check's D, forced pass and try state (docs/re/MOVEMENT.md §4.2 step 2, §4.3.1 items 3, 4, 7); the squad
+// container's turn in place (FIGHTER_FLYING §7.7 item 7).
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -81,8 +82,9 @@ void land_system(MovementSystem& sys, PassabilityGrid g) {
 
 // A 9-member squad on a 3 x 3 grid of pitch 12 (member half extents 3): joint slot box (15, 15). Container `cid`, members
 // cid + 1 .. cid + 9 (as test_movement_gaps' t20_squad).
-void squad(MovementSystem& sys, ObjectId cid, V2 at, int32_t owner, float cmax = 0.8f) {
+void squad(MovementSystem& sys, ObjectId cid, V2 at, int32_t owner, float cmax = 0.8f, float turn = 6.0f) {
     UnitDesc c = unit(cid, at, 2, cmax, 12.0f, LocomotorKind::Default);
+    c.turn_rate = turn;
     c.team_container = true;
     c.container_arrangement = 0;
     c.owner = owner;
@@ -305,11 +307,130 @@ void test_forced_pass() {
     }
 }
 
+// ---------------------------------------------------------------- 2.2 the container's turn in place (FIGHTER_FLYING §7.7 item 7)
+void test_container_turn() {
+    ::alamo::test::section("container turn in place");
+    struct Out {
+        uint32_t first_turn = 0, first_step = 0;
+        std::vector<float> yaw;  // per frame from the order frame
+        float member_moved = 0.0f;  // the farthest a member moved before the container's first step
+    };
+    // a lone squad at yaw 0 ordered 200 away at `deg` (speed multiplier 1.0: B = the type's turn rate)
+    const auto run = [&](float b, float deg) {
+        Out o;
+        MovementConfig cfg;
+        cfg.constants.land_speed_multiplier = 1.0f;
+        MovementSystem sys{cfg};
+        land_system(sys, open_grid(100, 100));
+        const V2 at = cell_center(40, 40);
+        squad(sys, 100, at, 1, 0.8f, b);
+        SimRng rng(221);
+        for (uint32_t f = 1; f < 40; ++f) sys.tick(f, rng, serial_for);  // laid out, members on their slots
+        MoveOrder m;
+        m.units = {101};
+        m.destination = at + dir_from_deg(deg) * 200.0f;
+        sys.move(m, rng, 40);
+        const V2 p0 = sys.view(100).pos;
+        V2 mp[9];
+        for (ObjectId i = 0; i < 9; ++i) mp[i] = sys.view(101 + i).pos;
+        float prev = sys.view(100).yaw;
+        for (uint32_t f = 40; f < 400 && o.first_step == 0; ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView v = sys.view(100);
+            o.yaw.push_back(v.yaw);
+            if (o.first_turn == 0 && v.yaw != prev) o.first_turn = f;
+            if (!(v.pos == p0)) o.first_step = f;
+            prev = v.yaw;
+            if (o.first_step == 0)
+                for (ObjectId i = 0; i < 9; ++i) o.member_moved = std::max(o.member_moved, distance(sys.view(101 + i).pos, mp[i]));
+        }
+        return o;
+    };
+    const float up = heading_deg(V2{0.0f, 1.0f});  // the segment's heading (90)
+    const Out b4 = run(4.0f, 90.0f), b45 = run(4.5f, 90.0f), b0 = run(4.0f, 0.0f);
+    const uint32_t t0 = b4.first_turn;
+    CHECK(t0 > 40 && b45.first_turn == t0);
+    // B 4.0: 22 ticks of turning (4 .. 88), tick 23 yaw := 90 with 2 left: the first step in the same tick
+    CHECK(b4.yaw.size() == t0 - 40 + 23);
+    CHECK(b4.yaw[t0 - 40 + 21] == 88.0f && b4.yaw[t0 - 40 + 22] == up && b4.first_step == t0 + 22);
+    // B 4.5: tick 20 reaches 90 exactly (no budget left: no step), the first step on tick 21
+    CHECK(b45.yaw[t0 - 40 + 19] == up && b45.first_step == t0 + 20);
+    // delta 0: the first step on the first tick of the start
+    CHECK(b0.first_turn == 0 && b0.first_step == t0);
+    CHECK(b4.member_moved == 0.0f && b45.member_moved == 0.0f);  // the members stand while the container turns
+    std::printf("container turn: start tick %u, B 4 first step %u (yaw %.4f), B 4.5 first step %u, aligned first step %u; "
+                "members moved %.3f / %.3f before the first step\n",
+                t0, b4.first_step, static_cast<double>(b4.yaw.back()), b45.first_step, b0.first_step,
+                static_cast<double>(b4.member_moved), static_cast<double>(b45.member_moved));
+    {  // a crush-flee path (kind 7): the budget doubles (Fleeing_Infantry_Speed_Bonus 2): B 1 turns 2 per tick
+        MovementConfig cfg;
+        cfg.constants.land_speed_multiplier = 1.0f;
+        MovementSystem sys{cfg};
+        land_system(sys, open_grid(100, 100));
+        const V2 at = cell_center(20, 20);
+        UnitDesc c = unit(100, at, 2, 2.0f, 12.0f, LocomotorKind::Default);
+        c.team_container = true;
+        c.container_arrangement = 0;
+        c.squashable = true;
+        c.owner = 1;
+        c.turn_rate = 1.0f;
+        c.movement_prediction_interval = 4.0f;
+        CHECK(sys.add_unit(c));
+        const V2 rel[4] = {{10.0f, 10.0f}, {10.0f, -10.0f}, {-10.0f, 10.0f}, {-10.0f, -10.0f}};
+        std::vector<ObjectId> ids;
+        std::vector<V2> slots;
+        for (ObjectId id = 1; id <= 4; ++id) {
+            UnitDesc d = unit(id, at + rel[id - 1], 2, 2.0f, 3.0f, LocomotorKind::Default);
+            d.owner = 1;
+            d.formation_spacing = 0.5f;
+            CHECK(sys.add_unit(d));
+            CHECK(sys.set_team_member_shape(id, 3.0f, 3.0f, 3.0f, 3.0f));
+            ids.push_back(id);
+            slots.push_back(rel[id - 1]);
+        }
+        CHECK(sys.set_land_team(100, ids, slots));
+        for (ObjectId id : {ObjectId{100}, ObjectId{1}, ObjectId{2}, ObjectId{3}, ObjectId{4}}) CHECK(sys.set_team(id, 100, 1.0f));
+        SimRng rng(222);
+        for (uint32_t f = 1; f < 20; ++f) sys.tick(f, rng, serial_for);
+        UnitDesc cr = unit(60, cell_center(8, 20), 2, 1.0f, 10.0f, LocomotorKind::Default);
+        cr.collision_class = kUccVehicle;
+        cr.crusher = true;
+        cr.owner = 2;
+        CHECK(sys.add_unit(cr));
+        MoveOrder o;
+        o.units = {60};
+        o.destination = cell_center(60, 20);
+        sys.move(o, rng, 20);
+        uint32_t turning = 0, full = 0;
+        float worst = 0.0f;
+        bool fled = false, moved = false;
+        for (uint32_t f = 20; f < 600 && !moved; ++f) {
+            const UnitView b = sys.view(100);
+            sys.tick(f, rng, serial_for);
+            const UnitView a = sys.view(100);
+            if (!sys.team_fleeing(100)) continue;
+            fled = true;
+            if (!(a.pos == b.pos)) {
+                moved = true;
+                continue;
+            }
+            const float d = std::fabs(wrap_deg(a.yaw - b.yaw));
+            if (!(d > 0.0f)) continue;
+            ++turning;
+            worst = std::max(worst, d);
+            if (std::fabs(d - 2.0f) < 1e-4f) ++full;
+        }
+        CHECK(fled && moved && turning > 0 && full + 1 >= turning && worst <= 2.0f + 1e-4f && full > 0);
+        std::printf("container turn: crush-flee start - %u turning ticks, %u of them 2.0 (B 1 x 2)\n", turning, full);
+    }
+}
+
 }  // namespace
 
 int main() {
     test_zone_validate();
     test_order_validation();
     test_forced_pass();
+    test_container_turn();
     return ::alamo::test::report("alamo_tactical_movement_b2_tests");
 }
