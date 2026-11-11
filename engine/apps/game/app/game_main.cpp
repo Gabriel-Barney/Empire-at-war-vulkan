@@ -14,11 +14,45 @@
 //                   (tests; saveload: the save / load menus, app_script_saveload.cpp);
 //                   ends with the presentation-on/off check (the run's per-tick CRC log == a fresh presentation-free
 //                   replay of its recorded command stream) and 0 validation messages. Exit 0 "skipped" without data.
+//        alamo_game --export-save SAVE.alsv --out FILE.json [--game DIR] [MODPATH=..]   a save's galactic state as JSON for
+//                   tools (save_export.hpp): no window, Vulkan or audio; exit 0, or 1 + a message on stderr.
 // Game data: --game DIR or ALAMO_FOC_DATA (the FoC "corruption" folder).
 #include "game_app.hpp"
 #include "alamo/vfs/steam_workshop.hpp"
 
+#include "alamo/game/save_export.hpp"
+#include "alamo/render/galactic/galactic_snapshot.hpp"
+
 namespace alamo_game_app {
+
+// Launcher support: --export-save (save_export.hpp). Loads the game data the save needs (the same --game / MODPATH= as the
+// game it was saved from), loads the save headless and writes the JSON; faction colours from Factions.xml.
+static int export_save_main(const Options& opt, const std::string& save, const std::string& out) {
+    const std::string root = opt.game.empty() ? env_or_empty("ALAMO_FOC_DATA") : opt.game;
+    if (root.empty() || out.empty()) {
+        std::fprintf(stderr, "--export-save needs --out FILE and --game <corruption dir> (or ALAMO_FOC_DATA)\n");
+        return 2;
+    }
+    GameData data;
+    std::string err;
+    if (!load_game_data(root, opt.game_args, data, &err)) {
+        std::fprintf(stderr, "game data: %s\n", err.c_str());
+        return 1;
+    }
+    std::vector<ExportColor> colors;
+    for (const render::FactionColor& f : render::load_faction_colors(*data.files)) {
+        if (!f.has_color) continue;
+        const auto byte = [](float v) { return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+        colors.push_back({f.name, byte(f.color.x), byte(f.color.y), byte(f.color.z)});
+    }
+    jobs::JobSystem js(jobs::JobSystemConfig{opt.workers});
+    if (!export_save(data, js, save, out, colors, &err)) {
+        std::fprintf(stderr, "export: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("exported %s\n", out.c_str());
+    return 0;
+}
 
 // ------------------------------------------------------------------------------------------------ init
 bool App::init() {
@@ -546,6 +580,7 @@ int main(int argc, char** argv) {
         }
         if (!regen_save.empty()) opt.bench.save = regen_save;
     }
+    std::string export_in, export_out;  // --export-save / --out (save_export.hpp)
     for (int i = 1; i < argc; ++i) {
         {  // BM2a: the benchmark flags (benchmark.hpp)
             size_t bi = static_cast<size_t>(i);
@@ -609,8 +644,14 @@ int main(int argc, char** argv) {
         else if (a == "--profile-out") opt.profile = true, opt.profile_out = next();
         else if (a == "--profile-budget") opt.profile_budget = std::strtod(next().c_str(), nullptr);
         else if (a == "--bench-scenario" || a == "--bench-make" || a == "--bench-regen") (void)next();  // bm2 / bm3: read before this loop
+        else if (a == "--export-save") export_in = next();  // launcher support (save_export.hpp)
+        else if (a == "--out") export_out = next();
         else if (a.find('=') != std::string::npos) opt.game_args.push_back(a);
         else return usage();
+    }
+    if (!export_in.empty()) {  // launcher support: no window, Vulkan or audio
+        log::set_min_level(log::Level::Warn);
+        return export_save_main(opt, export_in, export_out);
     }
     if (opt.bench_new.active()) return bench_new_main(opt);  // BM3: no window, no renderer
     if (opt.width == 0 || opt.height == 0) return usage();

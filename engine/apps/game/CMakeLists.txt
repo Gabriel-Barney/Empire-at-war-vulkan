@@ -27,6 +27,7 @@ add_library(alamo_game_core STATIC
   src/benchmark.cpp
   src/benchmark_scenario.cpp
   src/benchmark_save.cpp
+  src/save_export.cpp
 )
 target_include_directories(alamo_game_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_game_core PUBLIC alamo_sim alamo_vfs alamo_data alamo_core alamo_engine_flags)
@@ -72,6 +73,14 @@ target_link_libraries(alamo_game_save_tests PRIVATE alamo_core alamo_game_core a
 add_test(NAME alamo_game_save_tests COMMAND alamo_game_save_tests)
 set_tests_properties(alamo_game_save_tests PROPERTIES TIMEOUT 1200)
 alamo_label_slow(alamo_game_save_tests)
+
+# Launcher support (save_export.hpp): a campaign saved and exported to JSON through the load path on the FoC data
+# (ALAMO_FOC_DATA, skipped without): every planet row, routes, live fleets, players, well-formed and deterministic; junk refused.
+add_executable(alamo_game_save_export_tests tests/test_save_export.cpp)
+target_link_libraries(alamo_game_save_export_tests PRIVATE alamo_core alamo_game_core)
+add_test(NAME alamo_game_save_export_tests COMMAND alamo_game_save_export_tests)
+set_tests_properties(alamo_game_save_export_tests PROPERTIES TIMEOUT 600)
+alamo_label_slow(alamo_game_save_export_tests)
 
 # p4ui t06 (UI.md section 9): the skirmish map catalog (official / custom / mod-folder maps) on a fake install in its own temp
 # folder; with ALAMO_FOC_DATA also the shipped data (24 land + 24 space official rows, no custom).
