@@ -2601,6 +2601,12 @@ void GalacticAiWorld::set_free_store_owner(objects::ObjectHandle unit, int32_t p
     else impl_->unit_reserved[impl_->store.id(unit)] = pp;
 }
 
+uint32_t GalacticAiWorld::task_force_fleet_object(int32_t player, std::string_view tf_name) {
+    for (auto& [id, tf] : impl_->tfs)  // id order
+        if (tf.player == player && tf.name == tf_name) return impl_->tf_fleet_object(tf);
+    return gal::kNoFleet;
+}
+
 int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perception, std::string_view application,
                                           std::string_view reachability, double probability, PlanetIndex source,
                                           double max_distance) {

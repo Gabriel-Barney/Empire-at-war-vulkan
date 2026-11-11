@@ -370,6 +370,13 @@ Empire-human seed 0: Rebel `credits_at_13500` 1890 -> 805 and `build_count` 19 -
 there), hence `travel.hop_ticks[Rebel:NABOO->SHOLA]` FAIL; new FAIL `credits_at_13500[Empire]` 18797.5 vs 19007.5 (an
 Underworld sabotage at Corellia at 10851 now succeeds). Goldens: `ai_galactic_synthetic_crc.txt`, `ai_underworld_crc.txt`,
 `galactic_ai_hotm_golden.txt`, `galactic_ai_hotm_human_golden.txt`.
+2026-11-11 (a2m t02, tests): `alamo_ai_galactic_tests` covers the three rules directly: `test_fleet_object_reelection`
+(the FleetObject's member destroyed: its fleet dies, signal 0x10; or it lives on with a non-member, the [M] 0x1b
+reading; Move_To then moves the other member's fleet and leaves the old fleet's non-members), and
+`test_produce_force_stage_launch` (an infantry on the stage's surface is launched and merged into the FleetObject by
+Produce_Force, and the following Move_To takes it along). [port] a fleet "not being removed" (+0x3a0 bit 2) is read as
+a live fleet with contents (the sim removes an emptied fleet at once). Test accessor
+`GalacticAiWorld::task_force_fleet_object`. No behaviour change: no golden moves.
 
 **2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
 FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the

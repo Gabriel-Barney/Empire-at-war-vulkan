@@ -230,6 +230,10 @@ public:
     objects::ObjectHandle free_store_supply(int32_t player, uint32_t type) const;
     int32_t free_store_owner(objects::ObjectHandle unit) const;
     void set_free_store_owner(objects::ObjectHandle unit, int32_t pp);
+    // a2m t02, tests / diagnostics: the FleetObject (TF +0x120, a GalacticSim fleet index) of the AI player's live task
+    // force named `tf_name` (lowest task-force id first), read as Move_To reads it (re-elected when it is gone or holds
+    // no member any more, A2L_T01_RE_ANSWERS Q8.2); galactic::kNoFleet when there is no such task force or no fleet.
+    uint32_t task_force_fleet_object(int32_t player, std::string_view tf_name);
     int32_t reachable_target(int32_t player, std::string_view perception, std::string_view application,
                              std::string_view reachability, double probability, PlanetIndex source = kInvalidPlanet,
                              double max_distance = -1.0);
