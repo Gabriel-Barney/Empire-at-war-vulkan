@@ -2005,6 +2005,35 @@ float MovementSystem::follow_speed(const Unit& s, const CollisionObject& c) cons
     return std::min(walk_max_speed(s), vf * len / straight);
 }
 
+bool MovementSystem::on_blocked_cell(const Unit& u) const {
+    const bool order = u.has_goal && !u.pushed;  // the order path is the top record (or will be, once planned)
+    if (order && (u.need_path || u.forced || u.m.next < u.m.escape_until)) return false;  // forced ([port] see the header)
+    return !grid_.passable_world(u.m.pos, u.lp.mask);
+}
+
+void MovementSystem::collision_stop(Unit& u, const CollisionObject& c, uint32_t frame) {
+    const bool own = u.push_owner == kNoDetour || u.push_owner == c.seq;  // 0x42cba0: the pack's path owner is 0 or c
+    // 0x554480(pack, unit, id != 0): every record of the stack is destroyed
+    end_push(u);
+    if (u.has_goal) u.arrived = true;
+    u.has_goal = false;
+    u.need_path = false;
+    if (u.start_frame == kStartPending) u.start_frame = 0;
+    u.m.path.clear();
+    u.m.next = 0;
+    u.m.escape_until = 0;
+    u.around.clear();
+    u.path_change = frame;  // pack +0x288: the stack changed
+    u.fturn = u.path_started = false;
+    if (own) {  // state 0x16, pack +0xec / +0xf0 := 0 at once
+        u.m.speed = 0.0f;
+        u.m.state = LocoState::WalkStopped;
+        u.coast = false;
+    } else {
+        brake_to_stop(u, frame);
+    }
+}
+
 // Destination blocked 0x684710(a, b): a's path approximation reaches the end of its path stack and a's rectangle placed
 // at the path end overlaps b's or that of a layer object standing within the 160 x 160 box around the end. [port] "the
 // approximation reaches the path end" = near_path_end: the path end is no farther from the mover (straight line) than
@@ -2606,6 +2635,13 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
 // Per-state service 0x684cf0 (every frame) and the speed answer 0x684660.
 void MovementSystem::mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame) {
     using S = CollisionState;
+    // s78n t20 (MOVEMENT §5.4.1 "The impassable-cell rule in full" item 1; validity, first in every state): a first, b
+    // only when a passed; the unit on an impassable cell is stopped and the record ends (6)
+    if (Unit* const s = on_blocked_cell(a) ? &a : on_blocked_cell(b) ? &b : nullptr) {
+        collision_stop(*s, c, frame);
+        c.state = S::Resolved;
+        return;
+    }
     if (c.state == S::TryAgainLater) {
         if (mvs_behind(a, b)) {
             c.state = S::Resolved;

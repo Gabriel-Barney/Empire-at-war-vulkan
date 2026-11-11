@@ -6512,6 +6512,114 @@ static void test_t20_decision_leftovers() {
         std::printf("t20 decision: crusher - scattering victim pushed %u time(s), non-scattering: state 4, stuck: %u failed push\n",
                     scat.st.pushes, stuck.st.push_failures);
     }
+    // s78n t20 batch 1 item 1.3 (MOVEMENT §5.4.1 "The impassable-cell rule in full"): validity, first in every state - a
+    // participant with a locomotor whose top path is not forced and that stands on a cell impassable for it is stopped
+    // (its path stack emptied; speed 0 and state 0x16 at once when its path owner is none or this record) and the record
+    // ends; participant b is tested only when a passed.
+    {  // (a) a standing obstacle on a stamped cell beside the mover's line: stopped (a no-op, it has no path) at every
+       // record - the mover never gets an answer from it (no detour, no hold) and walks on past it
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        const V2 bp{cell_center(22, 20).x, 412.0f};  // cell (22, 21); its footprint reaches y = 406, the mover's y = 406
+        CHECK(sys.add_unit(t20_vehicle(11, bp, 1)));
+        sys.grid().set_base(22, 21, kPassImpassable);
+        SimRng rng(511);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        sys.move(o, rng, 1);
+        bool arrived = false, held = false, pushed = false, listed = false;
+        for (uint32_t f = 1; f < 800 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView v = sys.view(10);
+            arrived = v.arrived;
+            pushed = pushed || v.pushed;
+            held = held || (v.has_goal && v.speed < v.max_speed && v.pos.x > start.x + 20.0f && v.pos.x < dest.x - 20.0f);
+            for (const CollisionObject& c : sys.collisions().list()) listed = listed || (c.a == 10 && c.b == 11);
+        }
+        const MovementStats st = sys.stats();
+        std::printf("t20 batch 1 impassable cell: stander on a stamped cell - records made %u, listed after a tick %d\n",
+                    st.collisions_created, listed ? 1 : 0);
+        CHECK(arrived && !pushed && !held && !listed && st.collisions_created >= 1 && st.dynamic_repaths == 0 && st.pushes == 0);
+        CHECK(sys.view(11).pos == bp && !sys.view(11).has_goal);
+    }
+    {  // (b) the mover itself on a stamped cell (an ordinary path) while it has a record: stopped the same tick - no
+       // path, no goal, speed 0, signalled arrived (the formation counts it done)
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        CHECK(sys.add_unit(t20_vehicle(11, cell_center(24, 20), 1)));
+        SimRng rng(512);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        bool rec = false;
+        for (; f < 400 && !rec; ++f) {
+            sys.tick(f, rng, serial_for);
+            for (const CollisionObject& c : sys.collisions().list()) rec = rec || (c.a == 10 && c.b == 11);
+        }
+        CHECK(rec && sys.view(10).speed > 0.0f && sys.view(10).has_goal);
+        const V2 p = sys.view(10).pos;
+        sys.grid().set_base(world_to_cell(p.x), world_to_cell(p.y), kPassImpassable);
+        sys.tick(f++, rng, serial_for);
+        const UnitView v = sys.view(10);
+        CHECK(!v.has_goal && !v.pushed && v.speed == 0.0f && v.arrived && v.pos == p && sys.land_path(10).empty());
+        bool listed = false;
+        for (const CollisionObject& c : sys.collisions().list()) listed = listed || (c.a == 10 && c.b == 11);
+        CHECK(!listed);
+    }
+    {  // (c) a forced (flag 0x20) path across stamped cells: exempt - the record goes on to decision step 2 (the push)
+       // and the mover walks on to its goal
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        CHECK(sys.add_unit(t20_vehicle(11, cell_center(24, 20), 1)));
+        for (int32_t x = 16; x <= 23; ++x) sys.grid().set_base(x, 20, kPassImpassable);
+        SimRng rng(514);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 1);
+        bool arrived = false;
+        for (uint32_t f = 1; f < 800 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            arrived = sys.view(10).arrived;
+        }
+        CHECK(arrived && distance(sys.view(10).pos, dest) < 1.0f && sys.stats().pushes >= 1);
+    }
+    {  // (d) a unit ordered off a stamped cell: its first leg (the planner's escape from a blocked start) is exempt from
+       // the rule ([port] "forced" = a flag-0x20 path or this escape leg), so a record on that leg does not delete it
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        CHECK(sys.add_unit(t20_vehicle(11, cell_center(17, 20) + V2{6.0f, 0.0f}, 1)));
+        sys.grid().set_base(15, 20, kPassImpassable);
+        SimRng rng(513);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        sys.move(o, rng, 1);
+        bool arrived = false, rec_on_cell = false, kept = true;
+        for (uint32_t f = 1; f < 1500 && !arrived; ++f) {
+            const bool on_cell = !sys.grid().passable_world(sys.view(10).pos, sys.mask_of(10));
+            const uint32_t made = sys.stats().collisions_created;
+            sys.tick(f, rng, serial_for);
+            arrived = sys.view(10).arrived;
+            // a record made or listed this tick while the mover started it on the stamped cell
+            bool rec = sys.stats().collisions_created != made;
+            for (const CollisionObject& c : sys.collisions().list()) rec = rec || c.a == 10 || c.b == 10;
+            if (on_cell && rec) {
+                rec_on_cell = true;
+                kept = kept && sys.view(10).has_goal;
+            }
+        }
+        CHECK(arrived && distance(sys.view(10).pos, dest) < 1.0f && kept);
+        std::printf("t20 batch 1 impassable cell: escape leg with a record on it %d, order kept %d\n", rec_on_cell ? 1 : 0, kept ? 1 : 0);
+    }
 }
 
 // s78n t20 item 1 (MOVEMENT 5.4.3): StoppedVsStopped - who moves, where to, and that it walks there.

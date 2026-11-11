@@ -1343,6 +1343,15 @@ private:
     // is in a formation of speed Vf > 0 and the path has >= 2 points (L = its length, D = the straight distance from its
     // first to its last point): the formation speed raised by the detour's extra length.
     float follow_speed(const Unit& s, const CollisionObject& c) const;
+    // s78n t20 (MOVEMENT §5.4.1 "The impassable-cell rule in full" items 1 - 3, 0x684450): the unit has a locomotor, its
+    // top path is not forced and its position fails 0x50e280 for its own class. "Forced" (path +0x5c; no path record:
+    // false) = the flag-0x20 order path on top, or [port] the planner's escape leg off a blocked start (the order path's
+    // first leg while next < escape_until) and an order still waiting for its plan.
+    bool on_blocked_cell(const Unit& u) const;
+    // vf +0x140(record id) = 0x5ad320 for Walk and the land team container: the whole path stack is cleared (order /
+    // formation path included); the order ends as arrived ([port] the formation's signal 10: the member counts as done).
+    // When the path owner is none or `c` (vf +0x170): state 0x16 and speed 0 at once; else brake_to_stop.
+    void collision_stop(Unit& u, const CollisionObject& c, uint32_t frame);
     // [port] End Move with no path record left (MOVEMENT §4.3.2 item 6, §5.4.1 impassable-cell item 3, §5.4.4 item 5): a
     // squad container coasts (team_walk's End Move); a Walk unit gets an owner-less straight top record along its facing
     // of the braking length v^2 / (2 decel) and brakes along it; without a speed or a deceleration it stops at once.
