@@ -593,6 +593,52 @@ void test_foc_weapon_sources(const objects::GameObjectTypes& types, const Battle
             for (const tactical::Vec3& v : b) CHECK(v.z > 0.0f);
         }
     }
+    {  // s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 1): Garrison_Bone_Names resolved on the land model, host-local frame
+        uint32_t listed = 0, resolved = 0;
+        std::string line;
+        for (uint32_t t = 0; t < types.size(); ++t) {
+            const auto names = types.get_list(t, "Garrison_Bone_Names");
+            if (names.empty()) continue;
+            ++listed;
+            std::vector<tactical::Vec3> bones;
+            CHECK(catalog.entry_bones(t, false, bones));
+            resolved += bones.size() == names.size() ? 1u : 0u;
+            line += std::string(line.empty() ? "" : "; ") + std::string(types.raw().types().name[t]) + ":";
+            for (const tactical::Vec3& v : bones) {
+                char buf[64];
+                std::snprintf(buf, sizeof buf, " (%.1f %.1f %.1f)", static_cast<double>(v.x), static_cast<double>(v.y),
+                              static_cast<double>(v.z));
+                line += buf;
+            }
+        }
+        std::printf("foc garrison entry bones: %u types list them, %u resolve all: %s\n", listed, resolved, line.c_str());
+        // 12 types list them (5 own lists, the rest inherited by variants); only Gargantuan_Battle_Platform_Death_Clone's
+        // model lacks the bone (dropped)
+        CHECK(listed >= 5 && resolved + 1 >= listed);
+        const auto bones_of = [&](const char* name, std::vector<tactical::Vec3>& b) {
+            const objects::TypeIndex t = types.resolve_name(name);
+            return t != objects::kNone && catalog.entry_bones(static_cast<uint32_t>(t), false, b);
+        };
+        std::vector<tactical::Vec3> b;
+        // HTT (Scale_Factor 0.3): one bone behind the hull on the centre line (the model's +Y tail -> local -x), scaled
+        if (bones_of("Gallofree_HTT_Transport", b)) {
+            CHECK(b.size() == 1);
+            if (b.size() == 1) CHECK(b[0].x < -50.0f && b[0].x > -120.0f && std::fabs(b[0].y) < 1.0f && std::fabs(b[0].z) < 5.0f);
+        }
+        if (bones_of("HAV_Juggernaut", b)) {  // one bone at the tail
+            CHECK(b.size() == 1);
+            if (b.size() == 1) CHECK(b[0].x < -50.0f && std::fabs(b[0].y) < 1.0f);
+        }
+        // the bunker: four bones on the ground, one per side, 30 - 40 from the centre, opposite pairs about the centre
+        if (bones_of("Garrison_Bunker_Template", b)) {
+            CHECK(b.size() == 4);
+            for (const tactical::Vec3& v : b) {
+                const float r = std::sqrt(v.x * v.x + v.y * v.y);
+                CHECK(r > 30.0f && r < 40.0f && std::fabs(v.z) < 0.5f && std::min(std::fabs(v.x), std::fabs(v.y)) < 1.0f);
+            }
+            if (b.size() == 4) CHECK(std::fabs(b[0].y + b[2].y) < 3.0f && std::fabs(b[1].x + b[3].x) < 3.0f);
+        }
+    }
 }
 
 // FoC: a battle request built by hand (two FoC frigate groups at Kuat-like orbit) on a real space map.
