@@ -1332,6 +1332,10 @@ private:
     //     waypoint (the unit has arrived where it stands).
     bool claim(Unit& u, const CollisionObject& c, bool force, uint32_t frame);
     void push_top(Unit& u, std::vector<V2> path, uint8_t kind, bool flee, const CollisionObject& c, uint32_t frame);
+    // s78n t23 (MOVEMENT §5.4.1 "The stamp in full" items 2 - 4, 0x50a020 -> 0x5c7cb0 -> vf +0x78 0x680ef0): a path lands
+    // on u - every MovingVsMoving record of u in which u is the held unit (state 1 with u = M, state 4 with u = S) is
+    // stamped NOW + 2 (overwritten by a later stamp).
+    void stamp_held(const Unit& u, uint32_t frame);
     bool pop_top(Unit& u, bool walked, uint32_t frame);
     bool holds_path(const Unit& u, const CollisionObject& c) const { return u.pushed && u.push_owner == c.seq; }  // vf +0x1c0(id)
     // [port] the path stack as one polyline (stands for "the approximation runs along the path stack"): the top record's

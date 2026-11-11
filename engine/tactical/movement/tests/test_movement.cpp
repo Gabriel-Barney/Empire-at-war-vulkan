@@ -3095,8 +3095,8 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // item 5); merged with batch 2.
 // s78n t23 (2026-11-10): land moved (MovingVsMoving chooser and states for every pair, MOVEMENT 5.4.2 / 5.4.6; the
 // finished records leave the speed fold).
-// s78n t23 review fix 1: the pushing record stamps itself too (MOVEMENT 5.4.1 "Re-decide stamp").
-static constexpr uint64_t kGoldenLand = 0x7ecef964084d122cull;  // s78n t23 review fix 1
+// s78n t23 review fix 1: the re-decide stamp by role (MOVEMENT 5.4.1 "The stamp in full" items 2 - 3).
+static constexpr uint64_t kGoldenLand = 0x2f1a6ee6e5881c18ull;  // s78n t23 review fix 1
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

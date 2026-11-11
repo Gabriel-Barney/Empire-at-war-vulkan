@@ -271,8 +271,8 @@ void overtake_scene(MovementSystem& sys, SimRng& rng, float path) {
 
 // The overtake test 0x683260 (a = rear, b = front): (r_a + r_b + dist) / (Va - min(Vb, Va / 2)) <= D / Va. With a long
 // path the rear one passes (state 4, master = the rear one, which gets ahead); with a short one it follows (state 6,
-// master = the front one). The Pass record stamps itself NOW + 2 when M's detour is pushed (MOVEMENT 5.4.1 "Re-decide
-// stamp": no exception for the pushing record); state 6 pushes nothing.
+// master = the front one). M's own detour does not stamp the Pass record (MOVEMENT 5.4.1 "The stamp in full" item 3:
+// the stamp needs the path to land on the held unit, S in state 4); state 6 pushes nothing.
 void test_t20_mvm_overtake() {
     ::alamo::test::section("t20_mvm_overtake");
     for (const float path : {500.0f, 150.0f}) {
@@ -292,7 +292,7 @@ void test_t20_mvm_overtake() {
                 decided = c->state;
                 master = master_of(*c);
                 decided_at = f;
-                stamp = c->redecide;  // the re-decide stamp of M's own detour push (MOVEMENT 5.4.1)
+                stamp = c->redecide;  // M's own detour push: no stamp (MOVEMENT 5.4.1 item 3)
                 // the hand computation from the positions the decision read (the start of this tick)
                 const float va = r0.max_speed, vb = f0.max_speed, vs = std::min(vb, 0.5f * va);
                 const float dist = distance(r0.pos, f0.pos);
@@ -301,7 +301,7 @@ void test_t20_mvm_overtake() {
             }
             passed = passed || sys.view(1).pos.x > sys.view(2).pos.x + 1.0f;
         }
-        if (path > 200.0f) CHECK(decided == CollisionState::Pass && master == 1 && passed && lhs <= rhs && stamp == decided_at + 2);
+        if (path > 200.0f) CHECK(decided == CollisionState::Pass && master == 1 && passed && lhs <= rhs && stamp == 0);
         else CHECK(decided == CollisionState::MovingWithSpeed && master == 2 && !passed && stamp == 0);
         std::printf("t20 overtake: path %.0f -> state %d, master %d, (r + r + d) / (Va - vs) %.1f vs D / Va %.1f, rear got "
                     "ahead %d, re-decide stamp +%d\n",

@@ -1851,18 +1851,9 @@ void MovementSystem::push_top(Unit& u, std::vector<V2> path, uint8_t kind, bool 
     u.push_next = 1;
     u.around.clear();
     u.path_change = frame;  // s78n t18: pack +0x288 (a path record is pushed on its stack)
-    // s78n t23 (MOVEMENT §5.4.1 "Re-decide stamp", 0x50a020 -> 0x5c7cb0): every MovingVsMoving record of u that
-    // re-decides on its partner's path change (vf +0x78: state 1 with u the slave, state 4 with u the master) is
-    // stamped NOW + 2 - the record that pushes this path too (review fix: the spec has no exception; the decision sets
-    // the state before its push, so a Pass re-decides two frames after M's detour and rebuilds lines A / B from S's
-    // position then, a Path Around two frames after S's detour; without it three units held each other for good)
-    for (CollisionObject& o : coll_.list_mut()) {
-        if (o.kind != CollisionKind::MovingVsMoving) continue;
-        if (o.a != u.d.id && o.b != u.d.id) continue;
-        const bool is_master = (o.master == 0 ? o.a : o.b) == u.d.id;
-        if ((o.state == CollisionState::PathAround && !is_master) || (o.state == CollisionState::Pass && is_master))
-            o.redecide = frame + 2;
-    }
+    // s78n t23 (MOVEMENT §5.4.1 "The stamp in full" item 1): the push stamps the unit's held records (0x50a020). The
+    // record that pushes is never stamped by its own detour - by the role test, the detour lands on its detourer.
+    stamp_held(u, frame);
     if (u.d.team_container) {
         // s78n t14 (FIGHTER_FLYING §7.2 caller 4, 0x5ad140): a squad container's path that is not a formation path and
         // has >= 2 points re-lays toward wp1 - wp0. s78n t18 (MOVEMENT §5.4.1 "Push"): the path is marked started - a
@@ -1872,6 +1863,15 @@ void MovementSystem::push_top(Unit& u, std::vector<V2> path, uint8_t kind, bool 
         u.coast = false;
         if (u.m.state == LocoState::WalkEndMove) u.m.state = LocoState::WalkMoving;
         else if (u.m.state != LocoState::WalkMoving) u.m.state = LocoState::WalkStopped;
+    }
+}
+
+void MovementSystem::stamp_held(const Unit& u, uint32_t frame) {
+    for (CollisionObject& o : coll_.list_mut()) {
+        if (o.kind != CollisionKind::MovingVsMoving || (o.a != u.d.id && o.b != u.d.id)) continue;
+        const ObjectId m = o.master == 0 ? o.a : o.b;
+        if ((o.state == CollisionState::PathAround && m == u.d.id) || (o.state == CollisionState::Pass && m != u.d.id))
+            o.redecide = frame + 2;
     }
 }
 
@@ -3117,22 +3117,20 @@ bool MovementSystem::mvm_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
         return true;
     }
     if (ch.mode == 2) {  // Path Around: S around M; then swapped, swapped back with flag 1, swapped with flag 1
+        // s78n t23 (MOVEMENT §5.4.1 "The stamp in full" item 3): the roles (+0x7c / +0x80) are swapped before each
+        // retry, so every detour lands on the record's S of that moment
         if (mvm_detour(c, m, s, false, frame)) return true;
         if (!ch.swap_ok) {
             c.state = S::Crusher;
             return true;
         }
-        if (mvm_detour(c, s, m, false, frame)) {
-            c.master ^= 1u;
-            return true;
-        }
+        c.master ^= 1u;
+        if (mvm_detour(c, s, m, false, frame)) return true;
+        c.master ^= 1u;
         if (mvm_detour(c, m, s, true, frame)) return true;
-        if (mvm_detour(c, s, m, true, frame)) {
-            c.master ^= 1u;
-            return true;
-        }
-        c.master ^= 1u;  // all four failed: the roles are left swapped, no service this frame
-        mvm_fail(c, frame, rng);
+        c.master ^= 1u;
+        if (mvm_detour(c, s, m, true, frame)) return true;
+        mvm_fail(c, frame, rng);  // all four failed: the roles are left swapped, no service this frame
         return false;
     }
     return true;
