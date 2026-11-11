@@ -513,6 +513,16 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
         const objects::TypeIndex pt = ty.resolve_name(ascii_trim(projs.front()));
         if (pt != objects::kNone) u.listed_projectile = projectile(static_cast<uint32_t>(pt), s);
     }
+    // S8 t08: the own-weapon gate flags (type +0xae..+0xb1, default true). s78n t26.1 review 5: read for every type, not
+    // only for one with the WEAPON behaviour - 0x568e60 and the slot 47 / TURRET deploy rules read the type field itself
+    // (the Abstract_Mobile_Defense_Unit's Fire_Weapon_When_Undeployed No was lost: it has no weapon).
+    {
+        auto yes = [&](const char* tag) { return ty.get_string(t, tag).empty() || ty.get_bool(t, tag); };
+        u.fire_weapon_when_deployed = yes("Fire_Weapon_When_Deployed");
+        u.fire_weapon_when_undeployed = yes("Fire_Weapon_When_Undeployed");
+        u.fire_weapon_when_rocket_attack = yes("Fire_Weapon_When_In_Rocket_Attack_Mode");
+        u.fire_weapon_when_normal_attack = yes("Fire_Weapon_When_In_Normal_Attack_Mode");
+    }
     if (weapon_behavior && !projs.empty()) {
         const objects::TypeIndex pt = ty.resolve_name(ascii_trim(projs.front()));
         if (pt != objects::kNone) {
@@ -527,12 +537,6 @@ tc::UnitDesc BattleCatalog::unit_desc(uint32_t t, BuildState& s) const {
             for (const std::string_view n : projs)
                 if (const objects::TypeIndex q = ty.resolve_name(ascii_trim(n)); q != objects::kNone)
                     u.weapon_projectiles.push_back(projectile(static_cast<uint32_t>(q), s));
-        // S8 t08: the own-weapon gate flags (type +0xae..+0xb1, default true).
-        auto yes = [&](const char* tag) { return ty.get_string(t, tag).empty() || ty.get_bool(t, tag); };
-        u.fire_weapon_when_deployed = yes("Fire_Weapon_When_Deployed");
-        u.fire_weapon_when_undeployed = yes("Fire_Weapon_When_Undeployed");
-        u.fire_weapon_when_rocket_attack = yes("Fire_Weapon_When_In_Rocket_Attack_Mode");
-        u.fire_weapon_when_normal_attack = yes("Fire_Weapon_When_In_Normal_Attack_Mode");
         // S8 t06 B4 (LOB_SOLVER §5.1): the fire bones of the unit's model (battle host with model data only).
         if (u.weapon_projectile >= 0 && s.model_mode >= 0) u.muzzle_model = muzzle_bones(t, s.model_mode == 1, u.muzzle_bones);
     }

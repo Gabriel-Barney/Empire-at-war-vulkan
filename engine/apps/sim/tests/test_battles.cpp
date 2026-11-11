@@ -11,6 +11,8 @@
 // With ALAMO_FOC_DATA (FoC "corruption" folder) a real FoC space map battle runs as well.
 
 #include "battle_test_fixture.hpp"
+#include "alamo/core/parallel.hpp"
+#include "alamo/tactical/tree_set.hpp"
 
 namespace {
 
@@ -787,6 +789,75 @@ void test_land_drop_rules() {
     std::printf("  land drop rules: OK\n");
 }
 
+// s78n t26.1 review 5 (TACTICAL_COMBAT §3.1.1, MOVEMENT §3.2.1 "Who is an auto-deployer"): Auto_Deploys defaults to true,
+// so every shipped Deploys type but the AT-AT family and AT-AA is an auto-deployer. The Empire_Mobile_Defense_Unit (no
+// Auto_Deploys tag; Fire_Weapon_When_Undeployed No) is one, but it has neither the WEAPON nor the TURRET behaviour, so it
+// never holds an attack target and the combat auto-deploy check 0x568e60 never runs for it (it deploys by its DEPLOY
+// ability). The check's path is driven with Destroyer_Droid (WEAPON, no TURRET): ordered onto a target in range it requests
+// the deploy (0x391260), on a human player's auto-acquired target it does not, on an AI player's it does.
+struct DeployHooks final : tactical::combat::CombatHooks {
+    uint32_t requests = 0;
+    void request_deploy(tactical::combat::ObjectId, uint32_t) override { ++requests; }
+};
+
+void test_foc_auto_deploy(const objects::GameObjectTypes& types, const BattleCatalog& catalog) {
+    namespace tc = tactical::combat;
+    const uint32_t mdu = static_cast<uint32_t>(types.resolve_name("Empire_Mobile_Defense_Unit"));
+    const uint32_t droid = static_cast<uint32_t>(types.resolve_name("Destroyer_Droid"));
+    const uint32_t foe = static_cast<uint32_t>(types.resolve_name("Rebel_Mobile_Defense_Unit"));
+    CHECK(mdu < types.size() && droid < types.size() && foe < types.size());
+    if (mdu >= types.size() || droid >= types.size() || foe >= types.size()) return;
+    std::vector<uint32_t> idx;
+    const BattleTables bt = catalog.build_battle({mdu, droid, foe}, idx, false);
+    CHECK(idx.size() == 3);
+    if (idx.size() != 3) return;
+    const tc::UnitDesc& md = bt.combat.units[idx[0]];
+    const tc::UnitDesc& dd = bt.combat.units[idx[1]];
+    std::printf("foc MDU: deploys %d auto_deploys %d fire undeployed %d, weapon %d turret %d\n", md.deploys ? 1 : 0,
+                md.auto_deploys ? 1 : 0, md.fire_weapon_when_undeployed ? 1 : 0, md.weapon_projectile, md.turret ? 1 : 0);
+    CHECK(md.deploys && md.auto_deploys && !md.fire_weapon_when_undeployed && md.has_locomotor);
+    CHECK(md.weapon_projectile < 0 && !md.turret);
+    CHECK(dd.deploys && dd.auto_deploys && !dd.fire_weapon_when_undeployed && dd.weapon_projectile >= 0 && !dd.turret);
+    const auto run = [&](bool ai, bool ordered) {
+        tc::CombatConfig cfg;
+        cfg.mode = tc::GameMode::Land;
+        cfg.opportunity_fire = false;
+        std::vector<tc::PlayerInfo> players(2);
+        players[0].ai = ai;
+        tc::CombatSystem cs(bt.combat, cfg, players);
+        DeployHooks hooks;
+        cs.set_hooks(&hooks);
+        tactical::TreeSet trees(2);
+        SimRng rng(26);
+        const float d = std::max(40.0f, std::min(150.0f, 0.5f * dd.max_attack_distance));
+        const auto add = [&](tc::ObjectId id, uint32_t desc, int32_t owner, tactical::Vec3 pos, tactical::Vec3 face) {
+            tc::UnitSpawn s;
+            s.id = id;
+            s.desc = desc;
+            s.owner = owner;
+            s.position = pos;
+            s.facing = face;
+            CHECK(cs.add_unit(s, 1, rng));
+            tactical::TreeMembership m;
+            m.owner = owner;
+            const float r = std::max(1.0f, bt.combat.units[desc].radius);
+            CHECK(trees.add(static_cast<tactical::EntityHandle>(id), {{pos.x - r, pos.y - r, pos.z - r}, {pos.x + r, pos.y + r, pos.z + r}},
+                            1u, m));
+        };
+        add(1, idx[1], 0, {0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
+        add(2, idx[2], 1, {d, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f});
+        if (ordered) cs.order_attack(1, 2);
+        for (uint32_t f = 1; f < 90; ++f) cs.tick(f, trees, rng, serial_for);
+        std::printf("  Destroyer_Droid ai %d ordered %d: targeting state %d, deploy requests %u\n", ai ? 1 : 0, ordered ? 1 : 0,
+                    static_cast<int>(cs.targeting_state(1)), hooks.requests);
+        return hooks.requests;
+    };
+    const uint32_t ordered = run(false, true), human_auto = run(false, false), ai_auto = run(true, false);
+    std::printf("foc Destroyer_Droid auto-deploy requests: ordered %u, human auto target %u, AI auto target %u\n", ordered,
+                human_auto, ai_auto);
+    CHECK(ordered > 0 && human_auto == 0 && ai_auto > 0);
+}
+
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
@@ -887,6 +958,7 @@ void test_foc() {
         }
     }
     test_foc_weapon_sources(types, catalog);  // S8 t08 / S8 t06 B4
+    test_foc_auto_deploy(types, catalog);  // s78n t26.1 review 5
     {  // --- S4 (owner: S4 agent): shipped corruption options (PLANETS.XML) and garrison / capture descriptors ---
         const std::vector<galactic::CorruptionChoiceDef>& ae = rules.special.type(types.resolve_name("AetenII")).corruption;
         size_t missions = 0, options = 0;
