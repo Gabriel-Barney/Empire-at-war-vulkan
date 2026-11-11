@@ -541,6 +541,275 @@ void test_t20_mvm_order_stamp() {
     }
 }
 
+// ---------------------------------------------------------------- s78n t23 review item 7: more MovingVsMoving cases
+// (The 4432153f regression - a record read one waypoint past a cut path, here pending_tag's push_next == size guard -
+// has no direct scene; the save checks of alamo_headless_bench_land_battle_w4 / _w16 caught it and keep covering it.)
+// The first decided state and master of the pair's record over a run; `on_tick` sees each tick.
+struct Decided {
+    CollisionState state = CollisionState::Active;
+    ObjectId master = -1;
+    uint32_t frame = 0;
+};
+template <class F>
+Decided run_pair(MovementSystem& sys, SimRng& rng, ObjectId x, ObjectId y, uint32_t from, uint32_t to, F&& on_tick) {
+    Decided d;
+    for (uint32_t f = from; f < to; ++f) {
+        sys.tick(f, rng, serial_for);
+        const CollisionObject* c = mvm_record(sys, x, y);
+        if (d.state == CollisionState::Active && c && c->state != CollisionState::Active) {
+            d.state = c->state;
+            d.master = master_of(*c);
+            d.frame = f;
+        }
+        on_tick(f, c);
+    }
+    return d;
+}
+void order(MovementSystem& sys, SimRng& rng, std::vector<ObjectId> ids, V2 to, uint32_t frame) {
+    MoveOrder o;
+    o.units = std::move(ids);
+    o.destination = to;
+    sys.move(o, rng, frame);
+}
+
+// Chooser rows (MOVEMENT 5.4.6 "Chooser"): two vehicles crossing at 90 degrees -> Path Around (equal class, no crush);
+// a Giant against a Vehicle it cannot crush, head-on -> Path Around with the Giant as M; two halted vehicles head-on
+// (no formation: Stop clears it) with max speeds 1.0 / 0.8 -> M = the slower one, and as no Path Around can start
+// (no base path) the four attempts fail and leave the roles swapped (state 10, M = the faster one).
+void test_t23_chooser_rows() {
+    ::alamo::test::section("t23_chooser_rows");
+    {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 120);
+        UnitDesc a = vehicle(1, cell_center(20, 60), 0);
+        UnitDesc b = vehicle(2, cell_center(50, 30), 1);
+        b.yaw_deg = 90.0f;
+        CHECK(sys.add_unit(a) && sys.add_unit(b));
+        SimRng rng(331);
+        order(sys, rng, {1}, cell_center(100, 60), 1);
+        order(sys, rng, {2}, cell_center(50, 100), 1);
+        const Decided d = run_pair(sys, rng, 1, 2, 1, 600, [](uint32_t, const CollisionObject*) {});
+        CHECK(d.state == CollisionState::PathAround);
+        std::printf("t23 chooser: crossing at 90 degrees -> port state %d (Path Around), master %d (frame %u)\n",
+                    static_cast<int>(d.state), d.master, d.frame);
+    }
+    {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 120);
+        UnitDesc g = vehicle(1, cell_center(20, 60), 0, 30.0f, 18.0f);
+        g.collision_class = kUccGiantVehicle;
+        g.radius = 36.0f;
+        UnitDesc v = vehicle(2, cell_center(70, 60), 1);
+        v.yaw_deg = 180.0f;
+        CHECK(sys.add_unit(g) && sys.add_unit(v));
+        SimRng rng(332);
+        order(sys, rng, {1}, cell_center(110, 60), 1);
+        order(sys, rng, {2}, cell_center(5, 60), 1);
+        const Decided d = run_pair(sys, rng, 1, 2, 1, 600, [](uint32_t, const CollisionObject*) {});
+        CHECK(d.state == CollisionState::PathAround && d.master == 1);
+        std::printf("t23 chooser: Giant against a Vehicle -> port state %d (Path Around), master %d (the Giant)\n",
+                    static_cast<int>(d.state), d.master);
+    }
+    {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc w = vehicle(1, cell_center(20, 50), 0, 10.0f, 6.0f, 1.0f);
+        w.accel = 0.05f;
+        w.decel = 0.004f;
+        UnitDesc e = vehicle(2, cell_center(60, 50), 0, 10.0f, 6.0f, 0.8f);
+        e.accel = 0.05f;
+        e.decel = 0.004f;
+        e.yaw_deg = 180.0f;
+        CHECK(sys.add_unit(w) && sys.add_unit(e));
+        SimRng rng(333);
+        order(sys, rng, {1}, cell_center(90, 50), 1);
+        order(sys, rng, {2}, cell_center(5, 50), 1);
+        uint32_t f = 1;
+        for (; f < 600 && distance(sys.view(1).pos, sys.view(2).pos) > 260.0f; ++f) sys.tick(f, rng, serial_for);
+        const ObjectId both[] = {1, 2};
+        sys.halt(both, f);
+        CHECK(sys.view(1).form_id == 0 && sys.view(2).form_id == 0);
+        const Decided d = run_pair(sys, rng, 1, 2, f, f + 400, [](uint32_t, const CollisionObject*) {});
+        CHECK(d.state == CollisionState::TryAgainLater && d.master == 1);
+        std::printf("t23 chooser: halted head-on 1.0 / 0.8 -> port state %d (Try Again Later), master %d after the four failed "
+                    "attempts (chosen: 2, the slower)\n",
+                    static_cast<int>(d.state), d.master);
+    }
+}
+
+// Same formation (MOVEMENT 5.4.6 chooser step 3): one order for a column of two heading east, the rear one slower, so it
+// ranks into the front row (the slowest rank leads) and its goal lies past the faster one's. Vehicles of one type ->
+// state 13: the two swap goals and the record ends in its decision frame (so state 13 is never seen between ticks);
+// Infantry -> state 11 with the front-slot unit as M.
+void test_t23_same_formation() {
+    ::alamo::test::section("t23_same_formation");
+    for (int inf = 0; inf < 2; ++inf) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 120);
+        const V2 base = cell_center(30, 60);
+        UnitDesc a = inf ? unit(1, base + V2{40.0f, 0.0f}, 2, 1.0f, 6.0f) : vehicle(1, base + V2{40.0f, 0.0f}, 0);
+        UnitDesc b = inf ? unit(2, base, 2, 0.8f, 6.0f) : vehicle(2, base, 0, 10.0f, 6.0f, 0.8f);
+        CHECK(sys.add_unit(a) && sys.add_unit(b));
+        SimRng rng(334);
+        order(sys, rng, {1, 2}, cell_center(80, 60), 1);
+        const V2 g1 = sys.view(1).goal, g2 = sys.view(2).goal;
+        CHECK(sys.view(1).form_id != 0 && sys.view(1).form_id == sys.view(2).form_id && g2.x > g1.x);
+        bool swapped = false;
+        const Decided d = run_pair(sys, rng, 1, 2, 1, 1200, [&](uint32_t, const CollisionObject*) {
+            swapped = swapped || (sys.view(1).goal == g2 && sys.view(2).goal == g1);
+        });
+        if (inf) CHECK(d.state == CollisionState::FormationFollow && d.master == 2);
+        else CHECK(swapped && mvm_record(sys, 1, 2) == nullptr);
+        std::printf("t23 same formation: %s, goals %.0f / %.0f -> port state %d seen, master %d (frame %u), goals swapped %d\n",
+                    inf ? "infantry" : "vehicles", static_cast<double>(g1.x), static_cast<double>(g2.x), static_cast<int>(d.state),
+                    d.master, d.frame, swapped ? 1 : 0);
+    }
+}
+
+// Save / load inside state 10 (Try Again Later): the resumed run equals the uninterrupted one tick for tick, retry draws
+// included. At a passed retry frame the record is in state 0 after its service, flags 0 (MOVEMENT 5.4.6 "Retry frame of
+// states 10 and 12": the fold reads state 0's max speed).
+void test_t23_save_try_again() {
+    ::alamo::test::section("t23_save_try_again");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc w = vehicle(1, cell_center(20, 50), 0);
+    w.accel = 0.05f;
+    w.decel = 0.004f;
+    UnitDesc e = vehicle(2, cell_center(60, 50), 0);
+    e.accel = 0.05f;
+    e.decel = 0.004f;
+    e.yaw_deg = 180.0f;
+    CHECK(sys.add_unit(w) && sys.add_unit(e));
+    SimRng rng(323);
+    order(sys, rng, {1}, cell_center(90, 50), 1);
+    order(sys, rng, {2}, cell_center(5, 50), 1);
+    uint32_t f = 1;
+    for (; f < 600 && distance(sys.view(1).pos, sys.view(2).pos) > 260.0f; ++f) sys.tick(f, rng, serial_for);
+    const ObjectId both[] = {1, 2};
+    sys.halt(both, f);
+    for (; f < 1200; ++f) {
+        sys.tick(f, rng, serial_for);
+        const CollisionObject* c = mvm_record(sys, 1, 2);
+        if (c && c->state == CollisionState::TryAgainLater) break;
+    }
+    const CollisionObject* c = mvm_record(sys, 1, 2);
+    CHECK(c && c->state == CollisionState::TryAgainLater);
+    if (!c) return;
+    const uint32_t retry = c->retry;
+    ByteWriter wr;
+    sys.write(wr);
+    const std::vector<uint8_t> bytes = wr.bytes();
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 100);
+    ByteReader r(bytes);
+    CHECK(copy.read(r));
+    SimRng rng2 = rng;
+    bool same = units_crc(copy) == units_crc(sys), retry_state0 = false;
+    for (uint32_t k = f + 1; k < f + 200; ++k) {
+        sys.tick(k, rng, serial_for);
+        copy.tick(k, rng2, serial_for);
+        same = same && units_crc(copy) == units_crc(sys) && rng.draws() == rng2.draws();
+        if (k == retry) {
+            const CollisionObject* q = mvm_record(sys, 1, 2);
+            retry_state0 = q && q->state == CollisionState::Active && !q->now_a && !q->now_b;
+        }
+    }
+    CHECK(same && retry_state0);
+    std::printf("t23 save in Try Again Later: saved at %u (retry %u), 199 ticks identical %d, state 0 with flags 0 at the "
+                "retry frame %d\n",
+                f, retry, same ? 1 : 0, retry_state0 ? 1 : 0);
+}
+
+// Starvation (MOVEMENT 5.4.6 0x681d30, states 15 / 16): the slower vehicle of one order leads (its front row slot is
+// ahead), so it and the rear one are Speed Slave Only with M = the front one; a crawler of another order (max speed
+// 0.02, below the 0.05 acceleration default) ahead of it caps it below its acceleration (Moving With Speed Only: it
+// does not overtake). The rear one, answered below its own acceleration, starves: 30 frames later it becomes M of state
+// 15. Case 1: one rear unit, which also has a record with the crawler - two records, so it stands in state 15. Case 2:
+// a Giant leads two rear units side by side, each with that one record - state 16 in the same frame, a detour around
+// the Giant.
+void test_t23_starvation() {
+    ::alamo::test::section("t23_starvation");
+    for (int with_detour = 0; with_detour < 2; ++with_detour) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 120);
+        const V2 at = cell_center(30, 60);
+        UnitDesc front = vehicle(1, at, 0, 10.0f, with_detour ? 24.0f : 6.0f, 0.8f);
+        if (with_detour) front.collision_class = kUccGiantVehicle;  // a Giant never overtakes (0x683260)
+        CHECK(sys.add_unit(front));
+        CHECK(sys.add_unit(vehicle(2, at - V2{40.0f, with_detour ? 16.0f : 0.0f}, 0)));
+        if (with_detour) CHECK(sys.add_unit(vehicle(4, at - V2{40.0f, -16.0f}, 0)));
+        UnitDesc crawler = vehicle(3, at + V2{80.0f, 0.0f}, 1, 30.0f, with_detour ? 4.0f : 20.0f, 0.02f);
+        crawler.radius = 40.0f;  // wide: the front one does not overtake it on the short way to its goal
+        CHECK(sys.add_unit(crawler));
+        SimRng rng(335);
+        order(sys, rng, {3}, cell_center(110, 60), 1);
+        if (with_detour) order(sys, rng, {1, 2, 4}, at + V2{400.0f, 0.0f}, 1);
+        else order(sys, rng, {1, 2}, at + V2{110.0f, 0.0f}, 1);
+        CHECK(sys.view(1).form_id != 0 && sys.view(1).form_id == sys.view(2).form_id);
+        uint32_t slave = 0, starved = 0, detour = 0, records = 0;
+        ObjectId starved_m = -1;
+        bool stood = true;
+        for (uint32_t f = 1; f < 1000; ++f) {
+            sys.tick(f, rng, serial_for);
+            const CollisionObject* c = mvm_record(sys, 1, 2);
+            if (!c) continue;
+            if (slave == 0 && c->state == CollisionState::SpeedSlave) slave = f;
+            const bool st = c->state == CollisionState::Starved || c->state == CollisionState::StarvedDetour;
+            if (starved == 0 && st) {
+                starved = f;
+                starved_m = master_of(*c);
+                for (const CollisionObject& k : sys.collisions().list())
+                    if (k.a == 2 || k.b == 2) ++records;
+            }
+            if (detour == 0 && c->state == CollisionState::StarvedDetour) detour = f;
+            if (starved > 0 && starved + 5 < f && c->state == CollisionState::Starved) stood = stood && sys.view(2).speed == 0.0f;
+        }
+        CHECK(slave > 0 && starved > slave + 29 && starved_m == 2);
+        if (with_detour) CHECK(records == 1 && detour == starved);
+        else CHECK(records == 2 && detour == 0 && stood);
+        std::printf("t23 starvation: Speed Slave Only from %u, starved at %u (M %d, the rear one, %u record(s)), state 16 at %u%s\n",
+                    slave, starved, starved_m, records, detour, with_detour ? "" : stood ? ", stands" : ", moves");
+    }
+}
+
+// Early pop (MOVEMENT 5.4.6 0x6807e0): head-on vehicles, Path Around with the early-pop gate (relation head-on); once S is
+// behind M by hx_S + hx_M and the way to its detour's end is clear, its detour is dropped before its last point.
+void test_t23_early_pop() {
+    ::alamo::test::section("t23_early_pop");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 120);
+    const V2 west = cell_center(20, 60), east = cell_center(60, 60);
+    UnitDesc w = vehicle(1, west, 0);
+    UnitDesc e = vehicle(2, east, 1);
+    e.yaw_deg = 180.0f;
+    CHECK(sys.add_unit(w) && sys.add_unit(e));
+    SimRng rng(336);
+    order(sys, rng, {1}, east + V2{200.0f, 0.0f}, 1);
+    order(sys, rng, {2}, west - V2{200.0f, 0.0f}, 1);
+    bool gate = false, popped = false;
+    float left = 0.0f;
+    ObjectId s = -1;
+    std::vector<V2> prev;
+    for (uint32_t f = 1; f < 900; ++f) {
+        sys.tick(f, rng, serial_for);
+        const CollisionObject* c = mvm_record(sys, 1, 2);
+        if (c && c->state == CollisionState::PathAround) {
+            gate = gate || c->early_pop;
+            s = master_of(*c) == 1 ? 2 : 1;
+        }
+        if (s < 0) continue;
+        const std::span<const V2> tp = sys.top_path(s);
+        if (!popped && !prev.empty() && tp.empty()) {
+            left = distance(sys.view(s).pos, prev.back());
+            popped = left > 1.0f;
+        }
+        prev.assign(tp.begin(), tp.end());
+    }
+    CHECK(gate && popped);
+    std::printf("t23 early pop: gate %d, detour dropped %.1f before its last point\n", gate ? 1 : 0, static_cast<double>(left));
+}
+
 }  // namespace
 
 int main() {
@@ -554,5 +823,10 @@ int main() {
     test_t20_mvm_impassable();
     test_t20_mvm_save_pass();
     test_t20_mvm_order_stamp();
+    test_t23_chooser_rows();
+    test_t23_same_formation();
+    test_t23_save_try_again();
+    test_t23_starvation();
+    test_t23_early_pop();
     return ::alamo::test::report("alamo_tactical_movement_b3_tests");
 }
