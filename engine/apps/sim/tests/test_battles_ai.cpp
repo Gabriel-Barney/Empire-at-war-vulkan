@@ -3450,6 +3450,58 @@ struct SquadGarrisonScene {
 // container and every member still a mover (the host feeds them after a load: an order then meets the same gates), and
 // runs on tick for tick with the saving session - through the entry, the leave order and the walk-out. Last: a garrison
 // order on a hostile host is refused before the units' queues are cleared and before they are sent walking.
+// s78n t20 batch 2 (FIGHTER_FLYING §7.4 "Garrison approach in full" items 4 - 5): a squad garrisons a garrison vehicle
+// that drives off. The squad's container is put 50 behind the walker, the walker is ordered 400 ahead and the squad into
+// it in the same frame. The squad's approach move ends where the walker stood; within 60 of the walker (3-D distance -
+// the squad's radius) the squad goes to state 2 and the walker - still driving the tick before - is stopped in that tick
+// (HostStop); the corrective move (flag 0x20, the whole excess toward the walker) then takes the squad in. Bunkers and
+// single units take the same code (GarrisonSystem; alamo_tactical_garrison_tests test_approach).
+void test_land_squad_garrison_host_stop() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, false, true);
+    SquadGarrisonScene a(*d, true);
+    CHECK(a.s.gs != nullptr);
+    if (!a.s.gs || !a.start()) {
+        CHECK(false);
+        return;
+    }
+    using R = commands::RejectReason;
+    for (int i = 0; i < 300; ++i) CHECK(a.tick());  // the squad lays out (a strung-out squad's radius is large)
+    objects::ObjectStore& st = a.tm->primary();
+    const Vec3 wp = st.position(st.find(a.walker));
+    CHECK(a.b->teleport(*a.tm, a.team, Vec3{wp.x - 80.0f, wp.y, wp.z}, st.facing(st.find(a.team))));
+    const objects::ObjectId w1[] = {a.walker};
+    CHECK(a.b->order_garrison(*a.tm, 0, a.members, a.walker, a.s.host->random().synced()) == R::None);
+    const uint32_t f0 = a.b->frame();
+    uint32_t closing = 0, inside = 0, dropped = 0, drive = 0;
+    bool stopped = false;
+    float walker_moved = 0.0f, gap = -1.0f;
+    for (int i = 0; i < 2000 && inside == 0 && dropped == 0; ++i) {
+        // the reservation stopped the walker (host vf +0xe0); when the squad is 40 short of it the player drives it on
+        if (drive == 0 && a.tm->primary().position(a.tm->primary().find(a.team)).x >= wp.x - 40.0f) {
+            CHECK(a.b->order_move(*a.tm, 0, w1, wp.x + 400.0f, wp.y, a.s.host->random().synced()) == R::None);
+            drive = a.b->frame();
+        }
+        const bool driving = a.b->movement().view(a.walker).has_goal;
+        if (!a.tick()) break;
+        const uint8_t state = a.b->garrison().state_of(a.members.front());
+        const objects::ObjectStore& s2 = a.tm->primary();
+        if (state == 2 && closing == 0) {
+            closing = a.b->frame();
+            stopped = driving && !a.b->movement().view(a.walker).has_goal;
+            const Vec3 now = s2.position(s2.find(a.walker)), kp = s2.position(s2.find(a.team));
+            walker_moved = std::sqrt((now.x - wp.x) * (now.x - wp.x) + (now.y - wp.y) * (now.y - wp.y));
+            gap = std::sqrt((now.x - kp.x) * (now.x - kp.x) + (now.y - kp.y) * (now.y - kp.y));
+        }
+        if (state == 0 && a.inside() == 0) dropped = a.b->frame();
+        if (a.inside() == a.members.size()) inside = a.b->frame();
+    }
+    std::printf("  garrison host stop: order %u, walker driven at %u, state 2 at %u (walker %.1f from its start, squad %.1f from "
+                "it, stopped %d), inside at %u, dropped at %u\n",
+                f0, drive, closing, static_cast<double>(walker_moved), static_cast<double>(gap), stopped ? 1 : 0, inside, dropped);
+    CHECK(drive > f0 && closing > drive && stopped && walker_moved > 0.0f && dropped == 0 && inside >= closing);
+}
+
 // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 items 6 / 8): the land attack re-check. The human's squad
 // (S10_Squad, LAND_TEAM_CONTAINER_LOCOMOTOR) attacks a trooper of the invader's squads; every unit is invulnerable and
 // the stand-in is off, so only the order and its attack block move it.
@@ -3949,6 +4001,8 @@ int main(int argc, char** argv) {
     test_land_squad_garrison();   // s78n review
     std::printf("s78n t18 review: a squad's garrison approach, entry, stay and walk-out through a save / load; a hostile host\n");
     test_land_squad_garrison_save_load();
+    std::printf("s78n t20 batch 2: a squad's approach to a garrison vehicle that drives off (HostStop, corrective move)\n");
+    test_land_squad_garrison_host_stop();
     std::printf("s78n t20 stage A: the land attack re-check (displaced squad, friendly squads on the line, save / load)\n");
     test_land_attack_blocks();
     test_vehicle_landing_exit();

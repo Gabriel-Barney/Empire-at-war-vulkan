@@ -5,6 +5,7 @@
 // cadence, first-candidate control, contested, decay vs sticky, two-step capture of an enemy point, garrison rule b),
 // and the descriptors read from type XML (garrison_types.hpp).
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
@@ -72,6 +73,7 @@ void test_rules() {
     bunker.exit_dist = 50.0f;
     bunker.can_fire = true;
     bunker.half_diagonal = 20.0f;
+    bunker.radius = 30.0f;
     HolderDesc jug;
     jug.kind = HolderKind::Vehicle;
     jug.accepts = kInf | kVeh;
@@ -84,7 +86,7 @@ void test_rules() {
     box.can_fire = false;
     CHECK(g.add_holder(10, 1, bunker) && !g.add_holder(10, 1, bunker));
     CHECK(g.add_holder(20, 1, jug) && g.add_holder(30, 9, box) && g.add_holder(40, 2, bunker));
-    const OccupantDesc trooper{kInf, 1, 5.0f}, dt3{kVeh, 2, 5.0f};
+    const OccupantDesc trooper{kInf, 1}, dt3{kVeh, 2};
     CHECK(g.add_unit(1, 1, trooper) && g.add_unit(2, 1, trooper) && g.add_unit(3, 1, dt3) && g.add_unit(4, 2, trooper));
     CHECK(g.add_unit(5, 3, trooper) && g.add_unit(6, 1, trooper) && g.add_unit(20, 1, dt3));
     // Masks (zero mask always matches), allied / neutral / hostile hosts, the unit itself.
@@ -102,24 +104,33 @@ void test_rules() {
     CHECK(g.enter_allowed(6, 10));  // (no capacity test at order time)
     CHECK(g.order_enter(6, 10));    // ... but the order is accepted (no capacity test at order time)
     CHECK(!g.order_enter(4, 10));   // hostile host
-    // Approach point: host + facing x half diagonal (no Enter_Dist) = (20, 0); reach = max(radius 0, slack 10) + 5.
+    // s78n t20 batch 2: a host without entry bones - the approach move goes to host + facing x half the host box's
+    // half-extent length (no Enter_Dist; 40 -> (20, 0)), the range test reads A = the host position: 3-D |A - P| - r <=
+    // Garrison_Radius (30, r 5: 34 enters, 36 does not).
     World w;
     w.set(10, {0, 0, 0});
     w.set(1, {34, 0, 0});
     w.set(2, {36, 0, 0});
     w.set(6, {300, 0, 0});
+    int32_t bone = 7;
+    const Vec3 ad = g.approach_destination(10, {0, 0, 0}, {2, 0, 0}, {300, 0, 0}, 40.0f, {}, bone);
+    CHECK(ad.x == 20.0f && ad.y == 0.0f && bone == -1);
     const Vec3 ap = g.approach_point(10, {0, 0, 0}, {2, 0, 0});
-    CHECK(ap.x == 20.0f && ap.y == 0.0f);
+    CHECK(ap.x == 0.0f && ap.y == 0.0f && g.bone_of(1) == -1);
     auto pose = [&w](ObjectId id, Vec3& p, Vec3& f) { return w.get(id, p, f); };
-    g.service(1, pose);
+    const ApproachFn r5 = [](ObjectId, ObjectId, ApproachInfo& ai) {
+        ai.radius = 5.0f;  // the move still runs (no "finished" signal in this test)
+        return true;
+    };
+    g.service(1, pose, r5);
     CHECK(g.entering(1) && !g.entering(2) && g.pending_holder(2) == 10 && g.holder_of(1) == kNoObject);
     CHECK(g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::EnterStarted && g.events()[0].unit == 1);
     CHECK(!g.cancel_enter(1) && !g.order_enter(1, 20));  // an entering unit is committed
     CHECK(!g.enter_allowed(1, 20) && g.enter_allowed(2, 20) == g.masks_match(2, 20));  // (a walking unit may be re-ordered)
     g.clear_events();
-    g.service(30, pose);
+    g.service(30, pose, r5);
     CHECK(g.holder_of(1) == kNoObject);  // 30 frames of fade: enters at frame 31
-    g.service(31, pose);
+    g.service(31, pose, r5);
     CHECK(g.holder_of(1) == 10 && g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::Entered &&
           g.used_slots(10) == 1 && g.free_slots(10) == 2);
     // Can_Garrison_Fire: holder flag and its occupants.
@@ -141,14 +152,14 @@ void test_rules() {
     w.set(3, {1015, 0, 0});
     CHECK(g.order_enter(3, 20));
     g.clear_events();
-    g.service(40, pose);
+    g.service(40, pose, r5);
     CHECK(g.entering(3));
-    g.service(70, pose);
+    g.service(70, pose, r5);
     CHECK(g.holder_of(3) == 20 && g.used_slots(20) == 2);
     // The walker 6 to the bunker: hostile owner change of the host drops it.
     g.clear_events();
     g.set_owner(10, 2);
-    g.service(71, pose);
+    g.service(71, pose, r5);
     CHECK(g.pending_holder(6) == kNoObject && g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::OrderDropped);
     // Owner change of an occupied host to a hostile owner ejects (an allied one keeps them, test_owner_change); host
     // death ejects (behaviour) or kills (CanContainGarrison only).
@@ -161,8 +172,8 @@ void test_rules() {
     w.set(30, {500, 0, 0});
     w.set(4, {520, 0, 0});
     CHECK(g.order_enter(4, 30));
-    g.service(80, pose);
-    g.service(110, pose);
+    g.service(80, pose, r5);
+    g.service(110, pose, r5);
     CHECK(g.holder_of(4) == 30);
     g.clear_events();
     g.remove(30, {500, 0, 0}, {1, 0, 0}, 111);
@@ -172,8 +183,8 @@ void test_rules() {
     w.set(5, {22, 0, 0});
     g.set_owner(10, 3);
     CHECK(g.order_enter(5, 10));
-    g.service(120, pose);
-    g.service(150, pose);
+    g.service(120, pose, r5);
+    g.service(150, pose, r5);
     CHECK(g.holder_of(5) == 10 && g.occupancy().size() == 1);
     g.clear_events();
     CHECK(g.eject_all(10, {0, 0, 0}, {1, 0, 0}, 151) == 1 && g.events()[0].kind == GarrisonEventKind::Ejected);
@@ -183,7 +194,7 @@ void test_rules() {
     CHECK(g.order_enter(6, 20));
     g.clear_events();
     w.erase(20);
-    g.service(160, pose);
+    g.service(160, pose, r5);
     CHECK(g.events().size() == 1 && g.events()[0].kind == GarrisonEventKind::OrderDropped);
 }
 
@@ -192,8 +203,9 @@ uint64_t scripted_hash() {
     HolderDesc h;
     h.accepts = kInf;
     h.slots = 2;
+    h.radius = 12.0f;
     g.add_holder(50, 0, h);
-    for (ObjectId i = 1; i <= 4; ++i) g.add_unit(i, 0, OccupantDesc{kInf, 1, 4.0f});
+    for (ObjectId i = 1; i <= 4; ++i) g.add_unit(i, 0, OccupantDesc{kInf, 1});
     World w;
     w.set(50, {0, 0, 0});
     for (ObjectId i = 1; i <= 4; ++i) {
@@ -222,7 +234,7 @@ void test_owner_change() {
     bunker.slots = 4;
     bunker.exit_dist = 40.0f;
     CHECK(g.add_holder(10, kNeutral, bunker));
-    const OccupantDesc trooper{kInf, 1, 5.0f};
+    const OccupantDesc trooper{kInf, 1};
     auto owner_of = [](ObjectId u) -> int32_t { return u == 1 ? 1 : (u == 2 ? 3 : 2); };  // units 1, 2, 3
     for (ObjectId u = 1; u <= 3; ++u) CHECK(g.add_unit(u, owner_of(u), trooper));
     // A neutral bunker is open to every side: owner 1, its ally 3 and the enemy 2 are all inside.
@@ -374,6 +386,7 @@ struct GarrisonScene {
         bunker.exit_dist = 50.0f;
         bunker.can_fire = true;
         bunker.half_diagonal = 20.0f;
+        bunker.radius = 30.0f;  // s78n t20 batch 2: entering within 30 of the host (A = the host position)
         HolderDesc jug;
         jug.kind = HolderKind::Vehicle;
         jug.accepts = kInf | kVeh;
@@ -382,8 +395,8 @@ struct GarrisonScene {
         jug.enter_dist = 15.0f;
         g.add_holder(10, 1, bunker);
         g.add_holder(20, 3, jug);
-        for (ObjectId i = 1; i <= 5; ++i) g.add_unit(i, i == 5 ? 3 : 1, OccupantDesc{kInf, 1, 5.0f});
-        g.add_unit(6, 1, OccupantDesc{kVeh, 2, 5.0f});
+        for (ObjectId i = 1; i <= 5; ++i) g.add_unit(i, i == 5 ? 3 : 1, OccupantDesc{kInf, 1});
+        g.add_unit(6, 1, OccupantDesc{kVeh, 2});
         w.set(10, {0, 0, 0});
         w.set(20, {1000, 0, 0});
         for (ObjectId i = 1; i <= 6; ++i) w.set(i, {25.0f + 40.0f * static_cast<float>(i), 0, 0});
@@ -417,7 +430,6 @@ void test_vehicle_thief_holder() {
     OccupantDesc inf;
     inf.category = kInf;
     inf.value = 1;
-    inf.radius = 2.0f;
     CHECK(g.add_holder(50, 1, car));  // the stolen vehicle (already the thief's owner's)
     CHECK(g.add_unit(1, 1, inf) && g.add_unit(2, 1, inf));  // the thief and an allied trooper
     const Vec3 at{100.0f, 50.0f, 0.0f}, face{0.0f, 1.0f, 0.0f};
@@ -492,11 +504,11 @@ void test_garrison_save() {
     }
     CHECK(pending > 0 && inside > 0);
     const std::vector<uint8_t> saved = bytes_of(a.g);
-    // The first unit's state byte: version, neutral, holder count, 2 holders (42 bytes + 4 per occupant), unit count,
-    // then id, owner, category, value, radius.
+    // The first unit's state byte: version, neutral, holder count, 2 holders (46 bytes + 12 per entry bone (none here) + 4
+    // per occupant), unit count, then id, owner, category, value.
     size_t unit0_state = 4 + 4 + 4;
-    for (const ObjectId h : {10, 20}) unit0_state += 42 + 4 * a.g.occupants(h).size();
-    unit0_state += 4 + 4 + 4 + 8 + 4 + 4;
+    for (const ObjectId h : {10, 20}) unit0_state += 46 + 4 * a.g.occupants(h).size();
+    unit0_state += 4 + 4 + 4 + 8 + 4;
 
     GarrisonScene b;
     ByteReader r(saved);
@@ -538,13 +550,13 @@ void test_garrison_save() {
     ByteReader rb2(bad);
     CHECK(!c.g.read(rb2));
     bad = saved;
-    CHECK(bad[unit0_state] == 7 || bad[unit0_state] == 5 || bad[unit0_state] == 1);
+    CHECK(bad[unit0_state] == 7 || bad[unit0_state] == 5 || bad[unit0_state] == 2 || bad[unit0_state] == 1);
     bad[unit0_state] = 3;  // not a GarrisonDataPack state
     ByteReader rb3(bad);
     CHECK(!c.g.read(rb3));
-    for (const uint8_t v : {uint8_t{1}, uint8_t{3}}) {  // only the current version (2: s78n t12 review) is read
+    for (const uint8_t v : {uint8_t{2}, uint8_t{4}}) {  // only the current version (3: s78n t20 batch 2) is read
         bad = saved;
-        CHECK(bad[0] == 2);
+        CHECK(bad[0] == 3);
         bad[0] = v;
         ByteReader rb4(bad);
         CHECK(!c.g.read(rb4));
@@ -697,7 +709,7 @@ static void test_groups() {
     bunker.accepts = kInf;
     bunker.slots = 2;
     bunker.radius = 30.0f;
-    bunker.enter_dist = 40.0f;
+    bunker.enter_dist = 40.0f;  // (no entry bones: A is the host position)
     bunker.exit_dist = 50.0f;
     CHECK(g.add_holder(1, 0, bunker));
     OccupantDesc inf;
@@ -715,25 +727,26 @@ static void test_groups() {
     World w;
     w.set(1, {0.0f, 0.0f, 0.0f});
     w.set(100, {200.0f, 0.0f, 0.0f});             // the container: its position is what the range test reads
-    w.set(11, {45.0f, 0.0f, 0.0f});               // a member standing on the approach point does not start the entry
+    w.set(11, {5.0f, 0.0f, 0.0f});                // a member standing at the host does not start the entry
     w.set(12, {210.0f, 5.0f, 0.0f});
     w.set(13, {190.0f, -5.0f, 0.0f});
     const PoseFn pose = [&w](ObjectId id, Vec3& p, Vec3& f) { return w.get(id, p, f); };
     float radius = 20.0f;
     bool arrived = false;
-    const GroupReachFn reach = [&](ObjectId group, GroupReach& gr) {
-        CHECK(group == 100);
-        gr.radius = radius;
-        gr.arrived = arrived;
+    // s78n t20 batch 2: the key of a squad is its container (100); a single unit is its own key
+    const ApproachFn reach = [&](ObjectId key, ObjectId host, ApproachInfo& ai) {
+        CHECK((key == 100 || key == 20) && host == 1);
+        ai.radius = key == 100 ? radius : 0.0f;
+        ai.moving = !arrived;
         return true;
     };
     g.service(1, pose, reach);
     CHECK(g.events().empty() && g.pending_holder(11) == 1 && !g.entering(11));
-    // 3-D distance from the container to the approach point (40, 0, 0) - r <= Garrison_Radius: 91 - 20 > 30; 89 - 20 <= 30...
-    w.set(100, {131.0f, 0.0f, 0.0f});
+    // 3-D distance from the container to A (the host position, no entry bones) - r <= Garrison_Radius: 51 - 20 > 30...
+    w.set(100, {51.0f, 0.0f, 0.0f});
     g.service(2, pose, reach);
     CHECK(g.events().empty());
-    w.set(100, {40.0f, 0.0f, 49.0f});             // ...and the distance is 3-D: 49 up - 20 = 29
+    w.set(100, {0.0f, 0.0f, 49.0f});              // ...and the distance is 3-D: 49 up - 20 = 29
     g.service(3, pose, reach);
     CHECK(g.events().size() == 3);                // all three start entering in the same pass, ascending id
     for (size_t i = 0; i < g.events().size(); ++i)
@@ -749,7 +762,7 @@ static void test_groups() {
     CHECK(g.used_slots(1) == 1 && g.free_slots(1) == 1);  // three members, one slot
     CHECK(g.can_garrison(20, 1) == false);                // 1 free - 0 reserved - 1 = 0 (strict)
     CHECK(g.order_enter(20, 1));                          // the entry rule itself: free >= value
-    w.set(20, {40.0f, 0.0f, 0.0f});
+    w.set(20, {20.0f, 0.0f, 0.0f});
     g.service(100, pose, reach);
     for (uint32_t f = 101; f <= 100 + g.config().enter_frames; ++f) g.service(f, pose, reach);
     CHECK(g.garrisoned(20) && g.free_slots(1) == 0);
@@ -768,12 +781,12 @@ static void test_groups() {
     CHECK(g2.reserved(1) == 2);
     World w2;
     w2.set(1, {0.0f, 0.0f, 0.0f});
-    w2.set(100, {40.0f, 0.0f, 0.0f});
+    w2.set(100, {20.0f, 0.0f, 0.0f});
     w2.set(200, {400.0f, 0.0f, 0.0f});
-    for (ObjectId id : {11, 12, 21, 22}) w2.set(id, {40.0f, 0.0f, 0.0f});
+    for (ObjectId id : {11, 12, 21, 22}) w2.set(id, {20.0f, 0.0f, 0.0f});
     const PoseFn pose2 = [&w2](ObjectId id, Vec3& p, Vec3& f) { return w2.get(id, p, f); };
     radius = 0.0f;
-    g2.service(1, pose2, {});                             // no reach hook: radius 0
+    g2.service(1, pose2, {});                             // no hook: radius 0, the moves still run
     CHECK(g2.entering(11) && g2.entering(12) && !g2.entering(21));
     for (uint32_t f = 2; f <= 1 + g2.config().enter_frames; ++f) g2.service(f, pose2, {});
     CHECK(g2.garrisoned(11) && g2.garrisoned(12) && g2.free_slots(1) == 0);
@@ -786,7 +799,8 @@ static void test_groups() {
             ++dropped;
         }
     CHECK(dropped == 2);
-    // the approach move ended short of the radius: inside 60.0 (0x140a28bcc) the squad enters from where it stopped
+    // the approach move ended short of the radius: inside 60.0 (0x140a28bcc) state 2 - the host stops and the container
+    // gets a flag-0x20 move of the whole 2-D excess toward A (s78n t20 batch 2), entering on the way
     GarrisonSystem g3;
     g3.set_group_fn([](ObjectId, GarrisonGroup& out) {
         out.id = 100;
@@ -798,15 +812,242 @@ static void test_groups() {
     CHECK(g3.add_unit(11, 0, inf) && g3.order_enter(11, 1));  // (the default group category 0 matches every host)
     World w3;
     w3.set(1, {0.0f, 0.0f, 0.0f});
-    w3.set(100, {95.0f, 0.0f, 0.0f});                     // 55 from the approach point
-    w3.set(11, {95.0f, 0.0f, 0.0f});
+    w3.set(100, {55.0f, 0.0f, 0.0f});                     // 55 from A
+    w3.set(11, {55.0f, 0.0f, 0.0f});
     const PoseFn pose3 = [&w3](ObjectId id, Vec3& p, Vec3& f) { return w3.get(id, p, f); };
     arrived = false;
+    radius = 5.0f;
     g3.service(1, pose3, reach);
-    CHECK(!g3.entering(11));                              // still walking: 55 > 5
+    CHECK(!g3.entering(11) && g3.state_of(11) == 1);      // still walking: 55 - 5 > 5
     arrived = true;
-    g3.service(2, pose3, reach);
-    CHECK(g3.entering(11));                               // its move ended: 55 <= 60
+    g3.service(2, pose3, reach);                          // its move ended: 55 - 5 <= 60
+    CHECK(!g3.entering(11) && g3.state_of(11) == 2 && g3.events().size() == 2);
+    if (g3.events().size() == 2) {
+        CHECK(g3.events()[0].kind == GarrisonEventKind::HostStop && g3.events()[0].unit == 11 && g3.events()[0].holder == 1);
+        const GarrisonEvent& cm = g3.events()[1];
+        // the whole 2-D excess e = 55 - 5 = 50 toward A: the container stops r = 5 short of it
+        CHECK(cm.kind == GarrisonEventKind::CorrectiveMove && cm.unit == 11 && std::fabs(cm.position.x - 5.0f) < 1e-4f &&
+              cm.position.y == 0.0f);
+    }
+    g3.clear_events();
+    arrived = false;                                      // the host issued the corrective move
+    w3.set(100, {5.0f, 0.0f, 0.0f});
+    g3.service(3, pose3, reach);
+    CHECK(g3.entering(11) && g3.events().size() == 1 && g3.events()[0].kind == GarrisonEventKind::EnterStarted);
+}
+
+// s78n t20 batch 2 (FIGHTER_FLYING §7.4 "Garrison approach in full"): one key (a single unit), host radius 10.
+namespace {
+struct ApproachScene {
+    GarrisonSystem g;
+    World w;
+    ApproachInfo info;  // what the host answers for the key
+    ApproachScene() {
+        HolderDesc h;
+        h.kind = HolderKind::Vehicle;
+        h.accepts = kInf;
+        h.slots = 4;
+        h.radius = 10.0f;
+        CHECK(g.add_holder(50, 1, h));
+        CHECK(g.add_unit(1, 1, OccupantDesc{kInf, 1}));
+        w.set(50, {0.0f, 0.0f, 0.0f});
+        info.radius = 5.0f;
+    }
+    void service(uint32_t f) {
+        const PoseFn pose = [this](ObjectId id, Vec3& p, Vec3& fc) { return w.get(id, p, fc); };
+        g.service(f, pose, [this](ObjectId, ObjectId, ApproachInfo& ai) {
+            ai = info;
+            return true;
+        });
+    }
+    size_t count(GarrisonEventKind k) const {
+        size_t n = 0;
+        for (const GarrisonEvent& e : g.events()) n += e.kind == k ? 1u : 0u;
+        return n;
+    }
+};
+}  // namespace
+
+static void test_approach() {
+    {  // the per-frame range test is 3-D: model-less unit (r = 0.0866), Garrison_Radius 10 (hand: 10.05 - 0.0866 <= 10;
+       // 10.1 - 0.0866 > 10; sqrt(9.6^2 + 9) - 0.0866 = 9.971; sqrt(9.7^2 + 9) - 0.0866 = 10.067)
+        const float r = std::sqrt(3.0f * 0.05f * 0.05f);
+        const Vec3 at[4] = {{10.05f, 0.0f, 0.0f}, {10.1f, 0.0f, 0.0f}, {9.6f, 0.0f, 3.0f}, {9.7f, 0.0f, 3.0f}};
+        const bool enters[4] = {true, false, true, false};
+        for (int i = 0; i < 4; ++i) {
+            ApproachScene s;
+            s.info.radius = r;
+            CHECK(s.g.order_enter(1, 50) && s.g.state_of(1) == 1);
+            s.w.set(1, at[i]);
+            s.service(1);
+            CHECK(s.g.entering(1) == enters[i]);
+        }
+    }
+    {  // finished at 3-D 40 with r 5: within 60 -> state 2, HostStop, a corrective move of the whole 2-D excess (35)
+        ApproachScene s;
+        CHECK(s.g.order_enter(1, 50));
+        s.w.set(1, {0.0f, 40.0f, 0.0f});
+        s.service(1);  // walking: 35 > 10
+        CHECK(s.g.events().empty() && s.g.state_of(1) == 1);
+        s.info.moving = false;
+        s.service(2);
+        CHECK(s.g.state_of(1) == 2 && s.g.events().size() == 2 && s.count(GarrisonEventKind::HostStop) == 1);
+        if (s.g.events().size() == 2) {
+            const GarrisonEvent& m = s.g.events()[1];
+            CHECK(m.kind == GarrisonEventKind::CorrectiveMove && m.position.x == 0.0f && std::fabs(m.position.y - 5.0f) < 1e-5f);
+            CHECK(std::fabs((40.0f - m.position.y) - 35.0f) < 1e-5f);  // length 35: the unit would stop r short of A
+        }
+        CHECK(s.g.reserved(50) == 1 && s.g.pending_holder(1) == 50);  // state 2 still reserves
+        s.g.clear_events();
+        s.info.moving = true;  // the corrective move runs; on the way, 3-D 15 - 5 <= 10 enters
+        s.w.set(1, {0.0f, 20.0f, 0.0f});
+        s.service(3);
+        CHECK(s.g.events().empty());
+        s.w.set(1, {0.0f, 15.0f, 0.0f});
+        s.service(4);
+        CHECK(s.g.entering(1) && s.g.events().size() == 1 && s.g.events()[0].kind == GarrisonEventKind::EnterStarted);
+    }
+    {  // state 2: the corrective move's end enters unconditionally (it ended short, e.g. blocked)
+        ApproachScene s;
+        CHECK(s.g.order_enter(1, 50));
+        s.w.set(1, {50.0f, 0.0f, 0.0f});
+        s.info.moving = false;
+        s.service(1);
+        CHECK(s.g.state_of(1) == 2 && s.count(GarrisonEventKind::CorrectiveMove) == 1);
+        s.g.clear_events();
+        s.info.moving = true;
+        s.service(2);
+        s.info.moving = false;  // ended at 3-D 50 - 5 = 45 > 10
+        s.service(3);
+        CHECK(s.g.entering(1) && s.count(GarrisonEventKind::EnterStarted) == 1 && s.count(GarrisonEventKind::HostStop) == 0);
+    }
+    {  // 2-D excess within the radius: HostStop and entering at once (no corrective move)
+        ApproachScene s;
+        CHECK(s.g.order_enter(1, 50));
+        s.w.set(1, {14.0f, 0.0f, 20.0f});  // 3-D 24.4 - 5 > 10, 2-D 14 - 5 <= 10
+        s.info.moving = false;
+        s.service(1);
+        CHECK(s.g.entering(1) && s.g.events().size() == 2 && s.g.events()[0].kind == GarrisonEventKind::HostStop &&
+              s.g.events()[1].kind == GarrisonEventKind::EnterStarted);
+    }
+    for (const bool host_path : {true, false}) {  // finished at 70 (- 5 > 60): cancel with a host path, else re-issue
+        ApproachScene s;
+        CHECK(s.g.order_enter(1, 50));
+        s.w.set(1, {70.0f, 0.0f, 0.0f});
+        s.info.moving = false;
+        s.info.host_path = host_path;
+        s.service(1);
+        CHECK(s.g.events().size() == 1);
+        if (host_path) {
+            CHECK(s.count(GarrisonEventKind::OrderDropped) == 1 && s.g.events()[0].was == 1 && s.g.state_of(1) == 0 &&
+                  s.g.reserved(50) == 0);
+        } else {
+            CHECK(s.count(GarrisonEventKind::Reissue) == 1 && s.g.events()[0].unit == 1 && s.g.state_of(1) == 1);
+            s.g.clear_events();
+            s.service(2);  // no move in flight until the host re-orders: no second signal
+            CHECK(s.g.events().empty());
+        }
+    }
+    {  // eleven finished approaches with an unchanged A: ten Reissue, then OrderDropped; a changed A resets the count
+        ApproachScene s;
+        s.w.set(50, {0.0f, 1.0f, 0.0f});  // (off the origin: the memo starts at (0, 0, 0), as the behaviour's fields)
+        s.w.set(1, {100.0f, 0.0f, 0.0f});
+        s.info.moving = false;
+        uint32_t reissues = 0, dropped = 0, frame = 1;
+        CHECK(s.g.order_enter(1, 50));
+        for (int k = 0; k < 11; ++k) {
+            s.g.clear_events();
+            s.service(frame++);
+            reissues += static_cast<uint32_t>(s.count(GarrisonEventKind::Reissue));
+            dropped += static_cast<uint32_t>(s.count(GarrisonEventKind::OrderDropped));
+            if (s.count(GarrisonEventKind::Reissue) == 1) CHECK(s.g.order_enter(1, 50));  // the host's new approach order
+        }
+        CHECK(reissues == 10 && dropped == 1 && s.g.state_of(1) == 0 && s.g.retries_of(1) == 10);
+        // the count survives the cancel: a new order's first finish with the same A cancels at once
+        s.g.clear_events();
+        CHECK(s.g.order_enter(1, 50));
+        s.service(frame++);
+        CHECK(s.count(GarrisonEventKind::OrderDropped) == 1 && s.g.retries_of(1) == 11);
+        // A changed (the host moved): the count starts again
+        s.g.clear_events();
+        s.w.set(50, {0.0f, 2.0f, 0.0f});
+        CHECK(s.g.order_enter(1, 50));
+        s.service(frame++);
+        CHECK(s.count(GarrisonEventKind::Reissue) == 1 && s.g.retries_of(1) == 0);
+    }
+    {  // entry bones: A = the bone's world point (host yaw 90: local x forward = world +y, local y left = world -x), the
+       // nearest reachable bone in 3-D is the destination; none reachable -> host + half the extent length along its yaw
+        GarrisonSystem g;
+        HolderDesc h;
+        h.accepts = kInf;
+        h.slots = 4;
+        h.radius = 10.0f;
+        h.bones = {{10.0f, 0.0f, 2.0f}, {0.0f, 10.0f, 2.0f}, {-10.0f, 0.0f, 2.0f}};
+        CHECK(g.add_holder(50, 1, h));
+        const Vec3 hp{100.0f, 50.0f, 0.0f}, hf{0.0f, 3.0f, 0.0f};
+        const Vec3 a0 = g.approach_point(50, hp, hf, 0), a1 = g.approach_point(50, hp, hf, 1), a2 = g.approach_point(50, hp, hf, 2);
+        CHECK(a0.x == 100.0f && a0.y == 60.0f && a0.z == 2.0f && a1.x == 90.0f && a1.y == 50.0f && a2.x == 100.0f && a2.y == 40.0f);
+        const Vec3 none = g.approach_point(50, hp, hf, 3);  // a bone the host does not have: the host position
+        CHECK(none.x == hp.x && none.y == hp.y && none.z == hp.z);
+        int32_t bone = -1;
+        Vec3 d = g.approach_destination(50, hp, hf, {100.0f, 0.0f, 0.0f}, 40.0f, {}, bone);
+        CHECK(bone == 2 && d.x == 100.0f && d.y == 40.0f);
+        d = g.approach_destination(50, hp, hf, {100.0f, 0.0f, 0.0f}, 40.0f, [](Vec3 p) { return p.y != 40.0f; }, bone);
+        CHECK(bone == 1 && d.x == 90.0f && d.y == 50.0f);  // 3-D 51.03 < 60.03
+        d = g.approach_destination(50, hp, hf, {100.0f, 0.0f, 0.0f}, 40.0f, [](Vec3) { return false; }, bone);
+        CHECK(bone == -1 && d.x == 100.0f && d.y == 70.0f && d.z == 0.0f);
+        // Garrison_Enter_Dist > 0: the bone point pushed outward (2-D host -> bone, z kept); the fallback uses it as L
+        GarrisonSystem g2;
+        h.enter_dist = 5.0f;
+        CHECK(g2.add_holder(50, 1, h));
+        const Vec3 p2 = g2.approach_point(50, hp, hf, 2);
+        CHECK(p2.x == 100.0f && p2.y == 35.0f && p2.z == 2.0f);
+        d = g2.approach_destination(50, hp, hf, {100.0f, 0.0f, 0.0f}, 40.0f, [](Vec3) { return false; }, bone);
+        CHECK(bone == -1 && d.x == 100.0f && d.y == 55.0f);
+        // the service reads A from the bone: a unit 3-D 12 from bone 0's point (z 2 above it) - r 5 <= 10 enters
+        OccupantDesc o{kInf, 1};
+        CHECK(g.add_unit(1, 1, o) && g.order_enter(1, 50, 0) && g.bone_of(1) == 0);
+        World w;
+        w.set(50, hp);
+        w.set(1, {100.0f + std::sqrt(140.0f), 60.0f, 0.0f});  // sqrt(140 + 4) = 12
+        const PoseFn pose = [&w](ObjectId id, Vec3& p, Vec3& f) {
+            if (!w.get(id, p, f)) return false;
+            if (id == 50) f = {0.0f, 3.0f, 0.0f};
+            return true;
+        };
+        g.service(1, pose, [](ObjectId, ObjectId, ApproachInfo& ai) {
+            ai.radius = 5.0f;
+            return true;
+        });
+        CHECK(g.entering(1));
+    }
+    {  // save / load inside state 2 (bone, move in flight, retry memo) - both copies carry on alike
+        ApproachScene a;
+        a.g.order_enter(1, 50, -1);
+        a.w.set(1, {50.0f, 0.0f, 0.0f});
+        a.info.moving = false;
+        a.service(1);
+        CHECK(a.g.state_of(1) == 2);
+        const std::vector<uint8_t> saved = bytes_of(a.g);
+        ApproachScene b;
+        ByteReader r(saved);
+        CHECK(b.g.read(r) && bytes_of(b.g) == saved && digest_of(b.g) == digest_of(a.g));
+        CHECK(b.g.state_of(1) == 2 && b.g.retries_of(1) == a.g.retries_of(1) && b.g.events().size() == a.g.events().size());
+        if (b.g.events().size() == 2) CHECK(b.g.events()[1].kind == GarrisonEventKind::CorrectiveMove);
+        for (ApproachScene* x : {&a, &b}) {
+            x->g.clear_events();
+            x->w = a.w;
+            x->info.moving = true;
+            x->service(2);
+            x->info.moving = false;
+            x->service(3);  // the corrective move ended: enter
+            CHECK(x->g.entering(1));
+        }
+        CHECK(digest_of(a.g) == digest_of(b.g));
+        ApproachScene d;  // a state-2 unit's save differs from a state-1 one's
+        d.g.order_enter(1, 50, -1);
+        CHECK(bytes_of(d.g) != saved);
+    }
 }
 
 int main() {
@@ -819,6 +1060,7 @@ int main() {
     test_garrison_save();  // N1 stage 2
     test_vehicle_thief_holder();  // s78n t12 review
     test_groups();  // s78n t18
+    test_approach();  // s78n t20 batch 2
     test_capture_save();
     std::printf("alamo_tactical_garrison_tests: %d checks, %d failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

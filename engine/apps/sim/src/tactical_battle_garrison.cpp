@@ -1,7 +1,8 @@
 // S4 garrisons + structure capture hookup of TacticalBattle (owner: S4 agent; engine/tactical/garrison; rules:
 // docs/re/L1_S4_REMAINING.md §3.5, §4.1, §4.2). Kept in its own file so the other battle hooks (fog, A1, L1 systems) stay
-// separate. Serial code; the only RNG use is the
-// MovementSystem move of order_garrison (same rule as order_move). Host-side [port] choices:
+// separate. Serial code; the only RNG uses are the
+// MovementSystem moves of the garrison approach (order_garrison, its re-issue and corrective move; same rule as
+// order_move) and the hosts' stop-and-hold adopts. Host-side [port] choices:
 //   * garrisoned units stay combat units: kUnitGarrisoned (never a candidate, TACTICAL_COMBAT 2.3 step 3), position =
 //     the host's every tick, fire range x Garrisoned_Max_Attack_Distance_Multiplier (a FireRange modifier entry of their
 //     own stacking category) in a GarrisonCanFire host, else FireRange -1000 (no shot can reach). The Num_Garrison_Guns
@@ -99,20 +100,19 @@ bool TacticalBattle::s4_group(objects::ObjectId unit, tg::GarrisonGroup& g) cons
     return true;
 }
 
-float TacticalBattle::s4_squad_radius(TacticalMode& mode, objects::ObjectId container) const {
-    // 0x443ce0 on a TEAM object: the 3-D length of the half-extent vector of the box 0x3982b0 = the live union of the
-    // members' model bounds (0x405320), world axis-aligned. It grows when the squad is strung out.
+float TacticalBattle::s4_reach_radius(TacticalMode& mode, objects::ObjectId key) const {
+    // 0x443ce0: the 3-D length of the half-extent vector of the box 0x3982b0 of the approaching key - on a TEAM object the
+    // live union of the members' model bounds (0x405320), world axis-aligned (it grows when the squad is strung out);
+    // s78n t20 batch 2: on a single unit its own world box (TacticalMode::bounds_of: the model box turned into a world-axis
+    // box, [P, P + 0.1] without a model - r 0.0866)
     const objects::ObjectStore& store = mode.primary();
     bool any = false;
     tactical::Aabb box{};
-    for (const Unit& m : units_) {
-        if (!m.alive || m.retreated || m.container >= containers_.size() || containers_[m.container].id != container) continue;
-        if (!store.alive(m.h)) continue;
-        const tactical::Aabb b = mode.bounds_of(m.h);
+    const auto add = [&](const tactical::Aabb& b) {
         if (!any) {
             box = b;
             any = true;
-            continue;
+            return;
         }
         box.min.x = std::min(box.min.x, b.min.x);
         box.min.y = std::min(box.min.y, b.min.y);
@@ -120,10 +120,25 @@ float TacticalBattle::s4_squad_radius(TacticalMode& mode, objects::ObjectId cont
         box.max.x = std::max(box.max.x, b.max.x);
         box.max.y = std::max(box.max.y, b.max.y);
         box.max.z = std::max(box.max.z, b.max.z);
+    };
+    if (!space_ && movement_ && movement_->is_land_team_container(key)) {
+        for (const Unit& m : units_) {
+            if (!m.alive || m.retreated || m.container >= containers_.size() || containers_[m.container].id != key) continue;
+            if (store.alive(m.h)) add(mode.bounds_of(m.h));
+        }
+    } else if (const objects::ObjectHandle h = store.find(key); store.alive(h)) {
+        add(mode.bounds_of(h));
     }
     if (!any) return 0.0f;
     const float ex = 0.5f * (box.max.x - box.min.x), ey = 0.5f * (box.max.y - box.min.y), ez = 0.5f * (box.max.z - box.min.z);
     return dmath::sqrt(ex * ex + ey * ey + ez * ez);
+}
+
+void TacticalBattle::s4_holder_bones(uint32_t type, tg::HolderDesc& hd) const {
+    hd.bones.clear();
+    std::vector<tactical::Vec3> bones;
+    if (space_ || !catalog_ || !catalog_->entry_bones(type, false, bones)) return;  // no model data: no bones
+    for (const tactical::Vec3& v : bones) hd.bones.push_back(Vec3{v.x, v.y, v.z});
 }
 
 void TacticalBattle::s4_owner_changed(TacticalMode& mode, objects::ObjectId id, int32_t, int32_t owner) {
@@ -156,6 +171,7 @@ bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, cons
         const tactical::Aabb b = mode.extent_box(h);
         const float dx = b.max.x - b.min.x, dy = b.max.y - b.min.y;
         hd.half_diagonal = 0.5f * dmath::sqrt(dx * dx + dy * dy);
+        s4_holder_bones(t, hd);  // s78n t20 batch 2
         garrison_.add_holder(id, p.owner, hd);
     }
     return true;
@@ -209,13 +225,13 @@ void TacticalBattle::s4_register(TacticalMode& mode, const Unit& u) {
         const tactical::Aabb b = mode.extent_box(u.h);
         const float dx = b.max.x - b.min.x, dy = b.max.y - b.min.y;
         hd.half_diagonal = 0.5f * dmath::sqrt(dx * dx + dy * dy);
+        s4_holder_bones(u.type, hd);  // s78n t20 batch 2
         garrison_.add_holder(u.id, owner, hd);
         abilities_->set_garrison_count(u.id, 0);
     }
     if (u.movable && tg::occupant_desc_from_type(types, u.type, od)) {
         s4_store_ = &mode.primary();
         s4_init();
-        od.radius = mv::unit_desc_from_type(types, u.type).radius;
         garrison_.add_unit(u.id, owner, od);
     }
 }
@@ -399,13 +415,41 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
             case tg::GarrisonEventKind::EnterStarted: {  // the host stops the unit at the approach point
                 // s78n t18 (FIGHTER_FLYING §7.4, entry 0x4446b0): a squad enters as its container - the container is
                 // stopped (vf +0x140: speed 0 at once), once; its members keep steering to their slots while they fade.
+                // s78n t20 batch 2: the host's stop-and-hold is HostStop's (0x443700), not the entering's.
                 objects::ObjectId k = objects::kNoObjectId;
                 if (!squad_first(e.unit, e.kind, k)) break;
                 const objects::ObjectId one[] = {k != objects::kNoObjectId ? k : e.unit};
                 movement_->stop(one);
-                // cu8l t02 (CU8K_T02_T06_RE §2 row 0x443780, rule 5): in range with room, the approach 0x443700 stops and
-                // holds the HOST (a garrison vehicle / hover transport: one draw; a structure has no locomotor: none).
+                break;
+            }
+            case tg::GarrisonEventKind::HostStop: {
+                // s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 5, 0x3a9880): a finished approach within 60 stops the host
+                // (locomotor stop) and re-adopts it - cu8l t02 (CU8K_T02_T06_RE §2 row 0x443780, rule 5): one draw for a
+                // garrison vehicle / hover transport; a structure has no locomotor: none.
+                if (movement_->has_unit(e.holder)) {
+                    const objects::ObjectId one[] = {e.holder};
+                    movement_->stop(one);
+                }
                 s4_hold(mode, e.holder);
+                break;
+            }
+            case tg::GarrisonEventKind::CorrectiveMove: {
+                // s78n t20 batch 2 (item 5): a new coordinator moves the key (kind 1, flags 0x20: forced path, no
+                // destination check, no passability step test) the whole 2-D excess toward A; its garrison approach stays
+                if (!bt_rng_) break;
+                const tactical::Aabb& bb = mode.bounds();
+                mv::MoveOrder o;
+                o.units = s4_key_units(e.unit, e.holder);
+                o.flags = mv::kMoveFlagSkipValidation;
+                o.destination = {std::clamp(e.position.x, bb.min.x, bb.max.x), std::clamp(e.position.y, bb.min.y, bb.max.y)};
+                if (!o.units.empty()) movement_->move(o, *bt_rng_, frame_);
+                break;
+            }
+            case tg::GarrisonEventKind::Reissue: {
+                // s78n t20 batch 2 (item 4): a new GarrisonEvent (flags 4) - a fresh approach move to the then-nearest bone
+                if (!bt_rng_) break;
+                const std::vector<objects::ObjectId> ids = s4_key_units(e.unit, e.holder);
+                (void)s4_approach(mode, ids, e.holder, *bt_rng_, true);
                 break;
             }
             case tg::GarrisonEventKind::Entered: {
@@ -455,7 +499,10 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                 unit_gone(mode, *u);
                 break;
             }
-            case tg::GarrisonEventKind::OrderDropped:  // cu8l t02 [M]: the host's reservation ends (vf29: its hold)
+            case tg::GarrisonEventKind::OrderDropped:
+                // cu8l t02 [M]: the host's reservation ends (vf29: its hold). s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 6,
+                // the cancel 0x443560): host vf +0xf8 only when the state was 2 (or 4: not modelled)
+                if (e.was != 2) break;
                 if (objects::ObjectId k = objects::kNoObjectId; squad_first(e.unit, e.kind, k)) s4_hold(mode, e.holder);
                 break;
         }
@@ -524,11 +571,13 @@ void TacticalBattle::s4_tick(TacticalMode& mode, SimRng&) {
             f = store.facing(h);
             return true;
         },
-        // s78n t18 (FIGHTER_FLYING §7.4 item 4): a squad's range test - the radius of its members' live union box, and
-        // whether its container's approach move has ended
-        [&](tg::ObjectId group, tg::GroupReach& gr) {
-            gr.radius = s4_squad_radius(mode, group);
-            gr.arrived = movement_ && movement_->has_unit(group) && !movement_->view(group).has_goal;
+        // s78n t20 batch 2 (FIGHTER_FLYING §7.4 items 3 - 5): the key's radius, whether its move still runs ([port] the
+        // "move finished" signal is the end of the mover's goal) and whether the host has a path (0x39ade0: a land mover
+        // with a goal; a structure never)
+        [&](tg::ObjectId key, tg::ObjectId holder, tg::ApproachInfo& ai) {
+            ai.radius = s4_reach_radius(mode, key);
+            ai.moving = movement_ && movement_->has_unit(key) && movement_->view(key).has_goal;
+            ai.host_path = movement_ && movement_->has_unit(holder) && movement_->view(holder).has_goal;
             return true;
         });
     s4_apply(mode);
@@ -632,28 +681,91 @@ cmd::RejectReason TacticalBattle::order_garrison(TacticalMode& mode, uint8_t pla
     if (ids.empty()) return refused_host ? R::InvalidTarget : R::InvalidUnit;  // InvalidTarget: hostile host
     clear_queues(ids);
     raise_order_replaced(ids);  // S7 t31: garrison enter (A1_READINGS §33.3 [M: raised at the order])
-    const Vec3 a = garrison_.approach_point(holder, store.position(hh), store.facing(hh));
-    // group move to the approach point (cancels older ones). s78n t20 [port]: without the destination check - the port's
-    // approach still needs every unit to reach the approach point itself (retail's approach with its corrective move,
-    // FIGHTER_FLYING §7.4, is not ported yet; with it the move becomes an ordinary checked one)
-    exec_move(mode, ids, a.x, a.y, rng, mv::kNoFacing, false, 0, false, objects::kNoObjectId, true);
-    uint32_t n = 0;
-    std::vector<objects::ObjectId> squads;  // s78n t18: a squad reserves once (one hold per squad, not per member)
-    for (const objects::ObjectId id : ids)
-        if (garrison_.order_enter(id, holder)) {
-            ++n;
-            const objects::ObjectId k = s4_squad_of(id);
-            if (k != objects::kNoObjectId) {
-                if (std::find(squads.begin(), squads.end(), k) != squads.end()) continue;
-                squads.push_back(k);
-            }
-            s4_hold(mode, holder);  // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x635efb / 0x635f7b): the reservation's host hold
-        }
+    const uint32_t n = s4_approach(mode, ids, holder, rng, false);
     // s78n t18 (MOVEMENT §5.3 "Hover state", GARRISON_HOVER_TRANSPORT vf +0xe0 0x635ee0): a hover transport whose slot a
     // unit reserves lowers
     if (n > 0)
         if (const tg::HolderDesc* hd = garrison_.holder_desc(holder); hd && hd->kind == tg::HolderKind::Hover) (void)movement_->hover_lower(holder);
     return n > 0 ? R::None : R::InvalidTarget;  // hostile host
+}
+
+// s78n t20 batch 2 (FIGHTER_FLYING §7.4 "Garrison approach in full" item 1; the GarrisonEvent 0x3ad620 with 0x3ad880):
+// per approaching key (a squad's container, or the unit) the destination - the host's entry bone nearest the key in 3-D
+// whose point is reachable for the key's class (zone-connected, 0x50eeb0), else the host position + L along its yaw (L =
+// Garrison_Enter_Dist, else half the 3-D length of the host box's half-extent vector), bone -1 - then an ordinary group
+// move (kind 1, flags 0: [port] the UI's flags 4 are not read; never 0x20, so the order-time destination check may
+// displace the goal off the host's footprint) and 0x444310 (state 1, the bone index). [port] The keys with the same bone
+// share one group move, in the order of their first unit. The reservation's host hold (cu8l t02, CU8K_T02_T06_RE §2 rows
+// 0x635efb / 0x635f7b) once per key at the order; a reissue keeps its reservation (0x444310 runs only from state 0).
+uint32_t TacticalBattle::s4_approach(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId holder, SimRng& rng,
+                                     bool reissue) {
+    objects::ObjectStore& store = mode.primary();
+    const objects::ObjectHandle hh = store.find(holder);
+    if (!movement_ || !store.alive(hh)) return 0;
+    const Vec3 hp = store.position(hh), hf = store.facing(hh);
+    const tactical::Aabb hb = mode.bounds_of(hh);
+    const float hx = 0.5f * (hb.max.x - hb.min.x), hy = 0.5f * (hb.max.y - hb.min.y), hz = 0.5f * (hb.max.z - hb.min.z);
+    const float extent_len = dmath::sqrt(hx * hx + hy * hy + hz * hz);
+    struct Leg {
+        int32_t bone = -1;
+        Vec3 to{};
+        std::vector<objects::ObjectId> ids;
+    };
+    std::vector<Leg> legs;
+    std::vector<std::pair<objects::ObjectId, size_t>> key_leg;  // key -> its leg
+    for (const objects::ObjectId id : ids) {
+        const objects::ObjectId k0 = s4_squad_of(id);
+        const objects::ObjectId key = k0 != objects::kNoObjectId ? k0 : id;
+        size_t li = legs.size();
+        for (const auto& [k, l] : key_leg)
+            if (k == key) li = l;
+        if (li == legs.size()) {
+            const objects::ObjectHandle kh = store.find(key);
+            const Vec3 kp = store.alive(kh) ? store.position(kh) : hp;
+            const bool mover = !space_ && movement_->has_unit(key);
+            const uint32_t mask = mover ? movement_->mask_of(key) : 0u;
+            int32_t bone = -1;
+            const Vec3 to = garrison_.approach_destination(
+                holder, hp, hf, kp, extent_len,
+                [&](Vec3 pt) { return mover && mv::zone_connected(movement_->regions(), mask, mv::V2{kp.x, kp.y}, mv::V2{pt.x, pt.y}); },
+                bone);
+            li = 0;
+            while (li < legs.size() && legs[li].bone != bone) ++li;
+            if (li == legs.size()) legs.push_back(Leg{bone, to, {}});
+            key_leg.emplace_back(key, li);
+        }
+        legs[li].ids.push_back(id);
+    }
+    uint32_t n = 0;
+    std::vector<objects::ObjectId> keys;  // one reservation hold per key
+    for (const Leg& l : legs) {
+        exec_move(mode, l.ids, l.to.x, l.to.y, rng, mv::kNoFacing, false);  // cancels older approaches of these units
+        for (const objects::ObjectId id : l.ids) {
+            if (!garrison_.order_enter(id, holder, l.bone)) continue;
+            ++n;
+            if (reissue) continue;
+            const objects::ObjectId k0 = s4_squad_of(id);
+            const objects::ObjectId key = k0 != objects::kNoObjectId ? k0 : id;
+            if (std::find(keys.begin(), keys.end(), key) != keys.end()) continue;
+            keys.push_back(key);
+            s4_hold(mode, holder);
+        }
+    }
+    return n;
+}
+
+std::vector<objects::ObjectId> TacticalBattle::s4_key_units(objects::ObjectId unit, objects::ObjectId holder) const {
+    std::vector<objects::ObjectId> out;
+    const objects::ObjectId k = s4_squad_of(unit);
+    if (k == objects::kNoObjectId) {
+        if (garrison_.pending_holder(unit) == holder) out.push_back(unit);
+        return out;
+    }
+    for (const Unit& m : units_)
+        if (m.alive && !m.retreated && m.container < containers_.size() && containers_[m.container].id == k &&
+            garrison_.pending_holder(m.id) == holder)
+            out.push_back(m.id);
+    return out;
 }
 
 cmd::RejectReason TacticalBattle::order_leave_garrison(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units) {
