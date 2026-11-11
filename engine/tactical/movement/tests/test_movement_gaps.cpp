@@ -5389,13 +5389,15 @@ static void test_land_squad_t18_review() {
         CHECK(arrived && length(sys.view(100).pos - at) <= 8.0f * 0.05f * mult + 1e-3f);
         std::printf("t18 review: coast with rate 0 - stood %d, then arrived %d\n", still ? 1 : 0, arrived ? 1 : 0);
     }
-    {  // step 10's stamp (s78n t20: reached only when Path Around fails). Vehicle 1 walks a walled lane (60 wide) into a
-       // row of hostile standing vehicles 40 apart (radius 20: no gap between them). For the first two of the row each of
-       // the 11 rejoin candidates (10 apart, from just past the unit) lies on a footprint farther along the row: Path
-       // Around fails without a search. For the others the candidates reach past the row, but by then the mover stands
-       // inside the grown rectangle of the unit in front of it and the lane leaves the graph no corner to start from: the
-       // search fails. A hostile unit is not pushed, so step 10 resolves every record - the mover keeps its path and its
-       // speed and walks through the row.
+    {  // A walled lane (60 wide) closed by a row of hostile standing vehicles 40 apart (radius 20: no gap between them).
+       // s78n t24 (MOVEMENT §5.4.7 "Rejoin candidates of a kind-3 Path Around", the same for kind 4): the path scan of
+       // the rejoin generator runs to the path end with no count (only accepted goals count, at most 11), so the first
+       // record's Path Around takes the first free point past the row as its goal; the lane leaves the graph no corner,
+       // and the search's crossing pass (segments crossing an obstacle at the overlap penalty) gives the detour straight
+       // through the row: one search, a detour record (Path Around state) that the mover walks through the row at full
+       // speed, and no later search (the path was planned around the row). (Before s78n t24 the scan stopped after 11
+       // tested points, every one on a footprint, so Path Around failed without a search and step 10 resolved the
+       // records; this scene no longer reaches step 10.)
         MovementSystem sys{MovementConfig{}};
         PassabilityGrid g = open_grid(100, 100);
         for (int32_t x = 0; x < 100; ++x) {
@@ -5442,8 +5444,8 @@ static void test_land_squad_t18_review() {
         const MovementStats& st = sys.stats();
         std::printf("t18 review: step 10 stamp - dynamic re-paths %u / %u before / past the third of the row, pushes %u, push failures %u, "
                     "early arrivals %u\n", n1, n2, st.pushes, st.push_failures, st.early_arrivals);
-        CHECK(n1 == 0 && a1 == 0 && on_path);          // step 10 twice: no search, no detour
-        CHECK(n2 >= 1 && around_states == 0);          // then searches that find no way: step 10 again
+        CHECK(n1 == 1 && a1 > 0 && !on_path);          // one search, its detour on the stack
+        CHECK(n2 == n1 && around_states > a1);          // no further search: the detour is walked through the row
         CHECK(other_states == 0 && st.pushes == 0 && st.push_failures == 0 && st.early_arrivals == 0);
         CHECK(near(min_speed, mult, 1e-5f));           // never slowed or held
         bool stood = true;

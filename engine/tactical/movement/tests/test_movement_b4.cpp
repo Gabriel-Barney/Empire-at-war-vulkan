@@ -74,12 +74,14 @@ void wall(MovementSystem& sys, int32_t x0, int32_t x1, int32_t y0, int32_t y1) {
 }
 
 // ---------------------------------------------------------------- the detour
-// A vehicle (10 x 6, speed 1, turn rate 6) ordered along y = 400 from x = 200 to x = 800; once it moves, a wall of cells
+// A vehicle (10 x 6, speed 1, turn rate 6) ordered along y = 400 from x = 200 to x = 800; once it moves (its order path
+// planned straight after the start delay), a wall of cells
 // x = 20, y = 17 .. 23 is stamped across its path. The step into the wall fails: speed 0, the position unchanged, one
 // Terrain record with one participant (made in the commit, decided on the next tick). The decision pushes a kind-2 detour
 // owned by the record whose rejoin point lies at least D + 2 = r_u + 42 ahead along the ordered path; the vehicle turns
 // in place at speed 0 (6 degrees a tick) until it faces the detour's first leg exactly, then walks it; the record ends
-// when the detour is popped; the order arrives with no re-plan. Serial and 4 workers give the same digest every tick.
+// at its first service after the detour is popped; the order arrives with no re-plan. Serial and 4 workers give the
+// same digest every tick.
 struct DetourOut {
     bool failed_step_ok = false, record_ok = false, detour_ok = false, turned_ok = false, ended_ok = false, arrived = false;
     uint32_t fail_frame = 0, turn_frames = 0, pop_frame = 0, records = 0, detours = 0, replans = 0;
@@ -98,8 +100,8 @@ DetourOut run_detour(const ParallelFor& pf) {
     o.destination = cell_center(40, 20);
     sys.move(o, rng, 1);
     uint32_t f = 1;
-    for (; f < 40; ++f) sys.tick(f, rng, pf);
-    CHECK(sys.view(10).has_goal && sys.view(10).speed > 0.0f && sys.view(10).pos.x < 360.0f);
+    for (; f < 300 && !(sys.view(10).speed > 0.0f); ++f) sys.tick(f, rng, pf);
+    CHECK(sys.view(10).has_goal && sys.view(10).speed > 0.0f && sys.view(10).pos.x < 360.0f && sys.view(10).yaw == 0.0f);
     wall(sys, 20, 20, 17, 23);
     const float ru = std::sqrt(10.0f * 10.0f + 6.0f * 6.0f);
     bool turning = false, moved_after = false;
@@ -142,11 +144,14 @@ DetourOut run_detour(const ParallelFor& pf) {
                 r.turned_ok = std::fabs(wrap_deg(heading - b.yaw)) <= 6.0f + 1e-4f && std::fabs(wrap_deg(heading - v.yaw)) < 1e-3f;
             }
         }
+        // the detour is popped in the commit pass; the record sees that at its next service (the next tick's driver pass)
         if (moved_after && r.pop_frame == 0 && !v.pushed) {
             r.pop_frame = f;
-            r.ended_ok = terrain_records(sys, 10) == 0;
+            r.ended_ok = terrain_records(sys, 10) == 1;
+        } else if (r.pop_frame != 0 && f == r.pop_frame + 1) {
+            r.ended_ok = r.ended_ok && terrain_records(sys, 10) == 0;
         }
-        if (r.pop_frame != 0 && !v.has_goal) break;
+        if (r.pop_frame != 0 && f > r.pop_frame && !v.has_goal) break;
     }
     r.arrived = sys.view(10).arrived && distance(sys.view(10).pos, cell_center(40, 20)) < 1.0f;
     r.records = sys.stats().terrain_records;
@@ -205,8 +210,8 @@ void test_terrain_stop_last_leg() {
 }
 
 // ---------------------------------------------------------------- an order-less pushed unit
-// Vehicle 10 on a forced path (flag 0x20) pushes the standing vehicle 11 aside (MovingVsStopped step 2). Walled in two
-// cells out, 11's push walk fails: its record finds no kind-1 record (it has no order), so the unit is stopped and its
+// Vehicle 10 on a forced path (flag 0x20) pushes the standing vehicle 11 aside (MovingVsStopped step 2). Walled in by
+// the ring of cells around its own, 11's push walk fails: its record finds no kind-1 record (it has no order), so the unit is stopped and its
 // push record is cleared - the push owner is another record, so it brakes (here from speed 0: at once).
 void test_terrain_pushed_orderless() {
     ::alamo::test::section("terrain_pushed_orderless");
@@ -228,9 +233,9 @@ void test_terrain_pushed_orderless() {
     CHECK(sys.view(11).pushed && sys.view(11).push_kind == 1 && !sys.view(11).has_goal);
     const V2 kp = sys.view(11).pos;
     const int32_t cx = world_to_cell(kp.x), cy = world_to_cell(kp.y);
-    for (int32_t y = cy - 2; y <= cy + 2; ++y)
-        for (int32_t x = cx - 2; x <= cx + 2; ++x)
-            if (std::abs(x - cx) == 2 || std::abs(y - cy) == 2) sys.grid().set_base(x, y, kPassImpassable);
+    for (int32_t y = cy - 1; y <= cy + 1; ++y)
+        for (int32_t x = cx - 1; x <= cx + 1; ++x)
+            if (x != cx || y != cy) sys.grid().set_base(x, y, kPassImpassable);
     for (uint32_t n = 0; n < 200 && sys.view(11).pushed; ++n, ++f) sys.tick(f, rng, serial_for);
     CHECK(!sys.view(11).pushed && sys.view(11).speed == 0.0f && !sys.view(11).has_goal);
     CHECK(sys.stats().terrain_records >= 1 && sys.stats().terrain_stops_nobase >= 1 && sys.stats().terrain_detours == 0);
@@ -276,7 +281,8 @@ void test_terrain_waiting() {
     o.destination = cell_center(40, 20);
     sys.move(o, rng, 1);
     uint32_t f = 1;
-    for (; f < 40; ++f) sys.tick(f, rng, serial_for);
+    for (; f < 300 && !(sys.view(10).speed > 0.0f); ++f) sys.tick(f, rng, serial_for);
+    CHECK(sys.view(10).yaw == 0.0f && sys.view(10).pos.x < 360.0f);
     wall(sys, 20, 20, 17, 23);
     for (; f < 900 && terrain_records(sys, 10) < 3; ++f) sys.tick(f, rng, serial_for);
     const uint32_t waiting = terrain_records(sys, 10);

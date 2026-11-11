@@ -1015,10 +1015,10 @@ bool MovementSystem::read_unit(ByteReader& r, Unit& u) {
     io_unit(in, u);
     // s78n t18 review: the hover state is 0 .. 3 (pack +0x2a8) and the garrison-exit host an object id or -1
     if (!r.ok() || !valid_object_id(u.d.id) || u.hover > 3 || u.exit_host < -1) return false;
-    // s78n t20: the top record - a kind 1 .. 3 with a weight 1 .. 3 exactly while one is on the stack, its walk index and
-    // every tag inside its points
+    // s78n t20: the top record - a kind 1 .. 3 with a weight 1 .. 4 exactly while one is on the stack, its walk index and
+    // every tag inside its points (s78n t24: weight 4 = a TerrainCollision detour)
     // s78n t23: a record given up by a MovingVsMoving re-decide has no owner and weight 0
-    if (u.pushed != (u.push_kind != 0) || u.push_kind > 3 || u.push_weight > 3 ||
+    if (u.pushed != (u.push_kind != 0) || u.push_kind > 3 || u.push_weight > 4 ||
         (u.pushed && u.push_weight == 0 && u.push_owner != kNoDetour))
         return false;
     if (u.pushed && (u.push_path.empty() || u.push_next > u.push_path.size())) return false;

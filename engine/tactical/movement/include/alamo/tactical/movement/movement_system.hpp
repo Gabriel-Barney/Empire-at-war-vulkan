@@ -1470,16 +1470,22 @@ private:
     // (`cur`: the start of the segment it walks); a collision-owned top record gets one point 1 unit past its end along
     // the order path's current segment. False: no order path, or no segment left.
     bool around_base(const Unit& u, std::vector<V2>& scratch, std::span<const V2>& base, uint32_t& cur) const;
-    // 0x67ad20 / 0x679aa0: the rejoin candidates in order - along the base path, past its end, the ring spot around its
-    // end - at most 11 tried; `fn` gets each accepted point with the order path index to resume at and returns true to
-    // take it.
+    // 0x67ad20 / 0x679aa0 / 0x675ed0 (s78n t24, MOVEMENT §5.4.7 "Rejoin candidates of a kind-3 Path Around"): the
+    // resumable goal generator - (a) every base path point from progress + D + 2 in steps of 10 to the path end, (b)
+    // steps of 10 past the end (a failed path-length test ends (b)), (c) the ring around the end (occupancy and the
+    // path-length test only); (a) / (b) candidates pass 0x679aa0. `fn` gets each accepted goal (at most 11) with the
+    // order path index to resume at and returns kRejoinNext (the next goal), kRejoinTaken or kRejoinFail (the call
+    // fails). True: taken.
     struct Rejoin {
         V2 q;
         uint32_t resume = 0;
         bool on_path = false;
     };
-    bool rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d, const std::function<bool(const Rejoin&)>& fn) const;
+    static constexpr int kRejoinNext = 0, kRejoinTaken = 1, kRejoinFail = -1;
+    bool rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d, const std::function<int(const Rejoin&)>& fn) const;
     bool rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) const;
+    // 0x67d580(request, object, 1): the goal-spot obstacle filter of 0x679aa0 (relation mask 0x10)
+    bool goal_obstacle(const Unit& u, const Unit& o) const;
     // 0x67d580 + 0x677650: the obstacle set of a Path Around call among the layer objects around u, ascending id, with
     // their swept boxes; `ids` = their units_ indices.
     void around_obstacles(const Unit& u, const Unit* forced, uint8_t flags, float half, std::vector<AroundObstacle>& out,

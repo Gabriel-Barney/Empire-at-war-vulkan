@@ -431,6 +431,7 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
             }
             if (from == nv) return false;  // no vertex to start from
         }
+        out.graph = true;  // s78n t24: the graph and the A* run once for this goal
         // ---- edges 0x678e80 and costs 0x67a3d0 (edge_class), evaluated on demand: 1 none, 2 plain, 3 crossing
         std::vector<uint8_t> edges(static_cast<size_t>(nv) * nv, 0);
         std::vector<FootRect> tracker(win.size());

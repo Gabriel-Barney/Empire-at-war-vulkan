@@ -138,6 +138,10 @@ struct AroundResult {
     uint32_t complexity = 0;       // the vertex count per A* pass run
     bool crossing = false;         // found only by pass 2 (segments crossing an obstacle at x the overlap penalty)
     float cost = 0.0f;
+    // s78n t24 (MOVEMENT §5.4.7 "Rejoin candidates of a kind-3 Path Around" item 3): the graph was built and the A* ran
+    // for this goal - a failure then fails the whole Path Around call (no next goal); a failure before it (start / goal
+    // cell, goal inside a grown rectangle, flood fill, no start vertex) moves on to the next goal
+    bool graph = false;
 };
 struct CellBox {
     int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;

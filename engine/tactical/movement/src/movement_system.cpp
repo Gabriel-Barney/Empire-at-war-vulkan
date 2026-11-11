@@ -2577,8 +2577,26 @@ bool MovementSystem::around_base(const Unit& u, std::vector<V2>& scratch, std::s
     return static_cast<size_t>(cur) + 1 < base.size();
 }
 
+// 0x67d580(request, object, 1) - the goal-spot filter of 0x679aa0 (s78n t24, MOVEMENT §5.4.7 "Rejoin candidates of a
+// kind-3 Path Around" item 2; relation mask 0x10): never an obstacle - u, anything u crushes, a class-exempt or gated
+// pair; always - u's MovingVsMoving partners; then by the relation (object, u): standing, held, head-on, crossing, same
+// way slower -> an obstacle; same way not slower -> not, unless it is on its final approach, not behind u's facing and
+// the pair has an undecided / detouring record. Infantry are obstacles here even for an Infantry / Giant u (the mask
+// has no bit 0).
+bool MovementSystem::goal_obstacle(const Unit& u, const Unit& o) const {
+    if (o.d.id == u.d.id) return false;
+    if (crushes(u, o) || !collision_classes_interact(u.d.collision_class, o.d.collision_class) || pair_gated(u, o)) return false;
+    for (const CollisionObject& c : coll_.list())
+        if (c.kind == CollisionKind::MovingVsMoving && ((c.a == u.d.id && c.b == o.d.id) || (c.a == o.d.id && c.b == u.d.id)))
+            return true;
+    if (unit_relation(o, u) != kRelSameWay) return true;
+    return near_path_end(o, u) && !(dot(o.m.pos - u.m.pos, dir_from_deg(u.m.yaw)) < 0.0f) && shares_open_record(u, o);
+}
+
 // 0x679aa0: the candidate is taken at the nearest passable point Q of the unit's region within LandDestinationProximity
-// (60), when the unit's rectangle placed at Q, axis along Q - E (its facing when zero), overlaps no layer object.
+// (60), when the unit's rectangle placed at Q, axis along Q - E (its facing when zero), overlaps no layer object that
+// the goal-spot filter counts as an obstacle (s78n t24: goal_obstacle). [port] the tracker argument of goals 2 - 11
+// (the previous window's grown shapes, [M] in the spec) is not modelled: every goal queries the layer.
 bool MovementSystem::rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) const {
     q = cand;
     const int32_t comp = regions_.component_at(u.slot, world_to_cell(u.m.pos.x), world_to_cell(u.m.pos.y));
@@ -2595,27 +2613,36 @@ bool MovementSystem::rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) c
     layer_box_query(q, foot_radius(u), near_units);
     for (uint32_t ci : near_units) {
         const Unit& o = units_[ci];
-        if (o.d.id != u.d.id && foot_overlap(r, foot_of(o))) return false;
+        if (o.d.id != u.d.id && foot_overlap(r, foot_of(o)) && goal_obstacle(u, o)) return false;
     }
     return true;
 }
 
 bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d,
-                                   const std::function<bool(const Rejoin&)>& fn) const {
-    constexpr uint32_t kMaxTried = 11;  // 0x675ed0
-    uint32_t tried = 0;
+                                   const std::function<int(const Rejoin&)>& fn) const {
+    // 0x675ed0: at most 11 accepted goals (0x676020 cmp r12d, 0xa); the generator itself has no count
+    constexpr uint32_t kMaxGoals = 11;
+    uint32_t goals = 0;
+    int verdict = kRejoinNext;
+    const auto offer = [&](const Rejoin& r) {
+        if (goals++ >= kMaxGoals) {
+            verdict = kRejoinFail;
+            return true;
+        }
+        verdict = fn(r);
+        return verdict != kRejoinNext;
+    };
     const V2 end = base.back();
-    // (a) along the base path, from the unit's progress + D + 2.0 in steps of 10
+    // (a) along the base path, from the unit's progress + D + 2.0 in steps of 10 to the path end (no count limit)
     std::vector<RejoinPoint> pts;
-    rejoin_on_path(base, cur, u.m.pos, d, kMaxTried, pts);
+    rejoin_on_path(base, cur, u.m.pos, d, UINT32_MAX, pts);
     for (const RejoinPoint& p : pts) {
-        if (tried++ >= kMaxTried) return false;
         Rejoin r;
         r.on_path = !u.pushed;
         r.resume = u.pushed ? u.m.next : p.next;  // (a detour off an older collision path resumes the order path by its lines)
-        if (rejoin_accept(u, p.p, end, r.q) && fn(r)) return true;
+        if (rejoin_accept(u, p.p, end, r.q) && offer(r)) return verdict == kRejoinTaken;
     }
-    // A spot past the path end needs a straight passable line from the end, or a land path no longer than 2 x the line.
+    // 0x679e20: a land path from the end E to the spot no longer than 2 x the straight line
     LandPathScratch sc;
     const auto reachable = [&](V2 spot) {
         if (line_passable(grid_, end, spot, u.lp.mask)) return true;
@@ -2629,7 +2656,7 @@ bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint
         return lp.ok && path_length(lp.points) <= 2.0f * distance(end, spot);
     };
     // (b) past the end E: toward the unit's target up to its distance, else along the last segment up to
-    // LandTemporaryDestinationProximity (20), in steps of 10
+    // LandTemporaryDestinationProximity (20), in steps of 10; each step 0x679aa0 and 0x679e20 - a failed 0x679e20 ends (b)
     V2 dir = normalize_retail(base[base.size() - 1] - base[base.size() - 2]);
     float limit = cfg_.constants.land_temporary_destination_proximity;
     if (u.ci.target >= 0 && length_sq(u.ci.target_pos - end) > 0.0f) {
@@ -2639,15 +2666,16 @@ bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint
     if (!(length_sq(dir) > 0.0f)) dir = dir_from_deg(u.m.yaw);
     const uint32_t past = u.pushed ? u.m.next : static_cast<uint32_t>(u.m.path.size());
     for (float s = 10.0f; s <= limit; s += 10.0f) {
-        if (tried++ >= kMaxTried) return false;
         const V2 spot = end + dir * s;
         Rejoin r;
         r.resume = past;
-        if (grid_.passable_world(spot, u.lp.mask) && reachable(spot) && rejoin_accept(u, spot, end, r.q) && fn(r)) return true;
+        if (!rejoin_accept(u, spot, end, r.q)) continue;
+        if (!reachable(spot)) break;
+        if (offer(r)) return verdict == kRejoinTaken;
     }
-    // (c) the ring search 0x440f90 around E (full circle from dir; occupancy margin max(6 x FormationSpacing, 0.25 r_u)):
-    // the first free reachable spot not behind E along dir
-    if (tried++ >= kMaxTried) return false;
+    // (c) the ring search 0x440f90 around E (full circle from dir; occupancy margin max(6 x FormationSpacing, 0.25 r_u);
+    // any layer object but u occupies): each free reachable spot not behind E along dir is a goal, in ring order (the
+    // search resumes after a goal that fails); 0x679e20 only, not 0x679aa0. The rings exhausted fail the call.
     const float ru = foot_radius(u);
     const float reach = ru + std::max(6.0f * u.d.formation_spacing, 0.25f * ru);
     const int32_t comp = regions_.component_at(u.slot, world_to_cell(u.m.pos.x), world_to_cell(u.m.pos.y));
@@ -2657,7 +2685,7 @@ bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint
     ring.dir = dir;
     ring.r = ru;
     V2 spot;
-    const bool found = ring_search(
+    const bool stopped = ring_search(
         ring,
         [&](V2 p, uint32_t) {
             const int32_t cx = world_to_cell(p.x), cy = world_to_cell(p.y);
@@ -2667,13 +2695,14 @@ bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint
             layer_box_query(p, reach + 1.0f, occ);
             for (uint32_t ci : occ)
                 if (units_[ci].d.id != u.d.id && ring_blocked(p, reach, foot_of(units_[ci]))) return false;
-            return reachable(p);
+            if (!reachable(p)) return false;
+            Rejoin r;
+            r.q = p;
+            r.resume = past;
+            return offer(r);
         },
         spot);
-    if (!found) return false;
-    Rejoin r;
-    r.resume = past;
-    return rejoin_accept(u, spot, end, r.q) && fn(r);
+    return stopped && verdict == kRejoinTaken;
 }
 
 bool MovementSystem::spare_point(const Unit& a, const Unit& b, V2& v) const {
@@ -2687,7 +2716,7 @@ bool MovementSystem::spare_point(const Unit& a, const Unit& b, V2& v) const {
     const float d = std::sqrt(dd.x * dd.x + dd.y * dd.y + dz * dz) + foot_radius(a) + foot_radius(b);
     return rejoin_search(a, base, cur, d, [&](const Rejoin& r) {
         v = r.q;
-        return true;
+        return kRejoinTaken;
     });
 }
 
@@ -2748,7 +2777,8 @@ bool MovementSystem::path_around(const CollisionObject& c, Unit& u, const Unit* 
         searched = true;
         const bool ok = around_search(grid_, k, q, res);
         quota_used_ += res.complexity;
-        if (!ok || res.points.size() < 2) return false;  // the next candidate
+        // s78n t24 (§5.4.7 "Rejoin candidates" item 3): an A* failure fails the call; an earlier failure tries the next goal
+        if (!ok || res.points.size() < 2) return res.graph ? kRejoinFail : kRejoinNext;
         // Last-point drop: the last corner sees the next original waypoint N -> the rejoin point is removed
         if (kind != 3 && res.points.size() > 2 && rj.on_path && rj.resume < u.m.path.size()) {
             const V2 p = res.points[res.points.size() - 2];
@@ -2760,7 +2790,7 @@ bool MovementSystem::path_around(const CollisionObject& c, Unit& u, const Unit* 
             if (drop) res.points.pop_back();
         }
         if (refuse_back && dot(normalize_retail(res.points[1] - res.points[0]), dir_from_deg(u.m.yaw)) < -0.5f)
-            return true;  // refused: the search ends, nothing changed
+            return kRejoinFail;  // refused: the search ends, nothing changed
 
         // 0x6744a0: the path's id list - every obstacle of the window that is not moving or lies behind the detour's end
         const V2 last = res.points.back();
@@ -2779,7 +2809,7 @@ bool MovementSystem::path_around(const CollisionObject& c, Unit& u, const Unit* 
         u.around = std::move(around);
         u.around_frame = frame;
         done = true;
-        return true;
+        return kRejoinTaken;
     });
     if (searched) ++stats_.dynamic_repaths;
     return done;

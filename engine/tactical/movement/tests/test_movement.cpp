@@ -1664,11 +1664,18 @@ static void test_land_group() {
                         sys.land_path(id).size());
     }
     const MovementStats& st = sys.stats();
+    // s78n t24 (MOVEMENT §5.4.7 item 3.5 and "Rejoin candidates of a kind-3 Path Around" item 5): a failed step makes a
+    // TerrainCollision record; when its Path Around fails, the unit is stopped where it stands, its order is lost, and it
+    // counts as arrived (the formation's member is done). Retail: no retry. Those units are counted apart; every other
+    // unit arrives at the destination.
+    const uint32_t stops = st.terrain_stops_failed + st.terrain_stops_nobase + st.terrain_stops_cell;
     std::printf("land group: 36 units, %u frames, %u arrived, %u near destination; paths %u (fail %u), replans %u, "
-                "collision checks %u, dynamic repaths %u, quota deferrals %u, early arrivals %u, blocked steps %u\n",
+                "collision checks %u, dynamic repaths %u, quota deferrals %u, early arrivals %u, blocked steps %u; terrain "
+                "records %u, detours %u, stops %u (failed detour %u, no base %u, cell %u)\n",
                 frames, arrived, near, st.paths_planned, st.path_failures, st.replans, st.collision_checks, st.dynamic_repaths,
-                st.quota_deferrals, st.early_arrivals, st.blocked_steps);
-    CHECK(ground && arrived == 36 && near == 36 && frames < 6500);
+                st.quota_deferrals, st.early_arrivals, st.blocked_steps, st.terrain_records, st.terrain_detours, stops,
+                st.terrain_stops_failed, st.terrain_stops_nobase, st.terrain_stops_cell);
+    CHECK(ground && arrived == 36 && 36 - near <= stops && frames < 6500);
 
     // Head-on corridor: two units swap ends through a 3-cell-wide corridor.
     MovementSystem s2{MovementConfig{}};
@@ -3103,7 +3110,9 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // s78n t23 review fix 2: a re-decided record waits (case 0 in its stamped frame; a set-up decision under quota).
 // s78n t23 follow-ups (MOVEMENT 5.4.2 / 5.4.6 "State 2 service", RE 2): MovingVsMoving answers start at 0; case 6 resets
 // before its chooser re-run.
-static constexpr uint64_t kGoldenLand = 0x8b3364785ab4958full;  // s78n t23 follow-ups
+// s78n t24 (MOVEMENT §5.4.7): TerrainCollision replaces the blocked-frames re-plan; the rejoin generator scans the whole
+// path (11 accepted goals); MovingVsMoving answers follow the role slots.
+static constexpr uint64_t kGoldenLand = 0x2ac2cf266cff907dull;  // s78n t24
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
