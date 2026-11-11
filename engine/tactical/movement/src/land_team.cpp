@@ -524,7 +524,7 @@ void MovementSystem::team_steer_recs(std::vector<SteerRec>& out) const {
     // The id-keyed collision hash (+0x80) gives a participant's active collision objects in list order (the port's
     // collision list is insertion order). vf +0x30 weights: MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3. vf
     // +0x38 (s78n t18, FIGHTER_FLYING §7.5 corrections): MovingVsStopped - the obstacle side in every state, the mover
-    // side only in Repulsion (state 2); MovingVsMoving - both sides in Repulse (state 3; state 11 is not modelled);
+    // side only in Repulsion (state 2); MovingVsMoving - both sides in Repulse (state 3) and state 11 (s78n t23);
     // StoppedVsStopped (s78n t20, 0x686f80) - only the unit being moved, while the record is Resolving (state 1).
     out.clear();
     for (const CollisionObject& c : coll_.list()) {
@@ -534,7 +534,7 @@ void MovementSystem::team_steer_recs(std::vector<SteerRec>& out) const {
         bool va = c.state == CollisionState::Resolving && c.master == 0, vb = c.state == CollisionState::Resolving && c.master == 1;
         if (c.kind == CollisionKind::MovingVsMoving) {
             w = 1.0f;
-            va = vb = c.state == CollisionState::Repulsion;
+            va = vb = c.state == CollisionState::Repulsion || c.state == CollisionState::FormationFollow;
         } else if (c.kind == CollisionKind::MovingVsStopped) {
             w = 2.0f;
             va = c.state == CollisionState::Repulsion;
@@ -860,12 +860,8 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
     // Speed step 0x5aaf70.
     float target = vmax;
     if (!top_push) target = std::min(target, u.formation_speed);
-    target = std::min(target, std::min(u.speed_cap, u.coll_speed));
-    bool now = u.coll_now;
-    if (frame < u.hold_until) {  // the MovingVsMoving stand-in's yield (a partner that is not Infantry / Bike): at once
-        target = 0.0f;
-        now = true;
-    }
+    target = std::min(target, u.coll_speed);
+    const bool now = u.coll_now;
     target = std::min(target, u.straggle * vmax);
     if (m.state == LocoState::WalkEndMove) target = a;
     if (target < 0.0f) target = 0.0f;

@@ -40,11 +40,12 @@
 //      DynamicObstacleOverlapPenalty only when the first pass finds no way) - pushed as a record on top of the unit's
 //      path stack; the ordered path stays underneath and resumes at the first waypoint line not yet crossed.
 //      StoppedVsStopped (§5.4.3) = one of the two walks a path to the first free spot of the ring search around itself
-//      (who: 0x687010; Resolving while it holds that path, Try Again Later every 30 frames). MovingVsMoving of two
-//      Infantry / Bike movers = the chooser 0x67f7b0 (Path Around for a forced path, Speed Slave Only within 60 degrees,
-//      else Repulse) and its states; other MovingVsMoving pairs keep the port's stand-in (speed slaving / yield /
-//      side-step on each unit's check frames, dropped when the pair stops predicting contact; [port] until §5.4.6 is
-//      ported). Each record answers its participants a speed and an "at once" flag, folded per unit before the walk.
+//      (who: 0x687010; Resolving while it holds that path, Try Again Later every 30 frames). MovingVsMoving (s78n t23,
+//      §5.4.2 / §5.4.6, every pair) = the chooser 0x67f7b0 (same formation, forced path, Repulse / Speed Slave Only for
+//      two Infantry / Bike movers; else overtake -> Pass or Moving With Speed Only, Giant, then by the relation code:
+//      Path Around with hold lines, the crusher pair, Moving With Speed Only) and its states, with the synced retry
+//      draws of Try Again Later / a failed pass. Each record answers its participants a speed and an "at once" flag,
+//      folded per unit before the walk (finished records leave the fold).
 //      The layer is hashed (land only);
 //   4. walk locomotor step of every unit IN PARALLEL (each unit writes only itself);
 //   5. serial commit in ascending id: terrain height, arrivals, blocked -> re-plan after 10
@@ -113,13 +114,14 @@
 //           suspends TARGETING / WEAPON / SPECIAL_WEAPON while UnitView::secondary_locomotor is set (§3.1.1 step 6).
 //           No draws.
 // RNG: FLYING loiter re-issue - one synced range_float(-90, 90) per re-issue without an attack target (serial,
-// ascending id, after the parallel walk). No other new draws.
+// ascending id, after the parallel walk). s78n t23: the MovingVsMoving retry draws - one synced range_int(0, 15) when a
+// record goes to Try Again Later (0x680c00) and each time the retry frame of state 10 / 12 passes, in the collision
+// driver's service order (serial). No other new draws.
 // Orders (s78n t20, MOVEMENT §4.3.1): a land move order without flag 0x20 and without an object goal runs the destination
 // check 0x439360 once, at the order - each formation's goal is moved to the first centre whose rectangle is passable, clear
 // of the order's other formations and not blocked by units that stand there or are heading there (more than 15 % of its
 // area); the order is never refused. A single unit ordered onto its own footprint does not move (the plan's shortcut).
-// PROVISIONAL: the MovingVsMoving states of pairs that are not two Infantry / Bike movers are a stand-in (s78n t18 / t20:
-// Infantry pairs, MovingVsStopped and StoppedVsStopped follow MOVEMENT §5.4.1 - §5.4.5); corridor squeeze
+// PROVISIONAL: corridor squeeze
 // (corridor.hpp) is a stand-alone pass: the port's formation members path individually (no shared formation path).
 // The jiggle draws skip special air units.
 #pragma once
@@ -917,10 +919,6 @@ private:
         int32_t large_hover_index = -1;  // P1 double-click: formation +0x22c (not hashed; no modelled consumer)
         uint32_t blocked_frames = 0, replans = 0;
         int32_t check_countdown = 0;
-        // [port] the MovingVsMoving stand-in (pairs that are not Infantry / Bike): the speed slave cap and the yield
-        // hold (speed 0 until this frame), set on the unit's check frames.
-        float speed_cap = 3.0e38f;
-        uint32_t hold_until = 0;
         // s78n t18 (0x509ea0): the lowest speed this tick's collision records answer the unit (3e38: none) and the "at
         // once" flag of the last record that writes one. Rebuilt by every land tick's driver before the walk (transient:
         // not saved, not hashed; the records' own answers are).
@@ -931,8 +929,6 @@ private:
         std::vector<ObjectId> around;
         uint32_t around_frame = 0;
         uint32_t path_change = 0;
-        V2 nudge;
-        uint32_t nudge_frames = 0;
         // a1k t03 (A1_READINGS §40.3): the collision-owned record on top of the locomotor's path stack, walked over the
         // order move (m.path / goal stay underneath, untouched, and resume when it ends). push_blocked = consecutive
         // blocked frames of its walk (save version 9). s78n t20 (MOVEMENT §1.5.1 item 5, §5.4.3; save version 18): one
@@ -1308,23 +1304,19 @@ private:
     void detect_collisions(uint32_t frame);
     void drive_collisions(uint32_t frame, SimRng& rng);
     void land_candidates(size_t ai, std::vector<uint32_t>& out) const;
-    // [port] the older "moving" predicates (an order path being walked), kept only for the MovingVsMoving stand-in of
-    // pairs that are not two Infantry / Bike movers
-    bool checker_moving(const Unit& u, uint32_t frame) const;
-    static bool other_moving(const Unit& u);
     bool mvm_contact(const Unit& a, const Unit& b) const;
     float mvs_contact(const Unit& a, const Unit& b) const;
     float mvs_look_distance(const Unit& a, const Unit& b) const;
-    bool collision_applies(const CollisionObject& c, uint32_t frame) const;  // [port] the stand-in kinds' keep test
     void resolve_collision(CollisionObject& c, bool full, uint32_t frame, SimRng& rng);
-    void mvm_response(Unit& x, const Unit& y, uint32_t frame);
     // s78n t14 part B: flee = the path is crush-flee (kind 7); s78n t18: `frame` stamps the blocker's path change; s78n
     // t20: `c` = the record that owns the pushed path
     bool push_aside(const CollisionObject& c, const Unit& a, Unit& b, bool flee, uint32_t frame);
     // s78n t18 (MOVEMENT §5.4.1 / §5.4.2; movement_system.cpp)
     static constexpr uint32_t kNoDetour = 0xFFFFFFFFu;
-    bool collision_valid(const CollisionObject& c, uint32_t frame) const;
-    bool mvm_infantry_pair(const Unit& a, const Unit& b) const;
+    bool collision_valid(const CollisionObject& c) const;
+    // s78n t23 (vf +0x40): the speed a record answers participant a (else b) - a MovingVsMoving record in state 0
+    // answers max speed (kInf) whatever it stores
+    static float record_answer(const CollisionObject& c, bool for_a);
     // s78n t20 (MOVEMENT §5.2 "What Moving is", vf +0x1a8 / +0x1b0): not suspended and (speed > 0, or a path record on
     // its stack - a collision-owned one or a planned order path - or turning in place). No order test: an order-less
     // unit on a pushed path is Moving. [port] an order whose path is not planned yet (start delay, composition pending)
@@ -1357,7 +1349,8 @@ private:
     float record_cap(const Unit& u) const;
     bool mvs_behind(const Unit& a, const Unit& b) const;
     bool mvm_passed(const Unit& a, const Unit& b) const;
-    float slave_speed(const Unit& x, const Unit& y, bool& touch) const;
+    float slave_speed(const Unit& x, const Unit& y, bool& touch) const;  // 0x67f590: the lane test, then 0x67f130
+    float closing_speed(const Unit& x, const Unit& y, bool& touch) const;  // 0x67f130 (touch: the footprints touch)
     // s78n t20 (MOVEMENT §5.4.6 "State 1 slave speed 0x5c69f0"): the formation-follow speed of a unit `s` walking the
     // detour of record `c` - max speed (kInf: no cap), lowered to min(max speed, Vf x L / D) only while s holds c's path,
     // is in a formation of speed Vf > 0 and the path has >= 2 points (L = its length, D = the straight distance from its
@@ -1419,13 +1412,37 @@ private:
     // their swept boxes; `ids` = their units_ indices.
     void around_obstacles(const Unit& u, const Unit* forced, uint8_t flags, float half, std::vector<AroundObstacle>& out,
                           std::vector<uint32_t>& ids) const;
-    uint8_t unit_relation(const Unit& p0, const Unit& p1) const;         // 0x679750(p0, p1)
+    // 0x679750(p0, p1); `own_clause` false: the "own record in state 0 / 1 / 4" clause is not taken (the chooser re-runs
+    // of MovingVsMoving states 2 and 6)
+    uint8_t unit_relation(const Unit& p0, const Unit& p1, bool own_clause = true) const;
     FootRect unit_swept_box(const Unit& o, const Unit& u, uint8_t rel) const;  // 0x677650 of o for the pathing unit u
     bool shares_open_record(const Unit& u, const Unit& o) const;        // an undecided / detouring record of the pair (vf +0x58)
     void mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t frame);
     void mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame);
-    CollisionState mvm_choose(const CollisionObject& c, const Unit& a, const Unit& b, bool& master_a) const;
+    // s78n t23 (MOVEMENT §5.4.2 / §5.4.6): MovingVsMoving for every pair. The chooser 0x67f7b0 gives the state, the
+    // master (0 = a, 1 = b), the set-up mode (0 none, 1 Pass 0x682e80, 2 Path Around 0x683140) and swap_ok; `rerun`: the
+    // re-runs of states 2 / 6 (the relation code's own-record clause is false).
+    struct MvmChoice {
+        CollisionState state = CollisionState::Active;
+        uint8_t master = 0;
+        uint8_t mode = 0;
+        bool swap_ok = true;
+    };
+    MvmChoice mvm_choose(const CollisionObject& c, const Unit& p0, const Unit& p1, bool rerun) const;
     void mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame, SimRng& rng);
+    bool mvm_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t frame, SimRng& rng);  // false: no service this frame
+    bool mvm_valid(CollisionObject& c, Unit& a, Unit& b, uint32_t frame);              // validity 0x680650
+    bool mvm_overtake(const Unit& a, const Unit& b) const;                              // 0x683260(rear a, front b)
+    void mvm_fail(CollisionObject& c, uint32_t frame, SimRng& rng);                     // 0x680c00
+    bool mvm_pass_setup(CollisionObject& c, Unit& m, const Unit& s, uint32_t frame);  // 0x682e80
+    bool mvm_detour(CollisionObject& c, Unit& m, Unit& s, bool flag, uint32_t frame); // 0x683140, one attempt
+    bool mvm_early_pop(CollisionObject& c, const Unit& m, Unit& s, uint32_t frame);    // 0x6807e0
+    bool mvm_starve(CollisionObject& c, const Unit& m, const Unit& s) const;           // 0x681d30 (true: starved)
+    void mvm_swap_slots(Unit& f, Unit& b, uint32_t frame);                             // 0x554660 (state 13)
+    V2 mvm_facing(const Unit& u) const;  // the facing, or the wanted facing while turning in place (vf +0x1f8)
+    // the last hold tag of u's top path naming `obstacle` that u has not passed yet (index >= its waypoint index)
+    const HoldTag* pending_tag(const Unit& u, ObjectId obstacle) const;
+    float accel_per_frame(const Unit& u) const;  // 0x372fe0 (<= 0: 0.05)
     // s78n t14 part B (0x5c8890): b's owner's faction has Scatters_From_Crushers and b's SPREAD_OUT is off.
     bool scatters(const Unit& b) const { return (!scatters_ || scatters_(b.d.owner)) && !b.spread; }
     // s78n t18 (MOVEMENT §5.3): the garrison-host gate of all three contact tests - either one's garrison host (walking
@@ -1435,9 +1452,6 @@ private:
     }
     static bool raised(const Unit& u) { return u.hover == 1; }  // the hover gate's "raised" (rising / lowering are not)
     bool svs_overlap(const Unit& a, const Unit& b) const;  // StoppedVsStopped contact 0x686500 (gate + coefficient)
-    // [port] the MovingVsMoving stand-in only: a crusher takes no record with a moving single unit it crushes (a squad
-    // container is pushed instead; its members are crushed).
-    bool drives_through(const Unit& c, const Unit& v) const { return crushes(c, v) && !v.d.team_container; }
     // The free-position search 0x440f90 around unit b itself (A1_READINGS §40.2): the push's set-up (cone pi / 4, outside
     // radius 0.33) and StoppedVsStopped's (Infantry class pi / 1.0, others 3 pi / 4 / 0.75; MOVEMENT §5.4.3)
     bool push_spot(const Unit& b, V2 dir, float cone, float outside, V2& out) const;

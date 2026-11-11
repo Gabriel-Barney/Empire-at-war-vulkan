@@ -106,7 +106,4 @@ struct WalkExtras {
 WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, const PassabilityGrid* grid,
                      const WalkExtras* extras = nullptr);
 
-// Moves `m.pos` by `offset` if the move passes the grid check (collision repulsion / push).
-bool try_nudge(LandMotion& m, V2 offset, uint32_t mask, const PassabilityGrid* grid);
-
 }  // namespace alamo::tactical::movement

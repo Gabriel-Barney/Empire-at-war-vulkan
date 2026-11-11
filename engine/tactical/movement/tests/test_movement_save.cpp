@@ -304,15 +304,17 @@ void test_collision_layer() {
     bad[12 + 4] = 7;  // kind
     CHECK(rejects(t, bad));
     bad = good;
-    put_u32(bad, 12 + 35 + 7, 9);   // second collision (35 bytes each): a = 9 ...
-    put_u32(bad, 12 + 35 + 11, 4);  // ... b = 4: the pair of the first collision again
+    put_u32(bad, 12 + 81 + 7, 9);   // second collision (81 bytes each since s78n t23): a = 9 ...
+    put_u32(bad, 12 + 81 + 11, 4);  // ... b = 4: the pair of the first collision again
     CHECK(rejects(t, bad));
     // s78n t20 (collision save 3): exact version; the StoppedVsStopped state Resolving (7) and "nobody is moved"
     // (master 2) are valid values, the next ones are not. A record is 46 bytes: state at +5, master at +45.
     bad = good;
     put_u32(bad, 0, 2);  // 2: before the s78n t20 StoppedVsStopped states
     CHECK(rejects(t, bad));
-    put_u32(bad, 0, 4);
+    put_u32(bad, 0, 3);  // 3: before the s78n t23 MovingVsMoving states and record fields
+    CHECK(rejects(t, bad));
+    put_u32(bad, 0, 5);
     CHECK(rejects(t, bad));
     bad = good;
     bad[12 + 4] = 2;  // s78n t20 F9: as a StoppedVsStopped record (kind at +4)
@@ -1625,7 +1627,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 20);  // 20: before the s78n t23 deployed extents (21)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 22);
+    put_u32(bad, 0, 21);  // 21: before the s78n t23 MovingVsMoving stand-in fields were dropped (22)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 23);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

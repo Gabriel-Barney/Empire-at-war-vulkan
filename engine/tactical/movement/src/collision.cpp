@@ -393,6 +393,17 @@ void CollisionLayer::hash(StateHasher& h) const {
         h.boolean(c.now_a);
         h.boolean(c.now_b);
         h.u8(c.master);
+        h.u32(c.failures);  // s78n t23
+        h.boolean(c.early_pop);
+        h.f32(c.line_a.x);
+        h.f32(c.line_a.y);
+        h.f32(c.line_b.x);
+        h.f32(c.line_b.y);
+        h.f32(c.line_dir.x);
+        h.f32(c.line_dir.y);
+        h.u8(c.starve_next);
+        h.u8(c.starve);
+        h.u32(c.redecide);
     }
 }
 

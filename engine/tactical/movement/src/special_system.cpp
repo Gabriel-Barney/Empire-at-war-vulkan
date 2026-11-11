@@ -75,9 +75,6 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
         u.jiggle = V2{};
         u.formation_speed = 3.0e38f;  // alone
         u.large_hover_index = -1;
-        u.speed_cap = 3.0e38f;
-        u.hold_until = 0;
-        u.nudge_frames = 0;
         end_push(u);  // a1k t03 [port]
         u.blocked_frames = 0;
         u.replans = 0;

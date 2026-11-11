@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
@@ -233,6 +234,258 @@ void test_t20_deployed_width() {
     }
 }
 
+// ---------------------------------------------------------------- 3.2 MovingVsMoving for every pair (§5.4.2, §5.4.6)
+const CollisionObject* mvm_record(const MovementSystem& sys, ObjectId x, ObjectId y) {
+    for (const CollisionObject& c : sys.collisions().list())
+        if (c.kind == CollisionKind::MovingVsMoving && ((c.a == x && c.b == y) || (c.a == y && c.b == x))) return &c;
+    return nullptr;
+}
+ObjectId master_of(const CollisionObject& c) { return c.master == 0 ? c.a : c.b; }
+
+uint64_t units_crc(const MovementSystem& sys) {
+    StateHasher h;
+    sys.hash_units(h);
+    sys.collisions().hash(h);
+    return h.digest();
+}
+
+// Two vehicles (soft radius 20, half extents 10 x 6) on one line, both ordered +x: the rear one at 1.0 x the land
+// multiplier (1.56), the front one at half that (0.78), 60 apart; the rear one's path is `path` long.
+void overtake_scene(MovementSystem& sys, SimRng& rng, float path) {
+    land_system(sys, 160);
+    const V2 at = cell_center(20, 80);
+    UnitDesc r = vehicle(1, at, 0, 10.0f, 6.0f, 1.0f);
+    r.radius = 20.0f;
+    UnitDesc f = vehicle(2, at + V2{60.0f, 0.0f}, 0, 10.0f, 6.0f, 0.5f);
+    f.radius = 20.0f;
+    CHECK(sys.add_unit(r) && sys.add_unit(f));
+    MoveOrder fo;
+    fo.units = {2};
+    fo.destination = at + V2{60.0f + 2000.0f, 0.0f};
+    sys.move(fo, rng, 1);
+    MoveOrder ro;
+    ro.units = {1};
+    ro.destination = at + V2{path, 0.0f};
+    sys.move(ro, rng, 1);
+}
+
+// The overtake test 0x683260 (a = rear, b = front): (r_a + r_b + dist) / (Va - min(Vb, Va / 2)) <= D / Va. With a long
+// path the rear one passes (state 4, master = the rear one, which gets ahead); with a short one it follows (state 6,
+// master = the front one).
+void test_t20_mvm_overtake() {
+    ::alamo::test::section("t20_mvm_overtake");
+    for (const float path : {500.0f, 150.0f}) {
+        MovementSystem sys{MovementConfig{}};
+        SimRng rng(321);
+        overtake_scene(sys, rng, path);
+        CollisionState decided = CollisionState::Active;
+        ObjectId master = -1;
+        bool passed = false;
+        float lhs = 0.0f, rhs = 0.0f;
+        for (uint32_t f = 1; f < 700; ++f) {
+            const UnitView r0 = sys.view(1), f0 = sys.view(2);
+            sys.tick(f, rng, serial_for);
+            const CollisionObject* c = mvm_record(sys, 1, 2);
+            if (decided == CollisionState::Active && c && c->state != CollisionState::Active) {
+                decided = c->state;
+                master = master_of(*c);
+                // the hand computation from the positions the decision read (the start of this tick)
+                const float va = r0.max_speed, vb = f0.max_speed, vs = std::min(vb, 0.5f * va);
+                const float dist = distance(r0.pos, f0.pos);
+                lhs = (20.0f + 20.0f + dist) / (va - vs);
+                rhs = std::max(0.0f, sys.view(1).goal.x - r0.pos.x) / va;
+            }
+            passed = passed || sys.view(1).pos.x > sys.view(2).pos.x + 1.0f;
+        }
+        if (path > 200.0f) CHECK(decided == CollisionState::Pass && master == 1 && passed && lhs <= rhs);
+        else CHECK(decided == CollisionState::MovingWithSpeed && master == 2 && !passed);
+        std::printf("t20 overtake: path %.0f -> state %d, master %d, (r + r + d) / (Va - vs) %.1f vs D / Va %.1f, rear got "
+                    "ahead %d\n",
+                    static_cast<double>(path), static_cast<int>(decided), master, static_cast<double>(lhs),
+                    static_cast<double>(rhs), passed ? 1 : 0);
+    }
+}
+
+// Head-on, equal class, one-member formations: Path Around (state 1), the master walks straight on (its lateral offset
+// stays exactly 0) and the slave detours around it; both arrive. Serial and 4 workers give the same CRC every tick.
+void test_t20_mvm_head_on() {
+    ::alamo::test::section("t20_mvm_head_on");
+    struct Out {
+        std::vector<uint64_t> crc;
+        CollisionState decided = CollisionState::Active;
+        ObjectId master = -1;
+        float lateral = 0.0f;
+        bool detoured = false, arrived = false, held = false;
+    };
+    const auto run = [](const ParallelFor& pf) {
+        Out o;
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 120);
+        const V2 west = cell_center(20, 60), east = cell_center(60, 60);
+        UnitDesc w = vehicle(1, west, 0);
+        UnitDesc e = vehicle(2, east, 1);
+        e.yaw_deg = 180.0f;
+        CHECK(sys.add_unit(w) && sys.add_unit(e));
+        SimRng rng(322);
+        MoveOrder wo;
+        wo.units = {1};
+        wo.destination = east + V2{200.0f, 0.0f};
+        sys.move(wo, rng, 1);
+        MoveOrder eo;
+        eo.units = {2};
+        eo.destination = west - V2{200.0f, 0.0f};
+        sys.move(eo, rng, 1);
+        float prev[3] = {0.0f, 0.0f, 0.0f};
+        for (uint32_t f = 1; f < 1200; ++f) {
+            sys.tick(f, rng, pf);
+            o.crc.push_back(units_crc(sys));
+            const CollisionObject* c = mvm_record(sys, 1, 2);
+            if (o.decided == CollisionState::Active && c && c->state != CollisionState::Active) {
+                o.decided = c->state;
+                o.master = master_of(*c);
+            }
+            if (o.master > 0) {
+                const ObjectId s = o.master == 1 ? 2 : 1;
+                o.lateral = std::max(o.lateral, std::fabs(sys.view(o.master).pos.y - west.y));
+                o.detoured = o.detoured || !sys.top_path(s).empty();
+                const float v = sys.view(o.master).speed;
+                o.held = o.held || (prev[o.master] > 0.5f && v == 0.0f);  // stopped at once at its hold line
+                prev[1] = sys.view(1).speed;
+                prev[2] = sys.view(2).speed;
+            }
+        }
+        o.arrived = sys.view(1).arrived && sys.view(2).arrived;
+        return o;
+    };
+    const Out s = run(serial_for), p = run(make_thread_pf(4));
+    CHECK(s.decided == CollisionState::PathAround && s.master > 0 && s.lateral == 0.0f && s.detoured && s.arrived);
+    CHECK(s.crc == p.crc);
+    std::printf("t20 head-on: state %d, master %d (lateral offset %.4f, held at once %d), slave detoured %d, both arrived %d, "
+                "serial = 4 workers %d\n",
+                static_cast<int>(s.decided), s.master, static_cast<double>(s.lateral), s.held ? 1 : 0, s.detoured ? 1 : 0,
+                s.arrived ? 1 : 0, s.crc == p.crc ? 1 : 0);
+}
+
+// Two vehicles head-on with no order path below them (halted: each brakes along its End Move stub, a top record with no
+// order underneath), so no Path Around can start (MOVEMENT 1.5.1: no base path): the four attempts fail in the decision
+// frame -> Try Again Later with one synced draw, retry - frame in [30, 45]; at the retry frame state 0 with a new draw,
+// and the next decision fails again with another. Face to face, both brake to 0 meanwhile. [port] The plan's one-cell
+// corridor does not stall in the port: Path Around's pass 2 takes the x 15 crossing edge (1.5.1 item 4) through the
+// master, so that detour succeeds.
+void test_t20_mvm_try_again() {
+    ::alamo::test::section("t20_mvm_try_again");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 100);
+    UnitDesc w = vehicle(1, cell_center(20, 50), 0);
+    w.accel = 0.05f;
+    w.decel = 0.004f;
+    UnitDesc e = vehicle(2, cell_center(60, 50), 0);
+    e.accel = 0.05f;
+    e.decel = 0.004f;
+    e.yaw_deg = 180.0f;
+    CHECK(sys.add_unit(w) && sys.add_unit(e));
+    SimRng rng(323);
+    MoveOrder wo;
+    wo.units = {1};
+    wo.destination = cell_center(90, 50);
+    sys.move(wo, rng, 1);
+    MoveOrder eo;
+    eo.units = {2};
+    eo.destination = cell_center(5, 50);
+    sys.move(eo, rng, 1);
+    uint32_t f = 1;
+    for (; f < 600 && distance(sys.view(1).pos, sys.view(2).pos) > 260.0f; ++f) sys.tick(f, rng, serial_for);
+    const ObjectId both[] = {1, 2};
+    sys.halt(both, f);
+    CHECK(!sys.view(1).has_goal && !sys.view(2).has_goal && sys.view(1).pushed && sys.view(2).pushed);
+    uint32_t first = 0, first_retry = 0, draws_first = 0, failures = 0;
+    std::vector<uint32_t> draw_frames;
+    bool range_ok = true, ref_ok = true, stood = true;
+    for (const uint32_t f0 = f; f < f0 + 400; ++f) {
+        SimRng ref = rng;
+        const uint64_t d0 = rng.draws();
+        sys.tick(f, rng, serial_for);
+        const uint64_t dn = rng.draws() - d0;
+        if (dn > 0) draw_frames.push_back(f);
+        const CollisionObject* c = mvm_record(sys, 1, 2);
+        if (!c) continue;
+        if (first == 0 && c->state == CollisionState::TryAgainLater) {
+            first = f;
+            first_retry = c->retry;
+            draws_first = static_cast<uint32_t>(dn);
+            ref_ok = c->retry == f + 30u + static_cast<uint32_t>(ref.range_int(0, 15));
+        }
+        if (c->state == CollisionState::TryAgainLater) {
+            range_ok = range_ok && c->retry >= f && c->retry <= f + 45u;
+            // face to face (neither behind the other yet): both answered 0 from the first service on (the failed
+            // decision itself services nothing)
+            if (f > first && sys.view(1).pos.x + 1.0f < sys.view(2).pos.x) stood = stood && c->speed_a == 0.0f && c->speed_b == 0.0f;
+        }
+        failures = c->failures;
+    }
+    CHECK(first > 0 && draws_first == 1 && ref_ok && first_retry - first >= 30u && first_retry - first <= 45u);
+    CHECK(draw_frames.size() >= 3 && draw_frames[0] == first && draw_frames[1] == first_retry && range_ok && stood);
+    CHECK(failures >= 2);
+    std::printf("t20 try again: state 10 at frame %u (1 draw, retry +%u), draw frames %u %u %u..., failures %u, both answered 0 %d\n",
+                first, first_retry - first, draw_frames.size() > 0 ? draw_frames[0] : 0u,
+                draw_frames.size() > 1 ? draw_frames[1] : 0u, draw_frames.size() > 2 ? draw_frames[2] : 0u, failures,
+                stood ? 1 : 0);
+}
+
+// A participant of a MovingVsMoving record that stands on an impassable cell is stopped (its whole path stack cleared)
+// and the record ends (validity 0x680650).
+void test_t20_mvm_impassable() {
+    ::alamo::test::section("t20_mvm_impassable");
+    MovementSystem sys{MovementConfig{}};
+    SimRng rng(324);
+    overtake_scene(sys, rng, 150.0f);
+    uint32_t f = 1;
+    for (; f < 300 && !mvm_record(sys, 1, 2); ++f) sys.tick(f, rng, serial_for);
+    CHECK(mvm_record(sys, 1, 2) != nullptr);
+    const V2 p = sys.view(1).pos;
+    sys.grid().set_base(world_to_cell(p.x), world_to_cell(p.y), kPassImpassable);
+    sys.tick(f, rng, serial_for);
+    const UnitView v = sys.view(1);
+    const CollisionObject* c = mvm_record(sys, 1, 2);
+    CHECK(!v.has_goal && v.speed == 0.0f && !v.pushed && sys.land_path(1).empty() && (!c || c->state == CollisionState::Resolved));
+    CHECK(sys.view(2).has_goal);
+    std::printf("t20 impassable: rear stopped at frame %u (speed %.2f, goal %d), record %s\n", f, static_cast<double>(v.speed),
+                v.has_goal ? 1 : 0, c ? "resolved" : "gone");
+}
+
+// Save / load inside state 4 (Pass): the resumed run equals the uninterrupted one tick for tick.
+void test_t20_mvm_save_pass() {
+    ::alamo::test::section("t20_mvm_save_pass");
+    MovementSystem sys{MovementConfig{}};
+    SimRng rng(325);
+    overtake_scene(sys, rng, 500.0f);
+    uint32_t f = 1;
+    for (; f < 700; ++f) {
+        sys.tick(f, rng, serial_for);
+        const CollisionObject* c = mvm_record(sys, 1, 2);
+        if (c && c->state == CollisionState::Pass) break;
+    }
+    const CollisionObject* c = mvm_record(sys, 1, 2);
+    CHECK(c && c->state == CollisionState::Pass);
+    ByteWriter w;
+    sys.write(w);
+    const std::vector<uint8_t> bytes = w.bytes();
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy, 160);
+    ByteReader r(bytes);
+    CHECK(copy.read(r));
+    SimRng rng2 = rng;
+    bool same = units_crc(copy) == units_crc(sys);
+    uint32_t n = 0;
+    for (uint32_t k = f + 1; k < f + 300; ++k, ++n) {
+        sys.tick(k, rng, serial_for);
+        copy.tick(k, rng2, serial_for);
+        same = same && units_crc(copy) == units_crc(sys);
+    }
+    CHECK(same);
+    std::printf("t20 save in Pass: saved at %u (%zu bytes), %u ticks identical %d\n", f, bytes.size(), n, same ? 1 : 0);
+}
+
 }  // namespace
 
 int main() {
@@ -240,5 +493,10 @@ int main() {
     test_step0_crush_no_locomotor();
     test_step0_squad_final_facing();
     test_t20_deployed_width();
+    test_t20_mvm_overtake();
+    test_t20_mvm_head_on();
+    test_t20_mvm_try_again();
+    test_t20_mvm_impassable();
+    test_t20_mvm_save_pass();
     return ::alamo::test::report("alamo_tactical_movement_b3_tests");
 }

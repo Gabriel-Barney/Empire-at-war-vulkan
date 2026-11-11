@@ -122,11 +122,14 @@ enum class CollisionKind : uint8_t { MovingVsMoving = 0, MovingVsStopped = 1, St
 // Resolved = MovingVsStopped 5 / 6, MovingVsMoving 8 / 9 (the driver drops the record in the same pass). s78n t18
 // (§5.4.1 / §5.4.2): TryAgainLater = MovingVsStopped 7; Repulsion = MovingVsStopped 2 / MovingVsMoving 3 Repulse;
 // PathAround = state 1 of both; Crusher = MovingVsStopped 4 (the crusher drives on) / MovingVsMoving 7 (both at max
-// speed); SpeedSlave = MovingVsMoving 2 Speed Slave Only. StoppedVsStopped and the MovingVsMoving stand-in of pairs that
-// are not Infantry / Bike stays Active ([port]). s78n t20 (§5.4.3): StoppedVsStopped - Active = 0 None, Resolving = 1 (the
-// unit CollisionObject::master walks its path to a free spot), TryAgainLater = 4, Resolved = 2 / 3.
+// speed); SpeedSlave = MovingVsMoving 2 Speed Slave Only. s78n t20 (§5.4.3): StoppedVsStopped - Active = 0 None,
+// Resolving = 1 (the unit CollisionObject::master walks its path to a free spot), TryAgainLater = 4, Resolved = 2 / 3.
+// s78n t23 (§5.4.6, MovingVsMoving of every pair): TryAgainLater = 10 Try Again Later; Pass = 4 Pass; MovingWithSpeed =
+// 6 Moving With Speed Only; FormationFollow = 11, PassFailed = 12, SwapSlots = 13, Starved = 15, StarvedDetour = 16 (no
+// debug names). The MovingVsMoving-only values are rejected on the other kinds by the save.
 enum class CollisionState : uint8_t {
     Active = 0, TryAgainLater = 1, Resolved = 2, Repulsion = 3, PathAround = 4, Crusher = 5, SpeedSlave = 6, Resolving = 7,
+    Pass = 8, MovingWithSpeed = 9, FormationFollow = 10, PassFailed = 11, SwapSlots = 12, Starved = 13, StarvedDetour = 14,
 };
 
 inline constexpr uint32_t kCollisionCrowdRefreshFrames = 30;
@@ -151,6 +154,16 @@ struct CollisionObject {
     float speed_a = 3.0e38f, speed_b = 3.0e38f;
     bool now_a = false, now_b = false;
     uint8_t master = 0;
+    // s78n t23 (MOVEMENT §5.4.2 / §5.4.6, MovingVsMoving only; collision save version 4; hashed): failures +0xb8 (no
+    // reader but the debug text); early_pop +0xbc (the state-1 detour may be popped early, 0x6807e0); the two state-4
+    // hold lines A / B (+0x8c..+0xa8: points, one direction); starvation +0xac (starve_next: 0 = a, 1 = b, 2 = none) and
+    // +0xb0 (countdown from 30); the re-decide frame +0x70 (0 = none).
+    uint32_t failures = 0;
+    bool early_pop = false;
+    V2 line_a, line_b, line_dir;
+    uint8_t starve_next = 2;
+    uint8_t starve = 30;
+    uint32_t redecide = 0;
 };
 
 // crowd - (float)(now - created).
@@ -178,6 +191,8 @@ public:
              const ResolveFn& resolve);
 
     std::span<const CollisionObject> list() const { return list_; }
+    // s78n t23: the records for in-place field writes (the re-decide stamp of a path push); never adds or removes.
+    std::span<CollisionObject> list_mut() { return list_; }
     std::span<const Step> last_order() const { return order_; }  // the last run's resolution order
     uint32_t last_cancelled() const { return cancelled_; }
     uint32_t last_resolved() const { return resolved_; }

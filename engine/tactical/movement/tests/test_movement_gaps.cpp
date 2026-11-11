@@ -4203,8 +4203,10 @@ static void test_land_squad_review_fixes() {
             return r;
         };
         const auto on = run(true), off = run(false);
-        CHECK(on.first > 0 && on.second > 0);     // Scatters_From_Crushers: pushed on a crush-flee path
-        CHECK(off.first > 0 && off.second == 0);  // not scattering: pushed aside, no flee
+        CHECK(on.first > 0 && on.second > 0);  // Scatters_From_Crushers: a crush-flee detour (state 1, kind 7)
+        // s78n t23 (MOVEMENT §5.4.6 chooser, "4 (head-on)"): a crusher against a non-scattering victim -> state 7, both
+        // run on (no detour, no push)
+        CHECK(off.first == 0 && off.second == 0);
         std::printf("land squad review fixes: moving crush pair - scatters: pushed %u fleeing %u; not: pushed %u fleeing %u\n",
                     on.first, on.second, off.first, off.second);
     }
@@ -4283,11 +4285,14 @@ static void test_land_squad_review_fixes() {
         uint32_t f = 20, cut_at = 0;
         for (; f < 900 && !sys.view(100).pushed; ++f) sys.tick(f, rng, serial_for);
         CHECK(sys.view(100).pushed);
-        // wall the container in: its pushed walk is blocked from now on
+        // wall the container in: its pushed walk is blocked from now on. s78n t23: a ring two cells out - its own cell
+        // stays passable (standing on an impassable cell, its MovingVsMoving record with the giant would stop it at
+        // once, MOVEMENT §5.4.2 validity)
         const V2 kp = sys.view(100).pos;
         const int32_t cx = world_to_cell(kp.x), cy = world_to_cell(kp.y);
         for (int32_t y = cy - 2; y <= cy + 2; ++y)
-            for (int32_t x = cx - 2; x <= cx + 2; ++x) sys.grid().set_base(x, y, kPassImpassable);
+            for (int32_t x = cx - 2; x <= cx + 2; ++x)
+                if (std::abs(x - cx) == 2 || std::abs(y - cy) == 2) sys.grid().set_base(x, y, kPassImpassable);
         const uint32_t blocked0 = sys.stats().blocked_steps;
         for (uint32_t n = 0; n < 40 && sys.view(100).pushed; ++n, ++f) sys.tick(f, rng, serial_for);
         cut_at = f;
@@ -4923,7 +4928,7 @@ static void test_land_squad_speed_order() {
     path_end("Stormtrooper squad", 0, 0.8f, t18_storm(), 0.05f * mult, 0.8f * mult, 15, true);
     path_end("Rebel squad", 1, 1.1f, rebel, 0.07f * mult, 1.0f * mult, 13, true);
     const float a = 0.05f * mult, vmax = 0.8f * mult;
-    {  // the MovingVsMoving stand-in's yield to a crossing vehicle with a lower id: speed 0 in the tick the hold is set
+    {  // s78n t23 (MOVEMENT §5.4.6): a vehicle crossing the squad's path - Path Around (state 1), the vehicle detours
         MovementSystem sys{MovementConfig{}};
         land_system(sys, 100);
         const V2 at = cell_center(10, 20);
@@ -4938,8 +4943,7 @@ static void test_land_squad_speed_order() {
         o.units = {1};
         o.destination = cell_center(40, 20);
         sys.move(o, rng, 1);
-        bool crossing = false, at_once = false;
-        float prev = 0.0f;
+        bool crossing = false, detoured = false;
         for (uint32_t f = 1; f < 600; ++f) {
             if (!crossing && sys.view(100).pos.x >= at.x + 200.0f) {
                 MoveOrder vo;
@@ -4949,13 +4953,12 @@ static void test_land_squad_speed_order() {
                 crossing = true;
             }
             sys.tick(f, rng, serial_for);
-            const float s = sys.view(100).speed;
-            at_once = at_once || (prev > vmax - 1e-3f && s == 0.0f);
-            prev = s;
+            detoured = detoured || !sys.top_path(50).empty();
         }
-        std::printf("land squad speed order: crossing vehicle - ordered %d, hold at once %d, arrived %d" "\n", crossing ? 1 : 0,
-                    at_once ? 1 : 0, sys.view(100).arrived ? 1 : 0);
-        CHECK(crossing && at_once && sys.view(100).arrived);
+        std::printf("land squad speed order: crossing vehicle - ordered %d, vehicle detoured %d, squad arrived %d, vehicle "
+                    "arrived %d\n",
+                    crossing ? 1 : 0, detoured ? 1 : 0, sys.view(100).arrived ? 1 : 0, sys.view(50).arrived ? 1 : 0);
+        CHECK(crossing && detoured && sys.view(100).arrived && sys.view(50).arrived);
     }
     {  // a new order while moving, and Stop
         MovementSystem sys{MovementConfig{}};

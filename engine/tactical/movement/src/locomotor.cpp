@@ -173,12 +173,4 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     return r;
 }
 
-bool try_nudge(LandMotion& m, V2 offset, uint32_t mask, const PassabilityGrid* grid) {
-    if (!(length_sq(offset) > 0.0f)) return false;
-    const V2 np = m.pos + offset;
-    if (!move_ok(grid, m.pos, np, mask)) return false;
-    m.pos = np;
-    return true;
-}
-
 }  // namespace alamo::tactical::movement
