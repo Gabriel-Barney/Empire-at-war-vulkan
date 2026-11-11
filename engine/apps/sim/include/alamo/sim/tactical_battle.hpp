@@ -1657,8 +1657,10 @@ private:
     // point not fogged for the first unit's owner) and stealth (a stealthed target and a first unit without
     // Target_Stealth_Units). Returns Moved when some mover got a goal, Stopped when the plan's "every member can fire"
     // stop took them, None otherwise. Land only.
+    // s78n t25.4: `guard` = a guard block on the object (Lua Guard_Target, flags 0x02, MOVEMENT §4.3.2 items 1 / 2 / 7):
+    // not staged (G = C), each engagement range capped at Land_Guard_Range, the guard L rule and guard trim in the movement.
     AttackPlan land_attack_order(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp,
-                                 uint8_t flags, bool replan, SimRng& rng);
+                                 uint8_t flags, bool replan, SimRng& rng, bool guard = false);
     // s78n t25.3 (0x40e260, TACTICAL_COMBAT §2.8): G = T's position, unless the unit with the largest
     // Targeting_Min_Attack_Distance is inside that min range of T: then min + 0.2 x (base range - min) from T toward it.
     Vec3 attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp);

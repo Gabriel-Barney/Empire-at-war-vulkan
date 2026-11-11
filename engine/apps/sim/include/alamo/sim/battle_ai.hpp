@@ -102,6 +102,8 @@ public:
     // One AI frame, after the battle tick (T7 order, see tactical_ai.hpp).
     void update();
     void end();  // battle end: every plan released
+    // a1h t02: the object-goal follow records' 30-frame re-path (the first step of update(); public for the host tests).
+    void follow_service();
     ai::tactical::TacticalAiWorld& world() { return *world_; }
     const ai::tactical::TacticalAiWorld& world() const { return *world_; }
     bool controls(int32_t player) const;
@@ -211,11 +213,14 @@ private:
         float r = 0.0f;              // R
         float threat = 0.0f;         // the move's threat tolerance (kThreatOff = none)
         uint32_t next = 0;           // the next battle frame the formation update may re-path (+0x1d8)
+        // s78n t25.4 (MOVEMENT §4.3.2 items 2 / 8): a land Guard_Target on an object - the re-path is the guard block's
+        // re-plan (TacticalBattle::land_attack_order, guard, replan: the slot kept). Saved (battle.ai 4), hashed when true.
+        bool guard = false;
     };
     std::vector<ObjectFollow> follows_;  // issue order
     void follow_drop(const std::vector<objects::ObjectId>& units);
-    void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat);
-    void follow_service();
+    void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat,
+                    bool guard = false);
     commands::RejectReason execute_order(uint8_t player, const commands::EventData& ev);
     // s78f t10: `flags` / `goal_object` = the order's movement block (mv::MoveOrder::flags / goal_object), the same values the
     // host's fighter formation record gets (TacticalBattle::fighter_order), so the movement layer's fighter leash and the

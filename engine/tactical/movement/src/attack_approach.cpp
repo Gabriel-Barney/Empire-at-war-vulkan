@@ -398,21 +398,31 @@ bool MovementSystem::arc_slot_test(const MoveOrder& order, const std::vector<uin
 // on the ring axis u = -d1 around C, the first success re-run with commit and written to every member of each formation.
 // (HX, HY) = formation_box on unit(C - centroid) ([port] 0x411640's mode-0 plan axis; the layout's fwd points at the
 // order's destination). No try succeeds -> nothing is written: the blocks stay plain.
+// s78n t25.4 (item 2, guard): a guard block's L = the formations whose lead is farther from C than min(the lead's attack
+// range, Land_Guard_Range) ([port] the 2-D distance, as the guard trim's); the rest as for an attack (R = the minimum
+// engagement range, which the host caps at Land_Guard_Range for a guard block, item 1).
 void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint32_t>& idx, const std::vector<LandForm>& forms) {
     std::vector<uint32_t> l;
+    const V2 c = order.attack.c;
     for (uint32_t i = 0; i < forms.size(); ++i) {
         const LandForm& f = forms[i];
-        if (!land_layer_object(units_[idx[f.members[0]]])) continue;
+        const Unit& lead = units_[idx[f.members[0]]];
+        if (!land_layer_object(lead)) continue;
         bool out = false;
-        for (const uint32_t m : f.members) {
-            const LandAttackUnit* e = attack_entry(order, units_[idx[m]].d.id);
-            out = out || !e || !e->in_range;
+        if (order.attack.guard) {  // s78n t25.4
+            const LandAttackUnit* e = attack_entry(order, lead.d.id);
+            const float lim = std::min(e ? e->range : 0.0f, cfg_.constants.land_guard_range);
+            out = distance(lead.m.pos, c) > lim;
+        } else {
+            for (const uint32_t m : f.members) {
+                const LandAttackUnit* e = attack_entry(order, units_[idx[m]].d.id);
+                out = out || !e || !e->in_range;
+            }
         }
         if (out) l.push_back(i);
         else ++stats_.attack_in_range;
     }
     if (l.empty()) return;
-    const V2 c = order.attack.c;
     const auto unslotted = [&](const Unit& lead) {
         stats_.attack_unslotted += static_cast<uint32_t>(l.size());
         if (!grid_.passable_world(c, lead.lp.mask)) stats_.attack_unslotted_cell += static_cast<uint32_t>(l.size());

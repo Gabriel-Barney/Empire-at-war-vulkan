@@ -180,7 +180,7 @@ struct LandAttack {
     float cz = 0.0f;         // C's height (the solo rule's 3-D distance)
     V2 g;                    // G = C after the host's staging 0x40e260 (equal to C when not staged)
     float t_hx = 0.0f, t_hy = 0.0f;  // the target's footprint half extents (0x396850): r_T = sqrt(hx^2 + hy^2)
-    bool guard = false;      // a guard block (t25.4: no slots yet)
+    bool guard = false;      // a guard block (s78n t25.4: the guard L rule, the guard trim, no item-6 stop, no solo rule)
     bool trim = true;        // 0x410e90's gate: T not fogged for the first member's owner, not stealthed (host)
     bool replan = false;     // a re-plan (0x410a60 / 0x4192b0): no split, no slot test, the slots and formations kept
     std::vector<LandAttackUnit> units;  // one entry per order unit (looked up by id)

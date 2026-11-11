@@ -662,6 +662,68 @@ std::vector<uint64_t> run_approach(const ParallelFor& pf) {
     return out;
 }
 
+// s78n t25.4 (MOVEMENT §4.3.2 items 1, 2, 6 and 7, guard): a guard block on a unit (half extents 5) 400 away, the
+// guard's attack range 250, engage = min(250 + 5, Land_Guard_Range 150) = 150 (item 1, the host's cap). L: the lead is
+// 400 > min(250, 150) from C -> slotted: R = 150, ring 150 - 15 = 135, theta 0. No item-6 stop for a guard (the hook
+// answers true everywhere). Plan: path (0,0) -> (265,0) (Q' = G + 135 rot(-v, 0)) -> (400,0), L = 400; the guard trim
+// starts at g = max(0, 400 - 150) = 250 and walks back from s = 400: |p - C| <= 150 down to s = 250, 240 fails ->
+// keep 250: goal (250, 0) (hand; the same without the slot leg, the path being straight). The hook is asked for the
+// line of fire only (los_only true). From 100 away: 100 <= 150 -> not in L, no slot (attack_in_range + 1); the trim
+// keeps 0 (g = max(0, 100 - 150) = 0, every s passes): the goal is the start point, where it stands.
+void test_scene_guard() {
+    ::alamo::test::section("scene_guard");
+    for (const float d : {400.0f, 100.0f}) {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        UnitDesc t = attacker(900, kO + V2{d, 0.0f}, 5.0f);
+        CHECK(sys.add_unit(t));
+        const V2 c = kO + V2{d, 0.0f};
+        bool los_only_always = true;
+        uint32_t asked = 0;
+        sys.set_fire_test([&](ObjectId, V2, ObjectId, bool los_only) {
+            los_only_always = los_only_always && los_only;
+            ++asked;
+            return true;
+        });
+        MoveOrder o = attack_order({10}, 900, c, 5.0f, 150.0f);
+        o.flags = kMoveFlagGuardMove;
+        o.attack.guard = true;
+        o.attack.units[0].range = 250.0f;
+        SimRng rng(7);
+        sys.move(o, rng, 1);
+        const UnitView v = sys.view(10);
+        CHECK(asked > 0 && los_only_always && sys.stats().attack_stops == 0);
+        CHECK(v.atk_form != 0 && v.atk_target == 900 && v.has_goal && !v.arrived);
+        if (d > 150.0f) {
+            CHECK(v.atk_theta == 0.0f && close_to(v.atk_rho, 135.0f, 1e-3f) && sys.stats().attack_slotted == 1);
+            CHECK(sys.stats().attack_legs == 1 && sys.stats().attack_in_range == 0);
+            CHECK(close2(v.goal, kO + V2{250.0f, 0.0f}, 0.01f) && close_to(sys.stats().attack_trim_sum, 150.0f, 0.01f));
+        } else {
+            CHECK(v.atk_rho == 0.0f && sys.stats().attack_slotted == 0 && sys.stats().attack_in_range == 1);
+            CHECK(sys.stats().attack_trims_first == 1 && close2(v.goal, kO, 0.01f));
+        }
+        std::printf("guard from %.0f: theta %.7f rho %.4f goal (%.4f, %.4f), legs %u, in range %u\n", static_cast<double>(d),
+                    static_cast<double>(v.atk_theta), static_cast<double>(v.atk_rho), static_cast<double>(v.goal.x - kO.x),
+                    static_cast<double>(v.goal.y - kO.y), sys.stats().attack_legs, sys.stats().attack_in_range);
+    }
+    // a blocked line of fire cuts before the guard range does: the same order with a hook that refuses the line from
+    // x <= 305: s = 400 .. 310 pass, 300 fails -> keep 310, goal (310, 0) (hand)
+    {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        CHECK(sys.add_unit(attacker(900, kO + V2{400.0f, 0.0f}, 5.0f)));
+        sys.set_fire_test([](ObjectId, V2 p, ObjectId, bool) { return p.x - kO.x > 305.0f; });
+        MoveOrder o = attack_order({10}, 900, kO + V2{400.0f, 0.0f}, 5.0f, 150.0f);
+        o.attack.guard = true;
+        o.attack.units[0].range = 250.0f;
+        SimRng rng(7);
+        sys.move(o, rng, 1);
+        CHECK(close2(sys.view(10).goal, kO + V2{310.0f, 0.0f}, 0.01f));
+    }
+}
+
 void test_scene_workers() {
     ::alamo::test::section("scene_workers");
     const std::vector<uint64_t> s = run_approach(serial_for);
@@ -690,6 +752,7 @@ int main() {
     test_scene_replan();
     test_scene_solo();
     test_scene_plain_orders();
+    test_scene_guard();  // s78n t25.4
     test_scene_workers();
     return ::alamo::test::report("alamo_tactical_movement_b5_tests");
 }

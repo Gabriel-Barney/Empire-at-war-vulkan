@@ -1041,15 +1041,16 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         // s78n t25.3 (MOVEMENT §4.3.2 items 6 / 7, 0x40edd0 / 0x410e90; TACTICAL_COMBAT §2.8 B 4): the movement's fire
         // test - can the mover hit the target from p: slots 43 / 46 and the line of fire from p at the ground height
         // (CombatSystem::can_hit_from; a squad container through its first live member). Yes or NoTarget (nothing
-        // tested) = it can fire. [port] los_only (guard blocks, t25.4) answers the same three tests.
-        movement_->set_fire_test([this](mv::ObjectId mover, mv::V2 p, mv::ObjectId target, bool) {
+        // tested) = it can fire. s78n t25.4: los_only (a guard block's trim, item 7: the movement tests the guard range)
+        // answers the line of fire alone (CombatSystem::line_of_fire_from).
+        movement_->set_fire_test([this](mv::ObjectId mover, mv::V2 p, mv::ObjectId target, bool los_only) {
             const objects::ObjectId unit = attack_lead(mover);
             if (unit == objects::kNoObjectId || !combat_->has_unit(unit)) return true;
             tactical::Vec3 from = combat_->can_hit_origin(unit);
             from.x = p.x;
             from.y = p.y;
             from.z = map_.terrain.sample_height(p.x, p.y);
-            const tc::CanHit c = combat_->can_hit_from(unit, from, target);
+            const tc::CanHit c = los_only ? combat_->line_of_fire_from(unit, from, target) : combat_->can_hit_from(unit, from, target);
             return c == tc::CanHit::Yes || c == tc::CanHit::NoTarget;
         });
     }
@@ -1975,7 +1976,7 @@ Vec3 TacticalBattle::attack_stage_goal(const TacticalMode& mode, std::span<const
 
 TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode, std::span<const objects::ObjectId> ids,
                                                             objects::ObjectId target, Vec3 tp, uint8_t flags, bool replan,
-                                                            SimRng& rng) {
+                                                            SimRng& rng, bool guard) {
     if (space_ || !movement_ || !combat_) return AttackPlan::None;
     const objects::ObjectStore& st = mode.primary();
     const Unit* tu = unit_by_id(target);
@@ -1999,7 +2000,8 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode,
     } else if (tu) {
         unit_half_extents(*tu, thx, thy);
     }
-    const Vec3 g = attack_stage_goal(mode, o.units, target, tp);
+    // s78n t25.4 [port]: a guard block is not staged (G = C; 0x40e260's min-range rule is for an attack on T)
+    const Vec3 g = guard ? tp : attack_stage_goal(mode, o.units, target, tp);
     const tactical::Aabb& bb = mode.bounds();
     o.destination = {std::clamp(g.x, bb.min.x, bb.max.x), std::clamp(g.y, bb.min.y, bb.max.y)};
     o.flags = flags;
@@ -2011,6 +2013,7 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode,
     o.attack.t_hx = thx;
     o.attack.t_hy = thy;
     o.attack.replan = replan;
+    o.attack.guard = guard;  // s78n t25.4
     // 0x410e90's gate: the target point not fogged for the first unit's owner, and not a stealthed target the first unit
     // cannot target (Target_Stealth_Units)
     const Unit* first = unit_by_id(o.units.front());
@@ -2028,6 +2031,8 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode,
             e.range = combat_->attack_range(lead);  // 0x3749d0
             // 0x4f6e40 (§4.3.2 item 1): + min(hx, hy) of the target's extents ([port] no pending-ability clause)
             e.engage = e.range + std::min(thx, thy);
+            // s78n t25.4 (item 1): a guard block's engagement range is capped at Land_Guard_Range (GC +0x11ec4)
+            if (guard) e.engage = std::min(e.engage, movement_->constants().land_guard_range);
             const tc::CanHit c = attack_can_hit(lead, target);
             e.in_range = c == tc::CanHit::Yes || c == tc::CanHit::LineBlocked;  // slots 44 / 45: range only
             e.melee = combat_->melee_attacker(lead);

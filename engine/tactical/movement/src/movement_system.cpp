@@ -947,13 +947,13 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             }
         }
     }
-    // s78n t25.2 (MOVEMENT §4.3.2 items 2 and 6 - 7): the attack slots of a new order (0x438c10; not at a re-plan, not
-    // for a guard block until t25.4), then the attack plan of every formation (the "every member can fire" stop, the
-    // slot leg, the fire trim, the member goals), before the squad start-delay draws below (a stopped container gets
-    // no path, so no draw).
+    // s78n t25.2 (MOVEMENT §4.3.2 items 2 and 6 - 7): the attack slots of a new order (0x438c10; not at a re-plan;
+    // s78n t25.4: guard blocks too, by the guard L rule), then the attack plan of every formation (the "every member can
+    // fire" stop, the slot leg, the fire trim, the member goals), before the squad start-delay draws below (a stopped
+    // container gets no path, so no draw).
     if (attack) {
         ++(replan ? stats_.attack_replans : stats_.attack_orders);
-        if (!replan && !order.attack.guard) attack_slots(order, idx, forms);
+        if (!replan) attack_slots(order, idx, forms);
         for (const LandForm& lf : forms) attack_plan(order, idx, lf, frame);
     }
     // s78n t14 (FIGHTER_FLYING §7.3 item 2, the path-set hook 0x5ad140 for a kind-1 path): a squad container standing still

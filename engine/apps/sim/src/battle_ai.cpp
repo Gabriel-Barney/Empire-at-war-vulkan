@@ -336,15 +336,17 @@ void BattleAi::hash(StateHasher& h) const {
         h.f32(f.r);
         h.f32(f.threat);
         h.u32(f.next);
+        if (f.guard) h.u8(0xA6);  // s78n t25.4: only when set (space and the other follows hash as before)
     }
 }
 
 // ---- N1 stage 2 save / load (owner: n2-host): chunk "battle.ai" ---------------------------------------------------
 namespace {
-constexpr uint32_t kBattleAiSaveVersion = 3;  // 2: UnitAI re-projection stamps; 3: a1h t02 object-goal follow records
+// 2: UnitAI re-projection stamps; 3: a1h t02 object-goal follow records; 4: s78n t25.4 ObjectFollow::guard
+constexpr uint32_t kBattleAiSaveVersion = 4;
 template <class A, class F>
 void follow_fields(A& a, F& f) {
-    a(f.units, f.target, f.gx, f.gy, f.r, f.threat, f.next);
+    a(f.units, f.target, f.gx, f.gy, f.r, f.threat, f.next, f.guard);
 }
 }
 
@@ -832,7 +834,8 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // s78f t10: the object block (movement: -1 = none)
     // s78n t20 (MOVEMENT 4.3.1 items 2 / 6): an object goal (block kind 3) takes neither the destination check nor the
     // single-member shortcut. s78n t25.3: land attack blocks are TacticalBattle::land_attack_order; what is left here on
-    // land is the a1h follow and the Guard_Target / non-attack Attack_Move object blocks ([port] until t25.4). The check's object test has no exemption for the order's target (retail sends kind 3 to
+    // land is the a1h follow and the Attack_Move blocks on a non-attackable object ([port]; s78n t25.4: Guard_Target on an
+    // object is a guard block of land_attack_order). The check's object test has no exemption for the order's target (retail sends kind 3 to
     // the attack-arc slot test 0x438c10, which leaves the target out), so run on an object goal it moves the goal off
     // the very object the units were sent to: attackers end out of weapon range of a standing enemy and never fire.
     o.skip_destination_check = object_block || goal_object != objects::kNoObjectId;
@@ -855,7 +858,8 @@ void BattleAi::follow_drop(const std::vector<objects::ObjectId>& units) {
     follows_.erase(std::remove_if(follows_.begin(), follows_.end(), [](const ObjectFollow& f) { return f.units.empty(); }), follows_.end());
 }
 
-void BattleAi::follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat) {
+void BattleAi::follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat,
+                          bool guard) {
     if (units.empty()) return;
     const TacticalBattle::Unit* lead = b_->unit_by_id(units.front());
     ObjectFollow f;
@@ -866,6 +870,7 @@ void BattleAi::follow_add(const std::vector<objects::ObjectId>& units, objects::
     // R = half the lead member's max attack range (0x3749d0 / 2) [port: the guard cap constant 0x140b276c0 is not known].
     f.r = lead ? 0.5f * lead->range : 0.0f;
     f.threat = threat;
+    f.guard = guard;  // s78n t25.4
     f.next = b_->frame_ + 30;  // the formation update runs at most once per FPS frames
     follows_.push_back(std::move(f));
 }
@@ -892,6 +897,12 @@ void BattleAi::follow_service() {
         if (dx * dx + dy * dy <= f.r * f.r) continue;
         f.gx = tp.x;
         f.gy = tp.y;
+        // s78n t25.4 (MOVEMENT §4.3.2 item 8): a land guard block's re-path is its re-plan - item 6 / 7 again from the
+        // object's new position, the slot (theta, rho) and the formations kept, no slot test, no composition
+        if (f.guard && !b_->space_) {
+            (void)b_->land_attack_order(*mode_, f.units, f.target, tp, mv::kMoveFlagGuardMove, true, host_->random().synced(), true);
+            continue;
+        }
         // s78n t20 fix (MOVEMENT 4.3.1 item 2): the follow stands for the formation's re-path of a kind-3 goal
         // (0x4192b0) - no destination check. [port] a Move_To(object) follow (kind 1 in retail, which does not follow
         // at all) re-paths the same way.
@@ -1187,6 +1198,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             // Guard_Target on an object build a kind-3 block, which never takes the position destination check;
             // Move_To(object) is a kind-1 position snapshot and takes it (the same split as `fobj` above)
             const bool object_block = fobj != objects::kNoObjectId;
+            // s78n t25.4: a land Guard_Target on an object is a guard block of the movement (land_attack_order, guard)
+            const bool land_guard = !b_->space_ && order == lua::LuaOrder::Guard && object_block;
             // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 item 6): a land Attack_Move on an attackable enemy
             // object is an attack block of each mover (TacticalBattle::AttackBlock, whose 30-frame checks re-path it: the
             // object follow below leaves it out), and a unit that can already hit it from where it stands takes no path.
@@ -1210,7 +1223,17 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 std::vector<objects::ObjectId> fu;
                 for (const objects::ObjectId id : group.units)
                     if (fobj == objects::kNoObjectId || !is_fighter(id)) fu.push_back(id);
-                follow_add(fu, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt);
+                follow_add(fu, static_cast<objects::ObjectId>(tw), tp.x, tp.y, tt, land_guard);
+            }
+            if (land_guard) {
+                // s78n t25.4 (MOVEMENT §4.3.2 items 1 / 2 / 6 / 7): a land Guard_Target on an object is one movement order
+                // with the guard block (flags 0x02): the guard L rule gives the formations farther than min(range, 150)
+                // a slot, the guard trim stops them within Land_Guard_Range of the object with a clear line of fire.
+                // The follow record above re-plans it (follow_service). Locked units are dropped by the builder.
+                for (const objects::ObjectId id : group.units) b_->combat_->clear_order(id);
+                const Vec3 gp = st.position(st.find(fobj));
+                (void)b_->land_attack_order(*mode_, group.units, fobj, gp, fflags, false, host_->random().synced(), true);
+                return R::None;
             }
             // refixf t02 / t06 (MOVEMENT §6.3 [H]): Lua Attack_Move / Move_To on a task force build one parameter block and ONE
             // coordinator for all its units, so the formation slots and the destination reservations (§2.4 step 4) give each

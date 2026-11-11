@@ -4338,6 +4338,181 @@ void test_land_attack_order() {
     CHECK(r.stop_cleared && r.move_cleared);
 }
 
+// s78n t25.4 (MOVEMENT §4.3.2 items 1, 2, 7 and 8; A1_READINGS §33.4): a Lua Guard_Target on a friendly squad (the
+// tactical AI's PortExtension Guard on an object) is one movement order with the guard block. The guard squad stands
+// 400 from the guarded one (> min(range, Land_Guard_Range 150): slotted); its goal is within 150 of the guarded squad
+// (the guard trim). The guarded squad is then moved 300 sideways (> R = half the lead's range): the follow record's
+// 30-frame service re-plans the guard (attack_replans + 1) with the slot bit-identical (theta, rho, atk_form, target)
+// and a goal within 150 of the new position; the guard ends there.
+struct LandGuardRun {
+    bool ordered = false, slotted = false, near_goal = false, arrived = false;
+    bool moved = false, replanned = false, same_slot = false, near_goal2 = false, arrived2 = false;
+    float rho = 0.0f, theta = 0.0f, goal_d = 0.0f, goal_d2 = 0.0f, end_d = 0.0f;
+    uint32_t replan_frames = 0;
+};
+
+LandGuardRun run_land_guard(const Data& d) {
+    LandGuardRun out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 8000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    opt.battle.fog = false;         // the trim gate (item 7: T not fogged) open; the test data has no reveal source
+    ClashSession s(d, 0, opt, {"S10_Squad", "S10_Squad"}, {}, true);
+    if (!s.gs) return out;
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };  // no AI player: orders only
+    std::unique_ptr<BattleAi> bai;
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId sq[2] = {objects::kNoObjectId, objects::kNoObjectId};
+    Vec3 dir{}, perp{};
+    mv::UnitView slot0;
+    uint32_t replans0 = 0;
+    for (uint64_t t = 0; t < 6000 && stage < 9; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto& cs = const_cast<tc::CombatSystem&>(b->combat());
+        const mv::MovementSystem& ms = b->movement();
+        if (bai) bai->follow_service();  // the BattleAi::update step (this AI runs no plans)
+        const auto gd = [&](mv::V2 p) {
+            const Vec3 gp = st.position(st.find(sq[1]));
+            return std::sqrt((p.x - gp.x) * (p.x - gp.x) + (p.y - gp.y) * (p.y - gp.y));
+        };
+        if (stage == 0) {
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                cs.make_invulnerable(id, 1000000, b->frame());
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            objects::ObjectId enemy = objects::kNoObjectId;
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() < 2 || !st.alive(th) || !ms.has_unit(static_cast<objects::ObjectId>(tid))) continue;
+                if (st.owner(th) == 0) {
+                    if (sq[0] == objects::kNoObjectId) sq[0] = static_cast<objects::ObjectId>(tid);
+                    else if (sq[1] == objects::kNoObjectId) sq[1] = static_cast<objects::ObjectId>(tid);
+                } else if (st.owner(th) == 1 && enemy == objects::kNoObjectId) {
+                    enemy = m.front();
+                }
+            }
+            CHECK(sq[1] != objects::kNoObjectId && enemy != objects::kNoObjectId);
+            if (sq[1] == objects::kNoObjectId || enemy == objects::kNoObjectId) break;
+            // the run_land_attack_two spots (open ground, one zone, 600 from the enemy on the attackers' side): the guard at
+            // +150 across, the guarded squad at -250 across (400 apart)
+            const Vec3 tp = st.position(st.find(enemy)), ap = st.position(st.find(sq[0]));
+            const float dx = ap.x - tp.x, dy = ap.y - tp.y, dl = std::sqrt(dx * dx + dy * dy);
+            dir = dl > 1.0f ? Vec3{dx / dl, dy / dl, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            perp = Vec3{-dir.y, dir.x, 0.0f};
+            const auto spot = [&](float along, float across) {
+                return Vec3{tp.x + dir.x * along + perp.x * across, tp.y + dir.y * along + perp.y * across, ap.z};
+            };
+            CHECK(b->teleport(*tm, sq[1], spot(600.0f, -250.0f), st.facing(st.find(sq[1]))));
+            CHECK(b->teleport(*tm, sq[0], spot(600.0f, 150.0f), st.facing(st.find(sq[0]))));
+            bai = std::make_unique<BattleAi>(*b, *tm, *s.host, ts);
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 1) {
+            if (b->frame() < stage_frame + 2) continue;
+            const Vec3 gp = st.position(st.find(sq[1]));
+            std::vector<uint8_t> pay;
+            const auto put = [&pay](uint32_t v) {
+                for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+            };
+            put(static_cast<uint32_t>(sq[0]));
+            put(static_cast<uint32_t>(sq[1]));
+            put(std::bit_cast<uint32_t>(gp.x));
+            put(std::bit_cast<uint32_t>(gp.y));
+            put(std::bit_cast<uint32_t>(gp.z));
+            put(0u);
+            const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::Guard));
+            out.ordered = bai->execute(0, commands::ev::port_extension(sub, pay)) == commands::RejectReason::None;
+            CHECK(out.ordered);
+            const mv::UnitView v = ms.view(sq[0]);
+            out.rho = v.atk_rho;
+            out.theta = v.atk_theta;
+            out.slotted = v.atk_rho > 0.0f && v.atk_form != 0 && v.atk_target == sq[1] && v.has_goal;
+            out.goal_d = gd(v.goal);
+            out.near_goal = out.goal_d > 140.0f && out.goal_d <= 150.0f + 0.5f;  // the trim: the 10-step inside the guard range
+            slot0 = v;
+            stage = 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 2) {
+            const mv::UnitView v = ms.view(sq[0]);
+            if (!v.has_goal && v.speed == 0.0f) {
+                out.arrived = true;
+                // 300 toward the enemy (to 300 from it, beside the attack test's slot ring)
+                const objects::ObjectHandle gh = st.find(sq[1]);
+                const Vec3 gp = st.position(gh);
+                out.moved = b->teleport(*tm, sq[1], Vec3{gp.x - dir.x * 300.0f, gp.y - dir.y * 300.0f, gp.z}, st.facing(gh));
+                CHECK(out.moved);
+                replans0 = ms.stats().attack_replans;
+                stage = 3;
+                stage_frame = b->frame();
+            } else if (b->frame() > stage_frame + 1500) {
+                stage = 9;
+            }
+            continue;
+        }
+        if (stage == 3) {
+            const mv::UnitView v = ms.view(sq[0]);
+            if (v.has_goal && ms.stats().attack_replans > replans0) {
+                out.replanned = true;
+                out.replan_frames = b->frame() - stage_frame;
+                out.same_slot = v.atk_theta == slot0.atk_theta && v.atk_rho == slot0.atk_rho && v.atk_form == slot0.atk_form &&
+                                v.atk_target == slot0.atk_target;
+                out.goal_d2 = gd(v.goal);
+                out.near_goal2 = out.goal_d2 > 140.0f && out.goal_d2 <= 150.0f + 0.5f;  // the trim: the 10-step inside the guard range
+                stage = 4;
+                stage_frame = b->frame();
+            } else if (b->frame() > stage_frame + 40) {
+                stage = 9;
+            }
+            continue;
+        }
+        if (stage == 4) {
+            const mv::UnitView v = ms.view(sq[0]);
+            if (!v.has_goal && v.speed == 0.0f) {
+                out.arrived2 = true;
+                out.end_d = gd(v.pos);
+                stage = 9;
+            } else if (b->frame() > stage_frame + 1500) {
+                stage = 9;
+            }
+        }
+    }
+    return out;
+}
+
+void test_land_guard() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    const LandGuardRun r = run_land_guard(*d);
+    std::printf("  land guard: ordered %d, slotted %d (theta %.7f, rho %.3f), goal %.2f from the guarded squad, arrived %d; "
+                "moved 300 %d, re-planned %d after %u frame(s), slot bit-identical %d, goal %.2f from it, arrived %d at %.2f\n",
+                r.ordered ? 1 : 0, r.slotted ? 1 : 0, static_cast<double>(r.theta), static_cast<double>(r.rho),
+                static_cast<double>(r.goal_d), r.arrived ? 1 : 0, r.moved ? 1 : 0, r.replanned ? 1 : 0, r.replan_frames,
+                r.same_slot ? 1 : 0, static_cast<double>(r.goal_d2), r.arrived2 ? 1 : 0, static_cast<double>(r.end_d));
+    CHECK(r.ordered && r.slotted && r.near_goal && r.arrived);
+    CHECK(r.moved && r.replanned && r.replan_frames <= 31 && r.same_slot && r.near_goal2 && r.arrived2);
+}
+
 void test_land_squad_garrison_save_load() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, false, true);
@@ -4574,6 +4749,7 @@ int main(int argc, char** argv) {
     std::printf("s78n t20 stage A: the land attack re-check (displaced squad, friendly squads on the line, save / load)\n");
     test_land_attack_blocks();
     test_land_attack_order();
+    test_land_guard();  // s78n t25.4
     test_land_attack_reach();  // s78n t20 review follow-ups
     test_land_death_clone_obstacle();  // s78n t20 batch 1 item 1.5
     test_vehicle_landing_exit();
