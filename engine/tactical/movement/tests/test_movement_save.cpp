@@ -1738,7 +1738,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 27);  // 27: before the s78n t25.2 land attack block (Unit::atk_*, the attack counters) (28)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 29);
+    put_u32(bad, 0, 28);  // 28: before the s78n t26 closing review Walk_Transition fields (29)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 30);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

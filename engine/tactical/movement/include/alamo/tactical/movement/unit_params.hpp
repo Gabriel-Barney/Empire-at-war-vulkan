@@ -132,6 +132,11 @@ struct UnitDesc {
     float max_walk_deployed = 0.0f;
     float deployed_walk_speed = 0.0f;
     bool deploy_ability = false;
+    // s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition", §3.5.2 F; save version 29): Walk_Transition
+    // (+0x35) and S = 0x372b90 = Scale_Factor (+0x658) x Movement_Animation_Speed (+0x370, type default 0.25). The clip
+    // frame counts are the model's (MovementSystem::set_deploy_clip_fn's hook, anim 2 / 16 / 17..20).
+    bool walk_transition = false;
+    float anim_scale_speed = 0.0f;
     // s78k t01 (MOVEMENT §3.5.1, save version 11): the Walk locomotor's arrival turn. Stopped_Rate_Of_Turn (+0x3b0, raw,
     // read by 0x374310 at speed 0; <= 0 -> Max_Rate_Of_Turn x the mode multiplier) and Movement_Directions_Count (+0x23fc,
     // type default 1).

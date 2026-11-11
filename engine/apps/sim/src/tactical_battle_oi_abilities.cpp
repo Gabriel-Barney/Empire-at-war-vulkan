@@ -781,6 +781,15 @@ void TacticalBattle::oi_deploy_sync() {
         // 0x61d300 at once on a blocked reverse. This is the deploy's "unit ability finished".
         if (e.finished) ability_finished_.push_back(e.id);
     }
+    // s78n t26 closing review (MOVEMENT §3.2.1 Helpers, item 4 row "deploying (0x18), d < 150", item 6): D = 0x39a390 is
+    // +0x2b3 set or state 0x19, so a deploying (0x18) unit whose walking-deployed flag an order set (d < M) is deployed for
+    // the shield absorb and the own-weapon gate from that moment. The 0x18 window has no deploy event, so the flag is
+    // mirrored here (kUnitDeploying with kUnitDeployingIn); 0x19 / 0x1A rewrite it through set_deploy_state.
+    if (!combat_) return;
+    for (const Unit& u : units_) {
+        if (!u.alive || !u.movable || movement_->deploy_state(u.id) != mv::LocoState::WalkDeploying || !combat_->has_unit(u.id)) continue;
+        combat_->set_flag(u.id, tc::kUnitDeploying, movement_->walking_deployed(u.id));
+    }
 }
 
 void TacticalBattle::oi_hash(StateHasher& h) const {

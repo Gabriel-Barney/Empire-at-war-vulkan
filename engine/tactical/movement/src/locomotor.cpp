@@ -1,6 +1,7 @@
 #include "alamo/tactical/movement/locomotor.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <span>
 
 #include "alamo/tactical/movement/formation.hpp"
@@ -43,7 +44,8 @@ WalkSpeedOut walk_speed(const WalkSpeedIn& in) {
         }
         t = std::min(t, in.cap);  // B.6
     }
-    if (o.end_move || in.state == LocoState::WalkEndMove) t = in.a;  // B.7 (no Walk_Transition)
+    // B.7: End Move T = a; a Walk_Transition unit holds T = v while its current clip is MOVE / WALKMOVE
+    if (o.end_move || in.state == LocoState::WalkEndMove) t = in.hold ? v : in.a;
     float nv = v;  // B.8
     if (t > nv) nv += std::min(in.acc, t - nv);
     else if (t < nv) nv = in.now && !start_move ? t : nv - std::min(in.a, nv - t);
@@ -51,6 +53,22 @@ WalkSpeedOut walk_speed(const WalkSpeedIn& in) {
     if (!(nv > 0.0f)) nv = 0.0f;
     o.v = nv;
     return o;
+}
+
+float walk_transition_accel(const WalkTransition& wt, float vmax) {
+    const float n = wt.count[1];
+    if (!(n > 0.0f) || !(wt.s > 0.0f)) return vmax;
+    const float r = vmax / wt.s;
+    return ((wt.s / n) * r) * r;
+}
+
+float walk_transition_decel(const WalkTransition& wt, float vmax, float v, float f0) {
+    const float v0 = f0 > 0.0f ? f0 : (v > 0.0f ? v : vmax);
+    const float u = std::max(0.75f * vmax, v0);
+    const float m = wt.count[2];
+    if (m == 0.0f || !(wt.s > 0.0f)) return u;
+    const float r = u / wt.s;
+    return ((wt.s / (m - 1.0f)) * r) * r;
 }
 
 float line_distance_along(V2 pos, V2 d, V2 l0, V2 n) {
@@ -94,6 +112,63 @@ bool walk_wanted_dir(const LandMotion& m, const WalkExtras* x, V2& dir) {
     return walk_wanted_dir(std::span<const V2>(m.path), m.next, m.pos, x, dir);
 }
 
+namespace {
+// s78n t26 closing review (MOVEMENT §3.5.2 F): the tracked clip's table index (-1: none / not a transition clip).
+int32_t wt_index(int32_t clip) {
+    for (int32_t i = 0; i < 6; ++i)
+        if (kWtClips[i] == clip) return i;
+    return -1;
+}
+// The clip's frame step this frame (fps / 30 x its rate).
+float wt_step(const LandMotion& m, const WalkTransition& wt) {
+    const int32_t i = wt_index(m.wt_clip);
+    return i < 0 ? 0.0f : wt.step[i] * m.wt_rate;
+}
+// 0x39a180 (as the deploy clips): a one-shot clip has ended when its frame >= count - 2 - step.
+bool wt_ended(const LandMotion& m, const WalkTransition& wt) {
+    const int32_t i = wt_index(m.wt_clip);
+    return i >= 0 && m.wt_pos >= wt.count[i] - 2.0f - wt_step(m, wt);
+}
+// The anim service of the frame before: the current clip runs on by its step (MOVE loops over its frames).
+void wt_advance(LandMotion& m, const WalkTransition& wt) {
+    const int32_t i = wt_index(m.wt_clip);
+    if (i < 0) return;
+    m.wt_pos += wt_step(m, wt);
+    if (i == 0 && wt.count[0] > 0.0f)
+        while (m.wt_pos >= wt.count[0]) m.wt_pos -= wt.count[0];  // [port] the MOVE loop wraps at its frame count
+}
+// 0x372ae0: the transition clips' rate V / S (1.0 when S = 0).
+float wt_vs(const WalkTransition& wt, float vmax) { return wt.s > 0.0f ? vmax / wt.s : 1.0f; }
+// F 0x14 (0x61f510) before the move step: true -> the end clip has ended (0x15, no speed test).
+bool wt_end_move(LandMotion& m, const WalkTransition& wt, float vmax) {
+    int32_t k = 0;  // the present end clips 17..20 (0x61d220)
+    for (int32_t i = 2; i < 6; ++i) k += wt.count[i] > 0.0f ? 1 : 0;
+    const auto play_end = [&](int32_t clip) {
+        // played at rate V / S from frame +0xf4 ([M] the start frame "rate + +0xf4" read as +0xf4), +0xf0 := +0xec latched
+        m.wt_clip = clip;
+        m.wt_pos = m.wt_f4;
+        m.wt_rate = wt_vs(wt, vmax);
+        m.wt_f0 = m.speed;
+    };
+    if (m.wt_clip >= 17 && m.wt_clip <= 20) return wt_ended(m, wt);
+    if (m.wt_clip == 2 && wt.count[0] > 0.0f && k > 0) {
+        // the end clip = 17 + (int(cur / (n_move / k)) % k), switched only when the phase <= the clip step, +0xf4 := the phase
+        const float seg = wt.count[0] / static_cast<float>(k);
+        const float q = std::floor(m.wt_pos / seg);
+        const float phase = m.wt_pos - q * seg;
+        if (phase <= wt_step(m, wt)) {
+            int32_t e = 17 + static_cast<int32_t>(q) % k;
+            if (!(wt.count[e - 15] > 0.0f)) e = 17;  // [port] the end clips are taken as numbered from 17
+            m.wt_f4 = phase;
+            play_end(e);
+        }
+        return false;  // B.7 holds T = v while MOVE plays
+    }
+    play_end(17);  // the current clip 16 -> 17 (any other clip likewise)
+    return false;
+}
+}  // namespace
+
 uint32_t resume_index(const LandMotion& q, uint8_t kind, uint32_t resume) {
     uint32_t next = q.next;
     if (kind == 2) next = std::max(next, std::min(resume, static_cast<uint32_t>(q.path.size())));
@@ -105,8 +180,15 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     if (m.next == 0 && !m.path.empty()) m.next = 1;  // path[0] is the start point (retail idx = next - 1)
     const float vmax = p.max_speed;
     const float vmax_u = x && x->vmax_u > 0.0f ? x->vmax_u : vmax;
-    const float acc = p.accel > 0.0f ? p.accel : vmax;
-    const float dec = p.decel > 0.0f ? p.decel : vmax;
+    // s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition"): a transition unit's acceleration and
+    // deceleration come from its MOVESTART / MOVE_ENDONE frame counts (V = vmax_u); the deceleration's u reads the speed,
+    // so it is taken afresh where it is used
+    const WalkTransition* wt = x && x->wt && x->wt->on ? x->wt : nullptr;
+    const bool wts = wt && wt->states;
+    const float acc = wt ? walk_transition_accel(*wt, vmax_u) : (p.accel > 0.0f ? p.accel : vmax);
+    const float dec_p = p.decel > 0.0f ? p.decel : vmax;
+    const auto dec_of = [&]() { return wt ? walk_transition_decel(*wt, vmax_u, m.speed, m.wt_f0) : dec_p; };
+    if (wts) wt_advance(m, *wt);
     LandMotion* below = x ? x->below : nullptr;
     bool forced = x && x->forced;
     const auto yaw_of = [&](const LandMotion& k) {
@@ -117,8 +199,17 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     // 0; with a started path, heading for the last waypoint and dot(pos - W, n) > -5 (n = the last segment's direction) the
     // index steps on; on the last waypoint the unit has arrived where it stands (the caller runs the arrival turn / pop),
     // else the move restarts from state 0 (the start rule below, in the same frame). No started path: idle 0x16.
-    if (m.state == LocoState::WalkEndMove && !(m.speed > dec)) {
+    // s78n t26 closing review (§3.5.2 F 0x14): a Walk_Transition unit with end clips enters 0x15 when its end clip has
+    // ended (no speed test); before that the end clip starts at a MOVE phase boundary ([port] no end clip: the speed test)
+    bool to15 = false;
+    if (m.state == LocoState::WalkEndMove) {
+        const bool clips = wts && (wt->count[2] > 0.0f || wt->count[3] > 0.0f || wt->count[4] > 0.0f || wt->count[5] > 0.0f);
+        to15 = clips ? wt_end_move(m, *wt, vmax_u) : !(m.speed > dec_of());
+    }
+    if (to15) {
         m.speed = 0.0f;
+        m.wt_f0 = 0.0f;   // 0x15 entry: +0xec and +0xf0 := 0
+        m.wt_clip = -1;   // the idle / arrival clips (a restart's 0x12 plays MOVESTART again)
         const size_t n = m.path.size();
         if (!m.started || n == 0) {
             m.state = LocoState::WalkStopped;
@@ -145,6 +236,7 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     const LocoState s0 = m.state;
     if (s0 == LocoState::WalkStopped || s0 == LocoState::None || s0 == LocoState::WalkStartTurn ||
         s0 == LocoState::WalkTurning || s0 == LocoState::WalkEndTurn) {
+        m.wt_clip = -1;  // idle / turn clips: no transition clip current
         if (m.path.empty()) {
             m.speed = 0.0f;
             m.state = LocoState::WalkStopped;
@@ -161,7 +253,7 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
         const float err = std::fabs(wrap_deg(desired - m.yaw));
         const float cur = wp_frac(m, m.next - 1);
         if (err <= p.turn_rate || (err <= p.close_enough_angle && cur > 0.0f)) {
-            m.state = LocoState::WalkMoving;
+            m.state = wts ? LocoState::WalkStartMove : LocoState::WalkMoving;
         } else {
             m.state = LocoState::WalkStartTurn;
             m.speed = 0.0f;
@@ -169,8 +261,41 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
             r.want = desired;
             return r;
         }
-    } else if (s0 == LocoState::WalkStartMove) {
+    } else if (s0 == LocoState::WalkStartMove && !wts) {
         m.state = LocoState::WalkMoving;
+    }
+    // s78n t26 closing review (§3.5.2 A / F 0x12, 0x61ff40): with Walk_Transition the MOVESTART clip plays (speed 0 on its
+    // first frame) and the move step runs in 0x12 until the clip has ended, then 0x13 in the same frame (+0xf4 := the frames
+    // run past count - 2). A path not started -> 0x14 when MOVESTART is current, else 0x15. [port] a model without MOVESTART
+    // goes on as a unit without the flag (0x13).
+    if (wts && m.state == LocoState::WalkStartMove) {
+        if (!(wt->count[1] > 0.0f)) {
+            m.state = LocoState::WalkMoving;
+        } else if (!m.path.empty() && !m.started) {
+            if (m.wt_clip == 16) {
+                m.state = LocoState::WalkEndMove;
+            } else {
+                m.speed = 0.0f;  // 0x15 with no started path: idle 0x16, the frame ends
+                m.wt_f0 = 0.0f;
+                m.wt_clip = -1;
+                m.state = LocoState::WalkStopped;
+                return r;
+            }
+        } else if (m.wt_clip != 16) {
+            m.wt_clip = 16;
+            m.wt_pos = 0.0f;
+            m.wt_rate = wt_vs(*wt, vmax_u);
+            m.speed = 0.0f;
+        } else {
+            m.wt_f4 = std::max(0.0f, m.wt_pos + wt_step(m, *wt) - (wt->count[1] - 2.0f));
+            if (wt_ended(m, *wt)) m.state = LocoState::WalkMoving;
+        }
+    }
+    // 0x13 (0x61f840): a transition unit starts the MOVE clip at frame int(+0xf4)
+    if (wts && m.state == LocoState::WalkMoving && m.wt_clip != 2) {
+        m.wt_clip = 2;
+        m.wt_pos = std::floor(m.wt_f4);
+        m.wt_rate = 0.0f;
     }
     // §3.5.2 C.1: vmax_u = 0 -> nothing; P not started -> End Move; the speed controller B.
     if (!(vmax_u > 0.0f)) return r;
@@ -180,7 +305,8 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     si.v = m.speed;
     si.vmax = vmax;
     si.acc = acc;
-    si.a = dec;
+    si.a = dec_of();
+    si.hold = wts && (m.wt_clip == 2 || m.wt_clip == 0x42);
     if (x) si.formation = x->formation;
     si.cap = speed_cap;
     si.now = x && x->cap_now;
@@ -203,11 +329,16 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     m.speed = so.v;
     if (so.end_move) m.state = LocoState::WalkEndMove;
     const float v = m.speed;
-    // C.2: the turn budget B = R, x f = v / vmax_u in End Move (0x12 never runs the step: no Walk_Transition); s78n t26.5
-    // (E): a land team container's budget is R with no f scaling. C.3: s = v.
+    // C.1: the MOVE clip's rate f x V / S (f <= 0: 1.0 in 0x14, else 0) - a transition unit's tracked MOVE clip runs at it
+    if (wts && m.wt_clip == 2) {
+        const float f = v / vmax_u;
+        m.wt_rate = f > 0.0f ? f * wt_vs(*wt, vmax_u) : (m.state == LocoState::WalkEndMove ? 1.0f : 0.0f);
+    }
+    // C.2: the turn budget B = R, x f = v / vmax_u in Start Move (0x12: only a Walk_Transition unit runs the step there) and
+    // End Move; s78n t26.5 (E): a land team container's budget is R with no f scaling. C.3: s = v.
     const bool team = x && x->container;
     float budget = p.turn_rate;
-    if (m.state == LocoState::WalkEndMove && !team) budget *= v / vmax_u;
+    if ((m.state == LocoState::WalkEndMove || m.state == LocoState::WalkStartMove) && !team) budget *= v / vmax_u;
     float s = v;
     if (!(v > 0.0f)) return r;
     bool no_turn = false;
@@ -320,7 +451,7 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
             // v^2 / (2a) > rest -> End Move unless a started path lies below
             float rest = sp - s;
             for (size_t i = static_cast<size_t>(m.next) + 1; i < m.path.size(); ++i) rest += distance(m.path[i - 1], m.path[i]);
-            if ((v * v) / (2.0f * dec) > rest && !(below && below->started)) m.state = LocoState::WalkEndMove;
+            if ((v * v) / (2.0f * dec_of()) > rest && !(below && below->started)) m.state = LocoState::WalkEndMove;
             return r;
         }
         ++m.next;  // s > s': on the line - the next waypoint with the rest of the budget

@@ -3132,7 +3132,8 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // s78n t24 (MOVEMENT §5.4.7): TerrainCollision replaces the blocked-frames re-plan; the rejoin generator scans the whole
 // path (11 accepted goals); MovingVsMoving answers follow the role slots.
 // s78n t26.2 (MOVEMENT §3.5.2 A / B): the speed controller (End Move T = a, 0x15 restarts), the start turn in place.
-static constexpr uint64_t kGoldenLand = 0xb5781f347d113e74ull;  // s78n t26.4 (the move step C, no snap); t26.3 the corner pass
+// s78n t26 closing review (FIGHTER_FLYING §7.5 item 4): formation mates side-step by their footprint overlap.
+static constexpr uint64_t kGoldenLand = 0x60b832dd7404ad8dull;  // s78n t26 closing review; t26.4 the move step C; t26.3 the corner pass
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

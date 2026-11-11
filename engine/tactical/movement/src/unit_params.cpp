@@ -58,6 +58,16 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     d.auto_deploys = t.get_bool(ti, "Auto_Deploys");
     d.max_walk_deployed = t.get_float(ti, "Max_Dist_Walk_While_Deployed");
     d.deployed_walk_speed = t.get_float(ti, "Deployed_Walk_Speed");
+    // s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition"): the flag and S = Scale_Factor x
+    // Movement_Animation_Speed (unset: the type defaults 1.0 / 0.25)
+    d.walk_transition = t.get_bool(ti, "Walk_Transition");
+    {
+        const float sc = t.get_float(ti, "Scale_Factor") > 0.0f ? t.get_float(ti, "Scale_Factor") : 1.0f;
+        const float mas = t.value(ti, objects::find_type_field("Movement_Animation_Speed")) != nullptr
+                              ? t.get_float(ti, "Movement_Animation_Speed")
+                              : 0.25f;
+        d.anim_scale_speed = sc * mas;
+    }
     // s78k t01 (MOVEMENT §3.5.1): the arrival turn's stopped rate and the direction count (unset -> the type default 1).
     d.stopped_turn_rate = t.get_float(ti, "Stopped_Rate_Of_Turn");
     if (t.value(ti, objects::find_type_field("Movement_Directions_Count")) != nullptr)

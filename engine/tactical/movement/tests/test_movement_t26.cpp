@@ -1403,6 +1403,169 @@ void test_t26_coast_save() {
     CHECK(sys.stats().walk_coasts > 0);
 }
 
+// s78n t26 closing review (FIGHTER_FLYING §7.5 "Corrections and confirmations (s78n t18 RE)" item 4 [H], MOVEMENT §5.3.1
+// overlap coefficient): the side step 0x5c71a0 of a against b in a's formation takes t = clamp(the footprint overlap
+// coefficient, 0, 1) instead of the distance ramp 1 - d / (1.3 (r_a + r_b)). Radius-6 round footprints (r_a + r_b = 12,
+// reach 15.6), heading north (left = (-1, 0)): b 13 to the right - ramp 1 - 13 / 15.6 = 0.166667, footprints apart
+// (13 > 12) -> 0 for a formation mate; b 10 to the left - ramp 0.358974, overlap 1 - 10 / 12 = 0.166667 (the step to
+// the right, -t left).
+void test_t26_formation_side_step() {
+    ::alamo::test::section("t26_formation_side_step");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys);
+    const V2 p = cell_center(50, 50);
+    CHECK(sys.add_unit(tank(1, p)));
+    CHECK(sys.add_unit(tank(2, p + V2{13.0f, 0.0f})));
+    CHECK(sys.add_unit(tank(3, p + V2{-10.0f, 0.0f})));
+    const V2 north{0.0f, 1.0f};
+    // no formation yet (form_id 0): the distance ramp
+    V2 v12 = sys.pair_side_step(1, 2, north), v13 = sys.pair_side_step(1, 3, north);
+    CHECK(near(v12.x, -(1.0f - 13.0f / 15.6f), 1e-4f) && v12.y == 0.0f);
+    CHECK(near(v13.x, 1.0f - 10.0f / 15.6f, 1e-4f) && v13.y == 0.0f);
+    SimRng rng(2611);
+    order(sys, rng, {1, 2, 3}, p + V2{0.0f, 600.0f}, 1);  // one order formation; nobody has moved yet
+    CHECK(sys.view(1).form_id != 0 && sys.view(1).form_id == sys.view(2).form_id && sys.view(1).form_id == sys.view(3).form_id);
+    v12 = sys.pair_side_step(1, 2, north);
+    v13 = sys.pair_side_step(1, 3, north);
+    CHECK(v12 == V2{});  // within 1.3 (r_a + r_b), footprints apart: no side step
+    CHECK(near(v13.x, 1.0f - 10.0f / 12.0f, 1e-3f) && near(v13.y, 0.0f, 1e-6f));
+    std::printf("t26 formation side step: mate 13 right %.6f, mate 10 left %.6f\n", static_cast<double>(v12.x),
+                static_cast<double>(v13.x));
+}
+
+// s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition" [H], §3.5.2 A / B.7 / C.2 / F [H]): an AT-ST
+// (Max_Speed 1.2 x land 1.56 -> V = 1.872; S = Scale_Factor 1.6 x Movement_Animation_Speed 0.8117 = 1.29872, V / S =
+// 1.441419) with synthetic clips MOVE 30, MOVESTART 16, MOVE_ENDONE 17 frames at 30 fps (step 1.0 x the rate). Hand
+// values: a = (S / 16) (V / S)^2 = V^2 / (16 S) = 0.168646; the braking u = max(0.75 V, v0) = V at the latch -> the same
+// value; v0 = 1.0 -> u = 1.404, ((S / 16) (u / S)) (u / S) = 0.094863; no MOVESTART -> V; no MOVE_ENDONE -> u.
+WalkTransition atst_clips() {
+    WalkTransition wt;
+    wt.on = wt.states = true;
+    wt.s = 1.6f * 0.8117f;
+    wt.count[0] = 30.0f;  // MOVE
+    wt.count[1] = 16.0f;  // MOVESTART
+    wt.count[2] = 17.0f;  // MOVE_ENDONE
+    for (float& st : wt.step) st = 1.0f;
+    return wt;
+}
+
+void test_t26_walk_transition() {
+    ::alamo::test::section("t26_walk_transition");
+    const float vmax = 1.2f * 1.56f;
+    const WalkTransition wt = atst_clips();
+    const float acc = walk_transition_accel(wt, vmax);
+    CHECK(near(acc, 0.168646f, 2e-6f));
+    CHECK(near(walk_transition_decel(wt, vmax, vmax, 0.0f), 0.168646f, 2e-6f));  // v0 = v = V
+    CHECK(near(walk_transition_decel(wt, vmax, 1.0f, 0.0f), 0.094863f, 2e-6f));  // u = 0.75 V
+    CHECK(near(walk_transition_decel(wt, vmax, 0.3f, vmax), 0.168646f, 2e-6f));  // the latch +0xf0 wins over +0xec
+    WalkTransition none = wt;
+    none.count[1] = none.count[2] = 0.0f;
+    CHECK(walk_transition_accel(none, vmax) == vmax && walk_transition_decel(none, vmax, 1.0f, 0.0f) == 0.75f * vmax);
+    LocomotorParams p;
+    p.max_speed = vmax;
+    p.turn_rate = 5.0f * 1.56f;
+    p.close_enough_angle = 180.0f;
+    WalkExtras x;
+    x.wt = &wt;
+    x.vmax_u = vmax;
+    // Acceleration (F 0x12): MOVESTART plays from frame 0 at V / S = 1.441419 per frame, speed 0 on its first frame and
+    // the move step in 0x12 (B.8 v += a); the clip has ended once its frame >= 16 - 2 - 1.441419 = 12.558581: frame
+    // 9 x 1.441419 = 12.972774 at the 10th call -> 0x13 in that frame. So v = k a for k = 1 .. 10 (0x12 for k <= 9),
+    // then 11 a = 1.855107, then V.
+    {
+        LandMotion m;
+        m.path = {V2{0.0f, 0.0f}, V2{400.0f, 0.0f}};
+        m.next = 1;
+        m.state = LocoState::WalkStopped;
+        float x0 = 0.0f;
+        for (int k = 1; k <= 13; ++k) {
+            (void)walk_step(m, p, 3.0e38f, nullptr, &x);
+            const float want = std::min(static_cast<float>(k) * acc, vmax);
+            CHECK(near(m.speed, want, 1e-4f));
+            CHECK(m.state == (k <= 9 ? LocoState::WalkStartMove : LocoState::WalkMoving));
+            CHECK(m.wt_clip == (k <= 9 ? 16 : 2));
+            CHECK(m.pos.x > x0);  // the move step runs in 0x12 too
+            x0 = m.pos.x;
+            if (k == 1) std::printf("t26 walk transition: speed after the first frame %.6f (a full-speed unit: %.6f)\n",
+                                    static_cast<double>(m.speed), static_cast<double>(vmax));
+        }
+        CHECK(near(m.wt_f4, 12.972774f + 1.441419f - 14.0f, 1e-4f));  // +0xf4: the frames past count - 2
+    }
+    // Braking (F 0x14, B.7): in End Move at V with MOVE at frame 28 (rate V / S): T = v while MOVE plays; the next frame
+    // MOVE wraps to 0.882838 <= its step 1.441419 -> MOVE_ENDONE starts at that frame (+0xf4 := the phase), +0xf0 := V,
+    // T = a: v = V - (c - 1) a on calls c = 2 .. 10; the end clip has ended at frame 0.882838 + 9 x 1.441419 >= 17 - 2 -
+    // 1.441419 on call 11 -> 0x15 (no speed test: v was 0.354186 > a), speed 0, arrived past the last line.
+    {
+        LandMotion m;
+        m.path = {V2{0.0f, 0.0f}, V2{450.0f, 0.0f}};
+        m.next = 1;
+        m.pos = {440.0f, 0.0f};
+        m.speed = vmax;
+        m.state = LocoState::WalkEndMove;
+        m.wt_clip = 2;
+        m.wt_pos = 28.0f;
+        m.wt_rate = vmax / wt.s;
+        for (int c = 1; c <= 11; ++c) {
+            const WalkResult r = walk_step(m, p, 3.0e38f, nullptr, &x);
+            if (c == 1) {
+                CHECK(near(m.speed, vmax, 1e-6f) && m.wt_clip == 2 && m.state == LocoState::WalkEndMove);
+            } else if (c <= 10) {
+                CHECK(near(m.speed, vmax - static_cast<float>(c - 1) * acc, 1e-4f) && m.wt_clip == 17 &&
+                      m.state == LocoState::WalkEndMove);
+                if (c == 2) CHECK(near(m.wt_f4, 0.882838f, 1e-4f) && m.wt_f0 == vmax);
+            } else {
+                CHECK(m.speed == 0.0f && r.arrived && m.state == LocoState::WalkStopped && m.wt_clip == -1 && m.wt_f0 == 0.0f);
+            }
+        }
+    }
+    // 0x12 with a path not started: MOVESTART current -> 0x14; else 0x15 (idle, speed 0)
+    {
+        LandMotion m;
+        m.path = {V2{0.0f, 0.0f}, V2{400.0f, 0.0f}};
+        m.next = 1;
+        m.started = false;
+        m.state = LocoState::WalkStartMove;
+        m.speed = 0.5f;
+        m.wt_clip = 16;
+        m.wt_rate = vmax / wt.s;
+        (void)walk_step(m, p, 3.0e38f, nullptr, &x);
+        CHECK(m.state == LocoState::WalkEndMove);
+        LandMotion q = m;
+        q.state = LocoState::WalkStartMove;
+        q.wt_clip = -1;
+        (void)walk_step(q, p, 3.0e38f, nullptr, &x);
+        CHECK(q.state == LocoState::WalkStopped && q.speed == 0.0f);
+    }
+    // The system: the clips come from the host's clip hook (set_deploy_clip_fn); the first moving frame is a, not V
+    {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys);
+        sys.set_deploy_clip_fn([](ObjectId, int32_t type, uint32_t& n, float& fps) {
+            fps = 30.0f;
+            n = type == 2 ? 30u : type == 16 ? 16u : type == 17 ? 17u : 0u;
+            return n != 0u;
+        });
+        UnitDesc d = tank(1, cell_center(20, 50));
+        d.max_speed = 1.2f;
+        d.turn_rate = 5.0f;
+        d.accel = d.decel = 0.0f;  // AT_ST_Walker sets no OverrideAcceleration / OverrideDeceleration
+        d.walk_transition = true;
+        d.anim_scale_speed = 1.6f * 0.8117f;
+        CHECK(sys.add_unit(d));
+        SimRng rng(2612);
+        order(sys, rng, {1}, cell_center(20, 50) + V2{600.0f, 0.0f}, 1);
+        uint32_t f = 1, first = 0;
+        for (; f < 200 && first == 0; ++f) {
+            sys.tick(f, rng);
+            if (sys.view(1).speed > 0.0f) first = f;
+        }
+        CHECK(first != 0 && near(sys.view(1).max_speed, vmax, 1e-6f));
+        CHECK(near(sys.view(1).speed, acc, 1e-5f) && sys.view(1).walk_state == LocoState::WalkStartMove);
+        sys.tick(f, rng);
+        CHECK(near(sys.view(1).speed, 2.0f * acc, 1e-5f));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1423,5 +1586,7 @@ int main() {
     test_t26_end_move();
     test_t26_coast_save();
     test_t26_container_step();  // s78n t26.5
+    test_t26_formation_side_step();  // s78n t26 closing review
+    test_t26_walk_transition();      // s78n t26 closing review
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }

@@ -559,18 +559,26 @@ V2 MovementSystem::member_side_steps(const Unit& a, V2 pa, V2 dir, uint32_t othe
     // a unit that is no container); t = 0 -> 0. 0x5c66a0 with L = (r_a + r_b) x 1.3, B = b's position and left = (-dir.y,
     // dir.x): "left free" = the segment B -> B + L left passes 0x5a4c10 for a's movement class and so does the segment
     // from B + L left - L dir to B + L left + L dir; "right free" likewise with -left. b on a's right (left . (b - a) <
-    // 0) and left free -> + t left; else right free -> - t left; else 0. [port] the footprint-overlap t of a pair in one
-    // formation (0x4261d0 / 0x41cf50) is not modelled (the port keeps no formation identity). s78n t18 review: b's
-    // position and height come from `pos` (the start-of-tick snapshot in the parallel walk), never from the live unit.
+    // 0) and left free -> + t left; else right free -> - t left; else 0. s78n t26 closing review (FIGHTER_FLYING §7.5
+    // "Corrections and confirmations (s78n t18 RE)", item 4 [H]): b in a's formation (0x4261d0 / 0x41cf50: b's pack +0x1f0 =
+    // a's formation; the port's Unit::form_id, 0 none) -> t = clamp(the footprint overlap coefficient 0x20d7a0 of the two
+    // rectangles (MOVEMENT §5.3.1), 0, 1) instead of the distance ramp. [port] a squad member carries no form_id (the
+    // order formations hold the containers and lone units), so member pairs keep the ramp [M]. s78n t18 review: b's
+    // position, height and yaw come from `pos` (the start-of-tick snapshot in the parallel walk), never from the live unit.
     const float ra = steer_radius(a);
     const auto side_step = [&](const Unit& b, const SteerPos& sb) -> V2 {
         const V2 pb = sb.pos;
         if (b.anchor >= 0 && b.anchor == a.anchor) return {};
         const float reach = (ra + steer_radius(b)) * 1.3f;
         if (!(reach > 0.0f)) return {};
-        const V2 dd = pa - pb;
-        const float dz = a.z - sb.z;
-        const float t = std::clamp(1.0f - std::sqrt(dd.x * dd.x + dd.y * dd.y + dz * dz) / reach, 0.0f, 1.0f);
+        float t = 0.0f;
+        if (a.form_id != 0 && b.form_id == a.form_id) {
+            t = std::clamp(foot_overlap_coefficient(foot_at(a, pa), foot_at(b, pb, sb.yaw)), 0.0f, 1.0f);
+        } else {
+            const V2 dd = pa - pb;
+            const float dz = a.z - sb.z;
+            t = std::clamp(1.0f - std::sqrt(dd.x * dd.x + dd.y * dd.y + dz * dz) / reach, 0.0f, 1.0f);
+        }
         if (!(t > 0.0f)) return {};
         const V2 left{-dir.y, dir.x};
         const auto free = [&](V2 side) {
@@ -630,6 +638,16 @@ V2 MovementSystem::member_avoid(const Unit& a, V2 pa, float speed, float vmax, V
     return out;
 }
 
+V2 MovementSystem::pair_side_step(ObjectId a, ObjectId b, V2 dir) const {
+    const Unit* u = unit_ptr(a);
+    const int32_t bi = find(b);
+    if (!u || bi < 0) return {};
+    std::vector<SteerPos> pos;
+    pos.reserve(units_.size());
+    for (const Unit& o : units_) pos.push_back({o.m.pos, o.z, o.m.yaw});
+    return member_side_steps(*u, u->m.pos, dir, static_cast<uint32_t>(bi), pos);
+}
+
 V2 MovementSystem::team_member_avoid(ObjectId member, V2 dir) const {
     const Unit* u = unit_ptr(member);
     if (!u || u->d.team_container || (u->anchor >= 0 && !unit_ptr(u->anchor))) return {};
@@ -641,7 +659,7 @@ V2 MovementSystem::team_member_avoid(ObjectId member, V2 dir) const {
     while (hi != recs.end() && hi->container == key) ++hi;
     std::vector<SteerPos> pos;
     pos.reserve(units_.size());
-    for (const Unit& o : units_) pos.push_back({o.m.pos, o.z});
+    for (const Unit& o : units_) pos.push_back({o.m.pos, o.z, o.m.yaw});
     const float flee = u->anchor >= 0 && team_fleeing(u->anchor) ? cfg_.constants.fleeing_infantry_speed_bonus : 1.0f;
     return member_avoid(*u, u->m.pos, u->m.speed, loco_max_speed(*u) * flee, dir,
                         std::span<const SteerRec>(recs).subspan(static_cast<size_t>(lo - recs.begin()),

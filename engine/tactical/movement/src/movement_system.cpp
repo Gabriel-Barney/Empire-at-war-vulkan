@@ -581,9 +581,11 @@ float MovementSystem::foot_radius(const Unit& u) const {
 
 FootRect MovementSystem::foot_of(const Unit& u) const { return foot_at(u, u.m.pos); }
 
-FootRect MovementSystem::foot_at(const Unit& u, V2 p) const {
+FootRect MovementSystem::foot_at(const Unit& u, V2 p) const { return foot_at(u, p, u.m.yaw); }
+
+FootRect MovementSystem::foot_at(const Unit& u, V2 p, float yaw) const {
     const V2 h = foot_half(u);
-    return foot_boxed(u) ? foot_rect(p, u.m.yaw, h.x, h.y) : foot_circle(p, u.m.yaw, u.d.radius);  // [port] no hard extents: a circle
+    return foot_boxed(u) ? foot_rect(p, yaw, h.x, h.y) : foot_circle(p, yaw, u.d.radius);  // [port] no hard extents: a circle
 }
 
 float MovementSystem::tree_half(const Unit& u) const { return std::max(std::max(foot_radius(u), u.d.radius), 1.0f); }
@@ -1816,7 +1818,7 @@ void MovementSystem::corner_pass(Unit& u) {
         in.seg = team_joint_box(u.d.id, hx, hy) ? std::max(2.0f, 0.5f * std::max(hx, hy)) : std::max(2.0f, u.d.radius);
     } else {
         in.vmax = u.team_cap < kInf && u.speed_factor > 0.0f ? u.team_cap : u.lp.max_speed;
-        in.decel = u.lp.decel;
+        in.decel = walk_decel(u, in.vmax);  // s78n t26 closing review: a Walk_Transition unit's vf +0x2e0
         in.seg = std::max(2.0f, u.d.radius);
     }
     struct Ctx {
@@ -2341,7 +2343,7 @@ float MovementSystem::closing_speed(const Unit& x, const Unit& y, bool& touch) c
     // s78n t18 review: a squad container's rate 0x5ab540 taken here (team_rate), not Unit::team_accel - that is the
     // walk's copy of the tick before (the driver runs first) and is not saved, so a loaded battle had 0 in its first tick
     const float rate = x.d.team_container ? team_rate(x) : 0.0f;
-    const float dec = x.d.team_container ? (rate > 0.0f ? rate : vmax) : x.lp.decel;
+    const float dec = x.d.team_container ? (rate > 0.0f ? rate : vmax) : walk_decel(x, vmax);
     if (follow < v && dec > 0.0f) tau = std::max(0.0f, tau - (v - follow) / dec);
     const float k = std::clamp(tau / (30.0f * cfg_.constants.moving_vs_moving_look_ahead_time), 0.0f, 1.0f);
     if (cy > 0.0f) return gap <= 0.0f ? 0.0f : follow + (vmax - follow) * k;  // y moves away along the line
@@ -3236,6 +3238,32 @@ float MovementSystem::accel_per_frame(const Unit& u) const {
     return u.d.accel > 0.0f && u.lp.accel > 0.0f ? u.lp.accel : 0.05f;
 }
 
+// s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition" [H], §3.5.2 F): the clip data of a Walk_Transition
+// Walk / Bike unit from the model (set_deploy_clip_fn's hook: frames, fps; [M] variant 0 - the hook answers the drawn
+// variant once that clip plays). Refreshed each land tick before the plan and the walk (not saved: derived from the
+// model); no hook -> off (the unit keeps the OverrideAcceleration / OverrideDeceleration getters).
+void MovementSystem::walk_transition_fill(Unit& u) const {
+    u.wt = WalkTransition{};
+    if (!u.d.walk_transition || !deploy_clip_ || cfg_.mode != MoveMode::Land) return;
+    if (u.d.locomotor != LocomotorKind::Default && u.d.locomotor != LocomotorKind::Bike) return;
+    u.wt.on = true;
+    u.wt.states = u.d.locomotor == LocomotorKind::Default;
+    u.wt.s = u.d.anim_scale_speed;
+    for (size_t i = 0; i < 6; ++i) {
+        uint32_t n = 0;
+        float fps = 0.0f;
+        if (deploy_clip_(u.d.id, kWtClips[i], n, fps) && fps > 0.0f) {
+            u.wt.count[i] = static_cast<float>(n);
+            u.wt.step[i] = fps / 30.0f;
+        }
+    }
+}
+
+// vf +0x2e0: the Walk deceleration - a Walk_Transition unit's from its MOVE_ENDONE clip (V = `vmax`), else lp.decel.
+float MovementSystem::walk_decel(const Unit& u, float vmax) const {
+    return u.wt.on ? walk_transition_decel(u.wt, vmax, u.m.speed, u.m.wt_f0) : u.lp.decel;
+}
+
 namespace {
 bool infantry_class(int32_t k) { return k == kUccInfantry || k == kUccBike; }
 }  // namespace
@@ -4087,6 +4115,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     for (Unit& u : units_) {
         u.m.last_dir = u.m.pos - u.prev_pos;
         u.prev_pos = u.m.pos;
+        walk_transition_fill(u);  // s78n t26 closing review: the Walk_Transition clip data (serial: the hook)
     }
     rebuild_regions_if_dirty(pf);
     tree_.maintain(static_cast<double>(frame) / 30.0);  // shape only; query results do not depend on it
@@ -4113,7 +4142,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     std::vector<SteerPos> pos0;  // s78n t18 review: with the heights (the side steps' 3-D distance)
     if (!recs.empty()) {
         pos0.reserve(units_.size());
-        for (const Unit& u : units_) pos0.push_back({u.m.pos, u.z});
+        for (const Unit& u : units_) pos0.push_back({u.m.pos, u.z, u.m.yaw});
     }
     // s78n t18 (MOVEMENT §5.4.1): each unit's own records - a Walk unit that is no squad member adds the vector to its
     // heading (a container uses none; its members read its records through their TeamSnap).
@@ -4198,6 +4227,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             x.avoid_ctx = &actx;
         }
         x.cap_now = u.coll_now;  // s78n t20 (MOVEMENT §3.5 step 2): the collision cap's "at once" flag
+        if (u.wt.on) x.wt = &u.wt;  // s78n t26 closing review: Walk_Transition (MOVEMENT §3.4, §3.5.2 F)
         x.lane = u.has_goal;
         x.directions = u.d.movement_directions;
         if (order_rec) {
@@ -4355,6 +4385,11 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 c.state = u.m.state;
                 c.last_dir = u.m.last_dir;
                 c.started = false;
+                c.wt_clip = u.m.wt_clip;  // s78n t26 closing review: the Walk_Transition clip state runs on
+                c.wt_pos = u.m.wt_pos;
+                c.wt_rate = u.m.wt_rate;
+                c.wt_f4 = u.m.wt_f4;
+                c.wt_f0 = u.m.wt_f0;
                 WalkExtras x;
                 walk_extras(i, false, x, actx);
                 x.lane = false;
@@ -4365,6 +4400,11 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 u.m.yaw = c.yaw;
                 u.m.speed = c.speed;
                 u.m.state = c.state;
+                u.m.wt_clip = c.wt_clip;
+                u.m.wt_pos = c.wt_pos;
+                u.m.wt_rate = c.wt_rate;
+                u.m.wt_f4 = c.wt_f4;
+                u.m.wt_f0 = c.wt_f0;
                 if (bike) bike_frame(u, yaw0, true);
                 return;
             }
@@ -4735,6 +4775,15 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.boolean(u.m.turn_done);
             h.u32(static_cast<uint32_t>(u.m.frac.size()));
             for (const float f : u.m.frac) h.f32(f);
+        }
+        // s78n t26 closing review (land only): a Walk_Transition unit's clip state, only while it is not the default
+        if (u.m.wt_clip != -1 || u.m.wt_pos != 0.0f || u.m.wt_rate != 0.0f || u.m.wt_f4 != 0.0f || u.m.wt_f0 != 0.0f) {
+            h.u8(0x35);
+            h.i32(u.m.wt_clip);
+            h.f32(u.m.wt_pos);
+            h.f32(u.m.wt_rate);
+            h.f32(u.m.wt_f4);
+            h.f32(u.m.wt_f0);
         }
         // s78n t26.4 (land only): the coast vector, the previous tick's position and an unstarted order path
         if (u.m.last_dir.x != 0.0f || u.m.last_dir.y != 0.0f || u.prev_pos.x != 0.0f || u.prev_pos.y != 0.0f || !u.m.started) {

@@ -941,6 +941,9 @@ public:
     // unit that is no squad member adds the same vector (key: itself) to its heading on every leg but the last
     // (MOVEMENT §5.4.1; `member` may be such a unit here). {0, 0}: unknown unit / no objects.
     V2 team_member_avoid(ObjectId member, V2 dir) const;
+    // s78n t26 closing review: 0x5c6d40(a, dir, b, 1.0) without the speed ratio (the side steps of `a` against `b`, or
+    // against b's members when b is a squad container) at the current positions; {0, 0} for an unknown unit. For tests.
+    V2 pair_side_step(ObjectId a, ObjectId b, V2 dir) const;
     void hash_speed(StateHasher& h) const;
     // ---- s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details"): clips of the Walk arrival turn ----
     // Every clip play the arrival turn asks for this tick, ascending id (at most one per unit and tick). The clip data
@@ -1007,6 +1010,7 @@ private:
         LocomotorParams lp;
         int32_t slot = -1;  // region-map mask slot
         LandMotion m;
+        WalkTransition wt;  // s78n t26 closing review: Walk_Transition clip data (walk_transition_fill; not saved)
         float z = 0.0f;
         bool has_goal = false, need_path = false, arrived = false, failed = false;
         V2 goal;
@@ -1213,6 +1217,7 @@ private:
     struct SteerPos {
         V2 pos;
         float z = 0.0f;
+        float yaw = 0.0f;  // s78n t26 closing review: the start-of-tick yaw (a formation mate's footprint, 0x5c71a0)
     };
     // 0x509810 for member `a` at `pa` (speed / max speed for the 0x5c6d40 ratio), `pos` = the snapshot by units_ index.
     V2 member_avoid(const Unit& a, V2 pa, float speed, float vmax, V2 dir, std::span<const SteerRec> recs,
@@ -1345,6 +1350,7 @@ private:
     float foot_radius(const Unit& u) const;
     FootRect foot_of(const Unit& u) const;
     FootRect foot_at(const Unit& u, V2 p) const;  // the same rectangle placed at `p`
+    FootRect foot_at(const Unit& u, V2 p, float yaw) const;  // ... and turned to `yaw`
     float tree_half(const Unit& u) const;  // the collision tree's half box: covers the footprint and the soft radius
     // Box query 0x5d7a00 on layer 0x10: the layer objects whose record box (centre +- its footprint radius) overlaps the
     // box centre +- half (strict), ascending id (units_ index).
@@ -1610,6 +1616,8 @@ private:
     // the last hold tag of u's top path naming `obstacle` that u has not passed yet (index >= its waypoint index)
     const HoldTag* pending_tag(const Unit& u, ObjectId obstacle) const;
     float accel_per_frame(const Unit& u) const;  // 0x372fe0 (<= 0: 0.05)
+    void walk_transition_fill(Unit& u) const;     // s78n t26 closing review: Unit::wt from the clip hook
+    float walk_decel(const Unit& u, float vmax) const;  // vf +0x2e0 (Walk_Transition: MOVE_ENDONE)
     // s78n t14 part B (0x5c8890): b's owner's faction has Scatters_From_Crushers and b's SPREAD_OUT is off.
     bool scatters(const Unit& b) const { return (!scatters_ || scatters_(b.d.owner)) && !b.spread; }
     // s78n t18 (MOVEMENT §5.3): the garrison-host gate of all three contact tests - either one's garrison host (walking

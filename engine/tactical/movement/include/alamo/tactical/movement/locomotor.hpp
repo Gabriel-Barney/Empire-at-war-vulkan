@@ -81,7 +81,37 @@ struct LandMotion {
     // when aligned, else the walk coasts to a stop and starts it from state 0x16).
     V2 last_dir;
     bool started = true;
+    // s78n t26 closing review (MOVEMENT §3.5.2 F, §3.4 "Units with Walk_Transition"): a Walk_Transition unit's clip as the
+    // locomotor tracks it - wt_clip = the current clip (-1 none / idle / a turn clip, 2 MOVE, 16 MOVESTART, 17..20 the
+    // end clips), wt_pos its frame, wt_rate its play rate (clip frames per sim frame = the clip's fps / 30 x wt_rate);
+    // wt_f4 = pack +0xf4 (the frame handed from one clip to the next); wt_f0 = pack +0xf0 (the speed latched when the end
+    // clip starts, the deceleration's v0; 0 at 0x15). Every value stays at its default for any other unit.
+    int32_t wt_clip = -1;
+    float wt_pos = 0.0f;
+    float wt_rate = 0.0f;
+    float wt_f4 = 0.0f;
+    float wt_f0 = 0.0f;
 };
+
+// s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition" [H], §3.5.2 F): the clip data of a Walk_Transition
+// unit from its model (variant 0 [M]): count[i] = the frame count (0: the model has no such clip) and step[i] = fps / 30
+// (clip frames per sim frame at rate 1) of clip kWtClips[i] - MOVE 2, MOVESTART 16, MOVE_ENDONE..END4 17..20. on = the
+// unit has Walk_Transition and the host supplied clip data; states = the 0x12 / 0x13 / 0x14 clip states of F run (the
+// Walk locomotor; a Bike shares only the acceleration / deceleration getters, [L] its state handlers are unread);
+// s = S = 0x372b90 = Scale_Factor x Movement_Animation_Speed.
+inline constexpr int32_t kWtClips[6] = {2, 16, 17, 18, 19, 20};
+struct WalkTransition {
+    bool on = false;
+    bool states = false;
+    float s = 0.0f;
+    float count[6] = {};
+    float step[6] = {};
+};
+// vf +0x2d8 0x42c400: n = the MOVESTART frame count; n > 0 -> a = ((S / n) x (V / S)) x (V / S), else V ([port] S <= 0: V).
+float walk_transition_accel(const WalkTransition& wt, float vmax);
+// vf +0x2e0 0x42c4c0: u = max(0.75 V, v0), v0 = +0xf0 if > 0, else +0xec (v) if > 0, else V; m = the MOVE_ENDONE frame
+// count; m != 0 -> ((S / (m - 1)) x (u / S)) x (u / S), else u ([port] S <= 0: u).
+float walk_transition_decel(const WalkTransition& wt, float vmax, float v, float f0);
 
 // s78n t26.2: the speed fraction of waypoint i (1.0 past the end; 0x5c4b80 / 0x5c4af0, the static (1.0, 1.0) default).
 inline float wp_frac(const LandMotion& m, size_t i) {
@@ -125,6 +155,7 @@ struct WalkSpeedIn {
     float frac_next = 1.0f;     // B.5: frac(idx + 1)
     float line_d = 3.0e38f;     // B.5: D, the distance along d to line(idx + 1) (3e38: none)
     LocoState state = LocoState::WalkMoving;
+    bool hold = false;          // B.7: Walk_Transition and the current clip is MOVE (2) / WALKMOVE (0x42): End Move T = v
 };
 struct WalkSpeedOut {
     float v = 0.0f;
@@ -163,7 +194,12 @@ float remaining_length(const LandMotion& m);
 //                 the turn budget R with no f scaling, the coast (C.4) and the travel (C.7) along the facing (cos yaw, sin
 //                 yaw); the caller passes no collision vector (`avoid` null) and `directions` 1;
 //   relay       - s78n t26.5 (FIGHTER_FLYING §7.2 caller 3): when set, the directions of the slot re-lays 0x5ac120 are
-//                 appended - the new segment at each waypoint stepped in C.11, the path below's segment after a pop (C.4).
+//                 appended - the new segment at each waypoint stepped in C.11, the path below's segment after a pop (C.4);
+//   wt          - s78n t26 closing review (MOVEMENT §3.4, §3.5.2 A / B.7 / C.2 / F): a Walk_Transition unit's clip data -
+//                 the acceleration / deceleration from the MOVESTART / MOVE_ENDONE frame counts; with `states`, Start Move
+//                 0x12 plays MOVESTART (speed 0 on its first frame) and runs the move step (budget x f) until it ends,
+//                 then 0x13 (the MOVE clip from frame int(+0xf4)); End Move 0x14 holds T = v while MOVE plays, starts an
+//                 end clip at a MOVE phase boundary and enters 0x15 when that clip ends (no speed test).
 struct WalkExtras {
     V2 jiggle;
     bool lane = false;
@@ -181,6 +217,7 @@ struct WalkExtras {
     float vmax_u = 0.0f;
     bool container = false;           // s78n t26.5
     std::vector<V2>* relay = nullptr;  // s78n t26.5
+    const WalkTransition* wt = nullptr;  // s78n t26 closing review: Walk_Transition clip data (null / !on: none)
 };
 
 // s78n t26.4 (MOVEMENT §5.4.1 "How Walk combines" items 1 - 3, 0x61d570): the wanted direction on the top record m - false

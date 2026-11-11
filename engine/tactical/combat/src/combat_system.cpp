@@ -1705,10 +1705,13 @@ bool CombatSystem::deployed_or_deploying(const Unit& u) const {
     // 0x39a390 (S9_DEATH_CLONE_SHIELDS §1.2): Deploys, a locomotor, and deploy pending / Deployed (kUnitDeploying). S8 t11
     // (TACTICAL_COMBAT §3.1.1 "Step 3 correction"): the walk locomotor's vf +0x120 is state == 0x19 only, so Deploying
     // (0x18) and Undeploying (0x1A) - kUnitDeployTransition - do not count. s78n t26.1 (MOVEMENT §3.2.1): the walking-deployed
-    // flag +0x2b3 keeps the movement state 0x19 (no deploy event), so a walking-deployed Destroyer Droid counts here. [port]
-    // the flag set while still deploying (0x18, an order shorter than M) is not reported: D from the clip end.
+    // flag +0x2b3 keeps the movement state 0x19 (no deploy event), so a walking-deployed Destroyer Droid counts here. s78n
+    // t26 closing review (MOVEMENT §3.2.1 Helpers, item 4 row "deploying (0x18), d < 150"): D is +0x2b3 set OR state 0x19,
+    // so a deploying unit (0x18, kUnitDeployTransition | kUnitDeployingIn) counts once an order set the flag (the host
+    // mirrors it as kUnitDeploying, TacticalBattle::oi_deploy_sync); 0x1A clears the flag (set_deploy_state).
     const UnitDesc& ud = desc_of(u);
-    return ud.deploys && ud.has_locomotor && (u.flags & kUnitDeploying) != 0 && (u.flags & kUnitDeployTransition) == 0;
+    if (!ud.deploys || !ud.has_locomotor || (u.flags & kUnitDeploying) == 0) return false;
+    return (u.flags & kUnitDeployTransition) == 0 || (u.flags & kUnitDeployingIn) != 0;
 }
 
 bool CombatSystem::deploy_transition(const Unit& u) const {
