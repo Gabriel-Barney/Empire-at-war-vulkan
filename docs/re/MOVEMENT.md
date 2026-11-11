@@ -411,7 +411,7 @@ MovingVsMoving `0x682e80` (flag 1, kind 4, flags 0), `0x683140` (flag 0, kind 4,
    - `flags`: bit 1 = a standing non-enemy unit (`0x2824f0` false) is an obstacle only if it shares with u a
      collision record that is still undecided or detouring (record vf +0x58: MvS state 0 / 1, MvM state 0 / 1 / 4);
      bit 2 = the same for every standing unit; bit 4 = standing units of collision classes 2-4 (the obstacle
-     classes) are ignored. Deployed / deploying units are always obstacles.
+     classes) are ignored. Deployed / deploying units are always obstacles (precise rule in item 3).
    - `kind` only becomes the pushed path's kind (3 TerrainCollision, 4 normal, 7 crush-flee); kind 3 adds **40.0**
      to D and skips the last-point drop of item 5.
 2. **Distance D, base path, rejoin point.**
@@ -449,6 +449,17 @@ MovingVsMoving `0x682e80` (flag 1, kind 4, flags 0), `0x683140` (flag 0, kind 4,
      2 (moving but held at speed 0), 4 (head-on), 8 (crossing), 0x20 (same way, slower) → obstacle; 0x10 (same way,
      not slower) → **ignored**, unless its approximation reaches its path end (pack +0x28c), it is not behind u's
      facing and the pair has an undecided / detouring record.
+   - **Order of the tests and the deployed rule (s78n t26 RE 2, `0x67d580`) [H].** (1) ignored: null, u, crushable,
+     `0x509370` false, `0x505020` false; (2) obstacle: the forced id list (global `0x140b3a1a0`), then the MvM
+     partners (`0x505630`); (3) the request byte +0x38 "skip a smaller collision class" (global `0x140a443c8`;
+     default 1 in `0x673ac0`, but **`0x5c80e0` sets it to 0**, so it is off for every Path Around call); (4) mask
+     bit 0 (Infantry, class 5, not in a hero clash +0x3b4) → ignored; (5) relation `0x679750` = 0 (standing: neither
+     locomotor vf +0x1a8 nor vf +0x1b0 reports moving) **and** (deployed `0x39a390` or deploying `0x39a400`) →
+     **obstacle unconditionally, before the `flags` bits 4 / 2 / 1, with no Movement_Speed (M ≤ 0) clause**;
+     (6) everything else by relation as above. So "always" in item 1 means "a *standing* unit that is deployed or
+     deploying". A walking-deployed droid (+0x2b3 set while it has a moving path) is not standing and is judged by
+     its relation. In the collision code `0x39a390` is called only by `0x67d580`, the push `0x6859a0` and the SvS
+     chooser `0x687010`; **only the last two** have the M ≤ 0 clause (type +0x23b0 ≤ 0 && (D || deploying)).
    - Shape (`0x677650`): the footprint rectangle `0x38de80` with **both half extents + 1.0**. A mover turning in
      place by more than 10°: a square of max(hx, hy). A mover closing on u (both max speeds > 0, closing speed c >
      0): the rectangle **swept** from its centre along its approximation by L = min(max(0, (d − r_u − r_o) / c), 30
@@ -1351,19 +1362,49 @@ points), `Fire_Weapon_When_Deployed` Yes / `_Undeployed` No, no TURRET behaviour
    → Walk `Deploy(false)` (vf +0x118(0), §3.2): 0x18 / 0x19 / flag set → 0x1A; a rolling unit is unchanged.
    Callers: the formation plan (item 2) with d = the order's path length; with d = 0 (so a deployed droid is set
    walking deployed instead of being undeployed): `0x3a1ce0` (DEPLOY turned off), `0x38a350` case 0x20
-   (MISSILE_SHIELD), `0x591a90` (DEPLOY_TROOPERS state 8), `0x636090` / `0x6360b0` [M: their callers].
+   (MISSILE_SHIELD), `0x591a90` (DEPLOY_TROOPERS state 8), `0x636090` / `0x6360b0`.
+   *s78n t26 RE 2 [H]:* `0x636090` / `0x6360b0` are the vftable slots +0xF0 / +0xF8 of
+   GarrisonVehicleBehaviorClass (vftable `0x8b1360`) and GarrisonHoverTransportBehaviorClass (`0x8b14d0`). +0xF0 is
+   called after a unit has entered the host (`0x4446b0`): when the host pack +0x210 is null or its reserved count
+   +0x34 is 0 → `0x3ac100`(host, 0). +0xF8 is called from the enter cancel `0x443560` (the unit in enter state 2 / 4)
+   and from the move-finished handler `0x443d10` (enter states other than 1 / 2; [M] the exit) → `0x3ac100`(host, 0).
+   For the HTT (M = 0) both are `Deploy(false)`: the host undeploys (rises) once nobody is still coming in.
 2. **At a move order (formation plan `0x41c1a0`).**
    - *Gate* (the executing call, mode ≥ 2; modes 0 / 1 skip it): the plan returns 0 (the formation gets no path)
      when **every** member is a `Deploys` type that is deployed or deploying and **not** an auto-deployer. A
-     formation with any rolling unit, any non-deployer or any auto-deployer is planned. [M: who undeploys a selection
-     of deployed manual deployers (AT-AT, HTT) before the plan was not traced; the same open point as the HTT
-     lowering note of §5.3, "Hover".]
+     formation with any rolling unit, any non-deployer or any auto-deployer is planned.
+   - *Who undeploys a deployed manual deployer at a move order (s78n t26 RE 2, replaces an [M]) [H]:* **nobody.** The
+     group move `0x2a7b80` and the waypoint queue `0x2a8240` admit a unit only when it is an auto-deployer
+     (`0x39a320`(x, 1)) or not D (`0x39a390`). A D manual deployer (AT-AT, HTT, any `Deploys` type without
+     `Auto_Deploys`, deployed or walking deployed) is **skipped entirely**: it is not added to the coordinator, its
+     behaviour orders 5 / 0x22 / 0x29 / 6 are not cleared and it is not moved (`0x2adff0`). It stays deployed and the
+     order goes to the other selected units; an all-deployed selection gets no move. Only the DEPLOY ability
+     (`0x3a1ce0`; the AI's `Activate_Ability("DEPLOY", false)`, AI_TACTICAL §7.3.3) or the garrison hooks of item 1
+     undeploy it. The group move is the path of the player move events (`0x3ad100`, `0x3ae090`, `0x3ae6c0`,
+     `0x3aebb0`, `0x3af790`, garrison `0x3ad620`), of Lua / AI `Move_To` (`0x426010` / `0x4f8200` via `0x73bf40`) and
+     of further callers (`0x58fb80`, `0x590bb0`, `0x492d60`, `0x4ca930`, `0x5031c0`, `0x5355d0`, `0x6218f0`,
+     `0x628820`, `0x6327d0`, `0x6364e0`, `0x63d0a0`, `0x644330`, `0x712fd0`, `0x3a38d0`, `0x4261f0`, `0x391310`,
+     `0x594dc0`, `0x595a30`).
+   - D excludes 0x18, so a **deploying** manual deployer (state 0x18) is admitted. When every member of the formation
+     is such a unit, the gate returns 0 with no state change and the formation update `0x422b70` (cases 0 / 2)
+     retries the plan at every formation update: the formation **waits** (after the deploy clip the unit is D and
+     the gate still holds, so it waits for a DEPLOY-off or garrison undeploy). With any other member the gate passes
+     and the deploying unit is planned like the rest [L: what the Walk 0x18 handler then does with its path is
+     unread]. Other formation-side D tests: the range test `0x4160a0` (D with
+     M == 0 → 0), the guard re-issue `0x4192b0` (skips D / deploying members unless M ≠ 0), Formation remove member
+     `0x421910` (state 1: any member with pack +0x160 == 0 that is D, deploying or loco vf +0x198 false → formation
+     state 2).
+   - Locomotor vf +0x160 (Walk `0x61e440`: after the claim test vf +0x170, states 0x18 / 0x19 / 0x1A or the flag set →
+     `Deploy(false)`, else state := 0x16; Bike `0x639b70` sets 0; the container `0x5ad3b0` sets 0x16): **[L] unread
+     who calls it** (no caller found in the decompile).
    - *Member loop* (member order): for an auto-deployer, `0x3ac100`(member, d) with **d = `0x54f610`(formation path)
      = the summed 3-D length of every segment of the formation's path** (its first point to the destination): not the
      member's own distance to its slot, not a radius around the place it deployed. Then the stack reset `0x554480`,
      the formation path is set (vf +0x190 = `0x42c680`, with the corner pass of §3.5.2 D) and the start:
      - one-member formation (or the global flag `0x140b16c9c` with formation +0x9c clear, land mode): vf +0x148 only
-       when the formation type (+0x218) ≠ 1; then `0x410170` marks the path started only in states 0xf–0x16 /
+       when the formation type (+0x218) ≠ 1 (*s78n t26 RE 2:* the global is GameConstants +0x149c
+       `ShouldSkipLandFormup`, **true in FoC**, and +0x9c is set to 1 only by `0x417520` for a block with flag 0x20,
+       so every ordinary land formation takes this branch; the path start of a moving unit is in §3.5.2 G); then `0x410170` marks the path started only in states 0xf–0x16 /
        0x21–0x24 when aligned. Land formations have type 1 [M: read from the locomotor vf +0x238 `0x18ceb0` = 1 that
        the callers of the setter `0x4241a0` use, not from the land composer `0x43c1b0`], so a deployed droid's path is
        **not started by the plan**: the 0x19 branch of item 3 starts it on the next Walk frame.
@@ -1402,6 +1443,16 @@ points), `Fire_Weapon_When_Deployed` Yes / `_Undeployed` No, no TURRET behaviour
        the Deploy clip at `Deployment_Anim_Rate`). So the droid **deploys at every stop**, whatever its target, and
        is idle only in 0x19.
    - **0x1A:** +0x2b3 := 0 on every frame of the undeploy.
+   - **0x1A entered from a walk (s78n t26 RE 2) [H unless tagged].** `Deploy(false)` (`0x61d300`) only writes state
+     0x1A (after the slot +0x35b block test): no stop, no speed or path change. The 0x1A handler only clears +0x2b3,
+     waits for the turret / plays the clip and, at the end, sets state 0 and signal 0x29 in the same loop. It runs
+     **no move step, no turn and no speed step**, so the position and yaw are frozen for the whole clip while
+     +0xec / +0xf0 keep their last walking values (the unit still counts as Moving, §5.2). Then state 0: the new path
+     is not started (0x1A is not in the `0x410170` list, §3.5.2 G) → 0x16, the frame ends; the next frame starts the
+     path, state 0 runs start test A → 0x12, and the controller starts from the **stale** v. The in-place turn 0x10
+     uses `Stopped_Rate_Of_Turn` only when +0xec ≤ 0, so with a stale speed the moving rate R applies. Writers of
+     +0xec scanned: `0x509090` (TerrainCollision report, zeroes it; reached only from the move step), 0x15, 0x19, the
+     stop `0x5ad320`, the controller; none runs in 0x1A [M: the scan is by pattern, not exhaustive].
    - `Take_Damage` (`0x3a9e30`): M > 0, Walk state 0x16, `Deploys` and +0x2b3 clear → `Deploy(true)` (the same rule
      for a hit that lands before the Walk frame).
 4. **What a move order does to the droid** (M = 150; d = the item 2 length):
@@ -1453,9 +1504,12 @@ walks"):
 - `MovementSystem::deploy` / `tick_deploy` (`deploy_system.cpp`, the "[port] pending flag … not modelled" notes): the
   0x16 rules (walking deployed → 0x19 at once with no 0x29 event; `Deploy(true)` at every stop when M > 0 and no
   DEPLOY ability), 0x1A clears the flag, `Deploy(true)` does nothing while the flag is set.
-- Collision: the push refusal, the StoppedVsStopped `immobile` lambda and the MovingVsMoving deployed obstacle
-  (`movement_system.cpp`, the three `WalkDeploying || WalkDeployed` tests) must read "deployed / deploying **and
-  M ≤ 0**".
+- Collision: the push refusal and the StoppedVsStopped `immobile` lambda (`movement_system.cpp`) must read "deployed /
+  deploying **and M ≤ 0**". *Corrected s78n t26 RE 2:* this bullet also listed the Path Around obstacle set
+  (`around_obstacles`); that test has **no** M clause in retail (`0x67d580`, §1.5.1 item 3: a standing deployed /
+  deploying unit is always an obstacle) and stays as it is.
+- Orders (s78n t26 RE 2): the group move skips D manual deployers (item 2); a formation with a deploying manual
+  deployer waits.
 - Combat: `CombatSystem::deployed_or_deploying` (`combat_system.cpp`, "vanilla never sets the pending flag") must
   include the flag; the shield absorb in `CombatSystem::take_damage_inner` has no `Shielded_Only_When_Deployed` gate;
   `TacticalBattle::deployed_half_extents` (`apps/sim/src/tactical_battle_bt.cpp`) includes the flag; the host's damage
@@ -1522,7 +1576,25 @@ The collision system is serviced by the land mode (§5.2). Its order relative to
 
 **Acceleration** (`0x372fe0`, locomotor vf91 `0x42c400`) = `OverrideAcceleration` (+0x3c0) × (effective speed / Max_Speed). Deceleration (`0x373080`, vf92 `0x42c4c0`) follows the same rule with `OverrideDeceleration` (+0x3c4).
 - **If the override is ≤ 0, the value is the full effective max speed**, i.e. full speed in one frame.
-- Units with `Walk_Transition` (+0x35) derive acceleration from the frame counts of their start/end-move animations instead. [M]
+- Units with `Walk_Transition` (+0x35) derive acceleration from the frame counts of their start/end-move animations instead.
+  *s78n t26 RE 2 (replaces the [M]) [H unless tagged]:* V = the effective max speed `0x370f00`(type, obj); S =
+  `0x372b90` = `Scale_Factor` (+0x658) × `Movement_Animation_Speed` (+0x370).
+  - Acceleration, vf +0x2d8 `0x42c400` (shared by Bike, vftable `0x8b23c0`): n = the frame count of clip 16
+    (MOVESTART, `0x38f9e0`(obj, 0x10)); n > 0 → **a = ((S / n) × (V / S)) × (V / S)**; n ≤ 0 → V.
+  - Deceleration, vf +0x2e0 `0x42c4c0`: u = max(0.75 × V, v0), v0 = pack +0xf0 if > 0, else +0xec if > 0, else V;
+    m = the frame count of clip 17 (MOVE_ENDONE); m ≠ 0 → **((S / (m − 1)) × (u / S)) × (u / S)**; m = 0 → u.
+  - Units without the flag: `0x372fe0` / `0x373080` when > 0, else V (as above).
+  - The frame counts are the model's (ALA) clip lengths [M: variant 0 of the clip].
+  - The 0x12 / 0x14 transition states that use them: §3.5.2 F.
+  - FoC types with `Walk_Transition` Yes (WALK_LOCOMOTOR): `AT_AT_Walker`, `Veers_AT_AT_Walker`, `AT_ST_Walker`,
+    `AT_AA_Walker`, `SPMAT_Walker`, `Pod_Walker`, `Hutt_Pod_Walker`, `Scavenger_Droid`, `Rancor`,
+    `Cuddles_The_Rancor`, `Night_Sister`, `UM06_Night_Sister`, and their variants (`*_Captured`,
+    `AT_AT_Walker_REB09`, `Rancor_Dark_Ally`, `Pod_Walker_Rebel` / `_Empire` / `_Underworld` / `_Pirate`,
+    `UM05_Cuddles_The_Rancor`, death clones, CIN / FIN props). BIKE_LOCOMOTOR: `Scout_Trooper` and
+    `Scout_Trooper_Converted_To_Enemy` (same getters; [L] the Bike state handlers are unread). `TaunTaun` sets No.
+  - Example inputs (`Scale_Factor` / `Movement_Animation_Speed` / `Max_Speed`): AT-AT 1.75 / 0.1366 / 0.5; AT-ST 1.6 /
+    0.8117 / 1.2; AT-AA 1.5 / 0.25 / 0.65; SPMAT 1.25 / 0.2151 / 0.6; Pod_Walker 1.0 / 0.8117 / 1.1; Rancor 1.0 /
+    0.75 / 0.75; Night_Sister 1.0 / 0.80 / 0.9; Cuddles 0.8 / 0.8 / 0.75; Scout_Trooper 1.5 / 3.0 / 5.0.
 
 **Turn rate** (`0x372560`) = `Max_Rate_Of_Turn` (+0x38c) × the mode multiplier × the global factor. While
 airborne-kind, the JetPack's speed / turn-rate getters (vf74 / vf75, read by the planner request and the formation
@@ -1731,7 +1803,14 @@ detour, §5.4.7 item 6).
 3. Formation jiggle `0x42c270` (§3.5 item 6). Distance budget s = v. Then the loop, items 4–11 (v = 0 → return):
 4. **Nothing to walk** (P null, P on its last waypoint `0x5c5910`: idx + 1 ≥ count, or P not started): Q = the
    path below (`0x556960`). Q null, Q not started, or state 0x14 → state := 0x14 and **coast**: pos += s ×
-   unit(pack +0x170 − +0x1a0, +0x180 − +0x1b0, 0) [M: read as the last frame's displacement]; commit when P is
+   unit(pack +0x170 − +0x1a0, +0x180 − +0x1b0, 0) (*s78n t26 RE 2, replaces an [M]* [H]: the object service
+   `0x3a6b80`, before the behaviours, copies pack +0x164..+0x190 to +0x194..+0x1c0 and then the object matrix obj
+   +0x248..+0x274 to +0x164..+0x190; the matrix translation is the position +0x78 / +0x7c / +0x80, rebuilt by
+   `0x3ac530` when dirty at the end of the object service / GOM flush. So the vector is **P(end of frame N−1) −
+   P(end of frame N−2)**, the whole previous frame's 2-D displacement (z := 0), fast-normalised by `0x16f570`;
+   commits earlier in the current frame do not change it; a zero vector stays zero, so the unit does not move but
+   the point is still tested and committed. [edge] the snapshot is skipped when the service's param_3 ≠ 0 or (obj
+   +0x3a0 & 8 and type +0x69)); commit when P is
    forced (+0x5c) or the point passes `0x50e280`, else report to the collision system (`0x509090`, TerrainCollision,
    §5.4.7) with no commit; return. Otherwise pop P (`0x557b10`), go on with Q, and **turn no more in this call**.
 5. **Line crossing:** L0, n = line(idx+1). n·(pos − L0) ≥ −0.001 → idx += 1 (`0x5c4920`: +0x64 := 0, +0x6c := 0),
@@ -1758,8 +1837,15 @@ detour, §5.4.7 item 6).
 **D. Corner-speed pass `0x5070b0`** (run by the Walk path set vf +0x190 `0x42c680`; the land team container's path
 set `0x5ad140` too): only in land mode and only for a **formation path** (kind 1: the source path's +0x30, the
 record's +0x48) of a unit in a formation.
-Its input polyline is the unit's lane (`0x413340`: the formation path offset by the unit's slot) [M: one polyline
-point per path waypoint]. Every other path keeps the default entries (1.0, 1.0) (Path Around: (1.0, 0.0) on
+Its input polyline is the unit's lane (`0x413340`: the formation path offset by the unit's slot).
+*s78n t26 RE 2 (replaces "[M: one polyline point per path waypoint]") [H unless tagged]:* `0x413340`(F, formation
+path, unit, out) writes **one point per formation-path waypoint**. Point i: an origin on wp[i] with a direction n
+(i = 0: unit(wp1 − wp0), fast then exact normalise; i > 0: the waypoint line of `0x5c5060`(path, i − 1) = the
+bisector at waypoint i; [L partly read] when the waypoint's arc length < |path +0x68| and the kind is 1 the point is
+shifted along the segment by (len + +0x68)). Row k = min(int(s_i / 30), rows − 1), s_i = the arc length to i
+(`0x54f870`), 30 = the step `0x140b2f0f4` (REMAINING_GAPS). Lateral offset L = F +0xb0[k].+4 + the unit's slot
+offset (`0x556710`(pack, F +0xe0[k]) → +4); point = origin + L × (−n.y, n.x); while it is not passable for the unit
+(`0x50e0c0`(grid, unit, point)) L −= L0 / 5, and once |L| ≤ |L0 / 5| L = 0. **z = 0** for every lane point. Every other path keeps the default entries (1.0, 1.0) (Path Around: (1.0, 0.0) on
 waypoint 0). Values: vmax = `0x370f00`, vmin = `0x3728f0` (`Min_Speed` × mode), ω = R × π / 180 (radians per frame),
 f_min = `Min_Speed_Fraction_For_Turn` (+0x3ac, default 0; FoC land types: `AT_AT_Walker`, `AT_ST_Walker`,
 `Veers_AT_AT_Walker`, `TaunTaun`, `Destroyer_Droid`, `Scavenger_Droid` 0.1; `AT_AA_Walker`, `SPMAT_Walker` 0.25;
@@ -1769,23 +1855,91 @@ f_min = `Min_Speed_Fraction_For_Turn` (+0x3ac, default 0; FoC land types: `AT_AT
 2. For each corner j (j = 0 is the unit's own position): d_in = the facing (cos yaw, sin yaw) at j = 0, else
    unit(P_j − P_{j−1}); the leg goes to P_i, i = j + 1: L = |P_i − P_j|, d = unit(P_i − P_j), θ = acos(clamp(d_in·d)),
    side = sign(d_in × d).
-3. **Merge (only when f_min > 0):** while L < L_turn = 2·vmax·θ / ω (the leg is shorter than the turn needs at full
-   speed) and a next point exists (the spliced path's points included): stop when the next point P_{i+1} lies on the
+3. **Merge (only when f_min > 0):** while L < L_turn = **2·vmax·sin|θ| / ω** (*corrected s78n t26 RE 2: this read
+   2·vmax·θ / ω; the code takes sinf of the angle*: the chord of the full-speed turn arc) and a next point exists (the spliced path's points included): stop when the next point P_{i+1} lies on the
    other side (side × (d_in × unit(P_{i+1} − P_j)) < 0); else accept it: i += 1 and L, d, θ from P_j to it. (The
-   loop's "θ > π" exit can never fire.) Then, still only when f_min > 0, if L > L_turn: the aim point A = B + d ×
+   loop's "θ > π" exit is fabs(acos) > 3.1415927 and can never fire; the spliced next point is taken from the started
+   top path's waypoints, +0x18.) Then, still only when f_min > 0, if L > L_turn: the aim point A = B + d ×
    max(0, |P_i − B| − (L − L_turn)), B = the point accepted before P_i (P_j when nothing was merged), and L, θ are
    recomputed for A. Otherwise (and always when f_min = 0) A = P_i.
-4. **Corner speed:** r = clamp(L / 2, 20, 100); v = min(vmax, ω·r / (1 − cos θ), L·ω / (2|θ|)); θ = 0 → vmax.
-5. **Probe** (while v > 0): the arc probe `0x505870`(unit, v, ω, signed θ (negative when d_in × d > 0), P_j, A) [M:
-   its geometry]; every probe segment must pass the static line test `0x5a4c10` (with type +0x1688). All pass and
-   (v < 0.2·vmax and j ≠ 0, or the corridor test `0x5093c0` passes) → accept. Otherwise v /= 1.5; when v < vmin or
+4. **Corner speed:** r = clamp(L / 2, 20, 100) (= max(20, min(L / 2, 100))); v = min(vmax, ω·r / (1 − cos θ),
+   **L·ω / (2·sin|θ|)**); θ = 0 → vmax. (*Corrected s78n t26 RE 2: the third term read L·ω / (2|θ|); the code takes
+   sinf.* Constants confirmed: 2.0, 0.5, 20.0, 100.0, 1.0. The third term is the speed whose arc v / ω has the chord
+   L over a 2|θ| turn.)
+5. **Probe** (while v > 0): the arc probe `0x505870`(unit, v, ω, signed θ (negative when d_in × d > 0), P_j, A); every
+   probe segment must pass the static line test `0x5a4c10` (with type +0x1688). All pass and
+   (v < 0.2·vmax and j ≠ 0, or the corridor test `0x5093c0` passes) → accept.
+   *s78n t26 RE 2 (replaces "[M: its geometry]") [H]:*
+   - Probe `0x505870`(unit, out, v, ω, θs, P_j, A): seg = max(2.0, 10 × `0x397830`(unit)); `0x397830` = for a TEAM
+     container max(hx, hy) / 20, else `0x373b50` = `Scale_Factor` × 2R / 20, so for a single unit **seg = max(2,
+     Scale × R)**, R = `Custom_Soft_Footprint_Radius`, else `Space_Obstacle_Radius`, else the larger model extent.
+     N = (uint)(|θs| × v / ω / seg + 3). The output starts with P_j. t = fast-unit(A − P_j); θs ≥ 0 → n = (−t.y,
+     t.x), s = +1; else n = (t.y, −t.x), s = −1. For k = 1 … N, u = k / N: **p_k = P_j + t·(sin|θ| − sin((1 −
+     2u)|θ|))·(v / ω) + n·(cos((2u − 1)|θ|) − cos|θ|)·(v / ω)**: a circle of radius v / ω through P_j, leaving it
+     along t turned by |θ| toward n (= d_in), total turn 2|θ|, chord along t. It stops before p_k when cross(A −
+     last, p_k − last) × s < 0 (p_k has passed the aim line); then A is appended.
+   - The static line test is `0x5a4c10`(pathfinder singleton `0x140a28800`, p_k, p_k+1, mask = type +0x1688 =
+     **`MovementClass`**).
+   - Corridor `0x5093c0`(probe polyline, unit): for each probe segment an oriented rectangle (centre = midpoint,
+     half length |seg| / 2, half width 0, exact sqrt normalisation) queried with `0x538200` (layer 0x10, the unit's
+     own id ignored, §5.3.2); any record with Static flag 2 → fail. It tests the probe polyline, not the lane. Otherwise v /= 1.5; when v < vmin or
    v < 0.1·vmax: v = vmin if the last static test passed, else 0, and accept.
 6. f = v / vmax; **f < f_min → 0** (stop and turn in place at that corner, item A; the merge is then dropped: only
    the unmerged leg's start gets it). The entry (1.0 = ω/ω, f) is written into waypoints j … i − 1 and the next
    corner is i. The last waypoint gets (1.0, 1.0). With a splice the appended point is removed again, the spliced
    path's current waypoint takes the fraction of the new path's last corner and its +0x6c is cleared.
 7. **Brake pass** (a > 0, vmax ≠ 0, at least 3 waypoints): v = 0 at the end; for k = count − 2 down to 0: v =
-   sqrt(2·a·|seg k| + v²) (2-D), wp[k].+4 = min(wp[k].+4, v / vmax), v = vmax × wp[k].+4.
+   sqrt(2·a·|seg k| + v²) (2-D: the segment from `0x5c5850` uses x and y), wp[k].+4 = min(wp[k].+4, v / vmax),
+   v = vmax × wp[k].+4.
+8. *Splice and last waypoint (s78n t26 RE 2) [H]:* without a splice the last waypoint gets (1, 1) through
+   `0x5c5d90`; with one, the spliced path's current waypoint takes the fraction of the new path's waypoint count − 2
+   and its +0x6c := 0. A fraction f < f_min writes 0 and the range reverts to the unmerged index.
+
+*3-D and 2-D lengths (s78n t26 RE 2) [H unless tagged].* `0x54f610` (whole path) and `0x54f700` (rest after a
+waypoint) sum **3-D** segment lengths (sqrt of dx² + dy² + dz²) over the stored waypoint xyz. The brake pass, the
+lane, the probe, the move step's D / s' and the corner pass's L / d (from the lane, z = 0) are 2-D or work on z = 0
+points. Path Around vertices are created with **z = 0** (obstacle corners, `0x675240`), and the pathfinder copies each
+A* node's xyz into the waypoint (`0x674870`). So where every waypoint has z = 0 the 3-D length is **exactly** the
+2-D one; a waypoint that carries a terrain height (the start / goal points taken from positions; [L] unread for the
+grid pathfinder `0x5a2200` … `0x5a49c0` and for the start / goal vertices) makes the 3-D length ≥ the 2-D one by the
+height differences. A port that sums 3-D lengths over the same stored points matches in both cases; a 2-D sum is
+exact only for z = 0 paths and otherwise an approximation that is short on slopes.
+
+**F. `Walk_Transition` states (s78n t26 RE 2) [H unless tagged].** Acceleration and deceleration: §3.4.
+- **0x12** (`0x61ff40`), started path: the current clip ≠ 16 → play 16 (MOVESTART; variant index 0xFFFF = random
+  draw, blend `0x140b39904`, rate `0x372ae0` = V / S, 1.0 when S = 0), +0xec := 0, the move step in 0x12, return.
+  Clip 16 playing → +0xf4 := max(0, cur + step − (count − 2)); not ended (`0x39a180`) → the move step in 0x12; ended
+  → state 0x13 **in the same frame**. Path not started: no transition → 0x15; with it → 0x14 when the current clip
+  is 16, else 0x15.
+- **0x13** (`0x61f840`): a transition unit starts the MOVE clip at frame int(+0xf4) (visual).
+- **0x14** (`0x61f510`): the current clip MOVE (2) or WALKMOVE (0x42): k = the number of present end clips 17–20
+  (`0x61d220`); end clip = 17 + (int(cur / (n_move / k)) % k), switched only when the phase ≤ the clip step, then
+  +0xf4 := the phase; k = 0 → the default idle type. The current clip 16 → 17. When the end clip is current and has
+  ended → 0x15 (no speed test). Else it is played (rate V / S, start frame rate + +0xf4) and +0xf0 := +0xec is
+  latched. The move step runs every frame; B.7 holds T = v while the clip is 2 / 0x42.
+
+**G. Starting a new path while moving (s78n t26 RE 2) [H unless tagged].**
+- The plan member loop (§3.2.1 item 2): the stack reset `0x554480` removes every record; the path set vf +0x190
+  (`0x42c680`: the lane `0x413340` only on land with kind 1 and the unit in a formation, then the corner pass D,
+  push `0x554310`, which does **not** set +0x6d). FoC `ShouldSkipLandFormup` = true, so a land formation takes the
+  one-member branch with no vf +0x148 (type 1). Start delay: speed +0xec == 0, obj +0x348 == −1 and block flag 8 →
+  P +0x54 := synced rand(0, GC `0x140b16d38`) + frame; the Walk service returns early while the top path +0x54 >
+  frame.
+- `0x410170` ("aligned") → P +0x6d := 1; **the locomotor state is not changed.** It needs a top path and wp[0].+4 > 0;
+  obj +0x348 slot ≠ −1 → aligned; states 0xf–0x16 or 0x21–0x23: the path has ≥ 2 points (`0x5c5850`), w = vf +0x1f0
+  (Walk `0x61dff0` → `0x61d890` / `0x61ca90`, the wanted yaw for path index 0 from pos +0x78 / yaw +0x84), δ =
+  `0x20b100` / `0x20b6d0` against obj +0x84..+0x8c, aligned when |δ| ≤ R or |δ| ≤ CE; state 0x24 → aligned; else not.
+- **Aligned moving unit (0x12–0x14):** keeps its state and speed; the next frame continues in 0x13 with no start test
+  A and no turn in place. The turn happens in the move step (C.6) and the corner cap B.4 uses wp[0].+4 (D's j = 0
+  corner with d_in = the facing).
+- **Not aligned:** in 0x13 the move step C.1 sees P not started → 0x14, T = a, coast (C.4). Then 0x15 (`0x61fc30`):
+  no started path → idle clip, state 0x16, the frame ends. The Walk 0x16 handler: a top path not started → +0x6d :=
+  1, state 0 in the same frame → start test A (a started path → 0x15). State 0 with an unstarted path → 0x16 and
+  the frame ends.
+- The formation update state 1 (`0x423760`) also calls vf +0x1a0 (can start) for each member, then vf +0x148.
+  Generic can-start `0x42ccb0`: a top path and (not started, or state ∈ {0x16, 0x19, 0x25}); Walk `0x61e380`: 0x18
+  → false, 0x19 with the flag clear and M > 0 → generic, other 0x19 → false. The plain start `0x42ced0` acts only when
+  vf +0x150 reports idle (`0x42c890`: 0, 0x16, 0x1c, 0x1e, 0x1f, 0x25–0x27, and 0x19 when M > 0).
 
 So with f_min = 0 (most units) each corner is slowed separately to v and never forced to 0 (a fraction of 0 comes
 only from failed probes); with f_min > 0 sharp corners on short legs are merged, and a corner slower than f_min ×
@@ -2782,8 +2936,11 @@ either side, **either side +0x3a7**, build pad holding the other, existing recor
     host** (`0x3a9880`: locomotor stop, removed from its coordinator), raise signal 0xb and call `0x391260`, which
     **deploys** a `Deploys` type (Walk vf +0x118(1) = `0x61d300`: state 0x18 Deploying). So the HTT lowers with its
     state machine frozen and then continues in 0x18 → 0x19 (Deployed), not in Start Move; its next move undeploys
-    (0x1a → 0) and state 0x12 sets rising again [M: the undeploy call from the move order was not traced; for
-    auto-deployers it is `0x3ac100` in the formation plan (§3.2.1), but the HTT is a manual deployer]. (This
+    (0x1a → 0) and state 0x12 sets rising again. *s78n t26 RE 2 (replaces an [M]) [H]:* a move order does **not**
+    undeploy it: the group move skips a deployed manual deployer (§3.2.1 item 2, §6.2). The undeploy comes from the
+    garrison hooks `0x636090` / `0x6360b0` (GarrisonHoverTransportBehaviorClass slots +0xF0 / +0xF8: after an entry
+    with no reservation left, at an enter cancel or at the end of an exit → `0x3ac100`(host, 0) = `Deploy(false)` for
+    M = 0) or from the DEPLOY ability; only then does a later order move it. (This
     corrects "after that the Start Move state runs again" above for the lowering case.)
   - **Readers of the state / the tag** (decompile scan for +0x2a8 and 0x23bc): the Walk service, Start Move and
     commit above; the pair gates `0x683790` / `0x442540` (table above, confirmed); the StoppedVsStopped chooser
@@ -3983,6 +4140,9 @@ passability check on the way (§3.5 step 4).
 1. Create a coordinator.
 2. Walk the player's **selection list in list order** (`0x2ad080`). For each unit:
    - skip it if it is movement-locked or its locomotor is suspended;
+   - *s78n t26 RE 2 [H]:* skip it entirely when it is deployed (`0x39a390`: `Deploys`, a locomotor, +0x2b3 set or
+     Walk state 0x19) and not an auto-deployer (`0x39a320`(x, 1)): no order cleared, no coordinator, no `0x2adff0`
+     (the waypoint queue `0x2a8240` has the same test; details §3.2.1 item 2);
    - clear behaviour orders 5, 0x22 and 0x29, and 6 when the attack is cleared;
    - replace a team member by its team container (object +0x2b0);
    - run the admission test `0x425e30` (has a locomotor, not a locked container member, not garrisoning).
