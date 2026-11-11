@@ -1658,9 +1658,9 @@ static void test_land_group() {
         if (v.arrived) ++arrived;
         if (distance(v.pos, cell_center(75, 80)) < 400.0f) ++near;
         if (!v.arrived && std::getenv("MOVEMENT_DEBUG"))
-            std::printf("  unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f replans %u path %zu\n", id,
+            std::printf("  unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f pushed %d path %zu\n", id,
                         static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), static_cast<double>(v.goal.x),
-                        static_cast<double>(v.goal.y), v.has_goal ? 1 : 0, v.failed ? 1 : 0, static_cast<double>(v.speed), v.replans,
+                        static_cast<double>(v.goal.y), v.has_goal ? 1 : 0, v.failed ? 1 : 0, static_cast<double>(v.speed), v.pushed ? 1 : 0,
                         sys.land_path(id).size());
     }
     const MovementStats& st = sys.stats();
@@ -3256,10 +3256,10 @@ static void test_real_data() {
                 for (const auto& [id, goal] : goals) {
                     const UnitView v = sys.view(id);
                     if (v.arrived && distance(v.pos, goal) < 160.0f) continue;
-                    std::printf("    unit %d mask %x at (%.1f,%.1f) cell %d,%d goal (%.1f,%.1f) used (%.1f,%.1f) arrived %d failed %d replans %u\n",
+                    std::printf("    unit %d mask %x at (%.1f,%.1f) cell %d,%d goal (%.1f,%.1f) used (%.1f,%.1f) arrived %d failed %d pushed %d\n",
                                 id, sys.mask_of(id), static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), world_to_cell(v.pos.x),
                                 world_to_cell(v.pos.y), static_cast<double>(goal.x), static_cast<double>(goal.y),
-                                static_cast<double>(v.goal.x), static_cast<double>(v.goal.y), v.arrived ? 1 : 0, v.failed ? 1 : 0, v.replans);
+                                static_cast<double>(v.goal.x), static_cast<double>(v.goal.y), v.arrived ? 1 : 0, v.failed ? 1 : 0, v.pushed ? 1 : 0);
                 }
             }
             // Group move: 12 infantry from the first unit's start to the last unit's goal.
@@ -3309,11 +3309,11 @@ static void test_real_data() {
                         for (ObjectId id : ids) {
                             const UnitView v = gs.view(id);
                             if (v.arrived) continue;
-                            std::printf("    unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f replans %u, "
+                            std::printf("    unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f pushed %d, "
                                         "collisions %zu\n",
                                         id, static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), static_cast<double>(v.goal.x),
                                         static_cast<double>(v.goal.y), v.has_goal ? 1 : 0, v.failed ? 1 : 0,
-                                        static_cast<double>(v.speed), v.replans, gs.collisions().list().size());
+                                        static_cast<double>(v.speed), v.pushed ? 1 : 0, gs.collisions().list().size());
                             for (const CollisionObject& c : gs.collisions().list())
                                 std::printf("      collision %u kind %u state %u %d-%d created %u retry %u\n", c.seq,
                                             static_cast<unsigned>(c.kind), static_cast<unsigned>(c.state), c.a, c.b, c.created, c.retry);

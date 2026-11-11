@@ -410,8 +410,10 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
         out.vertices = nv;
         out.window = win;
         // (iv) a start inside an obstacle's rect2: the search starts at the nearest vertex instead.
-        // s78n t20 F3 [port] (until §5.4.7 replaces it): only a vertex whose leg from the start passes the grid
-        // (line_passable) is taken; with none the call fails. Retail does not test that leg.
+        // s78n t20 F3 [port]: only a vertex whose leg from the start passes the grid (line_passable) is taken; with none
+        // the call fails. Retail does not test that leg; s78n t24 keeps the test: the port has no escape vertices, and an
+        // untested leg through a wall makes a detour whose first step fails (a TerrainCollision record, which plans the
+        // same detour again).
         uint32_t from = vstart;
         bool start_inside = false;
         for (size_t i = 0; i < win.size() && !start_inside; ++i)

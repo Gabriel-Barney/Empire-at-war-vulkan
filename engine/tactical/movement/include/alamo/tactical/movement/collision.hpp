@@ -117,7 +117,11 @@ bool foot_moving_contact(const FootTrack& p, const FootTrack& q, int32_t frames)
 //   4. each of them in that order: decided while the dynamic land pathfinder budget allows (0x679740: quota counter <
 //      DynamicLandComplexityQuota), else only serviced.
 // Containers are list-ordered vectors and a sorted vector of id pair keys (no pointer keys, no hashing).
-enum class CollisionKind : uint8_t { MovingVsMoving = 0, MovingVsStopped = 1, StoppedVsStopped = 2 };
+// s78n t24 (MOVEMENT §5.4.7): Terrain = TerrainCollision, a one-participant record (participants 1, b = kNoParticipant)
+// made when a unit's own walk step fails the passability test. It has no pair key: no pair filter and no duplicate rule
+// (every failed step makes another record); its crowd term is 0, so its priority is -(now - created).
+enum class CollisionKind : uint8_t { MovingVsMoving = 0, MovingVsStopped = 1, StoppedVsStopped = 2, Terrain = 3 };
+inline constexpr ObjectId kNoParticipant = -1;  // CollisionObject::b of a one-participant record
 // The retail per-class state enums (MOVEMENT §5.4 table) folded into one: Active = state 0 None (not decided yet),
 // Resolved = MovingVsStopped 5 / 6, MovingVsMoving 8 / 9 (the driver drops the record in the same pass). s78n t18
 // (§5.4.1 / §5.4.2): TryAgainLater = MovingVsStopped 7; Repulsion = MovingVsStopped 2 / MovingVsMoving 3 Repulse;
@@ -126,7 +130,9 @@ enum class CollisionKind : uint8_t { MovingVsMoving = 0, MovingVsStopped = 1, St
 // Resolving = 1 (the unit CollisionObject::master walks its path to a free spot), TryAgainLater = 4, Resolved = 2 / 3.
 // s78n t23 (§5.4.6, MovingVsMoving of every pair): TryAgainLater = 10 Try Again Later; Pass = 4 Pass; MovingWithSpeed =
 // 6 Moving With Speed Only; FormationFollow = 11, PassFailed = 12, SwapSlots = 13, Starved = 15, StarvedDetour = 16 (no
-// debug names). The MovingVsMoving-only values are rejected on the other kinds by the save.
+// debug names). The MovingVsMoving-only values are rejected on the other kinds by the save. s78n t24 (§5.4.7):
+// Terrain - Active = 0 None (waits for the quota pass), Resolving = 1 (its detour is on the unit's stack), Resolved = 2
+// Unresolvable / 3 Resolved; [port] the unnamed state 4 of a failed decision is not kept (the record is dropped).
 enum class CollisionState : uint8_t {
     Active = 0, TryAgainLater = 1, Resolved = 2, Repulsion = 3, PathAround = 4, Crusher = 5, SpeedSlave = 6, Resolving = 7,
     Pass = 8, MovingWithSpeed = 9, FormationFollow = 10, PassFailed = 11, SwapSlots = 12, Starved = 13, StarvedDetour = 14,
@@ -185,6 +191,8 @@ public:
     // Pair filter (0x5c7900): at most one collision per unordered pair.
     bool has_pair(ObjectId a, ObjectId b) const;
     // Appends a collision at the end of the list; returns its seq. No-op (returns UINT32_MAX) when the pair exists.
+    // s78n t24: a Terrain record has one participant (`a`; `b` is ignored and stored as kNoParticipant) and no pair key:
+    // it is always appended.
     uint32_t add(CollisionKind kind, ObjectId a, ObjectId b, uint32_t frame);
     // One driver pass (steps 1-4 above). Resolve must not add or remove collisions; a collision it marks Resolved is
     // dropped after the pass. Records serviced in step 2 get `full` = true.

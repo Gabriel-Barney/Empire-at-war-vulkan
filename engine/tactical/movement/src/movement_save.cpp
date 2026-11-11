@@ -31,12 +31,12 @@ namespace {
 
 constexpr uint32_t kGridSaveVersion = 1;
 constexpr uint32_t kOccupancySaveVersion = 1;
-constexpr uint32_t kCollisionSaveVersion = 4;  // 4: s78n t23 the MovingVsMoving states of every pair (Pass, MovingWithSpeed, FormationFollow, PassFailed, SwapSlots, Starved, StarvedDetour) and record fields failures / early_pop / hold lines / starvation / redecide; 3: s78n t20 the StoppedVsStopped state Resolving and `master` 2 (nobody is moved); 2: s78n t18 the records' speed answers, "at once" flags and master
+constexpr uint32_t kCollisionSaveVersion = 5;  // 5: s78n t24 the TerrainCollision kind (one participant, b = kNoParticipant, no pair key; states Active / Resolving); 4: s78n t23 the MovingVsMoving states of every pair (Pass, MovingWithSpeed, FormationFollow, PassFailed, SwapSlots, Starved, StarvedDetour) and record fields failures / early_pop / hold lines / starvation / redecide; 3: s78n t20 the StoppedVsStopped state Resolving and `master` 2 (nobody is moved); 2: s78n t18 the records' speed answers, "at once" flags and master
 constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 23;  // 23: s78n t26.1 UnitDesc::deploys / auto_deploys / max_walk_deployed / deployed_walk_speed / deploy_ability, Unit::walk_deployed, garrison deploy records; 22: s78n t23 Unit::speed_cap / hold_until / nudge / nudge_frames dropped (the MovingVsMoving stand-in); 21: s78n t23 UnitDesc::hard_x_deployed / hard_y_deployed; 20: s78n t20 batch 1 UnitDesc::no_locomotor / death_clone_obstacle, the push kills of the tick; 19: s78n t20 F5 Unit::self_goal; 18: s78n t20 the collision-owned top path record (Unit::push_owner / push_weight / push_kind / push_resume / push_tags; Unit::detour_seq / detour_end dropped), Unit::form_id / form_slot / self_arrive and the last formation id, UnitDesc::type_hx / type_hy / box_expansion; 17: s78n t18 collision states (Repulsion / PathAround / Crusher / SpeedSlave) and record answers, Unit::detour_seq / detour_end / around / around_frame / path_change, Unit::coast / fturn / path_started (a squad container's walk), Unit::exit_host / hover / hover_off and UnitDesc::hover_height (pair gates), the parked members' shape / speed data, Unit::waits dropped; 16: s78n t14 part B UnitDesc::movement_prediction_interval / avoidance_disabled, Unit::push_flee (crush-flee push path), Unit::steer_blocked dropped (members are not passability-tested); 15: s78n t14 UnitDesc::container_arrangement, Unit::recovery (u8, replaces recovering) / start_delay / team shape / laid_out / lay_dir / spread / team_target, the parked members' offsets; 14: s78n t03 UnitDesc::team_container, Unit::anchor / tslot / tindex / recovering / steer_blocked (land squad containers), s78n review Unit::team / team_factor / team_cap / team_max and the parked squad members; 13: cu8j t01 / t02 UnitDesc::stationary_space_layer, Unit::pend / adopted, the pending compositions + last serial; 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
+constexpr uint32_t kMovementSaveVersion = 24;  // 24: s78n t24 Unit::push_turn_first; Unit::blocked_frames / replans / push_blocked dropped (the blocked-frames re-plan); MovementStats::terrain_records / terrain_detours / terrain_stops_cell / terrain_stops_nobase / terrain_stops_failed; 23: s78n t26.1 UnitDesc::deploys / auto_deploys / max_walk_deployed / deployed_walk_speed / deploy_ability, Unit::walk_deployed, garrison deploy records; 22: s78n t23 Unit::speed_cap / hold_until / nudge / nudge_frames dropped (the MovingVsMoving stand-in); 21: s78n t23 UnitDesc::hard_x_deployed / hard_y_deployed; 20: s78n t20 batch 1 UnitDesc::no_locomotor / death_clone_obstacle, the push kills of the tick; 19: s78n t20 F5 Unit::self_goal; 18: s78n t20 the collision-owned top path record (Unit::push_owner / push_weight / push_kind / push_resume / push_tags; Unit::detour_seq / detour_end dropped), Unit::form_id / form_slot / self_arrive and the last formation id, UnitDesc::type_hx / type_hy / box_expansion; 17: s78n t18 collision states (Repulsion / PathAround / Crusher / SpeedSlave) and record answers, Unit::detour_seq / detour_end / around / around_frame / path_change, Unit::coast / fturn / path_started (a squad container's walk), Unit::exit_host / hover / hover_off and UnitDesc::hover_height (pair gates), the parked members' shape / speed data, Unit::waits dropped; 16: s78n t14 part B UnitDesc::movement_prediction_interval / avoidance_disabled, Unit::push_flee (crush-flee push path), Unit::steer_blocked dropped (members are not passability-tested); 15: s78n t14 UnitDesc::container_arrangement, Unit::recovery (u8, replaces recovering) / start_delay / team shape / laid_out / lay_dir / spread / team_target, the parked members' offsets; 14: s78n t03 UnitDesc::team_container, Unit::anchor / tslot / tindex / recovering / steer_blocked (land squad containers), s78n review Unit::team / team_factor / team_cap / team_max and the parked squad members; 13: cu8j t01 / t02 UnitDesc::stationary_space_layer, Unit::pend / adopted, the pending compositions + last serial; 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
 
 // ---- enum validation (switches without default: -Wswitch flags a new enumerator here) ---------------------------
 bool valid_loco_state(uint8_t v) {
@@ -94,7 +94,8 @@ bool valid_collision_kind(uint8_t v) {
     switch (static_cast<CollisionKind>(v)) {
         case CollisionKind::MovingVsMoving:
         case CollisionKind::MovingVsStopped:
-        case CollisionKind::StoppedVsStopped: return true;
+        case CollisionKind::StoppedVsStopped:
+        case CollisionKind::Terrain: return true;
     }
     return false;
 }
@@ -453,13 +454,11 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.u32(u.start_frame);
     io.f32(u.formation_speed);
     io.i32(u.large_hover_index);
-    io.u32(u.blocked_frames);
-    io.u32(u.replans);
     io.i32(u.check_countdown);
     io.b(u.pushed);  // a1k t03 (version 9)
     io.v2s(u.push_path);
     io.u32(u.push_next);
-    io.u32(u.push_blocked);
+    io.b(u.push_turn_first);  // s78n t24 (version 24; replaces push_blocked)
     io.b(u.push_flee);  // s78n t14 part B (version 16)
     io.u32(u.push_owner);  // s78n t20 (version 18)
     io.u8(u.push_weight);
@@ -609,6 +608,11 @@ void io_stats(IO& io, S& s) {  // MovementStats
     io.u32(s.jetpack_still_frames);  // S8 t09 (version 4)
     io.u32(s.pushes);  // a1k t03 (version 9)
     io.u32(s.push_failures);
+    io.u32(s.terrain_records);  // s78n t24 (version 24)
+    io.u32(s.terrain_detours);
+    io.u32(s.terrain_stops_cell);
+    io.u32(s.terrain_stops_nobase);
+    io.u32(s.terrain_stops_failed);
 }
 
 }  // namespace
@@ -806,17 +810,24 @@ bool CollisionLayer::read(ByteReader& r) {
         if (!r.ok() || !valid_collision_kind(kind) || !valid_collision_state(state) || c.master > 2 || c.seq >= next_seq ||
             (k > 0 && c.seq <= list[k - 1].seq))
             return false;
-        // s78n t20 F9: Resolving (7) and master 2 ("nobody is moved") belong to StoppedVsStopped; another kind in them
-        // would never end (mvs_service has no such state)
+        // s78n t20 F9: Resolving (7) and master 2 ("nobody is moved") belong to StoppedVsStopped (s78n t24: Resolving to
+        // Terrain too); another kind in them would never end (mvs_service has no such state)
+        const bool terrain = kind == static_cast<uint8_t>(CollisionKind::Terrain);
         if (kind != static_cast<uint8_t>(CollisionKind::StoppedVsStopped) &&
-            (state == static_cast<uint8_t>(CollisionState::Resolving) || c.master == 2))
+            ((state == static_cast<uint8_t>(CollisionState::Resolving) && !terrain) || c.master == 2))
             return false;
+        // s78n t24 (MOVEMENT §5.4.7): a Terrain record has its one participant (b = kNoParticipant) and is None or
+        // Resolving; every other record has two
+        if (terrain != (c.participants == 1) || (terrain && c.b != kNoParticipant) ||
+            (terrain && state != static_cast<uint8_t>(CollisionState::Active) && state != static_cast<uint8_t>(CollisionState::Resolving)))
+            return false;
+        if (!terrain && c.participants != 2) return false;
         // s78n t23: the MovingVsMoving-only states (Pass .. StarvedDetour) on another kind would never end
         if (kind != static_cast<uint8_t>(CollisionKind::MovingVsMoving) && state >= static_cast<uint8_t>(CollisionState::Pass))
             return false;
         c.kind = static_cast<CollisionKind>(kind);
         c.state = static_cast<CollisionState>(state);
-        pairs.push_back(collision_pair_key(c.a, c.b));
+        if (!terrain) pairs.push_back(collision_pair_key(c.a, c.b));  // s78n t24: a Terrain record has no pair key
     }
     std::sort(pairs.begin(), pairs.end());
     if (std::adjacent_find(pairs.begin(), pairs.end()) != pairs.end()) return false;  // one collision per pair

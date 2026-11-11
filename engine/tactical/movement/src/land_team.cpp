@@ -525,9 +525,14 @@ void MovementSystem::team_steer_recs(std::vector<SteerRec>& out) const {
     // collision list is insertion order). vf +0x30 weights: MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3. vf
     // +0x38 (s78n t18, FIGHTER_FLYING §7.5 corrections): MovingVsStopped - the obstacle side in every state, the mover
     // side only in Repulsion (state 2); MovingVsMoving - both sides in Repulse (state 3) and state 11 (s78n t23);
-    // StoppedVsStopped (s78n t20, 0x686f80) - only the unit being moved, while the record is Resolving (state 1).
+    // StoppedVsStopped (s78n t20, 0x686f80) - only the unit being moved, while the record is Resolving (state 1);
+    // TerrainCollision (s78n t24, MOVEMENT §5.4.7 item 2) - weight 4, a zero vector in every state.
     out.clear();
     for (const CollisionObject& c : coll_.list()) {
+        if (c.kind == CollisionKind::Terrain) {
+            if (find(c.a) >= 0) out.push_back({c.a, 4.0f, false, 0u});
+            continue;
+        }
         const int32_t ia = find(c.a), ib = find(c.b);
         if (ia < 0 || ib < 0) continue;
         float w = 3.0f;
@@ -764,6 +769,8 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
             if (steer_probe_ok(grid_, m.pos, np, u.lp.mask)) {
                 m.pos = np;
                 r.moved = true;
+            } else if (!(u.has_goal && u.forced)) {
+                r.blocked = true;  // s78n t24 (MOVEMENT §5.4.7 item 1): the End Move coast reports too (top record not forced)
             }
             m.state = LocoState::WalkEndMove;
             return r;
@@ -837,6 +844,7 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
         }
         m.yaw = wrap_deg(desired);
         m.state = LocoState::WalkMoving;
+        if (top_push) u.push_turn_first = false;  // s78n t24: the TerrainCollision detour's turn in place is over
     }
     if (m.state == LocoState::WalkEndMove && !(m.speed > a)) {  // 0x15 (0x5adb50)
         m.speed = 0.0f;

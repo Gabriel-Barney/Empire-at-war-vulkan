@@ -7,8 +7,8 @@
 // passed in one frame), yaw steps toward the travel direction by at most the turn rate, then the
 // passability check before commit: the move old -> new must stay on cells passing the unit's
 // MovementClass mask (conservative grid walk); on failure the unit does not move this frame and
-// reports `blocked` (the system re-plans, §1.6 re-path triggers). Directions use the retail fast
-// inverse sqrt (§3.5 step 5).
+// reports `blocked` (s78n t24: the system makes a TerrainCollision record, §5.4.7). Directions use the
+// retail fast inverse sqrt (§3.5 step 5).
 // PROVISIONAL [L]: the brake rule is "target <= sqrt(2 * decel * remaining path)" (the retail brakes
 // toward the next waypoint's speed cap; here only the final waypoint has cap 0), and the last
 // frame snaps onto the goal when the remaining distance is <= the frame's budget. Movement
@@ -94,6 +94,10 @@ float remaining_length(const LandMotion& m);
 //   tail        - s78n t20 (MOVEMENT §1.5.1 item 5, A1_READINGS §40.3): the path is a collision-owned record on top of a
 //                 started order path of this remaining length (> 0): the walk does not brake for the record's end and
 //                 reaching it reports `arrived` with the speed kept (the record is popped and the path below goes on).
+//   turn_first  - s78n t24 (MOVEMENT §5.4.7 item 6, §3.5.2 A): the current waypoint's speed fraction is 0 (a TerrainCollision
+//                 detour's waypoint 0): the start rule runs whatever the state (the failed step left the unit at speed 0)
+//                 and without Close_Enough_Angle_For_Move_Start - the unit turns in place by the turn rate until the
+//                 heading error is within one frame's turn, then moves (the move step lands the facing on the leg).
 struct WalkExtras {
     V2 jiggle;
     bool side_error = false;
@@ -101,6 +105,7 @@ struct WalkExtras {
     const void* avoid_ctx = nullptr;
     bool cap_now = false;
     float tail = 0.0f;
+    bool turn_first = false;
 };
 
 WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, const PassabilityGrid* grid,

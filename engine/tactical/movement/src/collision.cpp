@@ -273,6 +273,18 @@ bool CollisionLayer::has_pair(ObjectId a, ObjectId b) const {
 }
 
 uint32_t CollisionLayer::add(CollisionKind kind, ObjectId a, ObjectId b, uint32_t frame) {
+    if (kind == CollisionKind::Terrain) {  // s78n t24 (MOVEMENT §5.4.7 item 1): one participant, no count, no duplicate rule
+        CollisionObject c;
+        c.seq = next_seq_++;
+        c.kind = kind;
+        c.participants = 1;
+        c.a = a;
+        c.b = kNoParticipant;
+        c.created = frame;
+        c.crowd_frame = frame;
+        list_.push_back(c);
+        return c.seq;
+    }
     const uint64_t key = collision_pair_key(a, b);
     auto it = std::lower_bound(pairs_.begin(), pairs_.end(), key);
     if (it != pairs_.end() && *it == key) return UINT32_MAX;
@@ -296,6 +308,7 @@ uint32_t CollisionLayer::add(CollisionKind kind, ObjectId a, ObjectId b, uint32_
 }
 
 void CollisionLayer::drop_pair(const CollisionObject& c) {
+    if (c.participants < 2) return;  // s78n t24: a Terrain record has no pair key
     auto it = std::lower_bound(pairs_.begin(), pairs_.end(), collision_pair_key(c.a, c.b));
     if (it != pairs_.end() && *it == collision_pair_key(c.a, c.b)) pairs_.erase(it);
 }

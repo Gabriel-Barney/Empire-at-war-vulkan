@@ -4267,7 +4267,9 @@ static void test_land_squad_review_fixes() {
                     static_cast<double>(tight.worst), static_cast<double>(wide.worst), tight.frames, tight.added, tight.dropped,
                     wide.frames, wide.added, wide.dropped);
     }
-    {  // a pushed walk cut short (10 blocked frames) on a container with no order: stopped, so its members recover
+    {  // a pushed walk blocked on a container with no order: stopped, so its members recover. s78n t24 (MOVEMENT §5.4.7):
+       // the failed step makes a TerrainCollision record, whose Path Around finds no order path (no kind-1 record) - the
+       // container is stopped and its push record cleared
         MovementSystem sys{MovementConfig{}};
         land_system(sys, 100);
         const V2 at = cell_center(30, 20);
@@ -4296,7 +4298,7 @@ static void test_land_squad_review_fixes() {
         const uint32_t blocked0 = sys.stats().blocked_steps;
         for (uint32_t n = 0; n < 40 && sys.view(100).pushed; ++n, ++f) sys.tick(f, rng, serial_for);
         cut_at = f;
-        CHECK(!sys.view(100).pushed && sys.stats().blocked_steps >= blocked0 + 10);
+        CHECK(!sys.view(100).pushed && sys.stats().blocked_steps >= blocked0 + 1 && sys.stats().terrain_stops_nobase >= 1);
         CHECK(sys.remove_unit(50));  // the pusher goes: the squad stands alone, with no order
         CHECK(!sys.view(100).has_goal && sys.view(100).speed == 0.0f);
         // a member knocked off its slot now recovers (the recovery decision runs only while the container is stopped)
@@ -5765,10 +5767,10 @@ static void test_t20_destination_check() {
 
 // s78n t20 item 3 (MOVEMENT 1.5.1): the Path Around call inside the system - the detour is a record on top of the path
 // stack, the ordered path stays underneath untouched, and the unit resumes it at the next waypoint when the detour ends.
-// s78n t20 F3 [port] (until MOVEMENT §5.4.7 is ported): a detour whose start lies inside the obstacle ends. The mover
-// stands 15 behind a standing friendly vehicle (their feet overlap: the start is inside its grown rectangle), a wall of
-// cells closes the near side; ordered past it, the mover's order ends (arrived, or failed after its re-plans) - a top
-// record cut by the blocked rule counts as a blocked re-plan, so no detour loop runs for ever. Serial = 4 workers.
+// s78n t20 F3: a detour whose start lies inside the obstacle ends. The mover stands 15 behind a standing friendly
+// vehicle (their feet overlap: the start is inside its grown rectangle), a wall of cells closes the near side; ordered
+// past it, the mover's order ends (arrived, or stopped) - s78n t24: a failed step makes a TerrainCollision record (a
+// detour or a stop, MOVEMENT §5.4.7), so no detour loop runs for ever. Serial = 4 workers.
 static void test_t20_detour_start_inside() {
     struct Out {
         uint64_t crc = 0;
@@ -5807,9 +5809,10 @@ static void test_t20_detour_start_inside() {
         return r;
     };
     const Out s = run(serial_for), p = run(make_thread_pf(4));
-    std::printf("t20 F3: detour from inside the obstacle - ended %d at frame %u (arrived %d, failed %d), pushed %d, re-plans %u, "
-                "dynamic re-paths %u\n",
-                s.ended ? 1 : 0, s.end_frame, s.arrived ? 1 : 0, s.failed ? 1 : 0, s.pushed ? 1 : 0, s.st.replans, s.st.dynamic_repaths);
+    std::printf("t20 F3: detour from inside the obstacle - ended %d at frame %u (arrived %d, failed %d), pushed %d, terrain "
+                "records %u (detours %u), dynamic re-paths %u\n",
+                s.ended ? 1 : 0, s.end_frame, s.arrived ? 1 : 0, s.failed ? 1 : 0, s.pushed ? 1 : 0, s.st.terrain_records,
+                s.st.terrain_detours, s.st.dynamic_repaths);
     CHECK(s.crc == p.crc && s.end_frame == p.end_frame);
     CHECK(s.ended && (s.arrived || s.failed));
 }

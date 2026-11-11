@@ -48,8 +48,9 @@
 //      folded per unit before the walk (finished records leave the fold).
 //      The layer is hashed (land only);
 //   4. walk locomotor step of every unit IN PARALLEL (each unit writes only itself);
-//   5. serial commit in ascending id: terrain height, arrivals, blocked -> re-plan after 10
-//      blocked frames (§1.6 re-path trigger), candidate tree refit.
+//   5. serial commit in ascending id: terrain height, arrivals, candidate tree refit; a failed (blocked) step makes a
+//      TerrainCollision record (s78n t24, MOVEMENT §5.4.7: speed 0, decided by the next tick's driver - Path Around
+//      kind 3 with the turn in place onto its first leg, else the unit is stopped; no blocked-frame count, no re-plan).
 // Tick order (space): 1. space paths planned in parallel against the occupancy snapshot, tracks
 //   committed in ascending id; 2. Hermite playback in parallel; 3. serial commit (arrivals become
 //   stationary tracks, turn-to-face when a facing was ordered).
@@ -223,7 +224,6 @@ struct UnitView {
     bool push_flee = false;
     uint32_t form_id = 0;
     V2 goal;
-    uint32_t replans = 0;
     bool space_fallback = false;  // the last space plan failed every try (straight line flown)
     uint32_t start_frame = 0;     // OI tactical: frame the current order starts moving (stagger / queue delay)
     V2 jiggle;                    // OI tactical: formation jiggle offset
@@ -286,6 +286,11 @@ struct MovementStats {
     uint32_t jetpack_still_frames = 0;
     // a1k t03 (A1_READINGS §40): pushes started (a spot found and a path to it) and push attempts with no spot / path.
     uint32_t pushes = 0, push_failures = 0;
+    // s78n t24 (MOVEMENT §5.4.7): TerrainCollision records made (failed walk steps), detours pushed by their decisions, and
+    // units stopped - their own position impassable (decision step 4, or a waiting record's service), Path Around with
+    // no base path (no order / formation record on the stack, or past its last waypoint), Path Around failed otherwise.
+    // `replans` above stays 0 on land (the blocked-frames re-plan is gone).
+    uint32_t terrain_records = 0, terrain_detours = 0, terrain_stops_cell = 0, terrain_stops_nobase = 0, terrain_stops_failed = 0;
 };
 
 // s78n t14 (FIGHTER_FLYING §7.2 Dartboard step 3, 0x241820 / 0x241830): the radical inverse of `index` in `base` (f = 0,
@@ -657,7 +662,7 @@ public:
     //     (set_scatters_fn) and SPREAD_OUT is off). While the container's current path is a crush-flee push (0x39a5b0) the
     //     squad flees: Fleeing_Infantry_Speed_Bonus multiplies the container's team speed, acceleration and turn rate on
     //     that path and each member's max speed, acceleration and turn rate (FIGHTER_FLYING §7.1); it ends with the push
-    //     path (arrived, blocked, a new order, stop or teleport);
+    //     path (arrived, a TerrainCollision claim or stop, a new order, stop or teleport);
     //   - each member steers per frame (LandTeamInfantry 0x62d620) toward container + R(yaw) (slot + jiggle) from the
     //     container's state at the start of the tick [port: members precede their container in service order], with the
     //     speed rule of FIGHTER_FLYING §7 step 4 (v = 0 while the container turns in place, port state WalkStartTurn for
@@ -957,7 +962,6 @@ private:
         uint32_t start_frame = 0;
         float formation_speed = 3.0e38f;
         int32_t large_hover_index = -1;  // P1 double-click: formation +0x22c (not hashed; no modelled consumer)
-        uint32_t blocked_frames = 0, replans = 0;
         int32_t check_countdown = 0;
         // s78n t18 (0x509ea0): the lowest speed this tick's collision records answer the unit (3e38: none) and the "at
         // once" flag of the last record that writes one. Rebuilt by every land tick's driver before the walk (transient:
@@ -970,8 +974,11 @@ private:
         uint32_t around_frame = 0;
         uint32_t path_change = 0;
         // a1k t03 (A1_READINGS §40.3): the collision-owned record on top of the locomotor's path stack, walked over the
-        // order move (m.path / goal stay underneath, untouched, and resume when it ends). push_blocked = consecutive
-        // blocked frames of its walk (save version 9). s78n t20 (MOVEMENT §1.5.1 item 5, §5.4.3; save version 18): one
+        // order move (m.path / goal stay underneath, untouched, and resume when it ends). s78n t24 (MOVEMENT §5.4.7 item 6,
+        // save version 23): push_turn_first = the record's waypoint 0 has speed fraction 0 (a TerrainCollision detour) - the
+        // unit turns in place onto its first leg before it moves (Walk: walk_step's turn_first; a squad container: the
+        // start turn of team_walk); cleared once the unit is aligned and moves, or with the record. s78n t20 (MOVEMENT
+        // §1.5.1 item 5, §5.4.3; save version 18): one
         // record for every collision path - push_kind 1 a push 0x6859a0, 2 a Path Around detour, 3 a StoppedVsStopped
         // move; push_owner = the collision record that owns it (seq, pack +0x248; kNoDetour none) and push_weight that
         // record's weight (vf +0x30: MovingVsMoving 1, MovingVsStopped 2, StoppedVsStopped 3); push_resume = the order
@@ -980,7 +987,7 @@ private:
         bool pushed = false;
         std::vector<V2> push_path;
         uint32_t push_next = 0;
-        uint32_t push_blocked = 0;
+        bool push_turn_first = false;
         uint32_t push_owner = 0xFFFFFFFFu;
         uint8_t push_weight = 0;
         uint8_t push_kind = 0;
@@ -1429,6 +1436,11 @@ private:
     // squad container coasts (team_walk's End Move); a Walk unit gets an owner-less straight top record along its facing
     // of the braking length v^2 / (2 decel) and brakes along it; without a speed or a deceleration it stops at once.
     void brake_to_stop(Unit& u, uint32_t frame);
+    // s78n t24 (MOVEMENT §5.4.7): TerrainCollision. terrain_report = the failed-step report 0x509090 (the commit of the land
+    // tick, serial, ascending index): speed 0 and a new one-participant record; terrain_service = its decision 0x687ff0
+    // (quota pass, state None) and service 0x687ea0.
+    void terrain_report(Unit& u, uint32_t frame);
+    void terrain_service(CollisionObject& c, bool full, uint32_t frame);
     bool near_path_end(const Unit& a, const Unit& b) const;
     bool destination_blocked(const Unit& a, const Unit& b) const;
     bool side_step_ok(const Unit& a, const Unit& b, const CollisionObject& self) const;

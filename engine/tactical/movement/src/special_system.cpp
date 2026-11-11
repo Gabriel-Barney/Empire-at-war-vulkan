@@ -76,8 +76,6 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
         u.formation_speed = 3.0e38f;  // alone
         u.large_hover_index = -1;
         end_push(u);  // a1k t03 [port]
-        u.blocked_frames = 0;
-        u.replans = 0;
         if (u.has_goal) {
             u.need_path = true;
         } else {

@@ -314,7 +314,9 @@ void test_collision_layer() {
     CHECK(rejects(t, bad));
     put_u32(bad, 0, 3);  // 3: before the s78n t23 MovingVsMoving states and record fields
     CHECK(rejects(t, bad));
-    put_u32(bad, 0, 5);
+    put_u32(bad, 0, 4);  // 4: before the s78n t24 TerrainCollision records
+    CHECK(rejects(t, bad));
+    put_u32(bad, 0, 6);
     CHECK(rejects(t, bad));
     bad = good;
     bad[12 + 4] = 2;  // s78n t20 F9: as a StoppedVsStopped record (kind at +4)
@@ -340,6 +342,22 @@ void test_collision_layer() {
         CollisionLayer fine;
         CHECK(load(fine, bad));
     }
+    // s78n t24 (collision save 5, MOVEMENT §5.4.7): a TerrainCollision record - one participant, b = kNoParticipant, no
+    // pair key (two records of one unit load), state None or Resolving only
+    CollisionLayer tr;
+    CHECK(tr.add(CollisionKind::Terrain, 7, kNoParticipant, 3) != UINT32_MAX && tr.add(CollisionKind::Terrain, 7, 9, 4) != UINT32_MAX);
+    CHECK(tr.list().size() == 2 && tr.list()[1].b == kNoParticipant && tr.list()[1].participants == 1 && !tr.has_pair(7, 9));
+    const Bytes tg = bytes_of(tr);
+    CollisionLayer tl;
+    CHECK(load(tl, tg) && bytes_of(tl) == tg && hash_of(tl) == hash_of(tr));
+    Bytes tb = tg;
+    tb[12 + 5] = static_cast<uint8_t>(CollisionState::Resolving);
+    CHECK(load(tl, tb) && tl.list()[0].state == CollisionState::Resolving);
+    tb[12 + 5] = static_cast<uint8_t>(CollisionState::TryAgainLater);
+    CHECK(rejects(t, tb));
+    tb = tg;
+    tb[12 + 6] = 2;  // participants
+    CHECK(rejects(t, tb));
 }
 
 void test_fighter_grids() {
@@ -1645,7 +1663,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 22);  // 22: before the s78n t26.1 walking-deployed fields (23)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 24);
+    put_u32(bad, 0, 23);  // 23: before the s78n t24 TerrainCollision (push_turn_first, the re-plan counts dropped) (24)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 25);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

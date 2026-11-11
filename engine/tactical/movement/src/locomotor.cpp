@@ -38,10 +38,12 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     }
     const V2 to_wp = wp(m.next) - m.pos;
     const float desired = length_sq(to_wp) > 0.0f ? heading_deg(to_wp) : m.yaw;
-    // Start rule (§3.5 step 1).
-    if (m.state == LocoState::WalkStopped || m.state == LocoState::WalkStartTurn) {
+    // Start rule (§3.5 step 1). s78n t24: a waypoint of speed fraction 0 (turn_first) turns in place first from any state,
+    // with no close-enough angle (§3.5.2 A: |delta| <= R, or |delta| <= CE with a fraction > 0).
+    const bool turn_first = x && x->turn_first;
+    if (m.state == LocoState::WalkStopped || m.state == LocoState::WalkStartTurn || turn_first) {
         const float err = std::fabs(wrap_deg(desired - m.yaw));
-        if (err <= p.turn_rate || err <= p.close_enough_angle) {
+        if (err <= p.turn_rate || (!turn_first && err <= p.close_enough_angle)) {
             m.state = LocoState::WalkMoving;
         } else {
             m.state = LocoState::WalkStartTurn;
