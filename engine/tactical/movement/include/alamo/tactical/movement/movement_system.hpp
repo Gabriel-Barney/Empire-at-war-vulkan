@@ -798,6 +798,10 @@ public:
     // and the hold tags of its waypoints; empty without one.
     std::span<const V2> top_path(ObjectId id) const;
     std::span<const HoldTag> top_tags(ObjectId id) const;
+    // s78n t23 (MOVEMENT §5.3 "When the deployed pair is used"): the footprint rectangle's half extents 0x396850 and the
+    // half width across 0x396b70 of a land unit in its current deploy state; (0, 0) / 0 for an unknown id.
+    V2 collision_half(ObjectId id) const;
+    float collision_half_width(ObjectId id) const;
     // Hover state (pack +0x2a8) of a Walk unit whose type has Hover_Height: 0 grounded (spawn), 2 rising (set by the
     // start of a move while not raised, after any turn in place on the ground: z climbs by the max speed per frame to
     // the ground + Hover_Height, then is 1 raised, standing at the ground + Hover_Height), 3 lowering (hover_lower: a
@@ -1178,9 +1182,14 @@ private:
     // occupancy and dynamic-repath query reads this.
     bool land_layer_object(const Unit& u) const;
     // The footprint rectangle 0x38de80 (MOVEMENT §5.3.1): half extents 0x396850 (a squad container: its joint slot box;
-    // else the hard extents, [port] a circle of the soft radius when the type has none: FootRect::round), its bounding
-    // radius 0x3969f0 and the rectangle at the unit's position and yaw ([port] no hard-extent offsets, no deployed extents).
+    // s78n t23: the deployed pair while deploying / deployed when the deployed X is set; else the hard extents, [port] a
+    // circle of the soft radius when the type has none: FootRect::round), its bounding radius 0x3969f0 and the rectangle
+    // at the unit's position and yaw ([port] no hard-extent offsets).
+    bool deployed_extents(const Unit& u) const {  // the switch of 0x396850 / 0x396b70: Walk state 0x18 or 0x19
+        return u.deploy == LocoState::WalkDeploying || u.deploy == LocoState::WalkDeployed;
+    }
     V2 foot_half(const Unit& u) const;
+    bool foot_boxed(const Unit& u) const;  // a rectangle (else the [port] circle of the soft radius)
     float foot_radius(const Unit& u) const;
     FootRect foot_of(const Unit& u) const;
     FootRect foot_at(const Unit& u, V2 p) const;  // the same rectangle placed at `p`
@@ -1342,7 +1351,7 @@ private:
     StackPoly stack_poly(const Unit& u, std::vector<V2>& scratch) const;
     void stack_points(const Unit& u, std::vector<V2>& out) const;  // the unit's position, then the remaining points
     V2 type_half(const Unit& u) const;         // 0x371be0: the type's half extents (UnitDesc::type_hx / type_hy)
-    float half_width(const Unit& u) const;     // 0x396b70: the half width across ([port] no deployed switch yet)
+    float half_width(const Unit& u) const;     // 0x396b70: the half width across (s78n t23: the deployed Y switch)
     float walk_max_speed(const Unit& u) const;
     V2 wanted_dir(const Unit& u) const;
     float record_cap(const Unit& u) const;

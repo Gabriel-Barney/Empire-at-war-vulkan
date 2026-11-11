@@ -86,6 +86,8 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     const float scale = t.get_float(ti, "Scale_Factor") > 0.0f ? t.get_float(ti, "Scale_Factor") : 1.0f;
     d.hard_x = t.get_float(ti, "Custom_Hard_XExtent") * scale;
     d.hard_y = t.get_float(ti, "Custom_Hard_YExtent") * scale;
+    d.hard_x_deployed = t.get_float(ti, "Custom_Hard_XExtent_Deployed") * scale;  // s78n t23
+    d.hard_y_deployed = t.get_float(ti, "Custom_Hard_YExtent_Deployed") * scale;
     d.box_expansion = t.get_float(ti, "MovementBoxExpansionFactor");  // s78n t20
     const float soft = t.get_float(ti, "Custom_Soft_Footprint_Radius");
     if (soft > 0.0f) {

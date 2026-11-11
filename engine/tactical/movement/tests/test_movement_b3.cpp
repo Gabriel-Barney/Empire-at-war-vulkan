@@ -190,11 +190,55 @@ void test_step0_squad_final_facing() {
                 static_cast<double>(k.yaw));
 }
 
+// ---------------------------------------------------------------- 3.1 deployed half width (MOVEMENT §5.3)
+// MPTL-like (Y 15, deployed Y 24, scale 1.1): the half width 16.5 -> 26.4 while deploying and deployed, 16.5 while
+// undeploying; the rectangle never changes (no deployed X). MAL-like (scale 0.7): 10.5 -> 16.8. A synthetic deployed X
+// 40 with no deployed Y: the rectangle (40, 0) while deployed, the half width keeps the normal Y.
+void test_t20_deployed_width() {
+    ::alamo::test::section("t20_deployed_width");
+    using DR = MovementSystem::DeployResult;
+    struct Case {
+        float hx, hy, xd, yd;
+    };
+    const Case cases[3] = {{30.0f * 1.1f, 15.0f * 1.1f, 0.0f, 24.0f * 1.1f},
+                           {20.0f * 0.7f, 15.0f * 0.7f, 0.0f, 24.0f * 0.7f},
+                           {30.0f, 16.5f, 40.0f, 0.0f}};
+    for (int k = 0; k < 3; ++k) {
+        const Case& q = cases[k];
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 60);
+        UnitDesc d = vehicle(1, cell_center(20, 20), 0, q.hx, q.hy);
+        d.hard_x_deployed = q.xd;
+        d.hard_y_deployed = q.yd;
+        CHECK(sys.add_unit(d));
+        UnitDesc n = vehicle(2, cell_center(20, 20) + V2{q.hx + 20.0f, 0.0f}, 0, 20.0f, 10.0f);
+        CHECK(sys.add_unit(n));
+        SimRng rng(311);
+        const bool rect_switch = q.xd > 0.0f;
+        const V2 normal{q.hx, q.hy}, deployed = rect_switch ? V2{q.xd, 0.0f} : normal;
+        const float hw_dep = q.yd > 0.0f ? q.yd : q.hy;
+        CHECK(sys.collision_half(1) == normal && sys.collision_half_width(1) == q.hy);
+        CHECK(sys.deploy(1, true, 1) == DR::Deploying && sys.deploy_state(1) == LocoState::WalkDeploying);
+        CHECK(sys.collision_half(1) == deployed && sys.collision_half_width(1) == hw_dep);
+        sys.tick(1, rng, serial_for);  // no clip data: the Deploy clip ends on the frame it starts
+        CHECK(sys.deploy_state(1) == LocoState::WalkDeployed);
+        CHECK(sys.collision_half(1) == deployed && sys.collision_half_width(1) == hw_dep);
+        CHECK(sys.deploy(1, false, 2) == DR::Undeploying && sys.deploy_state(1) == LocoState::WalkUndeploying);
+        CHECK(sys.collision_half(1) == normal && sys.collision_half_width(1) == q.hy);
+        sys.tick(2, rng, serial_for);
+        CHECK(sys.deploy_state(1) == LocoState::None && sys.collision_half(1) == normal && sys.collision_half_width(1) == q.hy);
+        std::printf("t20 deployed width: case %d - half width %.2f -> %.2f, rectangle (%.1f, %.1f) -> (%.1f, %.1f)\n", k,
+                    static_cast<double>(q.hy), static_cast<double>(hw_dep), static_cast<double>(normal.x),
+                    static_cast<double>(normal.y), static_cast<double>(deployed.x), static_cast<double>(deployed.y));
+    }
+}
+
 }  // namespace
 
 int main() {
     test_step0_halt_brake();
     test_step0_crush_no_locomotor();
     test_step0_squad_final_facing();
+    test_t20_deployed_width();
     return ::alamo::test::report("alamo_tactical_movement_b3_tests");
 }

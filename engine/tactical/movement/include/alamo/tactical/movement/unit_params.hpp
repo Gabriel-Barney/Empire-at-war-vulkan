@@ -33,6 +33,12 @@ struct UnitDesc {
     // only by the push search (footprint radius 0x3969f0, mover extent 0x372040); unset falls back to `radius`.
     float hard_x = 0.0f;
     float hard_y = 0.0f;
+    // s78n t23 (MOVEMENT §5.3 "When the deployed pair is used"; save version 21): Custom_Hard_XExtent_Deployed /
+    // Custom_Hard_YExtent_Deployed x Scale_Factor (0 = unset), used while the Walk unit is deploying (0x18) or deployed
+    // (0x19): the rectangle takes the pair only when the deployed X is set (no FoC type sets it), the half width across
+    // 0x396b70 takes the deployed Y alone (FoC: MPTL, MAL_Rocket_Vehicle).
+    float hard_x_deployed = 0.0f;
+    float hard_y_deployed = 0.0f;
     // s78n t20 (MOVEMENT §5.3.1 item 5, §5.4.3, §5.4.4; save version 18): the TYPE's half extents 0x371be0 - the customs x
     // Scale_Factor, the model's box per missing axis, (0, 0) without a model; no joint slot box and no deployed switch.
     // Read by the early-arrival box and the StoppedVsStopped cost radius 0x371df0. The host fills them (it has the

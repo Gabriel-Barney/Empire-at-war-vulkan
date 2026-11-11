@@ -545,12 +545,30 @@ void MovementSystem::update_tree(const Unit& u) {
 // ---- s78n t18 (MOVEMENT §5.3.1 / §5.3.2): footprints and the layer-0x10 box query
 V2 MovementSystem::foot_half(const Unit& u) const {
     if (u.d.team_container && u.team_boxed) return {u.team_box_hx, u.team_box_hy};
+    // s78n t23 (MOVEMENT §5.3 "When the deployed pair is used", 0x371d20): the deployed pair only when its X is set (the Y
+    // branch tests the X field too): X set with Y unset gives hy = 0
+    if (deployed_extents(u) && u.d.hard_x_deployed > 0.0f) return {u.d.hard_x_deployed, std::max(u.d.hard_y_deployed, 0.0f)};
     if (u.d.hard_x > 0.0f || u.d.hard_y > 0.0f) return {std::max(u.d.hard_x, 0.0f), std::max(u.d.hard_y, 0.0f)};
     return {u.d.radius, u.d.radius};  // [port] no hard extents (the model-box fallback of 0x371be0 is not loaded)
 }
 
+bool MovementSystem::foot_boxed(const Unit& u) const {
+    return (u.d.team_container && u.team_boxed) || u.d.hard_x > 0.0f || u.d.hard_y > 0.0f ||
+           (deployed_extents(u) && u.d.hard_x_deployed > 0.0f);
+}
+
+V2 MovementSystem::collision_half(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    return u ? foot_half(*u) : V2{};
+}
+
+float MovementSystem::collision_half_width(ObjectId id) const {
+    const Unit* u = unit_ptr(id);
+    return u ? half_width(*u) : 0.0f;
+}
+
 float MovementSystem::foot_radius(const Unit& u) const {
-    if ((u.d.team_container && u.team_boxed) || u.d.hard_x > 0.0f || u.d.hard_y > 0.0f) {
+    if (foot_boxed(u)) {
         const V2 h = foot_half(u);
         return std::sqrt(h.x * h.x + h.y * h.y);
     }
@@ -561,8 +579,7 @@ FootRect MovementSystem::foot_of(const Unit& u) const { return foot_at(u, u.m.po
 
 FootRect MovementSystem::foot_at(const Unit& u, V2 p) const {
     const V2 h = foot_half(u);
-    const bool boxed = (u.d.team_container && u.team_boxed) || u.d.hard_x > 0.0f || u.d.hard_y > 0.0f;
-    return boxed ? foot_rect(p, u.m.yaw, h.x, h.y) : foot_circle(p, u.m.yaw, u.d.radius);  // [port] no hard extents: a circle
+    return foot_boxed(u) ? foot_rect(p, u.m.yaw, h.x, h.y) : foot_circle(p, u.m.yaw, u.d.radius);  // [port] no hard extents: a circle
 }
 
 float MovementSystem::tree_half(const Unit& u) const { return std::max(std::max(foot_radius(u), u.d.radius), 1.0f); }
@@ -1998,7 +2015,15 @@ V2 MovementSystem::type_half(const Unit& u) const {
     return {u.d.radius, u.d.radius};  // [port] not given and no hard extents: the soft radius
 }
 
-float MovementSystem::half_width(const Unit& u) const { return foot_half(u).y; }
+// 0x396b70 (MOVEMENT §5.3 "When the deployed pair is used"): a squad container's joint slot box; else, deploying or
+// deployed, the deployed Y alone when it is set (the per-axis 0x372100: no X test); else the normal half extents' y.
+// Undeploying (0x1A) uses the normal extents.
+float MovementSystem::half_width(const Unit& u) const {
+    if (u.d.team_container && u.team_boxed) return u.team_box_hy;
+    if (deployed_extents(u) && u.d.hard_y_deployed > 0.0f) return u.d.hard_y_deployed;
+    if (u.d.hard_x > 0.0f || u.d.hard_y > 0.0f) return std::max(u.d.hard_y, 0.0f);
+    return u.d.radius;
+}
 
 bool MovementSystem::set_collision_info(ObjectId id, const CollisionInfo& info) {
     Unit* u = unit_ptr(id);
@@ -2071,7 +2096,8 @@ float MovementSystem::slave_speed(const Unit& x, const Unit& y, bool& touch) con
     const V2 fx = dir_from_deg(x.m.yaw), fy = dir_from_deg(y.m.yaw);
     const V2 rel = y.m.pos - x.m.pos;
     // separate lanes: the facings within 10 degrees of parallel or anti-parallel and y at least hy_x + hy_y to the side
-    if (std::fabs(dot(fx, fy)) >= 0.9848f && std::fabs(cross(fx, rel)) >= foot_half(x).y + foot_half(y).y) return vmax;
+    // (s78n t23: the half widths 0x396b70, with their deployed switch)
+    if (std::fabs(dot(fx, fy)) >= 0.9848f && std::fabs(cross(fx, rel)) >= half_width(x) + half_width(y)) return vmax;
     const float v = x.m.speed;
     const float vmin = std::min(x.sp.min_speed, vmax);
     const V2 d = normalize_retail(rel);

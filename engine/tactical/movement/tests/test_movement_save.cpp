@@ -1623,7 +1623,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 19);  // 19: before the s78n t20 batch 1 death-clone fields and push kills (20)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 21);
+    put_u32(bad, 0, 20);  // 20: before the s78n t23 deployed extents (21)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 22);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
