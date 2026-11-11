@@ -687,7 +687,8 @@ public:
     //     final facing when that is more than 10 degrees off; else the same path restarts on the next tick. A new move
     //     order while moving: the container brakes at the rate, coasting straight along its facing, then starts the new
     //     path from speed 0 (start delays are drawn only when the order finds it at speed 0); Stop and Teleport zero the
-    //     speed at once. [port] the coast starts at the order; corner fractions and the brake-ahead are not modelled;
+    //     speed at once. s78n t26.5: the coast starts at the path set (until then the old order path is walked on), and the
+    //     move step is the Walk's C with MOVEMENT §3.5.2 E's differences (the corner fractions and the brake-ahead included);
     //   - s78n t16 (FIGHTER_FLYING §7.7, 0x5aaf70; confirmed by the retail runs in S78N_T14_RUN.md): the container's speed
     //     step. Acceleration = deceleration = 0x5ab540 = the minimum over its steering members of the member's
     //     OverrideDeceleration x (min(member Max_Speed, the members' smallest raw Max_Speed) x the mode multiplier x the

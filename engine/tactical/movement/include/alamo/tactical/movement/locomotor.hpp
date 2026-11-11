@@ -13,6 +13,8 @@
 // new position (0x50e280) unless the path is forced - a refused point reports `blocked` with no commit (s78n t24: the
 // system makes a TerrainCollision record, §5.4.7); v^2 / (2a) > the rest of the path -> End Move unless a started path
 // lies below. Directions use the retail fast inverse sqrt (§3.5 step 5).
+// s78n t26.5 (§3.5.2 E): the land team container runs the same step (WalkExtras::container): the budget R with no f
+// scaling, the coast and the travel along the facing, no collision vector, the slots re-laid at each waypoint stepped.
 #pragma once
 #include <cstdint>
 #include <span>
@@ -156,7 +158,12 @@ float remaining_length(const LandMotion& m);
 //   forced      - the top path's skip-passability flag +0x5c (the flag-0x20 order path); the planner's escape leg off a
 //                 blocked start (next < escape_until) counts as forced too;
 //   directions  - Movement_Directions_Count (C.7: 1 the facing, 2 the facing or its reverse, <= 0 the wanted direction);
-//   vmax_u      - C.1 / C.2: the undeployed effective max speed for f = v / vmax_u (<= 0: the controller's vmax).
+//   vmax_u      - C.1 / C.2: the undeployed effective max speed for f = v / vmax_u (<= 0: the controller's vmax);
+//   container   - s78n t26.5 (MOVEMENT §3.5.2 E, FIGHTER_FLYING §7.7 item 7): the land team container's move step 0x5adfb0 -
+//                 the turn budget R with no f scaling, the coast (C.4) and the travel (C.7) along the facing (cos yaw, sin
+//                 yaw); the caller passes no collision vector (`avoid` null) and `directions` 1;
+//   relay       - s78n t26.5 (FIGHTER_FLYING §7.2 caller 3): when set, the directions of the slot re-lays 0x5ac120 are
+//                 appended - the new segment at each waypoint stepped in C.11, the path below's segment after a pop (C.4).
 struct WalkExtras {
     V2 jiggle;
     bool lane = false;
@@ -172,6 +179,8 @@ struct WalkExtras {
     bool forced = false;
     int32_t directions = 1;
     float vmax_u = 0.0f;
+    bool container = false;           // s78n t26.5
+    std::vector<V2>* relay = nullptr;  // s78n t26.5
 };
 
 // s78n t26.4 (MOVEMENT §5.4.1 "How Walk combines" items 1 - 3, 0x61d570): the wanted direction on the top record m - false

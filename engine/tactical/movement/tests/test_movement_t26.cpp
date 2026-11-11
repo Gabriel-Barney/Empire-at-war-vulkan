@@ -12,6 +12,8 @@
 // s78n t26.4: the Walk move step C (MOVEMENT 3.5.2 C, G, 3.5.1 0x15): the turn first, the travel along the facing to the
 // waypoint line, the tau = 0 skip, the End Move coast along the last displacement, the point test, the pop into the path
 // below, 0x15 within 5 / restart, no snap, the unaligned new order's coast, and a save inside the coast.
+// s78n t26.5: the land team container's move step (MOVEMENT 3.5.2 E): the budget without f, the coast and travel along the
+// facing, the re-lays at the waypoints stepped and after a pop, and a new order behind a marching squad.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -1161,6 +1163,202 @@ void test_t26_end_move() {
     CHECK(kept);
 }
 
+// s78n t26.5: the land team container's move step 0x5adfb0 (MOVEMENT 3.5.2 E, FIGHTER_FLYING 7.7 item 7, 7.2 caller 3): C with
+// the budget R and no f scaling, the coast and the travel along the facing, the re-lay at each waypoint stepped; and the
+// new order while moving (3.5.2 G, FIGHTER_FLYING 7.7 item 5): the old path until the plan, then the coast at the rate.
+void test_t26_container_step() {
+    ::alamo::test::section("t26_container_step");
+    LocomotorParams lp;
+    lp.max_speed = 2.0f;
+    lp.accel = lp.decel = 1.0f;
+    lp.turn_rate = 10.0f;
+    // t26.4's hand case for a container (rate 10, v held at 2, 0x13): the same turn and travel - ticks 1 and 2 as the Walk's
+    // (yaw 20 / 10, s' 6.385 / 3.489589); tick 3 crosses line 1 at x 8.968663 with 0.880337 left, tau = 0 skips waypoint 2,
+    // and the coast runs along the facing (yaw 0: (1, 0)), not along the last displacement (hand)
+    {
+        LandMotion m;
+        m.pos = {4.0f, 0.0f};
+        m.yaw = 30.0f;
+        m.speed = 2.0f;
+        m.state = LocoState::WalkMoving;
+        m.path = {{0.0f, 0.0f}, {10.0f, 0.0f}, {10.0f, 10.0f}};
+        m.next = 1;
+        std::vector<V2> relay;
+        WalkExtras x;
+        x.container = true;
+        x.relay = &relay;
+        walk_step(m, lp, 3.0e38f, nullptr, &x);
+        CHECK(m.yaw == 20.0f && near(m.pos.x, 5.879385f, 2e-5f) && near(m.pos.y, 0.684040f, 2e-5f) && m.next == 1);
+        walk_step(m, lp, 3.0e38f, nullptr, &x);
+        CHECK(m.yaw == 10.0f && near(m.pos.x, 7.849001f, 3e-5f) && near(m.pos.y, 1.031337f, 3e-5f) && m.next == 1);
+        const float y2 = m.pos.y;
+        const WalkResult r3 = walk_step(m, lp, 3.0e38f, nullptr, &x);
+        std::printf("t26.5 container step: tick 3 at (%.6f, %.6f), yaw %.3f, next %u, relays %zu\n", static_cast<double>(m.pos.x),
+                    static_cast<double>(m.pos.y), static_cast<double>(m.yaw), m.next, relay.size());
+        CHECK(m.yaw == 0.0f && r3.tau_skips == 1 && r3.coast && m.state == LocoState::WalkEndMove && m.next == 3);
+        CHECK(near(m.pos.x, 8.968663f + 0.880337f, 4e-5f) && m.pos.y == y2);
+        // line 1 was reached in C.11 (s > s': idx + 1) - the re-lay along segment 2; waypoint 2 by the tau = 0 skip: none
+        CHECK(relay.size() == 1 && relay[0] == (V2{0.0f, 10.0f}));
+    }
+    // The turn budget in End Move: v 1.5 of vmax 3 (a 0.5, from 2.0) - a Walk turns R x f = 10 x 0.5 = 5 deg, a container the
+    // full R = 10 deg; on a crush-flee path its R is x Fleeing_Infantry_Speed_Bonus (2): 20 deg (hand)
+    {
+        LocomotorParams p3;
+        p3.max_speed = 3.0f;
+        p3.accel = p3.decel = 0.5f;
+        p3.turn_rate = 10.0f;
+        const auto turn = [&](bool team, float rate) {
+            LandMotion k;
+            k.pos = {10.0f, 0.0f};
+            k.yaw = 90.0f;
+            k.speed = 2.0f;
+            k.state = LocoState::WalkEndMove;
+            k.path = {{0.0f, 0.0f}, {200.0f, 0.0f}};
+            k.next = 1;
+            WalkExtras x;
+            x.container = team;
+            LocomotorParams q = p3;
+            q.turn_rate = rate;
+            walk_step(k, q, 3.0e38f, nullptr, &x);
+            return std::pair<float, float>(k.yaw, k.speed);
+        };
+        const float flee = MovementConstants{}.fleeing_infantry_speed_bonus;
+        const auto w = turn(false, 10.0f), c = turn(true, 10.0f), fl = turn(true, 10.0f * flee);
+        std::printf("t26.5 End Move turn: Walk %.4f, container %.4f, crush-flee %.4f (bonus %.2f, speed %.3f)\n",
+                    static_cast<double>(w.first), static_cast<double>(c.first), static_cast<double>(fl.first),
+                    static_cast<double>(flee), static_cast<double>(c.second));
+        CHECK(w.second == 1.5f && c.second == 1.5f && flee == 2.0f);
+        CHECK(w.first == 85.0f && c.first == 80.0f && fl.first == 70.0f);
+    }
+    // The re-lay (FIGHTER_FLYING 7.2 caller 3): a waypoint stepped in C.11 (s > s') re-lays along the new segment; a pop into
+    // the started path below re-lays along its segment
+    {
+        LandMotion k;
+        k.pos = {9.0f, 0.0f};
+        k.speed = 2.0f;
+        k.state = LocoState::WalkMoving;
+        k.path = {{0.0f, 0.0f}, {10.0f, 0.0f}, {10.0f, 10.0f}};
+        k.next = 1;
+        std::vector<V2> relay;
+        WalkExtras x;
+        x.container = true;
+        x.relay = &relay;
+        walk_step(k, lp, 3.0e38f, nullptr, &x);
+        CHECK(relay.size() == 1 && relay[0] == (V2{0.0f, 10.0f}) && k.next == 2 && k.yaw == 10.0f);
+        LandMotion t;
+        t.pos = {10.0f, 0.0f};
+        t.speed = 2.0f;
+        t.state = LocoState::WalkMoving;
+        t.path = {{0.0f, 0.0f}, {10.0f, 0.0f}};
+        t.next = 1;
+        LandMotion q;
+        q.path = {{0.0f, 0.0f}, {100.0f, 0.0f}};
+        q.next = 1;
+        std::vector<V2> r2;
+        WalkExtras xp;
+        xp.container = true;
+        xp.relay = &r2;
+        xp.below = &q;
+        const WalkResult pr = walk_step(t, lp, 3.0e38f, nullptr, &xp);
+        CHECK(pr.popped && r2.size() == 1 && r2[0] == (V2{100.0f, 0.0f}) && near(t.pos.x, 12.0f, 1e-4f));
+    }
+    // System: a new order behind a marching squad (the host's tick order, the AI's composition one update later). Until the
+    // plan the old path stays on top (MOVEMENT 3.5.2 G): the container walks on along it in 0x13 at its team speed. From the
+    // path set (not started, FIGHTER_FLYING 7.7 item 5) it brakes at its rate a = 0.1 in End Move, straight along its facing
+    // (team_coast), stops at 0x15 with no step, turns in place from speed 0 and walks the new path to its goal.
+    MovementConfig cfg;
+    cfg.constants.land_speed_multiplier = 1.0f;
+    MovementSystem sys{cfg};
+    land_system(sys);
+    sys.set_deferred_composition(true);
+    const V2 at = cell_center(20, 50);
+    UnitDesc cd = tank(100, at);
+    cd.type_name = "T26_TEAM";
+    cd.team_container = true;
+    cd.max_speed = 2.0f;
+    cd.turn_rate = 10.0f;
+    CHECK(sys.add_unit(cd));
+    const V2 rel[4] = {{8.0f, 8.0f}, {8.0f, -8.0f}, {-8.0f, 8.0f}, {-8.0f, -8.0f}};
+    std::vector<ObjectId> ids;
+    std::vector<V2> slots;
+    for (ObjectId id = 1; id <= 4; ++id) {
+        UnitDesc d = tank(id, at + rel[id - 1]);
+        d.type_name = "T26_TROOPER";
+        d.max_speed = 2.0f;
+        d.accel = d.decel = 0.1f;
+        d.radius = 3.0f;
+        CHECK(sys.add_unit(d));
+        CHECK(sys.set_team_member_shape(id, 3.0f, 3.0f, 3.0f, 3.0f));
+        ids.push_back(id);
+        slots.push_back(rel[id - 1]);
+    }
+    CHECK(sys.set_land_team(100, ids, slots));
+    CHECK(sys.set_team(100, 100, 1.0f, 2.0f));
+    for (ObjectId id : ids) CHECK(sys.set_team(id, 100, 1.0f, 2.0f));
+    SimRng rng(2605);
+    const auto step = [&](uint32_t f) {
+        sys.tick(f, rng);
+        sys.coordinator_update(f, f, rng);
+    };
+    order(sys, rng, {1}, at + V2{600.0f, 0.0f}, 1);
+    uint32_t g = 1;
+    // (the straggler cap 0x5ab640 holds it a hair under the team speed 2: the members walk at 2 too)
+    for (; g < 400 && !(sys.view(100).speed > 1.99f && sys.view(100).pos.x > at.x + 150.0f); ++g) step(g);
+    const float v0 = sys.view(100).speed;
+    CHECK(v0 > 1.99f && v0 <= 2.0f);
+    const V2 back = at - V2{100.0f, 0.0f};
+    order(sys, rng, {1}, back, g);
+    const auto planned = [&] {
+        const std::span<const V2> lp2 = sys.land_path(100);
+        return !lp2.empty() && distance(lp2.back(), back) < 40.0f;
+    };
+    uint32_t gap = 0;
+    bool gap_ok = true;
+    float gx = sys.view(100).pos.x;
+    for (uint32_t end = g + 10; g < end; ++g) {
+        step(g);
+        if (planned()) break;
+        const UnitView k = sys.view(100);
+        gap_ok = gap_ok && k.walk_state == LocoState::WalkMoving && near(k.speed, v0, 1e-4f) && k.pos.x > gx && !k.team_coast;
+        gx = k.pos.x;
+        ++gap;
+    }
+    CHECK(planned() && gap >= 1 && gap_ok);
+    // the tick of the plan: the coast's first step (v - a; a braking container does not wait for stragglers)
+    const UnitView k0 = sys.view(100);
+    CHECK(k0.team_coast && near(k0.speed, v0 - 0.1f, 1e-4f) && k0.walk_state == LocoState::WalkEndMove);
+    const float yaw0 = k0.yaw, y0 = k0.pos.y;
+    float px = k0.pos.x, pv = k0.speed;
+    bool falls = true;
+    uint32_t coast = 1;
+    ++g;
+    for (uint32_t end = g + 40; g < end; ++g) {
+        step(g);
+        const UnitView k = sys.view(100);
+        if (k.speed == 0.0f) {
+            ++g;
+            break;
+        }
+        // B.8 with T = a: v -= min(a, v - a) (the last step down to a itself)
+        falls = falls && near(pv - k.speed, std::min(0.1f, pv - 0.1f), 1e-4f) && k.yaw == yaw0 && k.pos.y == y0 && k.pos.x > px && k.team_coast;
+        px = k.pos.x;
+        pv = k.speed;
+        ++coast;
+    }
+    const UnitView ks = sys.view(100);
+    std::printf("t26.5 new order behind a squad: %u tick(s) on the old path, coast %u ticks, stopped at x %.3f\n", gap, coast,
+                static_cast<double>(ks.pos.x));
+    CHECK(falls && ks.speed == 0.0f && ks.pos.x == px && !ks.team_coast && coast >= 18);
+    bool turned = false, arrived = false;
+    for (uint32_t end = g + 600; g < end && !arrived; ++g) {
+        step(g);
+        const UnitView k = sys.view(100);
+        turned = turned || (k.speed == 0.0f && k.yaw != yaw0);
+        arrived = k.arrived;
+    }
+    CHECK(turned && arrived && distance(sys.view(100).pos, back) < 5.0f);
+}
+
 // Save inside End Move with a coast: the loaded copy hashes equal and goes on identically.
 void test_t26_coast_save() {
     ::alamo::test::section("t26_coast_save");
@@ -1224,5 +1422,6 @@ int main() {
     test_t26_walk_step();
     test_t26_end_move();
     test_t26_coast_save();
+    test_t26_container_step();  // s78n t26.5
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }

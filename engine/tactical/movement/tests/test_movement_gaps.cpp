@@ -5013,7 +5013,9 @@ static void test_land_squad_speed_order() {
         for (ObjectId id = 1; id <= 9; ++id) CHECK(sys.team_start_delay(id) == 0);  // no start delays (the squad moves)
         CHECK(rng.draws() == draws0);
         const float x0 = sys.view(100).pos.x, yaw0 = sys.view(100).yaw;
-        bool steps = sys.view(100).team_coast;
+        // s78n t26.5 (MOVEMENT §3.5.2 G, FIGHTER_FLYING §7.7 item 5): the coast starts at the path set - the old path stays on
+        // top of the stack until the plan (this tick's plan pass, before the walk)
+        bool steps = !sys.view(100).team_coast;
         for (uint32_t k = 1; k <= 15; ++k, ++f) {  // 15 frames of the rate while it coasts straight on
             sys.tick(f, rng, serial_for);
             steps = steps && near(sys.view(100).speed, vmax - a * static_cast<float>(k), 2e-5f) && sys.view(100).yaw == yaw0 &&
@@ -5399,7 +5401,8 @@ static void test_land_squad_t18_review() {
         back.units = {1};
         back.destination = at;
         sys.move(back, rng, f);
-        CHECK(sys.view(100).team_coast && near(sys.view(100).speed, vmax, 1e-5f));  // the order is not taken at once
+        // the order is not taken at once; s78n t26.5 (MOVEMENT §3.5.2 G): the coast starts at the path set (the tick's plan)
+        CHECK(!sys.view(100).team_coast && near(sys.view(100).speed, vmax, 1e-5f));
         const V2 p0 = sys.view(100).pos;
         bool still = true;
         for (uint32_t n = 0; n < 40; ++n, ++f) {

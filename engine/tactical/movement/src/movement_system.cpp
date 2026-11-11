@@ -837,11 +837,14 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 u.exit_host = -1;  // s78n t18 (MOVEMENT §5.3): a new order ends the garrison-host gate of a unit that left
                 if (u.d.team_container) {
                     // s78n t18 (FIGHTER_FLYING §7.7 item 5): a new order while moving is not taken at once - the
-                    // container brakes at its rate (0x14), coasting straight on, then starts the new path from speed 0
-                    u.coast = u.m.speed > 0.0f;
+                    // container brakes at its rate (0x14), coasting straight on, then starts the new path from speed 0.
+                    // s78n t26.5 (MOVEMENT §3.5.2 G): the coast starts at the path set (set_path_started); until the plan
+                    // a moving container walks on along its old order path (team_walk)
                     u.fturn = false;
-                    u.path_started = false;
-                    if (!u.coast) u.m.state = LocoState::WalkStopped;
+                    if (!(u.m.speed > 0.0f)) {
+                        u.path_started = false;
+                        u.m.state = LocoState::WalkStopped;
+                    }
                 }
                 u.jiggle = V2{};
                 // s78n t23 review fix 6 (MOVEMENT §5.4.1 "The stamp in full" item 7): the order path goes through the push
@@ -1654,11 +1657,20 @@ void MovementSystem::plan_deploy_cap(Unit& u, uint32_t frame) {
 // the collision vector is not asked at the plan) - and keeps the locomotor state and speed. Only a unit moving in 0x12 -
 // 0x14 is affected: a standing one starts its path at its walk's 0x16 either way (then start rule A). A moving unit that is
 // not aligned coasts in End Move (C.1 / C.4), stops at 0x15 and starts the path from 0x16. [port] A squad container keeps
-// its own path_started (team_walk); the Walk byte is set for it and for every non-Walk locomotor.
+// its own path_started (team_walk); the Walk byte is set for it and for every non-Walk locomotor. s78n t26.5 (FIGHTER_FLYING
+// §7.7 item 5, MOVEMENT §3.5.2 G / E): a squad container's new path is never started at the path set (0x5ad140 has no
+// aligned test) - a moving one brakes at its rate in End Move along its facing (Unit::coast), a standing one starts it
+// from 0x16.
 void MovementSystem::set_path_started(Unit& u) const {
     LandMotion& m = u.m;
     m.started = true;
-    if (u.d.team_container || is_air(u) || (u.d.locomotor != LocomotorKind::Default && u.d.locomotor != LocomotorKind::Bike)) return;
+    if (u.d.team_container) {
+        u.path_started = false;
+        u.coast = m.speed > 0.0f;
+        if (!u.coast) m.state = LocoState::WalkStopped;
+        return;
+    }
+    if (is_air(u) || (u.d.locomotor != LocomotorKind::Default && u.d.locomotor != LocomotorKind::Bike)) return;
     const bool moving = m.speed > 0.0f && (m.state == LocoState::WalkStartMove || m.state == LocoState::WalkMoving ||
                                            m.state == LocoState::WalkEndMove);
     if (!moving) return;
@@ -4295,6 +4307,11 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // x Fleeing_Infantry_Speed_Bonus with the rate and the turn rate on a crush-flee path) or its order path
             if (u.d.team_container) {
                 res[i] = team_walk(u, frame);
+                if (res[i].popped) {  // s78n t26.5 (MOVEMENT §3.5.2 C.4 / E): the pushed record ended, walked on along the order path
+                    end_push(u);
+                    u.around.clear();
+                    u.path_change = frame;
+                }
                 continue;
             }
             // s78n t26.2 (MOVEMENT §3.5.2 A): a start turn in place runs in the serial pass below (it reads the clip data

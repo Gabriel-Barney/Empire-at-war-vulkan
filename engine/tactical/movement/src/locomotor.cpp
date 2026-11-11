@@ -203,9 +203,11 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     m.speed = so.v;
     if (so.end_move) m.state = LocoState::WalkEndMove;
     const float v = m.speed;
-    // C.2: the turn budget B = R, x f = v / vmax_u in End Move (0x12 never runs the step: no Walk_Transition). C.3: s = v.
+    // C.2: the turn budget B = R, x f = v / vmax_u in End Move (0x12 never runs the step: no Walk_Transition); s78n t26.5
+    // (E): a land team container's budget is R with no f scaling. C.3: s = v.
+    const bool team = x && x->container;
     float budget = p.turn_rate;
-    if (m.state == LocoState::WalkEndMove) budget *= v / vmax_u;
+    if (m.state == LocoState::WalkEndMove && !team) budget *= v / vmax_u;
     float s = v;
     if (!(v > 0.0f)) return r;
     bool no_turn = false;
@@ -213,12 +215,12 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     for (size_t guard = 0; guard < 4 * m.path.size() + 16; ++guard) {
         // C.4: nothing to walk (no path, on the last waypoint, not started): pop into a started path below (not in End
         // Move; no more turning in this call), else End Move and the coast along the last frame's displacement (a zero
-        // vector stays zero: the point is still tested and committed).
+        // vector stays zero: the point is still tested and committed). s78n t26.5 (E): a container coasts along its facing.
         if (m.path.empty() || m.next >= m.path.size() || !m.started) {
             if (!below || !below->started || m.state == LocoState::WalkEndMove) {
                 m.state = LocoState::WalkEndMove;
                 r.coast = true;
-                const V2 np = m.pos + normalize_retail(m.last_dir) * s;
+                const V2 np = m.pos + (team ? dir_from_deg(m.yaw) : normalize_retail(m.last_dir)) * s;
                 if (!forced && grid && !grid->passable_world(np, p.mask)) {
                     r.blocked = true;
                     return r;
@@ -237,6 +239,8 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
             below = nullptr;
             r.popped = true;
             no_turn = true;
+            // s78n t26.5 (FIGHTER_FLYING §7.2 caller 3): the slots are re-laid along the path below's segment
+            if (x->relay && m.next >= 1 && m.next < m.path.size()) x->relay->push_back(m.path[m.next] - m.path[m.next - 1]);
             continue;
         }
         // C.5: n . (pos - L0) >= -0.001 -> the waypoint is passed (0x5c4920: the turn-done byte cleared)
@@ -259,8 +263,9 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
         // C.7: the travel direction vf +0x288 (0x61e0f0): Movement_Directions_Count 1 = the facing; N > 1 = of the N
         // directions spaced 360 / N from the facing the one with the largest dot product with the wanted direction (the
         // first on ties); <= 0 = the wanted direction
-        V2 t = normalize_retail(dir_from_deg(m.yaw));
-        if (dirs != 1) {
+        // s78n t26.5 (E): a container travels along its facing (cos yaw, sin yaw)
+        V2 t = team ? dir_from_deg(m.yaw) : normalize_retail(dir_from_deg(m.yaw));
+        if (dirs != 1 && !team) {
             V2 wd;
             if (walk_wanted_dir(m, x, wd) && length_sq(wd) > 0.0f) {
                 if (dirs <= 0) {
@@ -321,6 +326,8 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
         ++m.next;  // s > s': on the line - the next waypoint with the rest of the budget
         m.turn_done = false;
         s -= sp;
+        // s78n t26.5 (E, FIGHTER_FLYING §7.2 caller 3): a container re-lays its slots along the new segment
+        if (x && x->relay && m.next < m.path.size()) x->relay->push_back(m.path[m.next] - m.path[m.next - 1]);
     }
     return r;
 }
