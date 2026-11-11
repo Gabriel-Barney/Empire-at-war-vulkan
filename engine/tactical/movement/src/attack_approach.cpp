@@ -510,14 +510,17 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
 // on the uncut path (trim_point, extended, no cell snap): the point the trim tested, also at keep 0 (the path cut to its
 // first node, "the formation can fire from where it stands": every member keeps its own slot around the start). [port] the members then plan singly to those goals in plan_land (no shared
 // formation path). An air lead keeps the plain move the slot loop gave (the plan is for land formations).
-void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame) {
+// s78n t26 review round 3: no item-6 stop when T is unseen (LandAttack::unseen: 0x40edd0's fog / stealth terms, FIGHTER_FLYING
+// §4.11 E [H]); the members a re-path keeps (G 5, `kept`) get no goal and are not stopped by a failed plan.
+void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame,
+                                 const std::vector<uint8_t>& kept) {
     const Unit& lead = units_[idx[f.members[0]]];
     if (is_air(lead)) return;
     const ObjectId target = order.attack.target;
     const bool guard = order.attack.guard;
     std::vector<ObjectId> ids;
     for (const uint32_t m : f.members) ids.push_back(units_[idx[m]].d.id);
-    if (fire_test_ && !guard) {
+    if (fire_test_ && !guard && !order.attack.unseen) {
         bool all = true;
         for (const uint32_t m : f.members) {
             const Unit& x = units_[idx[m]];
@@ -543,7 +546,9 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
     std::vector<V2> path;
     if (!attack_path(lead, f.mask, f.centroid, g, path)) {
         // the plan fails: the members do not move ([port] stopped and failed, as the batch-2 zone failure; the block kept)
-        for (const ObjectId id : ids) {
+        for (const uint32_t m : f.members) {
+            if (kept[m]) continue;
+            const ObjectId id = units_[idx[m]].d.id;
             const ObjectId one[] = {id};
             Unit* x = unit_ptr(id);
             const float th = x->atk_theta, rh = x->atk_rho;
@@ -612,7 +617,7 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
     if (uncut.empty()) goal_s = path_length(path);
     for (const Slot& s : f.slots) {
         Unit& x = units_[idx[s.member]];
-        if (is_air(x)) continue;
+        if (is_air(x) || kept[s.member]) continue;
         V2 goal = path.back();
         trim_point(lay, goal_s, -s.back, s.lateral, true, goal);
         x.goal = goal;

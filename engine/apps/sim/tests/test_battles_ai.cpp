@@ -689,6 +689,9 @@ void test_battle_attack_team() {
             return best;
         };
         if (!ordered) {
+            // s78n t26 review round 3: the test data has no reveal source, so the target would be hidden (FIGHTER_FLYING §4.11 C / E: no
+            // land stop, no re-path while moving); this scenario is about a visible target (fog: test_land_attack_unseen)
+            if (b->fog()) b->fog()->reveal_all(1);  // the attackers are player 1's
             for (const objects::ObjectHandle h : st.all_objects()) {
                 if (!st.alive(h)) continue;
                 if (st.type(h) == team && st.owner(h) == 0 && target == objects::kNoObjectId && members_of(st.id(h)).size() >= 2) {
@@ -3694,6 +3697,9 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
             }
         }
         if (stage == 0) {
+            // s78n t26 review round 3: the test data has no reveal source, so the target would be hidden (FIGHTER_FLYING §4.11 C / E: no
+            // land stop, no re-path while moving); this scenario is about a visible target (fog: test_land_attack_unseen)
+            if (b->fog()) b->fog()->reveal_all(0);
             // the human's squads (ascending container id) and the invader's lowest-id squad member
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
             for (size_t i = 0; i < cs.unit_count(); ++i) {
@@ -3882,6 +3888,9 @@ LandReachRun run_land_reach(const Data& d, bool min_range) {
         auto& cs = const_cast<tc::CombatSystem&>(b->combat());
         const mv::MovementSystem& ms = b->movement();
         if (stage == 0) {
+            // s78n t26 review round 3: the test data has no reveal source, so the target would be hidden (FIGHTER_FLYING §4.11 C / E: no
+            // land stop, no re-path while moving); this scenario is about a visible target (fog: test_land_attack_unseen)
+            if (b->fog()) b->fog()->reveal_all(0);
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
             for (size_t i = 0; i < cs.unit_count(); ++i) {
                 const auto id = cs.unit_id_at(i);
@@ -4185,6 +4194,9 @@ LandAttackTwoRun run_land_attack_two(const Data& d) {
         auto& cs = const_cast<tc::CombatSystem&>(b->combat());
         const mv::MovementSystem& ms = b->movement();
         if (stage == 0) {
+            // s78n t26 review round 3: the test data has no reveal source, so the target would be hidden (FIGHTER_FLYING §4.11 C / E: no
+            // land stop, no re-path while moving); this scenario is about a visible target (fog: test_land_attack_unseen)
+            if (b->fog()) b->fog()->reveal_all(0);
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
             for (size_t i = 0; i < cs.unit_count(); ++i) {
                 const auto id = cs.unit_id_at(i);
@@ -4774,6 +4786,217 @@ void test_land_attack_formation_stop() {
     CHECK(r.ordered && r.one_form && r.window > 31 && r.stops_in_window == 0);
 }
 
+// s78n t26 review round 3 (FIGHTER_FLYING §4.11 C 1 / C 3 / C 4 / E [H]): the land attack block's fog and stealth terms.
+//   hidden: one squad (the fog revealed for its player, the test data has no reveal source) ordered onto an enemy squad 1300
+//   away; 2 frames into the chase the fog comes back (Reveal_All undone); once the enemy's TEAM container is hidden for player
+//   0 (FOG_OF_WAR §5.2, after its reveal memory) the enemy squad is moved 300 sideways (> R = 125). While the squad walks no 30-frame check may re-path
+//   (0x4165f0 false for a hidden non-guard top) or land-stop (c false): the goal is kept for more than one check interval.
+//   After arrival (states 3 / 4, C 3) d = |L - P| >= 40 (P = the hidden squad's position) plans again toward P: a new goal
+//   nearer the moved enemy within one check.
+//   stealthed: S10_Trooper gets a Stealth_Ability (unit ability STEALTH); the attackers' fire range +140 % (600: they stop
+//   beyond the enemy's 250, so it never fires and breaks stealth). After the attack formation has arrived, every enemy
+//   trooper turns stealth on; the next check (C 3: P = the lead's own position, d = 0 < 40) turns the block into a position
+//   block at L: the record goes (BattleStats::attack_unseen_drops + 1), every attacker's attack order and attack goal are
+//   cleared (0x38d730(member, null)), the movement's attack block too, and the squad stays where it stands.
+struct LandAttackUnseenRun {
+    bool ordered = false, hidden = false, moved = false, goal_kept = false, arrived = false, replanned = false, nearer = false;
+    uint32_t window = 0, replans_moving = 0, stops_moving = 0, replan_frames = 0;
+    bool stealthed = false, dropped = false, orders_cleared = false, block_cleared = false, stood = false;
+    uint32_t drop_frames = 0;
+};
+
+std::string trooper_stealth(std::string t) {  // S10_Trooper: unit ability STEALTH + its Stealth_Ability
+    const std::string at = "<GroundInfantry Name=\"S10_Trooper\">";
+    if (const size_t p = t.find(at); p != std::string::npos)
+        t.insert(p + at.size(),
+                 "<Unit_Abilities_Data SubObjectList=\"Yes\"><Unit_Ability><Type>STEALTH</Type><Recharge_Seconds>60.0</Recharge_Seconds>"
+                 "<Expiration_Seconds>600.0</Expiration_Seconds><GUI_Activated_Ability_Name>S10_Stealth</GUI_Activated_Ability_Name>"
+                 "</Unit_Ability></Unit_Abilities_Data><Abilities SubObjectList=\"Yes\"><Stealth_Ability Name=\"S10_Stealth\">"
+                 "<Activation_Style>User_Input</Activation_Style></Stealth_Ability></Abilities>");
+    return t;
+}
+
+LandAttackUnseenRun run_land_attack_unseen(const Data& d, bool stealth) {
+    LandAttackUnseenRun out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 9000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    ClashSession s(d, 0, opt, {"S10_Squad"}, {}, true);
+    if (!s.gs) return out;
+    int stage = 0;
+    uint32_t stage_frame = 0, replans0 = 0, stops0 = 0;
+    objects::ObjectId sq = objects::kNoObjectId, tcid = objects::kNoObjectId, target = objects::kNoObjectId;
+    std::vector<objects::ObjectId> mem, tmem;
+    Vec3 dir{}, perp{};
+    mv::V2 goal0{}, pos0{};
+    for (uint64_t t = 0; t < 9000 && stage < 9; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto& cs = const_cast<tc::CombatSystem&>(b->combat());
+        const mv::MovementSystem& ms = b->movement();
+        if (stage == 0) {
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                cs.make_invulnerable(id, 1000000, b->frame());
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() < 2 || !st.alive(th) || !ms.has_unit(static_cast<objects::ObjectId>(tid))) continue;
+                if (st.owner(th) == 0 && sq == objects::kNoObjectId) {
+                    sq = static_cast<objects::ObjectId>(tid);
+                    mem = m;
+                } else if (st.owner(th) == 1 && target == objects::kNoObjectId) {
+                    tcid = static_cast<objects::ObjectId>(tid);
+                    tmem = m;
+                    target = m.front();
+                }
+            }
+            CHECK(sq != objects::kNoObjectId && target != objects::kNoObjectId && b->fog() != nullptr);
+            if (sq == objects::kNoObjectId || target == objects::kNoObjectId || !b->fog()) break;
+            b->fog()->reveal_all(0);  // nothing hidden for player 0
+            const Vec3 tp = st.position(st.find(target)), ap = st.position(st.find(sq));
+            const float dx = ap.x - tp.x, dy = ap.y - tp.y, dl = std::sqrt(dx * dx + dy * dy);
+            dir = dl > 1.0f ? Vec3{dx / dl, dy / dl, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            perp = Vec3{-dir.y, dir.x, 0.0f};
+            CHECK(b->teleport(*tm, sq, Vec3{tp.x + dir.x * (stealth ? 900.0f : 1300.0f), tp.y + dir.y * (stealth ? 900.0f : 1300.0f), ap.z},
+                              st.facing(st.find(sq))));
+            if (stealth)
+                for (const objects::ObjectId id : mem)  // fire range +140 % (250 -> 600)
+                    if (tc::ModifierSet* m = cs.unit_modifiers(id))
+                        m->set_by_source(tc::ModList::FireRange, 0x54325233, 1.4f, tc::kPermanent, 0x54325233u, -0x5433);
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        const mv::UnitView v = ms.view(sq);
+        if (stage == 1) {
+            if (b->frame() < stage_frame + 2) continue;
+            CHECK(!b->fog_object_hidden(0, tcid, true));
+            out.ordered = b->order_attack(*tm, 0, mem, target, s.host->random().synced()) == commands::RejectReason::None;
+            CHECK(out.ordered && b->attack_blocks() == 1);
+            stage = stealth ? 5 : 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 2) {  // hidden: the fog back 2 frames into the chase; the squad hides once its memory lapses (~7 s)
+            if (b->frame() < stage_frame + 2) continue;
+            if (!b->fog()->reveal_all_players().empty()) b->fog()->undo_reveal_all(0);
+            out.hidden = b->fog_object_hidden(0, tcid, true);
+            if (!out.hidden) {
+                if (b->frame() > stage_frame + 600 || !v.has_goal) stage = 9;
+                continue;
+            }
+            CHECK(v.has_goal);
+            const objects::ObjectHandle th = st.find(tcid);
+            const Vec3 tp = st.position(th);
+            out.moved = b->teleport(*tm, tcid, Vec3{tp.x + perp.x * 300.0f, tp.y + perp.y * 300.0f, tp.z}, st.facing(th));
+            replans0 = ms.stats().attack_replans;
+            stops0 = b->stats().attack_land_stops;
+            goal0 = v.goal;
+            out.goal_kept = true;
+            stage = 3;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 3) {
+            if (v.has_goal) {
+                ++out.window;
+                out.goal_kept = out.goal_kept && v.goal == goal0;
+                out.replans_moving = ms.stats().attack_replans - replans0;
+                out.stops_moving = b->stats().attack_land_stops - stops0;
+            } else {
+                out.arrived = v.speed == 0.0f || out.arrived;
+                replans0 = ms.stats().attack_replans;
+                stage = 4;
+                stage_frame = b->frame();
+            }
+            if (b->frame() > stage_frame + 4000) stage = 9;
+            continue;
+        }
+        if (stage == 4) {
+            if (v.has_goal && ms.stats().attack_replans > replans0) {
+                out.replanned = true;
+                out.replan_frames = b->frame() - stage_frame;
+                const Vec3 tp = st.position(st.find(tcid));
+                const auto dd = [&](mv::V2 p) { return std::sqrt((p.x - tp.x) * (p.x - tp.x) + (p.y - tp.y) * (p.y - tp.y)); };
+                out.nearer = dd(v.goal) < dd(goal0);
+                stage = 9;
+            } else if (b->frame() > stage_frame + 40) {
+                stage = 9;
+            }
+            continue;
+        }
+        if (stage == 5) {  // stealthed: wait for the arrival
+            if (!v.has_goal && v.speed == 0.0f && b->frame() > stage_frame + 30) {
+                out.arrived = b->attack_blocks() == 1 && v.atk_target != -1;
+                std::vector<objects::ObjectId> on(tmem.begin(), tmem.end());
+                (void)b->abilities().set_unit_ability_mode(on, tactical::abilities::kStealth, true, b->frame());
+                out.stealthed = b->abilities().is_stealthed(target, b->frame());
+                stops0 = b->stats().attack_unseen_drops;
+                pos0 = v.pos;
+                stage = 6;
+                stage_frame = b->frame();
+            } else if (b->frame() > stage_frame + 4000) {
+                stage = 9;
+            }
+            continue;
+        }
+        if (stage == 6) {
+            if (b->attack_blocks() == 0) {
+                out.dropped = b->stats().attack_unseen_drops == stops0 + 1;
+                out.drop_frames = b->frame() - stage_frame;
+                out.orders_cleared = true;
+                for (const objects::ObjectId id : mem)
+                    out.orders_cleared = out.orders_cleared && cs.ordered_target(id) == tc::kNoObject && cs.attack_goal(id) == tc::kNoObject;
+                out.block_cleared = v.atk_target == -1 && v.atk_form == 0 && v.atk_rho == 0.0f;
+                stage = 7;
+                stage_frame = b->frame();
+            } else if (b->frame() > stage_frame + 40) {
+                stage = 9;
+            }
+            continue;
+        }
+        if (stage == 7) {  // it stays where it stands (no move toward L, no new attack)
+            if (b->frame() < stage_frame + 60) continue;
+            out.stood = !v.has_goal && std::abs(v.pos.x - pos0.x) < 1.0f && std::abs(v.pos.y - pos0.y) < 1.0f;
+            stage = 9;
+        }
+    }
+    return out;
+}
+
+void test_land_attack_unseen() {
+    {
+        auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                           false, false, false, true);
+        const LandAttackUnseenRun r = run_land_attack_unseen(*d, false);
+        std::printf("  land attack, target hidden mid-chase: ordered %d, hidden %d, moved 300 %d; walking %u frame(s), re-paths %u, "
+                    "land stops %u, goal kept %d; arrived %d, re-planned toward it %d after %u frame(s), nearer %d\n",
+                    r.ordered ? 1 : 0, r.hidden ? 1 : 0, r.moved ? 1 : 0, r.window, r.replans_moving, r.stops_moving,
+                    r.goal_kept ? 1 : 0, r.arrived ? 1 : 0, r.replanned ? 1 : 0, r.replan_frames, r.nearer ? 1 : 0);
+        CHECK(r.ordered && r.hidden && r.moved && r.window > 31 && r.replans_moving == 0 && r.stops_moving == 0 && r.goal_kept);
+        CHECK(r.arrived && r.replanned && r.replan_frames <= 31 && r.nearer);
+    }
+    {
+        auto d = squad_data_patched("_stealth", trooper_stealth);
+        const LandAttackUnseenRun r = run_land_attack_unseen(*d, true);
+        std::printf("  land attack, target stealthed on arrival: ordered %d, arrived %d, stealthed %d; dropped %d after %u frame(s), "
+                    "orders cleared %d, movement block cleared %d, stood %d\n",
+                    r.ordered ? 1 : 0, r.arrived ? 1 : 0, r.stealthed ? 1 : 0, r.dropped ? 1 : 0, r.drop_frames,
+                    r.orders_cleared ? 1 : 0, r.block_cleared ? 1 : 0, r.stood ? 1 : 0);
+        CHECK(r.ordered && r.arrived && r.stealthed && r.dropped && r.drop_frames <= 31 && r.orders_cleared && r.block_cleared && r.stood);
+    }
+}
+
 void test_land_squad_garrison_save_load() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, false, true);
@@ -5013,6 +5236,7 @@ int main(int argc, char** argv) {
     test_land_guard();  // s78n t25.4
     test_land_move_to_object();  // s78n t26 review round 2
     test_land_attack_formation_stop();  // s78n t26 review round 2
+    test_land_attack_unseen();          // s78n t26 review round 3
     test_land_attack_reach();  // s78n t20 review follow-ups
     test_land_death_clone_obstacle();  // s78n t20 batch 1 item 1.5
     test_vehicle_landing_exit();

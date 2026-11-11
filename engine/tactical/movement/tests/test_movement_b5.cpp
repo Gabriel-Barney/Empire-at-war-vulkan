@@ -593,6 +593,86 @@ void test_scene_replan() {
                 static_cast<double>(b.goal.x), static_cast<double>(b.goal.y));
 }
 
+// s78n t26 review round 3 (FIGHTER_FLYING §4.11 E [H]: c = 0x40edd0 is false when the object is hidden for members[0]'s
+// owner, or stealthed and members[0]'s type lacks Target_Stealth_Units; MOVEMENT §4.3.2 item 6 needs c true): the
+// scene_all_in_range mover (the target point 200 away, the fire hook true) with LandAttack::unseen set gets no item-6 stop -
+// a path and a goal, attack_stops 0; unset, the stop takes it.
+void test_scene_unseen() {
+    ::alamo::test::section("scene_unseen");
+    for (const bool unseen : {false, true}) {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        UnitDesc t = attacker(900, kO + V2{200.0f, 0.0f}, 5.0f);
+        t.owner = 2;
+        CHECK(sys.add_unit(t));
+        const V2 c = kO + V2{200.0f, 0.0f};
+        geometric_fire(sys, c, 255.0f);
+        SimRng rng(7);
+        MoveOrder o = attack_order({10}, 900, c, 5.0f, 255.0f, true);
+        o.attack.unseen = unseen;
+        sys.move(o, rng, 1);
+        const UnitView v = sys.view(10);
+        CHECK(v.has_goal == unseen && sys.stats().attack_stops == (unseen ? 0u : 1u) && v.atk_form != 0 && v.atk_target == 900);
+        std::printf("unseen %d: goal %d, item-6 stops %u\n", unseen ? 1 : 0, v.has_goal ? 1 : 0, sys.stats().attack_stops);
+    }
+}
+
+// s78n t26 review round 3 (FIGHTER_FLYING §4.11 G 5 [H]): "with a non-guard object top, a member that is in max range
+// (slot 44), not inside min range (slot 45) and not moving (locomotor vf +0x1c0(0) false) keeps its own path" when the
+// moving formation re-paths (0x4192b0 step 4). Two vehicles 50 apart, one attack formation, 1500 from the target; after 60
+// frames the first is halted (in range, standing: the host's in_range), the target moves 300 sideways and the formation
+// re-paths (LandAttack::repath): the halted member gets no goal and stays where it stands, its slot (theta, rho) and
+// attack formation kept; the walking one gets a new goal. Controls: the arrived re-plan (0x410a60, repath unset) and a
+// re-path of an in-range member that still walks give both members a goal.
+void test_scene_repath_keep() {
+    ::alamo::test::section("scene_repath_keep");
+    for (const int k : {0, 1, 2}) {  // 0: re-path, halted; 1: arrived re-plan, halted; 2: re-path, walking
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 50.0f})));
+        V2 c = kO + V2{1500.0f, 0.0f};
+        UnitDesc t = attacker(900, c, 5.0f);
+        t.owner = 2;
+        CHECK(sys.add_unit(t));
+        geometric_fire(sys, c, 255.0f);
+        SimRng rng(7);
+        sys.move(attack_order({10, 11}, 900, c, 5.0f, 255.0f), rng, 1);
+        CHECK(sys.view(10).atk_form != 0 && sys.view(10).atk_form == sys.view(11).atk_form);
+        uint32_t f = 1;
+        for (; f < 400 && !(sys.view(10).speed > 0.5f && sys.view(11).speed > 0.5f); ++f) sys.tick(f, rng);
+        CHECK(sys.view(10).has_goal && sys.view(11).has_goal && sys.view(10).speed > 0.0f);
+        if (k != 2) {
+            const ObjectId one[] = {10};
+            sys.halt(one, f);
+            for (; f < 400 && sys.view(10).speed > 0.0f; ++f) sys.tick(f, rng);
+        }
+        const UnitView a = sys.view(10);
+        CHECK(a.has_goal == (k == 2) && sys.view(11).has_goal);
+        c = c + V2{0.0f, 300.0f};
+        CHECK(sys.teleport(900, c, 0.0f, 0.0f, f));
+        geometric_fire(sys, c, 255.0f);
+        MoveOrder o = attack_order({10, 11}, 900, c, 5.0f, 255.0f);
+        o.attack.replan = true;
+        o.attack.repath = k != 1;
+        o.attack.units[0].in_range = true;  // unit 10: in max range, not inside min range (the host's slots 44 / 45)
+        sys.move(o, rng, f);
+        const UnitView b = sys.view(10), w = sys.view(11);
+        CHECK(w.has_goal && b.atk_form == a.atk_form && b.atk_theta == a.atk_theta && b.atk_rho == a.atk_rho && w.atk_form == a.atk_form);
+        if (k == 0) {
+            CHECK(!b.has_goal && b.pos == a.pos);
+            for (uint32_t e = f + 30; f < e; ++f) sys.tick(f, rng);
+            CHECK(!sys.view(10).has_goal && sys.view(10).pos == a.pos && sys.view(11).has_goal);
+        } else {
+            CHECK(b.has_goal);
+        }
+        std::printf("re-path keep (%s): member 1 goal %d (stands %d), member 2 goal %d\n",
+                    k == 0 ? "re-path, standing" : k == 1 ? "arrived re-plan, standing" : "re-path, walking", b.has_goal ? 1 : 0,
+                    sys.view(10).pos == a.pos ? 1 : 0, w.has_goal ? 1 : 0);
+    }
+}
+
 // §4.2 item 6: two Standard vehicles 50 apart go solo (two formations) when the 3-D distance to the target is below
 // r_seed + E_r + 60 = 21.2 + 255 + 60; far away they form one formation of two.
 void test_scene_solo() {
@@ -818,5 +898,7 @@ int main() {
     test_scene_short_range();      // s78n t25 review fixes
     test_scene_guard_formation();
     test_scene_workers();
+    test_scene_unseen();  // s78n t26 review round 3
+    test_scene_repath_keep();
     return ::alamo::test::report("alamo_tactical_movement_b5_tests");
 }

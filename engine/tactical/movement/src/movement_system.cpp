@@ -929,6 +929,16 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     // (the host's skip_destination_check) or a queued order (no composition pass). It never refuses the order: it only
     // moves the centre the formations' slots are laid around.
     if (position_order && !forms.empty()) destination_check(order, idx, forms, group_c);
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 G 5 [H]): a re-path of a moving formation on a non-guard block leaves
+    // a member that is in range (slots 44 / 45 from where it stands, the host's in_range) and not moving (no goal, speed 0:
+    // locomotor vf +0x1c0(0) false) on its own path - no new goal, no path, its slot kept
+    std::vector<uint8_t> atk_keep(idx.size(), 0);
+    if (replan && order.attack.repath && !order.attack.guard)
+        for (size_t n = 0; n < idx.size(); ++n) {
+            const Unit& u = units_[idx[n]];
+            const LandAttackUnit* e = attack_entry(order, u.d.id);
+            atk_keep[n] = e && e->in_range && !u.has_goal && !(u.m.speed > 0.0f) ? 1 : 0;
+        }
     {
         for (const LandForm& lf : forms) {
             const std::vector<uint32_t>& f = lf.members;
@@ -936,6 +946,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             const float fspeed = lf.speed;
             const uint32_t form_id = lf.keep_id != 0 ? lf.keep_id : ++form_serial_;  // s78n t25.2: a re-plan keeps it
             for (const Slot& s : lf.slots) {
+                if (atk_keep[s.member]) continue;  // s78n t26 review round 3: G 5
                 Unit& u = units_[idx[s.member]];
                 u.large_hover_index = -1;
                 const V2 exact = slot_world(lf.centre, fwd, s);
@@ -1022,7 +1033,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     if (attack) {
         ++(replan ? stats_.attack_replans : stats_.attack_orders);
         if (!replan) attack_slots(order, idx, forms);
-        for (const LandForm& lf : forms) attack_plan(order, idx, lf, frame);
+        for (const LandForm& lf : forms) attack_plan(order, idx, lf, frame, atk_keep);
     }
     // s78n t14 (FIGHTER_FLYING §7.3 item 2, the path-set hook 0x5ad140 for a kind-1 path): a squad container standing still
     // (speed 0) that gets this move draws every steering member's start delay, synced int [0, Max_Move_Frame_Delay], in team
@@ -1453,6 +1464,16 @@ void MovementSystem::halt(std::span<const ObjectId> ids, uint32_t frame) {
         u->m.speed = v;  // the speed is kept: the unit brakes through End Move
         u->m.state = s;
         brake_to_stop(*u, frame);
+    }
+}
+
+void MovementSystem::clear_attack_block(std::span<const ObjectId> ids) {
+    for (const ObjectId id : ids) {
+        Unit* u = unit_ptr(order_id(id));
+        if (!u) continue;
+        u->atk_theta = u->atk_rho = 0.0f;
+        u->atk_form = 0;
+        u->atk_target = -1;
     }
 }
 

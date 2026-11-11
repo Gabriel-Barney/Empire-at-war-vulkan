@@ -183,6 +183,14 @@ struct LandAttack {
     bool guard = false;      // a guard block (s78n t25.4: the guard L rule, the guard trim, no item-6 stop, no solo rule)
     bool trim = true;        // 0x410e90's gate: T not fogged for the first member's owner, not stealthed (host)
     bool replan = false;     // a re-plan (0x410a60 / 0x4192b0): no split, no slot test, the slots and formations kept
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 E / C 4 [H]): 0x40edd0's fog and stealth terms - T hidden for the
+    // first unit's owner (FOW_Object_Hidden, force 1) or stealthed and the first unit's type without Target_Stealth_Units
+    // (host). c is then false: no "every member can fire" stop (item 6).
+    bool unseen = false;
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 G 5 [H]): a re-path of a moving formation (0x4192b0 step 4, not the
+    // arrived re-plan 0x410a60) on a non-guard block - a member in range (LandAttackUnit::in_range) that is not moving
+    // (no goal, speed 0) keeps its own path: no new goal, its slot kept.
+    bool repath = false;
     std::vector<LandAttackUnit> units;  // one entry per order unit (looked up by id)
 };
 
@@ -388,6 +396,10 @@ public:
     // squad container brakes through End Move (brake_to_stop; s78n t26.4: a Walk unit keeps its speed and state and its walk
     // coasts in End Move, MOVEMENT §3.5.2 C.1 / C.4). [port] Other locomotors (and space) stop as stop() does.
     void halt(std::span<const ObjectId> ids, uint32_t frame);
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 C 3 [H]): the arrived formation's object block becomes a position
+    // block at L (Set_Move kind 1): the units leave their attack block (atk_theta / atk_rho / atk_form / atk_target), no
+    // path or speed change ([port] no new plan toward L: the formation stands within 40 of it).
+    void clear_attack_block(std::span<const ObjectId> ids);
     // s78n t25.2 (MOVEMENT §4.3.2 items 6 - 7): "this mover can fire at the target from p" - los_only false: not inside its
     // min range (TARGETING slot 46 at p), in max range (slot 43 at p) and the line of fire clear; true (guard blocks):
     // the line of fire only. A mover that is not tested answers true. Called from move() only (serial). Unset: no fire
@@ -1685,7 +1697,9 @@ private:
     bool attack_path(const Unit& lead, uint32_t mask, V2 centroid, V2& g, std::vector<V2>& path) const;
     void attack_slots(const MoveOrder& order, const std::vector<uint32_t>& idx, const std::vector<LandForm>& forms);
     bool arc_slot_test(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, float hx, float hy, V2 p) const;
-    void attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame);
+    // `kept` (indexed like idx): the members a re-path leaves on their own path (LandAttack::repath, G 5)
+    void attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame,
+                     const std::vector<uint8_t>& kept);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                     const std::vector<uint32_t>& delays, uint32_t serial);
     void park_space(Unit& u, uint32_t frame);

@@ -176,6 +176,8 @@ struct BattleStats {
     // s78n t20 stage A (land attack blocks; not saved): approaches re-issued by the 30-frame checks, land stops, and
     // re-approaches skipped because their goal was where the mover stood (s78n t25.3: not retail, dropped - always 0).
     uint32_t attack_reissues = 0, attack_land_stops = 0, attack_reissue_skips = 0;
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 C 3): blocks dropped after arrival on a hidden / stealthed target
+    uint32_t attack_unseen_drops = 0;
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -1624,6 +1626,11 @@ private:
     //   - moving, c, not stopping (the lead in Walk End Move, or flag 0x01 and the lead without a path) and D <= R ->
     //     the land stop of every member (0x4192b0 / 0x40e7a0);
     //   - moving and (stopping and not c, or D > R) -> plan again.
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 C / E [H]): c is false when the target is hidden for the lead's owner
+    // or stealthed without Target_Stealth_Units; a hidden target is never re-pathed to while moving (0x4165f0 false);
+    // after arrival an unseen target gives P (hidden: its position; stealthed: the lead's own) and d = |centroid - P|:
+    // d >= 40 plans again toward P, d < 40 drops the block (a position block at the centroid, every unit's attack order
+    // and attack goal cleared).
     // A plan (land_attack_order, replan) is the movement's attack block (MOVEMENT §4.3.2 items 6 - 8): no path when
     // every member can fire, else the path to the staged target point, cut back to where every member can fire.
     // s78n t25.3: the re-plan takes every block on the same target whose mover is in the same attack formation
@@ -1661,8 +1668,15 @@ private:
     // stop took them, None otherwise. Land only.
     // s78n t25.4: `guard` = a guard block on the object (Lua Guard_Target, flags 0x02, MOVEMENT §4.3.2 items 1 / 2 / 7):
     // not staged (G = C), each engagement range capped at Land_Guard_Range, the guard L rule and guard trim in the movement.
+    // s78n t26 review round 3: c's fog / stealth terms (attack_target_unseen for the first unit) gate the item-6 stop
+    // (mv::LandAttack::unseen); `repath` = a re-path of a moving formation (FIGHTER_FLYING §4.11 G 5: in-range members
+    // that stand keep their own path, mv::LandAttack::repath).
     AttackPlan land_attack_order(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp,
-                                 uint8_t flags, bool replan, SimRng& rng, bool guard = false);
+                                 uint8_t flags, bool replan, SimRng& rng, bool guard = false, bool repath = false);
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 C / E [H]): `target` hidden for `unit`'s owner (FOW_Object_Hidden
+    // 0x35f470, force 1), or stealthed (0x39b140) while `unit`'s type lacks Target_Stealth_Units.
+    void attack_target_unseen(const objects::ObjectStore& st, const Unit& unit, objects::ObjectId target, bool& hidden,
+                              bool& stealthed);
     // s78n t25.3 (0x40e260, TACTICAL_COMBAT §2.8): G = T's position, unless the unit with the largest
     // Targeting_Min_Attack_Distance is inside that min range of T: then min + 0.2 x (base range - min) from T toward it.
     Vec3 attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp);
