@@ -78,12 +78,17 @@ void wall(MovementSystem& sys, int32_t x0, int32_t x1, int32_t y0, int32_t y1) {
 // planned straight after the start delay), a wall of cells
 // x = 20, y = 17 .. 23 is stamped across its path. The step into the wall fails: speed 0, the position unchanged, one
 // Terrain record with one participant (made in the commit, decided on the next tick). The decision pushes a kind-2 detour
-// owned by the record whose rejoin point lies at least D + 2 = r_u + 42 ahead along the ordered path; the vehicle turns
-// in place at speed 0 (6 degrees a tick) until it faces the detour's first leg exactly, then walks it; the record ends
-// at its first service after the detour is popped; the order arrives with no re-plan. Serial and 4 workers give the
-// same digest every tick.
+// owned by the record whose rejoin point lies at least D + 2 = r_u + 42 ahead along the ordered path. s78n t26.2
+// (MOVEMENT §5.4.7 item 6, §3.5.2 A / B.4 / B.7, §3.5.1 item 1): the detour's waypoint 0 has speed fraction 0, so on
+// that tick the corner cap (turn-done clear, the facing off the leg) sends the unit to End Move, where T = a: one creep
+// step of min(acc, a) = 1 x 1.56 (accel / decel unset: the max speed, §3.4) [port: toward the waypoint until t26.4, retail along
+// the facing]; on the next tick End Move at v <= a stops (0x15) and restarts: the start rule fails (fraction 0) and the
+// unit turns in place at speed 0 (state 0x10 at R = 6 x 1.56, no stopped rate) until a frame leaves rate over, landing on
+// the first leg exactly, then walks it in the same tick; the record ends at its first service after the detour is
+// popped; the order arrives with no re-plan. Serial and 4 workers give the same digest every tick.
 struct DetourOut {
-    bool failed_step_ok = false, record_ok = false, detour_ok = false, turned_ok = false, ended_ok = false, arrived = false;
+    bool failed_step_ok = false, record_ok = false, detour_ok = false, creep_ok = false, turned_ok = false, ended_ok = false,
+         arrived = false;
     uint32_t fail_frame = 0, turn_frames = 0, pop_frame = 0, records = 0, detours = 0, replans = 0;
     float rejoin_ahead = 0.0f, first_leg = 0.0f, yaw_at_move = 0.0f;
     std::vector<uint64_t> crc;
@@ -130,7 +135,12 @@ DetourOut run_detour(const ParallelFor& pf) {
                 heading = heading_deg(top[1] - top[0]);
                 r.first_leg = heading;
             }
+            // End Move from the corner cap at fraction 0: one creep step at T = a; the turn that follows aims at the detour's
+            // waypoint 1 from where the creep ended
+            if (top.size() >= 2) heading = heading_deg(top[1] - v.pos);
+            r.creep_ok = std::fabs(v.speed - 1.0f * 1.56f) < 1e-5f && std::fabs(distance(v.pos, b.pos) - v.speed) < 1e-3f && v.pushed;
             turning = true;
+            continue;
         }
         if (turning && !moved_after) {
             if (v.pos == b.pos) {
@@ -139,9 +149,9 @@ DetourOut run_detour(const ParallelFor& pf) {
             } else {
                 moved_after = true;
                 r.yaw_at_move = v.yaw;
-                // it starts to move only when the start-of-tick facing was within one tick's turn of the leg, and the
-                // move lands the facing on the leg exactly
-                r.turned_ok = std::fabs(wrap_deg(heading - b.yaw)) <= 6.0f + 1e-4f && std::fabs(wrap_deg(heading - v.yaw)) < 1e-3f;
+                // it starts to move only when the start-of-tick facing was within one tick's turn (R = 6 x 1.56) of the
+                // leg (the frame that leaves rate over), and the turn lands the facing on the leg exactly
+                r.turned_ok = std::fabs(wrap_deg(heading - b.yaw)) < 6.0f * 1.56f + 1e-4f && std::fabs(wrap_deg(heading - v.yaw)) < 1e-3f;
             }
         }
         // the detour is popped in the commit pass; the record sees that at its next service (the next tick's driver pass)
@@ -167,15 +177,15 @@ void test_terrain_detour() {
     const float ru = std::sqrt(10.0f * 10.0f + 6.0f * 6.0f);
     CHECK(s.fail_frame > 0 && s.failed_step_ok && s.record_ok);
     CHECK(s.detour_ok && s.rejoin_ahead >= ru + 42.0f - 1e-3f);
-    CHECK(s.turn_frames >= 3 && s.turned_ok);
+    CHECK(s.creep_ok && s.turn_frames >= 3 && s.turned_ok);
     CHECK(s.pop_frame > 0 && s.ended_ok && s.arrived);
     CHECK(s.records == 1 && s.detours == 1 && s.replans == 0);
     CHECK(s.crc == p.crc);
-    std::printf("terrain detour: failed step at %u, rejoin %.2f ahead (>= r_u + 42 = %.2f), first leg %.2f deg, %u turning "
+    std::printf("terrain detour: failed step at %u, rejoin %.2f ahead (>= r_u + 42 = %.2f), first leg %.2f deg, creep %d, %u turning "
                 "ticks, yaw at the first move %.4f, popped at %u, arrived %d, records %u, detours %u, re-plans %u, serial = 4 "
                 "workers %d (%zu ticks)\n",
                 s.fail_frame, static_cast<double>(s.rejoin_ahead), static_cast<double>(ru + 42.0f), static_cast<double>(s.first_leg),
-                s.turn_frames, static_cast<double>(s.yaw_at_move), s.pop_frame, s.arrived ? 1 : 0, s.records, s.detours, s.replans,
+                s.creep_ok ? 1 : 0, s.turn_frames, static_cast<double>(s.yaw_at_move), s.pop_frame, s.arrived ? 1 : 0, s.records, s.detours, s.replans,
                 s.crc == p.crc ? 1 : 0, s.crc.size());
 }
 

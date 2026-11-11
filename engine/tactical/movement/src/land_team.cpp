@@ -723,8 +723,9 @@ void MovementSystem::team_speed_steps() {
 //   * speed step 0x5aaf70 in the moving state and while braking above a: T = the team speed (x the fleeing bonus on a
 //     crush-flee path); the formation speed on the order path; min the collision cap (its "at once" flag = `now`); min the
 //     straggler cap; braking: T := a (replacing all of it); T > v: v += min(a, T - v); T < v: now ? v := T : v -= min(a,
-//     v - T); clamp [0, team speed]. At v = 0 nothing else happens that frame (no turn, no waypoint step). [port] the
-//     corner fractions and the brake-ahead (steps 3 - 4) are no-ops: the port's land paths carry no per-waypoint fractions;
+//     v - T); clamp [0, team speed]. At v = 0 nothing else happens that frame (no turn, no waypoint step). s78n t26.2:
+//     with the corner cap (step 3: the turn-done byte clear and the facing |R| or more off w -> T = min(T, frac(idx) x
+//     vmax), 0 -> 0x14) and the brake-ahead (step 4, in double) of the path's speed fractions (walk_speed);
 //   * braking starts when the rest of the path is <= v^2 / (2a) with no started path below, or on the last waypoint; it
 //     moves on along the path and, past the last waypoint's line, straight on along the last segment (no snap);
 //   * 0x15 (braking, speed <= a at the start of the tick): speed 0, no step. Heading for the last waypoint and within 5.0
@@ -791,6 +792,8 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
     if (top_push) {
         std::swap(m.path, u.push_path);
         std::swap(m.next, u.push_next);
+        std::swap(m.frac, u.push_frac);  // s78n t26.2: the record's fractions and turn-done byte
+        std::swap(m.turn_done, u.push_turn_done);
         m.escape_until = 0;
     }
     const bool form = !top_push && u.in_formation;
@@ -808,6 +811,8 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
             m.escape_until = escape;
             std::swap(m.path, u.push_path);
             std::swap(m.next, u.push_next);
+            std::swap(m.frac, u.push_frac);
+            std::swap(m.turn_done, u.push_turn_done);
         }
         return r;
     };
@@ -844,7 +849,7 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
         }
         m.yaw = wrap_deg(desired);
         m.state = LocoState::WalkMoving;
-        if (top_push) u.push_turn_first = false;  // s78n t24: the TerrainCollision detour's turn in place is over
+        m.turn_done = true;  // s78n t26.2: the turn left rate over (P +0x6c)
     }
     if (m.state == LocoState::WalkEndMove && !(m.speed > a)) {  // 0x15 (0x5adb50)
         m.speed = 0.0f;
@@ -852,7 +857,7 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
             m.next = static_cast<uint32_t>(n);  // the waypoint index steps: arrived where it stands (no snap)
             const float want = land_wanted_yaw(u);
             if (!top_push && u.final_facing != kNoFacing &&
-                std::fabs(wrap_deg(want - m.yaw)) > arrival_turn_threshold(u.lp.turn_rate, false)) {
+                std::fabs(wrap_deg(want - m.yaw)) > arrival_turn_threshold(u.lp.turn_rate, m.next >= 1 && wp_frac(m, m.next - 1) == 0.0f)) {
                 u.fturn = true;  // the turn in place runs from this tick on; the pop follows it
                 m.state = LocoState::WalkStartTurn;
                 m.yaw = turn_toward(m.yaw, want, rate);
@@ -865,18 +870,44 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
         }
         return finish();
     }
-    // Speed step 0x5aaf70.
-    float target = vmax;
-    if (!top_push) target = std::min(target, u.formation_speed);
-    target = std::min(target, u.coll_speed);
-    const bool now = u.coll_now;
-    target = std::min(target, u.straggle * vmax);
-    if (m.state == LocoState::WalkEndMove) target = a;
-    if (target < 0.0f) target = 0.0f;
-    float v = m.speed;
-    if (target > v) v += std::min(a, target - v);
-    else if (target < v) v = now ? target : v - std::min(a, v - target);
-    v = std::clamp(v, 0.0f, std::max(vmax, 0.0f));
+    // Speed step 0x5aaf70 (s78n t26.2: FIGHTER_FLYING §7.7 item 3 steps 1-8 through walk_speed). The wanted facing w
+    // (0x5ab840) for the corner cap is the current segment's direction plus the lane term on a formation path (as the
+    // start turn's); the brake-ahead's g is the distance along that segment to the next waypoint's line.
+    WalkSpeedIn si;
+    si.v = m.speed;
+    si.vmax = std::max(vmax, 0.0f);
+    si.acc = a;
+    si.a = a;
+    if (!top_push && u.formation_speed < 3.0e38f) si.formation = u.formation_speed;
+    si.cap = std::min(u.coll_speed, u.straggle * vmax);
+    si.now = u.coll_now;
+    si.turn_done = m.turn_done;
+    si.rate = rate;
+    si.frac_cur = m.next >= 1 ? wp_frac(m, m.next - 1) : 1.0f;
+    si.frac_next = wp_frac(m, m.next);
+    si.state = m.state;
+    {
+        float w = m.yaw;
+        if (m.next >= 1) {
+            const V2 from = wp(m.next - 1);
+            const V2 sd = normalize_retail(wp(m.next) - from);
+            if (length_sq(sd) > 0.0f) {
+                const float k = form ? formation_side_correction(-cross(sd, m.pos - from)) : 0.0f;
+                w = heading_deg(V2{sd.x - k * sd.y, sd.y + k * sd.x});
+                if (si.frac_next * si.vmax < m.speed) {
+                    const V2 wn = wp(m.next);
+                    const V2 nn = static_cast<size_t>(m.next) + 1 < n
+                                      ? normalize_retail(sd + normalize_retail(wp(m.next + 1) - wn))
+                                      : sd;
+                    if (length_sq(nn) > 0.0f) si.line_d = line_distance_along(m.pos, sd, wn, nn);
+                }
+            }
+        }
+        si.yaw_err = std::fabs(wrap_deg(m.yaw - w));
+    }
+    const WalkSpeedOut so = walk_speed(si);
+    if (so.end_move) m.state = LocoState::WalkEndMove;
+    const float v = so.v;
     m.speed = v;
     if (!(v > 0.0f)) return finish();  // no turn, no waypoint step, no state change: the members keep steering
     // Move step: the budget v along the waypoints.
@@ -934,9 +965,14 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
     if (!top_push)
         for (uint32_t p = m.next; p < next && static_cast<size_t>(p) + 1 < n; ++p) u.relay.push_back(m.path[p + 1] - m.path[p]);
     m.pos = pos;
+    if (next != m.next) m.turn_done = false;  // s78n t26.2: 0x5c4920 at every index step
     m.next = next;
     r.moved = true;
-    if (length_sq(travel) > 0.0f) m.yaw = turn_toward(m.yaw, heading_deg(travel), rate);
+    if (length_sq(travel) > 0.0f) {
+        const float want = heading_deg(travel);
+        if (std::fabs(wrap_deg(want - m.yaw)) < rate) m.turn_done = true;  // s78n t26.2: leftover rate (P +0x6c)
+        m.yaw = turn_toward(m.yaw, want, rate);
+    }
     if (at_last && below_started) {
         m.next = static_cast<uint32_t>(n);  // the pushed path ends; the started path below goes on without braking
         r.arrived = true;

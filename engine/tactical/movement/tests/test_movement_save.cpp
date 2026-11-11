@@ -1665,7 +1665,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 23);  // 23: before the s78n t24 TerrainCollision (push_turn_first, the re-plan counts dropped) (24)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 25);
+    put_u32(bad, 0, 24);  // 24: before the s78n t26.2 path-record fractions / turn-done / start turn (25)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 26);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

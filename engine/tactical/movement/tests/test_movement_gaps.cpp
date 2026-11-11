@@ -1959,7 +1959,7 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // cu8j t01 / t02 (2026-11-08): compositions at the next coordinator update (draws, start frames, the jetpack swap's draw)
 // and the hash's pending composition / adopt state.
 // s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the single-member shortcut's exact goal is hashed).
-static constexpr uint64_t kGoldenMixed = 0xa9fed96a7302da92ull;  // s78n t20: the path stack top, formation identity, the destination check; F5
+static constexpr uint64_t kGoldenMixed = 0x750c51a950f62245ull;  // s78n t26.2: the speed controller, the start turn (s78n t20: the path stack top, formation identity, the destination check; F5)
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).
@@ -6172,9 +6172,10 @@ static void test_t20_early_arrival() {
         CHECK(r.arrived && r.st.early_arrivals == 1 && r.st.dynamic_repaths == 0 && r.st.pushes == 0 && !r.around && !r.pushed);
         CHECK(near(r.end.x, dest.x - back - 3.0f, 1e-3f) && near(r.end.y, dest.y, 1e-3f) && r.path_end == r.end);
         CHECK(r.record_frames_after == 0);  // Resolved in the decision: gone the same frame
-        // the "at once" flag: on the cut frame the speed drops to the new, nearer braking curve in one step (the rate
-        // alone would take 0.05 x 1.56 off)
-        CHECK(r.speed_before - r.speed_after > 0.05f * mult + 1e-4f);
+        // s78n t26.2 (MOVEMENT §3.5.2 B.5 / B.7 / C.11, §5.4.4 item 6): the "at once" flag only takes a lower target in
+        // one frame, and the cut frame has none - the new last waypoint's fraction is 1.0 (no brake-ahead); the braking
+        // is End Move's T = a from the rest test on (the t20 sqrt(2 a rest) curve was a port stand-in)
+        CHECK(r.speed_after == r.speed_before && near(r.speed_before, mult, 1e-4f));  // at the full 1 x 1.56
         CHECK(r.min_gap >= 5.0f + 3.0f - 1e-3f);  // its front stays 5 + 3 short of the standing footprint
         std::printf("t20 early arrival: cut %.1f, stopped at %.3f, speed %.3f -> %.3f on the cut frame\n", static_cast<double>(back + 3.0f),
                     static_cast<double>(r.end.x), static_cast<double>(r.speed_before), static_cast<double>(r.speed_after));

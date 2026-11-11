@@ -974,10 +974,11 @@ private:
         uint32_t around_frame = 0;
         uint32_t path_change = 0;
         // a1k t03 (A1_READINGS §40.3): the collision-owned record on top of the locomotor's path stack, walked over the
-        // order move (m.path / goal stay underneath, untouched, and resume when it ends). s78n t24 (MOVEMENT §5.4.7 item 6,
-        // save version 23): push_turn_first = the record's waypoint 0 has speed fraction 0 (a TerrainCollision detour) - the
-        // unit turns in place onto its first leg before it moves (Walk: walk_step's turn_first; a squad container: the
-        // start turn of team_walk); cleared once the unit is aligned and moves, or with the record. s78n t20 (MOVEMENT
+        // order move (m.path / goal stay underneath, untouched, and resume when it ends). s78n t26.2 (MOVEMENT §3.5.2,
+        // §5.4.7 item 6; save version 25, replaces t24's push_turn_first): push_frac / push_turn_done = the record's speed
+        // fractions and turn-done byte (LandMotion::frac / turn_done of the record, swapped in with push_path / push_next
+        // for its walk); a TerrainCollision detour carries {0.0} (waypoint 0 at fraction 0: the unit turns in place onto
+        // its first leg before it moves). s78n t20 (MOVEMENT
         // §1.5.1 item 5, §5.4.3; save version 18): one
         // record for every collision path - push_kind 1 a push 0x6859a0, 2 a Path Around detour, 3 a StoppedVsStopped
         // move; push_owner = the collision record that owns it (seq, pack +0x248; kNoDetour none) and push_weight that
@@ -987,7 +988,8 @@ private:
         bool pushed = false;
         std::vector<V2> push_path;
         uint32_t push_next = 0;
-        bool push_turn_first = false;
+        std::vector<float> push_frac;
+        bool push_turn_done = false;
         uint32_t push_owner = 0xFFFFFFFFu;
         uint8_t push_weight = 0;
         uint8_t push_kind = 0;
@@ -1033,6 +1035,9 @@ private:
         // (kAnimNone before the first: treated as idle-class), its start frame and play speed. tplay = this tick's play
         // request (transient, gathered into turn_events_).
         LocoState aturn = LocoState::None;
+        // s78n t26.2 (MOVEMENT §3.5.2 A, save version 25): the turn is the start turn in place before a move (the start
+        // rule failed; its wanted yaw is the top path's, re-read every frame) - it ends in Start Move, not in the pop.
+        bool aturn_start = false;
         float aturn_rate = 0.0f;
         int32_t tclip = -1;
         uint32_t tclip_start = 0;
@@ -1231,6 +1236,21 @@ private:
     float turn_clip_speed(const Unit& u) const;  // 0x3736a0
     float stopped_rate(const Unit& u) const;     // 0x374310 at speed 0: Stopped_Rate_Of_Turn, else R
     static void arrival_reset(Unit& u);
+    // s78n t26.2 (MOVEMENT §3.5.2 A): the wanted yaw of a start turn in place - the direction to the top path's current
+    // waypoint (the order path with the jiggle of a formation member, as walk_step aims); false: nothing left to walk.
+    bool start_turn_want(const Unit& u, uint32_t frame, float& want) const;
+    // s78n t26.2 (MOVEMENT §3.5.1 "Arrival turn, details" item 2): the arrival threshold's "current waypoint cap 0" - the
+    // speed fraction of the top path's waypoint behind the unit (path +0x60).
+    static bool cap_zero(const Unit& u);
+    // s78n t26.2 (MOVEMENT §3.5.2 A): a walk whose start rule failed (WalkResult::turn) starts the turn in place 0xF
+    // (serial pass, with the arrival turn's states); [port] a non-Walk locomotor (Bike) keeps the plain turn by its rate.
+    static void start_turn_mark(Unit& u, const WalkResult& r);
+    // s78n t26.2 (MOVEMENT §5.3 "What Moving is", vf +0x1b0 0x42cd30): turning in place (Walk states 0xF / 0x10 / 0x11 -
+    // a start turn, an arrival turn - or a container's turn in place).
+    static bool in_place_turn(const Unit& u) {
+        return u.aturn != LocoState::None || u.fturn || u.m.state == LocoState::WalkStartTurn ||
+               u.m.state == LocoState::WalkTurning || u.m.state == LocoState::WalkEndTurn;
+    }
     // s78l t02 c (MOVEMENT §6.1 "Forced-path destination check and fallback"): the 0x440f90 ring search around `d`.
     bool forced_spot(const Unit& u, V2 d, V2& out) const;
     float land_wanted_yaw(const Unit& u) const;  // s78k t01: the final facing through Movement_Directions_Count

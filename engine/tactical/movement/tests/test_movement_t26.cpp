@@ -4,6 +4,9 @@
 // M > 0 and no DEPLOY ability deploys), Deploy(false) from the flag, the move order's skip of deployed manual deployers
 // (§6.2) and the gate of deploying ones, the push / StoppedVsStopped refusal for M <= 0, Take_Damage's deploy, a
 // lowering hover host's deploy and the walk-out arrivals reported to the garrison host.
+// s78n t26.2: the path record's speed fractions and turn-done byte, the speed controller B (corner cap, brake-ahead, End
+// Move T = a) and the start rule A with the 3.5.1 turn in place (MOVEMENT 3.5.2 A / B, 3.5.1 "Arrival turn, details"
+// items 3-5).
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -553,6 +556,207 @@ void test_released_inside() {
                 static_cast<double>(v.pos.y), f);
 }
 
+
+// ---------------------------------------------------------------- s78n t26.2: the speed controller B (pure)
+void test_t26_controller() {
+    ::alamo::test::section("t26_controller");
+    // B.4 the corner cap: 0x20afe0 is |wrap(yaw - wanted)| < |R| (strict): an error of exactly R is capped, R - 0.01 not
+    WalkSpeedIn c;
+    c.v = 2.0f;
+    c.vmax = 3.0f;
+    c.acc = c.a = 0.05f;
+    c.rate = 10.0f;
+    c.frac_cur = 0.5f;
+    c.yaw_err = 10.0f;
+    const WalkSpeedOut capped = walk_speed(c);
+    CHECK(near(capped.v, 1.95f, 1e-6f) && !capped.end_move);  // T = 0.5 x 3 = 1.5 < v: down by a
+    c.yaw_err = 9.99f;
+    const float open_v = walk_speed(c).v;
+    CHECK(near(open_v, 2.05f, 1e-6f));  // within R: T = vmax, up by acc
+    c.yaw_err = 10.0f;
+    c.turn_done = true;
+    CHECK(near(walk_speed(c).v, 2.05f, 1e-6f));  // the turn-done byte set: no cap
+    c.turn_done = false;
+    c.frac_cur = 0.0f;
+    const WalkSpeedOut zero = walk_speed(c);
+    CHECK(zero.end_move && near(zero.v, 1.95f, 1e-6f));  // a cap of 0 sets End Move, where T = a
+    // B.7 End Move: T = a - v 1.0, a 0.25 -> 0.75, 0.5, 0.25, then stays 0.25 (hand)
+    WalkSpeedIn e;
+    e.v = 1.0f;
+    e.vmax = 3.0f;
+    e.acc = e.a = 0.25f;
+    e.state = LocoState::WalkEndMove;
+    std::vector<float> seq;
+    for (int k = 0; k < 5; ++k) {
+        e.v = walk_speed(e).v;
+        seq.push_back(e.v);
+    }
+    CHECK(seq == (std::vector<float>{0.75f, 0.5f, 0.25f, 0.25f, 0.25f}));
+    // B.2 a formation path at formation speed 0 -> End Move
+    WalkSpeedIn fo;
+    fo.v = 0.0f;
+    fo.vmax = 3.0f;
+    fo.acc = fo.a = 0.05f;
+    fo.formation = 0.0f;
+    CHECK(walk_speed(fo).end_move);
+    // B.5 the brake-ahead on (0, 0), (100, 0), (100, 400) with the fractions set by hand to (1, 0.698132, 1) (the t26.3
+    // corner speed of a 90-degree corner at R 6: v 2.094395, f 0.698132), vmax 3, a 0.05: vn = 2.094396, brake distance
+    // (9 - vn^2) / 0.1 = 46.135 (hand). Line(1) is the bisector line through (100, 0): D = 100 - x along +x.
+    const V2 n1 = normalize_retail(normalize_retail(V2{100.0f, 0.0f}) + normalize_retail(V2{0.0f, 400.0f}));
+    CHECK(near(line_distance_along({54.0f, 0.0f}, {1.0f, 0.0f}, {100.0f, 0.0f}, n1), 46.0f, 1e-3f));
+    CHECK(line_distance_along({54.0f, 0.0f}, {1.0f, 0.0f}, {100.0f, 0.0f}, {0.0f, 1.0f}) == 3.0e38f);  // d . n = 0
+    LocomotorParams lp;
+    lp.max_speed = 3.0f;
+    lp.accel = lp.decel = 0.05f;
+    lp.turn_rate = 6.0f;
+    lp.close_enough_angle = 180.0f;
+    const auto brake_at = [&](float x) {
+        LandMotion m;
+        m.pos = {x, 0.0f};
+        m.speed = 3.0f;
+        m.state = LocoState::WalkMoving;
+        m.path = {{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 400.0f}};
+        m.frac = {1.0f, 0.698132f, 1.0f};
+        m.next = 1;
+        m.turn_done = true;
+        (void)walk_step(m, lp, 3.0e38f, nullptr);
+        return m.speed;
+    };
+    const float far_v = brake_at(53.0f), near_v = brake_at(54.0f);
+    CHECK(far_v == 3.0f && near(near_v, 2.95f, 1e-6f));  // D 47 > 46.135: T = 3; D 46: T = vn, down by a
+    std::printf("t26.2 controller: corner cap at |e| = R %.3f, R - 0.01 %.3f; End Move %.2f %.2f %.2f %.2f; brake-ahead D 47 -> "
+                "%.3f, D 46 -> %.3f\n",
+                static_cast<double>(capped.v), static_cast<double>(open_v), static_cast<double>(seq[0]),
+                static_cast<double>(seq[1]), static_cast<double>(seq[2]), static_cast<double>(seq[3]),
+                static_cast<double>(far_v), static_cast<double>(near_v));
+}
+
+// ---------------------------------------------------------------- s78n t26.2: the start rule A (pure walk_step)
+struct StartOut {
+    WalkResult r;
+    LandMotion m;
+};
+
+StartOut start_once(float yaw, std::vector<float> frac) {
+    LocomotorParams lp;
+    lp.max_speed = 2.0f;
+    lp.accel = lp.decel = 0.5f;
+    lp.turn_rate = 10.0f;
+    lp.close_enough_angle = 180.0f;
+    StartOut o;
+    o.m.pos = {0.0f, 0.0f};
+    o.m.yaw = yaw;
+    o.m.state = LocoState::WalkStopped;
+    o.m.path = {{0.0f, 0.0f}, {100.0f, 0.0f}};
+    o.m.frac = std::move(frac);
+    o.m.next = 1;
+    o.r = walk_step(o.m, lp, 3.0e38f, nullptr);
+    return o;
+}
+
+void test_t26_start_rule() {
+    ::alamo::test::section("t26_start_rule");
+    // delta 90, CE 180, fraction 1: moves this tick (0x12 -> 0x13 and the move step in the same call)
+    const StartOut a = start_once(-90.0f, {});
+    CHECK(a.r.moved && !a.r.turn && a.m.speed == 0.5f && a.m.state == LocoState::WalkMoving);
+    // fraction 0: the close-enough clause fails -> the turn in place toward the leg (the caller's 0xF / 0x10 / 0x11)
+    const StartOut b = start_once(-90.0f, {0.0f});
+    CHECK(!b.r.moved && b.r.turn && b.r.want == 0.0f && b.m.speed == 0.0f && b.m.yaw == -90.0f &&
+          b.m.state == LocoState::WalkStartTurn);
+    // delta <= R with fraction 0: moves
+    const StartOut c = start_once(-10.0f, {0.0f});
+    CHECK(c.r.moved && !c.r.turn);
+    std::printf("t26.2 start rule: fraction 1 moves %d, fraction 0 turns %d (want %.1f), within R moves %d\n", a.r.moved ? 1 : 0,
+                b.r.turn ? 1 : 0, static_cast<double>(b.r.want), c.r.moved ? 1 : 0);
+}
+
+// ---------------------------------------------------------------- s78n t26.2: the start turn in place (system)
+struct StartTurnOut {
+    uint32_t turn_ticks = 0, first_step = 0, clip_hold = 0, begin_plays = 0;
+    std::vector<float> yaws;
+    bool exact = false;
+    float end_yaw = 1e9f;
+};
+
+// One vehicle at (400, 400) facing yaw0, ordered 400 along +x (path heading exactly 0); ticks until it first moves.
+// first_step counts the ticks from the first one with a path (turn ticks + begin-clip hold ticks + the moving tick).
+StartTurnOut start_turn_case(float yaw0, float rate, float stopped, float ce, bool pre) {
+    StartTurnOut o;
+    MovementConfig cfg;
+    cfg.constants.land_speed_multiplier = 1.0f;  // R = Rate_Of_Turn
+    MovementSystem sys{cfg};
+    PassabilityGrid g;
+    g.init(100, 100);
+    const float hi = static_cast<float>(g.width() - 1) * kCellSize;
+    sys.set_grid(std::move(g));
+    sys.set_height_fn([](float, float) { return 0.0f; });
+    sys.air().set_box({0.0f, 0.0f}, {hi, hi});
+    if (pre)  // only the begin clips exist: 10 frames at 30 fps
+        sys.set_deploy_clip_fn([](ObjectId, int32_t anim, uint32_t& n, float& fps) {
+            if (anim != kAnimTurnLeftBegin && anim != kAnimTurnRightBegin) return false;
+            n = 10;
+            fps = 30.0f;
+            return true;
+        });
+    UnitDesc d = tank(1, {400.0f, 400.0f});
+    d.yaw_deg = yaw0;
+    d.max_speed = d.alt_max_speed = 2.0f;
+    d.turn_rate = d.alt_turn_rate = rate;
+    d.stopped_turn_rate = stopped;
+    d.close_enough_angle = ce;
+    d.has_pre_turn_anim = pre;
+    d.collision_class = kUccVehicle;
+    CHECK(sys.add_unit(d));
+    SimRng rng(2602);
+    order(sys, rng, {1}, {800.0f, 400.0f}, 1);
+    const V2 p0 = sys.view(1).pos;
+    for (uint32_t f = 1; f < 400; ++f) {
+        const float y0 = sys.view(1).yaw;
+        sys.tick(f, rng);
+        for (const auto& ev : sys.take_turn_clip_events())
+            if (ev.anim == kAnimTurnLeftBegin || ev.anim == kAnimTurnRightBegin) ++o.begin_plays;
+        const UnitView v = sys.view(1);
+        if (v.pos != p0) {
+            o.first_step = o.turn_ticks + o.clip_hold + 1;
+            o.exact = y0 == 0.0f;  // the facing on the leg exactly when it starts to move
+            o.end_yaw = v.yaw;
+            break;
+        }
+        if (v.arrival_turn && v.yaw == y0 && v.speed == 0.0f) ++o.clip_hold;  // the begin clip holds the yaw
+        if (v.yaw != y0) {
+            ++o.turn_ticks;
+            o.yaws.push_back(v.yaw);
+        }
+    }
+    return o;
+}
+
+void test_t26_start_turn() {
+    ::alamo::test::section("t26_start_turn");
+    // delta 90, R 10, CE 30, no stopped rate: +10 a tick (the rate S = R), exactly on the leg after 9 turn ticks with no
+    // rate left (not reached); the 10th turn frame is reached and moves in the same tick (hand)
+    const StartTurnOut a = start_turn_case(-90.0f, 10.0f, 0.0f, 30.0f, false);
+    CHECK(a.turn_ticks == 9 && a.first_step == 10 && a.exact && !a.yaws.empty() && a.yaws.front() == -80.0f &&
+          a.yaws.back() == 0.0f);
+    // AT-AT-like: Stopped_Rate_Of_Turn 1 (raw, at speed 0) against R 3.12, CE 30, delta 40: 40 turn ticks at 1 degree, the
+    // step on tick 41 (hand)
+    const StartTurnOut b = start_turn_case(-40.0f, 3.12f, 1.0f, 30.0f, false);
+    CHECK(b.turn_ticks == 40 && b.first_step == 41 && b.exact);
+    // within CE (delta 20 <= 30, fraction 1): no turn in place
+    const StartTurnOut c = start_turn_case(-20.0f, 3.12f, 1.0f, 30.0f, false);
+    CHECK(c.turn_ticks == 0 && c.first_step == 1);
+    // Has_Pre_Turn_Anim with only the begin clips (10 frames at speed 1: the hold ends at clip frame 8, its last 2): the
+    // yaw holds 8 ticks, then 0x10 with the bands of 0x6204f0 (T = 10 on an ordinary path, S = 10): 10 a tick while
+    // e >= 45 (5 ticks: 80 .. 40), the half rate 5 (40 -> 20), the quarter rate S x 0.25 x e / 11.25 (20 -> 15.56 ->
+    // 12.10 -> 9.41), and at e < T the clip is "unchanged" - the begin clip, played again; the 13th turn frame lands on the
+    // leg with rate left over (reached) and moves in the same tick (hand): 12 turn ticks before it, 2 begin plays
+    const StartTurnOut d = start_turn_case(-90.0f, 10.0f, 0.0f, 30.0f, true);
+    CHECK(d.begin_plays == 2 && d.clip_hold == 8 && d.turn_ticks == 12 && d.first_step == 21 && !d.exact && d.end_yaw == 0.0f);
+    std::printf("t26.2 start turn: delta 90 R 10 -> %u turn ticks, step on %u; AT-AT-like delta 40 -> %u ticks at 1, step on %u; "
+                "within CE -> %u; begin clip: %u play, yaw held %u ticks, %u turn ticks\n",
+                a.turn_ticks, a.first_step, b.turn_ticks, b.first_step, c.turn_ticks, d.begin_plays, d.clip_hold, d.turn_ticks);
+}
+
 }  // namespace
 
 int main() {
@@ -565,5 +769,8 @@ int main() {
     test_hover_and_exit();
     test_garrison_keep();
     test_released_inside();
+    test_t26_controller();
+    test_t26_start_rule();
+    test_t26_start_turn();
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }

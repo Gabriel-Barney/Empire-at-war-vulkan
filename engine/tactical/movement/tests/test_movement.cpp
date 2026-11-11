@@ -3112,7 +3112,8 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // before its chooser re-run.
 // s78n t24 (MOVEMENT §5.4.7): TerrainCollision replaces the blocked-frames re-plan; the rejoin generator scans the whole
 // path (11 accepted goals); MovingVsMoving answers follow the role slots.
-static constexpr uint64_t kGoldenLand = 0x2ac2cf266cff907dull;  // s78n t24
+// s78n t26.2 (MOVEMENT §3.5.2 A / B): the speed controller (End Move T = a, 0x15 restarts), the start turn in place.
+static constexpr uint64_t kGoldenLand = 0x488c00fd87159e2aull;  // s78n t26.2
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
