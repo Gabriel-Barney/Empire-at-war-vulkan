@@ -840,6 +840,10 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 }
                 u.jiggle = V2{};
                 u.blocked_frames = 0;
+                // s78n t23 review fix 6 (MOVEMENT §5.4.1 "The stamp in full" item 7): the order path goes through the push
+                // and stamps the unit's held records only when no collision record owns the unit; with an owner every
+                // path record (the detour too) is destroyed with no stamp, and that record ends at its next service
+                if (u.push_owner == kNoDetour) stamp_held(u, frame);
                 end_push(u);  // a1k t03 [port]: a new move ends a pushed move
                 u.replans = 0;
                 u.threat = order.threat_threshold;  // §4.2

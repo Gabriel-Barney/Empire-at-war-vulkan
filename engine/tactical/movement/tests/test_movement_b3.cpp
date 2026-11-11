@@ -490,6 +490,57 @@ void test_t20_mvm_save_pass() {
     std::printf("t20 save in Pass: saved at %u (%zu bytes), %u ticks identical %d\n", f, bytes.size(), n, same ? 1 : 0);
 }
 
+// A new order (MOVEMENT 5.4.1 "The stamp in full" item 7): to the held unit of a Path Around record (M, owned by no
+// record) it goes through the push and stamps the record NOW + 2; to the detourer (S, owned by the record) it destroys
+// the detour with no stamp, and the record ends at its next service.
+void test_t20_mvm_order_stamp() {
+    ::alamo::test::section("t20_mvm_order_stamp");
+    for (int to_held = 1; to_held >= 0; --to_held) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 120);
+        const V2 west = cell_center(20, 60), east = cell_center(60, 60);
+        UnitDesc w = vehicle(1, west, 0);
+        UnitDesc e = vehicle(2, east, 1);
+        e.yaw_deg = 180.0f;
+        CHECK(sys.add_unit(w) && sys.add_unit(e));
+        SimRng rng(326);
+        MoveOrder wo;
+        wo.units = {1};
+        wo.destination = east + V2{200.0f, 0.0f};
+        sys.move(wo, rng, 1);
+        MoveOrder eo;
+        eo.units = {2};
+        eo.destination = west - V2{200.0f, 0.0f};
+        sys.move(eo, rng, 1);
+        uint32_t f = 1;
+        const CollisionObject* c = nullptr;
+        for (; f < 600; ++f) {
+            sys.tick(f, rng, serial_for);
+            c = mvm_record(sys, 1, 2);
+            if (c && c->state == CollisionState::PathAround) break;
+        }
+        CHECK(c && c->state == CollisionState::PathAround && c->redecide == 0);
+        if (!c) return;
+        const ObjectId m = master_of(*c), s = m == 1 ? 2 : 1;
+        CHECK(sys.view(s).pushed && !sys.view(m).pushed);
+        const uint32_t seq = c->seq;
+        MoveOrder no;
+        no.units = {to_held ? m : s};
+        no.destination = cell_center(60, 100);
+        sys.move(no, rng, ++f);
+        c = mvm_record(sys, 1, 2);
+        const uint32_t stamp = c ? c->redecide : 0;
+        if (to_held) CHECK(c && c->seq == seq && stamp == f + 2);
+        else CHECK(c && stamp == 0 && !sys.view(s).pushed);
+        sys.tick(f, rng, serial_for);
+        c = mvm_record(sys, 1, 2);
+        const bool ended = !c || c->seq != seq || c->state == CollisionState::Resolved;
+        if (!to_held) CHECK(ended);
+        std::printf("t20 order stamp: new order to the %s -> stamp %s, record %s after the next service\n",
+                    to_held ? "held M" : "detourer S", stamp ? "NOW + 2" : "none", ended ? "ended" : "kept");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -502,5 +553,6 @@ int main() {
     test_t20_mvm_try_again();
     test_t20_mvm_impassable();
     test_t20_mvm_save_pass();
+    test_t20_mvm_order_stamp();
     return ::alamo::test::report("alamo_tactical_movement_b3_tests");
 }
