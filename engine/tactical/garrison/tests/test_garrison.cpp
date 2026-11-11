@@ -1064,6 +1064,41 @@ static void test_approach() {
     }
 }
 
+// s78n t26.1 (FIGHTER_FLYING §7.4 "Host destroyed / release all" 0x37a060): a destroyed garrison host puts every
+// occupant at its own position (not at the exit point), in entry order; a Property host kills them.
+void test_host_death_position() {
+    for (const HolderKind kind : {HolderKind::Vehicle, HolderKind::Hover, HolderKind::Structure}) {
+        GarrisonSystem g;
+        g.set_allied([](int32_t a, int32_t b) { return a == b; });
+        HolderDesc hd;
+        hd.kind = kind;
+        hd.slots = 4;
+        hd.extent_len = 30.0f;
+        hd.exit_dist = 45.0f;
+        OccupantDesc inf;
+        inf.category = kInf;
+        inf.value = 1;
+        CHECK(g.add_holder(70, 1, hd));
+        CHECK(g.add_unit(3, 1, inf) && g.add_unit(1, 1, inf) && g.add_unit(2, 1, inf));
+        const Vec3 at{300.0f, -40.0f, 5.0f}, face{0.0f, 1.0f, 0.0f};
+        CHECK(g.board(3, 70, at, 1) && g.board(1, 70, at, 2) && g.board(2, 70, at, 3));
+        const Vec3 x = g.exit_point(70, at, face);
+        CHECK(x.y == at.y + 45.0f);  // the exit point is elsewhere
+        g.clear_events();
+        g.remove(70, at, face, 9);
+        CHECK(!g.is_holder(70) && g.occupancy().empty() && g.events().size() == 3);
+        if (g.events().size() == 3) {
+            const ObjectId order[3] = {3, 1, 2};
+            for (size_t k = 0; k < 3; ++k) {
+                const GarrisonEvent& e = g.events()[k];
+                CHECK(e.kind == GarrisonEventKind::Ejected && e.unit == order[k] && e.holder == 70 && e.frame == 9);
+                CHECK(e.position.x == at.x && e.position.y == at.y && e.position.z == at.z);
+            }
+        }
+        for (const ObjectId u : {1, 2, 3}) CHECK(g.is_unit(u) && g.holder_of(u) == kNoObject);
+    }
+}
+
 int main() {
     test_rules();
     const uint64_t h1 = scripted_hash(), h2 = scripted_hash();
@@ -1076,6 +1111,7 @@ int main() {
     test_groups();  // s78n t18
     test_approach();  // s78n t20 batch 2
     test_capture_save();
+    test_host_death_position();  // s78n t26.1
     std::printf("alamo_tactical_garrison_tests: %d checks, %d failures\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

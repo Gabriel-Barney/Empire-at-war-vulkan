@@ -187,7 +187,9 @@ public:
     // Death / retreat / removal at `pose` of the host: a host ejects (garrison behaviour) or kills (Property) its
     // occupants; approaches to it are dropped; a unit leaves its host silently. Unknown ids: no-op. s78n t20 batch 2
     // (MOVEMENT §5.3 "Hover in full", death 0x391310): `kill` - the occupants are killed whatever the kind (a
-    // GARRISON_HOVER host that died off the ground; the host decides, it knows the hover state).
+    // GARRISON_HOVER host that died off the ground; the host decides, it knows the hover state). s78n t26.1 (FIGHTER_FLYING
+    // §7.4 "Host destroyed / release all" 0x37a060): the ejected occupants are put at the host position `pos` (no exit
+    // point, no walk-out), in entry order.
     void remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame, bool kill = false);
     // Owner change: a host ejects the occupants not allied with the new owner (at the exit point of the given pose),
     // allied ones stay; approaches are re-checked at the next service; a unit only changes owner.
