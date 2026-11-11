@@ -979,17 +979,26 @@ static void test_jetpack_alternates() {
     d.turn_rate = 3.0f;  // the alternate is 12
     CHECK(sys.add_unit(d));
     CHECK(sys.add_unit(unit(2, cell_center(10, 12), 0, 1.5f, 6.0f, LocomotorKind::Default)));  // between 1.0 and 2.5
+    UnitDesc d3 = trooper(3, cell_center(12, 10));
+    d3.max_speed = 1.2f;
+    d3.alt_max_speed = 2.8f;  // its own alternate: the faster jetpacker
+    CHECK(sys.add_unit(d3));
     const float mult = sys.view(1).max_speed;  // Max_Speed 1.0 x the land multiplier
-    CHECK(sys.use_secondary_locomotor(1, true));
+    CHECK(sys.use_secondary_locomotor(1, true) && sys.use_secondary_locomotor(3, true));
     UnitView v = sys.view(1);
     CHECK(v.locomotor == LocomotorKind::Jetpack && v.loco_state == LocoState::None && v.max_speed == 2.5f * mult);
     SimRng rng(4);
     MoveOrder o;
-    o.units = {1, 2};
+    o.units = {1, 2, 3};
     o.destination = cell_center(60, 11);
     sys.move(o, rng, 0);
-    // One formation: the slowest member is the walker (1.5), not the trooper's Max_Speed (1.0).
-    CHECK(sys.view(2).formation_speed == 1.5f * mult && sys.view(1).formation_speed == 1.5f * mult);
+    // s78n t26 review round 2 (MOVEMENT §4.2 step 2 item 4 [H]: a candidate needs the seed's locomotor kind, vf +0x240 /
+    // +0x238; JetPack in pack state 0 answers vf +0x240 with kind 2, Walk is kind 1 without it): the walker moves alone
+    // (no formation speed), the two jetpackers share a formation whose speed is the slower alternate (2.5), not the
+    // trooper's Max_Speed (1.0).
+    CHECK(sys.view(1).form_id != 0 && sys.view(1).form_id == sys.view(3).form_id && sys.view(2).form_id != sys.view(1).form_id);
+    CHECK(sys.view(2).formation_speed == 3.0e38f && sys.view(1).formation_speed == 2.5f * mult &&
+          sys.view(3).formation_speed == 2.5f * mult);
 
     // Alone, facing away from the destination: the take-off turn (0x10) is limited by Max_Rate_Of_Turn, the flight by
     // Alternate_Max_Speed.
@@ -6292,7 +6301,8 @@ static void test_t20_early_arrival() {
     }
     {  // (v) a formation: the leader's cut also shortens the order paths of the members whose slot is behind its own
        // within the two half widths sideways (the same amount), and leaves the members in other lanes alone. Five
-       // vehicles: three ranks by attack-range stand-in (max speed) -> rows of 1, 1 and 3; the row of three puts one member
+       // vehicles: three ranks by attack range (s78n t26 review round 2: the host's 0x3749d0 query, 50 / 60 / 70 here,
+       // MOVEMENT §4.3 correction [H]; the max speeds were the stand-in) -> rows of 1, 1 and 3; the row of three puts one member
        // in the leader's lane and two far to the sides. (The leader starts 80 ahead of the others: its record is decided
        // inside the 160 x 160 candidate box, about 90 before its slot, and the members behind it then still have more
        // than the cut left to walk. The port's members path to their own slots, so one that is nearer its slot than the
@@ -6300,6 +6310,7 @@ static void test_t20_early_arrival() {
         MovementSystem sys{MovementConfig{}};
         land_system(sys, 100);
         const float speeds[5] = {0.5f, 0.6f, 0.7f, 0.7f, 0.7f};
+        sys.set_attack_range_query([&speeds](ObjectId id) { return id >= 10 && id < 15 ? 100.0f * speeds[id - 10] : 0.0f; });
         const V2 starts[5] = {cell_center(16, 20), cell_center(12, 20), cell_center(12, 17), cell_center(12, 22), cell_center(12, 25)};
         for (ObjectId i = 0; i < 5; ++i) {
             UnitDesc d = t20_vehicle(10 + i, starts[i], 1, 10.0f, 6.0f, speeds[i]);
@@ -6319,7 +6330,7 @@ static void test_t20_early_arrival() {
             one_form = one_form && sys.view(10 + i).form_id == form;
         }
         CHECK(one_form);
-        // the leader is the front slot: the slowest (rank order); its lane = the members at its y
+        // the leader is the front slot: the shortest range (rank order); its lane = the members at its y
         int lead = 0;
         for (int i = 1; i < 5; ++i)
             if (goal[i].x > goal[lead].x) lead = i;

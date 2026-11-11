@@ -75,7 +75,7 @@ std::vector<std::vector<uint32_t>> kmeans_buckets(std::span<const FormationMembe
 
 std::vector<std::vector<uint32_t>> split_into_formations(std::span<const FormationMember> m, std::span<const uint32_t> bucket,
                                                          const MovementConstants& k, const CompatibleFn& compatible,
-                                                         float double_click_speed_ratio) {
+                                                         float double_click_speed_ratio, const ReachFn& reach) {
     std::vector<std::vector<uint32_t>> out;
     if (bucket.empty()) return out;
     V2 c{};
@@ -116,8 +116,17 @@ std::vector<std::vector<uint32_t>> split_into_formations(std::span<const Formati
                         const float rd = (o.collision_class == 5 && !o.team_member) ? k.infantry_formation_recruitment_distance
                                                                                       : k.vehicle_formation_recruitment_distance;
                         float nearest = 3.0e38f;
-                        for (uint32_t mm : f) nearest = std::min(nearest, length_sq(m[mm].pos - o.pos));
+                        uint32_t nm = f.front();
+                        for (uint32_t mm : f) {
+                            const float d = length_sq(m[mm].pos - o.pos);
+                            if (d < nearest) {
+                                nearest = d;
+                                nm = mm;
+                            }
+                        }
                         ok = nearest <= rd * rd;
+                        // s78n t26 review round 2 (§4.2 step 2 item 4 [H]): a straight line or a path <= 1.4 x the distance
+                        if (ok && reach) ok = reach(nm, cand);
                     }
                     if (ok) {
                         f.push_back(cand);
@@ -144,11 +153,13 @@ std::vector<uint32_t> large_hover_formation_order(std::span<const FormationKey> 
     return out;
 }
 
-std::vector<RankedMember> rank_members(std::span<const FormationMember> m, std::span<const uint32_t> members) {
+std::vector<RankedMember> rank_members(std::span<const FormationMember> m, std::span<const uint32_t> members, RankKey key) {
     std::vector<uint32_t> heroes, others;
     for (uint32_t i : members) (m[i].hero ? heroes : others).push_back(i);
+    // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): the key of 0x41a080 is 0x3749d0, the attack range
+    const auto kv = [&](uint32_t i) { return key == RankKey::MaxSpeed ? m[i].max_speed : m[i].attack_range; };
     auto cmp = [&](uint32_t a, uint32_t b) {
-        if (m[a].max_speed != m[b].max_speed) return m[a].max_speed < m[b].max_speed;
+        if (kv(a) != kv(b)) return kv(a) < kv(b);
         const int c = icompare(m[a].type_name, m[b].type_name);
         if (c != 0) return c < 0;
         return m[a].id < m[b].id;
@@ -159,11 +170,11 @@ std::vector<RankedMember> rank_members(std::span<const FormationMember> m, std::
     float tol = 0.0f;
     for (int step = 0; step < 4; ++step) {
         uint32_t r = 0;
-        float start = others.empty() ? 0.0f : m[others[0]].max_speed;
+        float start = others.empty() ? 0.0f : kv(others[0]);
         for (size_t i = 0; i < others.size(); ++i) {
-            if (m[others[i]].max_speed - start > tol) {
+            if (kv(others[i]) - start > tol) {
                 ++r;
-                start = m[others[i]].max_speed;
+                start = kv(others[i]);
             }
             rank[i] = r;
         }
@@ -178,7 +189,7 @@ std::vector<RankedMember> rank_members(std::span<const FormationMember> m, std::
 }
 
 std::vector<Slot> layout_formation(std::span<const FormationMember> m, std::span<const uint32_t> members, V2 forward,
-                                   const MovementConstants& k) {
+                                   const MovementConstants& k, RankKey key) {
     std::vector<Slot> out;
     if (members.empty()) return out;
     const V2 right = formation_right(forward);
@@ -191,7 +202,7 @@ std::vector<Slot> layout_formation(std::span<const FormationMember> m, std::span
     const float side = std::ceil(std::sqrt(static_cast<float>(members.size())));
     const float hw = std::max(side * cell + 0.25f, std::sqrt(std::max(1.0f, area * k.spread_out_spacing_coefficient)));
 
-    std::vector<RankedMember> remaining = rank_members(m, members);
+    std::vector<RankedMember> remaining = rank_members(m, members, key);
     float depth = 0.0f;
     uint32_t row = 0;
     while (!remaining.empty()) {

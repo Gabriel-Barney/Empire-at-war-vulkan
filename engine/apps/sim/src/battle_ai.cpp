@@ -904,8 +904,7 @@ void BattleAi::follow_service() {
             continue;
         }
         // s78n t20 fix (MOVEMENT 4.3.1 item 2): the follow stands for the formation's re-path of a kind-3 goal
-        // (0x4192b0) - no destination check. [port] a Move_To(object) follow (kind 1 in retail, which does not follow
-        // at all) re-paths the same way.
+        // (0x4192b0) - no destination check. (s78n t26 review round 2: Move_To(object) adds no follow, it is kind 1.)
         if (f.units.size() == 1) {
             move_unit(f.units.front(), tp.x, tp.y, f.threat, 0, objects::kNoObjectId, true);
             continue;
@@ -997,8 +996,11 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             return R::None;
         }
         case T::MoveToObject: {
-            // Lua Move_To(object) without a threat threshold (ev_move_to_object): a move to the target's current position,
-            // like the LuaOrder MoveTo path; a1h t02: the group then follows the object (follow_service, A1_READINGS §33.4).
+            // Lua Move_To(object) without a threat threshold (ev_move_to_object): a move to a snapshot of the target's
+            // position, as the LuaOrder MoveTo path. s78n t26 review round 2 (LUA_API "Move_To / Attack_Move / Guard_Target"
+            // [H]; TACTICAL_COMBAT §2.8 "Summary by order"): Move_Internal's flags 0 give a kind-1 position block, which is
+            // never followed (A1_READINGS §33.4: the 30-frame re-path follows kind-3 goals only) - no follow record; the
+            // destination check and the single-member shortcut apply as for a position.
             const uint32_t tw = ev.u("target");
             const objects::ObjectHandle th = tw <= 0x7FFFFFFFu ? st.find(static_cast<objects::ObjectId>(tw)) : objects::ObjectHandle{};
             if (!st.alive(th)) {
@@ -1018,7 +1020,6 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             for (const objects::ObjectId id : o.units) b_->combat_->set_attack_goal(id, tc::kNoObject);  // refixf t06: kind 1
             b_->fighter_order(o.units, 0, tp);  // S7 t22: a position snapshot (kind 1)
             follow_drop(o.units);
-            follow_add(o.units, static_cast<objects::ObjectId>(tw), tp.x, tp.y, mv::kThreatOff);
             if (o.units.size() == 1) {
                 b_->combat_->clear_order(o.units.front());
                 return move_unit(o.units.front(), tp.x, tp.y) ? R::None : R::InvalidUnit;
@@ -1215,7 +1216,9 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 (void)b_->land_attack_order(*mode_, group.units, atu->id, tp, mv::kMoveFlagAttackMove, false, host_->random().synced());
                 return R::None;
             }
-            if (tw != cmd::kNoObject && !point_goal && !attack_block) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
+            // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4). s78n t26 review round 2: Move_To on an
+            // object is a kind-1 position snapshot (LUA_API Move_Internal flags 0 [H]): no follow
+            if (tw != cmd::kNoObject && !point_goal && !attack_block && order != lua::LuaOrder::MoveTo) {
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
                 // s78f t10: fighters given an object block follow it in their own formation (0x4192b0 steps 3 / 4,
                 // FIGHTER_FLYING §4.11); the follow's re-issued plain move would replace that block with a flags-0 position

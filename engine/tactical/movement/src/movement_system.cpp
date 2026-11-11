@@ -1,6 +1,7 @@
 #include "alamo/tactical/movement/movement_system.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 #include "alamo/core/dmath.hpp"
@@ -695,6 +696,8 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         f.pos = u.m.pos;
         f.max_speed = loco_max_speed(u);  // 0x41b2a0 reads vf74: S7 t14, the jetpack's alternate while airborne-kind
         if (u.d.team_container && u.team_cap < kInf) f.max_speed = u.team_cap;  // s78n t03: a container walks at the team speed
+        // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): the layout's rank key, the attack range 0x3749d0
+        f.attack_range = attack_range_fn_ ? attack_range_fn_(u.d.id) : 0.0f;
         f.radius = u.d.radius;
         f.spacing = u.d.formation_spacing;
         f.hero = u.d.hero;
@@ -725,13 +728,67 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             mem[n].short_range_attack = !mem[n].solo_attack && d < e->engage * k.short_range_attack_formation_coefficient;
         }
     }
+    // s78n t26 review round 2 (MOVEMENT §4.2 step 2 item 4 [H]): a candidate joins a seed with the same locomotor kind
+    // (vf +0x240 and vf +0x238 agree; FIGHTER_FLYING §4.10 B: kind 1 = Walk, Bike, LandTeamContainer, LandTeamInfantry,
+    // kind 2 = Flying, LandBomber, JetPack, Fighter; vf +0x240 true only for JetPack, whose kind is 2 in pack state 0 or
+    // 0x0F - 0x13, MOVEMENT §2 "Layers") when both are zone-connected (0x50ee10) to the destination, each for its own
+    // class. Movement masks need not agree: infantry and vehicles share a formation (its class: formation_class_mask).
+    // The destination is the seed's zone-validated point (§4.2 step 2 item 2: 0x50f480(P, the seed, its class, 30); P
+    // itself with flag 0x20, for an air seed or a seed off passable ground, or when the validation fails) - [port] [M]
+    // for an object goal too, whose block then drops the validated point; P is the order point, for an attack the
+    // object's position. [port] With no grid (unit tests without terrain) every unit is connected.
+    const auto loco_kind = [](const Unit& u) -> int32_t {
+        switch (u.d.locomotor) {
+            case LocomotorKind::Jetpack: {
+                const auto st = static_cast<uint8_t>(u.sm.state);
+                return st == 0 || (st >= 0x0F && st <= 0x13) ? 0x102 : 0x101;  // vf +0x240 true, kind 2 / 1
+            }
+            case LocomotorKind::Flying:
+            case LocomotorKind::LandBomber:
+            case LocomotorKind::Fighter: return 2;
+            default: return 1;
+        }
+    };
+    const V2 order_p = attack ? order.attack.c : order.destination;
+    std::vector<V2> seed_dest(idx.size());
+    std::vector<uint8_t> seed_dest_set(idx.size(), 0);
+    const auto dest_of = [&](uint32_t sd) -> V2 {
+        if (!seed_dest_set[sd]) {
+            seed_dest_set[sd] = 1;
+            seed_dest[sd] = order_p;
+            const Unit& su = units_[idx[sd]];
+            V2 v;
+            if (!(order.flags & kMoveFlagSkipValidation) && !is_air(su) && grid_.passable_world(su.m.pos, su.lp.mask) &&
+                zone_validate(regions_, order_p, su.m.pos, su.lp.mask, v))
+                seed_dest[sd] = v;
+        }
+        return seed_dest[sd];
+    };
+    const bool no_grid = grid_.width() == 0 || grid_.height() == 0;
     const auto compatible = [&](uint32_t a, uint32_t b) {
         const Unit& ua = units_[idx[a]];
         const Unit& ub = units_[idx[b]];
-        if (ua.lp.mask != ub.lp.mask) return false;
-        const int32_t ca = regions_.component_at(ua.slot, world_to_cell(ua.m.pos.x), world_to_cell(ua.m.pos.y));
-        const int32_t cb = regions_.component_at(ub.slot, world_to_cell(ub.m.pos.x), world_to_cell(ub.m.pos.y));
-        return ca == cb;
+        if (loco_kind(ua) != loco_kind(ub)) return false;
+        if (no_grid) return true;
+        const V2 d = dest_of(a);
+        return zone_connected(regions_, ua.lp.mask, ua.m.pos, d) && zone_connected(regions_, ub.lp.mask, ub.m.pos, d);
+    };
+    // §4.2 step 2 item 4 [H]: a straight passable line (0x5a4c10) from the nearest member to the candidate, or a path
+    // (0x5a2830) no longer than 1.4 x their distance ([port] [M]: the candidate's class, the line from the member)
+    LandPathScratch reach_sc;
+    const auto reach = [&](uint32_t nm, uint32_t cand) {
+        if (no_grid) return true;
+        const Unit& um = units_[idx[nm]];
+        const Unit& uc = units_[idx[cand]];
+        if (line_passable(grid_, um.m.pos, uc.m.pos, uc.lp.mask)) return true;
+        LandPathRequest q;
+        q.start = uc.m.pos;
+        q.goal = um.m.pos;
+        q.mask = uc.lp.mask;
+        q.snap_goal = false;
+        LandPath lp;
+        find_land_path(grid_, regions_, q, reach_sc, lp);
+        return lp.ok && !(path_length(lp.points) > k.formation_recruit_path_ratio * distance(um.m.pos, uc.m.pos));
     };
     std::vector<uint64_t> taken;
     std::vector<LandForm> forms;  // s78n t20: every formation of the order, laid out before any goal is given
@@ -797,11 +854,12 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             lf.fwd = normalize_retail(lf.centre - lf.centroid);
             if (length_sq(lf.fwd) == 0.0f) lf.fwd = {1.0f, 0.0f};
             lf.keep_id = keys[gi];
+            lf.mask = formation_class_mask(idx, lf.members);  // s78n t26 review round 2
             forms.push_back(std::move(lf));
         }
     }
     for (const std::vector<uint32_t>& bucket : replan ? std::vector<std::vector<uint32_t>>{} : kmeans_buckets(mem, k.max_formation_area)) {
-        for (const std::vector<uint32_t>& f : split_into_formations(mem, bucket, k, compatible, speed_ratio)) {
+        for (const std::vector<uint32_t>& f : split_into_formations(mem, bucket, k, compatible, speed_ratio, reach)) {
             V2 centre = order.destination;
             bool fresh = false;
             if (position_order && !zone_failed) {
@@ -850,6 +908,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             lf.slots = layout_formation(mem, f, fwd, k);
             lf.centre = centre;
             lf.fresh = fresh;
+            lf.mask = formation_class_mask(idx, f);  // s78n t26 review round 2 (0x4779e0)
             forms.push_back(std::move(lf));
         }
     }
@@ -1003,6 +1062,27 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
 // its class cannot enter, or is airborne) is left as it is: retail's tries all fail there and the forced pass keeps D
 // (§4.3.1 item 7, "What reaches the destination check"); [port] the port then keeps its slot search (pick_land_slot).
 // [port] the taken rectangles of a failed pass are dropped.
+// s78n t26 review round 2 (MOVEMENT §4.3.1 item 7 (c), §4.3.2 item 5 [H]): 0x4779e0 - of the movement classes whose
+// mask lies inside the intersection of the members' masks, the one with the most mask bits ([port] [L] ties: the lowest
+// class index; none inside: the intersection itself). One class for a single-class formation. [port] 0x414720's
+// switch to the class without the Shield bit when the goal stays zone-connected for it is not modelled.
+uint32_t MovementSystem::formation_class_mask(const std::vector<uint32_t>& idx, const std::vector<uint32_t>& members) const {
+    uint32_t inter = ~0u;
+    for (const uint32_t m : members) inter &= units_[idx[m]].lp.mask;
+    uint32_t best = inter;
+    int32_t best_bits = -1;
+    for (uint32_t c = 0; c < kMovementClassCount; ++c) {
+        const uint32_t cm = cfg_.classes.mask(static_cast<int32_t>(c));
+        if ((cm & ~inter) != 0u) continue;
+        const auto bits = static_cast<int32_t>(std::popcount(cm));
+        if (bits > best_bits) {
+            best_bits = bits;
+            best = cm;
+        }
+    }
+    return best;
+}
+
 void MovementSystem::destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms,
                                        V2 group_c) {
     std::vector<uint32_t> ord;
@@ -1015,14 +1095,14 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
     const LandForm& rf = forms[ord[0]];
     const Unit& lead = units_[idx[rf.members[0]]];
     const V2 dest = rf.centre;
-    if (!grid_.passable_world(lead.m.pos, lead.lp.mask) || !grid_.passable_world(dest, lead.lp.mask)) return;
+    if (!grid_.passable_world(lead.m.pos, rf.mask) || !grid_.passable_world(dest, rf.mask)) return;
     LandPathScratch sc;
     LandPath test;
     {
         LandPathRequest q;
         q.start = lead.m.pos;
         q.goal = dest;
-        q.mask = lead.lp.mask;
+        q.mask = rf.mask;
         q.clearance_radius = lead.d.radius > kCellSize && !lead.d.team_container ? lead.d.radius : 0.0f;  // as plan_land
         find_land_path(grid_, regions_, q, sc, test);
     }
@@ -1043,12 +1123,12 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
         V2 dn = dest;
         if (n > 0 && !forced) {
             dn = dest + kRing[n % 8u] * (20.0f * static_cast<float>((n + 7u) / 8u));
-            if (!grid_.passable_world(dn, lead.lp.mask) || !zone_connected(regions_, lead.lp.mask, dest, dn)) continue;
-            if (!line_passable(grid_, dest, dn, lead.lp.mask)) {
+            if (!grid_.passable_world(dn, rf.mask) || !zone_connected(regions_, rf.mask, dest, dn)) continue;
+            if (!line_passable(grid_, dest, dn, rf.mask)) {
                 LandPathRequest q;
                 q.start = dest;
                 q.goal = dn;
-                q.mask = lead.lp.mask;
+                q.mask = rf.mask;
                 q.snap_goal = false;
                 LandPath lp;
                 find_land_path(grid_, regions_, q, sc, lp);
@@ -1095,7 +1175,6 @@ void MovementSystem::destination_check(const MoveOrder& order, const std::vector
 bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const LandForm& f, V2 dn, V2 v, V2 axis, bool first,
                                      bool several, bool forced, std::vector<FootRect>& taken, V2& centre) const {
     const float sp = cfg_.constants.between_formation_spacing, ext = cfg_.constants.destination_query_extension;
-    const Unit& lead = units_[idx[f.members[0]]];
     float x0 = 3.0e38f, x1 = -3.0e38f, y0 = 3.0e38f, y1 = -3.0e38f;
     bool all_inf = true, all_giant = true, all_containers = true;
     // s78n t20 F8 [port]: the slots are laid along the layout's forward axis f.fwd, R along `axis`: each slot rectangle's
@@ -1132,11 +1211,11 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
         bool hit = false;
         for (const FootRect& t : taken) hit = hit || foot_overlap(rect, t);
         if (hit) continue;
-        bool pass = grid_.passable_world(c, lead.lp.mask) && grid_.passable_world(rect.c, lead.lp.mask);
+        bool pass = grid_.passable_world(c, f.mask) && grid_.passable_world(rect.c, f.mask);
         const V2 b = perp_left(axis);
         for (int corner = 0; corner < 4 && pass; ++corner) {
             const V2 p = rect.c + axis * ((corner & 1) ? hx : -hx) + b * ((corner & 2) ? hy : -hy);
-            pass = grid_.passable_world(p, lead.lp.mask);
+            pass = grid_.passable_world(p, f.mask);
         }
         if (!pass) {
             if (crossed_fail) break;  // the early end
@@ -1145,15 +1224,15 @@ bool MovementSystem::place_formation(const std::vector<uint32_t>& idx, const Lan
         }
         if (ground == Ground::Met) ground = Ground::Crossed;
         if (ground == Ground::Crossed) {
-            if (!zone_connected(regions_, lead.lp.mask, dn, c)) {
+            if (!zone_connected(regions_, f.mask, dn, c)) {
                 crossed_fail = true;
                 continue;
             }
-            if (!line_passable(grid_, dn, c, lead.lp.mask)) {
+            if (!line_passable(grid_, dn, c, f.mask)) {
                 LandPathRequest q;
                 q.start = dn;
                 q.goal = c;
-                q.mask = lead.lp.mask;
+                q.mask = f.mask;
                 q.snap_goal = false;
                 LandPath lp;
                 find_land_path(grid_, regions_, q, sc, lp);
@@ -1265,7 +1344,7 @@ void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32
             V2 fwd = order.facing_deg != kNoFacing ? dir_from_deg(order.facing_deg) : normalize_retail(dest - c);
             if (length_sq(fwd) == 0.0f) fwd = {1.0f, 0.0f};
             uint32_t n = 0;
-            for (const Slot& s : layout_formation(mem, f, fwd, k)) {
+            for (const Slot& s : layout_formation(mem, f, fwd, k, RankKey::MaxSpeed)) {  // [port] space: the speed key
                 Unit& u = units_[idx[s.member]];
                 V2 target = slot_world(dest, fwd, s);
                 if (!(order.flags & kMoveFlagSkipValidation))

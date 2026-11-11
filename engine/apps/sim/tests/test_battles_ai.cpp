@@ -4513,6 +4513,267 @@ void test_land_guard() {
     CHECK(r.moved && r.replanned && r.replan_frames <= 31 && r.same_slot && r.near_goal2 && r.arrived2);
 }
 
+// s78n t26 review round 2 (LUA_API "Move_To / Attack_Move / Guard_Target - Move_Internal 0x57da90" [H]: for Move_To,
+// flags 0, a GameObjectWrapper destination is the object's position and the order gets kind 1; TACTICAL_COMBAT §2.8
+// "Summary by order": unit.Move_To(object) = 1 (position snapshot); A1_READINGS §33.4: the 30-frame re-path follows
+// kind-3 goals only): a Lua Move_To(friendly squad) - the MoveToObject event (no threat number) and the LuaOrder MoveTo
+// with the object (a threat number) - moves to where the squad stood. The squad is then moved 300 away: the mover is
+// never re-pathed after it (its goal stays at the snapshot) and ends at the snapshot point, far from the squad.
+struct LandMoveToObjectRun {
+    bool ordered = false, moved = false, kept_goal = true, arrived = false;
+    float goal_d = 0.0f, end_snap = 0.0f, end_obj = 0.0f;
+};
+
+LandMoveToObjectRun run_land_move_to_object(const Data& d, bool lua_order) {
+    LandMoveToObjectRun out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 8000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    opt.battle.fog = false;
+    ClashSession s(d, 0, opt, {"S10_Squad", "S10_Squad"}, {}, true);
+    if (!s.gs) return out;
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };  // no AI player: orders only
+    std::unique_ptr<BattleAi> bai;
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId sq[2] = {objects::kNoObjectId, objects::kNoObjectId};
+    Vec3 dir{}, perp{}, snap{};
+    mv::V2 goal0;
+    for (uint64_t t = 0; t < 6000 && stage < 9; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto& cs = const_cast<tc::CombatSystem&>(b->combat());
+        const mv::MovementSystem& ms = b->movement();
+        if (bai) bai->follow_service();  // the BattleAi::update step (this AI runs no plans)
+        if (stage == 0) {
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                cs.make_invulnerable(id, 1000000, b->frame());
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            objects::ObjectId enemy = objects::kNoObjectId;
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() < 2 || !st.alive(th) || !ms.has_unit(static_cast<objects::ObjectId>(tid))) continue;
+                if (st.owner(th) == 0) {
+                    if (sq[0] == objects::kNoObjectId) sq[0] = static_cast<objects::ObjectId>(tid);
+                    else if (sq[1] == objects::kNoObjectId) sq[1] = static_cast<objects::ObjectId>(tid);
+                } else if (st.owner(th) == 1 && enemy == objects::kNoObjectId) {
+                    enemy = m.front();
+                }
+            }
+            CHECK(sq[1] != objects::kNoObjectId && enemy != objects::kNoObjectId);
+            if (sq[1] == objects::kNoObjectId || enemy == objects::kNoObjectId) break;
+            // the run_land_guard spots (open ground, 600 from the enemy): the mover at +150 across, the target at -250
+            const Vec3 tp = st.position(st.find(enemy)), ap = st.position(st.find(sq[0]));
+            const float dx = ap.x - tp.x, dy = ap.y - tp.y, dl = std::sqrt(dx * dx + dy * dy);
+            dir = dl > 1.0f ? Vec3{dx / dl, dy / dl, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            perp = Vec3{-dir.y, dir.x, 0.0f};
+            const auto spot = [&](float along, float across) {
+                return Vec3{tp.x + dir.x * along + perp.x * across, tp.y + dir.y * along + perp.y * across, ap.z};
+            };
+            CHECK(b->teleport(*tm, sq[1], spot(600.0f, -250.0f), st.facing(st.find(sq[1]))));
+            CHECK(b->teleport(*tm, sq[0], spot(600.0f, 150.0f), st.facing(st.find(sq[0]))));
+            bai = std::make_unique<BattleAi>(*b, *tm, *s.host, ts);
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 1) {
+            if (b->frame() < stage_frame + 2) continue;
+            const objects::ObjectHandle gh = st.find(sq[1]);
+            snap = st.position(gh);
+            if (lua_order) {
+                std::vector<uint8_t> pay;
+                const auto put = [&pay](uint32_t v) {
+                    for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+                };
+                put(static_cast<uint32_t>(sq[0]));
+                put(static_cast<uint32_t>(sq[1]));
+                put(std::bit_cast<uint32_t>(snap.x));
+                put(std::bit_cast<uint32_t>(snap.y));
+                put(std::bit_cast<uint32_t>(snap.z));
+                put(std::bit_cast<uint32_t>(1.0e9f));  // a threat number (Move_To(obj, n)): the LuaOrder path
+                const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::MoveTo));
+                out.ordered = bai->execute(0, commands::ev::port_extension(sub, pay)) == commands::RejectReason::None;
+            } else {
+                out.ordered = bai->execute(0, commands::ev::move_to_object(static_cast<uint32_t>(sq[1]), {static_cast<uint32_t>(sq[0])})) ==
+                              commands::RejectReason::None;
+            }
+            CHECK(out.ordered);
+            goal0 = ms.view(sq[0]).goal;
+            out.goal_d = std::sqrt((goal0.x - snap.x) * (goal0.x - snap.x) + (goal0.y - snap.y) * (goal0.y - snap.y));
+            // the target walks off at once: 300 toward the enemy
+            out.moved = b->teleport(*tm, sq[1], Vec3{snap.x - dir.x * 300.0f, snap.y - dir.y * 300.0f, snap.z}, st.facing(gh));
+            CHECK(out.moved);
+            stage = 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 2) {
+            const mv::UnitView v = ms.view(sq[0]);
+            if (v.has_goal && !(v.goal == goal0) && !v.pushed) out.kept_goal = false;  // a re-path after the moved squad
+            if (!v.has_goal && v.speed == 0.0f && b->frame() > stage_frame + 30) {
+                out.arrived = true;
+                const Vec3 op = st.position(st.find(sq[1]));
+                out.end_snap = std::sqrt((v.pos.x - snap.x) * (v.pos.x - snap.x) + (v.pos.y - snap.y) * (v.pos.y - snap.y));
+                out.end_obj = std::sqrt((v.pos.x - op.x) * (v.pos.x - op.x) + (v.pos.y - op.y) * (v.pos.y - op.y));
+                stage = 9;
+            } else if (b->frame() > stage_frame + 1500) {
+                stage = 9;
+            }
+        }
+    }
+    return out;
+}
+
+void test_land_move_to_object() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    for (const bool lua_order : {false, true}) {
+        const LandMoveToObjectRun r = run_land_move_to_object(*d, lua_order);
+        std::printf("  land Move_To(object) (%s): ordered %d, goal %.2f from the snapshot, target moved 300 %d, goal kept %d, "
+                    "arrived %d %.2f from the snapshot and %.2f from the target\n",
+                    lua_order ? "LuaOrder MoveTo + threat" : "MoveToObject", r.ordered ? 1 : 0, static_cast<double>(r.goal_d),
+                    r.moved ? 1 : 0, r.kept_goal ? 1 : 0, r.arrived ? 1 : 0, static_cast<double>(r.end_snap),
+                    static_cast<double>(r.end_obj));
+        CHECK(r.ordered && r.moved && r.goal_d < 60.0f && r.kept_goal);
+        CHECK(r.arrived && r.end_snap < 60.0f && r.end_obj > 200.0f);
+    }
+}
+
+// s78n t26 review round 2 (FIGHTER_FLYING §4.11 E [H]: c = 0x40edd0(F) is true only when EVERY member of the formation can
+// hit from where it stands; the land stop cuts F's path and stops every member at once): three squads 60 apart across the
+// approach, 800 from the target, given one Attack - one attack formation (the middle squad seeds at the centroid and
+// recruits both). The third squad's troopers get +140 % fire range (600 instead of 250), so it can hit long before the
+// others. While it can hit and the seed is still well out of its own range (> 280) with every squad walking, no 30-frame
+// check may land-stop (the formation walks on together); the window is longer than one check interval.
+struct LandAttackFormationStopRun {
+    bool ordered = false, one_form = false, ended = false;
+    uint32_t window = 0, stops_in_window = 0;
+};
+
+LandAttackFormationStopRun run_land_attack_formation_stop(const Data& d) {
+    LandAttackFormationStopRun out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 8000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    ClashSession s(d, 0, opt, {"S10_Squad", "S10_Squad", "S10_Squad"}, {}, true);
+    if (!s.gs) return out;
+    int stage = 0;
+    uint32_t stage_frame = 0, stops0 = 0;
+    objects::ObjectId sq[3] = {objects::kNoObjectId, objects::kNoObjectId, objects::kNoObjectId};
+    std::vector<objects::ObjectId> mem[3];
+    objects::ObjectId target = objects::kNoObjectId;
+    for (uint64_t t = 0; t < 6000 && stage < 9; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto& cs = const_cast<tc::CombatSystem&>(b->combat());
+        const mv::MovementSystem& ms = b->movement();
+        if (stage == 0) {
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                cs.make_invulnerable(id, 1000000, b->frame());
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            int n = 0;
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() < 2 || !st.alive(th) || !ms.has_unit(static_cast<objects::ObjectId>(tid))) continue;
+                if (st.owner(th) == 0 && n < 3) {
+                    sq[n] = static_cast<objects::ObjectId>(tid);
+                    mem[n] = m;
+                    ++n;
+                } else if (st.owner(th) == 1 && target == objects::kNoObjectId) {
+                    target = m.front();
+                }
+            }
+            CHECK(n == 3 && target != objects::kNoObjectId);
+            if (n < 3 || target == objects::kNoObjectId) break;
+            const Vec3 tp = st.position(st.find(target)), ap = st.position(st.find(sq[0]));
+            const float dx = ap.x - tp.x, dy = ap.y - tp.y, dl = std::sqrt(dx * dx + dy * dy);
+            const Vec3 dir = dl > 1.0f ? Vec3{dx / dl, dy / dl, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            const Vec3 perp{-dir.y, dir.x, 0.0f};
+            const float across[3] = {0.0f, 60.0f, -60.0f};
+            for (int k = 0; k < 3; ++k) {
+                const Vec3 p{tp.x + dir.x * 800.0f + perp.x * across[k], tp.y + dir.y * 800.0f + perp.y * across[k], ap.z};
+                CHECK(b->teleport(*tm, sq[k], p, st.facing(st.find(sq[k]))));
+            }
+            for (const objects::ObjectId id : mem[2])  // the long-range squad: Fire_Range bonus +140 % (250 -> 600)
+                if (tc::ModifierSet* m = cs.unit_modifiers(id))
+                    m->set_by_source(tc::ModList::FireRange, 0x54325232, 1.4f, tc::kPermanent, 0x54325232u, -0x5432);
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 1) {
+            if (b->frame() < stage_frame + 2) continue;
+            std::vector<objects::ObjectId> all;
+            for (const auto& m : mem) all.insert(all.end(), m.begin(), m.end());
+            out.ordered = b->order_attack(*tm, 0, all, target, s.host->random().synced()) == commands::RejectReason::None;
+            CHECK(out.ordered);
+            const uint32_t f0 = ms.view(sq[0]).atk_form;
+            out.one_form = f0 != 0 && ms.view(sq[1]).atk_form == f0 && ms.view(sq[2]).atk_form == f0;
+            stops0 = b->stats().attack_land_stops;
+            stage = 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 2) {
+            const uint32_t stops = b->stats().attack_land_stops;
+            const Vec3 tp = st.position(st.find(target));
+            const mv::UnitView v0 = ms.view(sq[0]);
+            const float d0 = std::sqrt((v0.pos.x - tp.x) * (v0.pos.x - tp.x) + (v0.pos.y - tp.y) * (v0.pos.y - tp.y));
+            const bool far_hit = cs.can_hit(mem[2].front(), target) == tc::CanHit::Yes;
+            const bool walking = ms.view(sq[0]).has_goal && ms.view(sq[1]).has_goal && ms.view(sq[2]).has_goal;
+            if (far_hit && walking && d0 > 280.0f) {
+                ++out.window;
+                out.stops_in_window += stops - stops0;
+            }
+            stops0 = stops;
+            if (!walking && d0 <= 280.0f) {
+                out.ended = true;
+                stage = 9;
+            } else if (b->frame() > stage_frame + 3000) {
+                stage = 9;
+            }
+        }
+    }
+    return out;
+}
+
+void test_land_attack_formation_stop() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    const LandAttackFormationStopRun r = run_land_attack_formation_stop(*d);
+    std::printf("  land attack formation stop: ordered %d, one attack formation %d, %u frame(s) with only the long-range squad "
+                "able to hit (all walking), land stops in them %u, ended %d\n",
+                r.ordered ? 1 : 0, r.one_form ? 1 : 0, r.window, r.stops_in_window, r.ended ? 1 : 0);
+    CHECK(r.ordered && r.one_form && r.window > 31 && r.stops_in_window == 0);
+}
+
 void test_land_squad_garrison_save_load() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, false, true);
@@ -4750,6 +5011,8 @@ int main(int argc, char** argv) {
     test_land_attack_blocks();
     test_land_attack_order();
     test_land_guard();  // s78n t25.4
+    test_land_move_to_object();  // s78n t26 review round 2
+    test_land_attack_formation_stop();  // s78n t26 review round 2
     test_land_attack_reach();  // s78n t20 review follow-ups
     test_land_death_clone_obstacle();  // s78n t20 batch 1 item 1.5
     test_vehicle_landing_exit();

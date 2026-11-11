@@ -1053,6 +1053,12 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
             const tc::CanHit c = los_only ? combat_->line_of_fire_from(unit, from, target) : combat_->can_hit_from(unit, from, target);
             return c == tc::CanHit::Yes || c == tc::CanHit::NoTarget;
         });
+        // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): the formation layout's rank key, Get attack range
+        // 0x3749d0 (the value land_attack_order reads); a squad container through its first live member
+        movement_->set_attack_range_query([this](mv::ObjectId id) {
+            const objects::ObjectId unit = attack_lead(id);
+            return unit != objects::kNoObjectId && combat_->has_unit(unit) ? combat_->attack_range(unit) : 0.0f;
+        });
     }
     combat_->bind_rng(&rng);  // Take_Damage listeners called outside the tick (host damage) draw here
     hg_setup(mode);           // hangars: SPAWN_SQUADRON descriptors and the HangarSystem (before any unit exists)
@@ -2052,7 +2058,7 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
     const auto live = [&](const Unit* x) { return x && x->alive && !x->retreated && st.alive(x->h) && combat_->has_unit(x->id); };
     struct Checked {  // s78n t25.3: this pass's checked blocks (ascending mover)
         objects::ObjectId mover, lead, tid;
-        bool plan, halted;
+        bool due, plan, halted;
     };
     std::vector<Checked> checked;
     const auto keep = [&](AttackBlock& r) {
@@ -2090,49 +2096,81 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
             tid = names(lead);
         }
         if (!lead || tid == objects::kNoObjectId) return false;  // the order no longer names the target
-        bool plan = false, halted = false;
-        if (frame_ < r.next || movement_locked(lead->id)) {
-            if (frame_ >= r.next) r.next = frame_ + 30u;
-            checked.push_back({r.mover, lead->id, tid, false, false});
-            return true;
-        }
-        r.next = frame_ + 30u;  // 0x410a60 / 0x4192b0: frame + int(FPS + 0.5)
-        const Vec3 tp = st.position(unit_by_id(tid)->h);
-        const mv::UnitView v = movement_->view(r.mover);
-        const tc::CanHit c = attack_can_hit(lead->id, tid);
-        const bool can = c == tc::CanHit::Yes || c == tc::CanHit::NoTarget;  // NoTarget: nothing tested (0x40edd0 true)
-        const float gx = tp.x - r.gx, gy = tp.y - r.gy, R = 0.5f * lead->range;
-        const bool far = gx * gx + gy * gy > R * R;
-        if (!v.has_goal) {
-            plan = !v.pushed && !can;  // arrived and some member cannot hit (FIGHTER_FLYING §4.11 A)
-        } else {
-            const bool stopping = v.walk_state == mv::LocoState::WalkEndMove;
-            if (can && !stopping && !far) {  // §4.11 E: the land stop
-                const objects::ObjectId one[] = {lead->id};
-                movement_->halt(one, frame_);  // s78n t20 review: no speed zeroing, the walk brakes through End Move
-                ++stats_.attack_land_stops;
-                halted = true;
-            } else if ((stopping && !can) || far) {
-                plan = true;
-            }
-        }
-        checked.push_back({r.mover, lead->id, tid, plan, halted});
+        // s78n t26 review round 2: the checks are the attack formation's (below); here the timer gate only
+        const bool due = frame_ >= r.next && !movement_locked(lead->id);
+        if (frame_ >= r.next && !due) r.next = frame_ + 30u;
+        checked.push_back({r.mover, lead->id, tid, due, false, false});
         return true;
     };
     size_t w = 0;
     for (size_t i = 0; i < attack_blocks_.size(); ++i)
         if (keep(attack_blocks_[i])) attack_blocks_[w++] = attack_blocks_[i];
     attack_blocks_.resize(w);
+    const auto bi = [&](objects::ObjectId mover) {
+        return std::lower_bound(attack_blocks_.begin(), attack_blocks_.end(), mover,
+                                [](const AttackBlock& b, objects::ObjectId v) { return b.mover < v; });
+    };
+    // s78n t26 review round 2 (FIGHTER_FLYING §4.11 A / E [H]): the checks are per attack formation F - the blocks on the
+    // same target whose movers share UnitView::atk_form (0: the block alone), in ascending mover order, lead = the first
+    // ([port] as the re-plan's lead). F is checked when its lead's block is due (0x410a60 / 0x4192b0: frame + int(FPS +
+    // 0.5)); every member's timer then resets. c = 0x40edd0(F): EVERY member can hit from where it stands (each block's
+    // lead: a squad through its first member that names the target, D 5); moving = some member has a goal; stopping =
+    // the lead's Walk state 0x14 (End Move) or 0x15 (Pre Stopped: [port] never observed, the port's walk passes it within
+    // the frame), or the block has flag 0x01 and the lead has no path (0x39ade0: no record on its path stack).
+    //   - arrived (no member has a goal), no member on a collision-owned top record, and not c -> plan again (0x410a60);
+    //   - moving, c, not stopping and D <= R -> the land stop: every member with a goal halts at once;
+    //   - moving and (stopping and not c, or D > R) -> plan again.
+    std::vector<uint8_t> grouped(checked.size(), 0);
+    for (size_t i = 0; i < checked.size(); ++i) {
+        if (grouped[i]) continue;
+        grouped[i] = 1;
+        const auto ri = bi(checked[i].mover);
+        const uint32_t form = movement_->view(checked[i].mover).atk_form;
+        std::vector<size_t> g{i};
+        if (form != 0)
+            for (size_t j = i + 1; j < checked.size(); ++j)
+                if (!grouped[j] && bi(checked[j].mover)->target == ri->target && movement_->view(checked[j].mover).atk_form == form) {
+                    grouped[j] = 1;
+                    g.push_back(j);
+                }
+        if (!checked[i].due) continue;
+        for (const size_t j : g) bi(checked[j].mover)->next = frame_ + 30u;
+        bool can = true, moving = false, pushed = false;
+        for (const size_t j : g) {
+            const tc::CanHit c = attack_can_hit(checked[j].lead, checked[j].tid);
+            can = can && (c == tc::CanHit::Yes || c == tc::CanHit::NoTarget);  // NoTarget: nothing tested (0x40edd0 true)
+            const mv::UnitView vj = movement_->view(checked[j].mover);
+            moving = moving || vj.has_goal;
+            pushed = pushed || vj.pushed;
+        }
+        const Unit* lead = unit_by_id(checked[i].lead);
+        const Vec3 tp = st.position(unit_by_id(checked[i].tid)->h);
+        const float gx = tp.x - ri->gx, gy = tp.y - ri->gy, R = 0.5f * lead->range;
+        const bool far = gx * gx + gy * gy > R * R;
+        if (!moving) {
+            checked[i].plan = !pushed && !can;  // arrived and some member cannot hit (FIGHTER_FLYING §4.11 A)
+            continue;
+        }
+        const mv::UnitView lv = movement_->view(checked[i].mover);
+        const bool stopping =
+            lv.walk_state == mv::LocoState::WalkEndMove || ((ri->flags & mv::kMoveFlagAttackMove) != 0 && !lv.has_goal);
+        if (can && !stopping && !far) {  // §4.11 E: the land stop of F
+            std::vector<objects::ObjectId> ids;
+            for (const size_t j : g)
+                if (movement_->view(checked[j].mover).has_goal) ids.push_back(checked[j].mover);
+            movement_->halt(ids, frame_);  // s78n t20 review: no speed zeroing, the walk brakes through End Move
+            ++stats_.attack_land_stops;
+            for (const size_t j : g) checked[j].halted = true;
+        } else if ((stopping && !can) || far) {
+            checked[i].plan = true;
+        }
+    }
     // s78n t25.3 (MOVEMENT §4.3.2 item 8, §4.6.2): the re-plans, in ascending mover order. A re-plan is the formation's:
     // it takes the lead of every block on the same target whose mover is in the same attack formation (atk_form != 0)
     // and was not land-stopped this pass; their timers reset together. No new formation (no ctor draw), no slot test.
     std::vector<uint8_t> done(checked.size(), 0);
     for (size_t i = 0; i < checked.size(); ++i) {
         if (!checked[i].plan || done[i]) continue;
-        const auto bi = [&](objects::ObjectId mover) {
-            return std::lower_bound(attack_blocks_.begin(), attack_blocks_.end(), mover,
-                                    [](const AttackBlock& b, objects::ObjectId v) { return b.mover < v; });
-        };
         const auto ri = bi(checked[i].mover);
         const objects::ObjectId target = ri->target;
         const uint8_t flags = ri->flags;

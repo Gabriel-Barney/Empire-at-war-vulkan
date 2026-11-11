@@ -1746,8 +1746,8 @@ int move_internal(Call& c, int flags, const char* who) {
     if (flags == kAttackMove) return issue_each(c, u.units, [&](ObjectId id) { return lua_order(LuaOrder::AttackMove, id, tid, p, 0); });
     if (flags == kGuardTarget) return issue_each(c, u.units, [&](ObjectId id) { return lua_order(LuaOrder::Guard, id, tid, p, 0); });
     // Move_To. REMAINING_GAPS §4.2: Move_Internal's optional numeric threat threshold T, carried as the order's arg
-    // (float bits; 0 = off). [port] with T an object target becomes a move to its current position; without it an
-    // object target is the MoveToObject order the battle host follows (a1h t02).
+    // (float bits; 0 = off). An object target is a move to a snapshot of its position either way (LUA_API Move_Internal:
+    // flags 0 -> kind 1 [H]; s78n t26 review round 2: the battle host no longer follows a MoveToObject order).
     if (c.is_number(k)) {
         const float t = static_cast<float>(c.number(k));
         const uint32_t bits = t != 0.0f ? std::bit_cast<uint32_t>(t) : 0u;

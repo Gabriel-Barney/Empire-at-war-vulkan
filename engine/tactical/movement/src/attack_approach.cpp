@@ -296,9 +296,8 @@ const LandAttackUnit* MovementSystem::attack_entry(const MoveOrder& order, Objec
 // s78n t25.2 (§4.3.2 item 6, §4.3.1 item 7 (b)): G is re-validated against the lead's zone (0x50f480(G, lead, 30): a
 // target on ground the lead cannot enter gives the reachable cell next to it nearest to the lead); the start is the
 // members' centroid when the lead reaches it by a straight line or a path <= 1.9 x the distance, else the lead's
-// position; the path start -> G as plan_land plans ([port] mask and clearance of the lead).
-bool MovementSystem::attack_path(const Unit& lead, V2 centroid, V2& g, std::vector<V2>& path) const {
-    const uint32_t mask = lead.lp.mask;
+// position; the path start -> G as plan_land plans (the formation's class `mask`, 0x4779e0; [port] the lead's clearance).
+bool MovementSystem::attack_path(const Unit& lead, uint32_t mask, V2 centroid, V2& g, std::vector<V2>& path) const {
     if (!zone_connected(regions_, mask, lead.m.pos, g)) {
         V2 v;
         if (!zone_validate(regions_, g, lead.m.pos, mask, v)) return false;
@@ -333,7 +332,7 @@ bool MovementSystem::attack_path(const Unit& lead, V2 centroid, V2& g, std::vect
 }
 
 // s78n t25.2: 0x43a070, the attack-arc slot test (§4.3.2 item 5) of formation f with (HX, HY) at the slot point p, for
-// the lead's mask ([port] the formation's class 0x4779e0 = the lead's): p passable, zone-connected to the lead, the
+// the formation's class 0x4779e0 (LandForm::mask, s78n t26 review round 2): p passable, zone-connected to the lead, the
 // terrain line p -> C clear (every crossed cell, the last included: a target on a stamped cell never gets a slot), and
 // the object test - the layer objects within sqrt(HX^2 + HY^2) + E of p, without the target, the order's units, objects
 // with a path record (an object without a locomotor always counts) and, for an all-Infantry / Bike or all-Giant
@@ -343,7 +342,7 @@ bool MovementSystem::attack_path(const Unit& lead, V2 centroid, V2& g, std::vect
 bool MovementSystem::arc_slot_test(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, float hx,
                                    float hy, V2 p) const {
     const Unit& lead = units_[idx[f.members[0]]];
-    const uint32_t mask = lead.lp.mask;
+    const uint32_t mask = f.mask;
     const V2 c = order.attack.c;
     if (!grid_.passable_world(p, mask)) return false;
     if (!zone_connected(regions_, mask, p, lead.m.pos)) return false;
@@ -423,9 +422,9 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
         else ++stats_.attack_in_range;
     }
     if (l.empty()) return;
-    const auto unslotted = [&](const Unit& lead) {
+    const auto unslotted = [&](const LandForm& rf) {
         stats_.attack_unslotted += static_cast<uint32_t>(l.size());
-        if (!grid_.passable_world(c, lead.lp.mask)) stats_.attack_unslotted_cell += static_cast<uint32_t>(l.size());
+        if (!grid_.passable_world(c, rf.mask)) stats_.attack_unslotted_cell += static_cast<uint32_t>(l.size());
     };
     float r = 3.0e38f;
     for (const uint32_t i : idx)
@@ -444,19 +443,19 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
     }
     const Unit& rlead = units_[idx[forms[ref].members[0]]];
     if (!(r < 3.0e38f)) {
-        unslotted(rlead);
+        unslotted(forms[ref]);
         return;
     }
     V2 g = order.attack.g;
     std::vector<V2> path;
-    if (!attack_path(rlead, forms[ref].centroid, g, path) || path.size() < 2) {
-        unslotted(rlead);
+    if (!attack_path(rlead, forms[ref].mask, forms[ref].centroid, g, path) || path.size() < 2) {
+        unslotted(forms[ref]);
         return;
     }
     const V2 d0 = normalize_retail(path[1] - path[0]);
     const V2 d1 = normalize_retail(path[path.size() - 1] - path[path.size() - 2]);
     if (!(length_sq(d1) > 0.0f)) {
-        unslotted(rlead);
+        unslotted(forms[ref]);
         return;
     }
     const V2 base = path[0];
@@ -497,7 +496,7 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
         }
         return;
     }
-    unslotted(rlead);
+    unslotted(forms[ref]);
 }
 
 // s78n t25.2: one formation's attack plan (§4.3.2 items 6 - 7; 0x41c1a0 -> 0x417520 -> 0x40eb90 / 0x410e90), run at the
@@ -542,7 +541,7 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
     }
     V2 g = order.attack.g;
     std::vector<V2> path;
-    if (!attack_path(lead, f.centroid, g, path)) {
+    if (!attack_path(lead, f.mask, f.centroid, g, path)) {
         // the plan fails: the members do not move ([port] stopped and failed, as the batch-2 zone failure; the block kept)
         for (const ObjectId id : ids) {
             const ObjectId one[] = {id};
@@ -562,7 +561,7 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         }
         return;
     }
-    const uint32_t mask = lead.lp.mask;
+    const uint32_t mask = f.mask;  // s78n t26 review round 2: the formation class 0x4779e0
     if (lead.atk_rho > 0.0f && path.size() >= 2) {
         const V2 v = last_dir(path);
         bool taken = false;

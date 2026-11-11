@@ -394,6 +394,11 @@ public:
     // trim and no "every member can fire" stop. Transient (host setup): not saved, not hashed.
     using FireTestFn = std::function<bool(ObjectId mover, V2 p, ObjectId target, bool los_only)>;
     void set_fire_test(FireTestFn fn) { fire_test_ = std::move(fn); }
+    // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): a unit's attack range 0x3749d0, the rank key of the land
+    // formation layout (0x41a080; a squad container: its first live member's, as the attack order's lead). Called from
+    // move() only (serial). Unset: 0 for every unit (ranks by type name, then id). Transient (host setup): not saved.
+    using AttackRangeFn = std::function<float(ObjectId unit)>;
+    void set_attack_range_query(AttackRangeFn fn) { attack_range_fn_ = std::move(fn); }
     // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): FormationClass ctor 0x40d0d0, one synced int(1, FPS), for a
     // formation the host creates outside move() (the Load_Map-tail GOM post-load pass, TacticalBattle); and whether a unit
     // already has a coordinator ([port]: an order or a formation; unknown ids have none).
@@ -1656,7 +1661,11 @@ private:
         // a fresh block carrying only the order's flags (no formation facing, no final facing)
         bool fresh = false;
         uint32_t keep_id = 0;  // s78n t25.2: an attack re-plan's formation (its units' atk_form; 0 = a new formation id)
+        // s78n t26 review round 2 (MOVEMENT §4.3.1 item 7 (c), §4.3.2 item 5: 0x4779e0): the formation's movement class
+        // mask - the class with the most mask bits among those inside the intersection of the members' masks
+        uint32_t mask = kPassClear;
     };
+    uint32_t formation_class_mask(const std::vector<uint32_t>& idx, const std::vector<uint32_t>& members) const;
     void destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms, V2 group_c);
     // s78n t20 batch 2: `forced` = the forced pass after n = 40 (no try accepted: the last try that reached the object
     // test, or Dn, is taken and true returned)
@@ -1673,7 +1682,7 @@ private:
     // The plan's goal and first path (item 6): G zone-validated for the lead (0x50f480; false when that fails), the start
     // (the members' centroid when reachable from the lead by a straight line or a path <= 1.9 x the distance, else the
     // lead's position) and the path start -> G (false: no path).
-    bool attack_path(const Unit& lead, V2 centroid, V2& g, std::vector<V2>& path) const;
+    bool attack_path(const Unit& lead, uint32_t mask, V2 centroid, V2& g, std::vector<V2>& path) const;
     void attack_slots(const MoveOrder& order, const std::vector<uint32_t>& idx, const std::vector<LandForm>& forms);
     bool arc_slot_test(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, float hx, float hy, V2 p) const;
     void attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame);
@@ -1738,6 +1747,7 @@ private:
     bool deferred_compose_ = false;           // cu8j t01: the host runs coordinator_update (not saved: host setup)
     uint32_t form_serial_ = 0;                // s78n t20: the last Unit::form_id given (saved, version 18)
     FireTestFn fire_test_;                    // s78n t25.2 (not saved: host setup)
+    AttackRangeFn attack_range_fn_;           // s78n t26 review round 2 (not saved: host setup)
     FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11

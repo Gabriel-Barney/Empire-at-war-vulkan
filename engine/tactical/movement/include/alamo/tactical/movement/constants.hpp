@@ -57,6 +57,9 @@ struct MovementConstants {
     float spread_out_spacing_coefficient = 1.8f;
     float infantry_formation_recruitment_distance = 60.0f;
     float vehicle_formation_recruitment_distance = 100.0f;
+    // s78n t26 review round 2 (MOVEMENT §4.2 step 2 item 4 [H]): a candidate whose straight line to the nearest member
+    // is blocked joins only when its path there is <= this x their distance
+    float formation_recruit_path_ratio = 1.4f;
     float double_click_move_max_speed_ratio = 1.25f;
     // s78n t20 (MOVEMENT §4.3.1 item 4): BetweenFormationSpacing (GC +0x14ec), the margin of the destination check's
     // formation and slot rectangles; the destination query extension (GC +0x14f0, Destination_Collision_Query_Extension,

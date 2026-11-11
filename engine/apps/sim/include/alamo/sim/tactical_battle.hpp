@@ -1616,12 +1616,14 @@ private:
     // ---- s78n t20 stage A: land attack blocks (FIGHTER_FLYING §4.11 A / E [H], MOVEMENT §4.3.2 items 6 / 8) ----
     // One record per mover (a steering squad's container, else the unit) that was given an attack on an object: the
     // Attack order (human and AI) and the AI's Attack_Move on an attackable enemy object. Every 30 frames (serial, ascending
-    // mover, before the collision feed and the movement tick), with c = attack_can_hit of the lead (the first unit of
-    // the mover whose combat order or attack goal still names the target), D = |recorded goal - target position| and
-    // R = half the lead's attack range:
-    //   - arrived (no goal, no collision-owned top record) and not c -> plan again (0x410a60);
-    //   - moving, c, not braking for its end (Walk End Move) and D <= R -> land stop (0x4192b0 / 0x40e7a0);
-    //   - moving and (braking and not c, or D > R) -> plan again.
+    // mover, before the collision feed and the movement tick), per attack formation (s78n t26 review round 2: the
+    // blocks on one target whose movers share UnitView::atk_form; lead = the first mover), with c = every member's
+    // attack_can_hit (a mover's tested unit: the first unit of the mover whose combat order or attack goal still names
+    // the target), D = |the lead's recorded goal - target position| and R = half the lead unit's attack range:
+    //   - arrived (no member has a goal, none on a collision-owned top record) and not c -> plan again (0x410a60);
+    //   - moving, c, not stopping (the lead in Walk End Move, or flag 0x01 and the lead without a path) and D <= R ->
+    //     the land stop of every member (0x4192b0 / 0x40e7a0);
+    //   - moving and (stopping and not c, or D > R) -> plan again.
     // A plan (land_attack_order, replan) is the movement's attack block (MOVEMENT §4.3.2 items 6 - 8): no path when
     // every member can fire, else the path to the staged target point, cut back to where every member can fire.
     // s78n t25.3: the re-plan takes every block on the same target whose mover is in the same attack formation

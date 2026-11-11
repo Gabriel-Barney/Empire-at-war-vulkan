@@ -642,8 +642,9 @@ void test_t23_chooser_rows() {
     }
 }
 
-// Same formation (MOVEMENT 5.4.6 chooser step 3): one order for a column of two heading east, the rear one slower, so it
-// ranks into the front row (the slowest rank leads) and its goal lies past the faster one's. Vehicles of one type ->
+// Same formation (MOVEMENT 5.4.6 chooser step 3): one order for a column of two heading east, the rear one slower and with
+// the shorter attack range, so it ranks into the front row (MOVEMENT §4.3 correction [H]: the shortest range leads; s78n t26
+// review round 2, the rank key was the max speed before) and its goal lies past the faster one's. Vehicles of one type ->
 // state 13: the two swap goals and the record ends in its decision frame (so state 13 is never seen between ticks);
 // Infantry -> state 11 with the front-slot unit as M.
 void test_t23_same_formation() {
@@ -652,6 +653,7 @@ void test_t23_same_formation() {
         MovementSystem sys{MovementConfig{}};
         land_system(sys, 120);
         const V2 base = cell_center(30, 60);
+        sys.set_attack_range_query([](ObjectId id) { return id == 2 ? 80.0f : 100.0f; });  // the rear one ranks in front
         UnitDesc a = inf ? unit(1, base + V2{40.0f, 0.0f}, 2, 1.0f, 6.0f) : vehicle(1, base + V2{40.0f, 0.0f}, 0);
         UnitDesc b = inf ? unit(2, base, 2, 0.8f, 6.0f) : vehicle(2, base, 0, 10.0f, 6.0f, 0.8f);
         CHECK(sys.add_unit(a) && sys.add_unit(b));
@@ -739,6 +741,9 @@ void test_t23_starvation() {
         MovementSystem sys{MovementConfig{}};
         land_system(sys, 120);
         const V2 at = cell_center(30, 60);
+        // s78n t26 review round 2 (MOVEMENT §4.3 "Correction, s78n t19" [H]): rows rank by attack range (shortest in front), no longer by max speed: the slow front one
+        // keeps the front row with the shorter range
+        sys.set_attack_range_query([](ObjectId id) { return id == 1 ? 80.0f : 100.0f; });
         UnitDesc front = vehicle(1, at, 0, 10.0f, with_detour ? 24.0f : 6.0f, 0.8f);
         if (with_detour) front.collision_class = kUccGiantVehicle;  // a Giant never overtakes (0x683260)
         CHECK(sys.add_unit(front));

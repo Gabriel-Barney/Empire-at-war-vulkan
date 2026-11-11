@@ -685,14 +685,16 @@ static void test_formations() {
     }
     CHECK(buckets.size() >= 2 && pure);
 
-    // Rank / rows: hero first, slowest in front, left/right order kept.
+    // Rank / rows (MOVEMENT §4.3 item 1 and its "Correction, s78n t19" [H]: the rank key 0x3749d0 is the attack range):
+    // hero first, shortest range in front, left/right order kept. The max speeds run the other way and are not read.
     std::vector<FormationMember> s;
-    const float speeds[8] = {3.0f, 1.0f, 2.0f, 1.0f, 3.0f, 2.0f, 2.5f, 1.0f};
+    const float ranges[8] = {3.0f, 1.0f, 2.0f, 1.0f, 3.0f, 2.0f, 2.5f, 1.0f};
     for (int i = 0; i < 8; ++i) {
         FormationMember f;
         f.id = 10 + i;
         f.pos = {static_cast<float>(i) * 40.0f, 0.0f};  // laterally spread along +x
-        f.max_speed = speeds[i];
+        f.attack_range = ranges[i];
+        f.max_speed = 4.0f - ranges[i];
         f.radius = 8.0f;
         f.spacing = 1.0f;
         f.type_name = i % 2 ? "Unit_B" : "unit_a";
@@ -702,7 +704,7 @@ static void test_formations() {
     std::vector<uint32_t> all{0, 1, 2, 3, 4, 5, 6, 7};
     const auto ranked = rank_members(s, all);
     CHECK(ranked.front().member == 4);  // hero first
-    // 4 distinct non-hero speeds (1, 2, 2.5, 3) -> tolerance grows to 15: one rank behind the hero.
+    // 4 distinct non-hero ranges (1, 2, 2.5, 3) -> tolerance grows to 15 (range units): one rank behind the hero.
     bool one_rank = true;
     for (size_t i = 1; i < ranked.size(); ++i) one_rank = one_rank && ranked[i].rank == 1;
     CHECK(one_rank);
@@ -721,13 +723,43 @@ static void test_formations() {
         for (size_t j = i + 1; j < slots.size(); ++j)
             if (std::fabs(slots[i].lateral - slots[j].lateral) < 1.0f && std::fabs(slots[i].back - slots[j].back) < 1.0f) distinct = false;
     CHECK(distinct);
-    // With fewer distinct speeds (no tolerance growth) the slowest rank is in front.
-    for (int i = 0; i < 8; ++i) s[static_cast<size_t>(i)].max_speed = i < 4 ? 2.0f : 1.0f;
+    // With fewer distinct ranges (no tolerance growth) the shortest range is in front (the slower units are behind).
+    for (int i = 0; i < 8; ++i) {
+        s[static_cast<size_t>(i)].attack_range = i < 4 ? 300.0f : 100.0f;
+        s[static_cast<size_t>(i)].max_speed = i < 4 ? 1.0f : 2.0f;
+    }
     s[4].hero = false;
     const auto r2 = rank_members(s, all);
-    CHECK(s[r2.front().member].max_speed == 1.0f && r2.front().rank == 0 && r2.back().rank == 1);
-    // Equal speed ties: case-insensitive type name, then id.
+    CHECK(s[r2.front().member].attack_range == 100.0f && r2.front().rank == 0 && r2.back().rank == 1);
+    // Equal range ties: case-insensitive type name, then id.
     CHECK(s[r2[0].member].type_name == "unit_a" || s[r2[0].member].type_name == "Unit_B");
+    // Real ranges (infantry 100 / 150, tank 300, artillery 600 / 800): five ranks for every tolerance up to the cap, rows
+    // front to back by range - the infantry in front, the artillery at the back (each member in its own rank's row here).
+    {
+        const float rr[5] = {800.0f, 100.0f, 300.0f, 600.0f, 150.0f};
+        std::vector<FormationMember> rm;
+        for (int i = 0; i < 5; ++i) {
+            FormationMember f;
+            f.id = 40 + i;
+            f.pos = {static_cast<float>(i) * 40.0f, 0.0f};
+            f.attack_range = rr[i];
+            f.max_speed = 1.0f + static_cast<float>(i);
+            f.radius = 8.0f;
+            f.spacing = 1.0f;
+            rm.push_back(f);
+        }
+        const std::vector<uint32_t> five{0, 1, 2, 3, 4};
+        const auto rk = rank_members(rm, five);
+        CHECK(rk.size() == 5 && rk[0].member == 1 && rk[1].member == 4 && rk[2].member == 2 && rk[3].member == 3 && rk[4].member == 0);
+        CHECK(rk[0].rank == 0 && rk[4].rank == 4);
+        const auto sl = layout_formation(rm, five, fwd, k);
+        bool front_to_back = sl.size() == 5;
+        for (size_t i = 0; i + 1 < sl.size() && front_to_back; ++i)
+            front_to_back = rm[sl[i].member].attack_range < rm[sl[i + 1].member].attack_range && sl[i].back < sl[i + 1].back;
+        CHECK(front_to_back);
+        // RankKey::MaxSpeed (the [port] space key) ranks by speed: member 0 (speed 1) in front
+        CHECK(rank_members(rm, five, RankKey::MaxSpeed).front().member == 0);
+    }
     // Recruitment: a Solo seed stays alone; far units are not recruited.
     std::vector<FormationMember> rec(4);
     for (int i = 0; i < 4; ++i) {
@@ -815,6 +847,64 @@ static void test_double_click() {
     bool no_hover = true;
     for (const UnitView& v : none) no_hover = no_hover && v.large_hover_index == -1;
     CHECK(no_hover);
+}
+
+// ---------------------------------------------------------------- 7c. recruitment across classes (s78n t26 review round 2)
+// MOVEMENT §4.2 step 2 item 4 [H]: a candidate joins when it has the seed's locomotor kind (vf +0x240 / +0x238), both are
+// zone-connected to the destination and a straight line or a path <= 1.4 x the distance joins it to the nearest member;
+// the movement masks need not agree (§4.3.1 item 7 (c): the formation's class is the 0x4779e0 class of the mask
+// intersection). So two infantry squads and a tank one formation: one formation id, the slowest member's speed.
+static void test_formation_recruit() {
+    const auto run = [](const std::vector<UnitDesc>& units, const std::vector<uint32_t>* walls, std::vector<UnitView>& out) {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(80, 80);
+        if (walls) g.set_base(*walls);
+        sys.set_grid(std::move(g));
+        for (const UnitDesc& d : units) CHECK(sys.add_unit(d));
+        SimRng rng(77);
+        MoveOrder o;
+        o.units = sys.unit_ids();
+        o.destination = cell_center(12, 60);
+        o.flags = kMoveFlagPlayerOrder;
+        sys.move(o, rng, 0);
+        out.clear();
+        for (ObjectId id : sys.unit_ids()) out.push_back(sys.view(id));
+    };
+    const int32_t kInf = static_cast<int32_t>(MovementClass::Infantry), kTracked = static_cast<int32_t>(MovementClass::Tracked);
+    std::vector<UnitDesc> mixed{land_unit(1, cell_center(10, 10), kInf, 1.5f, 8.0f, kUccInfantry),
+                                land_unit(2, cell_center(12, 10), kInf, 1.5f, 8.0f, kUccInfantry),
+                                land_unit(3, cell_center(14, 10), kTracked, 1.0f, 12.0f, kUccVehicle)};
+    std::vector<UnitView> v;
+    run(mixed, nullptr, v);
+    bool one = v.size() == 3 && v[0].form_id != 0;
+    float slow = 3.0e38f;
+    for (const UnitView& x : v) slow = std::min(slow, x.max_speed);
+    for (const UnitView& x : v) one = one && x.form_id == v[0].form_id && x.formation_speed == slow && x.has_goal;
+    std::printf("  recruitment: infantry x2 + tracked -> form ids %u %u %u, formation speed %.4f (slowest %.4f)\n", v[0].form_id,
+                v[1].form_id, v[2].form_id, static_cast<double>(v[0].formation_speed), static_cast<double>(slow));
+    CHECK(one);
+    // A flying unit (locomotor kind 2) beside them is not recruited by the ground seed: a formation of its own.
+    std::vector<UnitDesc> air = mixed;
+    UnitDesc fl = land_unit(4, cell_center(13, 11), static_cast<int32_t>(MovementClass::Flying), 3.0f, 8.0f, kUccVehicle);
+    fl.locomotor = LocomotorKind::Flying;
+    air.push_back(fl);
+    run(air, nullptr, v);
+    CHECK(v.size() == 4 && v[0].form_id == v[1].form_id && v[1].form_id == v[2].form_id && v[3].form_id != v[0].form_id);
+    // A wall between two tanks 80 apart (within 100) with the way round > 1.4 x 80: no line, no short path -> two formations;
+    // a gap in the wall next to them (a path <= 1.4 x the distance) -> one formation.
+    std::vector<uint32_t> wall(80 * 80, kPassClear);
+    for (int y = 0; y < 40; ++y) wall[static_cast<size_t>(y) * 80 + 12] = kPassImpassable;  // x = 12, open from y = 40
+    std::vector<UnitDesc> two{land_unit(1, cell_center(10, 10), kTracked, 1.0f, 12.0f, kUccVehicle),
+                              land_unit(2, cell_center(14, 10), kTracked, 1.0f, 12.0f, kUccVehicle)};
+    run(two, &wall, v);
+    const bool split = v.size() == 2 && v[0].form_id != v[1].form_id;
+    wall[static_cast<size_t>(11) * 80 + 12] = kPassClear;  // a 1-cell gap at y = 11
+    wall[static_cast<size_t>(12) * 80 + 12] = kPassClear;
+    run(two, &wall, v);
+    const bool joined = v.size() == 2 && v[0].form_id == v[1].form_id;
+    std::printf("  recruitment: wall without a near gap -> split %d; a gap beside them -> joined %d\n", split ? 1 : 0, joined ? 1 : 0);
+    CHECK(split && joined);
 }
 
 // ---------------------------------------------------------------- 8. collision helpers
@@ -1667,6 +1757,13 @@ static void test_land_group() {
     // 15, MOVEMENT 5.4.6) with 85: M stands while it has more than one collision record (13 is also S of a Path Around
     // record of 19), and a Starved record has no contact or end test of its own - it ends by validity when 85 stops at
     // its goal. Retail-literal by the spec; the bound allows that one hold.
+    // s78n t26 review round 2: with infantry and vehicles in one formation (MOVEMENT §4.2 step 2 item 4 [H]: recruitment
+    // by locomotor kind, not by movement mask) the run ends in a jam of four units in the maze, from frame ~1000 to the
+    // cap: vehicle 19 is M of a Starved record (state 15) with its formation mate 55 and also M of a Pass record (state 4)
+    // with 37 of another formation; state 15 answers M 0 and path-arounds it only while M has exactly one collision
+    // record (MOVEMENT §5.4.6 state table, row 15 [H]), so 19 stands; the Pass records hold their S (37 behind 19, 55 behind
+    // 37, 16 held by 55) at speed 0 while M passes, and no record of the four ends (Starved has no contact or end test;
+    // no jam breaker in retail, RE f36dc98b). The jammed units are counted apart and checked to be exactly that cycle.
     const uint32_t frames = run_land(sys, 0, 6500, rng, serial_for, ground);
     uint32_t arrived = 0, near = 0;
     for (ObjectId id : sys.unit_ids()) {
@@ -1691,7 +1788,30 @@ static void test_land_group() {
                 frames, arrived, near, st.paths_planned, st.path_failures, st.replans, st.collision_checks, st.dynamic_repaths,
                 st.quota_deferrals, st.early_arrivals, st.blocked_steps, st.terrain_records, st.terrain_detours, stops,
                 st.terrain_stops_failed, st.terrain_stops_nobase, st.terrain_stops_cell);
-    CHECK(ground && arrived == 36 && 36 - near <= stops && frames < 6500);
+    uint32_t jammed = 0;
+    bool cycle = true;
+    for (ObjectId id : sys.unit_ids()) {
+        const UnitView v = sys.view(id);
+        if (v.arrived) continue;
+        ++jammed;
+        // held at speed 0 by a MovingVsMoving record in state 15 (as its M, which has another record) or in Pass (as S)
+        bool held = false;
+        for (const CollisionObject& c : sys.collisions().list()) {
+            if (c.kind != CollisionKind::MovingVsMoving || (c.a != id && c.b != id)) continue;
+            const bool is_a = c.a == id;
+            const bool zero = (is_a ? c.speed_a : c.speed_b) == 0.0f;
+            const bool is_m = (c.master == 0) == is_a;
+            if (c.state == CollisionState::Starved && is_m && zero) {
+                uint32_t n = 0;
+                for (const CollisionObject& k : sys.collisions().list()) n += (k.a == id || k.b == id) ? 1u : 0u;
+                held = held || n > 1;
+            }
+            if (c.state == CollisionState::Pass && !is_m && zero) held = true;
+        }
+        cycle = cycle && held && v.has_goal && v.speed == 0.0f;
+    }
+    std::printf("land group: %u unit(s) jammed in a Starved / Pass cycle (MOVEMENT 5.4.6 row 15), cycle %d\n", jammed, cycle ? 1 : 0);
+    CHECK(ground && arrived + jammed == 36 && jammed <= 4 && cycle && 36 - near <= stops + jammed && (jammed > 0 || frames < 6500));
 
     // Head-on corridor: two units swap ends through a 3-cell-wide corridor.
     MovementSystem s2{MovementConfig{}};
@@ -3133,7 +3253,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // path (11 accepted goals); MovingVsMoving answers follow the role slots.
 // s78n t26.2 (MOVEMENT §3.5.2 A / B): the speed controller (End Move T = a, 0x15 restarts), the start turn in place.
 // s78n t26 closing review (FIGHTER_FLYING §7.5 item 4): formation mates side-step by their footprint overlap.
-static constexpr uint64_t kGoldenLand = 0x60b832dd7404ad8dull;  // s78n t26 closing review; t26.4 the move step C; t26.3 the corner pass
+static constexpr uint64_t kGoldenLand = 0xdf12b8f6a72240fbull;  // s78n t26 review round 2 (mixed formations, range rank); closing review; t26.4 the move step C; t26.3 the corner pass
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
@@ -3758,6 +3878,7 @@ int main() {
     test_locomotion();
     test_formations();
     test_double_click();
+    test_formation_recruit();  // s78n t26 review round 2
     test_collision_helpers();
     test_collision_layer();  // S7 collision priority sort
     test_path_around();          // s78n t20
