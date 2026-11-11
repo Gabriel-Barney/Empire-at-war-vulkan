@@ -252,6 +252,50 @@ bool MovementSystem::move_skips(ObjectId id) const {
     return u && cfg_.mode == MoveMode::Land && deployed_d(*u) && !auto_deployer(*u);
 }
 
+bool MovementSystem::garrison_remove(ObjectId id, uint32_t frame) {
+    const Unit* u = unit_ptr(id);
+    if (!u) return false;
+    std::erase_if(deploy_kept_, [id](const DeployKeep& k) { return k.id == id; });
+    if (cfg_.mode == MoveMode::Land && u->d.locomotor == LocomotorKind::Default && u->d.deploys &&
+        (u->deploy != LocoState::None || u->walk_deployed)) {
+        DeployKeep k;
+        k.id = id;
+        k.deploy = u->deploy;
+        k.walk_deployed = u->walk_deployed;
+        k.dclip = u->dclip;
+        k.dclip_pos = u->dclip >= 0 ? deploy_clip_pos(*u, frame) : 0.0f;
+        const auto it = std::lower_bound(deploy_kept_.begin(), deploy_kept_.end(), id,
+                                         [](const DeployKeep& e, ObjectId v) { return e.id < v; });
+        deploy_kept_.insert(it, k);
+    }
+    if (!park_team_member(id)) (void)remove_impl(id);
+    return true;
+}
+
+bool MovementSystem::restore_deploy(ObjectId id, uint32_t frame) {
+    const auto it = std::lower_bound(deploy_kept_.begin(), deploy_kept_.end(), id,
+                                     [](const DeployKeep& e, ObjectId v) { return e.id < v; });
+    if (it == deploy_kept_.end() || it->id != id) return false;
+    const DeployKeep k = *it;
+    deploy_kept_.erase(it);
+    Unit* u = unit_ptr(id);
+    if (!u || u->d.locomotor != LocomotorKind::Default) return false;
+    // The state as it was at the entry (no deploy event: the host's ability / combat flags never changed); a clip that
+    // was timing resumes at its kept position ([port] retail's hidden unit keeps running its locomotor inside [M]).
+    u->deploy = k.deploy;
+    u->walk_deployed = k.walk_deployed;
+    u->dclip = k.dclip;
+    u->dclip_start = frame;
+    u->dclip_pos0 = k.dclip >= 0 ? k.dclip_pos : 0.0f;
+    return true;
+}
+
+bool MovementSystem::deploy_kept(ObjectId id) const {
+    const auto it = std::lower_bound(deploy_kept_.begin(), deploy_kept_.end(), id,
+                                     [](const DeployKeep& e, ObjectId v) { return e.id < v; });
+    return it != deploy_kept_.end() && it->id == id;
+}
+
 bool MovementSystem::walking_deployed(ObjectId id) const {
     const Unit* u = unit_ptr(id);
     return u && u->walk_deployed;

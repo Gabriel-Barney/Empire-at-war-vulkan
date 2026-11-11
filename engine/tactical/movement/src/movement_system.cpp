@@ -410,6 +410,7 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
 bool MovementSystem::remove_unit(ObjectId id) {
     // s78n review: a parked squad member removed for good (it died inside its garrison) gives up its team place.
     const size_t dropped = std::erase_if(parked_, [id](const LandTeamSlot& p) { return p.member == id; });
+    std::erase_if(deploy_kept_, [id](const DeployKeep& k) { return k.id == id; });  // s78n t26.1 review
     const bool removed = remove_impl(id);
     // s78n t18 review: the record was a TEAM entry (a member suspended for a hero clash, or absent in a garrison - neither
     // is a steering member, so remove_impl did not rebuild): the entry list, the joint box and the container's radius
@@ -3865,6 +3866,17 @@ void MovementSystem::hash_units(StateHasher& h) const {
         h.u8(0xD2);
         h.u32(static_cast<uint32_t>(push_kills_.size()));
         for (const ObjectId id : push_kills_) h.i32(id);
+    }
+    if (!deploy_kept_.empty()) {  // s78n t26.1 review: the kept deploy states of garrisoned units, only while any exists
+        h.u8(0xDC);
+        h.u32(static_cast<uint32_t>(deploy_kept_.size()));
+        for (const DeployKeep& k : deploy_kept_) {
+            h.i32(k.id);
+            h.u8(static_cast<uint8_t>(k.deploy));
+            h.u8(k.walk_deployed ? 1 : 0);
+            h.i32(k.dclip);
+            h.f32(k.dclip_pos);
+        }
     }
     if (!parked_.empty()) {  // s78n review: parked squad members (garrisoned), appended only while any exists
         h.u8(0xC8);

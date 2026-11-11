@@ -304,6 +304,7 @@ void TacticalBattle::s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 a
         md.yaw_deg = 0.0f;
         mv_type_extents(md, u->type);  // s78n t20
         movement_->add_unit(md);
+        (void)movement_->restore_deploy(unit, frame_);  // s78n t26.1 review: deployed on entry -> deployed on exit
         s4_rejoin_squad(mode, *u, at);
         // s78n t18 (MOVEMENT §5.3 "Garrison host id"): the host id lasts until the unit's next order - standing beside its
         // former host it forms no collision object with it (a squad: its container, s4_apply)
@@ -504,7 +505,8 @@ void TacticalBattle::s4_apply(TacticalMode& mode) {
                 }
                 if (objects::ObjectId k = objects::kNoObjectId; squad_first(e.unit, e.kind, k)) s4_hold(mode, e.holder);
                 // s78n review: a land squad member keeps its team place (container, slot, team index) for the leave.
-                if (!movement_->park_team_member(e.unit)) movement_->remove_unit(e.unit);
+                // s78n t26.1 review: the Walk deploy state is kept for the leave (retail keeps the locomotor pack)
+                (void)movement_->garrison_remove(e.unit, frame_);
                 s4_squad_enter(mode, *u, e.position);  // s78n t14: the last member in takes the container in
                 store.set_position(u->h, e.position);
                 mode.trees().update(static_cast<tactical::EntityHandle>(e.unit), mode.bounds_of(u->h));

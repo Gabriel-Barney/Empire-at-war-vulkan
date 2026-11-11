@@ -456,6 +456,68 @@ void test_hover_and_exit() {
     CHECK(arr.size() == 1 && sys.view(2).arrived);
 }
 
+// ---------------------------------------------------------------- the deploy state across a garrison stay
+void test_garrison_keep() {
+    ::alamo::test::section("garrison_remove / restore_deploy: a droid deployed on entry walks out deployed");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys);
+    const V2 p0 = cell_center(20, 50), exit = cell_center(24, 50);
+    CHECK(sys.add_unit(droid(1, p0)));
+    CHECK(sys.add_unit(droid(2, cell_center(20, 70))));
+    SimRng rng(2608);
+    uint32_t f = settle_deployed(sys, rng, 1, 1, 60);
+    // entry: the unit leaves the system, its deploy state is kept (a unit without one keeps nothing)
+    CHECK(sys.garrison_remove(1, f) && !sys.has_unit(1) && sys.deploy_kept(1));
+    CHECK(!sys.garrison_remove(99, f));
+    // the record is saved and hashed
+    ByteWriter w;
+    sys.write(w);
+    MovementSystem copy{MovementConfig{}};
+    land_system(copy);
+    {
+        ByteReader r(w.bytes());
+        CHECK(copy.read(r) && r.done() && copy.deploy_kept(1));
+    }
+    StateHasher ha, hb;
+    sys.hash_units(ha);
+    copy.hash_units(hb);
+    CHECK(ha.digest() == hb.digest());
+    for (const uint32_t end = f + 20; f < end; ++f) sys.tick(f, rng);
+    // exit: a fresh unit of the same id, the kept state put back - 0x19, no deploy event, the record gone
+    CHECK(sys.add_unit(droid(1, exit)) && sys.restore_deploy(1, f) && !sys.deploy_kept(1));
+    CHECK(sys.deploy_state(1) == LocoState::WalkDeployed && !sys.restore_deploy(1, f));
+    std::vector<DE> ev = run(sys, rng, f, f + 10);
+    f += 10;
+    CHECK(ev.empty() && sys.deploy_state(1) == LocoState::WalkDeployed && sys.view(1).pos == exit);
+    // its next order shorter than M walks deployed
+    order(sys, rng, {1}, exit + V2{80.0f, 0.0f}, f);
+    bool walked = false, deployed = true;
+    for (const uint32_t end = f + 200; f < end && !sys.view(1).arrived; ++f) {
+        sys.tick(f, rng);
+        for (const DE& e : sys.take_deploy_events()) ev.push_back(e);
+        walked = walked || sys.walking_deployed(1);
+        deployed = deployed && sys.deploy_state(1) == LocoState::WalkDeployed;
+    }
+    CHECK(walked && deployed && ev.empty() && sys.view(1).arrived);
+    // a unit deploying on entry resumes its clip where it was; one that dies inside drops its record
+    CHECK(sys.deploy(2, false, f) == MovementSystem::DeployResult::Undeploying);
+    for (const uint32_t end = f + 4; f < end; ++f) sys.tick(f, rng);
+    (void)sys.take_deploy_events();
+    CHECK(sys.garrison_remove(2, f) && sys.deploy_kept(2));
+    f += 50;
+    CHECK(sys.add_unit(droid(2, cell_center(24, 70))) && sys.restore_deploy(2, f) && sys.deploy_state(2) == LocoState::WalkUndeploying);
+    uint32_t undeployed = 0;
+    for (const uint32_t end = f + 40; f < end && undeployed == 0; ++f) {
+        sys.tick(f, rng);
+        for (const DE& e : sys.take_deploy_events())
+            if (e.id == 2 && e.to == LocoState::None && e.finished) undeployed = f;
+    }
+    CHECK(undeployed > 0);
+    CHECK(sys.deploy(2, true, f) == MovementSystem::DeployResult::Deploying);
+    CHECK(sys.garrison_remove(2, f) && sys.deploy_kept(2) && !sys.remove_unit(2) && !sys.deploy_kept(2));
+    std::printf("garrison keep: deployed out and walked deployed; an undeploy resumed and ended at frame %u\n", undeployed);
+}
+
 }  // namespace
 
 int main() {
@@ -466,5 +528,6 @@ int main() {
     test_damage_deploy();
     test_push_refusal();
     test_hover_and_exit();
+    test_garrison_keep();
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }

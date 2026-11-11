@@ -749,6 +749,16 @@ public:
     // container's removal. Saved (version 14) and hashed while any exists. False: not a steering member (nothing done) /
     // no record, the container is gone, or the unit does not qualify (set_land_team's member rule).
     bool park_team_member(ObjectId member);
+    // s78n t26.1 review (MOVEMENT §3.2.1, FIGHTER_FLYING §7.4): a unit entering a garrison leaves this system, but retail
+    // keeps its locomotor pack - a droid deployed on entry walks out deployed. garrison_remove(id) keeps the Walk deploy
+    // state of a `Deploys` land unit that is not undeployed (the state, the walking-deployed flag, the deploy clip and its
+    // position at `frame`) and then parks (park_team_member) or removes the unit; restore_deploy(id), after the host's
+    // add_unit of the same id, puts that state back (the clip resumes at its kept position from `frame`). The record is
+    // dropped by restore_deploy and by remove_unit (the unit died inside). Saved (version 21) and hashed while any exists.
+    // garrison_remove: false when the unit is unknown. restore_deploy: false when there is no record or no such unit.
+    bool garrison_remove(ObjectId id, uint32_t frame);
+    bool restore_deploy(ObjectId id, uint32_t frame);
+    bool deploy_kept(ObjectId id) const;  // a garrison_remove record exists
     // s78n t06 review (hero clashes): the same record, but the member stays in this system as an ordinary unit where it
     // stands (anchor dropped, no own order: as attach_member leaves it), so move / stop / stop_and_leave act on the member
     // itself instead of its container; rejoin_land_team ends it. False: not a steering member (nothing done).
@@ -1541,6 +1551,15 @@ private:
     // s78n review: steering members parked while outside the system (garrison), ascending member id (saved, version 14;
     // hashed while any exists) - LandTeamSlot reused: (container, team index, member, slot).
     std::vector<LandTeamSlot> parked_;
+    // s78n t26.1 review: the Walk deploy state of units inside a garrison (garrison_remove), ascending id
+    struct DeployKeep {
+        ObjectId id = 0;
+        LocoState deploy = LocoState::None;
+        bool walk_deployed = false;
+        int32_t dclip = -1;
+        float dclip_pos = 0.0f;
+    };
+    std::vector<DeployKeep> deploy_kept_;
     // s78n review: the steering members by (container, team index, member) - derived from units_ (team_ix_rebuild).
     std::vector<LandTeamSlot> team_ix_;
     // s78n t18: every TEAM entry (steering, suspended, absent) by (container, team index, member) - derived from units_

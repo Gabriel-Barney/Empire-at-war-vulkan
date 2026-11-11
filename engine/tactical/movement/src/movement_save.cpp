@@ -1034,6 +1034,9 @@ void MovementSystem::write(ByteWriter& w) const {
     for (const LandTeamSlot& p : parked_)  // s78n t14 (version 15): + the offset
         w.i32(p.member).i32(p.container).u32(p.tindex).f32(p.slot.x).f32(p.slot.y).f32(p.off.x).f32(p.off.y)
             .f32(p.hx).f32(p.hy).f32(p.max_speed).f32(p.decel);  // s78n t18 (version 17): the absent member's entry data
+    w.u32(static_cast<uint32_t>(deploy_kept_.size()));  // s78n t26.1 review (version 21): garrisoned deploy states
+    for (const DeployKeep& k : deploy_kept_)
+        w.i32(k.id).u8(static_cast<uint8_t>(k.deploy)).boolean(k.walk_deployed).i32(k.dclip).f32(k.dclip_pos);
 }
 
 bool MovementSystem::read(ByteReader& r) {
@@ -1143,6 +1146,20 @@ bool MovementSystem::read(ByteReader& r) {
         p.decel = r.f32();
         if (!r.ok() || p.member < 0 || p.container < 0 || (k > 0 && p.member <= parked[k - 1].member)) return false;
     }
+    if (!r.count(n, 14)) return false;  // s78n t26.1 review: garrisoned deploy states
+    std::vector<DeployKeep> kept(n);
+    for (uint32_t k = 0; k < n; ++k) {
+        DeployKeep& d = kept[k];
+        d.id = r.i32();
+        const uint8_t st = r.u8();
+        d.walk_deployed = r.boolean();
+        d.dclip = r.i32();
+        d.dclip_pos = r.f32();
+        d.deploy = static_cast<LocoState>(st);
+        const bool st_ok = d.deploy == LocoState::None || d.deploy == LocoState::WalkDeploying ||
+                           d.deploy == LocoState::WalkDeployed || d.deploy == LocoState::WalkUndeploying;
+        if (!r.ok() || !st_ok || !valid_object_id(d.id) || d.dclip < -1 || (k > 0 && d.id <= kept[k - 1].id)) return false;
+    }
     if (!r.ok()) return false;
     // Squadron membership both ways (members are fighter units naming their squadron; a unit naming a squadron is in
     // it): the fighter code relies on it.
@@ -1185,6 +1202,7 @@ bool MovementSystem::read(ByteReader& r) {
     pend_serial_ = pend_serial;
     form_serial_ = form_serial;
     parked_ = std::move(parked);
+    deploy_kept_ = std::move(kept);
     team_ix_rebuild();  // s78n review: derived from the units
     // The region map is a cache of the grid's effective values (rebuilt, see the header); the rebuild also re-derives
     // every unit's mask slot.
