@@ -3878,6 +3878,85 @@ void test_land_attack_reach() {
     }
 }
 
+// s78n t20 batch 1 item 1.5 (MOVEMENT §5.4.5 item 2): the land death clone of a type with IsDeathCloneObstacle and a
+// UnitCollisionClass is a movement object without a locomotor at the dying unit's place, and leaves the movement system
+// with its object at the planned removal frame. S10_Trooper dies into S10_Wreck (Vehicle class, 2 s + 0.5 s fade).
+std::string trooper_wreck(std::string t) {
+    const std::string at = "<GroundInfantry Name=\"S10_Trooper\">";
+    if (const size_t p = t.find(at); p != std::string::npos)
+        t.insert(p + at.size(), "<Death_Clone>Damage_Normal, S10_Wreck</Death_Clone>");
+    if (const size_t end = t.find("</S10>"); end != std::string::npos)
+        t.insert(end, " <GroundVehicle Name=\"S10_Wreck\"><LandBehavior>HIDE_WHEN_FOGGED</LandBehavior>"
+                      "<UnitCollisionClass>Vehicle</UnitCollisionClass><IsDeathCloneObstacle>Yes</IsDeathCloneObstacle>"
+                      "<Death_Persistence_Duration>2</Death_Persistence_Duration><Death_Fade_Time>0.5</Death_Fade_Time>"
+                      "<Custom_Hard_XExtent>8</Custom_Hard_XExtent><Custom_Hard_YExtent>5</Custom_Hard_YExtent></GroundVehicle>\n");
+    return t;
+}
+
+void test_land_death_clone_obstacle() {
+    auto d = squad_data_patched("_wreck", trooper_wreck);
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;
+    ClashSession s(*d, 0, opt, {}, {}, true);
+    CHECK(s.gs != nullptr);
+    if (!s.gs) return;
+    int stage = 0;
+    objects::ObjectId clone = objects::kNoObjectId;
+    mv::V2 at{};
+    uint32_t kill_frame = 0, gone_frame = 0;
+    bool registered = false, still = true, idle = true;
+    size_t pending = 0;
+    for (uint64_t t = 0; t < 3000 && stage < 9; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        const tc::CombatSystem& cs = b->combat();
+        const mv::MovementSystem& ms = b->movement();
+        if (stage == 0) {
+            objects::ObjectId victim = objects::kNoObjectId;
+            for (size_t i = 0; i < cs.unit_count() && victim == objects::kNoObjectId; ++i) {
+                const auto id = cs.unit_id_at(i);
+                if (cs.team(id) != 0 && cs.alive(id) && st.owner(st.find(id)) == 0) victim = id;
+            }
+            CHECK(victim != objects::kNoObjectId);
+            if (victim == objects::kNoObjectId) break;
+            const std::vector<mv::ObjectId> before = ms.unit_ids();
+            const Vec3 vp = st.position(st.find(victim));
+            pending = b->death_clones_pending();
+            CHECK(b->script_damage(*tm, victim, 1.0e9f, false));
+            for (const mv::ObjectId id : ms.unit_ids())
+                if (std::find(before.begin(), before.end(), id) == before.end()) clone = id;
+            registered = clone != objects::kNoObjectId && b->death_clones_pending() == pending + 1;
+            at = mv::V2{vp.x, vp.y};
+            kill_frame = b->frame();
+            stage = 1;
+            continue;
+        }
+        if (stage == 1) {
+            if (ms.has_unit(clone)) {
+                const mv::UnitView v = ms.view(clone);
+                still = still && v.pos == at && v.speed == 0.0f;
+                idle = idle && !v.has_goal && !v.pushed;
+                for (const auto& c : ms.collisions().list()) idle = idle && c.a != clone;  // never a checker
+            } else {
+                gone_frame = b->frame();
+                CHECK(b->death_clones_pending() == pending && !st.alive(st.find(clone)));
+                stage = 9;
+            }
+        }
+    }
+    std::printf("  land death clone obstacle: registered %d at the death spot %d, idle %d, removed after %u frame(s)\n",
+                registered ? 1 : 0, still ? 1 : 0, idle ? 1 : 0, gone_frame - kill_frame);
+    CHECK(registered && still && idle && gone_frame > kill_frame + 60 && gone_frame <= kill_frame + 80);
+}
+
 void test_land_attack_blocks() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, true);
@@ -4147,6 +4226,7 @@ int main(int argc, char** argv) {
     std::printf("s78n t20 stage A: the land attack re-check (displaced squad, friendly squads on the line, save / load)\n");
     test_land_attack_blocks();
     test_land_attack_reach();  // s78n t20 review follow-ups
+    test_land_death_clone_obstacle();  // s78n t20 batch 1 item 1.5
     test_vehicle_landing_exit();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);
