@@ -439,6 +439,10 @@ MovingVsMoving `0x682e80` (flag 1, kind 4, flags 0), `0x683140` (flag 0, kind 4,
      grown rectangle, or one for which 5 window sizes fail, moves on to the next candidate.
    - So with a **blocked destination** the rejoin point slides forward along the path, then up to 20 past its end
      (or toward the target), then to the nearest free reachable spot around the end.
+   - *Correction (s78n t23 RE 4, `0x675ed0`, `0x67ad20`) [H]:* the "11" counts **accepted** candidates (goals
+     handed to the window / flood-fill / "goal inside an obstacle" tests), not candidates tested. A candidate
+     rejected by `0x679aa0` costs nothing: (a) runs over **every** path point to the path end. Details, the
+     acceptance test and the crowd case: §5.4.7, "Rejoin candidates of a kind-3 Path Around".
 3. **Obstacle set** (`0x67d580` over the layer-0x10 box query `0x5d7a00` of the window; FIGHTER_FLYING §7.8: squad
    members are never in it).
    - Never: u itself; anything u can crush (`0x5c8900`); a pair that fails the class table of §5.2 item 6
@@ -4138,6 +4142,46 @@ detection `0x508170`) [H unless tagged].**
   behaviour, keep it** (the long Pass holds and the missing early pop on fresh records are parity, not bugs).
   Keep the stored values per role slot across a role swap.
 
+**An order-less pushed unit in a head-on jam (s78n t23 RE 4, 2026-11-11; detection `0x508170`, `0x42cc60`,
+`0x5569b0`, `0x680650`, `0x682930`, `0x6814f0`, `0x682d00`, `0x683140`, `0x5c80e0`, `0x676c10`, `0x5567e0`,
+`0x67d580`) [H unless tagged].**
+- **(a) Moving or stopped at detection.** `0x508170` classes each unit by its locomotor: vf +0x1a8 (`0x42cc60`)
+  or vf +0x1b0 (turning in place). `0x42cc60` is true when the unit has a locomotor pack, is not suspended (vf
+  +0x210) and **pack +0xec > 0 or its path stack is not empty** (`0x5569b0`: the top record, of any kind). There
+  is no order test. So a pushed unit with a push (kind 4 / 7) path on its stack is **moving** even at speed 0 and
+  with no order: against another mover it gets a **MovingVsMoving** record (when the predictor `0x442540` says
+  contact), against a standing unit a MovingVsStopped one. The same test is the "moving" of the validity
+  `0x680650` and of the relation code (so it is never relation 0 "standing"; held at 0 it is relation 2).
+- **(b) Does it walk its push path while its MvM record is in 10?** Its walk step runs, but its speed is folded
+  with the record's answer. State 10 (`0x682930`): reset, validity, then +0x84 / +0x88 := 0 (8-byte write), flags
+  0 (braking); then (M.P − S.P)·f_S < −0.001 (M behind S) → S := S's max; else (S.P − M.P)·f_M < −0.001 → M :=
+  M's max; face to face neither. So it walks only when it is the one **in front** (the other is behind it along
+  its facing); otherwise it brakes to 0 and stays. Exceptions every retry: at a passed retry frame and while the
+  re-decision waits for quota (case 0) the record is in state 0 and answers **max speed** in the next fold
+  (§5.4.6 "Retry frame"; §5.4.1 "The stamp in full" item 6), so each unit gets at least one free fold per
+  30 + rnd[0, 15] frames (more while the quota is short) [H for the answers, M for how far that moves it].
+- **(c) What ends Try Again Later.** Only: validity `0x680650` (a participant gone → 8; one stands on an
+  impassable cell with an unforced path → it is stopped, 9; either not moving → 9: e.g. the other unit's order
+  path is gone, or the pushed unit's push path is popped / removed); and the retry frame (+0xb4 ≤ NOW → state 0,
+  +0xb4 := NOW + 30 + `0x1ffb40`(sim generator, 0, 15)). The following re-decision ends it only if the chooser's
+  predictor `0x442540`(1.5 s) now reports no contact (→ 8) or a set-up now succeeds; a failed set-up returns it to
+  10 (failures +0xb8 += 1). **No retry count, no timeout, no give-up state, no forced push, no "let one through"**:
+  +0xb8 has no reader but the debug text, state 10 runs no predictor, and it is never stamped (vf +0x78 is true
+  only in states 1 / 4). So a pair whose geometry and detours do not change stays in 10 for ever in retail too.
+- **(d) Path Around with no order.** As the **detourer** (S of `0x683140`, M of `0x682e80`, the unit of a
+  TerrainCollision, the spare point `0x5c6ba0`): the base path `0x676c10` needs a kind-1 record on the stack
+  (`0x5567e0`(pack, 1), searched from the top) and copies the **top** record; a unit with only a push path has
+  none → the call **fails** at once. As the **obstacle**: yes; it is in the obstacle set by its relation (held at
+  speed 0 → relation 2 → obstacle, §1.5.1 item 3), or as the forced id when flag 1. So in a head-on pair of the
+  pushed unit X and a mover Y, the four mode-2 attempts are: X around Y (fails, no kind 1), Y around X (needs a
+  free rejoin point on Y's path, §5.4.7 "Rejoin candidates"), and the same two with flag 1; all fail → 10.
+- ***Port spec:*** classify "moving" by speed > 0 **or a non-empty path stack** (no order test), so an order-less
+  pushed unit is a mover; state 10 answers 0 / 0 with the "behind" exceptions and keeps no count; it ends only by
+  validity or a re-decision at the retry frame (predictor no contact → 8, or a successful set-up); a detour by a
+  unit without a kind-1 record fails. Retail has no jam breaker for this case; a port that adds one must record it
+  as [port] (tier 1: a permanent hold is retail behaviour when the geometry is static, but the free max-speed
+  folds at each retry and while waiting for quota must be kept, since they are what can move it).
+
 *Not read:* the id list `0x140b3a1a0` tested in `0x677650`; `0x677650` reads the pathfinder's request global as
 "the other unit" [M: stale after an early return]; `0x509ea0` and `0x67f130` were not re-derived.
 
@@ -4246,6 +4290,66 @@ and keep the record until no path of the unit is owned by it; on failure stop th
 record waiting for quota stops the unit when its position has become impassable. Retail keeps a failed record
 for ever with no effect but item 5's; [port] dropping it at once is the simple choice (record it). The record
 answers max speed, no vector, weight 4.
+
+**Rejoin candidates of a kind-3 Path Around, and its failure (s78n t23 RE 4, 2026-11-11; `0x687ff0`,
+`0x687ea0`, `0x5c80e0`, `0x67b310`, `0x675ed0`, `0x67ad20`, `0x679aa0`, `0x679e20`, `0x67d580`, `0x679750`,
+`0x440be0` / `0x440f30` / `0x441750` / `0x440f90`, `0x676c10`, `0x5567e0`) [H unless tagged].** These rules are
+the same for every Path Around (kinds 3, 4, 7); kind 3 only gives D = r_u + 40 and no obstacle.
+1. **Generator `0x67ad20`, resumable.** It keeps a running path distance (a float owned by the caller,
+   s := max(s, s0), s0 = progress + D + 2) and returns the **first acceptable** candidate after it:
+   - (a) path points at s, s + 10, … while s < the path length, each tested by `0x679aa0`; **no count limit**, so
+     every point to the path end is tried. On success s := that point + 10 and N = the point after its segment.
+   - (b) past the end E (dir / limit as in §1.5.1 item 2), steps of 10: each step runs `0x679aa0` **and** the
+     path-length test `0x679e20` (land path E → spot ≤ 2 × straight); a failed `0x679e20` **ends (b)** (break, not
+     skip); a step that passes both is taken. There is no passability pre-test (the snap of `0x679aa0` does it).
+   - (c) the ring search around E with the search record of `0x675ed0` (object u, mode 1 full circle, centre E,
+     margin `0x440f30`, **occupancy and path tests on**, reachability on; the record keeps its ring / sample index
+     between calls): the first spot not behind E along dir; then **only** `0x679e20` (not `0x679aa0`); 20 rings
+     exhausted → the generator fails, and with it the whole Path Around. The ring's occupancy test rejects a
+     sample when **any** layer object other than u lies in its box (A1_READINGS §40.2): moving or standing, of
+     any class, with no relation filter.
+2. **Acceptance `0x679aa0`(request, u, candidate C, E, tracker)** of an (a) / (b) candidate:
+   - Q = the ring search (object u, `0x440be0` at `0x679ad0` with rdx = u; mode 1, centre C; **+0x5e := 1**
+     at `0x679b12`: no occupancy and no path test; reachability from u's cell on): the first sample in the map box
+     and in u's connected region for its class. None in 20 rings, or |Q − C| > GC +0x14e8
+     (`LandDestinationProximity`, 60) → rejected.
+   - u's rectangle at Q: the **hard** half extents (`0x396850`, no + 1), axis along Q − E (u's facing when zero).
+     Queried against the tracker argument: **null for the first goal** → the game's layer-0x10 object grid (vf
+     +0x238 → `0x5387f0` → `0x5d7ee0`) [M: the layer]; for goals 2…11 the tracker of the previous goal's window
+     (`0x677340`, the grown obstacle shapes of §1.5.1 item 4a) is passed [H for the argument, M for the effect].
+   - Each object met is judged by `0x67d580`(request, object, **1**): rejected when it returns 0 (obstacle).
+     With argument 1 the relation mask is the goal-spot mask +0x3c = **0x10**, so: never an obstacle: u, anything
+     u can crush, `0x509370` false, a pair the class table `0x505020` exempts; always an obstacle: the forced id
+     list, u's MvM partners (`0x505630`); **Infantry are obstacles here even for an Infantry / Giant u** (the
+     Infantry exemption is bit 0 of the mask, and 0x10 has no bit 0); then by the relation `0x679750`(object, u):
+     **0 standing → obstacle** (deployed or not; with Path Around flags 0, as for kind 3, no standing unit is
+     exempt); **2 (moving but held at speed 0), 4, 8, 0x20 → obstacle**; **0x10 (same way, not slower) → not an
+     obstacle**, unless its approximation reaches its path end (pack +0x28c), it is not behind u's facing and the
+     pair shares an undecided / detouring record (vf +0x58).
+3. **Goal loop `0x675ed0`** (at most **11** accepted goals: `0x676020` `cmp r12d, 0xa`, above → fail): for each goal from the
+   generator: up to 5 windows with a flood fill (terrain only) → all fail → next goal; tracker `0x677340` null →
+   next goal; goal inside an obstacle's grown rectangle (`0x6b3580`, u's id excluded) → next goal; else the graph
+   and the A\* run **once**: an A\* failure fails the call (no next goal). Generator failure fails the call.
+4. **So in a crowd** (36 units through a wall gap): with the (a) scan running to the path end, a kind-3 failure
+   needs every remaining path point (step 10) to have its snapped spot covered by a standing / held / crossing /
+   head-on / slower unit (held formation mates are rel 2: obstacles; formation mates walking the same way at the
+   same formation speed are rel 0x10: not obstacles), every (b) step too, and the ring search to find no
+   unoccupied spot around E in 20 rings; or 11 accepted goals that all fail the window / inside tests; or the
+   A\* to fail; or u on its last waypoint (§1.5.1 item 2); or no kind-1 record on u's stack (`0x676c10` →
+   `0x5567e0`(pack, 1)).
+5. **On failure** (re-read `0x687ff0`): +0x7c := NOW + 45, **Stop** (locomotor vf +0x140(record id): every path
+   record is destroyed, the order path included, §5.4.1 "The impassable-cell rule" item 3), state := 4. State 4
+   has no handler in `0x687ea0` (it handles only 0 and 1) and is not "finished": **no retry, no re-plan of the
+   order path, no full pathfind** in this class. The formation then counts the member as done (§5.4.1 "The
+   impassable-cell rule" item 4); a one-block move formation signals arrival when all are done; an attack block
+   is re-planned by its 30-frame re-check. [M: no other re-planner was found.]
+- ***Port spec:*** do not cap the candidates tested at 11: scan every path point to the end (step 10), then the
+  past-end steps (stop at the first failed 2× path test), then the ring search around E (any layer object other
+  than u blocks a ring sample; no further footprint test); 11 caps only the goals that reach the window / flood /
+  inside tests. Accept an (a) / (b) candidate at Q (nearest reachable passable point within 60) when u's hard-extent
+  rectangle there overlaps no object that `0x67d580` with the goal mask 0x10 calls an obstacle (standing units,
+  held / crossing / head-on / slower movers, Infantry included; same-way-not-slower movers ignored). On failure:
+  stop the unit and drop its order path, as now; no retry.
 
 *Not read:* the frame order of the locomotor steps against the driver (whether a record made by a step is decided
 in the same frame); `0x5c6970` (the base "give up ownership" helper, unused by this class); the Bike step beyond
