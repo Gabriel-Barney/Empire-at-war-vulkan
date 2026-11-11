@@ -288,6 +288,9 @@ uint32_t CollisionLayer::add(CollisionKind kind, ObjectId a, ObjectId b, uint32_
         c.retry = frame + 30;
         c.master = 2;
     }
+    // s78n t23 follow-up (MOVEMENT §5.4.2 "Answer to a participant", RE 2): the MovingVsMoving constructor 0x680420 zeroes
+    // both stored answers (+0x84 / +0x88): a state != 0 reads 0 until it writes them
+    if (kind == CollisionKind::MovingVsMoving) c.speed_a = c.speed_b = 0.0f;
     list_.push_back(c);
     return c.seq;
 }

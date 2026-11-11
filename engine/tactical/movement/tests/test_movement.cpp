@@ -3101,7 +3101,9 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // finished records leave the speed fold).
 // s78n t23 review fix 1: the re-decide stamp by role (MOVEMENT 5.4.1 "The stamp in full" items 2 - 3).
 // s78n t23 review fix 2: a re-decided record waits (case 0 in its stamped frame; a set-up decision under quota).
-static constexpr uint64_t kGoldenLand = 0xd8e306d6fc2544e8ull;  // s78n t23 review fix 2
+// s78n t23 follow-ups (MOVEMENT 5.4.2 / 5.4.6 "State 2 service", RE 2): MovingVsMoving answers start at 0; case 6 resets
+// before its chooser re-run.
+static constexpr uint64_t kGoldenLand = 0x8b3364785ab4958full;  // s78n t23 follow-ups
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

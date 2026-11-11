@@ -3358,6 +3358,11 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
             break;
         }
         case S::SpeedSlave: {  // 2: the chooser must give 2 again (roles not refreshed)
+            // s78n t23 follow-up (MOVEMENT §5.4.6 "State 2 service", RE 2): the re-run runs before the reset, with the state
+            // still 2, so record_cap folds this record's own stored answer for p0 (no self-exclusion: retail). Stored 0 (the
+            // constructor, case 0) -> a relation-path pair of Infantry / Bike movers bails to state 0 writing nothing and
+            // re-decides every frame (answered max speed); only the same-formation state 2 (decided before the relation)
+            // slaves the rear unit. Not "fixed", as retail.
             if (mvm_choose(c, a, b, true).state != S::SpeedSlave) {
                 c.state = S::Active;
                 break;
@@ -3398,11 +3403,13 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
             break;
         }
         case S::MovingWithSpeed:  // 6: the chooser must give 6 again (roles not refreshed); S follows M
+            // s78n t23 follow-up (MOVEMENT §5.4.6 "State 2 service" item 5, 0x681939): case 6 resets before its re-run, so
+            // the re-run reads both answers as max speeds and a bail leaves (max, max, flags 0)
+            reset();
             if (mvm_choose(c, a, b, true).state != S::MovingWithSpeed) {
                 c.state = S::Active;
                 break;
             }
-            reset();
             if (!crushes(s, m)) {
                 vs = closing_speed(s, m, touch);
                 if (touch) ns = true;

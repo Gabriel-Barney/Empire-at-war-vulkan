@@ -773,8 +773,11 @@ void test_t23_starvation() {
     }
 }
 
-// Early pop (MOVEMENT 5.4.6 0x6807e0): head-on vehicles, Path Around with the early-pop gate (relation head-on); once S is
-// behind M by hx_S + hx_M and the way to its detour's end is clear, its detour is dropped before its last point.
+// Early pop (MOVEMENT 5.4.6 0x6807e0): head-on vehicles, Path Around. s78n t23 follow-up (RE 2): the gate is rel(M, S)
+// after the detour, with the record already in state 1 (MOVEMENT 5.4.1: 0x682d00 writes +0x78 before the set-up), so
+// M's cap folds this record's own stored answer - 0 on a fresh record (constructor) - and rel is 2: no gate, the detour
+// is walked to its last point. (Before the follow-up the stored answer was "max", the gate was set and the detour was
+// dropped early.)
 void test_t23_early_pop() {
     ::alamo::test::section("t23_early_pop");
     MovementSystem sys{MovementConfig{}};
@@ -806,8 +809,63 @@ void test_t23_early_pop() {
         }
         prev.assign(tp.begin(), tp.end());
     }
-    CHECK(gate && popped);
+    CHECK(s > 0 && !gate && !popped);
     std::printf("t23 early pop: gate %d, detour dropped %.1f before its last point\n", gate ? 1 : 0, static_cast<double>(left));
+}
+
+// ---------------------------------------------------------------- s78n t23 follow-ups (MOVEMENT 5.4.6 "State 2 service")
+// (a) Two infantry units in different formations (two orders), both heading east, the rear one faster: the chooser's
+// relation path gives Speed Slave Only, but the state-2 service re-runs the chooser before its reset and reads the
+// record's own stored answer for p0 - 0 from the constructor - so it bails to state 0 writing nothing, every frame: the
+// record is never in state 2 between ticks and never slows the rear unit (answered max speed).
+// (b) Case 6 resets before its re-run (0x681939): the re-run reads both answers as max speeds, not its own last answer,
+// and a bail leaves (max, max, flags 0) - in the short-path overtake scene, every bail from state 6 to state 0.
+void test_t23_state2_self_read() {
+    ::alamo::test::section("t23_state2_self_read");
+    {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 120);
+        const V2 at = cell_center(20, 60);
+        CHECK(sys.add_unit(unit(1, at, 2, 1.0f, 6.0f)) && sys.add_unit(unit(2, at + V2{30.0f, 0.0f}, 2, 0.5f, 6.0f)));
+        SimRng rng(341);
+        order(sys, rng, {2}, cell_center(110, 60), 1);
+        order(sys, rng, {1}, cell_center(100, 60), 1);
+        CHECK(sys.view(1).form_id != sys.view(2).form_id);
+        uint32_t with_record = 0, slave = 0, full_speed = 0;
+        for (uint32_t f = 1; f < 400; ++f) {
+            sys.tick(f, rng, serial_for);
+            const CollisionObject* c = mvm_record(sys, 1, 2);
+            if (!c) continue;
+            ++with_record;
+            if (c->state == CollisionState::SpeedSlave) ++slave;
+            if (c->state == CollisionState::Active && sys.view(1).speed >= sys.view(1).max_speed - 1e-4f) ++full_speed;
+        }
+        CHECK(with_record >= 10 && slave == 0 && full_speed > 0);
+        std::printf("t23 state 2 self-read: different-formation infantry pair - %u ticks with a record, %u in state 2, %u at full "
+                    "speed while undecided\n",
+                    with_record, slave, full_speed);
+    }
+    {
+        MovementSystem sys{MovementConfig{}};
+        SimRng rng(321);
+        overtake_scene(sys, rng, 150.0f);
+        uint32_t six = 0, bails = 0, clean = 0;
+        bool was_six = false;
+        for (uint32_t f = 1; f < 700; ++f) {
+            sys.tick(f, rng, serial_for);
+            const CollisionObject* c = mvm_record(sys, 1, 2);
+            if (c && c->state == CollisionState::MovingWithSpeed) ++six;
+            if (c && was_six && c->state == CollisionState::Active) {
+                ++bails;
+                if (c->speed_a > 1e38f && c->speed_b > 1e38f && !c->now_a && !c->now_b) ++clean;
+            }
+            was_six = c && c->state == CollisionState::MovingWithSpeed;
+        }
+        CHECK(six >= 10 && bails >= 1 && clean == bails);
+        std::printf("t23 case 6 reset first: %u ticks in Moving With Speed Only, %u bail(s) to state 0, %u with both answers max "
+                    "and flags 0\n",
+                    six, bails, clean);
+    }
 }
 
 }  // namespace
@@ -828,5 +886,6 @@ int main() {
     test_t23_save_try_again();
     test_t23_starvation();
     test_t23_early_pop();
+    test_t23_state2_self_read();
     return ::alamo::test::report("alamo_tactical_movement_b3_tests");
 }

@@ -4656,7 +4656,10 @@ static void test_land_squad_repulsion() {
         CHECK(near(s.min_a, vmax, 1e-5f) && near(s.min_b, vmax, 1e-5f));  // neither is slowed or held
         std::printf("land squad repulsion: head-on squads - Repulse %u frames, member vectors %u\n", s.repulse, s.vec);
     }
-    {  // two squads on the same heading, the rear one faster: Speed Slave Only - it follows and never overlaps
+    {  // two squads on the same heading, the rear one faster. s78n t23 follow-up (MOVEMENT 5.4.6 "State 2 service", RE 2):
+       // different formations, so the chooser's Speed Slave Only comes from the relation path, and its service re-run
+       // reads the record's own stored answer (0) for p0 and bails to state 0 every frame - the rear squad is never
+       // slowed by the record (answered max speed) and walks up to the front one (before: it followed, never overlapping)
         MovementSystem sys{MovementConfig{}};
         land_system(sys, 100);
         const V2 pa = cell_center(10, 20), pb = cell_center(14, 20);
@@ -4671,27 +4674,24 @@ static void test_land_squad_repulsion() {
         ob.destination = cell_center(48, 20);
         sys.move(oa, rng, 2);
         sys.move(ob, rng, 2);
-        uint32_t slave = 0, slowed = 0;
+        uint32_t slave = 0, records = 0, full = 0;
         float min_gap = 3.0e38f;
-        bool wrong_master = false;
         for (uint32_t f = 2; f < 500; ++f) {
             sys.tick(f, rng, serial_for);
             const UnitView ka = sys.view(100), kb = sys.view(200);
             min_gap = std::min(min_gap, kb.pos.x - ka.pos.x);
-            for (const CollisionObject& c : sys.collisions().list())
-                if (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::SpeedSlave) {
-                    ++slave;
-                    wrong_master = wrong_master || (c.master == 0 ? c.a : c.b) != 200;  // the one farther ahead
-                    if (ka.speed < vmax - 1e-3f && kb.speed > 0.0f) ++slowed;
-                }
+            for (const CollisionObject& c : sys.collisions().list()) {
+                if (c.kind != CollisionKind::MovingVsMoving) continue;
+                ++records;
+                if (c.state == CollisionState::SpeedSlave) ++slave;
+                if (c.state == CollisionState::Active && near(ka.speed, vmax, 1e-5f)) ++full;
+            }
         }
-        CHECK(slave > 0 && !wrong_master && slowed > 0);
-        CHECK(min_gap > 0.0f);  // the rear container never passes the front one
-        // s78n t18 review: nor do the two joint boxes ever overlap (HX 9 each: the slave speed is 0 at once when the
-        // footprints touch), and the rear squad did close up from its start gap of 40
-        CHECK(min_gap >= 18.0f && min_gap < 40.0f - 10.0f);
-        std::printf("land squad repulsion: following squads - Speed Slave Only %u frames, rear slowed %u, closest %.2f\n", slave,
-                    slowed, static_cast<double>(min_gap));
+        CHECK(records > 0 && slave == 0 && full > 0);
+        CHECK(min_gap < 40.0f - 10.0f);  // the rear squad closed up from its start gap of 40
+        std::printf("land squad repulsion: following squads - MovingVsMoving record %u frames, Speed Slave Only %u, rear at full "
+                    "speed while undecided %u, closest %.2f\n",
+                    records, slave, full, static_cast<double>(min_gap));
     }
     {  // against a standing friendly vehicle on the path (destination free): Path Around - the vehicle is never moved, the
        // mover's members get no vector from that record (the mover side gives one only in Repulsion)

@@ -150,7 +150,8 @@ struct CollisionObject {
     uint32_t retry = 0;        // TryAgainLater: the next re-decide frame (+0x80)
     // s78n t18 (vf +0x40): the speed this record answers participant a / b (3e38 = its max speed) and the "at once"
     // flag, as of its last service; MovingVsMoving: the master (0 = a, 1 = b). Saved and hashed. s78n t20:
-    // StoppedVsStopped - `master` = the unit being moved (0 = a, 1 = b, 2 = nobody; record +0x7c).
+    // StoppedVsStopped - `master` = the unit being moved (0 = a, 1 = b, 2 = nobody; record +0x7c). s78n t23 follow-up
+    // (MOVEMENT §5.4.2, RE 2): a MovingVsMoving record starts with both answers 0 (CollisionLayer::add), as its constructor.
     float speed_a = 3.0e38f, speed_b = 3.0e38f;
     bool now_a = false, now_b = false;
     uint8_t master = 0;

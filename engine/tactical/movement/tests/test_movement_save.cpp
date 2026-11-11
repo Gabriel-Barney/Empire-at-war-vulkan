@@ -1122,7 +1122,9 @@ void save_squad(World& w, ObjectId cid, V2 at, float yaw, int32_t owner, float c
 // s78n t18 review: the record states and walk states the first t18 scenario does not pass through, each in its own lane
 // (250 apart: no shared candidates or crowd boxes):
 //  * Try Again Later - squad 100 on a forced path (flag 0x20) against vehicle 70 that cannot be pushed (Max_Speed 0);
-//  * Speed Slave Only - squad 200 behind the slower squad 300 on the same heading;
+//  * Speed Slave Only - vehicle 250 behind vehicle 251 of its own formation, which is held up by the crawler 252 ahead
+//    (s78n t23 follow-up, MOVEMENT 5.4.6 "State 2 service": only the same-formation state 2 lasts; two squads of two
+//    formations - the scenario before - re-decide every frame and never stay in state 2);
 //  * Crusher (state 4) - the crusher 60 against the hostile squad 400 that cannot be pushed (its one push attempt fails);
 //  * the final-facing turn - squad 500's order carries a final facing 90 degrees off.
 void build_t18_states(World& w) {
@@ -1134,8 +1136,17 @@ void build_t18_states(World& w) {
     UnitDesc v = land_unit(70, cell_center(24, 10), 7, 0.0f, 20.0f, kUccVehicle);
     v.owner = 1;
     CHECK(w.sys.add_unit(v));
-    save_squad(w, 200, cell_center(10, 35), 0.0f, 1, 0.8f, 1.0f, 0.05f);
-    save_squad(w, 300, cell_center(14, 35), 0.0f, 1, 0.8f, 0.4f, 0.05f);
+    const auto vehicle = [&w](ObjectId id, V2 pos, float hx, float hy, float speed, float radius, int32_t owner) {
+        UnitDesc d = land_unit(id, pos, 7, speed, radius, kUccVehicle);
+        d.hard_x = hx;
+        d.hard_y = hy;
+        d.owner = owner;
+        CHECK(w.sys.add_unit(d));
+    };
+    const V2 lane = cell_center(14, 35);
+    vehicle(250, lane - V2{40.0f, 0.0f}, 10.0f, 6.0f, 1.0f, 12.0f, 1);
+    vehicle(251, lane, 10.0f, 6.0f, 0.8f, 12.0f, 1);
+    vehicle(252, lane + V2{80.0f, 0.0f}, 30.0f, 20.0f, 0.02f, 40.0f, 2);
     save_squad(w, 400, cell_center(25, 60), 0.0f, 1, 0.0f, 0.0f, 0.0f);
     UnitDesc cr = land_unit(60, cell_center(8, 60), 7, 1.0f, 10.0f, kUccVehicle);
     cr.crusher = true;
@@ -1150,8 +1161,6 @@ void t18_states_before(World& w, uint32_t f) {
             if (w.sys.has_unit(id)) CHECK(w.sys.set_team(id, cid, 1.0f, cspeed));
     };
     team(100, 0.8f);
-    team(200, 0.8f);
-    team(300, 0.8f);
     team(400, 0.0f);
     team(500, 0.8f);
     if (f != 1) return;  // (frame 0 laid the squads out)
@@ -1164,8 +1173,13 @@ void t18_states_before(World& w, uint32_t f) {
         w.sys.move(o, w.rng, f);
     };
     order(101, cell_center(60, 10), kMoveFlagSkipValidation, kNoFacing);
-    order(201, cell_center(55, 35), 0, kNoFacing);
-    order(301, cell_center(58, 35), 0, kNoFacing);
+    order(252, cell_center(90, 35), 0, kNoFacing);
+    {  // one formation (s78n t23 follow-up)
+        MoveOrder o;
+        o.units = {250, 251};
+        o.destination = cell_center(14, 35) + V2{110.0f, 0.0f};
+        w.sys.move(o, w.rng, f);
+    }
     order(60, cell_center(60, 60), 0, kNoFacing);
     order(501, cell_center(25, 85), 0, 90.0f);
 }
