@@ -1525,6 +1525,12 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             find_land_path(grid_, regions_, q, sc, out[r]);
         }
     });
+    // s78n t26.3 (MOVEMENT §5.3.2 "Freshness"): the corridor test reads the layer flags of the last tracker update, so a unit
+    // is Static for every corner pass of this plan when it was not moving before the plan (members planned earlier in the
+    // loop do not turn Moving for the later ones)
+    corner_static_.assign(units_.size(), 0);
+    if (cfg_.mode == MoveMode::Land)
+        for (size_t i = 0; i < units_.size(); ++i) corner_static_[i] = unit_moving(units_[i]) ? 0 : 1;
     for (size_t r = 0; r < req.size(); ++r) {
         Unit& u = units_[req[r]];
         u.need_path = false;
@@ -1652,7 +1658,8 @@ void MovementSystem::plan_deploy_cap(Unit& u, uint32_t frame) {
 // segment max(2, 10 x 0x397830) = max(2, the soft radius) ([port] UnitDesc::radius stands for Scale_Factor x the
 // radius), a container max(2, max(HX, HY) / 2). Line test = 0x5a4c10 for the unit's movement class; corridor 0x5093c0 =
 // per probe segment a zero-width rectangle (centre the midpoint, half length |seg| / 2), failed by any land layer object
-// other than the unit whose footprint rectangle overlaps it and that is Static (not moving, unit_moving) now. The splice
+// other than the unit whose footprint rectangle overlaps it and that was Static (not moving, unit_moving) before the plan
+// (corner_static_: the flags of the last tracker update, §5.3.2). The splice
 // (item 1) is not reachable: the plan resets the stack before the path set (§3.5.2 G), as plan_land replaces the path.
 void MovementSystem::corner_pass(Unit& u) {
     if (cfg_.mode != MoveMode::Land || u.form_id == 0 || is_air(u) || u.m.path.size() < 2) return;
@@ -1697,7 +1704,7 @@ void MovementSystem::corner_pass(Unit& u) {
             x.sys->layer_box_query(seg.c, seg.hx, x.cand);
             for (const uint32_t oi : x.cand) {
                 const Unit& o = x.sys->units_[oi];
-                if (o.d.id == x.u->d.id || x.sys->unit_moving(o)) continue;
+                if (o.d.id == x.u->d.id || oi >= x.sys->corner_static_.size() || !x.sys->corner_static_[oi]) continue;
                 if (foot_overlap(seg, x.sys->foot_of(o))) return false;  // a Static record (flag 2)
             }
         }

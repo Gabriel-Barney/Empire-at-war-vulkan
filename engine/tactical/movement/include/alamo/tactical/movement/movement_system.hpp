@@ -1216,6 +1216,7 @@ private:
     void plan_deploy_cap(Unit& u, uint32_t frame);  // the plan's cap test for an auto-deployer
     // s78n t26.3 (MOVEMENT §3.5.2 D): the corner-speed pass 0x5070b0 on a new land order path (u.m.frac); serial.
     void corner_pass(Unit& u);
+    std::vector<uint8_t> corner_static_;  // per unit index: Static (not moving) before this plan; scratch, not saved
     void tick_deploy(uint32_t frame);
     void hash_deploy(StateHasher& h) const;
     void hash_turrets(StateHasher& h) const;  // S8 t24
