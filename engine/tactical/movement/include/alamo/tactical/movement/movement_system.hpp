@@ -957,6 +957,9 @@ private:
         bool self_arrive = false;
         V2 self_goal;
         CollisionInfo ci;  // s78n t20: set_collision_info (transient, host-set every tick)
+        // s78n t23 step 0: an early-arrival cut left a path record of the unit on its last waypoint during this tick's
+        // collision driver; tick_land finishes it at the walk step (cut_finished). Transient: false between ticks.
+        bool cut_pending = false;
         // space
         std::vector<SpaceWaypoint> wps;
         uint32_t path_start = 0;
@@ -1284,8 +1287,10 @@ private:
     void crush_pass(const std::vector<WalkResult>& res);
     bool hostile(int32_t a, int32_t b) const { return hostile_ ? hostile_(a, b) : (a >= 0 && b >= 0 && a != b); }
     // §5.5 victim rule: hostile, and (squashable by a supercrusher and the crusher is one) or squashable.
+    // s78n t23 step 0 (t21 review item 7): an object without a locomotor (a death-clone obstacle) neither crushes nor is
+    // crushed (a crusher's push kills it instead, §5.4.5 item 2).
     bool crushes(const Unit& c, const Unit& v) const {
-        return c.d.crusher && hostile(c.d.owner, v.d.owner) &&
+        return c.d.crusher && !c.d.no_locomotor && !v.d.no_locomotor && hostile(c.d.owner, v.d.owner) &&
                ((v.d.squashable_by_supercrusher && c.d.supercrusher) || v.d.squashable);
     }
     void tick_space(uint32_t frame, const ParallelFor& pf);
@@ -1374,6 +1379,11 @@ private:
     bool cut_order_path(Unit& u, float c, uint32_t frame);
     void cut_top_path(Unit& u, float c, uint32_t frame);
     void cut_finished(Unit& u, uint32_t frame);
+    // s78n t23 step 0: the End Move brake stub of brake_to_stop ([port], no retail record: kind 1, no owner, weight 1),
+    // which the walk brakes to its end even over a started order path
+    static bool brake_stub(const Unit& u) {
+        return u.pushed && u.push_kind == 1 && u.push_owner == 0xFFFFFFFFu && u.push_weight == 1;
+    }
     // s78n t20 (MOVEMENT §1.5.1): the Path Around call 0x5c80e0(record, u, o, flag, kind, flags) - a visibility-graph
     // detour from u (a point) to a rejoin point on its own current path, pushed as a record on top of its path stack
     // (kind 4; 7 = a crush-flee path). `o` = the obstacle of the record (null: none), forced into the obstacle set when

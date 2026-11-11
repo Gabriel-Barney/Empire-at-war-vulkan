@@ -3406,7 +3406,10 @@ void TacticalBattle::complete_retreat(TacticalMode& mode, uint8_t side) {
         hg_unit_removed(u.id);     // hangars / engine loops: the object leaves the battle
         abilities_->remove(u.id);  // combat unit removed too
         if (u.movable) movement_->remove_unit(u.id);
-        else movement_->object_removed(u.id);  // s78f review
+        else {
+            (void)movement_->remove_unit(u.id);  // s78n t23 step 0: a registered mine obstacle (no-op otherwise)
+            movement_->object_removed(u.id);     // s78f review
+        }
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
         if (u.tracked) damage_tracking_.disable(u.id);
 #endif
@@ -4780,7 +4783,10 @@ void TacticalBattle::process_death(TacticalMode& mode, const tc::DeathEvent& d, 
         vm_deaths_.push_back(u->id);  // story t06: the victory monitor sees this tick's deaths in this order
         s4_hover_death(u->id, at, face);  // s78n t20 batch 2: before the mover (and its hover state) goes
         if (u->movable) movement_->remove_unit(u->id);
-        else movement_->object_removed(u->id);  // s78f review: blocks naming a station / structure (fighter formations)
+        else {
+            (void)movement_->remove_unit(u->id);  // s78n t23 step 0: a registered mine obstacle (no-op otherwise)
+            movement_->object_removed(u->id);     // s78f review: blocks naming a station / structure (fighter formations)
+        }
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
         if (u->tracked) damage_tracking_.disable(u->id);
 #endif
@@ -4910,8 +4916,9 @@ void TacticalBattle::schedule_death_clone(TacticalMode& mode, objects::ObjectHan
 // s78n t20 batch 1 (MOVEMENT §5.4.5 item 2, §5.2 item 4): the clone is in the land layer as an object without a locomotor
 // (obj +0x333 = -1): never Moving, never a checker, the obstacle b of the movers' collision records. Its footprint is
 // its type's (Custom_Hard_X/YExtent x Scale_Factor, else the radius; UnitCollisionClass through Variant_Of_Existing_Type).
-// [port] registered only on land and only for clones that stay (a Remove_Upon_Death clone is destroyed before); the
-// Proximity_Mine / Proj_Remote_Bomb objects that also carry IsDeathCloneObstacle are not registered (ability objects).
+// [port] registered only on land and only for clones that stay (a Remove_Upon_Death clone is destroyed before). s78n t23
+// step 0: also a Proximity_Mine created by an ability (oi_spawn_unit, the battle unit's death removes it); not yet a
+// resting Proj_Remote_Bomb (a CombatSystem projectile, no battle object).
 void TacticalBattle::register_clone_obstacle(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type) {
     if (space_ || !movement_ || clone_type < 0) return;
     const objects::GameObjectTypes& types = catalog_->types();

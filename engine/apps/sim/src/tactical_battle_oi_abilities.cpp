@@ -293,6 +293,11 @@ objects::ObjectId TacticalBattle::oi_spawn_unit(TacticalMode& mode, int32_t type
             const objects::ObjectId one[] = {id};
             (void)movement_->hold_from_birth(one);
         }
+    } else if (u && movement_ && !space_) {
+        // s78n t23 step 0 (MOVEMENT §5.4.5 item 2, t21 review item 2): a land object without a locomotor whose type is
+        // IsDeathCloneObstacle with a UnitCollisionClass (FoC: Proximity_Mine, Infantry class) is a death-clone obstacle in
+        // the land layer from its creation until it dies (the death / retreat removal drops it)
+        register_clone_obstacle(mode, h, type);
     }
     return id;
 }

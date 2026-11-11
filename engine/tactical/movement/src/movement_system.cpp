@@ -2216,15 +2216,26 @@ void MovementSystem::cut_top_path(Unit& u, float c, uint32_t frame) {
 // a top record left on its last waypoint by a cut is finished. A collision-owned one over a started order path (the unit
 // not in End Move) is popped and the unit walks on along the order path; otherwise the unit goes to End Move and brakes
 // from where it is (brake_to_stop; [port] a finished order path ends as arrived at once, the braking follows).
+// s78n t23 step 0 (t21 review items 1 and 4): run at the walk step (tick_land, after the collision driver, for the units
+// a cut marked), not during the decision: a decision that goes on after the cut (early arrival false) sees the finished
+// top record, on which Path Around fails (§1.5.1 item 2). An order path with nothing left to walk under the popped record
+// (an over-cut follower, keep <= 0) ends as arrived, braking or not.
 void MovementSystem::cut_finished(Unit& u, uint32_t frame) {
     if (u.pushed) {
         if (!record_finished(u.push_path, u.push_next, u.m.pos)) return;
         const bool below = u.has_goal && !u.need_path && frame >= u.start_frame && u.m.next < u.m.path.size() &&
                            (!u.d.team_container || u.path_started);
         if (!below || u.m.state == LocoState::WalkEndMove) {
+            const bool used_up = u.has_goal && !u.need_path && u.m.next >= u.m.path.size();
             end_push(u);
             u.around.clear();
             u.path_change = frame;
+            if (used_up) {
+                u.has_goal = false;
+                u.arrived = true;
+                u.exit_host = -1;
+                land_arrival_turn(u);
+            }
             brake_to_stop(u, frame);
             return;
         }
@@ -2300,7 +2311,7 @@ bool MovementSystem::early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, ui
             const float c = (total - s) + 3.0f;
             if (a.pushed) {  // the top path is no formation path: a's top record only (s78n t20 batch 1)
                 cut_top_path(a, c, frame);
-                cut_finished(a, frame);
+                a.cut_pending = true;  // s78n t23 step 0: finished at the walk step (cut_finished)
                 return dot(b.m.pos - p, n) >= -0.001f;
             }
             const float ax = a.form_slot.x, ay = a.form_slot.y, hwa = half_width(a);
@@ -2308,10 +2319,10 @@ bool MovementSystem::early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, ui
                 for (Unit& m : units_) {
                     if (m.form_id != a.form_id || m.d.id == a.d.id) continue;
                     if (!(m.form_slot.x < ax) || std::fabs(m.form_slot.y - ay) > half_width(m) + hwa) continue;
-                    if (cut_order_path(m, c, frame)) cut_finished(m, frame);
+                    if (cut_order_path(m, c, frame)) m.cut_pending = true;
                 }
             }
-            if (cut_order_path(a, c, frame)) cut_finished(a, frame);
+            if (cut_order_path(a, c, frame)) a.cut_pending = true;
             return dot(b.m.pos - p, n) >= -0.001f;
         }
         if (s == 0.0f) return false;  // even its own position fails: nothing changed
@@ -2440,7 +2451,9 @@ bool MovementSystem::around_base(const Unit& u, std::vector<V2>& scratch, std::s
         base = u.m.path;
         cur = u.m.next - 1;
     } else {
-        if (u.push_next == 0 || u.push_path.empty()) return false;
+        // s78n t23 step 0 (§1.5.1 item 2, t21 review item 4): a top record left on its last waypoint (a cut, finished at
+        // the walk step) fails
+        if (u.push_next == 0 || u.push_path.empty() || u.push_next >= u.push_path.size()) return false;
         scratch = u.push_path;
         const V2 dir = normalize_retail(u.m.path[u.m.next] - u.m.path[u.m.next - 1]);
         scratch.push_back(scratch.back() + dir);  // 1 unit past its end along the order path's current segment
@@ -2568,8 +2581,8 @@ bool MovementSystem::spare_point(const Unit& a, const Unit& b, V2& v) const {
 // underneath, untouched, and resumes at the first waypoint line not yet crossed when the detour ends (pop_top). The
 // complexity (the vertex count of every A* pass) goes to the quota counter. [port] not modelled: the escape vertices of
 // a start inside a same-way obstacle, the formation-path refusal 0x41cf40, concave terrain corners and the corner
-// pruning masks; "crosses an obstacle" = the segment meets the interior of its grown rectangle; kind 3 (TerrainCollision)
-// has no caller.
+// pruning masks; kind 3 (TerrainCollision) has no caller. ("Crosses an obstacle" = the segment meets its tracker
+// rectangle, touching counts: §1.5.1 item 4a, path_around.cpp.)
 bool MovementSystem::path_around(const CollisionObject& c, Unit& u, const Unit* o, bool flag, uint8_t kind, uint8_t flags,
                                  uint32_t frame) {
     const MovementConstants& k = cfg_.constants;
@@ -2775,6 +2788,12 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
 // Per-state service 0x684cf0 (every frame) and the speed answer 0x684660.
 void MovementSystem::mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame) {
     using S = CollisionState;
+    // s78n t23 step 0 (MOVEMENT §5.4.1 driver item 2, t21 review item 5): a state-0 record without quota is not serviced
+    // (a state-0 MvS service does nothing - no validity either); it answers max speed meanwhile
+    if (c.state == S::Active && !full) {
+        ++stats_.quota_deferrals;
+        return;
+    }
     // s78n t20 (MOVEMENT §5.4.1 "The impassable-cell rule in full" item 1; validity, first in every state): a first, b
     // only when a passed; the unit on an impassable cell is stopped and the record ends (6)
     if (Unit* const s = on_blocked_cell(a) ? &a : on_blocked_cell(b) ? &b : nullptr) {
@@ -2793,7 +2812,7 @@ void MovementSystem::mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full
         }
     }
     if (c.state == S::Active) {
-        if (!full) {  // a state-None record waits for the dynamic quota; it answers max speed meanwhile
+        if (!full) {  // a retry that came due without quota: decided on a later frame
             ++stats_.quota_deferrals;
             return;
         }
@@ -3191,6 +3210,13 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     plan_land(frame, pf);
     detect_collisions(frame);  // S7: checks create collision objects
     drive_collisions(frame, rng);  // S7: cancel / priority sort / resolve (TACTICAL_GAPS §6.7)
+    // s78n t23 step 0 (MOVEMENT §5.4.4 item 5): a record a cut left on its last waypoint is finished at the walk step
+    // (serial, ascending index, before the parallel walk: a pop walks on along the order path in this tick's walk)
+    for (Unit& u : units_) {
+        if (!u.cut_pending) continue;
+        u.cut_pending = false;
+        cut_finished(u, frame);
+    }
     team_caps();  // s78k t03: serial, before the parallel walk reads Unit::team_cap
     team_speed_steps();  // s78n t16: the squad containers' acceleration and straggler cap (serial, start-of-tick positions)
     // s78n t03: each squad container's state at the start of the tick, for its steering members (anchor_at: index into
@@ -3303,8 +3329,9 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // under it. s78n t20 (MOVEMENT §1.5.1 item 5): it is walked as the order path is - the collision records'
             // speed answer, the steering vector, the team cap - without the formation speed, jiggle or side error.
             if (u.pushed && u.deploy == LocoState::None) {
-                // a started order path goes on under the record: no braking for the record's end
-                if (u.has_goal && !u.need_path && frame >= u.start_frame && !u.push_path.empty()) {
+                // a started order path goes on under the record: no braking for the record's end. s78n t23 step 0 (t21
+                // review item 6): not under the End Move brake stub (brake_to_stop), which brakes to its end
+                if (u.has_goal && !u.need_path && frame >= u.start_frame && !u.push_path.empty() && !brake_stub(u)) {
                     size_t from = u.m.next;
                     if (u.push_kind == 2) from = std::max(from, static_cast<size_t>(u.push_resume));
                     if (from < u.m.path.size()) {
@@ -3858,7 +3885,15 @@ float MovementSystem::land_wanted_yaw(const Unit& u) const {
 // no turn). The turn itself starts on the next tick (arrival_turn_frame).
 void MovementSystem::land_arrival_turn(Unit& u) const {
     arrival_reset(u);
-    if (u.final_facing == kNoFacing || u.d.locomotor != LocomotorKind::Default || is_air(u) || u.d.team_container) return;
+    if (u.final_facing == kNoFacing || is_air(u)) return;
+    if (u.d.team_container) {
+        // s78n t23 step 0 (t21 review item 3, FIGHTER_FLYING §7.7 item 6): a squad container that arrives outside its own
+        // 0x15 (an early-arrival cut, a popped record past its end) runs the same final-facing test: the turn in place
+        // (team_walk, after any braking coast)
+        if (std::fabs(wrap_deg(land_wanted_yaw(u) - u.m.yaw)) > arrival_turn_threshold(u.lp.turn_rate, false)) u.fturn = true;
+        return;
+    }
+    if (u.d.locomotor != LocomotorKind::Default) return;
     const float want = land_wanted_yaw(u);
     if (std::fabs(wrap_deg(want - u.m.yaw)) <= arrival_turn_threshold(u.lp.turn_rate, false)) return;
     u.turning = true;

@@ -67,6 +67,13 @@ target_link_libraries(alamo_tactical_movement_b2_tests PRIVATE alamo_tactical_mo
 add_test(NAME alamo_tactical_movement_b2_tests COMMAND alamo_tactical_movement_b2_tests)
 set_tests_properties(alamo_tactical_movement_b2_tests PROPERTIES TIMEOUT 300)
 
+# s78n t23 (t20 batch 3): the t21 review follow-ups, the deployed half width and MovingVsMoving for every pair (MOVEMENT
+# 5.3, 5.4.2, 5.4.6).
+add_executable(alamo_tactical_movement_b3_tests tests/test_movement_b3.cpp)
+target_link_libraries(alamo_tactical_movement_b3_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_b3_tests COMMAND alamo_tactical_movement_b3_tests)
+set_tests_properties(alamo_tactical_movement_b3_tests PROPERTIES TIMEOUT 300)
+
 # L1 systems: hyperspace departures, engine control, teleport (hyperspace.hpp, MovementSystem::teleport).
 add_executable(alamo_tactical_hyperspace_tests tests/test_hyperspace.cpp)
 target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement alamo_test_support)

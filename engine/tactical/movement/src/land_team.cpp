@@ -738,7 +738,8 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
     const float vmax = u.speed_factor > 0.0f ? cap * flee : 0.0f;
     const float a = (u.team_accel > 0.0f ? u.team_accel : cap) * flee;  // 0x5ab540, else full speed in one frame
     const float rate = u.lp.turn_rate * flee;
-    if (u.fturn && !top_push) {  // 0x15 step 5 -> 0x10: the final facing, turned to in place before the pop
+    // 0x15 step 5 -> 0x10: the final facing, turned to in place before the pop (s78n t23 step 0: after a braking coast)
+    if (u.fturn && !top_push && !u.coast) {
         const float want = land_wanted_yaw(u);
         const float err = std::fabs(wrap_deg(want - m.yaw));
         m.yaw = turn_toward(m.yaw, want, rate);
