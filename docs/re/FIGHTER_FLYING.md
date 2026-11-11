@@ -2083,6 +2083,11 @@ toward it. Confirmed by the s78n t14 run (`S78N_T14_RUN.md`).
      on the last waypoint → state 0 → 0x10 on the next frame [M: composed from those items].
    - For contrast, Walk (0x61e930, state 0) skips the turn in place when |error| ≤ its rate, or when |error| ≤
      `Close_Enough_Angle_For_Move_Start` and the waypoint fraction is > 0. The container always turns exactly.
+   - **Completeness (s78n t26, 2026-11-10):** this item and item 3 do not give the whole move step. The full
+     0x5adfb0 (line crossing at −0.001, the travel distance s' = |D / τ| to the waypoint line along the facing, the
+     τ = 0 waypoint skip, the coast along the facing on the last waypoint, the End Move test v² / (2a) > rest, the
+     slot re-lay `0x5ac120` at each waypoint stepped, the pop onto a started path below) is MOVEMENT §3.5.2 C and E,
+     and the corner fractions its speed step reads come from MOVEMENT §3.5.2 D.
 
 ***Port spec (container turn in place):*** at a path start (and after any stop on a path), each tick: target yaw =
 the current segment's direction plus the lane term (or the final facing on the last waypoint); rotate by min(B,
@@ -2230,6 +2235,12 @@ dynamic-repath queries before the pair gates of MOVEMENT §5.3.
   with decel = vf +0x2e0.
 - The exact arithmetic and the use of `Stopped_Rate_Of_Turn` (+0x3b0) are **untraced**. Nothing in §2–§6 reads
   +0x3ac or +0x3b0.
+- *Superseded s78n t26 (2026-11-10) [H]: the full pass is MOVEMENT §3.5.2 D.* Corrections to the bullets above: it is
+  also called through the land team container's path set `0x5ad140`; it runs only for formation paths (kind 1) in
+  land mode; the merge (and the pull-back of the aim point) runs only when `Min_Speed_Fraction_For_Turn` > 0, whose
+  default is 0; the speed is min(vmax, ω·r / (1 − cos θ), L·ω / (2|θ|)) with r = clamp(L / 2, 20, 100); a probe that
+  passes is also checked against the corridor test `0x5093c0`; the backward pass needs ≥ 3 waypoints. The pass does
+  not read `Stopped_Rate_Of_Turn`; that field is the at-rest turn rate (`0x374310`, MOVEMENT §3.5.1).
 
 ---
 

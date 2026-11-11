@@ -3048,7 +3048,8 @@ no shared test:
      > 0; MOVEMENT §3.2). *Corrected s78n t20, 2026-11-10: this said "which no FoC unit sets". In vanilla FoC
      `Destroyer_Droid` sets it to **150.0** (`UNITS_LAND_UNDERWORLD_DESTROYERDROIDS.XML`) and its variant
      `Destroyer_Droid_Attack` inherits it; no other type has the tag. So the byte is live for the Destroyer Droid.
-     Neither type has deployed extents, so its footprint does not change (MOVEMENT §5.3).*
+     Neither type has deployed extents, so its footprint does not change (MOVEMENT §5.3).* What sets and clears the
+     byte, and how the droid moves, fights and is shielded while it is set: MOVEMENT §3.2.1 (s78n t26).
 
    Only `WalkLocomotorBehaviorClass` implements these vfuncs; every other locomotor answers false. Undeploying (state
    0x1A) uses the normal extents. 0x396850 calls 0x371d20; 0x396a30 / 0x396b70 jump to 0x371f30 / 0x372100.
@@ -3184,7 +3185,8 @@ there.
 6. **CombatSystem slot 43 / 46 `_Deployed` extents** (`footprint_extents`, `target_extent`, `min_range_geometry`).
    *Port must change:* when the target's type `Deploys`, it has a locomotor, and the Walk state is 0x18 Deploying or
    0x19 Deployed (port: the DEPLOY ability active, `AbilitySystem::deployed` as in A1_READINGS §35.4 item 1; the
-   pending byte +0x2b3 is never set in vanilla):
+   pending byte +0x2b3 is set only by the Destroyer Droid walking deployed, which has no DEPLOY ability and no
+   deployed extents, MOVEMENT §3.2.1 — so for extents this mapping stays right in FoC):
    - ex = `Custom_Hard_XExtent_Deployed` × s when > 0, else the normal ex;
    - ey = `Custom_Hard_YExtent_Deployed` × s when > 0, else the normal ey.
 

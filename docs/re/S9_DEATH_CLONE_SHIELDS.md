@@ -61,6 +61,14 @@ locomotor's state machine (0x61e930) that enters state 0x12 when that distance i
 branch that switches to state 0x19 (Deployed) and on the undeploy branch (state 0x1A). Read together, the remap covers **deploying and deployed** walkers. Undeploying (0x1A) walkers with the
 flag already cleared fall back to the plain kind.
 
+*Corrected s78n t26, 2026-11-10 [H] (MOVEMENT §3.2.1):* the flag means **walking while deployed**. It is set by
+0x3ac100 when a deployed or deploying unit whose type has `Max_Dist_Walk_While_Deployed` > 0 gets a move order whose
+path is shorter than that distance (else the unit undeploys), by Walk vf +0x148 `0x61e570` on the same length test,
+and by the 0x19 branch that starts a path. It is cleared when the walk ends (0x16 → 0x19 at once) and during 0x1A.
+Only `Destroyer_Droid` (150.0, and its variant `Destroyer_Droid_Attack`) has the field in FoC. So the remap applies to
+**deployed** walkers (state 0x19) and to a droid **walking deployed**; a unit that is merely deploying (0x18, flag
+clear) is not remapped. For the droid the same test gates its shield (`Shielded_Only_When_Deployed`).
+
 ### 1.3 Existence check, then spawn lookup [H]
 The per-type `Death_Clone` table (type +0xd58; hash map keyed by int, each key holds a list of clone types) is
 read by `Pick_Death_Clone` (0x3718f0) with (key, sub-key, index):
