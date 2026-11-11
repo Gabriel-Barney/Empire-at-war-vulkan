@@ -406,6 +406,10 @@ public:
     using HostileFn = std::function<bool(int32_t a, int32_t b)>;
     void set_hostility(HostileFn fn) { hostile_ = std::move(fn); }
     std::span<const CrushEvent> crush_events() const { return crush_; }  // this tick (land)
+    // s78n t20 batch 1 (MOVEMENT §5.4.5 item 2): the death-clone obstacles a collision push killed this tick (land; the
+    // push 0x6859a0's first test, 0x391310(b, 1)), in the order of the pushes, each once. The host kills them by the
+    // normal death after the tick and removes them (remove_unit).
+    std::span<const ObjectId> push_kills() const { return push_kills_; }
     // L1 systems: Teleport (0x3a8f90; Start_Cinematic_Space_Retreat line-up, Lua Teleport): the unit stops (its
     // order is dropped) and is placed at `pos` / `z` with yaw `yaw_deg`; land: the collision tree entry moves; space:
     // a stationary occupancy track from `frame`. No draws. False when the unit is unknown.
@@ -1465,6 +1469,7 @@ private:
     LockedFn locked_;                // cu8l t03: the space composition's seed lock (host)
     ModelBoundFn model_bound_;       // s78n t10: the space composition's world boxes (host; not saved)
     std::vector<CrushEvent> crush_;  // OI tactical: this tick
+    std::vector<ObjectId> push_kills_;  // s78n t20 batch 1: this tick (saved, hashed while any)
     OwnerThreatFn threat_;           // REMAINING_GAPS §4.2
     AnimLengthFn anim_len_;          // §4.3-4.7
     SpaceOccupancy air_;

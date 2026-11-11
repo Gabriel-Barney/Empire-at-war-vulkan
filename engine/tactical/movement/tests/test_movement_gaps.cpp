@@ -6812,6 +6812,244 @@ static void test_t20_stopped_vs_stopped() {
     }
 }
 
+// s78n t20 batch 1 item 1.5 (MOVEMENT §5.4.5 item 2, §5.2 item 7, §5.4.3): death-clone obstacles - objects without a
+// locomotor in the land layer. Never Moving, never a checker, only ever the obstacle b: a forced path or a failed Path
+// Around kills one (the push succeeds; the host removes it after the tick), it never blocks a destination, and a stopped
+// unit overlapping one is the unit that moves.
+static UnitDesc t20_clone(ObjectId id, V2 pos, int32_t cls, float hx, float hy) {
+    UnitDesc d = unit(id, pos, 2, 0.0f, 12.0f, LocomotorKind::Default);
+    d.collision_class = cls;
+    d.hard_x = hx;
+    d.hard_y = hy;
+    d.owner = 2;
+    d.no_locomotor = true;
+    d.death_clone_obstacle = true;
+    return d;
+}
+
+static void test_t20_death_clone() {
+    const V2 start = cell_center(15, 20), dest = cell_center(30, 20);
+    // the host's part: the killed clones leave the movement system after the tick
+    const auto remove_killed = [](MovementSystem& sys, std::vector<ObjectId>& killed) {
+        const std::vector<ObjectId> ids(sys.push_kills().begin(), sys.push_kills().end());
+        for (const ObjectId id : ids) {
+            killed.push_back(id);
+            CHECK(sys.remove_unit(id));
+        }
+    };
+    const auto clone_checked = [](const MovementSystem& sys, ObjectId clone) {
+        for (const CollisionObject& c : sys.collisions().list())
+            if (c.a == clone) return true;
+        return false;
+    };
+    {  // (a) a forced (flag 0x20) path: decision step 2 takes b with no locomotor when it is a death clone - the push kills
+       // it (in push_kills the frame of the decision) and the mover walks on to its goal
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        const V2 cp = cell_center(24, 20);
+        CHECK(sys.add_unit(t20_clone(11, cp, kUccVehicle, 10.0f, 6.0f)));
+        SimRng rng(521);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 1);
+        std::vector<ObjectId> killed;
+        bool arrived = false, checker = false, moved = false, same_tick = false;
+        uint32_t kill_frame = 0;
+        for (uint32_t f = 1; f < 800 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            if (sys.has_unit(11)) {
+                checker = checker || clone_checked(sys, 11);
+                moved = moved || sys.view(11).pos != cp || sys.view(11).pushed;
+            }
+            if (!sys.push_kills().empty() && kill_frame == 0) {
+                kill_frame = f;
+                for (const CollisionObject& c : sys.collisions().list())  // decided (Resolved) the frame it was made
+                    same_tick = same_tick || (c.a == 10 && c.b == 11 && c.state == CollisionState::Resolved);
+            }
+            remove_killed(sys, killed);
+            arrived = sys.view(10).arrived;
+        }
+        CHECK(arrived && distance(sys.view(10).pos, dest) < 1.0f && killed == std::vector<ObjectId>{11} && kill_frame > 0);
+        CHECK(!checker && !moved && sys.stats().pushes == 0 && sys.stats().push_failures == 0 && !sys.has_unit(11));
+        std::printf("t20 batch 1 death clone: forced path - killed at frame %u (resolved that frame %d), mover arrived %d\n",
+                    kill_frame, same_tick ? 1 : 0, arrived ? 1 : 0);
+    }
+    {  // (b) an Infantry mover against an Infantry-class clone (a mine / bomb class): Repulsion (step 4), never a kill
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc m = unit(10, start, 2, 1.0f, 6.0f, LocomotorKind::Default);
+        m.owner = 1;
+        CHECK(sys.add_unit(m));
+        CHECK(sys.add_unit(t20_clone(11, cell_center(22, 20) + V2{0.0f, 3.0f}, kUccInfantry, 4.0f, 4.0f)));
+        SimRng rng(522);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        sys.move(o, rng, 1);
+        bool arrived = false, repulsion = false, kill = false;
+        for (uint32_t f = 1; f < 800 && !arrived; ++f) {
+            sys.tick(f, rng, serial_for);
+            for (const CollisionObject& c : sys.collisions().list())
+                repulsion = repulsion || (c.a == 10 && c.b == 11 && c.state == CollisionState::Repulsion);
+            kill = kill || !sys.push_kills().empty();
+            arrived = sys.view(10).arrived;
+        }
+        CHECK(arrived && repulsion && !kill && sys.has_unit(11) && sys.view(11).pos == (cell_center(22, 20) + V2{0.0f, 3.0f}));
+    }
+    {  // (c) only objects with a locomotor block the destination (0x684710 / 0x685e10): the early-arrival case (vii) of
+       // test_t20_early_arrival - a unit 60 before the goal and one on the goal - with a death clone on the goal. With a
+       // standing vehicle there the destination is blocked and the order path is cut 33 short; with the clone it is
+       // free: no cut, the record goes to Path Around and the path still ends on the goal
+        const auto run = [&](bool clone, bool& around, V2& end) {
+            MovementSystem sys{MovementConfig{}};
+            land_system(sys, 100);
+            UnitDesc m = t20_vehicle(10, start, 1);
+            m.formation_spacing = 2.0f;
+            CHECK(sys.add_unit(m));
+            SimRng rng(523);
+            MoveOrder o;
+            o.units = {10};
+            o.destination = dest;
+            sys.move(o, rng, 1);
+            bool placed = false, decided = false;
+            around = false;
+            for (uint32_t f = 1; f < 1500 && !decided; ++f) {
+                if (!placed && sys.view(10).pos.x >= dest.x - 90.0f) {
+                    CHECK(sys.add_unit(t20_vehicle(11, {dest.x - 60.0f, dest.y}, 1)));
+                    CHECK(sys.add_unit(clone ? t20_clone(12, dest, kUccVehicle, 12.0f, 6.0f) : t20_vehicle(12, dest, 1, 12.0f, 6.0f)));
+                    placed = true;
+                }
+                sys.tick(f, rng, serial_for);
+                for (const CollisionObject& c : sys.collisions().list())
+                    if (c.a == 10 && c.b == 11 && c.state != CollisionState::Active) {
+                        decided = true;
+                        around = c.state == CollisionState::PathAround;
+                    }
+            }
+            end = sys.land_path(10).empty() ? V2{} : sys.land_path(10).back();
+        };
+        bool around_c = false, around_v = false;
+        V2 end_c, end_v;
+        run(true, around_c, end_c);
+        run(false, around_v, end_v);
+        CHECK(around_c && distance(end_c, dest) < 1e-3f);
+        CHECK(around_v && near(end_v.x, dest.x - 33.0f, 1e-3f));
+        std::printf("t20 batch 1 death clone: on the goal - Path Around %d, path end %.1f from the goal (a standing vehicle: %.1f)\n",
+                    around_c ? 1 : 0, static_cast<double>(distance(end_c, dest)), static_cast<double>(distance(end_v, dest)));
+    }
+    {  // (d) a clone that fills the end of a one-cell lane (the goal lies under it): it does not block the destination,
+       // and Path Around finds no rejoin point (every candidate overlaps the clone or lies off the lane), so step 8 kills
+       // the clone ("shove_ok or b is a death clone") - for a hostile vehicle and for a hostile single infantry mover
+        const auto run = [&](bool infantry, uint32_t& kill_frame, bool& arrived, MovementStats& st) {
+            MovementSystem sys{MovementConfig{}};
+            PassabilityGrid g = open_grid(60, 60);
+            for (int32_t y = 0; y < 60; ++y)
+                for (int32_t x = 0; x < 60; ++x)
+                    if (!(y == 20 && x >= 10 && x <= 32)) g.set_base(x, y, kPassImpassable);
+            sys.set_grid(std::move(g));
+            sys.set_anim_length_fn(anim_len);
+            UnitDesc m = infantry ? unit(10, start, 2, 1.0f, 4.0f, LocomotorKind::Default) : t20_vehicle(10, start, 1, 8.0f, 4.0f);
+            m.owner = 1;
+            CHECK(sys.add_unit(m));
+            CHECK(sys.add_unit(t20_clone(11, {dest.x - 30.0f, dest.y}, kUccVehicle, 90.0f, 14.0f)));  // x 480 .. 660, across the lane
+            SimRng rng(524);
+            MoveOrder o;
+            o.units = {10};
+            o.destination = dest;
+            o.skip_destination_check = true;  // (the goal under the clone; no forced path)
+            sys.move(o, rng, 1);
+            std::vector<ObjectId> killed;
+            kill_frame = 0;
+            arrived = false;
+            for (uint32_t f = 1; f < 1500 && !arrived; ++f) {
+                sys.tick(f, rng, serial_for);
+                if (!sys.push_kills().empty() && kill_frame == 0) kill_frame = f;
+                remove_killed(sys, killed);
+                arrived = sys.view(10).arrived;
+            }
+            CHECK(killed == std::vector<ObjectId>{11});
+            st = sys.stats();
+        };
+        uint32_t kv = 0, ki = 0;
+        bool av = false, ai = false;
+        MovementStats sv, si;
+        run(false, kv, av, sv);
+        run(true, ki, ai, si);
+        CHECK(kv > 0 && ki > 0 && av && ai && sv.pushes == 0 && si.pushes == 0 && sv.push_failures == 0 && si.push_failures == 0);
+        std::printf("t20 batch 1 death clone: lane end - killed at frame %u (vehicle) / %u (single infantry), both arrived %d\n",
+                    kv, ki, av && ai ? 1 : 0);
+    }
+    {  // (e) a standing unit overlapping a clone: StoppedVsStopped with the unit as the checker; rule 1 moves it (the
+       // clone has no locomotor) - and a save / load in the middle continues identically
+        const auto setup = [&](MovementSystem& sys) {
+            land_system(sys, 100);
+            const V2 p0 = cell_center(20, 20);
+            CHECK(sys.add_unit(t20_vehicle(10, p0, 1)));
+            CHECK(sys.add_unit(t20_clone(11, {p0.x + 8.0f, p0.y}, kUccVehicle, 10.0f, 6.0f)));
+        };
+        MovementSystem sys{MovementConfig{}};
+        setup(sys);
+        SimRng rng(525);
+        sys.tick(1, rng, serial_for);
+        CHECK(sys.collisions().list().size() == 1);
+        if (sys.collisions().list().size() == 1) {
+            const CollisionObject& c = sys.collisions().list()[0];
+            CHECK(c.kind == CollisionKind::StoppedVsStopped && c.a == 10 && c.b == 11 && c.master == 0 &&
+                  c.state == CollisionState::Resolving);
+        }
+        for (uint32_t f = 2; f < 10; ++f) sys.tick(f, rng, serial_for);
+        ByteWriter w;
+        sys.write(w);
+        MovementSystem copy{MovementConfig{}};
+        land_system(copy, 100);
+        {
+            ByteReader r(w.bytes());
+            CHECK(copy.read(r) && r.done());
+        }
+        SimRng r2 = rng;
+        for (uint32_t f = 10; f < 300; ++f) {
+            sys.tick(f, rng, serial_for);
+            copy.tick(f, r2, serial_for);
+        }
+        StateHasher ha, hb;
+        sys.hash_units(ha);
+        copy.hash_units(hb);
+        CHECK(ha.digest() == hb.digest());
+        CHECK(sys.view(11).pos == (V2{cell_center(20, 20).x + 8.0f, cell_center(20, 20).y}) && sys.collisions().list().empty());
+        CHECK(distance(sys.view(10).pos, cell_center(20, 20)) > 5.0f);
+    }
+    {  // save / load with a kill listed (push_kills is saved and hashed like the crush events)
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, start, 1)));
+        CHECK(sys.add_unit(t20_clone(11, cell_center(24, 20), kUccVehicle, 10.0f, 6.0f)));
+        SimRng rng(526);
+        MoveOrder o;
+        o.units = {10};
+        o.destination = dest;
+        o.flags = kMoveFlagSkipValidation;
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        for (; f < 800 && sys.push_kills().empty(); ++f) sys.tick(f, rng, serial_for);
+        CHECK(!sys.push_kills().empty());
+        ByteWriter w;
+        sys.write(w);
+        MovementSystem copy{MovementConfig{}};
+        land_system(copy, 100);
+        {
+            ByteReader r(w.bytes());
+            CHECK(copy.read(r) && r.done());
+        }
+        StateHasher ha, hb;
+        sys.hash_units(ha);
+        copy.hash_units(hb);
+        CHECK(ha.digest() == hb.digest() && copy.push_kills().size() == 1 && copy.push_kills()[0] == 11);
+    }
+}
+
 int main() {
     test_corridor();
     test_threat();
@@ -6865,6 +7103,7 @@ int main() {
     test_t20_early_arrival();       // s78n t20 item 4
     test_t20_decision_leftovers();  // s78n t20 item 5
     test_t20_stopped_vs_stopped();  // s78n t20 item 1
+    test_t20_death_clone();         // s78n t20 batch 1 item 1.5
     test_determinism();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

@@ -1281,6 +1281,7 @@ void MovementSystem::tick(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
     const uint32_t interval = cfg_.constants.dynamic_land_quota_reset_interval;
     if (interval < 2 || frame % interval == 0) quota_used_ = 0;
     crush_.clear();
+    push_kills_.clear();  // s78n t20 batch 1
     despawned_.clear();
     fevents_.clear();
     tevents_.clear();  // s78l t02: the host takes them right after the tick (TacticalBattle::play_turn_clip_events)
@@ -1600,6 +1601,10 @@ void MovementSystem::detect_collisions(uint32_t frame) {
         // §4.3-4.6: air units take no part in land collision; FIGHTER_FLYING §7.5 item 1: a squad member is never a
         // collision checker (it is not registered)
         if (!land_layer_object(a)) continue;
+        // s78n t20 batch 1 (MOVEMENT §5.2 items 2 / 5 / 7): the check runs on the locomotor's countdown, so an object without
+        // a locomotor (a death-clone obstacle) is never a checker - only a candidate (and the pair filter's "neither side
+        // has a locomotor" then never applies: the checker has one)
+        if (a.d.no_locomotor) continue;
         if (a.check_countdown > 0) {
             --a.check_countdown;
             continue;
@@ -1799,7 +1804,7 @@ bool MovementSystem::unit_moving(const Unit& u) const {
     // vf +0x1a8 0x42cc60: not suspended (pack +0x260; the port's speed factor 0) and (speed > 0 or a path record on its
     // stack); vf +0x1b0 0x42cd30: not suspended and turning in place (the start turn, the arrival turn, a container's
     // final-facing turn)
-    if (!(u.speed_factor > 0.0f)) return false;
+    if (!(u.speed_factor > 0.0f) || u.d.no_locomotor) return false;  // s78n t20 batch 1: no locomotor, never Moving
     return u.m.speed > 0.0f || u.pushed || (u.has_goal && !u.need_path) || u.m.state == LocoState::WalkStartTurn ||
            u.aturn != LocoState::None || u.fturn;
 }
@@ -2022,6 +2027,7 @@ float MovementSystem::follow_speed(const Unit& s, const CollisionObject& c) cons
 }
 
 bool MovementSystem::on_blocked_cell(const Unit& u) const {
+    if (u.d.no_locomotor) return false;  // s78n t20 batch 1: the test needs a locomotor (a clone stands on its own stamp)
     const bool order = u.has_goal && !u.pushed;  // the order path is the top record (or will be, once planned)
     if (order && (u.need_path || u.forced || u.m.next < u.m.escape_until)) return false;  // forced ([port] see the header)
     return !grid_.passable_world(u.m.pos, u.lp.mask);
@@ -2079,13 +2085,15 @@ bool MovementSystem::destination_blocked(const Unit& a, const Unit& b) const {
         if (static_cast<size_t>(ti) + 1 < top.size()) nrm = normalize_retail(nrm + normalize_retail(top[ti + 1] - w));
         if (length_sq(nrm) > 0.0f && dot(e - w, nrm) < -0.1f) return false;
     }
+    // s78n t20 batch 1 (MOVEMENT §5.4.5 item 2): only objects with a locomotor count - a death clone never blocks the
+    // destination
     const FootRect ra = foot_at(a, e);
-    if (foot_overlap(ra, foot_of(b))) return true;
+    if (!b.d.no_locomotor && foot_overlap(ra, foot_of(b))) return true;
     std::vector<uint32_t> cand;
     layer_box_query(e, 0.5f * kCollisionCrowdBox, cand);
     for (uint32_t ci : cand) {
         const Unit& o = units_[ci];
-        if (o.d.id == a.d.id || o.d.id == b.d.id || unit_moving(o)) continue;
+        if (o.d.id == a.d.id || o.d.id == b.d.id || o.d.no_locomotor || unit_moving(o)) continue;
         if (foot_overlap(ra, foot_of(o))) return true;
     }
     return false;
@@ -2180,10 +2188,11 @@ bool MovementSystem::early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, ui
     std::vector<uint32_t> cand;
     layer_box_query(end, 0.5f * kCollisionCrowdBox, cand);
     std::vector<FootRect> blockers;
-    if (!unit_moving(b)) blockers.push_back(foot_of(b));
+    // s78n t20 batch 1 (MOVEMENT §5.4.4 item 2): every object without a locomotor and every Moving one is dropped
+    if (!b.d.no_locomotor && !unit_moving(b)) blockers.push_back(foot_of(b));
     for (uint32_t ci : cand) {
         const Unit& o = units_[ci];
-        if (o.d.id == a.d.id || o.d.id == b.d.id || unit_moving(o)) continue;
+        if (o.d.id == a.d.id || o.d.id == b.d.id || o.d.no_locomotor || unit_moving(o)) continue;
         blockers.push_back(foot_of(o));
     }
     const bool has_target = a.ci.target >= 0;
@@ -2570,9 +2579,9 @@ bool MovementSystem::mvs_path_around(const CollisionObject& c, Unit& a, const Un
     return path_around(c, a, &b, false, 4, p, frame) || path_around(c, a, &b, false, 4, static_cast<uint8_t>(p | 4u), frame);
 }
 
-// MovingVsStopped decision 0x684f90 (MOVEMENT §5.4.1; a = mover, b = obstacle), first match wins. Not modelled ([port]):
-// the death-clone obstacle branch (no such movement unit yet); step 10's units-ignoring detour 0x685490 (state 8) is a
-// stand-in (see there). s78n t20: the spare point 0x5c6ba0 and the Path Around calls are §1.5.1's; §5.4.5 - the target
+// MovingVsStopped decision 0x684f90 (MOVEMENT §5.4.1; a = mover, b = obstacle), first match wins. s78n t20 batch 1: the
+// death-clone obstacle clauses of steps 2 and 8 (§5.4.5 item 2). Not modelled ([port]): step 10's units-ignoring detour
+// 0x685490 (state 8) is a stand-in (see there). s78n t20: the spare point 0x5c6ba0 and the Path Around calls are §1.5.1's; §5.4.5 - the target
 // clause of step 4, the hero-clash test of step 8 and the crusher's record (set_collision_info gives the target, the
 // range, "short-range" and the clash state).
 void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t frame) {
@@ -2586,8 +2595,9 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
     const int32_t ca = a.d.collision_class, cb = b.d.collision_class;
     const bool inf_a = ca == kUccInfantry, inf_b = cb == kUccInfantry;
     const bool crush = crushes(a, b);
-    // 2. a forced top path (flag 0x20: garrison exit, unload; a collision-owned record on top is not forced)
-    if (a.forced && !a.pushed && a.has_goal) {
+    // 2. a forced top path (flag 0x20: garrison exit, unload; a collision-owned record on top is not forced), against b with
+    // a locomotor or a death clone (s78n t20 batch 1, MOVEMENT §5.4.5 item 2)
+    if (a.forced && !a.pushed && a.has_goal && (!b.d.no_locomotor || b.d.death_clone_obstacle)) {
         if (inf_a && inf_b) c.state = S::Repulsion;
         else c.state = push_aside(c, a, b, crush, frame) ? S::Resolved : S::TryAgainLater;
         return;
@@ -2646,10 +2656,12 @@ void MovementSystem::mvs_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
         }
     }
     // 8. a non-hostile blocker (or one that scatters from the crusher) is pushed - not by a single infantry mover, nor by
-    // a bike against infantry, and never a blocker in a hero clash (+0x3b4; only this step tests it)
+    // a bike against infantry, and never a blocker in a hero clash (+0x3b4; only this step tests it). s78n t20 batch 1
+    // (MOVEMENT §5.4.5 item 2): any mover pushes a death clone (hostile or not, single infantry included) - it is killed
     const bool friendly = !hostile(a.d.owner, b.d.owner) || scat;
     const bool shove_ok = friendly && !(inf_a && !a.d.team_container) && !(ca == kUccBike && inf_b);
-    if (shove_ok && (!crush || scat) && !b.ci.hero_clash && !push_tried && push_aside(c, a, b, crush, frame)) {
+    if ((shove_ok || b.d.death_clone_obstacle) && (!crush || scat) && !b.ci.hero_clash && !push_tried &&
+        push_aside(c, a, b, crush, frame)) {
         c.state = S::Resolved;
         return;
     }
@@ -2822,6 +2834,14 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
 // move). A deploying / deployed b is not pushed. [port] A b already on a pushed move counts as pushed (the original
 // pushes a blocker that is moving again, decision 0x684f90 step 2).
 bool MovementSystem::push_aside(const CollisionObject& c, const Unit& a, Unit& b, bool flee, uint32_t frame) {
+    // s78n t20 batch 1 (MOVEMENT §5.4.5 item 2, 0x6859a0 first test): a b without a locomotor is not pushed - a death-clone
+    // obstacle is killed (0x391310(b, 1), the normal death: the host does it after the tick, push_kills) and the push
+    // succeeds; any other locomotor-less b fails the push. No spot search, no path.
+    if (b.d.no_locomotor) {
+        if (!b.d.death_clone_obstacle) return false;
+        if (std::find(push_kills_.begin(), push_kills_.end(), b.d.id) == push_kills_.end()) push_kills_.push_back(b.d.id);
+        return true;
+    }
     // [port] a unit still walking the path this record pushed it on keeps it, path kind (crush-flee or not) included.
     // (s78n t20: a push by another record replaces the older collision path - the claim is forced, A1_READINGS §40.3.)
     if (holds_path(b, c)) return true;
@@ -2979,12 +2999,12 @@ float MovementSystem::svs_cost(const Unit& x, const Unit& y, V2 d) const {
 // deployed / deploying units never move (both: nobody); exactly one has a target -> the one without; two Infantry-class
 // units with targets -> nobody; against a Giant of a higher class only the smaller one is a candidate; else both are,
 // the cheaper first (cost(p1) <= cost(p0) -> p1 first). Of the candidates the first whose locomotor would accept the
-// claim moves (no owner, this record, or an owner of lower weight). [port] no movement unit is without a locomotor
-// (death clones: not registered yet); a deployed unit never walks (Max_Dist_Walk_While_Deployed is not modelled), and a
+// claim moves (no owner, this record, or an owner of lower weight). A participant without a locomotor (a death clone, s78n t20
+// batch 1) makes the other one move (rule 1). [port] a deployed unit never walks (Max_Dist_Walk_While_Deployed is not modelled), and a
 // unit whose max speed is 0 counts as immobile too (retail has no such case: it would pick it and wait for good).
 uint8_t MovementSystem::svs_pick_mover(const CollisionObject& c, const Unit& p0, const Unit& p1) const {
-    if (p0.d.collision_class == kUccLandingTransport) return 1;
-    if (p1.d.collision_class == kUccLandingTransport) return 0;
+    if (p0.d.collision_class == kUccLandingTransport || p0.d.no_locomotor) return 1;  // (s78n t20 batch 1: no locomotor)
+    if (p1.d.collision_class == kUccLandingTransport || p1.d.no_locomotor) return 0;
     if (p0.hover == 3) return 1;
     if (p1.hover == 3) return 0;
     const auto imm = [this](const Unit& x) {
@@ -3026,7 +3046,9 @@ uint8_t MovementSystem::svs_pick_mover(const CollisionObject& c, const Unit& p0,
 void MovementSystem::svs_service(CollisionObject& c, Unit& a, Unit& b, uint32_t frame) {
     using S = CollisionState;
     // Validity 0x686e80: a participant standing on a cell that is impassable for it -> Unresolvable
-    if (!grid_.passable_world(a.m.pos, a.lp.mask) || !grid_.passable_world(b.m.pos, b.lp.mask)) {
+    // (s78n t20 batch 1: only a participant with a locomotor is tested)
+    const auto off_cell = [this](const Unit& u) { return !u.d.no_locomotor && !grid_.passable_world(u.m.pos, u.lp.mask); };
+    if (off_cell(a) || off_cell(b)) {
         for (Unit* u : {&a, &b})
             if (holds_path(*u, c)) {
                 end_push(*u);
@@ -3169,7 +3191,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     pf(static_cast<uint32_t>(units_.size()), 64, [&](uint32_t b, uint32_t e) {
         for (uint32_t i = b; i < e; ++i) {
             Unit& u = units_[i];
-            if (is_air(u)) continue;  // §4.3-4.6: serial pass below
+            if (is_air(u) || u.d.no_locomotor) continue;  // §4.3-4.6: serial pass below; s78n t20 batch 1: no locomotor
             if (anchor_at[i] >= 0) {  // s78n t03: a squad member steers to its slot around its container
                 steer_member(u, snaps[static_cast<size_t>(anchor_at[i])], recs, pos0);
                 continue;
@@ -3302,6 +3324,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             update_tree(u);
             continue;
         }
+        if (u.d.no_locomotor) continue;  // s78n t20 batch 1: a death clone stands where it was placed
         const WalkResult& r = res[i];
         bool popped_arrival = false;
         if (u.pushed) {
@@ -3514,6 +3537,7 @@ void MovementSystem::tick_space(uint32_t frame, const ParallelFor& pf) {
 
 void MovementSystem::commit(objects::ObjectStore& store) const {
     for (const Unit& u : units_) {
+        if (u.d.no_locomotor) continue;  // s78n t20 batch 1: the host's object keeps its own transform
         const objects::ObjectHandle h = store.find(u.d.id);
         if (!store.alive(h)) continue;
         store.set_position(h, alamo::Vec3{u.m.pos.x, u.m.pos.y, u.z});
@@ -3600,6 +3624,10 @@ void MovementSystem::hash_units(StateHasher& h) const {
             h.u8(0xE7);
             h.i32(u.exit_host);
         }
+        if (u.d.no_locomotor) {  // s78n t20 batch 1: an object without a locomotor (a death clone), only for such a unit
+            h.u8(0xD1);
+            h.boolean(u.d.death_clone_obstacle);
+        }
         if (u.hover != 0 || u.hover_off != 0.0f) {  // s78n t18: the hover state, only once it left the ground
             h.u8(0xE8);
             h.u8(u.hover);
@@ -3650,6 +3678,11 @@ void MovementSystem::hash_units(StateHasher& h) const {
     for (const CrushEvent& e : crush_) {
         h.i32(e.crusher);
         h.i32(e.victim);
+    }
+    if (!push_kills_.empty()) {  // s78n t20 batch 1: the death clones a push killed this tick, only while any
+        h.u8(0xD2);
+        h.u32(static_cast<uint32_t>(push_kills_.size()));
+        for (const ObjectId id : push_kills_) h.i32(id);
     }
     if (!parked_.empty()) {  // s78n review: parked squad members (garrisoned), appended only while any exists
         h.u8(0xC8);

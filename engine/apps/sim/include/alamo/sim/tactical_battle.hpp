@@ -1690,6 +1690,11 @@ private:
 #endif
     void schedule_death_clone(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type, uint8_t kind, SimRng& rng);
     void remove_death_clones(TacticalMode& mode, bool all);  // due ones (expire_objects), or all (battle end)
+    // s78n t20 batch 1 (MOVEMENT §5.4.5 item 2): a land clone of a type with IsDeathCloneObstacle and a UnitCollisionClass
+    // is a movement object without a locomotor (the obstacle b of the land collisions); the clones a collision push
+    // killed this tick (MovementSystem::push_kills) are removed after the movement tick, in list order.
+    void register_clone_obstacle(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type);
+    void kill_pushed_clones(TacticalMode& mode);
     std::vector<AttachedEffect> effects_;
     std::vector<objects::ObjectId> story_reinforced_;  // L1/S4 wave 2b: reserve units deployed this tick
     std::vector<objects::ObjectId> ability_finished_;  // S7 t15 A1: signal 0x29 this tick (not saved: read the same tick)

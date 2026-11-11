@@ -1621,7 +1621,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 18);  // 18: before the s78n t20 F5 exact single-member goal Unit::self_goal (19)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 20);
+    put_u32(bad, 0, 19);  // 19: before the s78n t20 batch 1 death-clone fields and push kills (20)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 21);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

@@ -4900,9 +4900,59 @@ void TacticalBattle::schedule_death_clone(TacticalMode& mode, objects::ObjectHan
     uint32_t at = kForeverFrame;
     if (!forever) at = lifetime >= static_cast<uint64_t>(kForeverFrame - 1u - frame_) ? kForeverFrame - 1u : frame_ + static_cast<uint32_t>(lifetime);
     death_clones_.push_back({mode.primary().id(clone), clone, at});
+    register_clone_obstacle(mode, clone, clone_type);  // s78n t20 batch 1
 #ifdef ALAMO_SIM_HAVE_ANIM
     hooks_->anim_clone(clone, kind, &plan);
 #endif
+}
+
+// s78n t20 batch 1 (MOVEMENT §5.4.5 item 2, §5.2 item 4): the clone is in the land layer as an object without a locomotor
+// (obj +0x333 = -1): never Moving, never a checker, the obstacle b of the movers' collision records. Its footprint is
+// its type's (Custom_Hard_X/YExtent x Scale_Factor, else the radius; UnitCollisionClass through Variant_Of_Existing_Type).
+// [port] registered only on land and only for clones that stay (a Remove_Upon_Death clone is destroyed before); the
+// Proximity_Mine / Proj_Remote_Bomb objects that also carry IsDeathCloneObstacle are not registered (ability objects).
+void TacticalBattle::register_clone_obstacle(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type) {
+    if (space_ || !movement_ || clone_type < 0) return;
+    const objects::GameObjectTypes& types = catalog_->types();
+    const auto t = static_cast<objects::TypeIndex>(clone_type);
+    if (t >= types.size() || !types.get_bool(t, "IsDeathCloneObstacle")) return;
+    mv::UnitDesc md = mv::unit_desc_from_type(types, t);
+    if (md.collision_class < 0) return;
+    const objects::ObjectStore& store = mode.primary();
+    const Vec3 pos = store.position(clone), face = store.facing(clone);
+    md.id = store.id(clone);
+    md.pos = {pos.x, pos.y};
+    md.z = pos.z;
+    md.yaw_deg = yaw_of(face);
+    md.owner = store.owner(clone);
+    md.no_locomotor = true;
+    md.death_clone_obstacle = true;
+    // the locomotor-side data of the variant's base type does not apply (the clone's behaviours were stripped)
+    md.locomotor = mv::LocomotorKind::Default;
+    md.crusher = md.supercrusher = false;
+    md.turret = false;
+    md.hover_height = 0.0f;
+    md.uses_multiple_locomotors = md.has_secondary_locomotor = false;
+    mv_type_extents(md, t);
+    movement_->add_unit(md);
+}
+
+void TacticalBattle::kill_pushed_clones(TacticalMode& mode) {
+    if (space_ || !movement_ || movement_->push_kills().empty()) return;
+    // 0x391310(b, 1): the clone dies by the normal death. [port] it is destroyed here (its own death plan ends at once;
+    // a clone has no death clone of its own), and leaves the movement system and the battle's clone list.
+    const std::vector<objects::ObjectId> ids(movement_->push_kills().begin(), movement_->push_kills().end());
+    objects::ObjectStore& store = mode.primary();
+    for (const objects::ObjectId id : ids) {
+        movement_->remove_unit(id);
+        const auto it = std::find_if(death_clones_.begin(), death_clones_.end(), [id](const TimedObject& o) { return o.id == id; });
+        if (it == death_clones_.end()) continue;
+        if (store.alive(it->h)) {
+            mode.destroy(it->h);
+            ++stats_.death_clones_removed;
+        }
+        death_clones_.erase(it);
+    }
 }
 
 void TacticalBattle::remove_death_clones(TacticalMode& mode, bool all) {
@@ -4917,6 +4967,7 @@ void TacticalBattle::remove_death_clones(TacticalMode& mode, bool all) {
                 mode.destroy(death_clones_[i].h);
                 ++stats_.death_clones_removed;
             }
+            if (movement_) movement_->remove_unit(death_clones_[i].id);  // s78n t20 batch 1 (a registered clone obstacle)
             continue;
         }
         death_clones_[w++] = death_clones_[i];
@@ -5007,6 +5058,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
     movement_->commit(store);
+    kill_pushed_clones(mode);  // s78n t20 batch 1: the death clones a collision push killed
     play_turn_clip_events(rng, global_frame);  // s78l t02: the arrival turn's clip plays (synced variant draws), ascending id
     oi_deploy_sync();  // S8 t11: deploy clip ends (Is_Active, deploy flags, signal 0x29) before the combat tick
     profile::lap("tac.movement");
