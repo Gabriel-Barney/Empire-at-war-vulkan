@@ -222,6 +222,8 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             bool ok = r.ok() && r.done() && (same || extended);
             for (const Unit& u : units_)
                 if (u.participant >= parts_.size() || (u.container != 0xFFFFFFFFu && u.container >= containers_.size())) ok = false;
+            for (size_t i = 1; i < attack_blocks_.size(); ++i)  // s78n t20 review: one block per mover, ascending (lower_bound)
+                if (!(attack_blocks_[i - 1].mover < attack_blocks_[i].mover)) ok = false;
             if (ok && extended) {
                 const std::vector<uint32_t> saved_descs = descs_;
                 descs_ = descs;

@@ -1157,6 +1157,46 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
     }
 }
 
+void MovementSystem::halt(std::span<const ObjectId> ids, uint32_t frame) {
+    for (const ObjectId id : ids) {
+        const ObjectId one[] = {id};
+        Unit* u = unit_ptr(order_id(id));
+        if (!u || cfg_.mode != MoveMode::Land || u->d.locomotor != LocomotorKind::Default || u->deploy != LocoState::None) {
+            stop(one);
+            continue;
+        }
+        const float v = u->m.speed;
+        const LocoState s = u->m.state;
+        stop(one);
+        if (!(v > 0.0f)) continue;
+        u->m.speed = v;  // the speed is kept: the unit brakes through End Move
+        u->m.state = s;
+        brake_to_stop(*u, frame);
+    }
+}
+
+void MovementSystem::brake_to_stop(Unit& u, uint32_t frame) {
+    const float v = u.m.speed, dec = u.lp.decel;
+    if (u.d.team_container && v > 0.0f) {
+        u.coast = true;  // 0x14 with no top path: the coast brakes at the team rate (team_walk)
+        return;
+    }
+    if (u.d.team_container || !(v > 0.0f) || !(dec > 0.0f)) {
+        u.m.speed = 0.0f;
+        u.m.state = LocoState::WalkStopped;
+        u.coast = false;
+        return;
+    }
+    end_push(u);
+    u.pushed = true;
+    u.push_kind = 1;
+    u.push_weight = 1;
+    u.push_owner = kNoDetour;  // no record owns it: any claim replaces it
+    u.push_path = {u.m.pos, u.m.pos + dir_from_deg(u.m.yaw) * (v * v / (2.0f * dec))};
+    u.push_next = 1;
+    u.path_change = frame;
+}
+
 // L1 systems: Teleport (0x3a8f90): stop, place, re-register (collision tree / stationary space track).
 bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint32_t frame) {
     Unit* u = unit_ptr(id);

@@ -3480,7 +3480,9 @@ std::array<float, 6> fed_info(const mv::MovementSystem& ms, objects::ObjectId id
     return {static_cast<float>(ci.target), ci.target_pos.x, ci.target_pos.y, ci.target_radius, ci.attack_range, ci.short_range ? 1.0f : 0.0f};
 }
 
-LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save_load, bool use_ai = false) {
+// `workers`: the session's job workers; `digests` (s78n t20 review): every tick's digest from the order stage on.
+LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save_load, bool use_ai = false, uint32_t workers = 0,
+                                         std::vector<uint64_t>* digests = nullptr) {
     LandAttackBlockRun out;
     CampaignBattleOptions opt;
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
@@ -3488,9 +3490,9 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
     opt.battle.skip_human_units = true;
     opt.battle.order_interval = 0;  // no stand-in orders
     const auto session = [&](bool launch) {
-        return blockers ? std::make_unique<ClashSession>(d, 0, opt, std::initializer_list<const char*>{"S10_Squad", "S10_Squad"},
+        return blockers ? std::make_unique<ClashSession>(d, workers, opt, std::initializer_list<const char*>{"S10_Squad", "S10_Squad"},
                                                          std::initializer_list<const char*>{}, launch)
-                        : std::make_unique<ClashSession>(d, 0, opt, std::initializer_list<const char*>{},
+                        : std::make_unique<ClashSession>(d, workers, opt, std::initializer_list<const char*>{},
                                                          std::initializer_list<const char*>{}, launch);
     };
     auto s = session(true);
@@ -3520,6 +3522,7 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
         objects::ObjectStore& st = tm->primary();
         auto& cs = const_cast<tc::CombatSystem&>(b->combat());
         const mv::MovementSystem& ms = b->movement();
+        if (digests && stage >= 1) digests->push_back(clash_digest(*b));
         if (out.saved) {
             after_save.push_back(clash_digest(*b));
             info_after_save.push_back(fed_info(ms, team));
@@ -3690,6 +3693,191 @@ LandAttackBlockRun run_land_attack_block(const Data& d, bool blockers, bool save
     return out;
 }
 
+// s78n t20 review follow-ups (MOVEMENT §4.3.2 item 6; the interim approach point, replaced by t25): the squad data with
+// edited troopers, the stand-in off. min_range false: Targeting_Max_Attack_Distance 20 (a melee range, as Vader / Dark_Trooper);
+// the human's squad ordered to attack the invader's lowest-id member from 150 walks to where it can hit (before: it aimed
+// 0.7 x max(range, 100) = 70 short of the target and stood there). min_range true: Targeting_Min_Attack_Distance 100
+// (range 250); a land Attack_Move on the target through BattleAi from 400, then the squad is put 40 from the target (inside
+// its minimum range): its block's next 30-frame check re-plans to the staged point min + 0.2 x (range - min) = 130 from the
+// target (before: the target's own position), and it ends where it can hit.
+struct LandReachRun {
+    bool ordered = false, inside = false, replanned = false, reached = false;
+    uint32_t replan_frames = 0, reach_frames = 0;
+    float range = 0.0f, goal_dist = -1.0f, end_dist = -1.0f;
+};
+
+LandReachRun run_land_reach(const Data& d, bool min_range) {
+    LandReachRun out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    ClashSession s(d, 0, opt, {}, {}, true);
+    if (!s.gs) return out;
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d.files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };  // no AI player: orders only
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId team = objects::kNoObjectId, target = objects::kNoObjectId;
+    std::vector<objects::ObjectId> members;
+    Vec3 dir{};
+    for (uint64_t t = 0; t < 6000 && stage < 9; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto& cs = const_cast<tc::CombatSystem&>(b->combat());
+        const mv::MovementSystem& ms = b->movement();
+        if (stage == 0) {
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                cs.make_invulnerable(id, 1000000, b->frame());
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() < 2 || !st.alive(th) || !ms.has_unit(static_cast<objects::ObjectId>(tid))) continue;
+                if (st.owner(th) == 0 && team == objects::kNoObjectId) {
+                    team = static_cast<objects::ObjectId>(tid);
+                    members = m;
+                } else if (st.owner(th) == 1 && target == objects::kNoObjectId) {
+                    target = m.front();
+                }
+            }
+            CHECK(team != objects::kNoObjectId && target != objects::kNoObjectId);
+            if (team == objects::kNoObjectId || target == objects::kNoObjectId) break;
+            out.range = cs.attack_range(members.front());
+            const Vec3 tp = st.position(st.find(target)), ap = st.position(st.find(team));
+            const float dx = ap.x - tp.x, dy = ap.y - tp.y, dl = std::sqrt(dx * dx + dy * dy);
+            dir = dl > 1.0f ? Vec3{dx / dl, dy / dl, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            const float start = min_range ? 400.0f : 150.0f;
+            CHECK(b->teleport(*tm, team, Vec3{tp.x + dir.x * start, tp.y + dir.y * start, ap.z}, st.facing(st.find(team))));
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (!cs.alive(target)) break;
+        const Vec3 tp = st.position(st.find(target));
+        const auto dist_to = [&](mv::V2 p) { return std::sqrt((p.x - tp.x) * (p.x - tp.x) + (p.y - tp.y) * (p.y - tp.y)); };
+        if (stage == 1) {
+            if (b->frame() < stage_frame + 2) continue;
+            if (!min_range) {
+                out.ordered = b->order_attack(*tm, 0, members, target, s.host->random().synced()) == commands::RejectReason::None;
+            } else {
+                std::vector<uint8_t> pay;
+                const auto put = [&pay](uint32_t v) {
+                    for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+                };
+                put(static_cast<uint32_t>(members.front()));
+                put(static_cast<uint32_t>(target));
+                put(std::bit_cast<uint32_t>(tp.x));
+                put(std::bit_cast<uint32_t>(tp.y));
+                put(std::bit_cast<uint32_t>(tp.z));
+                put(0u);
+                for (size_t i = 1; i < members.size(); ++i) put(static_cast<uint32_t>(members[i]));
+                const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::AttackMove));
+                BattleAi bai(*b, *tm, *s.host, ts);
+                out.ordered = bai.execute(0, commands::ev::port_extension(sub, pay)) == commands::RejectReason::None;
+            }
+            CHECK(out.ordered);
+            stage = min_range ? 2 : 3;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 2) {  // min_range: 10 frames on the way, then 40 from the target
+            if (b->frame() < stage_frame + 10) continue;
+            const objects::ObjectHandle th = st.find(team);
+            CHECK(b->teleport(*tm, team, Vec3{tp.x + dir.x * 40.0f, tp.y + dir.y * 40.0f, st.position(th).z}, st.facing(th)));
+            out.inside = cs.can_hit(members.front(), target) == tc::CanHit::InsideMinRange;
+            stage = 3;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 3) {
+            const mv::UnitView v = ms.view(team);
+            // the c of the block checks: from the squad container (TacticalBattle::attack_can_hit)
+            tactical::Vec3 from = cs.can_hit_origin(members.front());
+            from.x = v.pos.x;
+            from.y = v.pos.y;
+            const tc::CanHit c = cs.can_hit_from(members.front(), from, target);
+            if (min_range && !out.replanned && v.has_goal) {
+                out.replanned = true;
+                out.replan_frames = b->frame() - stage_frame;
+                out.goal_dist = dist_to(v.goal);
+            }
+            if (c == tc::CanHit::Yes && (!min_range || out.replanned)) {
+                out.reached = true;
+                out.reach_frames = b->frame() - stage_frame;
+                out.end_dist = dist_to(mv::V2{v.pos.x, v.pos.y});
+                stage = 9;
+            } else if (b->frame() > stage_frame + 1500) {
+                out.end_dist = dist_to(mv::V2{v.pos.x, v.pos.y});
+                stage = 9;
+            }
+        }
+    }
+    return out;
+}
+
+// One squad data folder with S10_Trooper edited by `patch` (its own folder: g_temp_prefix + `name`).
+std::unique_ptr<Data> squad_data_patched(const char* name, std::string (*patch)(std::string)) {
+    static std::string prefix;
+    const char* const old = g_temp_prefix;
+    prefix = std::string(old) + name;
+    g_temp_prefix = prefix.c_str();
+    g_types_patch = patch;
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    g_types_patch = nullptr;
+    g_temp_prefix = old;
+    return d;
+}
+
+std::string trooper_melee(std::string t) {  // Targeting_Max_Attack_Distance 250 -> 20
+    const std::string at = "<GroundInfantry Name=\"S10_Trooper\">", r = "<Targeting_Max_Attack_Distance>250</Targeting_Max_Attack_Distance>";
+    if (const size_t p = t.find(at); p != std::string::npos)
+        if (const size_t q = t.find(r, p); q != std::string::npos) t.replace(q, r.size(), "<Targeting_Max_Attack_Distance>20</Targeting_Max_Attack_Distance>");
+    return t;
+}
+
+std::string trooper_min_range(std::string t) {  // Targeting_Min_Attack_Distance 100
+    const std::string at = "<GroundInfantry Name=\"S10_Trooper\">";
+    if (const size_t p = t.find(at); p != std::string::npos)
+        t.insert(p + at.size(), "<Targeting_Min_Attack_Distance>100</Targeting_Min_Attack_Distance>");
+    return t;
+}
+
+void test_land_attack_reach() {
+    {
+        auto d = squad_data_patched("_melee", trooper_melee);
+        const LandReachRun r = run_land_reach(*d, false);
+        std::printf("  land attack reach (melee): range %.0f, ordered %d, can hit after %u frame(s) %d, %.1f from the target\n",
+                    static_cast<double>(r.range), r.ordered ? 1 : 0, r.reach_frames, r.reached ? 1 : 0, static_cast<double>(r.end_dist));
+        CHECK(r.range == 20.0f && r.ordered && r.reached && r.reach_frames <= 600);
+    }
+    {
+        auto d = squad_data_patched("_min_range", trooper_min_range);
+        const LandReachRun r = run_land_reach(*d, true);
+        std::printf("  land attack reach (minimum range 100): ordered %d, inside %d, re-planned after %u frame(s) to %.1f from the "
+                    "target (staged 130), can hit after %u frame(s) %d, %.1f from the target\n",
+                    r.ordered ? 1 : 0, r.inside ? 1 : 0, r.replan_frames, static_cast<double>(r.goal_dist), r.reach_frames,
+                    r.reached ? 1 : 0, static_cast<double>(r.end_dist));
+        CHECK(r.ordered && r.inside && r.replanned && r.replan_frames <= 31);
+        CHECK(std::fabs(r.goal_dist - 130.0f) <= 10.0f);
+        CHECK(r.reached && r.end_dist > 100.0f);
+    }
+}
+
 void test_land_attack_blocks() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, true);
@@ -3705,11 +3893,18 @@ void test_land_attack_blocks() {
     std::printf("  land attack blocks: fed collision info checked on %u unit-frames, %u off, same after the load %d\n",
                 a.info_frames, a.info_bad, a.info_same ? 1 : 0);
     CHECK(a.info_frames > 100 && a.info_bad == 0 && a.info_same);
-    const LandAttackBlockRun c = run_land_attack_block(*d, true, false);
+    std::vector<uint64_t> w0, w4;
+    const LandAttackBlockRun c = run_land_attack_block(*d, true, false, false, 0, &w0);
     std::printf("  land attack blocks (ii): friendly squads at 0.76 / 0.92 x range: ordered %d, walking %d, ended in range %d "
                 "after %u frame(s), fired %d (%u frame(s) after the end)\n",
                 c.ordered ? 1 : 0, c.gated ? 1 : 0, c.ended_in_range ? 1 : 0, c.end_frame, c.fired ? 1 : 0, c.fire_frames);
     CHECK(c.ordered && c.gated && c.ended_in_range && c.fired && c.fire_frames <= 300);
+    // s78n t20 review: the same run (its blocks, re-plans and land stops) on 4 job workers - the same digest every tick
+    (void)run_land_attack_block(*d, true, false, false, 4, &w4);
+    size_t same = 0;
+    while (same < w0.size() && same < w4.size() && w0[same] == w4[same]) ++same;
+    std::printf("  land attack blocks (ii) serial / 4 workers: %zu / %zu tick(s), the first %zu equal\n", w0.size(), w4.size(), same);
+    CHECK(!w0.empty() && w0 == w4);
     // s78n t20 step 5: the same through the AI host's Attack (BattleAi::execute): it ends in weapon range
     const LandAttackBlockRun e = run_land_attack_block(*d, true, false, true);
     std::printf("  land attack blocks (AI Attack): ordered %d, walking %d, ended in range %d after %u frame(s), fired %d (%u frame(s) "
@@ -3951,6 +4146,7 @@ int main(int argc, char** argv) {
     test_land_squad_garrison_save_load();
     std::printf("s78n t20 stage A: the land attack re-check (displaced squad, friendly squads on the line, save / load)\n");
     test_land_attack_blocks();
+    test_land_attack_reach();  // s78n t20 review follow-ups
     test_vehicle_landing_exit();
     std::printf("a1i t04 / t05: land Reinforce from a landing object (spawn, carried type, unload offsets, take-off)\n");
     test_landing_drop(false);

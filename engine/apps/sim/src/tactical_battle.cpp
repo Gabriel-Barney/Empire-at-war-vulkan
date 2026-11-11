@@ -1546,8 +1546,11 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         // unit that cannot hit its nearest enemy from where it stands approaches again (no land stop here).
         if (dist <= 0.8f * range && !standin_recheck(u, best->id)) continue;
         if (movement_locked(u.id)) continue;  // OI follow-up t03: a locked unit keeps its order (§28.9)
+        if (!(dist > 0.0f)) continue;  // s78n t20 review: on the enemy's position there is no approach line
         const Vec3 ep = store.position(best->h);
-        const float k = (dist - 0.7f * range) / dist;
+        // s78n t20 interim, replaced by t25 (the arc slots): the approach aims with the unit's own range (no 100 floor), so
+        // a short-range unit gets to where it can hit
+        const float k = (dist - 0.7f * (u.range > 0.0f ? u.range : range)) / dist;
         mv::MoveOrder o;
         o.units = {u.id};
         o.destination = {up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k};
@@ -1851,7 +1854,7 @@ bool TacticalBattle::standin_recheck(const Unit& u, objects::ObjectId enemy) con
     if (!movement_->has_unit(mover)) return false;
     const mv::UnitView v = movement_->view(mover);
     if (v.has_goal || v.pushed) return false;
-    const tc::CanHit c = combat_->can_hit(u.id, enemy);
+    const tc::CanHit c = attack_can_hit(u.id, enemy);
     return c != tc::CanHit::Yes && c != tc::CanHit::NoTarget;
 }
 
@@ -1859,6 +1862,16 @@ objects::ObjectId TacticalBattle::attack_mover(objects::ObjectId unit) const {
     objects::ObjectId c = objects::kNoObjectId;
     mv::V2 slot;
     return movement_ && movement_->team_slot(unit, c, slot) && c >= 0 ? c : unit;
+}
+
+tc::CanHit TacticalBattle::attack_can_hit(objects::ObjectId unit, objects::ObjectId target) const {
+    const objects::ObjectId mover = attack_mover(unit);
+    if (mover == unit || !movement_ || !movement_->has_unit(mover)) return combat_->can_hit(unit, target);
+    tactical::Vec3 from = combat_->can_hit_origin(unit);  // its z (the lob solver's start height)
+    const mv::V2 p = movement_->view(mover).pos;
+    from.x = p.x;
+    from.y = p.y;
+    return combat_->can_hit_from(unit, from, target);
 }
 
 void TacticalBattle::attack_block_set(objects::ObjectId unit, objects::ObjectId target, uint8_t flags, Vec3 goal) {
@@ -1894,20 +1907,32 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_plan(TacticalMode& mode, 
     const float range = std::max(u.range, 100.0f);
     // MOVEMENT §4.3.2 item 6 [H]: a land plan of an object block whose members can all hit (0x40edd0) clears their paths and
     // issues none. [port] an attacker or target unknown to combat (NoTarget) keeps the older 80 % distance rule.
-    const tc::CanHit c = combat_->can_hit(u.id, target);
+    const tc::CanHit c = attack_can_hit(u.id, target);
     const bool need = c == tc::CanHit::NoTarget ? d > 0.8f * range : c != tc::CanHit::Yes;
     const objects::ObjectId one[] = {u.id};
     if (!need) {
         if (!v.has_goal) return AttackPlan::None;
-        movement_->stop(one);
+        movement_->halt(one, frame_);  // s78n t20 review: the paths are cleared, the speed is not zeroed (End Move)
         return AttackPlan::Stopped;
     }
     // [port] the approach point: the target's own position for an Attack_Move, else 70 % of the range short of it (the arc
     // slots of §4.3.2 items 2 - 5 and the fire trim of item 7 are not modelled; the early-arrival cut's range clause and the
-    // land stop end the walk where the unit can fire)
-    const float k = (flags & mv::kMoveFlagAttackMove) || !(d > 0.0f) ? 1.0f : (d - 0.7f * range) / d;
+    // land stop end the walk where the unit can fire). s78n t20 interim, replaced by t25: the range is the unit's own
+    // (no 100 floor) when combat tests it, so a short-range unit aims at a point it can hit from.
+    const float reach = c != tc::CanHit::NoTarget && u.range > 0.0f ? u.range : range;
+    const float k = (flags & mv::kMoveFlagAttackMove) || !(d > 0.0f) ? 1.0f : (d - 0.7f * reach) / d;
+    mv::V2 goal{v.pos.x + dx * k, v.pos.y + dy * k};
+    // s78n t20 review (MOVEMENT §4.3.2 item 6, staging 0x40e260 at every plan and re-plan): inside its minimum range of
+    // the target the goal is min + 0.2 x (attack range - min) from the target on the unit's side ([port] on the line from
+    // the target to the unit; one unit, as the order-time staging in BattleAi takes the group's largest minimum range)
+    if (const float mn = combat_->min_attack_distance(u.id); mn > 0.0f && combat_->inside_min_range(u.id, target)) {
+        const float sd = mn + 0.2f * (combat_->base_attack_range_of(u.id) - mn);
+        const Vec3 up = mode.primary().position(u.h);
+        const float ux = up.x - tp.x, uy = up.y - tp.y, ul = dmath::sqrt(ux * ux + uy * uy);
+        goal = ul > 0.0f ? mv::V2{tp.x + ux / ul * sd, tp.y + uy / ul * sd} : mv::V2{tp.x + sd, tp.y};
+    }
     const tactical::Aabb& bb = mode.bounds();
-    const mv::V2 dest{std::clamp(v.pos.x + dx * k, bb.min.x, bb.max.x), std::clamp(v.pos.y + dy * k, bb.min.y, bb.max.y)};
+    const mv::V2 dest{std::clamp(goal.x, bb.min.x, bb.max.x), std::clamp(goal.y, bb.min.y, bb.max.y)};
     const float ex = dest.x - v.pos.x, ey = dest.y - v.pos.y;
     if (ex * ex + ey * ey < 10.0f * 10.0f) return AttackPlan::Skipped;  // the goal is where the mover stands
     mv::MoveOrder o;
@@ -1964,7 +1989,7 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
         if (movement_locked(lead->id)) return true;
         const Vec3 tp = st.position(unit_by_id(tid)->h);
         const mv::UnitView v = movement_->view(r.mover);
-        const tc::CanHit c = combat_->can_hit(lead->id, tid);
+        const tc::CanHit c = attack_can_hit(lead->id, tid);
         const bool can = c == tc::CanHit::Yes || c == tc::CanHit::NoTarget;  // NoTarget: nothing tested (0x40edd0 true)
         const float gx = tp.x - r.gx, gy = tp.y - r.gy, R = 0.5f * lead->range;
         const bool far = gx * gx + gy * gy > R * R;
@@ -1975,7 +2000,7 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
             const bool stopping = v.walk_state == mv::LocoState::WalkEndMove;
             if (can && !stopping && !far) {  // §4.11 E: the land stop
                 const objects::ObjectId one[] = {lead->id};
-                movement_->stop(one);
+                movement_->halt(one, frame_);  // s78n t20 review: no speed zeroing, the walk brakes through End Move
                 ++stats_.attack_land_stops;
             } else if ((stopping && !can) || far) {
                 plan = true;
@@ -2077,6 +2102,7 @@ cmd::RejectReason TacticalBattle::order_facing(TacticalMode& mode, uint8_t playe
         if (abilities_) abilities_->order_cancel(u->id, frame_);
         if (movement_locked(u->id)) continue;  // OI follow-up t03: the refused move path (§28.9 [M])
         raise_order_replaced(u->id);  // S7 t31 [M: as Turn_To_Face 0x581cd0]
+        team_attack_drop(std::span<const objects::ObjectId>(&u->id, 1));  // s78n t20 review: the attack block ends too
         const Vec3 p = st.position(u->h);
         mv::MoveOrder o;
         o.units = {u->id};

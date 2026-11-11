@@ -326,6 +326,10 @@ public:
     // ---- orders
     void move(const MoveOrder& order, SimRng& rng, uint32_t frame);
     void stop(std::span<const ObjectId> ids);
+    // s78n t20 review follow-ups (MOVEMENT §4.3.2 item 6, FIGHTER_FLYING §4.11 E): the attack plan's "every member can
+    // fire" gate and the land stop clear the path stack as stop() does, but the speed is not zeroed - a land Walk unit or
+    // squad container brakes through End Move (brake_to_stop). [port] Other locomotors (and space) stop as stop() does.
+    void halt(std::span<const ObjectId> ids, uint32_t frame);
     // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): FormationClass ctor 0x40d0d0, one synced int(1, FPS), for a
     // formation the host creates outside move() (the Load_Map-tail GOM post-load pass, TacticalBattle); and whether a unit
     // already has a coordinator ([port]: an order or a formation; unknown ids have none).
@@ -1334,6 +1338,10 @@ private:
     bool mvs_behind(const Unit& a, const Unit& b) const;
     bool mvm_passed(const Unit& a, const Unit& b) const;
     float slave_speed(const Unit& x, const Unit& y, bool& touch) const;
+    // [port] End Move with no path record left (MOVEMENT §4.3.2 item 6, §5.4.1 impassable-cell item 3, §5.4.4 item 5): a
+    // squad container coasts (team_walk's End Move); a Walk unit gets an owner-less straight top record along its facing
+    // of the braking length v^2 / (2 decel) and brakes along it; without a speed or a deceleration it stops at once.
+    void brake_to_stop(Unit& u, uint32_t frame);
     bool near_path_end(const Unit& a, const Unit& b) const;
     bool destination_blocked(const Unit& a, const Unit& b) const;
     bool side_step_ok(const Unit& a, const Unit& b, const CollisionObject& self) const;

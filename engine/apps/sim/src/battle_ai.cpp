@@ -1208,7 +1208,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                 std::vector<objects::ObjectId> path_units;
                 for (const objects::ObjectId id : group.units) {
                     b_->attack_block_set(id, atu->id, mv::kMoveFlagAttackMove, tp);
-                    const tc::CanHit c = b_->combat_->has_unit(id) ? b_->combat_->can_hit(id, atu->id) : tc::CanHit::NoTarget;
+                    const tc::CanHit c = b_->combat_->has_unit(id) ? b_->attack_can_hit(id, atu->id) : tc::CanHit::NoTarget;
                     if (c != tc::CanHit::Yes) {
                         path_units.push_back(id);
                         continue;
@@ -1216,7 +1216,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     const objects::ObjectId mover = b_->attack_mover(id);
                     if (!b_->movement_locked(id) && b_->movement_->has_unit(mover) && b_->movement_->view(mover).has_goal) {
                         const objects::ObjectId one[] = {id};
-                        b_->movement_->stop(one);
+                        b_->movement_->halt(one, b_->frame_);  // s78n t20 review: no speed zeroing (End Move)
                     }
                 }
                 group.units = std::move(path_units);
@@ -1754,8 +1754,10 @@ void BattleAi::standin_orders() {
         // s78n t20 stage A [port] (FIGHTER_FLYING §4.11 A, arrived re-check only): an arrived unit that cannot hit its
         // nearest enemy from where it stands approaches again (no land stop here)
         if (dist <= 0.8f * range && !b_->standin_recheck(u, best->id)) continue;
+        if (!(dist > 0.0f)) continue;  // s78n t20 review: on the enemy's position there is no approach line
         const Vec3 ep = st.position(best->h);
-        const float k = (dist - 0.7f * range) / dist;
+        // s78n t20 interim, replaced by t25 (the arc slots): the approach aims with the unit's own range (no 100 floor)
+        const float k = (dist - 0.7f * (u.range > 0.0f ? u.range : range)) / dist;
         const Vec3 dest{up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k, 0.0f};
         if (dist <= 0.8f * range && (dest.x - up.x) * (dest.x - up.x) + (dest.y - up.y) * (dest.y - up.y) < 10.0f * 10.0f) continue;
         move_unit(u.id, dest.x, dest.y, mv::kThreatOff, 0, objects::kNoObjectId, true);  // s78n t20 fix: an attack approach

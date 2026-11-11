@@ -55,6 +55,9 @@ using ::alamo::test::g_fail;
 inline bool g_regen = false;
 // The temp folder prefix of make_data (one per test exe, so the exes can run in parallel under ctest -j).
 inline const char* g_temp_prefix = "alamo_sim_battle_tests";
+// s78n t20 review: an edit make_data applies to the S10Types.xml text it writes (null: none). A test that sets it also
+// sets its own g_temp_prefix (the edited data gets its own folder) and resets both.
+inline std::string (*g_types_patch)(std::string) = nullptr;
 
 namespace battle_fixture {
 
@@ -742,7 +745,8 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
     remove_all_long(d->root, ec);
     const fs::path x = d->root / "Data/XML";
     write_file(x / "GameObjectFiles.xml", "<GameObjectFiles><File>S10Types.xml</File></GameObjectFiles>\n");
-    write_file(x / "S10Types.xml", squad || squad_garrison ? squad_types(squad_garrison)  // s78n t03 / t09, s78n review
+    const auto patched = [](std::string t) { return g_types_patch ? g_types_patch(std::move(t)) : t; };
+    write_file(x / "S10Types.xml", patched(squad || squad_garrison ? squad_types(squad_garrison)  // s78n t03 / t09, s78n review
                                    : gate ? gate_types()  // cu8g t05
                                    : presence ? presence_types()  // s78l t03
                                    : vland ? vehicle_landing_types()  // s78l t04
@@ -761,7 +765,7 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
                                    : bm     ? bm_types()
                                    : anim   ? anim_types()
                                    : fog    ? fog_types()
-                                            : std::string(kTypes));
+                                            : std::string(kTypes)));
     if (bm) write_file(x / "BlackMarketItems.xml", kBmItems);  // P4 tactical
     write_file(x / "HardPointDataFiles.xml", fighters ? "<Hard_Point_Files><File>S10HardPoints.xml</File><File>S10BayHardPoints.xml</File></Hard_Point_Files>\n"
                                                       : "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");

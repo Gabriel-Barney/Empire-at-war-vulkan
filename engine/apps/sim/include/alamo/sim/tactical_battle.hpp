@@ -1608,7 +1608,7 @@ private:
     // ---- s78n t20 stage A: land attack blocks (FIGHTER_FLYING §4.11 A / E [H], MOVEMENT §4.3.2 items 6 / 8) ----
     // One record per mover (a steering squad's container, else the unit) that was given an attack on an object: the
     // Attack order (human and AI) and the AI's Attack_Move on an attackable enemy object. Every 30 frames (serial, ascending
-    // mover, before the collision feed and the movement tick), with c = CombatSystem::can_hit of the lead (the first unit of
+    // mover, before the collision feed and the movement tick), with c = attack_can_hit of the lead (the first unit of
     // the mover whose combat order or attack goal still names the target), D = |recorded goal - target position| and
     // R = half the lead's attack range:
     //   - arrived (no goal, no collision-owned top record) and not c -> plan again (0x410a60);
@@ -1627,6 +1627,10 @@ private:
     };
     std::vector<AttackBlock> attack_blocks_;
     objects::ObjectId attack_mover(objects::ObjectId unit) const;  // the squad container `unit` steers to, else `unit`
+    // Stage A's c (0x40edd0): CombatSystem::can_hit of `unit`, for a steering squad member from its container's position
+    // (s78n t20 review: TeamTargeting's origin, TACTICAL_COMBAT §5.4.4 item 2.1; the combat system's team positions are
+    // only set for the combat tick, so between ticks can_hit alone tests from the head member's own position).
+    tactical::combat::CanHit attack_can_hit(objects::ObjectId unit, objects::ObjectId target) const;
     // The stand-in loops' arrived re-check (land): `u`'s mover has no goal and no top record, and u cannot hit `enemy`.
     bool standin_recheck(const Unit& u, objects::ObjectId enemy) const;
     void attack_block_set(objects::ObjectId unit, objects::ObjectId target, uint8_t flags, Vec3 goal);  // land only
