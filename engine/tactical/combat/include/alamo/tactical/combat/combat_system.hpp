@@ -849,10 +849,15 @@ enum UnitFlag : uint32_t {
     // (footprint_extents: the _Deployed extents apply in 0x18 and 0x19, not in 0x1A). Set by the ability system with
     // kUnitDeployTransition (set_deploy_state). Saved and hashed with the other flags.
     kUnitDeployingIn = 1u << 26,
+    // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", readers 0x567c50 / 0x5662b0 / 0x38d730): a Hover_Height unit whose
+    // hover state (pack +0x2a8) is 1, raised. A melee attacker (Targeting_Max_Attack_Distance <= Melee_Cutoff_Range)
+    // neither acquires it (candidate filters), keeps it (current-target validation) nor is given it (Order_Attack C step
+    // 1). Mirrored by the host from MovementSystem::hover_state before every tick; derived state, not hashed.
+    kUnitHoverRaised = 1u << 27,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
-inline constexpr uint32_t kUnitHostMirrorFlags =
-    kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery | kUnitMoving | kUnitAttackClip;
+inline constexpr uint32_t kUnitHostMirrorFlags = kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery |
+                                                 kUnitMoving | kUnitAttackClip | kUnitHoverRaised;
 
 struct UnitSpawn {
     ObjectId id = kNoObject;
@@ -1135,8 +1140,8 @@ public:
     // always, ordered = 1): the lock is released (a locked ordered target becomes the auto target) and the weapon
     // hardpoints aim at the target (weapon_aim) until the next scan pick, path B or another order replaces it; the unit's
     // own target is untouched. Team members, LUCKY_SHOT (34) units and space BARRAGE units take the set path: the target
-    // becomes their locked ordered target at once. [port: the melee-vs-airborne refusal and the autofire fallback are not
-    // modelled.]
+    // becomes their locked ordered target at once. [port: the melee-vs-airborne refusal is modelled for a raised hover
+    // target (kUnitHoverRaised, s78n t20 batch 2) only; the autofire fallback is not modelled.]
     bool order_attack_issue(ObjectId attacker, ObjectId target, int32_t hardpoint = -1);
     ObjectId weapon_aim(ObjectId id) const;  // path-A hardpoint aim (kNoObject: none)
     bool order_locked(ObjectId id) const;    // the ordered target carries the lock (TD +0xf4: path B / set path)
@@ -1849,6 +1854,7 @@ private:
     void decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);  // decide_target + space hp step
     void decide_target(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
     bool lock_holds(const Unit& u, const Unit& t) const;  // refixf t06: §2.8 B "while locked" drop rules
+    bool hover_refused(const Unit& a, const Unit& t) const;  // s78n t20 batch 2: melee attacker vs a raised hover unit
     bool promote_goal(Unit& u);                           // refixf t06: §2.8 B promotion
     void share_target(const Unit& u, ObjectId t, float score);  // S8 t17: team target 0x406370 (scan writer)
     bool ability_type_active(const Unit& u, int32_t type) const;

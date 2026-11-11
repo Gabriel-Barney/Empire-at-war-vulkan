@@ -4,6 +4,7 @@
 #include "battle_test_fixture.hpp"
 
 #include <array>
+#include <iterator>
 
 namespace {
 
@@ -3502,6 +3503,97 @@ void test_land_squad_garrison_host_stop() {
     CHECK(drive > f0 && closing > drive && stopped && walker_moved > 0.0f && dropped == 0 && inside >= closing);
 }
 
+// s78n t20 batch 2 item 2.4 (MOVEMENT §5.3 "Hover in full"): the squad-garrison data with the walker made a GARRISON_HOVER
+// type with Hover_Height 80 (as Gallofree_HTT_Transport; no Deploys), reloaded from the rewritten S10Types.xml.
+std::unique_ptr<Data> hover_garrison_data() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, false, true);
+    const fs::path f = d->root / "Data/XML/S10Types.xml";
+    std::string t;
+    {
+        std::ifstream in(f, std::ios::binary);
+        t.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    const std::string beh = "WALK_LOCOMOTOR, GARRISON_VEHICLE", head = "<GroundVehicle Name=\"S10_Walker\">";
+    const size_t pb = t.find(beh), ph = t.find(head);
+    CHECK(pb != std::string::npos && ph != std::string::npos);
+    if (pb == std::string::npos || ph == std::string::npos) return d;
+    t.replace(pb, beh.size(), "WALK_LOCOMOTOR, GARRISON_HOVER");
+    t.insert(t.find(head) + head.size(), "<Hover_Height>80</Hover_Height>");
+    write_file(f, t);
+    auto h = std::make_unique<Data>();
+    h->root = d->root;
+    h->files = std::make_unique<DirectoryProvider>(path_to_utf8(h->root));
+    std::vector<std::string> diag;
+    CHECK(h->db.load(*h->files, {}, &diag));
+    CHECK(h->raw.load(*h->files));
+    CHECK(h->types.build(h->raw, h->files.get(), &diag));
+    CHECK(galactic::load_galactic_rules(*h->files, h->db, h->types, h->rules, &diag));
+    CHECK(galactic::load_conflict_rules(*h->files, h->db, h->types, h->rules, h->crules, &diag));
+    h->catalog = std::make_unique<BattleCatalog>(h->types, h->files.get(), &h->db.constants(), &diag);
+    return h;
+}
+
+// s78n t20 batch 2 item 2.4 (MOVEMENT §5.3 "Hover in full"; death 0x391310, eject request 0x635fc0): a squad garrisons
+// the hover walker (the reservation lowers it); the walker is then driven off and rises to the ground + 80.
+//   raised: killed in the air - the squad inside is killed with it;
+//   grounded: killed on the ground - the squad is ejected alive;
+//   eject: asked to eject while raised and driving - it is stopped and lowers at once.
+void test_land_hover_garrison_death() {
+    const auto d = hover_garrison_data();
+    using R = commands::RejectReason;
+    enum Case { kRaised, kGrounded, kEject };
+    for (const Case c : {kRaised, kGrounded, kEject}) {
+        SquadGarrisonScene a(*d, true);
+        CHECK(a.s.gs != nullptr);
+        if (!a.s.gs || !a.start()) {
+            CHECK(false);
+            return;
+        }
+        for (int i = 0; i < 300; ++i) CHECK(a.tick());
+        objects::ObjectStore& st = a.tm->primary();
+        const Vec3 wp = st.position(st.find(a.walker));
+        CHECK(a.b->teleport(*a.tm, a.team, Vec3{wp.x - 60.0f, wp.y, wp.z}, st.facing(st.find(a.team))));
+        CHECK(a.b->order_garrison(*a.tm, 0, a.members, a.walker, a.s.host->random().synced()) == R::None);
+        uint32_t inside = 0;
+        for (int i = 0; i < 2000 && inside == 0; ++i) {
+            if (!a.tick()) break;
+            if (a.inside() == a.members.size()) inside = a.b->frame();
+        }
+        CHECK(inside > 0);
+        const mv::MovementSystem& mv = a.b->movement();
+        for (int i = 0; i < 100 && mv.hover_state(a.walker) != 0; ++i) CHECK(a.tick());
+        CHECK(mv.hover_state(a.walker) == 0);
+        const float ground = st.position(st.find(a.walker)).z;
+        float z = ground;
+        if (c != kGrounded) {  // driven off: it rises, then moves at the ground + 80
+            const objects::ObjectId w1[] = {a.walker};
+            CHECK(a.b->order_move(*a.tm, 0, w1, wp.x + 400.0f, wp.y, a.s.host->random().synced()) == R::None);
+            for (int i = 0; i < 400 && !(mv.hover_state(a.walker) == 1 && mv.view(a.walker).speed > 0.0f); ++i) CHECK(a.tick());
+            z = st.position(st.find(a.walker)).z;
+            CHECK(mv.hover_state(a.walker) == 1 && std::fabs(z - (ground + 80.0f)) < 1e-3f);
+        }
+        if (c == kEject) {
+            CHECK(mv.view(a.walker).has_goal);
+            CHECK(a.b->eject_garrison(*a.tm, a.walker) > 0);
+            CHECK(!mv.view(a.walker).has_goal && mv.hover_state(a.walker) == 3);
+            std::printf("  hover garrison: eject while raised (z %.1f over %.1f) - stopped, lowering\n", static_cast<double>(z - ground),
+                        static_cast<double>(ground));
+            continue;
+        }
+        CHECK(a.b->script_damage(*a.tm, a.walker, 1.0e9f, false));
+        for (int i = 0; i < 5; ++i) CHECK(a.tick());
+        uint32_t alive = 0, held = 0;
+        for (const auto m : a.members) {
+            alive += a.b->combat().alive(m) ? 1u : 0u;
+            held += a.b->garrison_holder_of(m) != objects::kNoObjectId ? 1u : 0u;
+        }
+        std::printf("  hover garrison: walker killed %s (z %.1f over the ground) - %u of %zu members alive, %u still inside\n",
+                    c == kRaised ? "raised" : "grounded", static_cast<double>(z - ground), alive, a.members.size(), held);
+        CHECK(held == 0 && alive == (c == kRaised ? 0u : static_cast<uint32_t>(a.members.size())));
+    }
+}
+
 // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 items 6 / 8): the land attack re-check. The human's squad
 // (S10_Squad, LAND_TEAM_CONTAINER_LOCOMOTOR) attacks a trooper of the invader's squads; every unit is invulnerable and
 // the stand-in is off, so only the order and its attack block move it.
@@ -4003,6 +4095,7 @@ int main(int argc, char** argv) {
     test_land_squad_garrison_save_load();
     std::printf("s78n t20 batch 2: a squad's approach to a garrison vehicle that drives off (HostStop, corrective move)\n");
     test_land_squad_garrison_host_stop();
+    test_land_hover_garrison_death();  // s78n t20 batch 2 item 2.4
     std::printf("s78n t20 stage A: the land attack re-check (displaced squad, friendly squads on the line, save / load)\n");
     test_land_attack_blocks();
     test_vehicle_landing_exit();

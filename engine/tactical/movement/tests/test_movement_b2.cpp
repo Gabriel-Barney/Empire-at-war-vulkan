@@ -1,7 +1,7 @@
 // alamo_tactical_movement_b2_tests (no framework; non-zero exit on failure).
 // s78n t20 batch 2: the order-time items of the land movement port - the zone validation of the ordered point and the
 // destination check's D, forced pass and try state (docs/re/MOVEMENT.md §4.2 step 2, §4.3.1 items 3, 4, 7); the squad
-// container's turn in place (FIGHTER_FLYING §7.7 item 7).
+// container's turn in place (FIGHTER_FLYING §7.7 item 7); hover z (MOVEMENT §5.3 "Hover in full").
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -425,6 +425,119 @@ void test_container_turn() {
     }
 }
 
+// s78n t20 batch 2 item 2.4 (MOVEMENT §5.3 "Hover in full"): a Hover_Height 80 Walk unit at max speed 2.5 on ground
+// 10. By hand: Start Move sets rising (tick 0, z 10); ticks 1 .. 32 add 2.5 (z = 10 + 2.5 n, the 32nd lands exactly on
+// 90, so it is still rising); tick 33 finds z >= 90: raised, speed 0; tick 34 is the first horizontal step, at z 90.
+// A unit 90 degrees off its path turns in place on the ground first (turn rate 6, close-enough angle 1: 14 turning ticks at z 10, the
+// 15th tick finds the error 6 <= the turn rate and rises). Lowering
+// falls 2.5 per tick with x / y / yaw frozen and grounds on the 33rd tick.
+void test_t20_hover_z() {
+    ::alamo::test::section("hover z (rise, raised commit, turn on the ground, lowering)");
+    constexpr float kGround = 10.0f;
+    MovementConfig unit_speed;
+    unit_speed.constants.land_speed_multiplier = 1.0f;  // effective max speed = Max_Speed, turn rate = Rate_Of_Turn
+    const auto make = [&](MovementSystem& sys, float yaw) {
+        PassabilityGrid g = open_grid(100, 100);
+        const float hi = static_cast<float>(g.width() - 1) * kCellSize;
+        sys.set_grid(std::move(g));
+        sys.set_height_fn([](float, float) { return kGround; });
+        sys.air().set_box({0.0f, 0.0f}, {hi, hi});
+        UnitDesc d = unit(1, cell_center(20, 50), 2, 2.5f, 12.0f, LocomotorKind::Default);
+        d.collision_class = kUccVehicle;
+        d.hover_height = 80.0f;
+        d.yaw_deg = yaw;
+        d.close_enough_angle = 1.0f;  // the start rule turns in place while the error exceeds the turn rate
+        d.z = kGround;
+        CHECK(sys.add_unit(d));
+    };
+    struct Tick {
+        uint8_t hover = 0;
+        float z = 0.0f, yaw = 0.0f;
+        V2 pos;
+    };
+    const auto run = [&](float yaw, uint32_t ticks, std::vector<Tick>& out, MovementSystem& sys, SimRng& rng) {
+        make(sys, yaw);
+        MoveOrder m;
+        m.units = {1};
+        m.destination = cell_center(70, 50);
+        sys.move(m, rng, 1);
+        for (uint32_t f = 1; f <= ticks; ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView v = sys.view(1);
+            out.push_back({sys.hover_state(1), v.z, v.yaw, v.pos});
+        }
+    };
+    {  // straight ahead: the rise by hand
+        MovementSystem sys{unit_speed};
+        SimRng rng(241);
+        std::vector<Tick> t;
+        run(0.0f, 120, t, sys, rng);
+        size_t t0 = 0;
+        while (t0 < t.size() && t[t0].hover != 2) ++t0;
+        CHECK(t0 + 40 < t.size());
+        if (t0 + 40 < t.size()) {
+            const V2 p0 = t[t0].pos;
+            CHECK(t[t0].z == kGround);
+            bool climb = true;
+            for (size_t n = 1; n <= 32; ++n)
+                climb = climb && t[t0 + n].hover == 2 && t[t0 + n].z == kGround + 2.5f * static_cast<float>(n) && t[t0 + n].pos == p0;
+            CHECK(climb);
+            CHECK(t[t0 + 33].hover == 1 && t[t0 + 33].z == kGround + 80.0f && t[t0 + 33].pos == p0);
+            CHECK(t[t0 + 34].hover == 1 && t[t0 + 34].z == kGround + 80.0f && t[t0 + 34].pos.x > p0.x);
+            bool raised = true;
+            for (size_t n = t0 + 34; n < t.size(); ++n) raised = raised && t[n].hover == 1 && t[n].z == kGround + 80.0f;
+            CHECK(raised);
+            std::printf("hover z: rising from tick %zu, z %.1f .. %.1f, raised at +33, first step at +34 (x %.2f -> %.2f)\n", t0,
+                        static_cast<double>(t[t0 + 1].z), static_cast<double>(t[t0 + 32].z), static_cast<double>(p0.x),
+                        static_cast<double>(t[t0 + 34].pos.x));
+        }
+        // lowering mid-move: x / y / yaw frozen, z falls 2.5 per tick, grounded on the 33rd tick
+        const UnitView v0 = sys.view(1);
+        CHECK(v0.has_goal && sys.hover_lower(1) && sys.hover_state(1) == 3);
+        uint32_t f = 121, lowering = 0;
+        bool frozen = true, falls = true;
+        float z = v0.z;
+        for (; f < 200 && sys.hover_state(1) == 3; ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView v = sys.view(1);
+            frozen = frozen && v.pos == v0.pos && v.yaw == v0.yaw;
+            if (sys.hover_state(1) == 3) {
+                ++lowering;
+                falls = falls && v.z == z - 2.5f;
+                z = v.z;
+            }
+        }
+        CHECK(frozen && falls && lowering == 32 && sys.hover_state(1) == 0 && sys.view(1).z == kGround);
+        // the move goes on: it rises again
+        sys.tick(f, rng, serial_for);
+        CHECK(sys.hover_state(1) == 2 && sys.view(1).pos == v0.pos);
+        std::printf("hover z: lowering %u ticks at 2.5, then grounded at %.1f, rising again\n", lowering,
+                    static_cast<double>(sys.view(1).z));
+    }
+    {  // 90 degrees off: the turn in place runs on the ground, then the rise
+        MovementSystem sys{unit_speed};
+        SimRng rng(242);
+        std::vector<Tick> t;
+        run(90.0f, 80, t, sys, rng);
+        uint32_t turning = 0;
+        bool ground_turn = true, no_air_turn = true;
+        float yaw = 90.0f;
+        size_t rise = t.size();
+        for (size_t n = 0; n < t.size(); ++n) {
+            if (rise == t.size() && t[n].hover == 2) rise = n;
+            if (t[n].yaw != yaw) {
+                if (t[n].hover == 0 && t[n].z == kGround) ++turning;
+                else if (t[n].hover >= 2) no_air_turn = false;
+                else ground_turn = false;
+            }
+            yaw = t[n].yaw;
+        }
+        CHECK(ground_turn && no_air_turn && turning == 14 && rise < t.size() && rise >= 14);
+        if (rise < t.size()) CHECK(t[rise].pos == t[0].pos && std::fabs(wrap_deg(t[rise].yaw)) <= 6.0f);
+        std::printf("hover z: 90 degrees off - %u turning ticks on the ground, rising from tick %zu\n", turning, rise);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -432,5 +545,6 @@ int main() {
     test_order_validation();
     test_forced_pass();
     test_container_turn();
+    test_t20_hover_z();
     return ::alamo::test::report("alamo_tactical_movement_b2_tests");
 }

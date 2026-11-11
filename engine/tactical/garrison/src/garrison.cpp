@@ -142,10 +142,10 @@ Vec3 GarrisonSystem::exit_point(ObjectId holder, Vec3 pos, Vec3 facing) const {
     return {pos.x + dx * r, pos.y + dy * r, pos.z};
 }
 
-void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame) {
+void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame, bool kill) {
     if (const int32_t hi = holder_index(id); hi >= 0) {
         Holder& h = holders_[static_cast<size_t>(hi)];
-        if (h.d.kind == HolderKind::Property) {  // no host behaviour: the occupants die with it
+        if (kill || h.d.kind == HolderKind::Property) {  // no host behaviour (or a hover host in the air): they die with it
             const std::vector<ObjectId> inside = h.inside;
             for (const ObjectId uid : inside)
                 if (const int32_t ui = unit_index(uid); ui >= 0) leave(units_[static_cast<size_t>(ui)], h, GarrisonEventKind::Killed, pos, frame);

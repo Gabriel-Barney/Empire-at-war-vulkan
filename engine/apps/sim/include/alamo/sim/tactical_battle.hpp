@@ -1475,6 +1475,9 @@ private:
     float s4_reach_radius(TacticalMode& mode, objects::ObjectId key) const;
     // s78n t20 batch 2: a holder's entry bones (BattleCatalog::entry_bones) into its descriptor
     void s4_holder_bones(uint32_t type, tactical::garrison::HolderDesc& hd) const;
+    // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", death 0x391310): a GARRISON_HOVER host dying while not grounded
+    // kills its occupants - called by the death paths before the host's mover is removed (the hover state goes with it).
+    void s4_hover_death(objects::ObjectId id, Vec3 at, Vec3 facing);
     Vec3 s4_squad_leave(TacticalMode& mode, const tactical::garrison::GarrisonEvent& e, std::vector<SquadExit>& outs,
                         std::vector<tactical::garrison::GarrisonEvent>& events);
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved

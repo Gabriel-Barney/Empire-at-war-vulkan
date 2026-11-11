@@ -6681,6 +6681,71 @@ void test_s78n_review_combat() {
     }
 }
 
+// s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full"): a melee attacker (Targeting_Max_Attack_Distance 40 <= Melee_Cutoff_Range
+// 51) neither acquires (Scan_Player), keeps (Validate_Current_Target: the auto target at the next scan, an ordered one at
+// once) nor is ordered onto (Order_Attack C step 1) a target flagged kUnitHoverRaised; a ranged attacker (300) is not
+// affected; a grounded hover unit (flag clear) is an ordinary target.
+void test_hover_raised_melee() {
+    const auto world = [](World& w, float reach) {
+        w.data.projectiles.push_back(ProjectileDesc{});
+        w.data.projectiles[0].max_speed = 10.0f;
+        UnitDesc a;
+        a.tactical_health = 100.0f;
+        a.max_attack_distance = reach;
+        a.weapon_projectile = 0;
+        a.weapon_recharge = 100.0f;  // never fires during the test
+        push_unit(w.data, a);
+        UnitDesc t;
+        t.tactical_health = 100.0f;
+        t.radius = 10.0f;
+        t.category_mask = kCatCapital;
+        push_unit(w.data, t);
+        CombatConfig cfg;
+        cfg.short_range_cutoff = 51.0f;
+        w.make(cfg);
+        w.add(1, 0, 0, Vec3{0, 0, 0});
+        w.add(2, 1, 1, Vec3{30, 0, 0});
+    };
+    const auto ticks = [](World& w, int n) {
+        for (int i = 0; i < n; ++i) w.tick();
+    };
+    {  // melee: no acquisition while raised; acquired once grounded; dropped at the next scan when it rises again
+        World w;
+        world(w, 40.0f);
+        CHECK(w.sys->melee_attacker(1));
+        w.sys->set_flag(2, kUnitHoverRaised, true);
+        ticks(w, 60);
+        CHECK(w.sys->auto_target(1) == kNoObject);
+        CHECK(!w.sys->order_attack_issue(1, 2));  // refused
+        w.sys->set_flag(2, kUnitHoverRaised, false);
+        ticks(w, 60);
+        CHECK(w.sys->auto_target(1) == 2);
+        w.sys->set_flag(2, kUnitHoverRaised, true);
+        ticks(w, 60);
+        CHECK(w.sys->auto_target(1) == kNoObject);
+    }
+    {  // melee: an ordered target is dropped on the tick it rises
+        World w;
+        world(w, 40.0f);
+        w.sys->order_attack(1, 2);
+        w.tick();
+        CHECK(w.sys->current_target(1) == 2);
+        w.sys->set_flag(2, kUnitHoverRaised, true);
+        w.tick();
+        CHECK(w.sys->current_target(1) != 2);
+    }
+    {  // ranged: unaffected
+        World w;
+        world(w, 300.0f);
+        CHECK(!w.sys->melee_attacker(1));
+        w.sys->set_flag(2, kUnitHoverRaised, true);
+        ticks(w, 60);
+        CHECK(w.sys->auto_target(1) == 2);
+        CHECK(w.sys->order_attack_issue(1, 2));
+    }
+    std::printf("  hover raised: melee refuses / drops a raised target, ranged keeps it\n");
+}
+
 void test_incognito_targeting() {
     // s78n t05 (HERO_CLASH §8.2, +0x3a1 & 0x10 as the vehicle-thief boarding sets it): not auto-acquired, no auto-acquire
     // of its own (no scan, so no scan draws), an attack order still works; Take_Damage clears it.
@@ -7959,6 +8024,7 @@ int main(int argc, char** argv) {
     test_convert_victim_test();       // s78n t05
     test_s78n_review_combat();
     test_incognito_targeting();       // s78n t05
+    test_hover_raised_melee();        // s78n t20 batch 2
     test_energy_drain_engines();      // cu8f t02
     test_team_container_slot();       // s78h t06
     test_team_head_alone();           // s78i t03

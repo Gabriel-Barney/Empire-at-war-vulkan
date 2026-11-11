@@ -3171,18 +3171,30 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 if (bike) bike_frame(u, yaw0, true);
                 continue;
             }
-            // s78n t18 (MOVEMENT §5.3 "Hover state", Walk service 0x61e930): while rising (2) / lowering (3) the Walk
-            // state machine does not run - the height changes by the max speed per frame until Hover_Height / the
-            // ground, then the state is raised (1) / grounded (0) and the speed 0. [port] z itself is not written.
+            // s78n t18 / t20 batch 2 (MOVEMENT §5.3 "Hover in full", Walk service 0x61e930): while rising (2) / lowering
+            // (3) the Walk state machine does not run (no turn, no speed step, no horizontal move). T = the ground height
+            // at (x, y). Rising: z >= T + Hover_Height on entry -> z := that, raised (1), speed 0; else z += the effective
+            // max speed, and z > T + Hover_Height -> z := that, raised, speed 0 (landing exactly costs one more frame;
+            // speed 0: the rise never ends). Lowering mirrors it toward T -> grounded (0). hover_off = z - T, the height
+            // above the ground (hashed, saved).
             const bool hovers = u.d.hover_height > 0.0f && u.d.locomotor == LocomotorKind::Default;
             if (hovers && u.hover >= 2) {
                 const float step = u.lp.max_speed;
-                u.hover_off = u.hover == 2 ? u.hover_off + step : u.hover_off - step;
-                if (!(step > 0.0f) || (u.hover == 2 ? u.hover_off >= u.d.hover_height : u.hover_off <= 0.0f)) {
-                    u.hover_off = u.hover == 2 ? u.d.hover_height : 0.0f;
-                    u.hover = u.hover == 2 ? uint8_t{1} : uint8_t{0};
+                const float ground = height_ ? height_(u.m.pos.x, u.m.pos.y) : 0.0f;
+                const bool rising = u.hover == 2;
+                const float target = rising ? ground + u.d.hover_height : ground;
+                const auto reached = [&](float z) { return rising ? z >= target : z <= target; };
+                bool done = reached(u.z);
+                if (!done) {
+                    u.z = rising ? u.z + step : u.z - step;
+                    done = rising ? u.z > target : u.z < target;  // [port] lowering mirrors the rise's strict test
+                }
+                if (done) {
+                    u.z = target;
+                    u.hover = rising ? uint8_t{1} : uint8_t{0};
                     u.m.speed = 0.0f;
                 }
+                u.hover_off = u.z - ground;
                 continue;
             }
             // s78k t01 / s78l t02 (MOVEMENT §3.5.1): the arrival turn runs in the serial pass below (it reads the clip
@@ -3193,10 +3205,21 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 if (bike) bike_frame(u, yaw0, false);
                 continue;
             }
-            // s78n t18 (Walk Start Move 0x61ff40): a Hover_Height unit that is not raised rises first; the frame ends
+            // s78n t18 / t20 batch 2 (Walk Start Move 0x61ff40): a Hover_Height unit that is not raised rises first; the
+            // frame ends. A turn in place (0xf-0x11) comes before Start Move, so it runs on the ground: the start rule is
+            // tried on a copy, and a frame that only turns is kept (the walk's own result), one that would move rises.
             if (hovers && u.hover != 1) {
-                u.hover = 2;
-                u.m.speed = 0.0f;
+                LandMotion probe = u.m;
+                WalkExtras hx;
+                if (u.in_formation) hx.jiggle = u.jiggle;
+                const WalkResult pr = walk_step(probe, u.lp, kInf, &grid_, &hx);
+                if (probe.state == LocoState::WalkStartTurn) {
+                    u.m = std::move(probe);
+                    res[i] = pr;
+                } else {
+                    u.hover = 2;
+                    u.m.speed = 0.0f;
+                }
                 continue;
             }
             // s78k t03 / s78l t01: a team member walks at the team speed (team_caps) - the container's effective max speed
@@ -3332,7 +3355,9 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             --u.nudge_frames;
             try_nudge(u.m, u.nudge, u.lp.mask, &grid_);
         }
-        if (height_) u.z = height_(u.m.pos.x, u.m.pos.y);
+        // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", commit 0x42d6a0): a raised hover unit stands at G + Hover_Height;
+        // a rising / lowering one keeps the z its hover step wrote
+        if (height_ && u.hover < 2) u.z = height_(u.m.pos.x, u.m.pos.y) + (u.hover == 1 ? u.d.hover_height : 0.0f);
         update_tree(u);
     }
     crush_pass(res);  // OI tactical

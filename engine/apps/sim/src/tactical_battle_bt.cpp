@@ -1577,6 +1577,7 @@ void TacticalBattle::bt_kill_silently(TacticalMode& mode, objects::ObjectHandle 
         --parts_[u->participant].alive;
         hg_unit_removed(id);  // hangars / engine loops
         abilities_->remove(id);
+        s4_hover_death(id, st.position(h), st.facing(h));  // s78n t20 batch 2: before the mover (and its hover state) goes
         if (u->movable) movement_->remove_unit(id);
         else movement_->object_removed(id);  // s78f review: fighter formation blocks naming it
         unit_gone(mode, *u);

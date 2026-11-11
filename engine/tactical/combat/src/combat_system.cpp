@@ -420,6 +420,7 @@ bool CombatSystem::order_attack_issue(ObjectId attacker, ObjectId target, int32_
     if ((t->flags & kUnitHeroClash) || !clash_allows(u->id, t->id)) return false;  // s78n t06: Set_Target / pairing
     if ((t->flags & kUnitStealthed) && !desc_of(*u).target_stealth_units && u->owner != t->owner) return false;
     if (t->flags & kUnitGarrisoned) return false;
+    if (hover_refused(*u, *t)) return false;  // s78n t20 batch 2: the can-attack test 0x38d730 (MOVEMENT §5.3)
     // Members without TEAM / TARGETING get no Order_Attack (0x739200 step 3): a unit with no weapon at all [port].
     bool armed = desc_of(*u).weapon_projectile >= 0;
     for (uint32_t i = 0; i < u->hp_count && !armed; ++i) armed = is_weapon(data_->hardpoints[hps_[u->hp_begin + i].desc].kind);
@@ -492,6 +493,11 @@ bool CombatSystem::weapon_lob_reaches(ObjectId id, Vec3 from, Vec3 to) const {
 bool CombatSystem::melee_attacker(ObjectId id) const {
     const Unit* u = unit(id);
     return u && desc_of(*u).max_attack_distance <= cfg_.short_range_cutoff;
+}
+bool CombatSystem::hover_refused(const Unit& a, const Unit& t) const {
+    // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", 0x567c50 / 0x5662b0 / 0x38d730): a melee attacker
+    // (Targeting_Max_Attack_Distance <= Melee_Cutoff_Range) rejects a target with Hover_Height > 0 in hover state 1.
+    return (t.flags & kUnitHoverRaised) != 0 && desc_of(a).max_attack_distance <= cfg_.short_range_cutoff;
 }
 ObjectId CombatSystem::ordered_target(ObjectId id) const {
     const Unit* u = unit(id);
@@ -1266,6 +1272,7 @@ bool CombatSystem::candidate_ok(const Unit& a, const Unit& t, float range) const
     // because it is the most expensive).
     // 1 (s78n t05: kUnitIncognito is +0x3a1 & 0x10 too), 3 (s78n t06: +0x3b4 is kUnitHeroClash)
     if (t.flags & (kUnitSkipTargeting | kUnitIncognito | kUnitDead | kUnitGarrisoned | kUnitHeroClash)) return false;
+    if (hover_refused(a, t)) return false;  // s78n t20 batch 2: a raised hover unit and a melee attacker (Scan_Player)
     const UnitDesc& ad = desc_of(a);
     const UnitDesc& td = desc_of(t);
     if (!td.is_valid_target) return false;  // 2
@@ -1333,7 +1340,8 @@ void CombatSystem::gather(uint32_t index, QueryContext& ctx) {
     if (u.flags & kUnitDead) return;
     if (u.ordered_target != kNoObject) {
         const Unit* o = unit(u.ordered_target);
-        if (live(o) && is_enemy(u.owner, o->owner)) return;  // attacking an ordered target: no auto scan [M]
+        // attacking an ordered target: no auto scan [M] (s78n t20 batch 2: unless decide_target drops it, hover_refused)
+        if (live(o) && is_enemy(u.owner, o->owner) && !hover_refused(u, *o)) return;
     }
     if (frame_ < u.next_scan) return;
     if (!unit_can_attack(u)) return;  // no TargetingBehavior work without a weapon
@@ -1470,7 +1478,8 @@ void CombatSystem::decide_target(Unit& u, std::vector<Candidate>& cands, uint32_
     bool dropped = false;
     if (u.ordered_target != kNoObject) {
         const Unit* o = unit(u.ordered_target);
-        if (live(o) && is_enemy(u.owner, o->owner) && (!u.locked || lock_holds(u, *o))) return;
+        // s78n t20 batch 2: Validate_Current_Target 0x567c50 drops a raised hover target of a melee attacker
+        if (live(o) && is_enemy(u.owner, o->owner) && !hover_refused(u, *o) && (!u.locked || lock_holds(u, *o))) return;
         u.ordered_target = kNoObject;  // finished order cleared (0x565de0)
         u.ordered_hp = -1;
         u.locked = 0;
