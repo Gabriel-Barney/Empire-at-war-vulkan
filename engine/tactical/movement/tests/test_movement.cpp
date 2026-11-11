@@ -1106,9 +1106,14 @@ static void test_path_around() {
         const FootRect box{{500.0f, 400.0f}, {1.0f, 0.0f}, 11.0f, 7.0f, false};
         CHECK(ray_leaves_rect(box, {440.0f, 400.0f}, {1.0f, 0.0f}, exit) && std::fabs(exit.x - 511.0f) < 1e-4f && exit.y == 400.0f);
         CHECK(!ray_leaves_rect(box, {440.0f, 400.0f}, {-1.0f, 0.0f}, exit) && !ray_leaves_rect(box, {440.0f, 420.0f}, {1.0f, 0.0f}, exit));
-        CHECK(segment_crosses_rect(box, {480.0f, 400.0f}, {520.0f, 400.0f}, 0.01f));
-        CHECK(!segment_crosses_rect(box, {489.0f, 393.0f}, {511.0f, 393.0f}, 0.01f));  // along its edge: boundary contact
-        CHECK(!segment_crosses_rect(box, {480.0f, 400.0f}, {488.0f, 400.0f}, 0.01f));
+        // s78n t20 (MOVEMENT §1.5.1 item 4a, 0x6b1d00): a closed separating-axis test, touching counts
+        CHECK(segment_meets_rect(box, {480.0f, 400.0f}, {520.0f, 400.0f}));
+        CHECK(segment_meets_rect(box, {489.0f, 393.0f}, {511.0f, 393.0f}));  // along its edge
+        CHECK(segment_meets_rect(box, {480.0f, 400.0f}, {489.0f, 400.0f}));  // ending on its side
+        CHECK(segment_meets_rect(box, {505.0f, 401.0f}, {505.0f, 401.0f}));  // a point inside
+        CHECK(!segment_meets_rect(box, {480.0f, 400.0f}, {488.0f, 400.0f}));
+        CHECK(!segment_meets_rect(box, {480.0f, 380.0f}, {530.0f, 392.0f}));  // passes below the corner (511, 393)
+        CHECK(segment_meets_rect(box, {501.0f, 383.0f}, {521.0f, 403.0f}));   // through the corner (511, 393) exactly
     }
     // ---- ring search 0x440f90: rings 0, 1, 2.8, 5.4, 8.8, 13, 18 (step 1, + 0.8 per ring, capped at min(1.5 r, 10)); n =
     // trunc(2 pi R / r) + 1 samples, at least 4 after ring 0; counter-clockwise from the search direction; a sample past
@@ -1247,6 +1252,51 @@ static void test_path_around() {
         CHECK(res.points.size() >= 3 && res.points.front() == q.start && res.points.back() == goal);
         if (res.points.size() >= 3) CHECK(std::fabs(res.points[1].x - 484.0f) < 1e-3f && std::fabs(res.points[1].y - 386.5f) < 1e-3f);
     }
+    // ---- s78n t20 (MOVEMENT §1.5.1 item 4a, its worked example moved to (500, 400)): one standing obstacle, rect1 = rect2
+    // = tracker = [-10, 10] x [-5, 5], a = +x; corners k0 (+a +b) = (10, 5), k1 (+a -b), k2 (-a -b), k3 (-a +b) = (-10, 5);
+    // S = (20, 0), G = (-30, 0). No edge from a corner into its inward 44-degree cone (d . n >= 0.71934, n = the unit
+    // vector of (-sa a - sb b)); crossing = touching the tracker rectangle of an obstacle that is neither end's own.
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        const V2 o{500.0f, 400.0f};
+        std::vector<AroundObstacle> obs{{3, FootRect{o, {1.0f, 0.0f}, 10.0f, 5.0f, false}, 10.0f, false}};
+        AroundRequest q;
+        q.start = o + V2{20.0f, 0.0f};
+        q.goal = o + V2{-30.0f, 0.0f};
+        q.grow = 0.0f;
+        q.tracker = 0.0f;
+        q.obstacles = obs;
+        const AroundVertexRef s{-1, 0, q.start}, gl{-1, 0, q.goal}, k0{0, 0, {}}, k1{0, 1, {}}, k2{0, 2, {}}, k3{0, 3, {}};
+        CHECK(around_edge_class(g, q, s, k0) == 2);   // d . n = -0.316: an edge at x 1
+        CHECK(around_edge_class(g, q, s, k3) == 1);   // 0.814: none in either pass (the segment runs through the rectangle)
+        CHECK(around_edge_class(g, q, k0, gl) == 1);  // 0.789: none
+        CHECK(around_edge_class(g, q, k3, gl) == 2);  // -0.514
+        CHECK(around_edge_class(g, q, k0, k3) == 2);  // a side of one rectangle: no cone test, its own rectangle is free
+        CHECK(around_edge_class(g, q, k0, k2) == 1);  // a diagonal
+        CHECK(around_edge_class(g, q, s, gl) == 3);   // two obstacle-less vertices: no cone, the tracker rectangle is met
+        const AroundVertexRef s2{-1, 0, o + V2{20.0f, 10.0f}};
+        CHECK(around_edge_class(g, q, s2, k0) == 2);  // d . n = -0.949 (straight along the outward diagonal)
+        AroundResult res;
+        CHECK(around_search(g, k, q, res) && !res.crossing && res.points.size() == 4);
+        if (res.points.size() == 4) {
+            CHECK(res.points[0] == q.start && res.points[3] == q.goal && res.points[1].x == 510.0f && res.points[2].x == 490.0f);
+            CHECK(std::fabs(res.points[1].y - 400.0f) == 5.0f && res.points[2].y == res.points[1].y);
+        }
+        CHECK(std::fabs(res.cost - (std::sqrt(125.0f) + 20.0f + std::sqrt(425.0f))) < 1e-3f && std::fabs(res.cost - 51.80f) < 0.01f);
+        // a third obstacle B whose tracker rectangle touches the side k0 - k3 (y = 405): that side crosses it; the far
+        // side k1 - k2 does not
+        obs.push_back({4, FootRect{o + V2{0.0f, 10.0f}, {1.0f, 0.0f}, 3.0f, 5.0f, false}, 3.0f, false});
+        q.obstacles = obs;
+        CHECK(around_edge_class(g, q, k0, k3) == 3 && around_edge_class(g, q, k1, k2) == 2);
+        // ... and the front side (k0 - k1) of an obstacle in relation 2 / 4 / 8 / 0x20 costs 1 whatever it meets
+        obs[1].shape.c = o + V2{12.0f, 0.0f};
+        q.obstacles = obs;
+        CHECK(around_edge_class(g, q, k0, k1) == 3);
+        obs[0].front_free = true;
+        q.obstacles = obs;
+        CHECK(around_edge_class(g, q, k0, k1) == 2);
+    }
     // ---- pass 2: a wall with a gap that a standing obstacle's grown rectangle covers - no way around it, so the second
     // pass crosses it at x DynamicObstacleOverlapPenalty on the crossing segment only
     {
@@ -1274,7 +1324,7 @@ static void test_path_around() {
         uint32_t crossing = 0;
         float want = 0.0f;
         for (size_t i = 1; i < res.points.size(); ++i) {
-            const bool x = segment_crosses_rect(rect1, res.points[i - 1], res.points[i], 0.01f);
+            const bool x = segment_meets_rect(rect1, res.points[i - 1], res.points[i]);
             crossing += x ? 1u : 0u;
             want += distance(res.points[i - 1], res.points[i]) * (x ? k.dynamic_obstacle_overlap_penalty : 1.0f);
         }
@@ -3017,7 +3067,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
 // their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
 // s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the exact single-member goal is hashed).
-static constexpr uint64_t kGoldenLand = 0x4bb8134961f368d2ull;  // s78n t20 batch A: the path stack top, the destination check, Path Around, the early-arrival cut, StoppedVsStopped (MOVEMENT 1.5.1 / 4.3.1 / 5.4.3 - 5.4.5)
+static constexpr uint64_t kGoldenLand = 0x61bd1bed9dae9325ull;  // s78n t20 batch 1 item 1.1: the Path Around edge rules (MOVEMENT 1.5.1 item 4a)
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

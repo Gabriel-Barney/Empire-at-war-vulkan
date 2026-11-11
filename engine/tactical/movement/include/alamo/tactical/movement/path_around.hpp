@@ -58,8 +58,9 @@ FootRect swept_box(const SweptInput& in);
 // Rectangle helpers (FootRect::round is not read: every obstacle of the dynamic pathfinder is a rectangle).
 // Strict interior of the rectangle with both half extents + grow.
 bool rect_contains(const FootRect& r, V2 p, float grow = 0.0f);
-// The segment p -> q meets the open rectangle with both half extents - shrink (boundary contact is no crossing).
-bool segment_crosses_rect(const FootRect& r, V2 p, V2 q, float shrink);
+// s78n t20 (MOVEMENT §1.5.1 item 4a, the crossing query 0x6b1d00): the segment p -> q as a zero-width oriented box
+// against the closed rectangle - a separating-axis test with a closed comparison, so touching counts.
+bool segment_meets_rect(const FootRect& r, V2 p, V2 q);
 // Where the ray origin + t dir (t >= 0) leaves the rectangle; false when it never touches it.
 bool ray_leaves_rect(const FootRect& r, V2 origin, V2 dir, V2& out);
 inline FootRect rect_grown(const FootRect& r, float g) { return {r.c, r.a, r.hx + g, r.hy + g, false}; }
@@ -141,5 +142,16 @@ CellBox around_window(V2 start, V2 goal, uint32_t bound, bool giant, int32_t gri
 // feasible flood fill, or the search fails (heap empty / node pool of 3 x vertices exhausted). `out.complexity` is valid
 // either way.
 bool around_search(const PassabilityGrid& grid, const MovementConstants& k, const AroundRequest& q, AroundResult& out);
+
+// Test accessor for the edge rules of around_search (0x678e80 / 0x67a3d0, MOVEMENT §1.5.1 item 4a): a graph vertex is
+// corner `corner` ((+a +b), (+a -b), (-a -b), (-a +b)) of q.obstacles[obs], or with obs -1 the point p (the start, the
+// goal or a terrain corner). Every obstacle of q counts as in the window. 1 no edge, 2 an edge at x 1, 3 a crossing edge
+// (x DynamicObstacleOverlapPenalty, pass 2 only).
+struct AroundVertexRef {
+    int32_t obs = -1;
+    uint32_t corner = 0;
+    V2 p;
+};
+uint8_t around_edge_class(const PassabilityGrid& grid, const AroundRequest& q, const AroundVertexRef& a, const AroundVertexRef& b);
 
 }  // namespace alamo::tactical::movement

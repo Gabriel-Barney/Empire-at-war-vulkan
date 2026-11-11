@@ -81,14 +81,17 @@ bool slab_range(float ox, float oy, float dx, float dy, float hx, float hy, floa
 }
 }  // namespace
 
-bool segment_crosses_rect(const FootRect& r, V2 p, V2 q, float shrink) {
-    const float hx = r.hx - shrink, hy = r.hy - shrink;
-    if (!(hx > 0.0f) || !(hy > 0.0f)) return false;
+bool segment_meets_rect(const FootRect& r, V2 p, V2 q) {
     const V2 b = perp_left(r.a);
-    const V2 lp = p - r.c, d = q - p;
-    float t0 = 0.0f, t1 = 0.0f;
-    if (!slab_range(dot(lp, r.a), dot(lp, b), dot(d, r.a), dot(d, b), hx, hy, t0, t1)) return false;
-    return t0 < 1.0f && t1 > 0.0f;  // the open box meets the open segment
+    const V2 d = q - p;
+    const V2 m = (p + q) * 0.5f - r.c;  // the segment box's centre, relative to the rectangle's
+    // separated along x when the centres' distance exceeds the two projected half extents (equal: touching, no gap)
+    const auto separated = [&](V2 x) {
+        const float reach = r.hx * std::fabs(dot(r.a, x)) + r.hy * std::fabs(dot(b, x)) + 0.5f * std::fabs(dot(d, x));
+        return std::fabs(dot(m, x)) > reach;
+    };
+    if (separated(r.a) || separated(b)) return false;
+    return !(length_sq(d) > 0.0f) || !(separated(d) || separated(perp_left(d)));
 }
 
 bool ray_leaves_rect(const FootRect& r, V2 origin, V2 dir, V2& out) {
@@ -217,11 +220,51 @@ V2 rect_corner(const FootRect& r, uint32_t k) {
     return r.c + r.a * (sa * r.hx) + b * (sb * r.hy);
 }
 
+// s78n t20 (MOVEMENT §1.5.1 item 4a): the corner vector n (+0x30) of corner k at (sa ha, sb hb): the unit vector of
+// (-sa a - sb b), pointing from the corner into the rectangle at 45 degrees to its axes.
+V2 corner_inward(const FootRect& r, uint32_t k) {
+    const float sa = k < 2 ? 1.0f : -1.0f, sb = (k == 0 || k == 3) ? 1.0f : -1.0f;
+    return normalize_retail(r.a * -sa + perp_left(r.a) * -sb);
+}
+
 struct Vertex {
-    V2 p;
+    V2 p;                // the emitted point: the rect1 corner ([port] when f > 0, MOVEMENT §1.5.1 "Not read")
     int32_t obs = -1;    // index into the window's obstacle list (-1: terrain corner, start or goal)
     uint32_t corner = 0;
+    V2 p2;               // s78n t20 (item 4a, +0x0c): the rect2 corner, which the edge and crossing tests use
 };
+
+// Edges 0x678e80 and the cost multiplier 0x67a3d0 between two vertices (MOVEMENT §1.5.1 item 4a): 1 none, 2 plain, 3
+// crossing (x the overlap penalty, pass 2 only). `win` = the window's obstacles (indices into q.obstacles), `tracker` =
+// their tracker rectangles (shape + q.tracker; the temporary records of 0x6b4810, not rect1).
+uint8_t edge_class(const PassabilityGrid& grid, const AroundRequest& q, std::span<const uint32_t> win,
+                   std::span<const FootRect> tracker, const Vertex& a, const Vertex& b) {
+    // cos(0.7679449 rad) = cos 44 degrees (cosf of the float 0x3f449809)
+    constexpr float kInwardCone = 0.7193398f;
+    const bool same = a.obs == b.obs;  // one obstacle, or two obstacle-less vertices
+    if (same && a.obs >= 0 && ((a.corner + 4u - b.corner) & 3u) == 2u) return 1;  // a rectangle's diagonal
+    if (!same) {
+        // no edge from a corner into its inward cone: d . n >= cos 44, d = the unit vector from the corner to the other
+        // vertex; tested from each end that is a corner
+        const auto inward = [&](const Vertex& c, const Vertex& other) {
+            if (c.obs < 0) return false;
+            const V2 n = corner_inward(q.obstacles[win[static_cast<size_t>(c.obs)]].shape, c.corner);
+            return dot(normalize_retail(other.p2 - c.p2), n) >= kInwardCone;
+        };
+        if (inward(a, b) || inward(b, a)) return 1;
+    }
+    if (!line_passable(grid, a.p2, b.p2, q.mask)) return 1;
+    // the side between the front corners (+a +-b) of an obstacle in relation 2 / 4 / 8 / 0x20 always costs 1
+    if (same && a.obs >= 0 && a.corner + b.corner == 1u && q.obstacles[win[static_cast<size_t>(a.obs)]].front_free) return 2;
+    // crossing: the segment meets (touching counts) the tracker rectangle of an obstacle that is neither end's own
+    // ([port] a linear scan in window order stands for the tracker tree query; the same set)
+    for (size_t i = 0; i < tracker.size(); ++i) {
+        const int32_t o = static_cast<int32_t>(i);
+        if (o == a.obs || o == b.obs) continue;
+        if (segment_meets_rect(tracker[i], a.p2, b.p2)) return 3;
+    }
+    return 2;
+}
 
 }  // namespace
 
@@ -320,7 +363,7 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
                     for (int32_t dx = -1; dx <= 1 && !corner; dx += 2)
                         corner = !grid.passable_cell(cx + dx, cy + dy, q.mask) && grid.passable_cell(cx + dx, cy, q.mask) &&
                                  grid.passable_cell(cx, cy + dy, q.mask);
-                if (corner) vs.push_back({cell_center(cx, cy), -1, 0});
+                if (corner) vs.push_back({cell_center(cx, cy), -1, 0, cell_center(cx, cy)});
             }
         }
         // (ii) per obstacle the corners of rect1, kept when the matching rect2 corner passes and the corner lies inside
@@ -328,18 +371,18 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
         for (size_t i = 0; i < win.size(); ++i) {
             const FootRect rect2 = rect_grown(q.obstacles[win[i]].shape, grow2);
             for (uint32_t c = 0; c < 4; ++c) {
-                const V2 p = rect_corner(rect1[i], c);
-                if (!grid.passable_world(rect_corner(rect2, c), q.mask)) continue;
+                const V2 p = rect_corner(rect1[i], c), p2 = rect_corner(rect2, c);
+                if (!grid.passable_world(p2, q.mask)) continue;
                 bool covered = false;
                 for (size_t j = 0; j < win.size() && !covered; ++j)
                     covered = j != i && rect_contains(q.obstacles[win[j]].shape, p, q.tracker);
-                if (!covered) vs.push_back({p, static_cast<int32_t>(i), c});
+                if (!covered) vs.push_back({p, static_cast<int32_t>(i), c, p2});
             }
         }
         const uint32_t corners = static_cast<uint32_t>(vs.size());
         const uint32_t vstart = corners, vgoal = corners + 1;
-        vs.push_back({q.start, -1, 0});  // (iv)
-        vs.push_back({q.goal, -1, 0});   // (v)
+        vs.push_back({q.start, -1, 0, q.start});  // (iv)
+        vs.push_back({q.goal, -1, 0, q.goal});     // (v)
         const uint32_t nv = static_cast<uint32_t>(vs.size());
         out.vertices = nv;
         out.window = win;
@@ -363,30 +406,15 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
             }
             if (from == nv) return false;  // no vertex to start from
         }
-        // ---- edges 0x678e80 and costs 0x67a3d0, evaluated on demand: 1 none, 2 plain, 3 crossing (x the overlap penalty)
+        // ---- edges 0x678e80 and costs 0x67a3d0 (edge_class), evaluated on demand: 1 none, 2 plain, 3 crossing
         std::vector<uint8_t> edges(static_cast<size_t>(nv) * nv, 0);
-        constexpr float kCornerCone = 0.7193f;  // cos(0.7679): about 44 degrees around the corner's outward diagonal
+        std::vector<FootRect> tracker(win.size());
+        for (size_t i = 0; i < win.size(); ++i) tracker[i] = rect_grown(q.obstacles[win[i]].shape, q.tracker);
         const auto edge = [&](uint32_t i, uint32_t j) -> uint8_t {
             const uint32_t lo = std::min(i, j), hi = std::max(i, j);
             uint8_t& e = edges[static_cast<size_t>(lo) * nv + hi];
-            if (e != 0) return e;
-            const Vertex &a = vs[lo], &b = vs[hi];
-            const bool same = a.obs >= 0 && a.obs == b.obs;
-            if (same && ((a.corner + 4u - b.corner) & 3u) == 2u) return e = 1;  // a rectangle's diagonal
-            const auto outward = [&](const Vertex& c, const Vertex& other) {
-                if (c.obs < 0) return false;
-                const V2 dir = normalize_retail(other.p - c.p);
-                const V2 diag = normalize_retail(c.p - rect1[static_cast<size_t>(c.obs)].c);
-                return dot(dir, diag) > kCornerCone;
-            };
-            if (outward(a, b) || outward(b, a)) return e = 1;
-            if (!line_passable(grid, a.p, b.p, q.mask)) return e = 1;
-            // the front edge (corners +a +-b) of an obstacle in relation 2 / 4 / 8 / 0x20 always costs 1
-            if (same && a.corner + b.corner == 1u && q.obstacles[win[static_cast<size_t>(a.obs)]].front_free) return e = 2;
-            // [port] "crosses" = the segment meets the interior of an obstacle's rect1 (boundary contact never counts)
-            for (const FootRect& r : rect1)
-                if (segment_crosses_rect(r, a.p, b.p, 0.01f)) return e = 3;
-            return e = 2;
+            if (e == 0) e = edge_class(grid, q, win, tracker, vs[lo], vs[hi]);
+            return e;
         };
         const auto seg_len = [&](uint32_t i, uint32_t j) {
             const V2 d = vs[j].p - vs[i].p;
@@ -470,6 +498,22 @@ bool around_search(const PassabilityGrid& grid, const MovementConstants& k, cons
         return out.points.size() >= 2;
     }
     return false;
+}
+
+uint8_t around_edge_class(const PassabilityGrid& grid, const AroundRequest& q, const AroundVertexRef& a, const AroundVertexRef& b) {
+    std::vector<uint32_t> win(q.obstacles.size());
+    std::vector<FootRect> tracker(q.obstacles.size());
+    for (size_t i = 0; i < q.obstacles.size(); ++i) {
+        win[i] = static_cast<uint32_t>(i);
+        tracker[i] = rect_grown(q.obstacles[i].shape, q.tracker);
+    }
+    const auto vertex = [&](const AroundVertexRef& r) {
+        if (r.obs < 0 || static_cast<size_t>(r.obs) >= q.obstacles.size()) return Vertex{r.p, -1, 0, r.p};
+        const FootRect& s = q.obstacles[static_cast<size_t>(r.obs)].shape;
+        const uint32_t c = r.corner & 3u;
+        return Vertex{rect_corner(rect_grown(s, q.grow), c), r.obs, c, rect_corner(rect_grown(s, q.grow + q.f), c)};
+    };
+    return edge_class(grid, q, win, tracker, vertex(a), vertex(b));
 }
 
 }  // namespace alamo::tactical::movement
