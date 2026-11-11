@@ -414,6 +414,10 @@ public:
     // push 0x6859a0's first test, 0x391310(b, 1)), in the order of the pushes, each once. The host kills them by the
     // normal death after the tick and removes them (remove_unit).
     std::span<const ObjectId> push_kills() const { return push_kills_; }
+    // s78n t26.1 review: the units whose walk ended deployed this tick (Walk 0x16 -> 0x19 with the Deploy clip on its last
+    // frame, tick_deploy; ascending id). The host sets that clip (AnimBehaviors::deploy_at_end) whatever clip plays then
+    // (Deployed_Walk, a turn, an idle). Visual only: read in the same tick, not saved, not hashed.
+    std::span<const ObjectId> deploy_pose_events() const { return deploy_pose_; }
     // L1 systems: Teleport (0x3a8f90; Start_Cinematic_Space_Retreat line-up, Lua Teleport): the unit stops (its
     // order is dropped) and is placed at `pos` / `z` with yaw `yaw_deg`; land: the collision tree entry moves; space:
     // a stationary occupancy track from `frame`. No draws. False when the unit is unknown.
@@ -1519,6 +1523,7 @@ private:
     ModelBoundFn model_bound_;       // s78n t10: the space composition's world boxes (host; not saved)
     std::vector<CrushEvent> crush_;  // OI tactical: this tick
     std::vector<ObjectId> push_kills_;  // s78n t20 batch 1: this tick (saved, hashed while any)
+    std::vector<ObjectId> deploy_pose_;  // s78n t26.1 review: this tick (not saved, not hashed)
     OwnerThreatFn threat_;           // REMAINING_GAPS §4.2
     AnimLengthFn anim_len_;          // §4.3-4.7
     SpaceOccupancy air_;

@@ -296,6 +296,7 @@ void MovementSystem::tick_deploy(uint32_t frame) {
                 u.m.speed = 0.0f;  // the 0x19 handler runs in the same frame (speed := 0)
                 const DeployClip c = deploy_clip(u, kAnimDeploy);
                 deploy_start_clip(u, kAnimDeploy, std::max(c.count - 1.0f, 0.0f), frame);
+                deploy_pose_.push_back(u.d.id);  // the host's Deploy clip at its last frame (units_ ascending)
                 continue;
             }
             if (u.deploy == LocoState::None && !u.walk_deployed && u.d.max_walk_deployed > 0.0f && !u.d.deploy_ability) {

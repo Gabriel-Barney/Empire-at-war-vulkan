@@ -165,10 +165,16 @@ void test_droid() {
                     static_cast<double>(speed[0]), static_cast<double>(speed[1]), static_cast<double>(speed[2]),
                     static_cast<double>(speed[3]), static_cast<double>(speed[4]), speed.size());
     }
-    // The stop: the flag is cleared at once, 0x19 with the Deploy clip on its last frame, no event.
-    ev = run(sys, rng, f, f + 5);
-    f += 5;
-    CHECK(ev.empty() && !sys.walking_deployed(1) && sys.deploy_state(1) == LocoState::WalkDeployed && sys.view(1).speed == 0.0f);
+    // The stop: the flag is cleared at once, 0x19 with the Deploy clip on its last frame, no deploy event; one deployed
+    // pose event (the host's Deploy clip) on that tick.
+    uint32_t poses = 0;
+    for (const uint32_t end = f + 5; f < end; ++f) {
+        sys.tick(f, rng);
+        for (const DE& e : sys.take_deploy_events()) ev.push_back(e);
+        for (const ObjectId id : sys.deploy_pose_events()) poses += id == 1 ? 1u : 100u;
+    }
+    CHECK(ev.empty() && poses == 1 && !sys.walking_deployed(1) && sys.deploy_state(1) == LocoState::WalkDeployed &&
+          sys.view(1).speed == 0.0f && sys.view(1).deploy_clip == 0x19);  // the Deploy clip (ModelAnimType 25)
 
     // An order 200 ahead (L >= M): Deploy(false) at the path start (0x1A, no walk while it runs), then the walk at full
     // speed (3.6 x 1.56 = 5.616) and the deploy at the stop.
@@ -191,6 +197,36 @@ void test_droid() {
     }
     CHECK(undeployed_seen && redeployed && sys.view(1).arrived && near(vmax, 3.6f * 1.56f, 1e-4f));
     std::printf("droid over M: undeploy, roll at %.3f, deploy at the stop (frame %u)\n", static_cast<double>(vmax), f);
+}
+
+// ---------------------------------------------------------------- the deployed pose after an arrival turn
+void test_pose_after_turn() {
+    ::alamo::test::section("a deployed walk that ends with an arrival turn: the pose event after the turn");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys);
+    const V2 p0 = cell_center(20, 50);
+    CHECK(sys.add_unit(droid(1, p0)));
+    SimRng rng(2607);
+    uint32_t f = settle_deployed(sys, rng, 1, 1, 60);
+    MoveOrder o;
+    o.units = {1};
+    o.destination = p0 + V2{100.0f, 0.0f};
+    o.final_facing_deg = 90.0f;  // the arrival turn runs after the path (0x0F .. 0x11)
+    sys.move(o, rng, f);
+    uint32_t pose_frame = 0, turn_seen = 0, poses = 0;
+    for (const uint32_t end = f + 300; f < end; ++f) {
+        sys.tick(f, rng);
+        (void)sys.take_deploy_events();
+        if (sys.view(1).arrival_turn) turn_seen = f;
+        for (const ObjectId id : sys.deploy_pose_events()) {
+            CHECK(id == 1);
+            ++poses;
+            pose_frame = f;
+        }
+    }
+    CHECK(turn_seen > 0 && poses == 1 && pose_frame > turn_seen && !sys.walking_deployed(1) &&
+          sys.deploy_state(1) == LocoState::WalkDeployed && std::fabs(wrap_deg(sys.view(1).yaw - 90.0f)) < 1e-3f);
+    std::printf("pose after an arrival turn: turn until frame %u, pose at %u\n", turn_seen, pose_frame);
 }
 
 // ---------------------------------------------------------------- Deploy(false) while walking deployed; save round trip
@@ -424,6 +460,7 @@ void test_hover_and_exit() {
 
 int main() {
     test_droid();
+    test_pose_after_turn();
     test_freeze_and_save();
     test_manual_deployers();
     test_damage_deploy();

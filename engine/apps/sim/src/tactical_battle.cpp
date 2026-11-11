@@ -4512,6 +4512,11 @@ void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, u
                    ? u.container
                    : 0xFFFFFFFFu;
     };
+    // s78n t26.1 review (MOVEMENT §3.2.1 item 3): a walk that ended deployed this tick (0x16 -> 0x19) sets the Deploy clip on
+    // its last frame (blend 0.2, rate 1.0; [port] variant 0, no draw), whatever clip plays (Deployed_Walk, a turn, an idle)
+    for (const objects::ObjectId id : movement_->deploy_pose_events())
+        if (const Unit* du = unit_by_id(id); du && du->alive && !du->retreated && w->contains(id) && anim_->deploy_at_end(*gm, id, gframe))
+            ++stats_.anim_plays;
     std::vector<int8_t> head_moving(containers_.size(), -1);  // per team container: its first live member's gate
     idle_gate_.assign(units_.size(), 0);
     for (size_t i = 0; i < units_.size(); ++i) {
@@ -4549,21 +4554,17 @@ void TacticalBattle::drive_animation(objects::ObjectStore& store, SimRng& rng, u
         in.target = target;
         if (u.movable) {
             const mv::UnitView v = movement_->view(u.id);
-            if (v.deploy_state != mv::LocoState::None && !v.walk_deployed) {
+            // s78n t26.1 review: only 0x19 with the walking-deployed flag leaves the deploy states to the locomotor clips
+            // (clip 115); 0x18 with the flag set (an order shorter than M while deploying) keeps its Deploy clip.
+            if (v.deploy_state != mv::LocoState::None && !(v.deploy_state == mv::LocoState::WalkDeployed && v.walk_deployed)) {
                 // S8 t11 follow-up (MOVEMENT §3.2, 0x61e930): the Walk deploy states own the animation - the Deploy /
                 // Undeploy clip (synced random variant at Deployment_Anim_Rate) starts when the locomotor starts timing
                 // it; Deployed keeps the finished clip. [port] a reversed clip is drawn from its first frame.
                 // s78l t03: the IDLE deploy gate (deploying / undeploying / deployed) returns with nothing changed.
-                // s78n t26.1 (MOVEMENT §3.2.1 item 3): a walk that ends deployed returns to 0x19 with the Deploy clip set on
-                // its last frame (blend 0.2, rate 1.0; [port] variant 0, no draw), replacing the Deployed_Walk clip.
-                if (v.deploy_state == mv::LocoState::WalkDeployed) {
-                    if (v.deploy_clip == static_cast<int32_t>(anim::kAnimDeploy) && w->current_type(u.id) == anim::kAnimDeployedWalk &&
-                        anim_->deploy_at_end(*gm, u.id, gframe))
-                        ++stats_.anim_plays;
-                } else if (v.deploy_clip >= 0 && w->current_type(u.id) != v.deploy_clip &&
-                           anim_->deploy(*gm, u.id, v.deploy_clip == static_cast<int32_t>(anim::kAnimUndeploy), rng, gframe)) {
+                // s78n t26.1: the deployed pose after a deployed walk is set above (deploy_pose_events).
+                if (v.deploy_state != mv::LocoState::WalkDeployed && v.deploy_clip >= 0 && w->current_type(u.id) != v.deploy_clip &&
+                    anim_->deploy(*gm, u.id, v.deploy_clip == static_cast<int32_t>(anim::kAnimUndeploy), rng, gframe))
                     ++stats_.anim_plays;
-                }
                 continue;
             }
             // s78n t26.1 (MOVEMENT §3.2.1 item 3, state 0x13 0x61f840): walking deployed plays clip 115 (Deployed_Walk) at

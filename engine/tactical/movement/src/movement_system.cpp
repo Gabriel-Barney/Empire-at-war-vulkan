@@ -1362,6 +1362,7 @@ void MovementSystem::tick(uint32_t frame, SimRng& rng, const ParallelFor& pf) {
     if (interval < 2 || frame % interval == 0) quota_used_ = 0;
     crush_.clear();
     push_kills_.clear();  // s78n t20 batch 1
+    deploy_pose_.clear();  // s78n t26.1 review
     despawned_.clear();
     fevents_.clear();
     tevents_.clear();  // s78l t02: the host takes them right after the tick (TacticalBattle::play_turn_clip_events)
