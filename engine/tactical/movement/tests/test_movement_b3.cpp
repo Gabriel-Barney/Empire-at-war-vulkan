@@ -870,6 +870,39 @@ void test_t23_state2_self_read() {
 
 }  // namespace
 
+// ---------------------------------------------------------------- s78n t24 (RE f8afef8d): the role slots
+// A MovingVsMoving record's stored answers (+0x84 M / +0x88 S) and flags (+0xbd / +0xbe) belong to the role slots: a role
+// change (the decision's chooser result, the Pass failure swap, the Path Around retries) hands the old M slot's values
+// to the new M. The port keeps them per participant, so set_master / swap_roles swap them; a StoppedVsStopped
+// "nobody" (master 2) and an unchanged master leave them.
+void test_t24_role_slots() {
+    ::alamo::test::section("t24_role_slots");
+    CollisionObject c;
+    c.kind = CollisionKind::MovingVsMoving;
+    c.master = 0;
+    c.speed_a = 0.25f;  // M slot (a is M)
+    c.speed_b = 3.0e38f;
+    c.now_a = true;
+    c.now_b = false;
+    c.set_master(0);
+    CHECK(c.master == 0 && c.speed_a == 0.25f && c.speed_b == 3.0e38f && c.now_a && !c.now_b);
+    c.set_master(1);  // b becomes M: it now reads the M slot's 0.25 and flag
+    CHECK(c.master == 1 && c.speed_b == 0.25f && c.speed_a == 3.0e38f && c.now_b && !c.now_a);
+    c.swap_roles();
+    CHECK(c.master == 0 && c.speed_a == 0.25f && c.speed_b == 3.0e38f && c.now_a && !c.now_b);
+    c.swap_roles();
+    c.swap_roles();
+    c.swap_roles();  // three swaps (the Path Around retries 2 - 4): the roles and the slots end swapped
+    CHECK(c.master == 1 && c.speed_b == 0.25f && c.speed_a == 3.0e38f);
+    CollisionObject s;
+    s.kind = CollisionKind::StoppedVsStopped;
+    s.master = 2;
+    s.speed_a = 1.0f;
+    s.speed_b = 2.0f;
+    s.set_master(0);
+    CHECK(s.master == 0 && s.speed_a == 1.0f && s.speed_b == 2.0f);
+}
+
 int main() {
     test_step0_halt_brake();
     test_step0_crush_no_locomotor();
@@ -887,5 +920,6 @@ int main() {
     test_t23_starvation();
     test_t23_early_pop();
     test_t23_state2_self_read();
+    test_t24_role_slots();
     return ::alamo::test::report("alamo_tactical_movement_b3_tests");
 }

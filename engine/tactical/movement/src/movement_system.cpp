@@ -3254,14 +3254,14 @@ bool MovementSystem::mvm_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
     using S = CollisionState;
     const MvmChoice ch = mvm_choose(c, a, b, false);
     c.state = ch.state;
-    c.master = ch.master;
+    c.set_master(ch.master);  // s78n t24: the role slots' answers follow the roles (RE f8afef8d)
     if (ch.state == S::Active || ch.state == S::Resolved) return false;
     Unit& m = c.master == 0 ? a : b;
     Unit& s = c.master == 0 ? b : a;
     if (ch.mode == 1) {  // Pass: failure -> 0x680c00, M and S swap, state 12, serviced at once
         if (mvm_pass_setup(c, m, s, frame)) return true;
         mvm_fail(c, frame, rng);
-        c.master ^= 1u;
+        c.swap_roles();
         c.state = S::PassFailed;
         return true;
     }
@@ -3273,11 +3273,11 @@ bool MovementSystem::mvm_decide(CollisionObject& c, Unit& a, Unit& b, uint32_t f
             c.state = S::Crusher;
             return true;
         }
-        c.master ^= 1u;
+        c.swap_roles();
         if (mvm_detour(c, s, m, false, frame)) return true;
-        c.master ^= 1u;
+        c.swap_roles();
         if (mvm_detour(c, m, s, true, frame)) return true;
-        c.master ^= 1u;
+        c.swap_roles();
         if (mvm_detour(c, s, m, true, frame)) return true;
         mvm_fail(c, frame, rng);  // all four failed: the roles are left swapped, no service this frame
         return false;

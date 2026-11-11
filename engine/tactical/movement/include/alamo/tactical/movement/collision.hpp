@@ -171,6 +171,21 @@ struct CollisionObject {
     uint8_t starve_next = 2;
     uint8_t starve = 30;
     uint32_t redecide = 0;
+    // s78n t24 (MOVEMENT §5.4.2, RE f8afef8d): MovingVsMoving - the stored answers (+0x84 / +0x88) and "at once" flags
+    // (+0xbd / +0xbe) belong to the M / S role slots, not to the units; the port keeps them per participant (a / b), so
+    // a role change hands the old M slot's answer and flag to the new M (and S's to the new S). m: 0 = a, 1 = b.
+    void set_master(uint8_t m) {
+        if (m != master && m <= 1 && master <= 1) {
+            const float sp = speed_a;
+            speed_a = speed_b;
+            speed_b = sp;
+            const bool nw = now_a;
+            now_a = now_b;
+            now_b = nw;
+        }
+        master = m;
+    }
+    void swap_roles() { set_master(static_cast<uint8_t>(master ^ 1u)); }
 };
 
 // crowd - (float)(now - created).
