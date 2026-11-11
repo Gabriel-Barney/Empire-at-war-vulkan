@@ -1571,6 +1571,9 @@ Object service (`0x3a6b80`) does:
 Inside one locomotor service: path follow → speed controller → turn → integrate → passability check → terrain conform → set position.
 
 The collision system is serviced by the land mode (§5.2). Its order relative to the object walk was not pinned down. [M]
+*(s78n t23 RE, 2026-11-10) [H]: the land mode update `0x3639d0` runs the object walks `0x2be640` (both lists) first, then the
+collision driver `0x50a780` (detection `0x508170` at its end), then the movement coordinators `0x426eb0`. So the speed
+fold of frame N reads the record answers left by frame N − 1's driver (§5.4.1 "The stamp in full" item 6).*
 
 ### 3.4 Speed, acceleration and turn rate [H]
 
@@ -3248,6 +3251,61 @@ or 3.
   `0x5c7cb0`: +0x70 := NOW + 2 when vf +0x78(partner) is true. vf +0x78 is false for MvS, SvS and Terrain; for MvM
   it is true in state 1 when the partner is the slave and in state 4 when the partner is the master. **A new path of
   either unit never ends or resets a MovingVsStopped record.**
+- **The stamp in full (s78n t23 RE, 2026-11-10; `0x554310`, `0x50a020`, `0x5c7cb0`, `0x5c7100`, `0x680ef0`,
+  `0x682d00`, `0x67f7b0`, `0x6811c0`, `0x6814f0`, `0x5c6970`, `0x42cdd0`, `0x554480`, `0x41c1a0`, `0x3639d0`) [H
+  unless tagged].**
+  1. **Order inside the push `0x554310`(pack, path, unit):** the record is appended to the stack, pack +0x275 := 0,
+     then the stamp `0x50a020`(system, unit), then `0x559260`, pack +0x288 := NOW, pack +0x1e8 := 0. `0x50a020` is
+     called from nowhere else, and `0x554310` only from the locomotor's vf +0x190 `0x42c680` (every land locomotor;
+     the team container's `0x5ad140` ends in it). Pops and removals (`0x557b10`, `0x559410`, `0x554480`) stamp
+     pack +0x288 but **never** +0x70.
+  2. **Who is stamped:** `0x50a020` takes every record listed for the unit; for each, `0x5c7cb0` takes the partner
+     = the first other participant (`0x5c7100`) and calls vf +0x78(record, partner), which compares **live**
+     fields: state +0x78 = 1 and partner id = +0x80 (S), or state = 4 and partner id = +0x7c (M). There is no
+     separate "partner is master" byte. So the new path has landed on **M in state 1** (the master that holds at
+     its line) or on **S in state 4** (the passed unit that holds at line B): in both states the unit that is
+     *held*. (A phrasing "unit = slave in state 1, master in state 4" is the wrong way round.)
+  3. **The record that pushed is not stamped, by the role test, not by an exclusion.** Nothing in `0x50a020` /
+     `0x5c7cb0` compares the path's owner id (+0x4c) with the record. The chooser writes state, M and S straight
+     into +0x78 / +0x7c / +0x80 (`0x682d00` passes those addresses to `0x67f7b0`) **before** `0x682e80` /
+     `0x683140` run, and the swapped retries of mode 2 swap +0x7c / +0x80 before each call. The detour of
+     `0x683140` lands on S of a state-1 record (partner M ≠ S: false); the detour of `0x682e80` lands on M of a
+     state-4 record (partner S ≠ M: false). So a record is never stamped by its own detour, and a detour pushed by
+     record c onto unit X stamps **every other** record of X in which X is the held unit (state 1 with X = M, state 4
+     with X = S); records in any other state (0, 2, 3, 6, 7, 10-16) are not stamped. The claim before the push
+     (`0x42cdd0`: owner pack +0x248 := c, `0x559410` removes older collision paths) does not stamp +0x70.
+  4. **Debounce:** each stamp overwrites +0x70 with NOW + 2, so a record that is stamped again before it fires is
+     postponed; one stamped every frame never fires.
+  5. **When it fires (Q2):** the stamp is tested only at the top of the service `0x6814f0`. A record in state 1 / 4
+     has vf +0x50 false, so the driver's first pass (record-id order) calls vf +0x20 → `0x682d00`, which for a
+     state ≠ 0 jumps to the service. There: +0x70 := 0, `0x5c6970` (both participants' locomotors give up this
+     record id: the detourer's owner +0x248 := 0; **its detour stays on its stack**), state := 0, and the switch
+     falls into case 0: M, S := the participants in list order, both speeds 0, both flags 1, return. **No
+     decision in that frame.** Next frame, vf +0x50 (`0x6811c0`: state 0 → run the chooser without side effects,
+     answer "mode ≠ 0") decides: a mode-0 result (states 2, 3, 6, 7, 8, 11, 13, 15) is decided at once in the
+     first pass, without quota; a Pass / Path Around set-up (mode 1 / 2) waits for the quota pass, and without
+     quota the record gets case 0 again and waits. *(Correction to "vf +0x50" above: MvM answers true only in
+     state 0 **and** when the chooser asks for a set-up.)*
+  6. **Speeds while re-decided:** the speed fold runs in the object walk, **before** the collision driver of the
+     same frame (land mode update `0x3639d0`: `0x2be640` for both object lists, then `0x50a780`, then the
+     coordinators `0x426eb0`). A record in state 0 answers max speed (`0x680d00`). So a stamp that fires in frame
+     N's driver frees the held unit in the fold of frame N + 1 (from this record), and the decision in frame
+     N + 1's driver at the earliest holds it again from frame N + 2: **at least one free fold per re-decision**.
+     [M] that fold may even be "at once": case 0 set both flags to 1 and the flag of the last record asked wins
+     (FIGHTER_FLYING §7.7 item 5).
+  7. **A new order (Q4) stamps only when no collision owns the unit.** The formation plan `0x41c1a0` (the move /
+     formation order) calls `0x554480`(pack, unit, **pack +0x248**) and then vf +0x190 with the order path.
+     - Owner 0: the whole stack is destroyed, the order path is pushed on top through the main branch of
+       `0x554310` → **stamp**: the unit's records where it is held (state 1 as M, state 4 as S) re-decide at
+       NOW + 2.
+     - Owner ≠ 0 (a collision record claimed the unit: it is the detourer of a state-1 record, the passer of a
+       state-4 record, a pushed or SvS-moved unit): `0x554480` with id ≠ 0 destroys **every** path record, the
+       detour included (+0x288 := NOW); `0x554310` then sees owner ≠ path +0x4c = 0 [M: an order path's +0x4c is
+       0; a non-zero one would be refused] and inserts the order path through `0x553cc0` at the owner's record
+       (none left: the bottom) **without the stamp** and without the +0x275 / +0x1e8 resets; the owner stays set.
+       The records in which the unit is held are not re-decided; the record that owned it ends at its next
+       service (state 1: no pending tagged waypoint on S's top path and no path of the record → 8; state 4 the
+       same test on M), which releases the unit it held.
 
 **MovingVsStopped record:** +0x78 state, +0x7c mover id, +0x80 next retry frame, +0x84 "at once" flag.
 **Validity `0x684450`** (first step of the decision and of every state): fewer than two live participants → 5; the
@@ -3883,7 +3941,7 @@ in formations → true only when b's formation order index (formation +0x23c, th
 | 4 Pass | reset; M := max. S := max when S can crush M or S is before line A ((S.P − A.pt)·a < −0.001); **0 with flag S** at or past line B ((S.P − B.pt)·a ≥ −0.001); between them min(`0x67f130`(S, M), 0.5 × M's current speed). Also **0 with flag S** when S is at or past M's pending tagged waypoint line and cannot crush | no pending tagged waypoint on M's top path and M holds no path of the record → 8; (S.P − M.P)·f_M ≤ −(r_M + r_S) (`0x3969f0`, M's actual facing) → 8 |
 | 6 Moving With Speed Only | reset; the chooser re-run must give 6, else state 0 (roles not refreshed); M := max; S := max if S can crush M, else `0x67f130`(S, M) | predictor(M, S) false → 8 |
 | 7 | reset; both max speed, no vectors | validity only (one of them stops, or is gone); no predictor, no timer |
-| 10 Try Again Later | reset; retry frame ≤ NOW → state 0 and a new retry frame (this frame's speeds still apply); both 0, flags 0 (braking); (M.P − S.P)·f_S < −0.001 → S := max; else (S.P − M.P)·f_M < −0.001 → M := max | |
+| 10 Try Again Later | reset; retry frame ≤ NOW → state 0 and a new retry frame (the speeds below are still written, but never read: see "Retry frame", s78n t23 RE); both 0, flags 0 (braking); (M.P − S.P)·f_S < −0.001 → S := max; else (S.P − M.P)·f_M < −0.001 → M := max | |
 | 11 | no reset; M := max, S := `0x67f130`(S, M); vectors for both | (S.P − M.P)·f_M < −(r_S + r_M) → 8 |
 | 12 | reset; M := max; S := `0x67f130`(S, M) | retry frame ≤ NOW → new retry frame, state 0; else predictor false → 8 |
 | 13 | `0x554660`: swaps the two members' slot offsets, slot lists, +0x110 and the formation path's +0x68; zeroes both approximation countdowns | → 8 |
@@ -3938,6 +3996,47 @@ follow at the slave speed until NOW + 30 + rnd[0, 15] (one synced draw); a faile
 not swappable → state 7: both run on) → Try Again Later with the same timer (both brake to 0, the one that is
 behind the other may run). [port] the +0xbc early pop, the starvation states 15 / 16 and pack +0x110 (0 without
 corridor squeeze) may be simplified; record that.
+
+**Retry frame of states 10 and 12 (s78n t23 RE, 2026-11-10; `0x682930`, `0x6814f0` case 12, `0x680d00`,
+`0x3639d0`) [H].** In the service of the frame whose retry frame has passed, state 10 sets state 0 and the new
+retry frame first and then still writes +0x84 / +0x88 (0 / max as in the row); state 12 writes M := max, S :=
+`0x67f130` and then sets state 0. Neither runs case 0 that frame (the roles stay, possibly swapped; flags 0 from
+the reset). These speeds are **dead**: the answer `0x680d00` returns the max speed whenever state = 0 (it still
+writes the flag, 0 here), and the next reader is the speed fold of the **next** frame's object walk, which runs
+before that frame's collision driver (`0x3639d0`: `0x2be640` ×2, then `0x50a780`); the choosers and starvation
+tests of other records later in the same driver pass also read through `0x680d00`. So at a passed retry frame
+both units get **max speed (not "at once") in the next frame's fold**, and the record decides in that frame's
+driver (at once for a mode-0 result, under quota for a set-up, §5.4.1 "The stamp in full" item 5). The earlier
+"this frame's speeds still apply" was wrong.
+
+**A ring of held movers (s78n t23 RE, 2026-11-10; `0x682510`, `0x682170`, `0x6807e0`, `0x681d30`, `0x680ef0`,
+`0x50a020`, §5.4.1 "The stamp in full") [H for each step, M for the long-run outcome: not observed in a run].**
+- Roles. In state 1 the **held** unit H is M (speed 0 at its hold line, the waypoint of S's detour tagged with
+  M) and the detourer D is S; in state 4 H is S (0 at line B) and D is M (the passer). The detour always lives on
+  D, the claim (owner) is on D, and vf +0x78 is true exactly when a new path lands on H.
+- A ring = records r1 … rn with D(rk) = H(rk+1) and D(rn) = H(r1), every H at or past its line, so every unit
+  stands. Nothing inside states 1 / 4 ends it: no timer or retry frame; starvation `0x681d30` runs only from state
+  2 (and the never-entered 14); the early pop `0x6807e0` (state 1, only with +0xbc) needs S behind M by hx_S + hx_M
+  along M's facing, which a standing S never reaches; the Pass lines (+0x8c…+0xa8) are written only by `0x682e80`
+  at a decision; validity holds (every unit has a path on its stack); the state-1 / 4 end tests need D to pass
+  the tagged corner or M to pass S.
+- **But a ring cannot be static in retail.** It forms by decisions, each pushing a detour onto its D. The push of
+  the record decided last lands on the H of a record already in state 1 / 4 (D(rk) = H(rk+1)), so that record is
+  stamped; it fires 2 frames later, the record is in state 0 for at least one fold (its H gets max speed from it,
+  §5.4.1 item 6), re-decides (same roles when the geometry still gives them), re-claims D and pushes a new detour
+  onto D = H of the next record, which is stamped in turn. The stamp walks round the ring forever, about 3 frames
+  per record (more when the quota delays a set-up): each H gets at least one free fold per lap of ≈ 3n frames,
+  and the hold lines are recomputed on each new detour. A record whose re-decision fails goes to 10 (both stand
+  face to face; no push, the chain pauses) and re-decides after 30 + rnd[0, 15] frames, which restarts it; a
+  re-decision into 2 / 3 / 6 / 7 / 12 replaces that link's hold line by that state's speed rule.
+- **Other breakers:** a new order to any ring member (it owns a claim as some record's D, so `0x554480` destroys
+  its detour without a stamp; that record ends at its next service and its H walks on, which unwinds the ring);
+  the death or stop of a member (validity 8 / 9).
+- **Port consequence.** A permanent three-unit hold in the port means its stamp chain is broken somewhere:
+  excluding records by "who pushed" instead of by the role test above, stamping only when the record is not in
+  state 1 / 4, deciding at once inside the stamped service (no free fold), keeping the held answer while the
+  record is in state 0, or not stamping a re-push of the same detour. Retail re-stamps on **every** push onto H,
+  including a re-decided record's fresh detour onto its D.
 
 *Not read:* the id list `0x140b3a1a0` tested in `0x677650`; `0x677650` reads the pathfinder's request global as
 "the other unit" [M: stale after an early return]; `0x509ea0` and `0x67f130` were not re-derived.
