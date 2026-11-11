@@ -3508,6 +3508,11 @@ code writes them.
 the state ≠ 0, else its max speed. **Vector (vf +0x38 `0x680c40`):** only in states **3** and **11**, for either
 participant (and so for its squad members), `0x5c6ca0`(…, 1.0), weight 1.0 (FIGHTER_FLYING §7.5).
 `0x67f080` ("reset") sets both speeds to the max speeds and both flags to 0.
+*s78n t23 RE 2 (`0x680420`, `0x6817ac`, `0x509ea0`) [H]:* the stored answers are real numbers from construction on.
+The constructor `0x680420` zeroes both (its 8-byte writes: +0x80 := none with +0x84 := 0, +0x88 := 0), and case 0
+zeroes both again (one 8-byte write at `0x6817ac`). So in a state ≠ 0, before that state writes them, the answer
+is **0**, not the max speed. No reader excludes the record itself: the cap `0x509ea0` folds vf +0x40 of **every**
+record listed for the unit, this one included (consequence for the state-2 re-run: §5.4.6, "State 2 service").
 
 **Validity `0x680650`** (start of most states): fewer than two participants → 8; a participant without a
 locomotor → 9; a participant whose top path is not forced stands on an impassable cell → it is stopped (vf +0x140;
@@ -3617,7 +3622,10 @@ single infantry. Speed Slave Only re-chooses every frame and turns into Repulse 
 ends by `0x67eb90` or when either participant has neither speed nor path. The plan's "[port] Repulse for every
 Infantry pair" is right for crossing and head-on squads and wrong for squads moving the same way (retail slaves the
 rear one to the front one and stops it at contact). [port] the starvation states 15 / 16 and the (1, 1) flag quirk
-may be left out; record that.
+may be left out; record that. *(s78n t23 RE 2 correction: the "headings within 60°" Speed Slave Only of squads in
+different formations never survives its first service, because the state-2 re-run reads the record's own stored
+answer of 0; such a pair re-decides every frame and is answered max speed. Only the same-formation state 2 slaves
+the rear unit. §5.4.6, "State 2 service".)*
 
 #### 5.4.3 StoppedVsStopped in full (s78n t19 RE, 2026-11-10) [H unless tagged]
 Read from the vftable `0x8b5450`, `0x686de0`, `0x687570`, `0x687720`, `0x686e80`, `0x687010`, `0x686b20`,
@@ -3947,7 +3955,7 @@ in formations → true only when b's formation order index (formation +0x23c, th
 | 13 | `0x554660`: swaps the two members' slot offsets, slot lists, +0x110 and the formation path's +0x68; zeroes both approximation countdowns | → 8 |
 | 15 | countdown +0xb0 = 0 → 30; reset; M := 0 (flag 0), S := max; **every frame** while M has exactly one collision record: path-around(M around S, flag = wanted headings differ by < 90°, kind 4) | success → 16 |
 | 16 | reset; M := max, S := 0 (flag 0) | no pending tagged waypoint and M holds no path of the record → 8 |
-| 2 Speed Slave Only | as §5.4.2 | |
+| 2 Speed Slave Only | as §5.4.2; the re-run comes **before** the reset ("State 2 service" below) | |
 
 - **State 1 slave speed `0x5c69f0`:** max speed; only when S holds this record's path, is in a formation with
   speed Vf > 0 and the path has ≥ 2 points: min(max speed, Vf × path length / straight distance first-to-last
@@ -4037,6 +4045,50 @@ driver (at once for a mode-0 result, under quota for a set-up, §5.4.1 "The stam
   state 1 / 4, deciding at once inside the stamped service (no free fold), keeping the held answer while the
   record is in state 0, or not stamping a re-push of the same detour. Retail re-stamps on **every** push onto H,
   including a re-decided record's fresh detour onto its D.
+
+**State 2 service: the chooser re-run reads the record's own stale answer (s78n t23 RE 2, 2026-11-10;
+`0x6814f0` case 2 `0x681554`…`0x681658`, case 6 `0x6818cc`…`0x6819e9`, `0x67f7b0`, `0x679750`, `0x509ea0`,
+`0x680d00` (vf +0x40 of the MvM vftable `0x8b5090`, read from the image), `0x680420`, `0x67f080`, `0x682d00`,
+`0x6811c0`) [H for each step; M for the in-game outcome: not observed in a run].**
+1. **Sequence of case 2:** validity `0x680650` (`0x681557`); M or S none → state 0. Local state := 2 (`0x681589`)
+   and the chooser `0x67f7b0` (`0x6815be`) writes state, M, S, mode and swap into **stack locals**: the record's
+   +0x78 stays **2** during the re-run, +0x7c / +0x80 are not refreshed. Local ≠ 2 → `0x681b66`: state := 0,
+   return, **nothing else** (no reset; speeds and flags keep their last values). Only on a 2: the unit lookups,
+   reset `0x67f080` (`0x681615`: both speeds := max, flags := 0), +0x84 := M's max (`0x68162c`), +0x88 :=
+   `0x67f590`(S, M) (`0x681642`), = 0 → +0xbe := 1, `0x67eb90` → 8, else starvation `0x681d30`. So the reset is
+   **after** the re-run, the state is not set to 0 before it, and the speeds are not cleared before it.
+2. **The self-read:** for two Infantry-class movers that are not in one formation and not split by a forced path,
+   the re-run reaches step 6, `0x679750`(p0, p1) (`0x67fda5`), which calls `0x509ea0`(system, p0's max speed, p0)
+   (`0x6797f7`): the minimum over vf +0x40 of every record of p0, **this one included** (the loop `0x509fa0`…
+   compares nothing but the speeds). With +0x78 = 2, `0x680d00` returns the stored +0x84 (p0 = M) or +0x88 (p0 =
+   S). Stored 0 → cap 0 → rel **2** → step 7: not 0x10 / 0x20 → **3** → ≠ 2 → state 0. Only **p0's** answer counts
+   (list order; p1's cap is not read); a 0 from another record of p0 has the same effect.
+3. **The first service after a decision always fails.** The decision `0x682d00` runs the chooser with +0x78 = 0
+   (answers = max speed, so it gives 2) and, mode 0, serves at once (`0x682df3`, vf +0x18). The stored speeds are
+   then those of the constructor or of the last case 0: **(0, 0)**. The re-run reads 0 for p0 whichever role it
+   has → 3 → state 0, in the same driver call, writing nothing. Next frame vf +0x50 `0x6811c0` (state 0: a chooser
+   run into locals → mode 0 → false) sends it to the first-pass vf +0x20 again → 2 → service → 0. So **a
+   relation-path Speed Slave Only (two Infantry / Bike movers in different formations, headings within 60°) never
+   writes a speed**: the record re-decides every frame, answers **max speed** in every fold (state 0 at fold time),
+   with the flags last written (0 from the constructor; 1, 1 after a case 0, e.g. after a stamp or starvation). It
+   does not slow the rear unit: retail lets it walk into the unit ahead at full speed (other records, e.g. a
+   MovingVsStopped, may still cap it). The (port-observed) bail "once S has answered 0" is the steady-state form of
+   the same rule.
+4. **Exception:** non-zero stored speeds inherited from an earlier state of the same record. A same-formation state
+   2 (decided by §5.4.2 step 4 / §5.4.6 step 1, **before** the relation is computed, so the self-read never touches
+   it: it keeps 2 every frame) writes +0x84 = max, +0x88 = slave speed; if the formation splits, the re-run takes
+   the relation path and keeps 2 while p0 = M (max) or p0 = S with a non-zero answer; the frame after S is
+   answered 0 (the footprint-touch hold, or a 0 from `0x67f130`) it bails, and from then on it is the loop of
+   item 3 (speeds stale, (max, 0)).
+5. **The other re-runs:** the chooser has exactly four callers (scan of `call` rel32 to `0x67f7b0`): `0x6811fc`
+   (vf +0x50, state 0), `0x682d5a` (decision, state 0: answers are max speeds, no self-read), case 2 `0x6815be` and
+   case 6 `0x68197b`. **Case 6 runs the reset `0x67f080` (`0x681939`) before its re-run**, so its own answers are
+   both max speeds there (no self-read; rel 2 only from another record of p0), and a case-6 bail leaves speeds
+   max and flags 0. The stale self-read exists only in state 2.
+- ***Port spec:*** keep `0x509ea0` without self-exclusion; a MovingVsMoving record's stored speeds start at **0**
+  (constructor), not "max"; case 2: re-run first, bail to state 0 writing nothing, reset only after a 2; case 6:
+  reset (both max, flags 0) **before** the re-run, so a case-6 bail leaves (max, max, flags 0). With these the
+  relation-path state 2 of Infantry pairs is dead as in retail (item 3); do not "fix" the bail.
 
 *Not read:* the id list `0x140b3a1a0` tested in `0x677650`; `0x677650` reads the pathfinder's request global as
 "the other unit" [M: stale after an early return]; `0x509ea0` and `0x67f130` were not re-derived.
