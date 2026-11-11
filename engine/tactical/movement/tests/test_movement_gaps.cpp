@@ -4944,7 +4944,8 @@ static void test_land_squad_speed_order() {
         o.destination = cell_center(40, 20);
         sys.move(o, rng, 1);
         bool crossing = false, detoured = false;
-        for (uint32_t f = 1; f < 600; ++f) {
+        // s78n t23 review fix 1: the self-stamped records re-decide, the squad arrives near frame 630 (was before 600)
+        for (uint32_t f = 1; f < 900; ++f) {
             if (!crossing && sys.view(100).pos.x >= at.x + 200.0f) {
                 MoveOrder vo;
                 vo.units = {50};

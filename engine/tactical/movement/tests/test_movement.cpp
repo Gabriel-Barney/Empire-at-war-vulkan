@@ -3095,7 +3095,8 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // item 5); merged with batch 2.
 // s78n t23 (2026-11-10): land moved (MovingVsMoving chooser and states for every pair, MOVEMENT 5.4.2 / 5.4.6; the
 // finished records leave the speed fold).
-static constexpr uint64_t kGoldenLand = 0x5263ba92dbd0e685ull;  // s78n t23: MovingVsMoving for every pair
+// s78n t23 review fix 1: the pushing record stamps itself too (MOVEMENT 5.4.1 "Re-decide stamp").
+static constexpr uint64_t kGoldenLand = 0x7ecef964084d122cull;  // s78n t23 review fix 1
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
@@ -3172,7 +3173,6 @@ static void test_real_data() {
     uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0;
     uint32_t space_units = 0, space_arrived = 0, space_hits = 0, space_obstacles = 0, plan_fail = 0, plan_invalid = 0, plans = 0;
     uint32_t group_units = 0, group_arrived = 0, space_fallbacks = 0;
-    uint32_t land_held = 0;  // s78n t23: not arrived, in a circular MovingVsMoving hold (counted in land_arrived)
     for (const std::string& path : maps) {
         std::vector<uint8_t> bytes;
         terrain::MapData map;
@@ -3235,35 +3235,14 @@ static void test_real_data() {
             SimRng tick_rng(1);
             run_land(sys, 0, 12000, tick_rng, serial_for, ground);
             if (!ground) ++off_ground;
-            uint32_t arrived = 0, held = 0;
-            const auto done = [&](ObjectId id, V2 goal) {
-                const UnitView v = sys.view(id);
-                return v.arrived && distance(v.pos, goal) < 160.0f;
-            };
+            uint32_t arrived = 0;
             for (const auto& [id, goal] : goals) {
+                const UnitView v = sys.view(id);
                 // Arrived at the goal, or early at a blocked destination (contact + LandDestinationProximity).
-                if (done(id, goal)) {
-                    ++arrived;
-                    continue;
-                }
-                // s78n t23 (MOVEMENT 5.4.6): a unit left in a circular MovingVsMoving hold - a unit held at its hold line
-                // (state 1) for a detourer that is held in a Pass (state 4) by a passer slowed by the first one - has a
-                // MovingVsMoving record with another unit that has not arrived either. No retail rule breaks such a
-                // cycle (states 1 / 4 end only on the units' progress); counted apart, at most two per map.
-                for (const CollisionObject& c : sys.collisions().list()) {
-                    if (c.kind != CollisionKind::MovingVsMoving || (c.a != id && c.b != id)) continue;
-                    const ObjectId o = c.a == id ? c.b : c.a;
-                    const auto it = std::find_if(goals.begin(), goals.end(), [o](const auto& g) { return g.first == o; });
-                    if (it != goals.end() && !done(o, it->second)) {
-                        ++held;
-                        break;
-                    }
-                }
+                if (v.arrived && distance(v.pos, goal) < 160.0f) ++arrived;
             }
             land_units += static_cast<uint32_t>(goals.size());
-            land_arrived += arrived + held;
-            land_held += held;
-            CHECK(held <= 3);
+            land_arrived += arrived;
             if (arrived != goals.size()) {
                 std::printf("  %s: %u / %zu arrived (paths %u, replans %u, failures %u)\n", path.c_str(), arrived, goals.size(),
                             sys.stats().paths_planned, sys.stats().replans, sys.stats().path_failures);
@@ -3410,12 +3389,10 @@ static void test_real_data() {
         }
     }
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("real maps: %u land maps (%u obstacle stamps), %u plans (%u failed, %u invalid), %u / %u units arrived (%u of "
-                "them held in a MovingVsMoving cycle), "
+    std::printf("real maps: %u land maps (%u obstacle stamps), %u plans (%u failed, %u invalid), %u / %u units arrived, "
                 "group %u / %u, %u maps left passable ground; %u space maps (%u static obstacles), %u / %u ships arrived, "
                 "%u obstacle-centre frames, %u planner fallbacks; %.1f s\n",
-                land_maps, stamped_total, plans, plan_fail, plan_invalid, land_arrived, land_units, land_held, group_arrived,
-                group_units,
+                land_maps, stamped_total, plans, plan_fail, plan_invalid, land_arrived, land_units, group_arrived, group_units,
                 off_ground, space_maps, space_obstacles, space_arrived, space_units, space_hits, space_fallbacks, secs);
     CHECK(land_maps >= 40 && space_maps >= 20);
     CHECK(plan_fail == 0 && plan_invalid == 0 && off_ground == 0);

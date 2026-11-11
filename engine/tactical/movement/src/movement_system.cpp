@@ -1851,11 +1851,13 @@ void MovementSystem::push_top(Unit& u, std::vector<V2> path, uint8_t kind, bool 
     u.push_next = 1;
     u.around.clear();
     u.path_change = frame;  // s78n t18: pack +0x288 (a path record is pushed on its stack)
-    // s78n t23 (MOVEMENT §5.4.1 "Re-decide stamp", 0x50a020 -> 0x5c7cb0): every other MovingVsMoving record of u that
+    // s78n t23 (MOVEMENT §5.4.1 "Re-decide stamp", 0x50a020 -> 0x5c7cb0): every MovingVsMoving record of u that
     // re-decides on its partner's path change (vf +0x78: state 1 with u the slave, state 4 with u the master) is
-    // stamped NOW + 2
+    // stamped NOW + 2 - the record that pushes this path too (review fix: the spec has no exception; the decision sets
+    // the state before its push, so a Pass re-decides two frames after M's detour and rebuilds lines A / B from S's
+    // position then, a Path Around two frames after S's detour; without it three units held each other for good)
     for (CollisionObject& o : coll_.list_mut()) {
-        if (o.seq == c.seq || o.kind != CollisionKind::MovingVsMoving) continue;
+        if (o.kind != CollisionKind::MovingVsMoving) continue;
         if (o.a != u.d.id && o.b != u.d.id) continue;
         const bool is_master = (o.master == 0 ? o.a : o.b) == u.d.id;
         if ((o.state == CollisionState::PathAround && !is_master) || (o.state == CollisionState::Pass && is_master))
