@@ -7,6 +7,8 @@
 // s78n t26.2: the path record's speed fractions and turn-done byte, the speed controller B (corner cap, brake-ahead, End
 // Move T = a) and the start rule A with the 3.5.1 turn in place (MOVEMENT 3.5.2 A / B, 3.5.1 "Arrival turn, details"
 // items 3-5).
+// s78n t26.3: the corner-speed pass D (MOVEMENT 3.5.2 D with the RE 2 corrections): corner speeds, the merge and the aim
+// point, the probe step-downs, the brake pass, and Min_Speed_Fraction_For_Turn on an order path.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -631,6 +633,111 @@ void test_t26_controller() {
                 static_cast<double>(far_v), static_cast<double>(near_v));
 }
 
+// ---------------------------------------------------------------- s78n t26.3: the corner-speed pass D (pure)
+// MOVEMENT §3.5.2 D items 2-7 with the RE 2 corrections (L_turn and the third speed term take sin|theta|). vmax 3, R 6
+// degrees / frame (omega 0.1047198), facing 0, no probe callbacks (open ground) unless stated.
+CornerPassIn corner_in(float f_min, float decel) {
+    CornerPassIn in;
+    in.yaw0 = 0.0f;
+    in.vmax = 3.0f;
+    in.rate = 6.0f;
+    in.f_min = f_min;
+    in.decel = decel;
+    in.seg = 2.0f;
+    return in;
+}
+
+bool line_short_of_110(const void*, V2 a, V2 b) { return a.x <= 110.0f && b.x <= 110.0f; }  // a wall at x 110
+bool line_below_5(const void*, V2 a, V2 b) { return a.y < 5.0f && b.y < 5.0f; }             // nothing passes beyond y 5
+bool corridor_never(const void*, const std::vector<V2>&) { return false; }
+
+void test_t26_corner_pass() {
+    ::alamo::test::section("t26_corner_pass");
+    const float w = 6.0f * dmath::kPiF / 180.0f;
+    // (0, 0), (100, 0), (100, 40), f_min 0, no brake pass: corner 0 straight (theta 0: vmax); corner 1 theta pi / 2, L 40,
+    // r = clamp(20, 20, 100) = 20: v = min(3, w 20 / 1 = 2.094395, 40 w / 2 = 2.094395) -> f 0.698132 (hand)
+    const std::vector<V2> l40{{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 40.0f}};
+    CornerPassStats s0;
+    const std::vector<float> a = corner_fractions(l40, corner_in(0.0f, 0.0f), &s0);
+    CHECK(a.size() == 3 && a[0] == 1.0f && near(a[1], 0.698132f, 1e-5f) && a[2] == 1.0f);
+    CHECK(s0.zero == 0 && s0.slowed == 1 && s0.stepdowns == 0);
+    // the brake pass (a 0.05): v 0 at the end; k = 1: sqrt(0.1 x 40) = 2 -> f1 = min(0.698132, 2 / 3) = 0.666667; k = 0:
+    // sqrt(0.1 x 100 + 4) / 3 = 1.247 -> f0 stays 1 (hand)
+    const std::vector<float> ab = corner_fractions(l40, corner_in(0.0f, 0.05f));
+    CHECK(ab[0] == 1.0f && near(ab[1], 2.0f / 3.0f, 1e-6f) && ab[2] == 1.0f);
+    // (0, 0), (100, 0), (100, 40), (100, 400): the corner keeps its speed when the path goes on (brake pass k = 2: sqrt(0.1 x
+    // 360) = 6 -> 1, v 3; k = 1: sqrt(0.1 x 40 + 9) / 3 = 1.2 -> 0.698132 stays): (1, 0.698132, 1, 1) - the fractions the t26.2
+    // brake-ahead case sets by hand. (On (0, 0), (100, 0), (100, 400) the leg is 400 long: r = 100, v = vmax, all 1.0.)
+    const std::vector<float> a400 =
+        corner_fractions({{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 40.0f}, {100.0f, 400.0f}}, corner_in(0.0f, 0.05f));
+    CHECK(a400.size() == 4 && a400[0] == 1.0f && near(a400[1], 0.698132f, 1e-5f) && a400[2] == 1.0f && a400[3] == 1.0f);
+    CHECK(corner_fractions({{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 400.0f}}, corner_in(0.0f, 0.05f)) ==
+          (std::vector<float>{1.0f, 1.0f, 1.0f}));
+    // (0, 0), (100, 0), (100, 10), f_min 0.25: corner 1 v = min(3, 2.094395, 10 w / 2 = 0.523599) -> f 0.174533 < 0.25 ->
+    // 0; corner 0: theta 0, L_turn 0, the aim point pulled back onto P_0 keeps theta 0 -> vmax (hand)
+    const std::vector<V2> l10{{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 10.0f}};
+    CornerPassStats s1;
+    const std::vector<float> b = corner_fractions(l10, corner_in(0.25f, 0.0f), &s1);
+    CHECK(b[0] == 1.0f && b[1] == 0.0f && b[2] == 1.0f && s1.zero == 1);
+    const std::vector<float> b1 = corner_fractions(l10, corner_in(0.1f, 0.0f));  // f_min 0.1: 0.174533 stays
+    CHECK(b1[0] == 1.0f && near(b1[1], 0.174533f, 1e-5f));
+    // The merge (f_min 0.1): at corner 1 L 10 < L_turn = 2 x 3 x 1 / w = 57.30 and the next point (100, 20) is on the same
+    // side -> merged: L 20, theta pi / 2, v = min(3, 2.094395, 20 w / 2 = 1.047198), f 0.349066 on waypoints 1 and 2 (hand)
+    const std::vector<V2> l3{{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 10.0f}, {100.0f, 20.0f}};
+    const std::vector<float> m = corner_fractions(l3, corner_in(0.1f, 0.0f));
+    CHECK(m.size() == 4 && m[0] == 1.0f && near(m[1], 0.349066f, 1e-5f) && m[2] == m[1] && m[3] == 1.0f);
+    // with f_min 0 there is no merge: corner 1 gets 0.174533, corner 2 (straight on along +y, theta 0) 1.0
+    const std::vector<float> m0 = corner_fractions(l3, corner_in(0.0f, 0.0f));
+    CHECK(near(m0[1], 0.174533f, 1e-5f) && m0[2] == 1.0f);
+    // the next point on the other side, (110, -10): no merge, corner 1 0.174533; corner 2 from (100, 10): d_in (0, 1), d =
+    // unit(10, -20), theta = acos(-0.894427) = 2.677945, L 22.36068, L_turn = 6 sin(theta) / w = 25.62 > L, no next point:
+    // v = min(3, w 20 / (1 - cos theta) = 1.105556, L w / (2 sin theta) = 2.617994) -> f 0.368519 (hand)
+    const std::vector<float> o = corner_fractions({{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 10.0f}, {110.0f, -10.0f}}, corner_in(0.1f, 0.0f));
+    CHECK(near(o[1], 0.174533f, 1e-5f) && near(o[2], 0.368519f, 2e-5f) && o[3] == 1.0f);
+    // The probe: a wall at x 110 across corner 1's arc (radius v / w, bulging to x = 100 + v / w): 2.094395 (bulge 20) and
+    // 1.396263 (13.3) fail, 0.930842 (8.89) passes the line test and the open corridor -> f 0.310281, 2 step-downs (hand)
+    CornerPassIn wall = corner_in(0.0f, 0.0f);
+    wall.line_ok = line_short_of_110;
+    CornerPassStats s2;
+    const std::vector<float> c = corner_fractions(l40, wall, &s2);
+    CHECK(near(c[1], 0.310281f, 1e-5f) && s2.stepdowns == 2);
+    // a corridor that always fails: corner 0 (j = 0 always takes it) 3 -> 2 -> 1.333 -> 0.889 -> 0.593 -> 0.395 < vmin 0.5
+    // with the line test passing -> vmin, f 0.166667; corner 1 2.094395 -> 1.396263 -> 0.930842 -> 0.620562 -> 0.413708 <
+    // vmin -> vmin too (the vmin test comes before the next probe), f 0.166667 (hand)
+    CornerPassIn cf = corner_in(0.0f, 0.0f);
+    cf.corridor_ok = corridor_never;
+    cf.vmin = 0.5f;
+    const std::vector<float> d = corner_fractions(l40, cf);
+    CHECK(near(d[0], 0.5f / 3.0f, 1e-6f) && near(d[1], 0.5f / 3.0f, 1e-6f));
+    // vmin 0: corner 0 goes on to 0.263 < 0.1 vmax -> vmin 0; corner 1's 0.413708 is probed again and, < 0.2 vmax at
+    // j != 0, accepted without the corridor -> f 0.137903 (hand)
+    cf.vmin = 0.0f;
+    const std::vector<float> d0 = corner_fractions(l40, cf);
+    CHECK(d0[0] == 0.0f && near(d0[1], 0.137903f, 1e-5f));
+    // the line test failing at every speed: down to 0 (the last line test failed), vmin or not
+    CornerPassIn lf = corner_in(0.0f, 0.0f);
+    lf.vmin = 0.5f;
+    lf.line_ok = line_below_5;
+    CHECK(corner_fractions(l40, lf)[1] == 0.0f);
+    // The arc probe itself: corner 1 of l40 at v 2.094395 (radius 20), a left turn (theta_s -pi / 2): it starts at P_j,
+    // bulges to x 120 at the middle and ends with the aim point
+    std::vector<V2> pr;
+    corner_arc_probe({100.0f, 0.0f}, {100.0f, 40.0f}, 2.094395f, w, -dmath::kHalfPiF, 2.0f, pr);
+    float max_x = 0.0f;
+    for (const V2 q : pr) max_x = std::max(max_x, q.x);
+    CHECK(pr.size() > 3 && pr.front().x == 100.0f && pr.front().y == 0.0f && pr.back().x == 100.0f && pr.back().y == 40.0f &&
+          near(max_x, 120.0f, 0.05f));
+    // no pass when R is not > 0
+    CornerPassIn none = corner_in(0.0f, 0.0f);
+    none.rate = 0.0f;
+    CHECK(corner_fractions(l40, none).empty());
+    std::printf("t26.3 corner pass: 90-degree L 40 -> %.6f (brake pass %.6f); L 10 f_min 0.25 -> %.1f, 0.1 -> %.6f; merged %.6f; "
+                "wall %.6f (%u step-downs); corridor fail %.6f / %.6f\n",
+                static_cast<double>(a[1]), static_cast<double>(ab[1]), static_cast<double>(b[1]), static_cast<double>(b1[1]),
+                static_cast<double>(m[1]), static_cast<double>(c[1]), s2.stepdowns, static_cast<double>(d[0]),
+                static_cast<double>(d[1]));
+}
+
 // ---------------------------------------------------------------- s78n t26.2: the start rule A (pure walk_step)
 struct StartOut {
     WalkResult r;
@@ -680,7 +787,8 @@ struct StartTurnOut {
 
 // One vehicle at (400, 400) facing yaw0, ordered 400 along +x (path heading exactly 0); ticks until it first moves.
 // first_step counts the ticks from the first one with a path (turn ticks + begin-clip hold ticks + the moving tick).
-StartTurnOut start_turn_case(float yaw0, float rate, float stopped, float ce, bool pre) {
+StartTurnOut start_turn_case(float yaw0, float rate, float stopped, float ce, bool pre, float f_min = 0.0f,
+                             V2 to = {800.0f, 400.0f}) {
     StartTurnOut o;
     MovementConfig cfg;
     cfg.constants.land_speed_multiplier = 1.0f;  // R = Rate_Of_Turn
@@ -705,10 +813,11 @@ StartTurnOut start_turn_case(float yaw0, float rate, float stopped, float ce, bo
     d.stopped_turn_rate = stopped;
     d.close_enough_angle = ce;
     d.has_pre_turn_anim = pre;
+    d.min_speed_fraction_for_turn = f_min;  // s78n t26.3
     d.collision_class = kUccVehicle;
     CHECK(sys.add_unit(d));
     SimRng rng(2602);
-    order(sys, rng, {1}, {800.0f, 400.0f}, 1);
+    order(sys, rng, {1}, to, 1);
     const V2 p0 = sys.view(1).pos;
     for (uint32_t f = 1; f < 400; ++f) {
         const float y0 = sys.view(1).yaw;
@@ -752,6 +861,16 @@ void test_t26_start_turn() {
     // leg with rate left over (reached) and moves in the same tick (hand): 12 turn ticks before it, 2 begin plays
     const StartTurnOut d = start_turn_case(-90.0f, 10.0f, 0.0f, 30.0f, true);
     CHECK(d.begin_plays == 2 && d.clip_hold == 8 && d.turn_ticks == 12 && d.first_step == 21 && !d.exact && d.end_yaw == 0.0f);
+    // s78n t26.3: the corner pass on the order path. Facing 90 off a 20-long leg (goal (420, 400)), R 6, vmax 2, CE 180:
+    // corner 0 v = min(2, w 20 = 2.094395, 20 w / 2 = 1.047198) -> f 0.523599 (hand). Min_Speed_Fraction_For_Turn 0.5 keeps
+    // it and start rule A moves at once (within CE, fraction > 0); 0.55 writes 0 and the unit turns in place first: 15
+    // turn ticks of 6 degrees (exact landing, no rate left), the step on tick 16
+    const StartTurnOut e = start_turn_case(-90.0f, 6.0f, 0.0f, 180.0f, false, 0.5f, {420.0f, 400.0f});
+    CHECK(e.turn_ticks == 0 && e.first_step == 1);
+    const StartTurnOut g = start_turn_case(-90.0f, 6.0f, 0.0f, 180.0f, false, 0.55f, {420.0f, 400.0f});
+    CHECK(g.turn_ticks == 15 && g.first_step == 16 && g.exact);
+    std::printf("t26.3 corner pass on the order path: f_min 0.5 -> %u turn ticks, step on %u; 0.55 -> %u turn ticks, step on %u\n",
+                e.turn_ticks, e.first_step, g.turn_ticks, g.first_step);
     std::printf("t26.2 start turn: delta 90 R 10 -> %u turn ticks, step on %u; AT-AT-like delta 40 -> %u ticks at 1, step on %u; "
                 "within CE -> %u; begin clip: %u play, yaw held %u ticks, %u turn ticks\n",
                 a.turn_ticks, a.first_step, b.turn_ticks, b.first_step, c.turn_ticks, d.begin_plays, d.clip_hold, d.turn_ticks);
@@ -770,6 +889,7 @@ int main() {
     test_garrison_keep();
     test_released_inside();
     test_t26_controller();
+    test_t26_corner_pass();
     test_t26_start_rule();
     test_t26_start_turn();
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");

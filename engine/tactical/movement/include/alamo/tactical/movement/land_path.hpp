@@ -258,4 +258,43 @@ inline bool line_passable(const PassabilityGrid& grid, V2 a, V2 b, uint32_t mask
     return walk_cells(a, b, [&](int32_t cx, int32_t cy) { return grid.passable_cell(cx, cy, mask); });
 }
 
+// ---- s78n t26.3 (MOVEMENT §3.5.2 D, s78n t26 RE 2): the corner-speed pass 0x5070b0 ----
+// Inputs of one pass: yaw0 = the unit's facing (degrees; corner 0's incoming direction), vmax = the effective max speed
+// 0x370f00, vmin = Min_Speed x mode (0x3728f0), rate = R in degrees / frame (omega = R pi / 180), f_min =
+// Min_Speed_Fraction_For_Turn, decel = a (the brake pass), seg = the arc probe's segment length (max(2, 10 x 0x397830)).
+// line_ok = the static line test 0x5a4c10 for the unit's movement class, corridor_ok = the corridor test 0x5093c0 over the
+// probe polyline (null: passes).
+struct CornerPassIn {
+    float yaw0 = 0.0f;
+    float vmax = 0.0f;
+    float vmin = 0.0f;
+    float rate = 0.0f;
+    float f_min = 0.0f;
+    float decel = 0.0f;
+    float seg = 2.0f;
+    bool (*line_ok)(const void* ctx, V2 a, V2 b) = nullptr;
+    bool (*corridor_ok)(const void* ctx, const std::vector<V2>& probe) = nullptr;
+    const void* ctx = nullptr;
+};
+// zero / slowed: corners whose written fraction is 0 / in (0, 1) after item 6 (before the brake pass); stepdowns: v /= 1.5.
+struct CornerPassStats {
+    uint32_t zero = 0, slowed = 0, stepdowns = 0;
+};
+// Items 2-7 over the polyline `poly` (point 0 = the unit's own position): one speed fraction per point (the +4 entry; the
+// last point 1.0). Corner j: d_in = the facing (j = 0) or unit(P_j - P_j-1); the leg to P_i (i = j + 1): L, d, theta =
+// acos(clamp(d_in . d)), side = sign(d_in x d); with f_min > 0 the merge (while L < L_turn = 2 vmax sin|theta| / omega
+// and a next point lies on the same side, it is taken) and the aim point A = B + d max(0, |P_i - B| - (L - L_turn)) when
+// L > L_turn (else A = P_i); v = min(vmax, omega r / (1 - cos theta), L omega / (2 sin|theta|)), r = clamp(L / 2, 20,
+// 100), theta = 0 -> vmax; while v > 0 the arc probe must pass the line test and (v < 0.2 vmax and j != 0, or the
+// corridor test), else v /= 1.5 and below vmin or 0.1 vmax v = vmin (the last line test passed) or 0; f = v / vmax, f <
+// f_min -> 0 on waypoint j alone, else f on waypoints j .. i - 1. The brake pass (decel > 0, at least 3 points) from the
+// end: v = sqrt(2 a |seg k| + v^2), f_k = min(f_k, v / vmax), v = vmax f_k. Empty result: vmax or rate not > 0 (no pass).
+std::vector<float> corner_fractions(const std::vector<V2>& poly, const CornerPassIn& in, CornerPassStats* stats = nullptr);
+// The arc probe 0x505870 (s78n t26 RE 2): from P_j toward the aim point A at speed v, omega (radians / frame), signed theta
+// (negative for a left turn, d_in x d > 0), segment length seg: N = (uint)(|theta| v / omega / seg + 3) points p_k = P_j +
+// t (sin|theta| - sin((1 - 2u)|theta|)) v / omega + n (cos((2u - 1)|theta|) - cos|theta|) v / omega, u = k / N, t =
+// unit(A - P_j), n its normal toward the incoming direction; it stops before a p_k past the aim line (cross(A - last, p_k -
+// last) x s < 0), then A is appended. `out` starts with P_j.
+void corner_arc_probe(V2 pj, V2 a, float v, float omega, float theta_s, float seg, std::vector<V2>& out);
+
 }  // namespace alamo::tactical::movement

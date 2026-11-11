@@ -39,6 +39,7 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     if (d.bank_turn_angle == 0.0f) d.bank_turn_angle = static_cast<float>(t.get_int(ti, "Bank_Turn_Angle"));  // int-typed row
     if (t.value(ti, objects::find_type_field("Bank_Turn_Angle")) == nullptr) d.bank_turn_angle = 70.0f;  // unset: 70 (FIGHTER_FLYING §1.4)
     d.min_speed = t.get_float(ti, "Min_Speed");
+    d.min_speed_fraction_for_turn = t.get_float(ti, "Min_Speed_Fraction_For_Turn");  // s78n t26.3
     d.strafe_distance = t.get_float(ti, "Strafe_Distance");
     d.prepare_strafe_height = t.get_float(ti, "Prepare_Strafe_Height");
     d.has_pre_turn_anim = t.get_bool(ti, "Has_Pre_Turn_Anim");

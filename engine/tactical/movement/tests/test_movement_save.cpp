@@ -1667,7 +1667,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 24);  // 24: before the s78n t26.2 path-record fractions / turn-done / start turn (25)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 26);
+    put_u32(bad, 0, 25);  // 25: before the s78n t26.3 Min_Speed_Fraction_For_Turn and corner-pass counts (26)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 27);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

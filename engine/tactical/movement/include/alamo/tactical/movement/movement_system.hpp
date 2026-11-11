@@ -291,6 +291,9 @@ struct MovementStats {
     // no base path (no order / formation record on the stack, or past its last waypoint), Path Around failed otherwise.
     // `replans` above stays 0 on land (the blocked-frames re-plan is gone).
     uint32_t terrain_records = 0, terrain_detours = 0, terrain_stops_cell = 0, terrain_stops_nobase = 0, terrain_stops_failed = 0;
+    // s78n t26.3 (MOVEMENT §3.5.2 D): the corner-speed pass's corners written with fraction 0 / with a fraction in (0, 1),
+    // and its probe step-downs (v /= 1.5).
+    uint32_t corner_zero = 0, corner_slowed = 0, corner_stepdowns = 0;
 };
 
 // s78n t14 (FIGHTER_FLYING §7.2 Dartboard step 3, 0x241820 / 0x241830): the radical inverse of `index` in `base` (f = 0,
@@ -1211,6 +1214,8 @@ private:
     static bool deploy_branch(Unit& u);          // Walk 0x19 with a path: start walking deployed (true = the frame ends)
     bool deploy_gate_holds(const Unit& u) const;  // the plan's gate (every member a deployed / deploying manual deployer)
     void plan_deploy_cap(Unit& u, uint32_t frame);  // the plan's cap test for an auto-deployer
+    // s78n t26.3 (MOVEMENT §3.5.2 D): the corner-speed pass 0x5070b0 on a new land order path (u.m.frac); serial.
+    void corner_pass(Unit& u);
     void tick_deploy(uint32_t frame);
     void hash_deploy(StateHasher& h) const;
     void hash_turrets(StateHasher& h) const;  // S8 t24

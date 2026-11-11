@@ -1567,6 +1567,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.escape_until = 2u;
             u.m.frac.clear();  // s78n t26.2: a new record - fractions (1.0, 1.0), turn-done clear
             u.m.turn_done = false;
+            corner_pass(u);  // s78n t26.3
             plan_deploy_cap(u, frame);  // s78n t26.1
             continue;
         }
@@ -1577,6 +1578,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.frac.clear();  // s78n t26.2: a new record - fractions (1.0, 1.0), turn-done clear
             u.m.turn_done = false;
             u.goal = out[r].goal_used;
+            corner_pass(u);  // s78n t26.3
             plan_deploy_cap(u, frame);  // s78n t26.1
         } else {
             ++stats_.path_failures;
@@ -1639,6 +1641,76 @@ bool MovementSystem::deploy_gate_holds(const Unit& u) const {
 void MovementSystem::plan_deploy_cap(Unit& u, uint32_t frame) {
     if (!auto_deployer(u) || u.d.locomotor != LocomotorKind::Default || is_air(u)) return;
     deploy_cap_unit(u, path_length_3d(u.m.path), frame);
+}
+
+// s78n t26.3 (MOVEMENT §3.5.2 D, s78n t26 RE 2): the corner-speed pass 0x5070b0 of the Walk path set vf +0x190 0x42c680
+// and of the squad container's 0x5ad140 - land mode, a formation path (every land order composes a formation: form_id;
+// [port] the flag-0x20 straight path too, it is the formation's path) of a Walk unit or a squad container. The input is
+// the unit's own path ([port] the lane 0x413340 is the formation path offset by the slot; the port plans each member's
+// path to its slot, so the path stands for it, with no lateral pull-in). vmax = the effective max speed (a container: its
+// team speed), vmin = Min_Speed x mode, R, f_min, a = the deceleration (a container: its rate 0x5ab540, team_rate); probe
+// segment max(2, 10 x 0x397830) = max(2, the soft radius) ([port] UnitDesc::radius stands for Scale_Factor x the
+// radius), a container max(2, max(HX, HY) / 2). Line test = 0x5a4c10 for the unit's movement class; corridor 0x5093c0 =
+// per probe segment a zero-width rectangle (centre the midpoint, half length |seg| / 2), failed by any land layer object
+// other than the unit whose footprint rectangle overlaps it and that is Static (not moving, unit_moving) now. The splice
+// (item 1) is not reachable: the plan resets the stack before the path set (§3.5.2 G), as plan_land replaces the path.
+void MovementSystem::corner_pass(Unit& u) {
+    if (cfg_.mode != MoveMode::Land || u.form_id == 0 || is_air(u) || u.m.path.size() < 2) return;
+    if (u.d.locomotor != LocomotorKind::Default && !u.d.team_container) return;
+    CornerPassIn in;
+    in.yaw0 = u.m.yaw;
+    in.rate = u.lp.turn_rate;
+    in.vmin = std::max(u.d.min_speed, 0.0f) * mode_mult();
+    in.f_min = u.d.min_speed_fraction_for_turn;
+    float hx = 0.0f, hy = 0.0f;
+    if (u.d.team_container) {
+        const float cap = u.team_cap < kInf ? u.team_cap : u.lp.max_speed;
+        in.vmax = u.speed_factor > 0.0f ? cap : 0.0f;
+        const float rate = team_rate(u);
+        in.decel = rate > 0.0f ? rate : cap;
+        in.seg = team_joint_box(u.d.id, hx, hy) ? std::max(2.0f, 0.5f * std::max(hx, hy)) : std::max(2.0f, u.d.radius);
+    } else {
+        in.vmax = u.team_cap < kInf && u.speed_factor > 0.0f ? u.team_cap : u.lp.max_speed;
+        in.decel = u.lp.decel;
+        in.seg = std::max(2.0f, u.d.radius);
+    }
+    struct Ctx {
+        const MovementSystem* sys;
+        const Unit* u;
+        mutable std::vector<uint32_t> cand;
+    } ctx{this, &u, {}};
+    in.ctx = &ctx;
+    in.line_ok = [](const void* c, V2 a, V2 b) {
+        const Ctx& x = *static_cast<const Ctx*>(c);
+        return line_passable(x.sys->grid_, a, b, x.u->lp.mask);
+    };
+    in.corridor_ok = [](const void* c, const std::vector<V2>& probe) {
+        const Ctx& x = *static_cast<const Ctx*>(c);
+        for (size_t k = 0; k + 1 < probe.size(); ++k) {
+            const V2 a = probe[k], b = probe[k + 1];
+            const float len = distance(a, b);
+            FootRect seg;
+            seg.c = (a + b) * 0.5f;
+            seg.a = len > 0.0f ? V2{(b.x - a.x) / len, (b.y - a.y) / len} : V2{1.0f, 0.0f};
+            seg.hx = 0.5f * len;
+            seg.hy = 0.0f;
+            x.sys->layer_box_query(seg.c, seg.hx, x.cand);
+            for (const uint32_t oi : x.cand) {
+                const Unit& o = x.sys->units_[oi];
+                if (o.d.id == x.u->d.id || x.sys->unit_moving(o)) continue;
+                if (foot_overlap(seg, x.sys->foot_of(o))) return false;  // a Static record (flag 2)
+            }
+        }
+        return true;
+    };
+    CornerPassStats st;
+    std::vector<float> f = corner_fractions(u.m.path, in, &st);
+    stats_.corner_zero += st.zero;
+    stats_.corner_slowed += st.slowed;
+    stats_.corner_stepdowns += st.stepdowns;
+    // every entry 1.0 is the default record (an empty vector)
+    if (std::all_of(f.begin(), f.end(), [](float v) { return v == 1.0f; })) f.clear();
+    u.m.frac = std::move(f);
 }
 
 // ---------------------------------------------------------------- S7 collision layer (TACTICAL_GAPS §6.7)

@@ -652,4 +652,115 @@ bool find_land_path(const PassabilityGrid& grid, const RegionMap& regions, const
     return true;
 }
 
+// ---- s78n t26.3 (MOVEMENT §3.5.2 D items 2-7, s78n t26 RE 2): the corner-speed pass 0x5070b0 ----
+void corner_arc_probe(V2 pj, V2 a, float v, float omega, float theta_s, float seg, std::vector<V2>& out) {
+    out.clear();
+    out.push_back(pj);
+    const float th = std::fabs(theta_s);
+    const float rad = v / omega;
+    const V2 t = normalize_retail(a - pj);
+    const bool left = theta_s >= 0.0f;
+    const V2 n = left ? V2{-t.y, t.x} : V2{t.y, -t.x};
+    const float s = left ? 1.0f : -1.0f;
+    const uint32_t count = static_cast<uint32_t>(th * v / omega / seg + 3.0f);
+    const float sin_th = dmath::sin(th), cos_th = dmath::cos(th);
+    for (uint32_t k = 1; k <= count; ++k) {
+        const float u = static_cast<float>(k) / static_cast<float>(count);
+        const V2 p = pj + t * ((sin_th - dmath::sin((1.0f - 2.0f * u) * th)) * rad) +
+                     n * ((dmath::cos((2.0f * u - 1.0f) * th) - cos_th) * rad);
+        const V2 last = out.back();
+        if (cross(a - last, p - last) * s < 0.0f) break;  // p_k has passed the aim line
+        out.push_back(p);
+    }
+    out.push_back(a);
+}
+
+std::vector<float> corner_fractions(const std::vector<V2>& poly, const CornerPassIn& in, CornerPassStats* stats) {
+    std::vector<float> f;
+    const size_t count = poly.size();
+    const float omega = in.rate * dmath::kPiF / 180.0f;
+    // [port] a unit that cannot turn (R <= 0) or move (vmax <= 0) gets no pass: its fractions stay 1.0
+    if (count < 2 || !(in.vmax > 0.0f) || !(omega > 0.0f)) return f;
+    f.assign(count, 1.0f);
+    const auto angle = [](V2 din, V2 d) { return dmath::acos(std::clamp(dot(din, d), -1.0f, 1.0f)); };
+    std::vector<V2> probe;
+    size_t j = 0;
+    while (j + 1 < count) {
+        const V2 pj = poly[j];
+        const V2 din = j == 0 ? dir_from_deg(in.yaw0) : normalize_retail(pj - poly[j - 1]);
+        size_t i = j + 1;
+        float len = distance(pj, poly[i]);
+        V2 d = normalize_retail(poly[i] - pj);
+        float theta = angle(din, d);
+        const float cr = cross(din, d);
+        const float side = cr > 0.0f ? 1.0f : (cr < 0.0f ? -1.0f : 0.0f);
+        V2 aim = poly[i];
+        if (in.f_min > 0.0f) {  // item 3: the merge and the aim point, only with f_min > 0
+            float l_turn = 2.0f * in.vmax * dmath::sin(theta) / omega;
+            V2 b = pj;
+            while (len < l_turn && i + 1 < count) {
+                if (side * cross(din, normalize_retail(poly[i + 1] - pj)) < 0.0f) break;  // the next point on the other side
+                b = poly[i];
+                ++i;
+                len = distance(pj, poly[i]);
+                d = normalize_retail(poly[i] - pj);
+                theta = angle(din, d);
+                l_turn = 2.0f * in.vmax * dmath::sin(theta) / omega;
+            }
+            if (len > l_turn) {
+                aim = b + d * std::max(0.0f, distance(b, poly[i]) - (len - l_turn));
+                len = distance(pj, aim);
+                // [port] an aim point on P_j itself (l_turn 0: theta 0) keeps the leg's angle
+                if (len > 0.0f) theta = angle(din, normalize_retail(aim - pj));
+            }
+        }
+        // item 4: the corner speed
+        float v = in.vmax;
+        if (theta != 0.0f) {
+            const float r = std::max(20.0f, std::min(len * 0.5f, 100.0f));
+            v = std::min(in.vmax, std::min(omega * r / (1.0f - dmath::cos(theta)), len * omega / (2.0f * dmath::sin(theta))));
+        }
+        // item 5: the arc probe, the static line test and the corridor test; else v /= 1.5
+        const float theta_s = cr > 0.0f ? -theta : theta;
+        while (v > 0.0f) {
+            corner_arc_probe(pj, aim, v, omega, theta_s, in.seg, probe);
+            bool line = true;
+            for (size_t k = 0; k + 1 < probe.size() && line; ++k)
+                if (in.line_ok && !in.line_ok(in.ctx, probe[k], probe[k + 1])) line = false;
+            if (line && ((v < 0.2f * in.vmax && j != 0) || !in.corridor_ok || in.corridor_ok(in.ctx, probe))) break;
+            v /= 1.5f;
+            if (stats) ++stats->stepdowns;
+            if (v < in.vmin || v < 0.1f * in.vmax) {
+                v = line ? in.vmin : 0.0f;
+                break;
+            }
+        }
+        // item 6: the fraction; below f_min 0 on the unmerged leg's start only
+        const float fr = v / in.vmax;
+        if (fr < in.f_min) {
+            f[j] = 0.0f;
+            if (stats) ++stats->zero;
+            j += 1;
+        } else {
+            for (size_t k = j; k < i; ++k) f[k] = fr;
+            if (stats) {
+                if (fr <= 0.0f) ++stats->zero;
+                else if (fr < 1.0f) ++stats->slowed;
+            }
+            j = i;
+        }
+    }
+    f[count - 1] = 1.0f;
+    // item 7: the brake pass (2-D segments)
+    if (in.decel > 0.0f && count >= 3) {
+        float v = 0.0f;
+        for (size_t k = count - 1; k-- > 0;) {
+            v = std::sqrt(2.0f * in.decel * distance(poly[k], poly[k + 1]) + v * v);
+            f[k] = std::min(f[k], v / in.vmax);
+            v = in.vmax * f[k];
+        }
+    }
+    return f;
+}
+
 }  // namespace alamo::tactical::movement
