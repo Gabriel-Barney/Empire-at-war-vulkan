@@ -57,6 +57,9 @@ struct FormationMember {
     // s78n t25.2 (MOVEMENT §4.2 item 6): an attack order's solo seed (in max range, melee, or within r + E_r +
     // Solo_Attack_Range of the target) recruits nobody, as a Solo seed
     bool solo_attack = false;
+    // s78n t25 fix (MOVEMENT §4.2 item 6 / item 4 first bullet): otherwise a short-range seed (d < E_r x
+    // Short_Range_Attack_Formation_Coefficient) recruits nobody
+    bool short_range_attack = false;
 };
 
 std::vector<std::vector<uint32_t>> kmeans_buckets(std::span<const FormationMember> m, float max_formation_area,

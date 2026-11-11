@@ -724,6 +724,68 @@ void test_scene_guard() {
     }
 }
 
+// s78n t25 review fix 2 (MOVEMENT §4.2 item 6 [H]: "Otherwise short-range is set when d < E_r x
+// Short_Range_Attack_Formation_Coefficient 1.6"; item 4 first bullet: recruitment needs a seed that is not one; the worked
+// case §4.3.2 item 9 checks "not short-range"). The scene of scene_solo: two Standard vehicles 50 apart, E_r = 255,
+// r_seed = sqrt(15^2 + 15^2) = 21.2 -> solo below 336.2, short-range below 255 x 1.6 = 408 (hand). A target at 380 is past
+// the solo limit but short-range: the seed recruits nobody -> two formations, a slot each (one ring, two angles). At 420
+// (past 408) the seed recruits -> one formation of two.
+void test_scene_short_range() {
+    ::alamo::test::section("scene_short_range");
+    for (const float d : {380.0f, 420.0f}) {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 50.0f})));
+        UnitDesc t = attacker(900, kO + V2{d, 0.0f}, 5.0f);
+        t.owner = 2;
+        CHECK(sys.add_unit(t));
+        SimRng rng(7);
+        sys.move(attack_order({10, 11}, 900, kO + V2{d, 0.0f}, 5.0f, 255.0f), rng, 1);
+        const UnitView a = sys.view(10), b = sys.view(11);
+        const bool two = a.form_id != b.form_id;
+        CHECK(two == (d < 408.0f));
+        if (two) {
+            CHECK(a.atk_form == a.form_id && b.atk_form == b.form_id && sys.stats().attack_slotted == 2);
+            CHECK(a.atk_rho > 0.0f && a.atk_rho == b.atk_rho && a.atk_theta != b.atk_theta);
+        } else {
+            CHECK(a.atk_form == b.atk_form && sys.stats().attack_slotted == 1);
+        }
+        std::printf("short-range rule: target at %.0f -> %s, slotted %u\n", static_cast<double>(d),
+                    two ? "two formations" : "one formation", sys.stats().attack_slotted);
+    }
+}
+
+// s78n t25 review fix 1 (MOVEMENT §4.3.2 item 7 [H]: "s = 0 -> the path is cut to its first node (the formation can fire
+// from where it stands)"; the slot position of a member is its depth / lateral offset on the path, extended backwards
+// before the start). A guard of two vehicles at (0, -25) and (0, 25), guarding a unit at (100, 0): one formation (guard
+// orders have no solo rule; 50 <= the recruitment distance 100), start S = the centroid (0, 0), path S -> (100, 0). The
+// guard trim starts at g = max(0, 100 - 150) = 0 and every s passes -> keep 0. Slots (layout, FormationSpacing 0, radius
+// 12): w = 24 / 20 = 1.2, side 2, hw = max(2 x 1.2 + 0.25, sqrt(2 x 1.44 x 1.8)) = 2.65, one row, gap (5.3 - 2.4) / 3 =
+// 0.96667 -> laterals -/+ (2.65 - 0.96667 - 0.6) x 20 = -/+ 21.6667, back 0; the left one (larger y; right = (0, -1)) is
+// the member at y = +25 (hand). The goals are the two slot points around S, (0, +21.6667) and (0, -21.6667), not S twice.
+void test_scene_guard_formation() {
+    ::alamo::test::section("scene_guard_formation");
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO + V2{0.0f, -25.0f})));
+    CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 25.0f})));
+    CHECK(sys.add_unit(attacker(900, kO + V2{100.0f, 0.0f}, 5.0f)));
+    sys.set_fire_test([](ObjectId, V2, ObjectId, bool) { return true; });
+    MoveOrder o = attack_order({10, 11}, 900, kO + V2{100.0f, 0.0f}, 5.0f, 150.0f);
+    o.flags = kMoveFlagGuardMove;
+    o.attack.guard = true;
+    for (LandAttackUnit& e : o.attack.units) e.range = 250.0f;
+    SimRng rng(7);
+    sys.move(o, rng, 1);
+    const UnitView a = sys.view(10), b = sys.view(11);
+    CHECK(a.form_id == b.form_id && sys.stats().attack_trims == 1 && sys.stats().attack_trims_first == 1);
+    CHECK(a.has_goal && b.has_goal && !(a.goal == b.goal));
+    CHECK(close2(a.goal, kO + V2{0.0f, -21.6667f}, 0.01f) && close2(b.goal, kO + V2{0.0f, 21.6667f}, 0.01f));
+    std::printf("guard formation from 100: goals (%.4f, %.4f) / (%.4f, %.4f)\n", static_cast<double>(a.goal.x - kO.x),
+                static_cast<double>(a.goal.y - kO.y), static_cast<double>(b.goal.x - kO.x), static_cast<double>(b.goal.y - kO.y));
+}
+
 void test_scene_workers() {
     ::alamo::test::section("scene_workers");
     const std::vector<uint64_t> s = run_approach(serial_for);
@@ -753,6 +815,8 @@ int main() {
     test_scene_solo();
     test_scene_plain_orders();
     test_scene_guard();  // s78n t25.4
+    test_scene_short_range();      // s78n t25 review fixes
+    test_scene_guard_formation();
     test_scene_workers();
     return ::alamo::test::report("alamo_tactical_movement_b5_tests");
 }

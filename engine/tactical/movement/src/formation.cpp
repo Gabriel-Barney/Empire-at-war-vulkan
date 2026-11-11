@@ -96,7 +96,8 @@ std::vector<std::vector<uint32_t>> split_into_formations(std::span<const Formati
         remaining.erase(remaining.begin() + static_cast<std::ptrdiff_t>(si));
         std::vector<uint32_t> f{seed};
         const FormationMember& s = m[seed];
-        if (s.grouping != kGroupingSolo && !s.solo_attack) {  // s78n t25.2: the attack solo rule
+        // s78n t25.2: the attack solo rule; s78n t25 fix: the short-range rule (MOVEMENT §4.2 item 4 / item 6)
+        if (s.grouping != kGroupingSolo && !s.solo_attack && !s.short_range_attack) {
             bool grew = true;
             while (grew) {
                 grew = false;

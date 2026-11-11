@@ -507,8 +507,9 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
 // failed, the block kept); with a slot (the lead's rho > 0) the slot leg Q' = G + q rot(-v, theta) (v = the first path's
 // last segment, q = line_reach toward G + rho rot(-v, theta)) is taken when a path start -> Q' succeeds and its first
 // segment points the same way as the first path's (dot > 0): start -> ... -> Q' -> G. The fire trim (trim gate and hook
-// set) cuts the path to fire_trim's keep length (cut_points); each member's goal is its slot point at the cut path's end
-// (trim_point, extended, no cell snap). [port] the members then plan singly to those goals in plan_land (no shared
+// set) cuts the path to fire_trim's keep length (cut_points); each member's goal is its slot point at arc length keep
+// on the uncut path (trim_point, extended, no cell snap): the point the trim tested, also at keep 0 (the path cut to its
+// first node, "the formation can fire from where it stands": every member keeps its own slot around the start). [port] the members then plan singly to those goals in plan_land (no shared
 // formation path). An air lead keeps the plain move the slot loop gave (the plan is for land formations).
 void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame) {
     const Unit& lead = units_[idx[f.members[0]]];
@@ -586,6 +587,8 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         }
         ++(taken ? stats_.attack_legs : stats_.attack_leg_refused);
     }
+    std::vector<V2> uncut;  // the path before the fire trim's cut (empty: no trim)
+    float goal_s = 0.0f;
     if (order.attack.trim && fire_test_) {
         std::vector<TrimMember> tm;
         for (const Slot& s : f.slots) tm.push_back({s.member, -s.back, s.lateral, true});
@@ -597,17 +600,22 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
             if (guard && distance(p, c) > guard_range) return false;
             return fire_test_(units_[idx[m.member]].d.id, p, target, guard);
         });
+        // the member goals are the slot points the trim tested: on the uncut path at arc length keep (at keep 0 the cut
+        // path is its first node alone and has no direction; the uncut one extends backwards along its first segment)
+        uncut = path;
         cut_points(path, keep);
+        goal_s = keep;
         ++stats_.attack_trims;
         if (!(keep > 0.0f)) ++stats_.attack_trims_first;
         stats_.attack_trim_sum += total - keep;
     }
-    const float end = path_length(path);
+    const std::vector<V2>& lay = uncut.empty() ? path : uncut;
+    if (uncut.empty()) goal_s = path_length(path);
     for (const Slot& s : f.slots) {
         Unit& x = units_[idx[s.member]];
         if (is_air(x)) continue;
         V2 goal = path.back();
-        trim_point(path, end, -s.back, s.lateral, true, goal);
+        trim_point(lay, goal_s, -s.back, s.lateral, true, goal);
         x.goal = goal;
         x.self_goal = goal;
         x.has_goal = true;

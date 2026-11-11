@@ -709,7 +709,9 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     if (attack && !replan && !order.attack.guard) {
         // s78n t25.2 (MOVEMENT §4.2 item 6 [H]): a seed goes solo when it is already in max range of the target (slot 44),
         // or melee (0x372210), or its 3-D distance to the target d < r_seed (0x3969f0) + E_r + Solo_Attack_Range. The flag
-        // is set on every member and read only for the seed (members are not seeds until picked).
+        // is set on every member and read only for the seed (members are not seeds until picked). Otherwise the seed is
+        // short-range when d < E_r x Short_Range_Attack_Formation_Coefficient (1.6), and a short-range seed recruits
+        // nobody either (§4.2 step 2 item 4, first bullet; the worked case §4.3.2 item 9 tests "not short-range").
         for (size_t n = 0; n < idx.size(); ++n) {
             const Unit& u = units_[idx[n]];
             const LandAttackUnit* e = attack_entry(order, u.d.id);
@@ -717,6 +719,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             const float dx = u.m.pos.x - order.attack.c.x, dy = u.m.pos.y - order.attack.c.y, dz = u.z - order.attack.cz;
             const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
             mem[n].solo_attack = e->in_range || e->melee || d < foot_radius(u) + e->engage + k.solo_attack_range;
+            mem[n].short_range_attack = !mem[n].solo_attack && d < e->engage * k.short_range_attack_formation_coefficient;
         }
     }
     const auto compatible = [&](uint32_t a, uint32_t b) {
