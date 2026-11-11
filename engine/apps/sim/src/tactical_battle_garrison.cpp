@@ -716,6 +716,10 @@ uint32_t TacticalBattle::s4_approach(TacticalMode& mode, std::span<const objects
     if (!movement_ || !store.alive(hh)) return 0;
     const Vec3 hp = store.position(hh), hf = store.facing(hh);
     const float extent_len = s4_extent_len(mode, hh);
+    // s78n t20 batch 2 review: the reachability test reads the zones - bring them up to the grid first (map stamps since
+    // the last movement tick or order), as move_land does at the order (serial, a pure function of the grid). Land only:
+    // a space battle builds no regions.
+    if (!space_) movement_->rebuild_regions_if_dirty();
     struct Leg {
         int32_t bone = -1;
         Vec3 to{};
