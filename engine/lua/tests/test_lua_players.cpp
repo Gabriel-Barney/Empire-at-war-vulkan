@@ -1000,7 +1000,13 @@ public:
     bool tf_valid(int32_t tf) override { return tf == 3; }
     int32_t tf_force_count(int32_t) override { return static_cast<int32_t>(units.size()); }
     void tf_set_flag(int32_t, AiTfFlag, bool) override {}
-    int32_t tf_produce_force(int32_t, const AiArg&, bool) override { return -1; }
+    // a2m t05: Produce_Force calls that reached the host; a stage object other than `planet` is not a planet.
+    objects::ObjectHandle planet;
+    std::vector<std::pair<bool, bool>> produced;  // (stage present, sync)
+    int32_t tf_produce_force(int32_t, const AiArg& stage, bool sync) override {
+        produced.emplace_back(stage.present, sync);
+        return stage.present && stage.object != planet ? kAiNotAPlanet : 9;
+    }
     int32_t tf_get_stage(int32_t) override { return -1; }
     bool tf_all_on_free_store(int32_t) override { return false; }
     int32_t tf_order(int32_t, AiTfOrder o, const AiArg&) override {
@@ -1182,6 +1188,23 @@ uint64_t special_session() {
     CHECK(ai.orders.size() == 3 && ai.orders[0] == AiTfOrder::LandUnits && ai.orders[1] == AiTfOrder::ActivateAbility &&
           ai.orders[2] == AiTfOrder::ActivateAbility && ai.abilities.size() == 2 && ai.abilities[0].empty() &&
           ai.abilities[1] == "Halter_T" && g.store->alive(h[1]) && g.store->alive(h[2]) && sim.respawns_pending(0).size() == 1);
+    // a2m t05 (A2M_T04_RE_ANSWERS Q4.1) [H]: Produce_Force's argument 1, when present (a Lua nil counts), must resolve to a
+    // planet, else the script error stops the script with nothing created; argument 2, when present, must be a bool.
+    {
+        ai.planet = sim.planets()[0].object;
+        vm.set_object_global("PA", ai.planet);
+        const std::string not_planet = "SCRIPT ERROR: TaskForceClass::Produce_Force -- Expected a planet object for parameter 1\n";
+        CHECK(run(vm, "TF.Produce_Force(nil)") == not_planet && ai.produced.empty());
+        CHECK(run(vm, "TF.Produce_Force(true)") == not_planet && ai.produced.empty());  // argument 1 cannot be skipped
+        CHECK(run(vm, "TF.Produce_Force(3)") == not_planet && ai.produced.empty());
+        CHECK(run(vm, "TF.Produce_Force(UFleet)") == not_planet && ai.produced.size() == 1);  // the host finds no planet
+        CHECK(run(vm, "TF.Produce_Force(PA, 1)").find("invalid type for parameter 2.  Expected bool") != std::string::npos &&
+              ai.produced.size() == 1);
+        CHECK(run(vm, "pf0 = TF.Produce_Force() pf1 = TF.Produce_Force(PA, true) pf2 = TF.Produce_Force(PA) "
+                      "pfok = pf0 ~= nil and pf1 ~= nil and pf2 ~= nil") == "" && gtrue(vm, "pfok"));
+        CHECK(ai.produced.size() == 4 && !ai.produced[1].first && !ai.produced[1].second && ai.produced[2].first &&
+              ai.produced[2].second && ai.produced[3].first && !ai.produced[3].second);
+    }
     attach_ai_host(vm, nullptr, 0);
     // The fleet itself with a matching type name: every carried unit of that type (content order) tries its abilities -
     // both remaining saboteurs apply.

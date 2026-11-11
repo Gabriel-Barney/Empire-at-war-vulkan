@@ -16,7 +16,7 @@ Confidence tags: [H] read or measured directly; [M] inferred from several consis
 | D1 | `galactic_ai_enemy_strength` adds starbase and ground-structure power only for the all-categories mask. Retail (0x5f2430) adds them to each typed Contrast row whose mask matches. Felucia's Capital row is therefore 0 in the port instead of about 12650, so the Empire can fund `Conquer_Pirate @Felucia` at frame 42. | port deviation | H spec, M causal |
 | D2 | Because of D1, the Empire spends its whole Offensive pool on 16 slow, cheap ground units for Conquer_Pirate. Retail spends it on space ships, most likely Tartan + Broadside. | consequence of D1 | M |
 | D3 | The Empire's Infrastructure spend in frames 0..1350 is about 1130 in the port and about 3400 in retail. The port's Magnepulse at Tatooine waits behind a ground unit in the Tatooine ground queue (ordered at 837, not about 103). Its Heavy Vehicle Factory goal is then dropped four times by the time limit. | port deviation, cause partly open | M / L |
-| D4 | The Underworld's `Conquer_Pirate @Kashyyyk` turns positive only through markup from `Distant_System_Path_Bonus`. It is accepted at 323 and takes Kashyyyk at about 877. Retail shows no Underworld ConquerPirate before 54583. | port deviation, mechanism open | M (deviation), L (cause) |
+| D4 | The Underworld's `Conquer_Pirate @Kashyyyk` turns positive only through markup from `Distant_System_Path_Bonus`. It is accepted at 323 and takes Kashyyyk at about 877. Retail shows no Underworld ConquerPirate before 54583 (a pre-fix recorder run: suspect, §5.2). | port deviation, mechanism open | M (deviation), L (cause) |
 | D5 | Underworld `Upgrade_Starbase`: proposed from frame 17 but loses Infrastructure to the two palaces. Port: none in 3000 frames. Retail: first plan at 2794. | open | L |
 | L1 | The weighted pick between Build_Space_Forces plans (Acclamator vs Tartan + Broadside) | synced random draw | M |
 | L2 | The E1 Empire income of 870 at frame 1351 (vs 585) comes from NalHutta, which E1 had already conquered. It is not a separate bug. The base 585 vs 667.5 gap is the t02 question and is not resolved here. (a2j, `A2J_T03_INCOME.md`: the 585 is the Kashyyyk loss to D4, 82.5 per cycle; no income term deviates.) | consequence / open | M |
@@ -210,7 +210,12 @@ Orders that reached a production queue:
 
 ### 5.2 Retail [H]
 
-- No Underworld ConquerPirate PSTART until 54583 (040725).
+- No Underworld ConquerPirate PSTART until 54583 (040725). **Pre-fix recorder artefact (a2m t12):** suspect. Run
+  040725 used the kit before its 2026-11-08 Flush_G fix. Until then, the second and later runs of every pooled
+  instance of a hooked plan died at their first record, so the AI was disturbed after each hooked plan's first release.
+  The fixed-kit run 20261108-212556 agrees only within frames 0..1600. The same applies to D4's retail statement in
+  section 1 and to "Kashyyyk stays with the Empire" (`A2J_T02_T04_PROBE_RESULTS.md` section 1). See
+  `A2K_T05_SABOTEUR_RUN.md` section 5; a 30-minute fixed-kit run (`run_a2f_sab.cmd --sab-long`) re-checks them.
 - The Empire holds 4 planets through 7525 (053820), with no space losses before about 17179.
 - The Underworld's budget spend matches the port closely (credits at 241: 5416 port vs 5667 retail; at 481: 3332 vs 3840; at 724: 1619 vs 1737). So the difference is in goal choice, not money.
 

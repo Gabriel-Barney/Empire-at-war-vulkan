@@ -63,6 +63,9 @@ struct EconomyConstants {
     // a2l t03 (A2L_T03_RE_ANSWERS Q4.1): Health_Low_Percent_Threshold (+0x11b38; FoC 0.33, Thrawn's Revenge 0.50), the
     // galactic free-store Setup A health floor.
     float health_low_percent_threshold = 0.33f;
+    // a2m t05 (A2M_T04_RE_ANSWERS Q3) [H]: the AI reachability slot 7 (0x663810) thresholds of levels 7 / 8 / 9,
+    // GameConstants +0x157c / +0x1580 / +0x1584 (FoC XML and ctor defaults 1000 / 3000 / 5000).
+    std::array<float, 3> threat_reachability_tolerance{1000.0f, 3000.0f, 5000.0f};
     float corruption_hyperspace_bonus = 1.5f;      // Corruption_Hyperspace_Bonus (+0x1213c)
     float political_control_change_seconds = 7.0f; // Political_Control_Change_Time_Seconds (+0x124)
     float influence_alignment_bonus = 0.5f;        // MaxInfluenceTransitionAlignmentBonus (+0x574)

@@ -13,6 +13,13 @@ predates the a2j market fix (lane A, 9e0dd0e).
 
 Confidence tags: [H] read directly from the run; [M] inferred; [L] hypothesis.
 
+**Pre-fix recorder (a2m t12).** This run (074145) and run 040725 were recorded before the kit's 2026-11-08 Flush_G fix
+(`tools/probe_mod/a2f_budget/README.md`, "a2k t05 fix"). Until then, the second and later runs of every pooled instance of
+the hooked plans died at their first record, so the AI was disturbed after each hooked plan's first release. Sections 1
+and 3 mark what that makes suspect. Still valid: the D4 perception findings and the D3 production in frames
+0..1500. Run 20261108-212556 (fixed kit) reproduces that production frame for frame. See
+`A2K_T05_SABOTEUR_RUN.md` section 5.
+
 ## 1. D4: Underworld -> Kashyyyk (report section 6)
 
 | frame | retail SCP | port SCP | retail markup | port markup |
@@ -28,6 +35,10 @@ Confidence tags: [H] read directly from the run; [M] inferred; [L] hypothesis.
 - **Retail's desire is positive (0.311) from 270 on, yet retail starts no Underworld ConquerPirate** before 54583 (run 040725), and Kashyyyk stays with the Empire in this
   run [H]. So the sign of the desire is not what decides it. Either retail's accept step rejects a desire of 0.311 that the port's accepts at about 0.7 (a threshold, or
   the competition at commit step 5), or the force / plan solve fails in retail [M for "accept side", L for which].
+  **Pre-fix recorder artefact (a2m t12):** "no Underworld ConquerPirate before 54583" and "Kashyyyk stays with the
+  Empire" are suspect. Both come from pre-fix runs whose AI the kit disturbed after each hooked plan's first release.
+  The fixed-kit run 20261108-212556 agrees only within frames 0..1600 (no Underworld ConquerPirate start). They need a
+  30-minute run with the fixed kit (`run_a2f_sab.cmd --sab-long`). See `A2K_T05_SABOTEUR_RUN.md` section 5.
 - Empire -> Felucia: equal (5.94, then 6.25 after one markup). Retail's markup arrives 30 frames later (390 vs 360) [H]; no consequence seen.
 - Later rows (port only, after its Kashyyyk conquest) are not comparable.
 
@@ -64,6 +75,9 @@ Confidence tags: [H] read directly from the run; [M] inferred; [L] hypothesis.
 budget at commit, and the template.
 
 ## 3. t04: per fiscal cycle P / I (report section 8)
+
+**Pre-fix recorder artefact (a2m t12):** retail's per-cycle P / I after the first cycles is suspect. The kit disturbed
+the retail AI after each hooked plan's first release (header note; `A2K_T05_SABOTEUR_RUN.md` section 5).
 
 - **Empire, cycle 1 (frames 1351..2700) [H]:** the per-category income rates are equal: Offensive 5.76 / 5.76, Infrastructure 7.42 / 7.42, MajorItem 1.66 / 1.66. The 667.5
   payment is equal, as lane B found (`A2J_T03_INCOME.md`).

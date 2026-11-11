@@ -72,9 +72,10 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
         builds.emplace(b.id, b);
         BuildTask& t = builds[b.id];
         tf.builds.push_back(t.id);
-        // [open] The charge is not kept on the task (t.charge stays 0), so PRODUCTION_END's paid(s += charge, 0x5f9f90
-        // [M]) adds nothing, as before a2l (the lambda wrote a local copy). Keeping it moved hotm_galactic's Rebel build
-        // count 36 -> 19 (retail 32..50); it waits for an RE read of +s.
+        // a2m t05 (A2M_T04_RE_ANSWERS Q5.2) [H]: the charge at task-list time moves cost(T, 0) from the goal's required
+        // to its allocated amount (0x691950 -> 0x6110e0) and sets the "charged" byte BT +0xd0; no amount is stored on
+        // the task. The committed spend s grows at production start (the market bind 0x64abf0), not at PRODUCTION_END
+        // (0x5f9f90 there is a per-task-force type counter nothing reads, not a budget call).
         auto charge = [&] {
             if (t.charged) return;
             const float ch = cost_none(type);
@@ -103,7 +104,7 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
                 }
                 launch_and_form(tf.player, at, o, unit_jumps(o) ? kAloneFleet : gal::kNoFleet);
             }
-            tf.units.push_back(o);  // galactic: 0x6498f0 hands the unit to the task -> FINISHED
+            tf_join(tf, o);  // galactic: 0x6498f0 hands the unit to the task -> FINISHED
             tf.had_units = true;
             finish_build(t);
             continue;
@@ -160,14 +161,14 @@ bool GalacticAiWorld::Impl::resolve_claim(BuildTask& b) {
         const auto tit = tfs.find(b.tf);  // 0: 0x647df0 gives the unit to the task
         off_free_store(u);
         if (tit != tfs.end()) {
-            tit->second.units.push_back(u);
+            tf_join(tit->second, u);
             tit->second.had_units = true;
         }
         finish_build(b);
         return true;
     }
     if (wait) return false;
-    // every claim lapsed: charged once (Allocate 0x691950 -> 0x6110e0); b.charge stays 0 (see create_build_tasks)
+    // every claim lapsed: charged once (Allocate 0x691950 -> 0x6110e0; see create_build_tasks)
     if (PlayerAi* pa = player_ai(b.player)) pa->ctx.budget.spend(b.category, b.goal_key, cost_none(b.type));
     b.charged = true;
     return false;
@@ -501,6 +502,9 @@ void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
                 fail_build(b, "production refused");
                 continue;
             }
+            // 0x64abf0, the bind at production start (A2M_T04_RE_ANSWERS Q5.2) [H]: the goal's committed spend s grows
+            // by the full (float)cost(T, none), unconditionally.
+            if (PlayerAi* pa = player_ai(owner)) pa->ctx.budget.paid(b.category, b.goal_key, cost_none(b.type));
             b.state = BuildState::Producing;
             b.producing_at = p;
             b.bid = -1.0;
@@ -574,8 +578,7 @@ void GalacticAiWorld::Impl::service_build_tasks(int32_t player) {
         if (count > b.queue_entries_before) continue;
         const gal::TypeInfo* ti = type_info(b.type);
         if (ti && ti->advances_tech != 0) {
-            if (PlayerAi* pa = player_ai(player)) pa->ctx.budget.paid(b.category, b.goal_key, b.charge);
-            finish_build(b);
+            finish_build(b);  // a2m t05: no budget call at PRODUCTION_END (Q5.1)
         } else {
             fail_build(b, "production dropped");
         }

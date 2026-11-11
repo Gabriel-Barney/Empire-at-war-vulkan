@@ -104,6 +104,31 @@ per instance. The selftest runs the real DeploySaboteur thread, the real PGBase 
 release) and the thread again (`sab plan flush`, 5 checks; with the old Lua it fails with `attempt to index global
 'A2FB_Errors'`). Selftest: 202 checks.
 
+**a2m t12 (2026-11-09): stage naming, longer desire samples, a 30-minute saboteur run.** From the retail run
+20261108-212556 (`docs/re/A2K_T05_SABOTEUR_RUN.md` sections 1 and 7 item 5). Changes, all in the `--saboteur` parts:
+
+* **Stage naming.** `MainForce.Get_Stage()` returns an AI target (AITargetLocationWrapper), which has no `Get_Type`, so
+  every `PSTAGE` / `PMOVS` record of that run says `stage=ERR` / `stage2=ERR`. The kit now names the stage through the
+  AI target's game object (`Get_Game_Object()`, which the shipped free store and story scripts call), or directly with
+  `Get_Type` if it is a game object. New keys: `stagek=` (`obj`, `type` or `ERR`: how it was named) and `stages=`
+  (`tostring(stage)`, as AssembleForce's own DebugMessage makes it); the same for `stage2`.
+* **Desire samples.** Channel U's `UD` records (Should_Corrupt_Planet / Should_Sabotage_Planet per planet) now run to the
+  end of the run, every 30 frames in 0..1400. They stopped at frame 600 before, so retail's passes at 691, 847, 1006, 1171
+  and 1333 had no desire sample (the 691 pass picked Yavin over Corellia). The extra reads can shift the AI's leaf-cache
+  refreshes like the earlier ones (section 10, "Probe effect"); `--no-sab-desire` leaves them out.
+* **30-minute run.** `run_a2f_sab.cmd --sab-long` (`a2f_run.py --saboteur --sab-long`): the same saboteur build, but
+  channel U keeps sampling every 300 frames (10 s) after frame 1400 up to frame 54000 (30 minutes of galactic time), the
+  `UD` records included (their `own=` / `cor=` keys give every planet's owner and corruption state over the run). The
+  message "saboteur run recorded (frame 54000)" comes with the story's "30 minutes recorded". It is for the long-horizon
+  statements that A2K_T05 section 5 marks as suspect, e.g. "no Underworld ConquerPirate before 54583" and "Kashyyyk
+  stays with the Empire". The default `run_a2f_sab.cmd` run is unchanged in length (frame 1400, message at 1410).
+  The free store's record cap is 4000 in every `--saboteur` build (1600 otherwise), because its saboteur records
+  (FSAB / FSABN / FADD / FSVC) would not fit in 1600 over 30 minutes.
+* Channel U's `UEND` now comes just after the last sample frame (1401, or 54001), before the story's `SABDONE`. The
+  report has a new line in section 9: planet owner / corruption changes at the `UD` samples.
+
+Not tested in game yet: the first run with these changes is the next `run_a2f_sab.cmd` run. Selftest: 211 checks.
+
 ## 1. What it records
 
 Retail 1.121 writes no Lua output files, so the probe Lua keeps its records as strings
@@ -115,7 +140,7 @@ running game (the pattern of the a1h / q2 kits). Three Lua channels plus one Pyt
 | S (story) | a plot script added to the three HotM story plots (`Lua_Script A2fb_Story`), ServiceRate 0.01 | every frame for the first 4 s of galactic time (before and just after the AI's budget Init), every frame in a window around each of the first four fiscal payments (44.5 s .. 47.5 s, 89.5 s .. 92.5 s, ...), a full sample every 1 s until 120 s and every 5 s until 300 s, then it goes quiet |
 | F (free store) | wraps `FreeStoreService` of GalacticFreeStore.lua at its shipped 8 s schedule (no rate change) | one full sample per call, at most 200 |
 | P (plans) | wraps the task-force thread of 12 plans: BuildBaseComponentBarracks, BuildBaseComponentLightVehicleFactory, BuildBaseComponentResearchFacility, UpgradeStarbasePlan, BuildEconomicStructurePlan, EmpireAdvanceTechPlan, and since a2h BuildBaseComponentHeavyVehicleFactory, BuildBaseComponentAdvancedVehicleFactory, LiftBlockadePlan, FlushMajorItemBudget, ConquerPiratePlan, since a2k t05 AI_Plan_Underworld_DeploySaboteur; also ScriptExit and `<force>_Production_Failed` (when the script has it) | `Budget.Get_Spendable_Resources` and `Get_Unallocated_Resources` at plan start (PSTART), then a small sample (full for FlushMajorItemBudget); the same fields at the end (PRET / PEXIT / PFAIL); DeploySaboteur also goal / target / stage / block results (section 10) |
-| U (saboteur, `--saboteur` only) | the Underworld AI plot's `Lua_Script` (`A2fb_SabU`), ServiceRate set per sample frame | Underworld_Saboteur_Team objects every 30 frames in 0..1400, desire equations per planet every 30 frames in 0..600 (section 10) |
+| U (saboteur, `--saboteur` only) | the Underworld AI plot's `Lua_Script` (`A2fb_SabU`), ServiceRate set per sample frame | Underworld_Saboteur_Team objects and the desire equations per planet every 30 frames in 0..1400 (desire: 0..600 before a2m t12); with `--sab-long` then every 300 frames up to 54000 (section 10) |
 | watcher | `a2f_watch.py`, a thread of `a2f_run.py`, ReadProcessMemory only (never writes, injects or suspends) | the budget block of each AI player: init byte, income/s, last tick period T, reset flag +0x74, refund accumulator, polled about every 3 ms, with the mode frame of every change |
 
 Per sample (Lua, per AI player; the human is skipped): credits, `CreditsUnnormalized` (CU), net income, and
@@ -243,7 +268,7 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 | `build_a2f_mod.py`, `a2fb_spec.py` | build `Mods\A2fBudgetProbe` (patched equation file, 3 story plots, plan and free-store hooks, canaries, marker, optional text patch); the single table of probe types, equations and shipped equation names |
 | `a2fb_core.lua`, `a2fb_story.lua`, `a2fb_freestore_hook.lua`, `a2fb_plan_hook.lua` | the probe Lua (Lua 5.0.2: no `#`, no `%`, no math library in the free-store script) |
 | `a2fb_percept.lua`, `a2fb_scoring_hook.lua` | a2j: channel D (AI plot scripts, D4 perception) and channel Q (GameScoring production events) |
-| `a2fb_saboteur_plan.lua`, `a2fb_saboteur.lua`, `run_a2f_sab.cmd` | a2k t05: the DeploySaboteur plan extension (channel P), channel U (Underworld AI plot), the short-run launcher (section 10); the free-store part is in `a2fb_freestore_hook.lua` |
+| `a2fb_saboteur_plan.lua`, `a2fb_saboteur.lua`, `run_a2f_sab.cmd` | a2k t05: the DeploySaboteur plan extension (channel P), channel U (Underworld AI plot), the saboteur-run launcher (section 10; `--sab-long` = the 30-minute run, a2m t12); the free-store part is in `a2fb_freestore_hook.lua` |
 | `a2j_port.py`, `port_a2j_patch.py` | a2j: the port side (export a commit, trace patch, build, run the scenario, write the D4 table) |
 | `port_reference_a2j.tsv` | a2j: the port's D4 values (commit and method in its first lines; section 9) |
 | `a2f_watch.py` | read-only memory watcher of the budget block |
@@ -253,7 +278,12 @@ leaves the watcher (the flag and the raw budget block) unchanged.
 
 ## 7. Offline self-test
 
-`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 202 checks since the a2k t05 pool-release fix (197 at a2k t05, 140 in a2j, 101 in a2i, 83 in a2h, 55 until a2g).
+`toolchain\venv\Scripts\python.exe -I selftest_a2f.py [--lua PATH] [--out DIR]`. 211 checks since a2m t12 (202 after the a2k t05 pool-release fix, 197 at a2k t05, 140 in a2j, 101 in a2i, 83 in a2h, 55 until a2g).
+a2m t12 adds: the stage as an AI target with only `Get_Game_Object` and a `__tostring` (as `Get_Stage()` returns it in
+retail: `stagek=obj`), and as a game object (`stagek=type`); the short config (desire to 1400) and the `--sab-long`
+config, its build and story Lua, and `--sab-long` without `--saboteur` refused; the SAB_DONE text per build; channel U
+over the whole 30 minutes (every 30 frames to 1400, then every 300 to 54000, `UEND` right after, under the cap); the
+story's SABDONE after 54010 with MIN30; the report's owner / corruption line.
 a2k t05 adds: the saboteur spec (the shipped DeploySaboteur thread and handler, AssembleForce's global `stage`, the reads
 the shipped free store and AI scripts make themselves, the saboteur type, HotM's planets and starting saboteur, the two
 desire functions, Enemy-only goals, closures without Variable_Human or `#`); the `--saboteur` / `--no-sab-desire` builds;
@@ -292,7 +322,11 @@ story run (`robust_test`) checks that one failing record gives one ERR record an
   20261106-040725). EvaluatePerception returns nil and the script error helper sets the script's failed flag, but raises no
   Lua error. Retail then stops the script: the story channel (only `LOAD` / `DEF` were found; the rest of its records were
   lost from memory too), the Empire's free-store instance after its first sample, and each Empire plan instance after its
-  first sample (its later `PSTART` lines have no sample after them, with no ERR). Equations seen to fail: `ActiveGoals`
+  first sample (its later `PSTART` lines have no sample after them, with no ERR). **Pre-fix artefact (a2m t12):** that
+  last part was not the equation failure. It was the recorder's own Flush_G bug, fixed 2026-11-08 ("a2k t05 fix" above):
+  a released plan instance's next run died at its first record, and its PSTART string was left as an orphan. Run
+  20261108-212556 records every restart (`docs/re/A2K_T05_SABOTEUR_RUN.md` section 5). The story-channel stop of
+  040725 was a real equation failure (that script is not pooled; `docs/re/A2I_T02_PROBE.md`). Equations seen to fail: `ActiveGoals`
   with no `Parameter_Category`. Expected to fail by the same mechanism: an unknown equation name, and a `Variable_Human`
   equation with no human player (the kit writes `skip` for those). Rule for kit changes: evaluate only equations that have
   answered in retail, and add a rule to `retail_eval_fails` in the selftest for every new failure found. Not every `nil` is
@@ -316,6 +350,11 @@ story run (`robust_test`) checks that one failing record gives one ERR record an
   gaps (an LVF instance: 20 of 39 records found) while the story and free-store channels have none. Cause unknown (the
   records are kept in the script's table). So a2h's `no_end` count is an upper bound for releases; `confirmed`
   (`prev=none` on the next start) and the orphan count (end records whose start is missing) show how much was lost.
+  **Pre-fix artefact (a2m t12):** the cause is now known. Until the 2026-11-08 fix ("a2k t05 fix" above), a plan
+  release ran PGBase Flush_G, which deleted the global records table (and the previous-run state), so the gaps of
+  20261105-195851 are the recorder's own fault. In runs before that fix (20261105-*, 20261106-040725, 20261106-074145),
+  `no_end` is not evidence of a release, and `confirmed` (`prev=none`) is not either: Flush_G wiped the state that
+  `prev=` is read from. `docs/re/A2K_T05_SABOTEUR_RUN.md` section 5.
 * PEXIT `by=` / `line=` need the Lua debug library in plan scripts; without it the record says `by=nodebug`. Line numbers
   are lines of the shipped plan script (it comes first in the mod copy).
 * MJ: `Needs_More_Space_Force_Globally`, `Need_To_Flush_MajorItem_Budget` and `A2FB_HumanSpaceTotal` use Variable_Human and
@@ -410,20 +449,25 @@ not proposed); H2 = the MonCalimari plan ends early, the saboteur returns to the
 it. The run also shows Q1 (fleet members after the stage arrival), Q2 (what Move_To moves) and Q3 (`Get_Stage`).
 
 **Scenario.** `Sandbox_Heart_Of_The_Maw_Rebel` ("Heart of the Maw", faction REBEL, Medium), human Rebel with no orders,
-story on (the campaign's own story plots, as always), frames 0..1400 (about 47 s of galactic time).
+story on (the campaign's own story plots, as always), frames 0..1400 (about 47 s of galactic time). With `--sab-long`
+(a2m t12): frames 0..54000 (30 minutes), with the AI's attacks on Rebel planets auto-resolved.
 
 **Run it (Gabriel, Steam running, FoC closed).**
 1. Offline check: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\a2f_budget\selftest_a2f.py` ends with
-   `A2F SELFTEST OK (202 checks, 0 failed)` (the Lua checks need `lua50.exe`, section 7).
+   `A2F SELFTEST OK (211 checks, 0 failed)` (the Lua checks need `lua50.exe`, section 7).
 2. Double-click `tools\probe_mod\a2f_budget\run_a2f_sab.cmd`. It opens its own console window (`start`), so the recorder
    does not depend on the shell that launched it. From a Claude session start it detached, for example
    `Start-Process -FilePath "<repo>\tools\probe_mod\a2f_budget\run_a2f_sab.cmd"` (PowerShell), never in a Claude terminal
    tab (a2j: the recorder died with the session). The window runs `a2f_run.py --saboteur`: profile backup, build and
    install `Mods\A2fBudgetProbe` with `--saboteur`, launch, scan, report, cleanup, profile restore. Options are passed on:
-   `--windowed`, `--no-launch`, `--no-sab-desire`, `--game DIR`, `--non-interactive` (no pause at the end).
+   `--windowed`, `--no-launch`, `--no-sab-desire`, `--sab-long` (a2m t12: the 30-minute run), `--game DIR`,
+   `--non-interactive` (no pause at the end).
 3. In the game: Single Player > Galactic Conquest > "Heart of the Maw", **REBEL**, Medium, Start. Close the "Active Story
    Objectives" box. Hands off: no orders, no pause, normal speed, window in front.
-4. At frame 1410 "A2FB PROBE: saboteur run recorded" shows (record `SABDONE`). Esc > Quit to the main menu > Quit; do not
+4. At frame 1410 "A2FB PROBE: saboteur run recorded (frame 1400)" shows (record `SABDONE`). With `--sab-long`: keep
+   going through "5-minute dense phase done" and "25 minutes recorded", auto-resolve every battle prompt (it pauses
+   galactic time), until "30 minutes recorded" and "saboteur run recorded (frame 54000)" show (the same story service,
+   up to 30 s after frame 54010). Esc > Quit to the main menu > Quit; do not
    save. The window then writes the report, cleans up and restores the profile, prints `A2F_RUN_DONE exit=<n>` and waits
    for a key. `tools\probe_mod\a2f_budget\out\latest.txt` names the run folder, its `run_status.txt` the state (also after
    a Claude session cut).
@@ -435,13 +479,13 @@ story on (the campaign's own story plots, as always), frames 0..1400 (about 47 s
 | Q5 item | Record | Content |
 |---|---|---|
 | 1 PSTART | P `PSTART` of AI_Plan_Underworld_DeploySaboteur | frame, `n=` (run number of the script instance, with the channel's sid = plan id), `goal=`, `tgt=`, `tgtc=` |
-| 1 stage | P `PSTAGE` | `stage=` the planet AssembleForce got from `MainForce.Get_Stage()` (the script's own global `stage`; no extra call), `blk=` type of the Produce_Force status (`nil` = no status) |
-| 2 progress | P `PPROD`, `PMOVS`, `PMOVE` | `res=` BlockOnCommand's result for Produce_Force(stage) and Move_To(Target) (true / false / nil), `dt=` seconds blocked; PMOVS also `stage2=` (Get_Stage again), `units=` (Get_Force_Count) |
+| 1 stage | P `PSTAGE` | `stage=` the planet AssembleForce got from `MainForce.Get_Stage()` (the script's own global `stage`; no extra Get_Stage call): since a2m t12 named through the AI target's `Get_Game_Object()` (`stagek=obj`), else `Get_Type` (`stagek=type`); `stages=` `tostring(stage)`; `stage=ERR` in run 20261108-212556 (Get_Type on the AI target); `blk=` type of the Produce_Force status (`nil` = no status) |
+| 2 progress | P `PPROD`, `PMOVS`, `PMOVE` | `res=` BlockOnCommand's result for Produce_Force(stage) and Move_To(Target) (true / false / nil), `dt=` seconds blocked; PMOVS also `stage2=` / `stage2k=` / `stage2s=` (Get_Stage again, named as `stage=`), `units=` (Get_Force_Count) |
 | 2 failed | P `PFAIL` (+ `PEXIT` from its ScriptExit) | `MainForce_Production_Failed` fired, with `tgtc=` |
 | 3 end | P `PRET` / `PEXIT` / `PFAIL` | result path (`PRET` = thread returned after Set_Plan_Result or not; `PEXIT` = ScriptExit, `by=` / `line=`), `tgtc=` (`Target.Is_Corrupted()`), `blk=` block calls done; no end record = the goal system released the plan |
 | 4 every 30 frames | U `UN`, `US` | per Underworld_Saboteur_Team the Underworld owns: `id=` (Get_Object_ID), `type=`, `pl=`, `par=` / `parid=` / `cnt=` / `parpl=` (parent: the fleet, or a transport, then `gp*` = the fleet); `parpl=nil` = in transit |
 | 4 store | F `FSAB` (8 s), `FADD`, `FSVC` | `st=` `Is_Object_On_Free_Store`, `tr=` `Is_Unit_In_Transit` (read only for a store unit), admissions (every type), `On_Unit_Service` calls (unreserved entries; `safe=`, `tp=`) |
-| 5 proposals | U `UD` (every 30 frames, 0..600) | per HotM planet not owned by the Underworld: `CP=` Should_Corrupt_Planet, `SP=` Should_Sabotage_Planet (the two goals' desire functions), `own=`, `cor=` |
+| 5 proposals | U `UD` (every 30 frames, 0..1400; 0..600 before a2m t12; with `--sab-long` then every 300 frames to 54000) | per HotM planet not owned by the Underworld: `CP=` Should_Corrupt_Planet, `SP=` Should_Sabotage_Planet (the two goals' desire functions), `own=`, `cor=` |
 
 **Not covered, and why** (do not read these from the run):
 * **Hidden fleet**: no Lua binding reads a fleet's hidden / stealth state (LUA_API.md). Indirect evidence: `cnt=` of the

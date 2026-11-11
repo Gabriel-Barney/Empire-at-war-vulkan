@@ -2,7 +2,7 @@
 """build_a2f_mod.py - builds the a2f t07 budget probe mod (Mods\\A2fBudgetProbe) from the installed game's own files.
 
   build_a2f_mod.py [--game DIR] [--out MODDIR] [--source-zip extracted\\foc_data_text.zip] [--no-mod-equations]
-                   [--no-percept] [--saboteur [--no-sab-desire]]
+                   [--no-percept] [--saboteur [--no-sab-desire] [--sab-long]]
 
 Nothing from the game is stored in the repository: every shipped file is read from the install (loose files / MEGs, FoC
 order, through tools/probe_mod/common/ted_owners.py; the extracted text zip is the fallback) and patched:
@@ -25,6 +25,8 @@ order, through tools/probe_mod/common/ted_owners.py; the extracted text zip is t
 (Story_Plots_Underworld_AI_Heroes.xml) gets Lua_Script = A2fb_SabU (Data\\Scripts\\Story\\A2fb_SabU.lua, channel U:
 a2fb_saboteur.lua), the free store gets its saboteur records (FSAB / FADD / FSVC) and the story script shows
 TEXT_A2FB_SAB_DONE after frame SAB_STOP. --no-sab-desire leaves out channel U's desire evaluations (UD records).
+--sab-long (a2m t12) with --saboteur: the same run for 30 minutes of galactic time (channel U every SAB_LONG_STEP
+frames after SAB_STOP up to SAB_LONG_STOP, then TEXT_A2FB_SAB_DONE).
 --no-mod-equations builds the Lua without the A2FB_* equation calls (and leaves the equation file alone): use it
 if a run showed that the game does not load the mod's equation file (the report says so).
 """
@@ -80,8 +82,14 @@ PLAN_EXTRA = {'AI_Plan_Underworld_DeploySaboteur': 'a2fb_saboteur_plan.lua'}
 # a2k t05 saboteur run (--saboteur): what channel U and the free-store hook look for, and when
 SAB_TYPE = 'Underworld_Saboteur_Team'
 SAB_STEP = 30          # frames between channel U samples
-SAB_STOP = 1400        # last frame channel U samples; the story script shows TEXT_A2FB_SAB_DONE from SAB_STOP + 10
-SAB_DES_STOP = 600     # last frame of the UD desire samples (the pass near frame 116 and the next ones, ~150 frames each)
+SAB_STOP = 1400        # last frame of the 30-frame samples; the short run ends here (TEXT_A2FB_SAB_DONE from + 10)
+# a2m t12 (A2K_T05_SABOTEUR_RUN.md section 7 item 5): the UD desire samples run to the end of the run (they stopped at
+# 600 until a2m: retail's passes at 691, 847, 1006, 1171, 1333 had no desire sample), and --sab-long continues the run
+# for 30 minutes of galactic time with a sample every SAB_LONG_STEP frames after SAB_STOP (UN / US / UD, own= per
+# planet: the owner changes), for the A2K_T05 section 5 long-horizon statements.
+SAB_DES_STOP = SAB_STOP
+SAB_LONG_STEP = 300    # --sab-long: frames between channel U samples after SAB_STOP (channel D's long cadence)
+SAB_LONG_STOP = 54000  # --sab-long: last sample frame = 30 minutes of galactic time (the story's MIN30 at 1800 s)
 SAB_PLANETS = ['Corellia', 'Felucia', 'Kamino', 'Kashyyyk', 'Kuat', 'MonCalimari', 'Naboo', 'NalHutta', 'Shola',
                'Tatooine', 'The_Maw', 'Yavin']       # the Locations of Sandbox_Heart_Of_The_Maw_Rebel
 SAB_PLOT = 'Story_Plots_Underworld_AI_Heroes.xml'
@@ -95,8 +103,8 @@ TEXTS = [
     ('TEXT_A2FB_DONE', 'A2FB PROBE: 5-minute dense phase done. Keep the game running (30 s samples continue).'),
     ('TEXT_A2FB_LONG_DONE', 'A2FB PROBE: 25 minutes recorded. Keep the game running until the 30-minute message.'),
     ('TEXT_A2FB_MIN30', 'A2FB PROBE: 30 minutes recorded. You can quit now (Esc > Quit to the main menu > Quit).'),
-    ('TEXT_A2FB_SAB_DONE', 'A2FB PROBE: saboteur run recorded (frame 1400). You can quit now (Esc > Quit to the main '
-                           'menu > Quit).'),
+    ('TEXT_A2FB_SAB_DONE', 'A2FB PROBE: saboteur run recorded (frame @@SABEND@@). You can quit now (Esc > Quit to the '
+                           'main menu > Quit).'),
 ]
 CANARIES = {'Story': 'A2FB_Canary_Story.txt', 'FreeStore': 'A2FB_Canary_FreeStore.txt', 'Plan': 'A2FB_Canary_Plan.txt',
             'PerceptU': 'A2FB_Canary_PerceptU.txt', 'PerceptE': 'A2FB_Canary_PerceptE.txt',
@@ -157,10 +165,24 @@ def read_text(name):
     return open(os.path.join(HERE, name), encoding='ascii').read()
 
 
-def sab_head(desire=True):
-    """a2k t05: Lua text of the saboteur-run switch (A2FB_SAB) and its configuration table A2FB_SABCFG."""
-    return ('A2FB_SAB = true\nA2FB_SABCFG = { type = "%s", step = %d, stop = %d, des_stop = %d, planets = { %s } }\n'
-            % (SAB_TYPE, SAB_STEP, SAB_STOP, SAB_DES_STOP if desire else -1,
+def screen_texts(sab_long=False):
+    """TEXTS with the saboteur run's last frame filled in (a2m t12: 1400, or 54000 with --sab-long)."""
+    return [(k, v.replace('@@SABEND@@', str(sab_end(sab_long)))) for k, v in TEXTS]
+
+
+def sab_end(long=False):
+    """a2m t12: the last channel U sample frame of a saboteur run (SAB_STOP, or SAB_LONG_STOP with --sab-long)."""
+    return SAB_LONG_STOP if long else SAB_STOP
+
+
+def sab_head(desire=True, long=False):
+    """a2k t05: Lua text of the saboteur-run switch (A2FB_SAB) and its configuration table A2FB_SABCFG: samples every
+    step frames in 0 .. stop, then (a2m t12, --sab-long) every step2 frames up to stop2 (stop2 = stop: no second
+    phase); UD desire samples in 0 .. des_stop (-1 = none)."""
+    end = sab_end(long)
+    return ('A2FB_SAB = true\nA2FB_SABCFG = { type = "%s", step = %d, stop = %d, step2 = %d, stop2 = %d, des_stop = %d, '
+            'planets = { %s } }\n'
+            % (SAB_TYPE, SAB_STEP, SAB_STOP, SAB_LONG_STEP, end, (end if long else SAB_DES_STOP) if desire else -1,
                ', '.join('"%s"' % p for p in SAB_PLANETS)))
 
 
@@ -188,13 +210,13 @@ def plan_subs(name, thread):
             '@@FULL@@': 'true' if name in FULL_SAMPLE_PLANS else 'false'}
 
 
-def story_lua(use_mod_eq=True, saboteur=False):
-    return assemble(None, 'S', 'a2fb_story.lua', use_mod_eq, head_extra=sab_head() if saboteur else '')
+def story_lua(use_mod_eq=True, saboteur=False, long=False):
+    return assemble(None, 'S', 'a2fb_story.lua', use_mod_eq, head_extra=sab_head(True, long) if saboteur else '')
 
 
-def sab_lua(use_mod_eq=True, desire=True):
-    """a2k t05: the channel-U plot script (Underworld AI plot) of the saboteur run."""
-    return assemble(None, 'U', 'a2fb_saboteur.lua', use_mod_eq, head_extra=sab_head(desire))
+def sab_lua(use_mod_eq=True, desire=True, long=False):
+    """a2k t05: the channel-U plot script (Underworld AI plot) of the saboteur run (a2m t12: long = --sab-long)."""
+    return assemble(None, 'U', 'a2fb_saboteur.lua', use_mod_eq, head_extra=sab_head(desire, long))
 
 
 def plan_lua(orig, name, thread, use_mod_eq=True):
@@ -241,13 +263,16 @@ def queue_types(src):
     return out
 
 
-def build(game, out, zip_path=None, use_mod_eq=True, percept=True, saboteur=False, sab_desire=True):
+def build(game, out, zip_path=None, use_mod_eq=True, percept=True, saboteur=False, sab_desire=True, sab_long=False):
     """percept=False leaves channel D out (no AI plot scripts, no EvaluatePerception from them). Its evaluations share
     the AI's per-token leaf cache (AI_TACTICAL_PERCEPTION section 1.2), so they can shift when the AI's cached values are
     refreshed: in the port that changed the run from frame 1460 (A2J_T02_PROBE_PLAN.md section 3). Build without it
     for a budget run (t04) that the D4 reads cannot perturb.
     saboteur=True (a2k t05) implies percept=False and adds channel U and the saboteur records (module docstring);
-    sab_desire=False leaves channel U's desire evaluations out."""
+    sab_desire=False leaves channel U's desire evaluations out; sab_long=True (a2m t12, --sab-long) runs channel U and the
+    SABDONE message to SAB_LONG_STOP (30 minutes) instead of SAB_STOP."""
+    if sab_long and not saboteur:
+        raise SystemExit('--sab-long needs --saboteur')
     if saboteur:
         percept = False
     src = Source(game, zip_path)
@@ -270,7 +295,7 @@ def build(game, out, zip_path=None, use_mod_eq=True, percept=True, saboteur=Fals
         plot = ('<?xml version="1.0" ?>\r\n\r\n<Story_Mode_Plots>\r\n\t<Lua_Script>A2fb_Story</Lua_Script>\r\n'
                 '\t<Active_Plot>Story_Sandbox_12U_%s.XML</Active_Plot>\r\n</Story_Mode_Plots>\r\n' % f)
         write(os.path.join(out, 'Data', 'XML', 'Story_Plots_Sandbox_12U_%s.xml' % f), plot.encode('latin-1'))
-    write(os.path.join(out, 'Data', 'Scripts', 'Story', 'A2fb_Story.lua'), crlf(story_lua(use_mod_eq, saboteur)))
+    write(os.path.join(out, 'Data', 'Scripts', 'Story', 'A2fb_Story.lua'), crlf(story_lua(use_mod_eq, saboteur, sab_long)))
 
     # a2j t02 (D4): one perception plot script per (AI faction, planet) pair, in that faction's own AI story plot
     for fkey, _pn, _planet, suf, plot_file in (a2fb_spec.PERC_PAIRS if percept else []):
@@ -285,8 +310,9 @@ def build(game, out, zip_path=None, use_mod_eq=True, percept=True, saboteur=Fals
     if saboteur:
         data, where = src.need('DATA\\XML\\' + SAB_PLOT.upper())
         write(os.path.join(out, 'Data', 'XML', SAB_PLOT), ai_plot(data.decode('latin-1'), SAB_SCRIPT).encode('latin-1'))
-        write(os.path.join(out, 'Data', 'Scripts', 'Story', '%s.lua' % SAB_SCRIPT), crlf(sab_lua(use_mod_eq, sab_desire)))
-        notes.append('saboteur run: channel U%s' % ('' if sab_desire else ' without desire reads (--no-sab-desire)'))
+        write(os.path.join(out, 'Data', 'Scripts', 'Story', '%s.lua' % SAB_SCRIPT), crlf(sab_lua(use_mod_eq, sab_desire, sab_long)))
+        notes.append('saboteur run: channel U%s%s' % ('' if sab_desire else ' without desire reads (--no-sab-desire)',
+                                                    ' to frame %d (--sab-long)' % SAB_LONG_STOP if sab_long else ''))
 
     # a2j t02 (D3): GameScoring production events (channel Q)
     data, where = src.need(SCORING)
@@ -298,7 +324,7 @@ def build(game, out, zip_path=None, use_mod_eq=True, percept=True, saboteur=Fals
     data, where = src.need(FREESTORE)
     write(os.path.join(out, 'Data', 'Scripts', 'FreeStore', 'GalacticFreeStore.lua'),
           crlf(assemble(data.decode('latin-1'), 'F', 'a2fb_freestore_hook.lua', use_mod_eq,
-                        head_extra=sab_head(sab_desire) if saboteur else '')))
+                        head_extra=sab_head(sab_desire, sab_long) if saboteur else '')))
     notes.append('free store from ' + where)
 
     # plans
@@ -331,10 +357,11 @@ def build(game, out, zip_path=None, use_mod_eq=True, percept=True, saboteur=Fals
         from build_probe import dat_read, dat_bytes
         tmp = os.path.join(out, 'mt.tmp')
         write(tmp, mt)
-        keys = {k for k, _ in TEXTS}
+        lines = screen_texts(sab_long)
+        keys = {k for k, _ in lines}
         pairs = [kv for kv in dat_read(tmp) if kv[0] not in keys]
         os.remove(tmp)
-        write(os.path.join(out, 'Data', 'Text', 'MasterTextFile_English.dat'), dat_bytes(pairs + TEXTS))
+        write(os.path.join(out, 'Data', 'Text', 'MasterTextFile_English.dat'), dat_bytes(pairs + lines))
         notes.append('text from ' + where)
     else:
         notes.append('no MasterTextFile_English.dat: the on-screen lines will be blank')
@@ -357,9 +384,10 @@ def main():
     ap.add_argument('--no-percept', action='store_true', help='leave channel D (the D4 perception scripts) out')
     ap.add_argument('--saboteur', action='store_true', help='a2k t05 saboteur run: channel U instead of D, FSAB records')
     ap.add_argument('--no-sab-desire', action='store_true', help='with --saboteur: no desire evaluations in channel U')
+    ap.add_argument('--sab-long', action='store_true', help='with --saboteur: the 30-minute saboteur run (a2m t12)')
     a = ap.parse_args()
     build(a.game, a.out or os.path.join(a.game, 'corruption', 'Mods', MOD_NAME), a.source_zip,
-          not a.no_mod_equations, not a.no_percept, a.saboteur, not a.no_sab_desire)
+          not a.no_mod_equations, not a.no_percept, a.saboteur, not a.no_sab_desire, a.sab_long)
 
 
 if __name__ == '__main__':

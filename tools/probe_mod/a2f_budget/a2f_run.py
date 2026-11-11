@@ -4,7 +4,7 @@ FoC with the mod, scan the game's memory for the probe Lua's records and watch t
 the report when the game exits, then clean up and restore the profile (always, also after an error or Ctrl+C).
 
   a2f_run.py [--game DIR] [--non-interactive] [--no-launch] [--windowed] [--no-mod-equations] [--no-percept] [--no-profile]
-             [--saboteur [--no-sab-desire]] [--wait-start-sec N] [--scan-sec S] [--report-only RUN_DIR]
+             [--saboteur [--no-sab-desire] [--sab-long]] [--wait-start-sec N] [--scan-sec S] [--report-only RUN_DIR]
 
   --non-interactive   never waits for a key; progress lines; ends with A2F_RUN_DONE exit=<n>
   --no-launch         install and scan only; start the game yourself (StarWarsG.exe MODPATH=Mods\\A2fBudgetProbe in corruption)
@@ -14,6 +14,8 @@ the report when the game exits, then clean up and restore the profile (always, a
   --saboteur          a2k t05 short saboteur run (run_a2f_sab.cmd): channel U instead of D, the free store's saboteur
                       records, the plan records of AI_Plan_Underworld_DeploySaboteur; quit at "saboteur run recorded"
   --no-sab-desire     with --saboteur: channel U without its desire evaluations (UD records)
+  --sab-long          with --saboteur: the 30-minute saboteur run (a2m t12; run_a2f_sab.cmd --sab-long): channel U to
+                      frame 54000 (every 300 frames after 1400); quit at "saboteur run recorded (frame 54000)"
   --no-profile        skip the profile snapshot / restore (not recommended)
   --report-only DIR   rebuild report.txt from DIR\\records.txt + budget_watch.jsonl (no game, no install)
   --port-trace ERR    with --report-only: the per-cycle P / I table against a2j_port.py's port.err (a2j t04)
@@ -77,6 +79,18 @@ STEPS_SAB = r'''
     main menu > Quit. Do not save. The run finishes by itself (A2F_RUN_DONE exit=<n>); this window stays open.
 '''
 
+STEPS_SAB_LONG = r'''
+ A2M T12 SABOTEUR PROBE, 30-MINUTE RUN (--sab-long). Nothing is clicked for you; then leave the game alone.
+ 1) Main menu > Single Player > Galactic Conquest > campaign "Heart of the Maw". Faction REBEL, difficulty Medium,
+    Start (accept the defaults).
+ 2) Close the "Active Story Objectives" box. Then hands off: no orders, no pause, normal speed, keep the window in front
+    (FoC pauses when it loses focus). "A2FB PROBE: story script running" shows at the start. If the AI attacks and a
+    battle prompt appears, choose auto-resolve (the prompt pauses galactic time).
+ 3) "5-minute dense phase done" (300 s) and "25 minutes recorded" (1500 s) mean keep going. At 30 minutes of galactic
+    time "30 minutes recorded" and "saboteur run recorded (frame 54000)" show (together, within 30 s). Then Esc > Quit
+    to the main menu > Quit. Do not save. The run finishes by itself (A2F_RUN_DONE exit=<n>); this window stays open.
+'''
+
 
 def canary_status(mod, percept=True, saboteur=False):
     """{'Story': 'deleted' | 'present' | 'no mod folder'} - _CustomScriptMessage deleted the file when the script ran."""
@@ -103,11 +117,14 @@ def main():
     ap.add_argument('--no-profile', action='store_true')
     ap.add_argument('--saboteur', action='store_true', help='a2k t05: the short saboteur run (run_a2f_sab.cmd)')
     ap.add_argument('--no-sab-desire', action='store_true', help='with --saboteur: no desire evaluations in channel U')
+    ap.add_argument('--sab-long', action='store_true', help='with --saboteur: the 30-minute saboteur run (a2m t12)')
     ap.add_argument('--wait-start-sec', type=float, default=900)
     ap.add_argument('--scan-sec', type=float, default=5.0)
     ap.add_argument('--report-only')
     ap.add_argument('--port-trace', help='with --report-only: a2j_port.py port.err for the per-cycle P / I table (a2j t04)')
     a = ap.parse_args()
+    if a.sab_long and not a.saboteur:
+        ap.error('--sab-long needs --saboteur (run_a2f_sab.cmd --sab-long)')
     if a.report_only:
         d = a.report_only
         res, text = a2f_report.run(os.path.join(d, 'records.txt'), os.path.join(d, 'budget_watch.jsonl'),
@@ -137,7 +154,7 @@ def main():
     watch_path = os.path.join(run_dir, 'budget_watch.jsonl')
     info = {'game': a.game, 'mod': mod, 'started': time.time(), 'scans': 0, 'mod_equations': not a.no_mod_equations,
             'percept': not a.no_percept and not a.saboteur, 'saboteur': a.saboteur,
-            'sab_desire': a.saboteur and not a.no_sab_desire}
+            'sab_desire': a.saboteur and not a.no_sab_desire, 'sab_long': a.sab_long}
     code = 0
     proc = None
     watcher_thread = None
@@ -151,7 +168,7 @@ def main():
             profile.snapshot(run_dir)
         a2f_cleanup.cleanup(a.game, os.path.join(run_dir, 'cleanup.log'))  # a stale folder from a crashed run
         types = build_a2f_mod.build(a.game, mod, use_mod_eq=not a.no_mod_equations, percept=not a.no_percept,
-                                    saboteur=a.saboteur, sab_desire=not a.no_sab_desire)
+                                    saboteur=a.saboteur, sab_desire=not a.no_sab_desire, sab_long=a.sab_long)
         with open(os.path.join(run_dir, 'A2FB_TYPES.json'), 'w') as f:
             json.dump(types, f, indent=1)
         qt = os.path.join(mod, 'A2FB_QUEUE_TYPES.json')     # a2j: ground / space queue per type (report D3)
@@ -159,7 +176,7 @@ def main():
             with open(qt, 'rb') as src, open(os.path.join(run_dir, 'A2FB_QUEUE_TYPES.json'), 'wb') as dst:
                 dst.write(src.read())
         say('\n' + '=' * 110 + '\n Mod installed (Mods\\%s). Full notes: tools\\probe_mod\\a2f_budget\\README.md'
-            % build_a2f_mod.MOD_NAME + (STEPS_SAB if a.saboteur else STEPS) + '=' * 110)
+            % build_a2f_mod.MOD_NAME + (STEPS_SAB_LONG if a.sab_long else STEPS_SAB if a.saboteur else STEPS) + '=' * 110)
         t0 = time.time()
         if not a.no_launch:
             subprocess.Popen([exe] + (WINDOWED if a.windowed else []) + [MODPATH], cwd=corr)

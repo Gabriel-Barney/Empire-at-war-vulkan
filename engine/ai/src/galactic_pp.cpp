@@ -166,6 +166,13 @@ struct GalPp {
     // The source planets of the production estimates (0x6639f0 / 0x664210 -> 0x665160 of the TARGET's reachability,
     // A2K_T02_RE_ANSWERS Q1 port change 3) [H]: the per-target list at the goal level; [port] a goal without a target
     // keeps the player-level flood (no target reachability object).
+    // Production Setup C queue time (A2M_T04_RE_ANSWERS Q2.2 step 3) [H]: first solve (flag 0x140b3a524 = 1) the planet
+    // production's current item remaining time 0x401ba0; re-solves the AIPlanetBuildQueue time 0x53bb20(q, 1, 0).
+    float queue_time(PlanetIndex p, uint32_t q) const {
+        if (!first_solve) return w.planet_queue_time(p, q);
+        const auto queue = w.sim.queue_of(p, q);
+        return queue.empty() ? 0.0f : queue[0].remaining;
+    }
     const std::vector<PlanetIndex>& source_list() const {
         const int level = std::min(reach_level, 5);
         return has_target() ? pa.stage_list(tplanet(), level) : pa.source_planets(level);
@@ -219,8 +226,9 @@ struct GalPp {
             for (size_t k = 0; k < list.size(); ++k) {
                 const PlanetIndex p = list[k];
                 const gal::PlanetState& ps = planets[p];
-                const bool surface = w.sim.surface_accessible(p);  // 0x375220
-                if (!surface || !w.can_build_at(player, t, p)) continue;  // 0x3fa420 + 0x2804d0
+                // a2m t05 (A2M_T04_RE_ANSWERS Q2.3) [H]: revealed 0x3fa420 + the can-build gate 0x2804d0 (its step 24 is
+                // the only surface rule); no +0xd0 test in this loop.
+                if (!w.sim.is_planet_revealed(p) || !w.can_build_at(player, t, p)) continue;
                 float c = pool[k].time;
                 if (has_target() && speed > 0.0f) {
                     const Vec3 a = planets[static_cast<size_t>(target)].position, b = ps.position;
@@ -321,13 +329,20 @@ public:
     //     dropped. The test runs for candidates with PP +0x104 == 0 or entry +0x30 == 0, i.e. every candidate left by
     //     the reservation test above. [port] the galactic store keeps no hardpoint health, so the min with 0x396070 is
     //     the hull fraction itself;
-    //   * in transit [H rule; M field]: retail keeps a unit whose fleet is in hyperspace, keyed by the fleet's planet
-    //     (FleetDataPack +0x50): taken as the hop's source planet (FleetState::from), with the fleet's own position for
-    //     the 2-D distance term;
     //   * the "engaged" clauses (dogfight cell, special-weapon recharge) are tactical state and pass for every galactic
     //     unit [M]; not modelled.
-    // [port] Not modelled (open item, needs RE: the galactic meaning of obj +0x210 (+8 / +0x34), +0x3A7, +0x3B4, the
-    // lock 0x39ad40 and the attach test +0x35B -> 0x42e3b0 / 0x42e3d0): the moving / building / lock / attach tests.
+    // a2m t05 (A2M_T04_RE_ANSWERS Q1, health section) [H order]: reservation -> health -> stage key -> exclusions.
+    //   * health = the hull fraction alone, clamped to [0, 1]: retail takes min(hull, destroyable-hardpoint fraction)
+    //     only for a type with Should_Be_Destroyed_When_All_Hardpoints_Destroyed and a destroyable hardpoint; the
+    //     galactic store keeps no hardpoint health [M, open item 2];
+    //   * the planet is needed only for the stage key (a goal target and a unit that is not hidden); a unit in a moving
+    //     fleet takes FleetDataPack +0x50 = the move's FINAL destination (FleetState::path.back()) [H], for the reach row
+    //     and the revealed test. [port] the distance term uses the fleet's position: retail reads the unit object's own
+    //     +0x78 / +0x7c, which the fleet move does not update [M; stale value L, open item 1];
+    //   * the running maximum is raised before the exclusions [H];
+    //   * the garrison / limbo / hero-clash / lock / build-pad exclusions are written only by tactical code and never
+    //     fire for a galactic unit [M, open item 4]: a unit in a moving fleet is kept. INDIGENOUS_UNIT types never
+    //     reach the galactic free store [port].
     void setup_a() override {
         p_.stages.assign(p_.def.task_forces.size(), p_.tplanet());
         if (p_.has_target()) {
@@ -346,22 +361,23 @@ public:
             const objects::ObjectId id = p_.w.store.id(u);
             // A candidate needs PP+0x104 == 0 (the first solve) or +0x30 == 0 (A1_READINGS §28.5).
             if (!p_.first_solve && p_.w.unit_reserved.count(id) != 0) continue;
-            if (static_cast<float>(p_.hull_fraction(u)) < health_floor) continue;  // Health_Low_Percent_Threshold
-            PlanetIndex at = p_.w.planet_of_unit(u);
-            Vec3 pos = at != kInvalidPlanet ? planets[at].position : Vec3{};
-            if (at == kInvalidPlanet) {  // in transit: the fleet's planet (the hop's source) [M]
-                const uint32_t fl = p_.w.fleet_of_unit(u);
-                if (fl == gal::kNoFleet || !p_.w.sim.fleets()[fl].moving) continue;
-                at = p_.w.sim.fleets()[fl].from;
-                pos = p_.w.sim.fleets()[fl].position;
-                if (!p_.w.valid_planet(at)) continue;
-            }
+            if (static_cast<float>(std::min(p_.hull_fraction(u), 1.0)) < health_floor) continue;  // Health_Low_Percent_Threshold
             const gal::TypeInfo* x = p_.ti(p_.w.store.type(u));
             if (!x || structure_kind(x->kind)) continue;
             FsUnit f;
             f.h = u;
             f.type = p_.w.store.type(u);
             if (p_.has_target() && !p_.w.sim.hidden(u)) {
+                PlanetIndex at = p_.w.planet_of_unit(u);
+                Vec3 pos = at != kInvalidPlanet ? planets[at].position : Vec3{};
+                if (at == kInvalidPlanet) {  // in transit: FleetDataPack +0x50, the move's final destination [H]
+                    const uint32_t fl = p_.w.fleet_of_unit(u);
+                    if (fl == gal::kNoFleet || !p_.w.sim.fleets()[fl].moving) continue;
+                    const gal::FleetState& fs = p_.w.sim.fleets()[fl];
+                    at = fs.path.empty() ? fs.to : fs.path.back();
+                    pos = fs.position;
+                    if (!p_.w.valid_planet(at)) continue;
+                }
                 if (!p_.w.sim.is_planet_revealed(at)) continue;
                 double sum = 0.0;
                 bool finite = false;
@@ -394,7 +410,7 @@ public:
         std::vector<uint32_t> wts;
         f->get_path(from, stage, path, &wts);
         if (path.size() < 2) return -1.0;
-        const double c = ai_reach_path_cost(wts, path.size(), level);
+        const double c = ai_reach_path_cost(wts, path.size(), level, p_.w.sim.rules().constants.threat_reachability_tolerance);
         return c >= kReachNone ? -1.0 : c;
     }
     float score(uint32_t i) override {  // 0x728560 [H]
@@ -618,15 +634,21 @@ public:
             const uint32_t t = r.type;
             if (!(p_.has_target() && p_.is_structure(t))) {
                 // "travel estimate" 0x664210(target reachability, T, level) (AI_GALACTIC_3 §8) [H]: not a travel time
-                // but the mean, over the level's source planets (0x665160) with a usable surface and a production
-                // queue that can build T, of btime(T, planet) + that planet's queue time; no planet -> 1e18.
+                // but the mean, over the level's source planets (0x665160) that pass the tests below, of btime(T, planet)
+                // + that planet's queue time; no planet -> 1e18.
+                // a2m t05 (A2M_T04_RE_ANSWERS Q2) [H]: a planet counts when it is revealed (0x3fa420), has a production
+                // object (+0xd0; every port planet has its production queues [port]) and passes the full can-build gate
+                // 0x2804d0, whose step 24 is the only surface rule (land-only kinds). No separate surface veto: a space
+                // unit is estimated at a planet with a destroyed surface (Interceptor4_Frigate at The_Maw).
+                // Queue time by the first-solve flag 0x140b3a524: the first solve (PP Init 0x6c0d00) reads the production
+                // behaviour's current item remaining time (0x401ba0); the re-solves the AIPlanetBuildQueue time
+                // (0x559b40 -> 0x53bb20(q, 1, 0), planet_queue_time).
                 double sum = 0.0;
                 int32_t n = 0;
                 const uint32_t q = p_.w.sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
                 for (const PlanetIndex k : p_.source_list()) {
-                    const bool surface = p_.w.sim.surface_accessible(k);  // 0x375220
-                    if (!surface || !p_.w.can_build_at(p_.player, t, k)) continue;
-                    sum += static_cast<double>(p_.w.btime_at(p_.player, t, k)) + static_cast<double>(p_.w.planet_queue_time(k, q));
+                    if (!p_.w.sim.is_planet_revealed(k) || !p_.w.can_build_at(p_.player, t, k)) continue;
+                    sum += static_cast<double>(p_.w.btime_at(p_.player, t, k)) + static_cast<double>(p_.queue_time(k, q));
                     ++n;
                 }
                 const double est = n > 0 ? sum / static_cast<double>(n) : kInf;

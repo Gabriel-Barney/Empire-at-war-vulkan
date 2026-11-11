@@ -356,6 +356,72 @@ the next pass. HotM Empire-human seeds 0-11: Shola taken by tick 13501 in 7 of 1
 Rebel space build is a Marauder, via the early Conquer_Pirate); seeds 3 / 4 at 7626 / 7647 (retail 7498). Golden
 `galactic_ai_hotm_human_golden.txt` regenerated (the Kuat split and move on one tick); q4h parity 0 regressions.
 
+**2026-11-09 (a2m t02): Move_To moves the task force's FleetObject only** (`docs/re/A2L_T01_RE_ANSWERS.md` Q8,
+`docs/re/A2K_T08_RE_ANSWERS.md` Q2.3; marked "a2m t02" in `engine/ai/src/galactic_ai.cpp`). A task force keeps a
+FleetObject (TF +0x120, `TaskForceRec::fleet`): Add_Force elects the added unit's parent fleet while it is null [H]; a
+MovementBlockStatus holds that one fleet, so members in other fleets stay where they are (still counted). Produce_Force
+launches a surface member at the stage into orbit (TRANSPORTS_TO_ORBIT, [H state; M name]) and merges into the FleetObject
+when it is stationary at the stage. [port] choices: the election is re-checked lazily when Move_To runs (no signal hooks);
+the FleetObject is re-elected when it is dead or holds no member any more (the [M] reading of signal 0x1b; without it the
+Underworld shared home fleet was moved instead of the hero's split fleet). AI world save version 8 (6..8 read). HotM
+Empire-human seed 0: Rebel `credits_at_13500` 1890 -> 805 and `build_count` 19 -> 23 (both PASS now); Shola is taken at
+5970 (retail 7498 / 8214), so the Rebel `Remove_Corruption @Shola` plan flies Han Solo's Millennium Falcon (Hyperspace_Speed
+2.0) Naboo -> Shola in 70 ticks, a leg retail never flies (retail launches the Falcon at Naboo at 6293..7261 and keeps it
+there), hence `travel.hop_ticks[Rebel:NABOO->SHOLA]` FAIL; new FAIL `credits_at_13500[Empire]` 18797.5 vs 19007.5 (an
+Underworld sabotage at Corellia at 10851 now succeeds). Goldens: `ai_galactic_synthetic_crc.txt`, `ai_underworld_crc.txt`,
+`galactic_ai_hotm_golden.txt`, `galactic_ai_hotm_human_golden.txt`.
+
+**2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
+FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
+stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final
+destination (`FleetState::path.back()`, FleetDataPack +0x50) [H]; the tactical-only exclusions never fire [M]. [port] the
+distance term keeps the fleet's position (retail: the unit's own, stale, position; open item 1). Production Setup C and
+the ETA: revealed + the can-build gate (whose step 24 is the only surface rule), no `surface_accessible` veto; Setup C's
+queue time is the planet production's current item remaining time in the first solve and the AIPlanetBuildQueue time in
+the re-solves. Reach levels 7 / 8 / 9 use GameConstants Low_ / Medium_ / High_Threat_Reachability_Tolerance (1000 /
+3000 / 5000), other levels 0.0. `Produce_Force`: argument 1 present and not a planet (nil included) or argument 2 present
+and not a bool is a script error; no argument in galactic clears the PP's Test_Target_Contrast (inert until 0x6c47c0 is
+ported). Budget: no budget call at PRODUCTION_END, no stored charge, the committed spend s += cost(T, none) at production
+start. `Land_Units`: the FleetObject's contents from the last member down; a ground-kind member (the port's transport)
+lands only when the planet's ground owner is the player or an ally, otherwise fires its Ground_Activated ability; the
+max-ground-forces test is `==`; a FleetObject in transit returns the status without action. HotM Empire-human seed 0:
+Setup A, reach levels, Produce_Force, the budget and Land_Units change no decision; the Setup C / ETA change alone gives
+the parity numbers in the a2m baseline commit (Underworld builds Interceptor4_Frigate at The_Maw, order at tick 97, retail
+queue start 88; Build_Ground_Forces at 1434, retail about 1500; Underworld `credits_at_4500` 374 -> 877 PASS; Rebel
+`build_count` 23 -> 9 and `credits_at_4500` 538 -> 1595 FAIL: the Rebels no longer start Conquer_Pirate at Shola).
+
+**2026-11-09 (a2m t09): AI clock precision** (`docs/re/A2M_T08_T10_T14_RE.md` t08 [H]; `galactic_ai_game_age`,
+`galactic_ai_time_since_corruption_change`, `galactic_ai_time_since_stamp` in `galactic_ai_tokens`). spf is the float
+1.0f / 30.0f; `Game.Age` = (double)frame x (double)spf; `TimeSinceCorruptionChange` = the unsigned 32-bit difference
+times spf in float, widened; `TimeSinceConversion` / `GroundConflict` / `SpaceConflict` = (double)(int32)difference x
+(double)spf, never = (double)1e18f. Age > 120 first holds at frame 3600 (frame / 30 gave 3601). [port] the player-level
+`TimeSinceSpace/GroundDefender/Attacker` leaves still divide by 30 (not covered by t08). HotM seed 0: the Underworld
+saboteur desire timing moves the RNG, so verdicts shift both ways (total FAIL 15 -> 15; see the a2m baseline commit).
+
+**2026-11-09 (a2m t10): No_Units_Remaining entry rule** (`A2M_T08_T10_T14_RE.md` t10.3 / t10.8 [H]). A member lost to
+0x10 / 0x1a (`prune_tf`) queues its task force; `drain_lost_members` raises event 7 unless a remaining entry (members,
+wanted types, Queued / Producing builds) has a type that is not a named / generic hero, not a space special weapon and has
+no Land LOBBING_SUPERWEAPON, on every such loss. [port] raised at the drain in the same frame (execution service sweep or
+end of `update_player`), not inside the simulation step; the member's entry type is its own type. Already as retail: a
+plan's end leaves the fleet's hop in progress (`end_plan` drops the Move_To status without stopping the fleet; Move_To
+orders one hop at a time) and the free store refuses a unit in transit (`free_store_move`). [L] open: the retail sender
+of the generic-hero saboteur exit at frame 248 (A2M t10.5); a saboteur-only TF still exits only when the saboteur itself
+leaves. HotM seed 0: CRC unchanged.
+
+**2026-11-09 (a2m t11): Underworld proposal cadence, measured** (HotM Empire-human seed 0, port after t09 / t10). The
+Underworld goal pass scores 151..158 candidates (Rebel 157..165); `need` = ceil(E / 150) = 2, so after the first pass
+(quota = cap 4: 6 players - 1 human) every pass takes ceil(E / 2) = 76..78 frames: passes end at 42, 119, 195, 272, 348,
+424, 501, 577, 654, ... Retail's Underworld plan records (52, 103, 250, 397, 544, 691, 847, 1006, 1171, 1333, 1495; all
+frame = 1 mod 3, the planning pump where the plan's Lua first runs; the port logs at the commit) fit 51-frame first
+passes (E about 153 at quota 3 = cap with 6..8 counted players) and then quota 1 (147..165 frames, E about the port's).
+Open [RE]: what Goal Service 0x6cacd0 counts as `evalsLastPass` (which candidates, which pass, where it is reset), the
+first-pass quota, and the player count of the cap; not ported.
+
+**2026-11-09 (a2m t15): slicer draws checked.** `apply_slicer` / `slice_execute` already follow REMAINING_GAPS 1.3
+steps 2-8 and t14.5: gate failures draw nothing; an AI with no affordable entry draws R only (lists present, tech <= 4,
+also when Min == Max) and keeps the droids; the AI pick draws once for one or more affordable entries. FindTarget
+(`find_target_pick`) draws only with two or more positive scores (t14.3). New draw-count test in `test_special.cpp`.
+
 **2026-11-08 (q4hf t03): more retail references.** `geonosis_skirmish` now has 3 retail runs (`20261108-204213-skirmish-vanilla-lua`,
 `20261108-203639-skirmish-vanilla` added), so its tolerances use the run-to-run envelope; `hotm_galactic` has a 4th run,
 `20261108-204711-galactic-vanilla-lua` (40 cycles, cut at the scenario's `max_tick` 13501; its two auto-resolved Tatooine
