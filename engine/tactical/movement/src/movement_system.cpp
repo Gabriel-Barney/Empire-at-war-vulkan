@@ -2833,11 +2833,11 @@ const HoldTag* MovementSystem::pending_tag(const Unit& u, ObjectId obstacle) con
     return r;
 }
 
-// 0x372fe0: the type's acceleration per frame (OverrideAcceleration x the mode multiplier; [port] a squad container: its
-// rate 0x5ab540); not set (<= 0) -> 0.05, not the locomotor's "full speed in one frame".
+// 0x372fe0 (MOVEMENT §3.4): the unit's own type's acceleration per frame, OverrideAcceleration scaled like the speed
+// (x the mode multiplier x the speed factor, Unit::lp.accel); not set (<= 0) -> 0.05, not the locomotor's "full speed
+// in one frame". A squad container reads its own type too (s78n t23 review fix 3: not the members' rate 0x5ab540).
 float MovementSystem::accel_per_frame(const Unit& u) const {
-    const float a = u.d.team_container ? team_rate(u) : u.d.accel > 0.0f ? u.lp.accel : 0.0f;
-    return a > 0.0f ? a : 0.05f;
+    return u.d.accel > 0.0f && u.lp.accel > 0.0f ? u.lp.accel : 0.05f;
 }
 
 namespace {
