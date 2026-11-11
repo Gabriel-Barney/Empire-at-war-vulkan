@@ -3274,6 +3274,8 @@ or 3.
      record c onto unit X stamps **every other** record of X in which X is the held unit (state 1 with X = M, state 4
      with X = S); records in any other state (0, 2, 3, 6, 7, 10-16) are not stamped. The claim before the push
      (`0x42cdd0`: owner pack +0x248 := c, `0x559410` removes older collision paths) does not stamp +0x70.
+     *(s78n t23 RE 3: because the state is already 1 / 4 when the set-ups run, their relation reads fold this
+     record's own stored answer, usually 0 → rel 2: §5.4.6, "Set-up reads of the record's own answer".)*
   4. **Debounce:** each stamp overwrites +0x70 with NOW + 2, so a record that is stamped again before it fires is
      postponed; one stamped every frame never fires.
   5. **When it fires (Q2):** the stamp is tested only at the top of the service `0x6814f0`. A record in state 1 / 4
@@ -4089,6 +4091,52 @@ driver (at once for a mode-0 result, under quota for a set-up, §5.4.1 "The stam
   (constructor), not "max"; case 2: re-run first, bail to state 0 writing nothing, reset only after a 2; case 6:
   reset (both max, flags 0) **before** the re-run, so a case-6 bail leaves (max, max, flags 0). With these the
   relation-path state 2 of Infantry pairs is dead as in retail (item 3); do not "fix" the bail.
+
+**Set-up reads of the record's own answer (s78n t23 RE 3, 2026-11-11; `0x682d00`, `0x682e80`, `0x683140`,
+`0x5c80e0`, `0x67c0b0`, `0x67c1a0`, `0x677650`, `0x679750`, `0x509ea0`, `0x680d00`, `0x67ee60`, `0x5049e0`,
+detection `0x508170`) [H unless tagged].**
+1. **The state is already the new one.** The decision passes &+0x78 / &+0x7c / &+0x80 to the chooser
+   (`0x682d4e` / `0x682d45` / `0x682d2c`, call `0x682d5a`), so +0x78 = 4 (Pass) or 1 (Path Around) and M / S are
+   the new roles **before** `0x682e80` (call `0x682d79`) or `0x683140` (`0x682dc7`, retries `0x682e06` /
+   `0x682e21` / `0x682e3c`; their role swaps change only +0x7c / +0x80). vf +0x80 `0x67ee60`, called from inside
+   the path-around, tests +0x78 = 4 at that time, which confirms it.
+2. **`0x680d00` does not special-case 1 or 4:** any +0x78 ≠ 0 (with both ids set and the unit a participant,
+   `0x5c7100`) returns the stored +0x84 (unit = M) or +0x88 (unit = S). Stored values are per **role slot**, not
+   per unit: a re-decision that swaps the roles hands the old M slot to the new M.
+3. **Nothing writes +0x84 / +0x88 between the chooser and the set-up / gate.** `0x682d00` only compares from
+   `0x682d5f` to the calls; `0x682e80` writes only +0x8c…+0xa8, after the box; `0x683140` writes only +0xbc
+   (`0x683225` / `0x683238`); `0x5c80e0` writes no field of the record (its push stamps +0x70 of the held
+   unit's **other** records only, §5.4.1 "The stamp in full" item 3); `0x67ee60` only reads. So the values read
+   are the last ones written: **(0, 0)** for a record decided in its first frame (constructor `0x680420`) or after
+   a case 0 (a set-up that waited for quota, a fired stamp, starvation). They are non-zero only on a re-decision
+   straight out of a state that wrote them and returned to 0 without a case 0: a state-2 bail (stale), a case-6
+   bail (max, max), the retry frame of 10 (0 / max as its row) or 12 (M max, S `0x67f130`).
+4. **The record is already in both participants' lists.** Detection `0x508170` builds the record (`0x680420`)
+   and links it at once with `0x5049e0`, which appends its id to the unit→records vector of **each** participant
+   (the hash `0x509ea0` reads, system +0x78 / +0x90). The decision runs in a later driver call, so `0x509ea0`
+   folds this record for p0.
+5. **Readers in the set-up and their effect:**
+   - `0x682e80` → `0x5c80e0`(record, M, S, 1, 4): `0x67c0b0` / `0x67c1a0` set the request global
+     `0x140a443a8` := M and call `0x677650`(S), and `0x682e80` itself calls `0x677650`(S) for the hold lines
+     (`0x682f7b`). Inside, rel = `0x679750`(S, global = M) (`0x677afb`): S's cap folds this record's +0x88 → with
+     0 stored, **rel 2**. Its only use there: rel ∈ {0x10, 0x20} with S on its final approximation (pack +0x28c)
+     → the chord L := S's remaining path length. With rel 2 the chord stays clamp((dist − r_M − r_S) / closing, 0,
+     45 frames) × S's max speed, also for an S on its final approximation (which with 0x10 / 0x20 would get its
+     remaining length: always when its id is not in `0x140b3a1a0`, else when that is shorter). An S off its
+     final approximation is not affected.
+   - `0x683140` → `0x5c80e0`(record, S, M, 0, kind, flag) (`0x6831f8`, global := S, box of M), then the gate
+     `0x679750`(M, 0) (`0x683205`; p1 = the request global, S after the call [M]): M's cap folds this record's
+     +0x84 → with 0 stored, **rel 2** → **+0xbc := 0**. So the early detour pop `0x6807e0` is never armed on a
+     record decided with (0, 0) stored, i.e. on every fresh record and after any case 0; it is armed only on
+     re-decisions with a non-zero M slot (item 3) and rel(M, S) ∈ {4, 8, 0x10}.
+   - [M] the pathfinder's own obstacle code (`0x67d580` obstacle set, `0x676ec0`, `0x67a3d0`) also calls
+     `0x679750` during the search and so also sees this record's stored answers (a 0 → "held" → an obstacle);
+     not traced call by call.
+- ***Port spec:*** the decision writes state and roles before the set-up (as the port does); the answer for any
+  state ≠ 0 is the stored role-slot value, 0 until written; no self-exclusion in the cap. Then the Pass hold lines
+  of a fresh record use the rel-2 box (no final-leg chord) and +0xbc stays 0 on fresh records: **retail
+  behaviour, keep it** (the long Pass holds and the missing early pop on fresh records are parity, not bugs).
+  Keep the stored values per role slot across a role swap.
 
 *Not read:* the id list `0x140b3a1a0` tested in `0x677650`; `0x677650` reads the pathfinder's request global as
 "the other unit" [M: stale after an early return]; `0x509ea0` and `0x67f130` were not re-derived.
