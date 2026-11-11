@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -1060,42 +1061,104 @@ void test_t26_end_move() {
     // displacement), stops at 0x15 and then starts the new path (the turn in place, start rule A).
     MovementSystem s2{cfg};
     land_system(s2);
+    // the host's order of a tick (MAIN_LOOP 1.2, tactical_battle): the movement tick, then the coordinator update (step 10);
+    // an AI order given after it composes at the next tick's update and is planned at the tick after that
+    s2.set_deferred_composition(true);
+    const auto step2 = [&](uint32_t f) {
+        s2.tick(f, rng);
+        s2.coordinator_update(f, f, rng);
+    };
     UnitDesc w = tank(2, cell_center(20, 50));
     w.accel = w.decel = 0.3f;
     w.close_enough_angle = 30.0f;
     CHECK(s2.add_unit(w));
     order(s2, rng, {2}, cell_center(20, 50) + V2{400.0f, 0.0f}, 1);
     uint32_t g = 1;
-    for (; g < 300 && s2.view(2).speed < 3.0f; ++g) s2.tick(g, rng);  // (the order's composition delay first)
+    for (; g < 300 && s2.view(2).speed < 3.0f; ++g) step2(g);  // (the order's composition delay first)
     const float v0 = s2.view(2).speed;
     CHECK(v0 >= 3.0f);
-    order(s2, rng, {2}, cell_center(20, 50) - V2{200.0f, 0.0f}, g);
-    std::vector<float> speeds;
+    const V2 back_goal = cell_center(20, 50) - V2{200.0f, 0.0f};
+    order(s2, rng, {2}, back_goal, g);
+    // Until the new order is planned (its composition at the next coordinator update, §4.6.2) the old order path stays on
+    // top of the stack (the stack reset 0x554480 runs with the path set, §3.5.2 G): the unit walks on along it in 0x13 -
+    // no End Move, its speed does not fall, it keeps moving away from the new goal.
+    const auto planned = [&] {
+        const std::span<const V2> lp2 = s2.land_path(2);
+        return !lp2.empty() && distance(lp2.back(), back_goal) < 40.0f;
+    };
+    uint32_t gap = 0;
+    bool gap_ok = true;
+    float gv = v0, gx = s2.view(2).pos.x;
+    std::vector<float> speeds;  // from the tick of the plan on
     std::vector<float> xs;
-    bool started_turn = false;
-    for (uint32_t end = g + 40; g < end; ++g) {
-        s2.tick(g, rng);
-        speeds.push_back(s2.view(2).speed);
-        xs.push_back(s2.view(2).pos.x);
-        if (s2.view(2).speed == 0.0f) {
-            started_turn = true;
+    float v_plan = 0.0f;  // the speed before the tick of the plan
+    for (uint32_t end = g + 10; g < end; ++g) {
+        step2(g);
+        const UnitView gw = s2.view(2);
+        if (planned()) {
+            v_plan = gv;
+            speeds.push_back(gw.speed);
+            xs.push_back(gw.pos.x);
+            ++g;
             break;
         }
+        gap_ok = gap_ok && gw.walk_state == LocoState::WalkMoving && gw.speed >= gv && gw.pos.x > gx;
+        ++gap;
+        gv = gw.speed;
+        gx = gw.pos.x;
+    }
+    std::printf("t26.4 new order behind: %u tick(s) on the old path before the plan (speed %.3f)\n", gap, static_cast<double>(v_plan));
+    CHECK(gap >= 1 && gap_ok && !speeds.empty());
+    bool started_turn = !speeds.empty() && speeds.back() == 0.0f;
+    for (uint32_t end = g + 40; g < end && !started_turn; ++g) {
+        step2(g);
+        speeds.push_back(s2.view(2).speed);
+        xs.push_back(s2.view(2).pos.x);
+        if (s2.view(2).speed == 0.0f) started_turn = true;
     }
     bool falls = speeds.size() >= 2;
     for (size_t i = 0; i + 1 < speeds.size(); ++i) {
         if (speeds[i + 1] == 0.0f) break;
         falls = falls && near(speeds[i] - speeds[i + 1], 0.3f, 1e-4f) && xs[i + 1] > xs[i];
     }
-    std::printf("t26.4 new order behind: speed %.3f -> coast %zu ticks (first %.3f)\n", static_cast<double>(v0), speeds.size(),
+    std::printf("t26.4 new order behind: speed %.3f -> coast %zu ticks (first %.3f)\n", static_cast<double>(v_plan), speeds.size(),
                 static_cast<double>(speeds.empty() ? 0.0f : speeds[0]));
-    CHECK(falls && started_turn && near(speeds[0], v0 - 0.3f, 1e-4f));
+    CHECK(falls && started_turn && near(speeds[0], v_plan - 0.3f, 1e-4f));
     bool turned = false;
     for (uint32_t end = g + 80; g < end; ++g) {
-        s2.tick(g, rng);
+        step2(g);
         if (s2.view(2).pos.x < xs.back() - 1.0f) turned = true;
     }
     CHECK(turned);
+
+    // A re-plan of a moving vehicle with CloseEnoughAngleForMoveStart 180 (a chase re-issuing its goal, 3.5.2 G): the new
+    // order waits for its composition on the old path, then the new path is aligned and keeps 0x13 - the speed never
+    // falls and the unit is never in End Move across the order (the brake-and-restart of each re-plan is gone).
+    MovementSystem s3{cfg};
+    land_system(s3);
+    s3.set_deferred_composition(true);
+    const auto step3 = [&](uint32_t f) {
+        s3.tick(f, rng);
+        s3.coordinator_update(f, f, rng);
+    };
+    UnitDesc c = tank(3, cell_center(20, 50));
+    c.accel = c.decel = 0.3f;
+    CHECK(s3.add_unit(c));
+    order(s3, rng, {3}, cell_center(20, 50) + V2{600.0f, 0.0f}, 1);
+    uint32_t h = 1;
+    for (; h < 300 && s3.view(3).speed < 3.6f; ++h) step3(h);
+    CHECK(near(s3.view(3).speed, 3.6f, 1e-4f));
+    bool kept = true;
+    for (int k = 0; k < 3; ++k) {  // three re-plans 20 ticks apart, each a little farther along +x
+        order(s3, rng, {3}, cell_center(20, 50) + V2{620.0f + 20.0f * static_cast<float>(k), 30.0f}, h);
+        for (uint32_t end = h + 20; h < end; ++h) {
+            step3(h);
+            kept = kept && s3.view(3).walk_state == LocoState::WalkMoving && near(s3.view(3).speed, 3.6f, 1e-4f);
+        }
+    }
+    std::printf("t26.4 re-plans while moving: speed %.3f state 0x%x\n", static_cast<double>(s3.view(3).speed),
+                static_cast<unsigned>(s3.view(3).walk_state));
+    CHECK(kept);
 }
 
 // Save inside End Move with a coast: the loaded copy hashes equal and goes on identically.

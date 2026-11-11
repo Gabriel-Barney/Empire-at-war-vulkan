@@ -4214,6 +4214,23 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // s78n t26.4 (MOVEMENT §3.5.2 C.1 / C.4, G): no started path (no order - a stop on a record owned by another,
             // a cut, a halt -, a new order not planned yet, a start delay): a moving unit goes to End Move at T = a and
             // coasts along its last frame's displacement to 0x15 (then idle); a standing one does nothing
+            // s78n t26.4 fix (MOVEMENT §3.5.2 G, §4.6.2): a new order that is not planned yet (its composition waits for
+            // the next coordinator update, or the re-plan for the next plan pass) leaves the old order path on top of the
+            // stack - retail's stack reset 0x554480 runs only in the plan member loop, together with the path set - so a
+            // moving unit walks on along it until then, as before the order. [port] its arrival on that path is not the
+            // new order's (r.arrived is dropped); a standing unit does nothing (the start delay of a new path applies at
+            // speed 0 only).
+            if (u.has_goal && u.m.speed > 0.0f && !u.m.path.empty() && u.m.next < u.m.path.size()) {
+                WalkExtras x;
+                walk_extras(i, false, x, actx);
+                x.vmax_u = vmax_u;
+                actx.vmax = lp.max_speed;
+                res[i] = walk_step(u.m, lp, u.coll_speed, &grid_, &x);
+                res[i].arrived = false;
+                start_turn_mark(u, res[i]);
+                if (bike) bike_frame(u, yaw0, true);
+                return;
+            }
             if (u.m.speed > 0.0f) {
                 LandMotion c;
                 c.pos = u.m.pos;
