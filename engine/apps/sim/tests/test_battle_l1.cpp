@@ -2086,6 +2086,50 @@ void test_sw_fire() {
     CHECK(r.target_fired && r.target_point);
 }
 
+// s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition" [H]): the shipped AT_ST_Walker sets Walk_Transition
+// and no OverrideAcceleration / OverrideDeceleration; S = Scale_Factor 1.6 x Movement_Animation_Speed 0.8117. With a
+// 16-frame MOVESTART (synthetic clip data) its first moving frame is a = V^2 / (16 S) = 0.168646 (V = 1.2 x 1.56), not V.
+// The Destroyer_Droid does not set the flag.
+void test_foc_walk_transition(const objects::GameObjectTypes& types) {
+    namespace mv = tactical::movement;
+    const objects::TypeIndex ti = types.resolve_name("AT_ST_Walker");
+    const objects::TypeIndex td = types.resolve_name("Destroyer_Droid");
+    CHECK(ti != objects::kNone && ti < types.size() && td != objects::kNone && td < types.size());
+    if (ti == objects::kNone || ti >= types.size() || td == objects::kNone || td >= types.size()) return;
+    mv::UnitDesc d = mv::unit_desc_from_type(types, static_cast<uint32_t>(ti));
+    std::printf("foc AT_ST_Walker: walk transition %d S %.5f speed %.2f accel %.2f decel %.2f\n", d.walk_transition ? 1 : 0,
+                static_cast<double>(d.anim_scale_speed), static_cast<double>(d.max_speed), static_cast<double>(d.accel),
+                static_cast<double>(d.decel));
+    CHECK(d.walk_transition && std::fabs(d.anim_scale_speed - 1.6f * 0.8117f) < 1e-5f && d.max_speed == 1.2f &&
+          !(d.accel > 0.0f) && !(d.decel > 0.0f));
+    CHECK(!mv::unit_desc_from_type(types, static_cast<uint32_t>(td)).walk_transition);
+    mv::MovementSystem sys{mv::MovementConfig{}};
+    mv::PassabilityGrid g;
+    g.init(100, 100);
+    sys.set_grid(std::move(g));
+    sys.set_height_fn([](float, float) { return 0.0f; });
+    sys.set_deploy_clip_fn([](objects::ObjectId, int32_t type, uint32_t& n, float& fps) {
+        fps = 30.0f;
+        n = type == 2 ? 30u : type == 16 ? 16u : type == 17 ? 17u : 0u;
+        return n != 0u;
+    });
+    const mv::V2 p0 = mv::cell_center(20, 50);
+    d.id = 1;
+    d.pos = p0;
+    CHECK(sys.add_unit(d));
+    SimRng rng(2613);
+    mv::MoveOrder o;
+    o.units = {1};
+    o.destination = p0 + mv::V2{600.0f, 0.0f};
+    sys.move(o, rng, 1);
+    float first = 0.0f;
+    for (uint32_t f = 1; f < 200 && !(first > 0.0f); ++f) {
+        sys.tick(f, rng);
+        first = sys.view(1).speed;
+    }
+    CHECK(std::fabs(first - 0.168646f) < 1e-5f && sys.view(1).walk_state == mv::LocoState::WalkStartMove);
+}
+
 // s78n t26.1 (MOVEMENT §3.2.1): the shipped Destroyer_Droid (Underworld; no measured land seed fields one) on the FoC
 // type data - movement parameters from the type, the land speed multiplier 1.56: idle it deploys; an order 100 away
 // (< Max_Dist_Walk_While_Deployed 150) walks deployed at Deployed_Walk_Speed 2.5 (0x19 throughout, no deploy event) and
@@ -2215,6 +2259,7 @@ void test_foc() {
     CHECK(ds != objects::kNone && types.get_float(ds, "TSW_Attack_Distance_From_Target") == 5800.0f);
     const BattleCatalog catalog(types, files.get(), &db.constants(), &diag);
     test_foc_destroyer_droid(types, catalog);  // s78n t26.1
+    test_foc_walk_transition(types);  // s78n t26 closing review
 }
 
 }  // namespace
