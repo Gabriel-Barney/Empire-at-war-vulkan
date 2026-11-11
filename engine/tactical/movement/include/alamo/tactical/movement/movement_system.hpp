@@ -799,10 +799,12 @@ public:
     std::span<const V2> top_path(ObjectId id) const;
     std::span<const HoldTag> top_tags(ObjectId id) const;
     // Hover state (pack +0x2a8) of a Walk unit whose type has Hover_Height: 0 grounded (spawn), 2 rising (set by the
-    // start of a move while not raised: the unit stands for Hover_Height / its max speed frames, then is 1 raised), 3
-    // lowering (hover_lower: a GARRISON_HOVER_TRANSPORT whose slot a unit reserves, or that is asked to eject; back to 0
-    // after the same time; its walk does not run meanwhile and it rises again at its next move). Only "raised" (1) counts
-    // in the gates. hover_lower: false for an unknown unit or a type without Hover_Height.
+    // start of a move while not raised, after any turn in place on the ground: z climbs by the max speed per frame to
+    // the ground + Hover_Height, then is 1 raised, standing at the ground + Hover_Height), 3 lowering (hover_lower: a
+    // GARRISON_HOVER host whose slot a unit reserves, or that is asked to eject - the host stops it first; z falls back
+    // to the ground, then 0; its walk does not run meanwhile and it rises again at its next move). s78n t20 batch 2: z
+    // (UnitView::z) is the unit's height. Only "raised" (1) counts in the gates. hover_lower: false for an unknown unit
+    // or a type without Hover_Height.
     bool hover_lower(ObjectId id);
     uint8_t hover_state(ObjectId id) const;
     // The container has a current target (0x397a40(K, 0) [M]): its members do not recover to their slots while it idles.
@@ -1038,7 +1040,7 @@ private:
         bool push_flee = false;
         // s78n t18 (MOVEMENT §5.3 pair gates): gar_host - set_pair_gate's garrison host (transient, host-set every tick;
         // -1 none); exit_host - set_garrison_exit (saved, version 17); hover / hover_off - the hover state (pack +0x2a8)
-        // and the height risen so far (saved, version 17).
+        // and the height above the ground (s78n t20 batch 2; saved, version 17).
         ObjectId gar_host = -1;
         ObjectId exit_host = -1;
         uint8_t hover = 0;
@@ -1442,10 +1444,15 @@ private:
         std::vector<Slot> slots;
         V2 centre;
         bool checked = false;  // s78n t20 F5: the destination check accepted `centre` (its slots take no cell snap)
+        // s78n t20 batch 2 (MOVEMENT §4.2 step 2): `centre` is the seed's zone-validated point V != the ordered point -
+        // a fresh block carrying only the order's flags (no formation facing, no final facing)
+        bool fresh = false;
     };
     void destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms, V2 group_c);
+    // s78n t20 batch 2: `forced` = the forced pass after n = 40 (no try accepted: the last try that reached the object
+    // test, or Dn, is taken and true returned)
     bool place_formation(const std::vector<uint32_t>& idx, const LandForm& f, V2 dn, V2 v, V2 axis, bool first, bool several,
-                         int32_t comp, std::vector<FootRect>& taken, V2& centre) const;
+                         bool forced, std::vector<FootRect>& taken, V2& centre) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                    const std::vector<uint32_t>& delays, uint32_t serial, SimRng& rng);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,

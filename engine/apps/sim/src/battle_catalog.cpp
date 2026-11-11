@@ -1152,6 +1152,26 @@ bool BattleCatalog::target_bones(uint32_t type, bool space, std::vector<tactical
     return true;
 }
 
+bool BattleCatalog::entry_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const {
+    out.clear();
+    const auto names = types_->get_list(type, "Garrison_Bone_Names");
+    if (names.empty()) return true;
+    const ModelInfo* m = model_info(type, space, false);
+    if (!m) return false;
+    float scale = types_->columns().scale_factor[type];
+    if (!(scale > 0.0f)) scale = 1.0f;
+    for (const std::string_view n : names) {
+        const std::string name = ascii_upper(ascii_trim(n));
+        if (name.empty()) continue;
+        const int32_t b = m->find(name);
+        if (b < 0) continue;  // unresolvable on the model: dropped (0x375380)
+        // ALO model space (nose -Y, left +X, up +Z) -> the unit-local frame (x forward, y left, z up), as target_bones.
+        const auto& p = m->bone_pos[static_cast<size_t>(b)];
+        out.push_back(tactical::Vec3{-p[1] * scale, p[0] * scale, p[2] * scale});
+    }
+    return true;
+}
+
 bool BattleCatalog::garrison_bones(uint32_t type, bool space, int32_t guns,
                                    std::vector<std::vector<tactical::combat::GarrisonBone>>& out) const {
     out.clear();

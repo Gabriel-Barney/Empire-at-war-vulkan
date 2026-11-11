@@ -4778,6 +4778,7 @@ void TacticalBattle::process_death(TacticalMode& mode, const tc::DeathEvent& d, 
         const int32_t owner = store.owner(u->h);
         mode.destroy(u->h);
         vm_deaths_.push_back(u->id);  // story t06: the victory monitor sees this tick's deaths in this order
+        s4_hover_death(u->id, at, face);  // s78n t20 batch 2: before the mover (and its hover state) goes
         if (u->movable) movement_->remove_unit(u->id);
         else movement_->object_removed(u->id);  // s78f review: blocks naming a station / structure (fighter formations)
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -5101,6 +5102,8 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
                          mvv.locomotor == mv::LocomotorKind::LandBomber;
         combat_->set_flag(u.id, tc::kUnitFighterIdle, mvv.loco_state == mv::LocoState::FighterIdle);
         combat_->set_flag(u.id, tc::kUnitHoverRest, air && mvv.loco_state == mv::LocoState::WalkStopped);
+        // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full"): a Hover_Height unit raised (state 1) - melee attackers refuse it
+        combat_->set_flag(u.id, tc::kUnitHoverRaised, movement_->hover_state(u.id) == 1);
         combat_->set_flag(u.id, tc::kUnitRocketAttack, abilities_ && abilities_->is_active(u.id, 11));
         // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the locomotor is moving (an order in progress or speed), and
         // the model has an Attack clip (0x397ae0(obj, 5)): a moving land unit without TURRET fires only without one.

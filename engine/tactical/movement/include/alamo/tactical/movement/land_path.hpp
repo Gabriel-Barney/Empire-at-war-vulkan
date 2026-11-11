@@ -182,6 +182,21 @@ float path_length(std::span<const V2> points);
 bool snap_to_component(const PassabilityGrid& grid, const RegionMap& regions, V2 p, uint32_t mask, int32_t component,
                        int32_t max_rings, V2& out);
 
+// s78n t20 batch 2 (MOVEMENT §4.3.1 item 7, 0x50da90 / 0x50ee10 / 0x50f480): zones are the region components of a mask.
+// zone_at: -1 "none" (no slot for the mask, outside the grid, the uncovered last row / column), 0 a region that fails the
+// mask, else the component + 1. zone_connected (0x50ee10, land): both cells have a region that passes the mask and the
+// zones are equal - an impassable end point is never zone-connected to anything.
+int32_t zone_at(const RegionMap& regions, int32_t slot, int32_t cx, int32_t cy);
+bool zone_connected(const RegionMap& regions, uint32_t mask, V2 a, V2 b);
+// 0x50f480(P, Q, style 0, class, 30, out), cells by world_to_cell: zone(Q) = none with Q's cell outside the grid, or
+// zone(Q) = zone(P) -> out := P, true (passability is not looked at). Otherwise the square rings r = 1 .. 29 around P's
+// cell, candidates in the retail order - for i = -r .. r the cell (px + i, py + r), then its mirror (px - i, py - r);
+// for j = 1 - r .. r - 1 the cell (px + r, py + j), then its mirror (px - r, py - j); a mirror only when the first cell
+// of its pair is inside the grid and has a region - kept when inside the grid with zone(Q). The first ring with a kept
+// cell decides: out := the centre of the kept cell nearest to Q (strict <: the earliest wins a tie), true; no later ring
+// is looked at. None in 29 rings -> false, out untouched.
+bool zone_validate(const RegionMap& regions, V2 p, V2 q, uint32_t mask, V2& out);
+
 // ---------------------------------------------------------------- template implementation
 template <class Fn>
 bool walk_cells(V2 a, V2 b, Fn&& fn) {

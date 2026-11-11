@@ -1,6 +1,7 @@
 #include "alamo/tactical/garrison/garrison.hpp"
 
 #include <algorithm>
+#include <bit>
 
 #include "alamo/core/dmath.hpp"
 
@@ -24,6 +25,16 @@ void dir2(Vec3 f, float& dx, float& dy) {
     const float inv = 1.0f / dmath::sqrt(l2);
     dx = f.x * inv;
     dy = f.y * inv;
+}
+
+float dist3(Vec3 a, Vec3 b) {
+    const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return dmath::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+bool same_bits(Vec3 a, Vec3 b) {
+    return std::bit_cast<uint32_t>(a.x) == std::bit_cast<uint32_t>(b.x) && std::bit_cast<uint32_t>(a.y) == std::bit_cast<uint32_t>(b.y) &&
+           std::bit_cast<uint32_t>(a.z) == std::bit_cast<uint32_t>(b.z);
 }
 }  // namespace
 
@@ -80,13 +91,46 @@ void GarrisonSystem::leave(Unit& u, Holder& h, GarrisonEventKind kind, Vec3 at, 
     push(kind, u, h.id, at, frame);
 }
 
-Vec3 GarrisonSystem::approach_point(ObjectId holder, Vec3 pos, Vec3 facing) const {
+Vec3 GarrisonSystem::approach_point(ObjectId holder, Vec3 pos, Vec3 facing, int32_t bone) const {
+    const HolderDesc* d = holder_desc(holder);
+    if (!d || bone < 0 || static_cast<size_t>(bone) >= d->bones.size()) return pos;
+    float fx = 0.0f, fy = 0.0f;
+    dir2(facing, fx, fy);
+    const Vec3 b = d->bones[static_cast<size_t>(bone)];
+    // host-local x forward / y left -> world: forward (fx, fy), left (-fy, fx)
+    Vec3 a{pos.x + b.x * fx - b.y * fy, pos.y + b.x * fy + b.y * fx, pos.z + b.z};
+    if (d->enter_dist > 0.0f) {  // pushed outward along the 2-D host -> bone direction, the bone's z kept
+        const float ox = a.x - pos.x, oy = a.y - pos.y, l2 = ox * ox + oy * oy;
+        if (l2 > 0.0f) {
+            const float k = d->enter_dist / dmath::sqrt(l2);
+            a.x += ox * k;
+            a.y += oy * k;
+        }
+    }
+    return a;
+}
+
+Vec3 GarrisonSystem::approach_destination(ObjectId holder, Vec3 pos, Vec3 facing, Vec3 from, float extent_len,
+                                          const ReachableFn& reachable, int32_t& bone) const {
+    bone = -1;
     const HolderDesc* d = holder_desc(holder);
     if (!d) return pos;
+    Vec3 best = pos;
+    float best_d = 0.0f;
+    for (size_t i = 0; i < d->bones.size(); ++i) {
+        const Vec3 a = approach_point(holder, pos, facing, static_cast<int32_t>(i));
+        const float dd = dist3(a, from);
+        if (bone >= 0 && !(dd < best_d)) continue;
+        if (reachable && !reachable(a)) continue;
+        best = a;
+        best_d = dd;
+        bone = static_cast<int32_t>(i);
+    }
+    if (bone >= 0) return best;
     float dx = 0.0f, dy = 0.0f;
     dir2(facing, dx, dy);
-    const float r = d->enter_dist > 0.0f ? d->enter_dist : d->half_diagonal;
-    return {pos.x + dx * r, pos.y + dy * r, pos.z};
+    const float l = d->enter_dist > 0.0f ? d->enter_dist : 0.5f * extent_len;
+    return {pos.x + dx * l, pos.y + dy * l, pos.z};
 }
 
 Vec3 GarrisonSystem::exit_point(ObjectId holder, Vec3 pos, Vec3 facing) const {
@@ -98,10 +142,10 @@ Vec3 GarrisonSystem::exit_point(ObjectId holder, Vec3 pos, Vec3 facing) const {
     return {pos.x + dx * r, pos.y + dy * r, pos.z};
 }
 
-void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame) {
+void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame, bool kill) {
     if (const int32_t hi = holder_index(id); hi >= 0) {
         Holder& h = holders_[static_cast<size_t>(hi)];
-        if (h.d.kind == HolderKind::Property) {  // no host behaviour: the occupants die with it
+        if (kill || h.d.kind == HolderKind::Property) {  // no host behaviour (or a hover host in the air): they die with it
             const std::vector<ObjectId> inside = h.inside;
             for (const ObjectId uid : inside)
                 if (const int32_t ui = unit_index(uid); ui >= 0) leave(units_[static_cast<size_t>(ui)], h, GarrisonEventKind::Killed, pos, frame);
@@ -114,9 +158,12 @@ void GarrisonSystem::remove(ObjectId id, Vec3 pos, Vec3 facing, uint32_t frame) 
         }
         for (Unit& u : units_)
             if (u.host == id && u.state != State::Inside) {
+                const State was = u.state;
                 u.state = State::None;
                 u.host = kNoObject;
+                u.awaiting = false;
                 push(GarrisonEventKind::OrderDropped, u, id, pos, frame);
+                events_.back().was = static_cast<uint8_t>(was);
             }
         holders_.erase(holders_.begin() + holder_index(id));
     }
@@ -175,7 +222,7 @@ int32_t GarrisonSystem::reserved(ObjectId holder) const {
     int32_t n = 0;
     std::vector<ObjectId> groups;  // s78n t18: a squad walking in reserves once
     for (const Unit& u : units_) {
-        if (u.host != holder || u.state != State::Moving) continue;
+        if (u.host != holder || (u.state != State::Moving && u.state != State::Closing)) continue;  // states 1 - 2
         GarrisonGroup g;
         if (group_of(u, g)) {
             if (std::find(groups.begin(), groups.end(), g.id) != groups.end()) continue;
@@ -249,7 +296,22 @@ ObjectId GarrisonSystem::pending_holder(ObjectId unit) const {
     const int32_t ui = unit_index(unit);
     if (ui < 0) return kNoObject;
     const Unit& u = units_[static_cast<size_t>(ui)];
-    return (u.state == State::Moving || u.state == State::Entering) ? u.host : kNoObject;
+    return pending(u.state) ? u.host : kNoObject;
+}
+
+uint8_t GarrisonSystem::state_of(ObjectId unit) const {
+    const int32_t ui = unit_index(unit);
+    return ui < 0 ? uint8_t{0} : static_cast<uint8_t>(units_[static_cast<size_t>(ui)].state);
+}
+
+int32_t GarrisonSystem::bone_of(ObjectId unit) const {
+    const int32_t ui = unit_index(unit);
+    return ui < 0 ? -1 : units_[static_cast<size_t>(ui)].bone;
+}
+
+uint32_t GarrisonSystem::retries_of(ObjectId unit) const {
+    const int32_t ui = unit_index(unit);
+    return ui < 0 ? 0u : units_[static_cast<size_t>(ui)].retries;
 }
 
 bool GarrisonSystem::entering(ObjectId unit) const {
@@ -267,11 +329,13 @@ bool GarrisonSystem::enter_allowed(ObjectId unit, ObjectId holder) const {
     return host_open(h, u.owner) && mask_ok(category_of(u), h.d.accepts);
 }
 
-bool GarrisonSystem::order_enter(ObjectId unit, ObjectId holder) {
+bool GarrisonSystem::order_enter(ObjectId unit, ObjectId holder, int32_t bone) {
     if (!enter_allowed(unit, holder)) return false;
     Unit& u = units_[static_cast<size_t>(unit_index(unit))];
     u.state = State::Moving;
     u.host = holder;
+    u.bone = bone;
+    u.awaiting = true;  // the approach move is in flight: its end is the "move finished" signal
     return true;
 }
 
@@ -289,9 +353,12 @@ bool GarrisonSystem::board(ObjectId unit, ObjectId holder, Vec3 at, uint32_t fra
 
 bool GarrisonSystem::cancel_enter(ObjectId unit) {
     const int32_t ui = unit_index(unit);
-    if (ui < 0 || units_[static_cast<size_t>(ui)].state != State::Moving) return false;
-    units_[static_cast<size_t>(ui)].state = State::None;
-    units_[static_cast<size_t>(ui)].host = kNoObject;
+    if (ui < 0) return false;
+    Unit& u = units_[static_cast<size_t>(ui)];
+    if (u.state != State::Moving && u.state != State::Closing) return false;
+    u.state = State::None;
+    u.host = kNoObject;
+    u.awaiting = false;
     return true;
 }
 
@@ -299,11 +366,14 @@ bool GarrisonSystem::order_exit(ObjectId unit, Vec3 holder_pos, Vec3 holder_faci
     const int32_t ui = unit_index(unit);
     if (ui < 0) return false;
     Unit& u = units_[static_cast<size_t>(ui)];
-    if (u.state == State::Moving || u.state == State::Entering) {  // cancel the approach
+    if (pending(u.state)) {  // cancel the approach
         const ObjectId host = u.host;
+        const State was = u.state;
         u.state = State::None;
         u.host = kNoObject;
+        u.awaiting = false;
         push(GarrisonEventKind::OrderDropped, u, host, holder_pos, frame);
+        events_.back().was = static_cast<uint8_t>(was);
         return true;
     }
     const int32_t hi = u.state == State::Inside ? holder_index(u.host) : -1;
@@ -330,102 +400,116 @@ uint32_t GarrisonSystem::eject_all(ObjectId holder, Vec3 holder_pos, Vec3 holder
     return n;
 }
 
-// s78n t18 (FIGHTER_FLYING §7.4): the pending members of group `g` (units_[first] is the lowest id of them), decided
-// together - see "squads" in the header.
-void GarrisonSystem::service_group(size_t first, const GarrisonGroup& g, uint32_t frame, const PoseFn& pose, const GroupReachFn& reach) {
-    const ObjectId host = units_[first].host;
-    const State state = units_[first].state;
-    std::vector<size_t> mem;
-    for (size_t i = first; i < units_.size(); ++i) {
-        const Unit& m = units_[i];
-        GarrisonGroup mg;
-        if ((m.state == State::Moving || m.state == State::Entering) && m.host == host && group_of(m, mg) && mg.id == g.id) mem.push_back(i);
-    }
-    const int32_t hi = holder_index(host);
-    Vec3 kp, kf, hp, hf;
-    const auto drop_all = [&] {
-        for (const size_t i : mem) {
-            Unit& m = units_[i];
-            Vec3 mp, mf;
-            (void)pose(m.id, mp, mf);
-            m.state = State::None;
-            m.host = kNoObject;
-            push(GarrisonEventKind::OrderDropped, m, host, mp, frame);
-        }
-    };
-    if (hi < 0 || !pose(g.id, kp, kf) || !pose(host, hp, hf)) return drop_all();
-    Holder& h = holders_[static_cast<size_t>(hi)];
-    if (thief_holder(h) || !host_open(h, units_[first].owner) || free_slots(host) < (g.value > 0 ? g.value : 0)) return drop_all();
-    if (state == State::Moving) {
-        // 0x443ff0: 3-D distance from the container to the approach point - r <= Garrison_Radius; 0x443d10 on a finished
-        // approach move: <= 60.0
-        const Vec3 a = approach_point(host, hp, hf);
-        const float dx = kp.x - a.x, dy = kp.y - a.y, dz = kp.z - a.z;
-        GroupReach gr;
-        if (reach) (void)reach(g.id, gr);
-        const float d = dmath::sqrt(dx * dx + dy * dy + dz * dz) - gr.radius;
-        if (!(d <= h.d.radius) && !(gr.arrived && d <= cfg_.arrived_reach)) return;  // still walking
-        for (const size_t i : mem) {
-            Unit& m = units_[i];
-            Vec3 mp, mf;
-            if (!pose(m.id, mp, mf)) mp = kp;
-            m.state = State::Entering;
-            m.enter_at = frame + cfg_.enter_frames;
-            push(GarrisonEventKind::EnterStarted, m, host, mp, frame);
-        }
-        return;
-    }
-    if (frame < units_[first].enter_at) return;
-    for (const size_t i : mem) {  // the whole squad is inside in this pass
+// The cancel 0x443560: every member of the key leaves the approach (OrderDropped with the state it ended).
+void GarrisonSystem::drop_key(const std::vector<size_t>& mem, ObjectId host, uint32_t frame, const PoseFn& pose) {
+    for (const size_t i : mem) {
         Unit& m = units_[i];
-        m.state = State::Inside;
-        h.inside.push_back(m.id);
-        push(GarrisonEventKind::Entered, m, host, hp, frame);
+        Vec3 mp, mf;
+        (void)pose(m.id, mp, mf);
+        const State was = m.state;
+        m.state = State::None;
+        m.host = kNoObject;
+        m.awaiting = false;
+        push(GarrisonEventKind::OrderDropped, m, host, mp, frame);
+        events_.back().was = static_cast<uint8_t>(was);
     }
 }
 
-void GarrisonSystem::service(uint32_t frame, const PoseFn& pose, const GroupReachFn& group_reach) {
+// 0x444440: entering (state 5, the fade), the move signal unsubscribed.
+void GarrisonSystem::enter_key(const std::vector<size_t>& mem, ObjectId host, uint32_t frame, const PoseFn& pose, Vec3 at) {
+    for (const size_t i : mem) {
+        Unit& m = units_[i];
+        Vec3 mp, mf;
+        if (!pose(m.id, mp, mf)) mp = at;
+        m.state = State::Entering;
+        m.enter_at = frame + cfg_.enter_frames;
+        m.awaiting = false;
+        push(GarrisonEventKind::EnterStarted, m, host, mp, frame);
+    }
+}
+
+// s78n t20 batch 2 (FIGHTER_FLYING §7.4 "Garrison approach in full" items 3 - 5): one approaching key - a squad's
+// container (its pending members `mem`, ascending id) or a single unit - with the slots it takes.
+void GarrisonSystem::service_key(const std::vector<size_t>& mem, ObjectId key, int32_t value, uint32_t frame, const PoseFn& pose,
+                                 const ApproachFn& approach) {
+    Unit& u0 = units_[mem.front()];
+    const ObjectId host = u0.host;
+    const int32_t hi = holder_index(host);
+    Vec3 kp, kf, hp, hf;
+    if (hi < 0 || !pose(key, kp, kf) || !pose(host, hp, hf)) return drop_key(mem, host, frame, pose);
+    Holder& h = holders_[static_cast<size_t>(hi)];
+    // capacity on every service and signal (free < the key's value -> cancel); s78n t12 review: a thief's vehicle
+    if (thief_holder(h) || !host_open(h, u0.owner) || free_slots(host) < value) return drop_key(mem, host, frame, pose);
+    if (u0.state == State::Entering) {
+        if (frame < u0.enter_at) return;
+        for (const size_t i : mem) {  // the whole key is inside in this pass
+            Unit& m = units_[i];
+            m.state = State::Inside;
+            h.inside.push_back(m.id);
+            push(GarrisonEventKind::Entered, m, host, hp, frame);
+        }
+        return;
+    }
+    ApproachInfo ai;
+    if (approach && !approach(key, host, ai)) ai = ApproachInfo{};
+    const Vec3 a = approach_point(host, hp, hf, u0.bone);
+    const float d3 = dist3(a, kp) - ai.radius;
+    // [M] the handler of the finished move runs before the frame's range test
+    if (u0.awaiting && !ai.moving) {  // signal 10: the approach (or corrective) move finished - handler 0x443d10
+        for (const size_t i : mem) units_[i].awaiting = false;
+        if (u0.state == State::Closing) return enter_key(mem, host, frame, pose, kp);
+        // state 1: the retry memo - an unchanged A (bit for bit) counts, past max_retries the approach is cancelled
+        const bool same = same_bits(a, u0.memo);
+        const uint32_t n = same ? u0.retries + 1 : 0;
+        for (const size_t i : mem) {
+            units_[i].memo = a;
+            units_[i].retries = n;
+        }
+        if (same && n > cfg_.max_retries) return drop_key(mem, host, frame, pose);
+        if (d3 <= cfg_.arrived_reach) {
+            // state 2 and 0x443700: the host stops; 2-D excess e = |A - P| - r within Garrison_Radius -> enter, else a
+            // flag-0x20 move of the whole excess toward A (the service enters on the way, its end enters)
+            for (const size_t i : mem) units_[i].state = State::Closing;
+            push(GarrisonEventKind::HostStop, u0, host, a, frame);
+            const float dx = a.x - kp.x, dy = a.y - kp.y, d = dmath::sqrt(dx * dx + dy * dy);
+            const float e = d - ai.radius;
+            if (e <= h.d.radius || !(d > 0.0f)) return enter_key(mem, host, frame, pose, kp);
+            const float k = e / d;
+            push(GarrisonEventKind::CorrectiveMove, u0, host, Vec3{kp.x + dx * k, kp.y + dy * k, kp.z}, frame);
+            for (const size_t i : mem) units_[i].awaiting = true;
+            return;
+        }
+        if (ai.host_path) return drop_key(mem, host, frame, pose);  // "the host is moving" is read only here
+        push(GarrisonEventKind::Reissue, u0, host, kp, frame);      // a new GarrisonEvent (flags 4): the host re-orders
+        return;
+    }
+    // the service 0x443ff0, every frame in states 1 - 2: 3-D |A - P| - r <= Garrison_Radius -> entering
+    if (d3 <= h.d.radius) enter_key(mem, host, frame, pose, kp);
+}
+
+void GarrisonSystem::service(uint32_t frame, const PoseFn& pose, const ApproachFn& approach) {
     std::vector<ObjectId> groups;  // s78n t18: the groups decided in this pass
+    std::vector<size_t> mem;
     for (size_t idx = 0; idx < units_.size(); ++idx) {
-        Unit& u = units_[idx];
-        if (u.state != State::Moving && u.state != State::Entering) continue;
+        const Unit& u = units_[idx];
+        if (!pending(u.state)) continue;
+        mem.clear();
+        ObjectId key = u.id;
+        int32_t value = value_of(u);
         if (GarrisonGroup g; group_of(u, g)) {
             if (std::find(groups.begin(), groups.end(), g.id) != groups.end()) continue;
             groups.push_back(g.id);
-            service_group(idx, g, frame, pose, group_reach);
-            continue;
+            key = g.id;
+            value = g.value > 0 ? g.value : 0;
+            for (size_t i = idx; i < units_.size(); ++i) {
+                const Unit& m = units_[i];
+                GarrisonGroup mg;
+                if (pending(m.state) && m.host == u.host && group_of(m, mg) && mg.id == g.id) mem.push_back(i);
+            }
+        } else {
+            mem.push_back(idx);
         }
-        const ObjectId host = u.host;
-        const int32_t hi = holder_index(host);
-        Vec3 up, uf, hp, hf;
-        auto drop = [&] {
-            u.state = State::None;
-            u.host = kNoObject;
-            push(GarrisonEventKind::OrderDropped, u, host, up, frame);
-        };
-        if (hi < 0 || !pose(u.id, up, uf) || !pose(host, hp, hf)) {
-            drop();
-            continue;
-        }
-        Holder& h = holders_[static_cast<size_t>(hi)];
-        if (thief_holder(h) || !host_open(h, u.owner) || free_slots(host) < value_of(u)) {  // s78n t12 review: thief holder
-            drop();
-            continue;
-        }
-        if (u.state == State::Moving) {
-            const Vec3 a = approach_point(host, hp, hf);
-            const float dx = up.x - a.x, dy = up.y - a.y;
-            const float reach = (h.d.radius > cfg_.reach_slack ? h.d.radius : cfg_.reach_slack) + u.d.radius;
-            if (dx * dx + dy * dy > reach * reach) continue;  // still walking
-            u.state = State::Entering;
-            u.enter_at = frame + cfg_.enter_frames;
-            push(GarrisonEventKind::EnterStarted, u, host, up, frame);
-            continue;
-        }
-        if (frame < u.enter_at) continue;
-        u.state = State::Inside;
-        h.inside.push_back(u.id);
-        push(GarrisonEventKind::Entered, u, host, hp, frame);
+        service_key(mem, key, value, frame, pose, approach);
     }
 }
 
@@ -452,6 +536,12 @@ void GarrisonSystem::hash(StateHasher& h) const {
         h.u8(static_cast<uint8_t>(u.state));
         h.i32(u.host);
         h.u32(u.enter_at);
+        h.i32(u.bone);  // s78n t20 batch 2
+        h.boolean(u.awaiting);
+        h.f32(u.memo.x);
+        h.f32(u.memo.y);
+        h.f32(u.memo.z);
+        h.u32(u.retries);
     }
 }
 

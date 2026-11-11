@@ -1467,11 +1467,17 @@ private:
     void s4_squad_enter(TacticalMode& mode, const Unit& u, Vec3 host);
     // s78n t18 (FIGHTER_FLYING §7.4): the movement-backed land squad container a unit garrisons with (kNoObjectId: it
     // garrisons on its own), GarrisonSystem's group of a unit (the container type's Garrison_Value, default 1, and
-    // Garrison_Category), the squad's live members of an order, and the range test's radius 0x443ce0 (the 3-D length of
-    // the half extents of the members' live union box 0x405320).
+    // Garrison_Category), the squad's live members of an order, and the range tests' radius 0x443ce0 of an approaching
+    // key (s78n t20 batch 2: the 3-D length of the half-extent vector of its world box - a squad container's the members'
+    // live union box 0x405320, a unit's its own TacticalMode::bounds_of box).
     objects::ObjectId s4_squad_of(objects::ObjectId unit) const;
     bool s4_group(objects::ObjectId unit, tactical::garrison::GarrisonGroup& g) const;
-    float s4_squad_radius(TacticalMode& mode, objects::ObjectId container) const;
+    float s4_reach_radius(TacticalMode& mode, objects::ObjectId key) const;
+    // s78n t20 batch 2: a holder's entry bones (BattleCatalog::entry_bones) into its descriptor
+    void s4_holder_bones(uint32_t type, tactical::garrison::HolderDesc& hd) const;
+    // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", death 0x391310): a GARRISON_HOVER host dying while not grounded
+    // kills its occupants - called by the death paths before the host's mover is removed (the hover state goes with it).
+    void s4_hover_death(objects::ObjectId id, Vec3 at, Vec3 facing);
     Vec3 s4_squad_leave(TacticalMode& mode, const tactical::garrison::GarrisonEvent& e, std::vector<SquadExit>& outs,
                         std::vector<tactical::garrison::GarrisonEvent>& events);
     std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
@@ -1720,6 +1726,14 @@ private:
     void s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 at, objects::ObjectId holder = objects::kNoObjectId);
     void s4_hold(TacticalMode& mode, objects::ObjectId holder);  // cu8l t02: a garrison host's stop-and-hold
     void s4_apply(TacticalMode& mode);  // garrison / capture events -> movement, combat, store, owners, story feeds
+    // s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 1): the approach order of `ids` (live units of one player, squads
+    // expanded) to `holder` - per key (squad container or unit) the destination and bone, one checked group move per bone,
+    // then GarrisonSystem::order_enter. `reissue`: the retry of a finished approach (no reservation hold). The units
+    // ordered.
+    uint32_t s4_approach(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId holder, SimRng& rng,
+                         bool reissue);
+    // the units an approach event names: a squad member -> the squad's members approaching `holder`; else the unit
+    std::vector<objects::ObjectId> s4_key_units(objects::ObjectId unit, objects::ObjectId holder) const;
     commands::RejectReason s4_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void s4_hash(StateHasher& h) const;
     tactical::garrison::GarrisonSystem garrison_;

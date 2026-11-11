@@ -675,7 +675,6 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                 if (store.alive(th) && !garrison_.is_unit(q.source)) {
                     tg::OccupantDesc od;
                     od.value = tg::kBoardOnlyValue;
-                    od.radius = mv::unit_desc_from_type(catalog_->types(), store.type(th)).radius;
                     s4_store_ = &store;
                     s4_init();
                     garrison_.add_unit(q.source, store.owner(th), od);
