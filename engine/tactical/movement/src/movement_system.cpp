@@ -1762,8 +1762,10 @@ void MovementSystem::resolve_collision(CollisionObject& c, bool full, uint32_t f
             }
             // [port] one object per pair: each participant responds from its own side (its own contact test) on its
             // own collision-check frames; the speed cap / hold / side-step it sets lasts until its next check, as the
-            // pre-layer per-unit checks did. Full and fallback are the same (no dynamic pathfinder use).
-            if (a.check_countdown == check_phase) mvm_response(a, b, frame);
+            // pre-layer per-unit checks did. Full and fallback are the same (no dynamic pathfinder use). Both sides
+            // respond only while both still walk an order path: an earlier record's service this frame may have ended
+            // one (the early-arrival cut, MOVEMENT 5.4.4 item 5, leaves the waypoint index at or past the cut list's end)
+            if (a.check_countdown == check_phase && checker_moving(a, frame) && other_moving(b)) mvm_response(a, b, frame);
             if (b.check_countdown == check_phase && !crushes(b, a) && checker_moving(b, frame) && other_moving(a) &&
                 mvm_contact(b, a))
                 mvm_response(b, a, frame);
