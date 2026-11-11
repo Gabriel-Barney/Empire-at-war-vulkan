@@ -4137,6 +4137,207 @@ void test_land_attack_blocks() {
     CHECK(e.ordered && e.gated && e.ended_in_range && e.fired && e.fire_frames <= 300 && e.info_bad == 0);
 }
 
+// s78n t25.3 (MOVEMENT §4.3.2 items 2 - 8, FIGHTER_FLYING §4.11 A / E): every land attack order goes through the attack
+// block (TacticalBattle::land_attack_order). Two human squads 300 apart across the approach, 600 from the target (beyond
+// the recruitment distance: two formations; not solo: 600 > foot + engage + Solo_Attack_Range), given ONE Attack:
+//   (iv) one movement attack order (MovementStats::attack_orders + 1), both containers slotted (atk_rho > 0) at different
+//        angles, both end in weapon range (can_hit Yes, no goal) and fire within 300 frames of that, apart from each other;
+//   (v)  the target's squad is then teleported 200 farther: the next 30-frame re-check re-plans (a goal again,
+//        attack_replans + 1) and the slot is bit-identical (theta, rho, the attack formation);
+//   (vii) a Stop clears the first squad's slot, a plain move the second's.
+// (vi, a structure target: the test data has no stamped structure; covered by alamo_tactical_movement_b5_tests, the
+// stamped-cell scene: rho 0, the goal outside the footprint.)
+struct LandAttackTwoRun {
+    bool ordered = false, one_order = false, slotted = false, distinct = false, apart = false;
+    bool ended[2] = {false, false}, fired[2] = {false, false};
+    uint32_t end_frame[2] = {0, 0}, fire_frames[2] = {0, 0};
+    float theta[2] = {0.0f, 0.0f}, rho[2] = {0.0f, 0.0f};
+    bool teleported = false, replanned = false, same_slot = false;
+    uint32_t replan_frames = 0;
+    bool stop_cleared = false, move_cleared = false;
+};
+
+LandAttackTwoRun run_land_attack_two(const Data& d) {
+    LandAttackTwoRun out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 8000;
+    opt.battle.skip_human_units = true;
+    opt.battle.order_interval = 0;  // no stand-in orders
+    ClashSession s(d, 0, opt, {"S10_Squad", "S10_Squad"}, {}, true);
+    if (!s.gs) return out;
+    int stage = 0;
+    uint32_t stage_frame = 0;
+    objects::ObjectId sq[2] = {objects::kNoObjectId, objects::kNoObjectId}, spare = objects::kNoObjectId;
+    std::vector<objects::ObjectId> mem[2];
+    objects::ObjectId target = objects::kNoObjectId;
+    Vec3 dir{};
+    mv::UnitView slot0;
+    uint32_t replans0 = 0;
+    for (uint64_t t = 0; t < 9000 && stage < 9; ++t) {
+        TacticalBattle* b = s.tick();
+        TacticalMode* tm = s.host->tactical();
+        if (!b || !tm || b->frame() < 3) {
+            if (stage > 0) break;
+            continue;
+        }
+        objects::ObjectStore& st = tm->primary();
+        auto& cs = const_cast<tc::CombatSystem&>(b->combat());
+        const mv::MovementSystem& ms = b->movement();
+        if (stage == 0) {
+            std::map<uint32_t, std::vector<objects::ObjectId>> teams;
+            for (size_t i = 0; i < cs.unit_count(); ++i) {
+                const auto id = cs.unit_id_at(i);
+                cs.make_invulnerable(id, 1000000, b->frame());
+                if (cs.team(id) != 0 && cs.alive(id)) teams[cs.team(id)].push_back(id);
+            }
+            for (const auto& [tid, m] : teams) {
+                const objects::ObjectHandle th = st.find(static_cast<objects::ObjectId>(tid));
+                if (m.size() < 2 || !st.alive(th) || !ms.has_unit(static_cast<objects::ObjectId>(tid))) continue;
+                if (st.owner(th) == 0) {
+                    if (sq[0] == objects::kNoObjectId) {
+                        sq[0] = static_cast<objects::ObjectId>(tid);
+                        mem[0] = m;
+                    } else if (sq[1] == objects::kNoObjectId) {
+                        sq[1] = static_cast<objects::ObjectId>(tid);
+                        mem[1] = m;
+                    } else if (spare == objects::kNoObjectId) {
+                        spare = static_cast<objects::ObjectId>(tid);
+                    }
+                } else if (st.owner(th) == 1 && target == objects::kNoObjectId) {
+                    target = m.front();
+                }
+            }
+            CHECK(sq[1] != objects::kNoObjectId && target != objects::kNoObjectId);
+            if (sq[1] == objects::kNoObjectId || target == objects::kNoObjectId) break;
+            const Vec3 tp = st.position(st.find(target)), ap = st.position(st.find(sq[0]));
+            const float dx = ap.x - tp.x, dy = ap.y - tp.y, dl = std::sqrt(dx * dx + dy * dy);
+            dir = dl > 1.0f ? Vec3{dx / dl, dy / dl, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+            const Vec3 perp{-dir.y, dir.x, 0.0f};
+            for (int k = 0; k < 2; ++k) {
+                const float side = k == 0 ? 150.0f : -150.0f;
+                const Vec3 p{tp.x + dir.x * 600.0f + perp.x * side, tp.y + dir.y * 600.0f + perp.y * side, ap.z};
+                CHECK(b->teleport(*tm, sq[k], p, st.facing(st.find(sq[k]))));
+            }
+            if (spare != objects::kNoObjectId)  // the third squad out of the way, behind them
+                CHECK(b->teleport(*tm, spare, Vec3{tp.x + dir.x * 1000.0f, tp.y + dir.y * 1000.0f, ap.z}, st.facing(st.find(spare))));
+            stage = 1;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (!cs.alive(target)) break;
+        bool fired[2] = {false, false};
+        for (const tc::ShotEvent& ev : cs.shot_events())
+            for (int k = 0; k < 2; ++k)
+                for (const auto id : mem[k])
+                    fired[k] = fired[k] || (ev.shooter == id && (ev.target == target || cs.team(ev.target) == cs.team(target)));
+        if (stage == 1) {
+            if (b->frame() < stage_frame + 2) continue;
+            std::vector<objects::ObjectId> all = mem[0];
+            all.insert(all.end(), mem[1].begin(), mem[1].end());
+            const uint32_t orders0 = ms.stats().attack_orders;
+            out.ordered = b->order_attack(*tm, 0, all, target, s.host->random().synced()) == commands::RejectReason::None;
+            CHECK(out.ordered);
+            out.one_order = ms.stats().attack_orders == orders0 + 1;
+            const mv::UnitView v0 = ms.view(sq[0]), v1 = ms.view(sq[1]);
+            out.theta[0] = v0.atk_theta;
+            out.theta[1] = v1.atk_theta;
+            out.rho[0] = v0.atk_rho;
+            out.rho[1] = v1.atk_rho;
+            out.slotted = v0.atk_rho > 0.0f && v1.atk_rho > 0.0f && v0.atk_form != 0 && v1.atk_form != 0 && v0.atk_form != v1.atk_form;
+            out.distinct = v0.atk_theta != v1.atk_theta;
+            stage = 2;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 2) {
+            for (int k = 0; k < 2; ++k) {
+                if (!out.ended[k]) {
+                    if (fired[k]) out.fired[k] = true;  // a member may fire on the way (in range while walking)
+                    if (cs.can_hit(mem[k].front(), target) == tc::CanHit::Yes && !ms.view(sq[k]).has_goal) {
+                        out.ended[k] = true;
+                        out.end_frame[k] = b->frame();
+                    }
+                } else if (!out.fired[k] && fired[k]) {
+                    out.fired[k] = true;
+                    out.fire_frames[k] = b->frame() - out.end_frame[k];
+                }
+            }
+            const bool done = out.ended[0] && out.ended[1] && out.fired[0] && out.fired[1];
+            const bool late = (out.ended[0] && !out.fired[0] && b->frame() > out.end_frame[0] + 300) ||
+                              (out.ended[1] && !out.fired[1] && b->frame() > out.end_frame[1] + 300);
+            if (done || late || b->frame() > stage_frame + 3000) {
+                for (int k = 0; k < 2; ++k)
+                    if (out.ended[k]) out.end_frame[k] -= stage_frame;
+                const Vec3 a = st.position(st.find(sq[0])), c = st.position(st.find(sq[1]));
+                const float sep = std::sqrt((a.x - c.x) * (a.x - c.x) + (a.y - c.y) * (a.y - c.y));
+                out.apart = sep > ms.collision_radius(sq[0]) + ms.collision_radius(sq[1]);
+                if (!done) {
+                    stage = 9;
+                    break;
+                }
+                // (v): the target's squad 200 farther from the attackers
+                slot0 = ms.view(sq[0]);
+                replans0 = ms.stats().attack_replans;
+                const auto tc_id = static_cast<objects::ObjectId>(cs.team(target));
+                const objects::ObjectHandle th = st.find(tc_id);
+                const Vec3 tp = st.position(th);
+                out.teleported = b->teleport(*tm, tc_id, Vec3{tp.x - dir.x * 200.0f, tp.y - dir.y * 200.0f, tp.z}, st.facing(th));
+                CHECK(out.teleported);
+                stage = 3;
+                stage_frame = b->frame();
+            }
+            continue;
+        }
+        if (stage == 3) {
+            const mv::UnitView v = ms.view(sq[0]);
+            if (v.has_goal && ms.stats().attack_replans > replans0) {
+                out.replanned = true;
+                out.replan_frames = b->frame() - stage_frame;
+                out.same_slot = v.atk_theta == slot0.atk_theta && v.atk_rho == slot0.atk_rho && v.atk_form == slot0.atk_form &&
+                                v.atk_target == slot0.atk_target && v.atk_rho > 0.0f;
+                stage = 4;
+            } else if (b->frame() > stage_frame + 40) {
+                stage = 4;
+            }
+            continue;
+        }
+        if (stage == 4) {  // (vii)
+            CHECK(b->order_stop(*tm, 0, mem[0]) == commands::RejectReason::None);
+            const mv::UnitView v0 = ms.view(sq[0]);
+            out.stop_cleared = v0.atk_rho == 0.0f && v0.atk_theta == 0.0f && v0.atk_form == 0 && v0.atk_target == -1;
+            const Vec3 p = st.position(st.find(sq[1]));
+            CHECK(b->order_move(*tm, 0, mem[1], p.x + dir.x * 100.0f, p.y + dir.y * 100.0f, s.host->random().synced()) ==
+                  commands::RejectReason::None);
+            const mv::UnitView v1 = ms.view(sq[1]);
+            out.move_cleared = v1.atk_rho == 0.0f && v1.atk_theta == 0.0f && v1.atk_form == 0 && v1.atk_target == -1;
+            stage = 9;
+        }
+    }
+    return out;
+}
+
+void test_land_attack_order() {
+    auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+                       false, false, true);
+    const LandAttackTwoRun r = run_land_attack_two(*d);
+    std::printf("  land attack order (iv): ordered %d, one movement order %d, slotted %d (theta %.7f / %.7f, rho %.3f / %.3f), "
+                "distinct %d; ended in range %d / %d after %u / %u frame(s), fired %d / %d (%u / %u frame(s) after the end), "
+                "apart %d\n",
+                r.ordered ? 1 : 0, r.one_order ? 1 : 0, r.slotted ? 1 : 0, static_cast<double>(r.theta[0]), static_cast<double>(r.theta[1]),
+                static_cast<double>(r.rho[0]), static_cast<double>(r.rho[1]), r.distinct ? 1 : 0, r.ended[0] ? 1 : 0, r.ended[1] ? 1 : 0,
+                r.end_frame[0], r.end_frame[1], r.fired[0] ? 1 : 0, r.fired[1] ? 1 : 0, r.fire_frames[0], r.fire_frames[1],
+                r.apart ? 1 : 0);
+    CHECK(r.ordered && r.one_order && r.slotted && r.distinct);
+    CHECK(r.ended[0] && r.ended[1] && r.fired[0] && r.fired[1] && r.fire_frames[0] <= 300 && r.fire_frames[1] <= 300 && r.apart);
+    std::printf("  land attack order (v): target teleported 200 %d, re-planned %d after %u frame(s), slot bit-identical %d; "
+                "(vii) Stop clears the slot %d, a plain move clears it %d\n",
+                r.teleported ? 1 : 0, r.replanned ? 1 : 0, r.replan_frames, r.same_slot ? 1 : 0, r.stop_cleared ? 1 : 0,
+                r.move_cleared ? 1 : 0);
+    CHECK(r.teleported && r.replanned && r.replan_frames <= 31 && r.same_slot);
+    CHECK(r.stop_cleared && r.move_cleared);
+}
+
 void test_land_squad_garrison_save_load() {
     auto d = make_data(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
                        false, false, false, true);
@@ -4372,6 +4573,7 @@ int main(int argc, char** argv) {
     test_land_hover_garrison_death();  // s78n t20 batch 2 item 2.4
     std::printf("s78n t20 stage A: the land attack re-check (displaced squad, friendly squads on the line, save / load)\n");
     test_land_attack_blocks();
+    test_land_attack_order();
     test_land_attack_reach();  // s78n t20 review follow-ups
     test_land_death_clone_obstacle();  // s78n t20 batch 1 item 1.5
     test_vehicle_landing_exit();

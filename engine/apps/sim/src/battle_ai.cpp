@@ -831,7 +831,8 @@ bool BattleAi::move_unit(objects::ObjectId id, float x, float y, float threat_th
     o.flags = flags;  // s78f t10: the order's block flags (0x01 attack-move / 0x02 guard)
     o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // s78f t10: the object block (movement: -1 = none)
     // s78n t20 (MOVEMENT 4.3.1 items 2 / 6): an object goal (block kind 3) takes neither the destination check nor the
-    // single-member shortcut. The check's object test has no exemption for the order's target (retail sends kind 3 to
+    // single-member shortcut. s78n t25.3: land attack blocks are TacticalBattle::land_attack_order; what is left here on
+    // land is the a1h follow and the Guard_Target / non-attack Attack_Move object blocks ([port] until t25.4). The check's object test has no exemption for the order's target (retail sends kind 3 to
     // the attack-arc slot test 0x438c10, which leaves the target out), so run on an object goal it moves the goal off
     // the very object the units were sent to: attackers end out of weapon range of a standing enemy and never fire.
     o.skip_destination_check = object_block || goal_object != objects::kNoObjectId;
@@ -1037,6 +1038,9 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     if (std::find(attackers.begin(), attackers.end(), mid) == attackers.end()) attackers.push_back(mid);
             follow_drop(attackers);  // a1h t02: a newer order (signal 0xb, A1_READINGS §33.3)
             std::vector<TacticalBattle::TeamPick> picks;
+            // s78n t25.3 (MOVEMENT §4.3.2 item 2): on land the attackers of each resolved target (groups in order of first
+            // appearance) form one movement order with the attack block (TacticalBattle::land_attack_order)
+            std::vector<std::pair<objects::ObjectId, std::vector<objects::ObjectId>>> groups;
             for (const objects::ObjectId aid : attackers) {
                 const TacticalBattle::Unit* u = b_->unit_by_id(aid);
                 if (!u) continue;
@@ -1055,8 +1059,10 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                                       ct && b_->movement_->fighter_squad(ct->id) ? ct->id : tu->id);
                 ++n;
                 if (!u->movable) continue;
-                if (!b_->space_) {  // s78n t20 stage A (MOVEMENT §4.3.2 item 6, FIGHTER_FLYING §4.11 A / E): no path when it can hit
-                    b_->attack_approach(*mode_, *u, tp, host_->random().synced(), objects::kNoObjectId, tu->id);
+                if (!b_->space_) {  // s78n t20 stage A / t25.3 (MOVEMENT §4.3.2, FIGHTER_FLYING §4.11 A / E)
+                    auto g = std::find_if(groups.begin(), groups.end(), [&](const auto& x) { return x.first == tu->id; });
+                    if (g == groups.end()) g = groups.insert(groups.end(), {tu->id, {}});
+                    g->second.push_back(u->id);
                     b_->attack_block_set(u->id, ct ? ct->id : tu->id, 0, tp);
                     continue;
                 }
@@ -1083,6 +1089,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     b_->movement_->fighter_new_order(o, b_->frame_);
                 }
             }
+            for (const auto& [tid, us] : groups)
+                (void)b_->land_attack_order(*mode_, us, tid, st.position(b_->unit_by_id(tid)->h), 0, false, host_->random().synced());
             return n ? R::None : R::InvalidUnit;
         }
         case T::PortExtension: {
@@ -1157,25 +1165,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     }
                     for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tu->id, -1);
                     // Staging (0x40e260 [M], §2.8): land formations (type 1) only - a single space Attack_Move is not staged.
-                    // The member M with the largest Targeting_Min_Attack_Distance, when inside that min range of the target,
-                    // moves the goal to d = min + 0.2 x (Get_Base_Attack_Range(M) - min) from the target [port: on the line
-                    // from the target to M].
-                    if (!b_->space_) {
-                        objects::ObjectId m = objects::kNoObjectId;
-                        float mn = 0.0f;
-                        for (const objects::ObjectId id : group.units)
-                            if (b_->combat_->has_unit(id) && b_->combat_->min_attack_distance(id) > mn) {
-                                mn = b_->combat_->min_attack_distance(id);
-                                m = id;
-                            }
-                        if (m != objects::kNoObjectId && b_->combat_->inside_min_range(m, tu->id)) {
-                            const float d = mn + 0.2f * (b_->combat_->base_attack_range_of(m) - mn);
-                            const Vec3 mp = st.position(b_->unit_by_id(m)->h);
-                            const float dx = mp.x - tp.x, dy = mp.y - tp.y, len = dmath::sqrt(dx * dx + dy * dy);
-                            x = len > 0.0f ? tp.x + dx / len * d : tp.x + d;
-                            y = len > 0.0f ? tp.y + dy / len * d : tp.y;
-                        }
-                    }
+                    // s78n t25.3: on land it is TacticalBattle::attack_stage_goal, inside the attack order below.
                 } else if (order == lua::LuaOrder::AttackMove) {
                     for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
                 }
@@ -1204,24 +1194,13 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             const bool attack_block = !b_->space_ && order == lua::LuaOrder::AttackMove && !point_goal && atu && atu->alive &&
                                       !atu->retreated && b_->combat_->has_unit(atu->id) && hostile_owner(player, st.owner(atu->h));
             if (attack_block) {
+                // s78n t25.3 (MOVEMENT §4.3.2 items 2 / 6 / 7): one movement order with the attack block (flags 0x01) for
+                // the movers; the staging 0x40e260 is the builder's (attack_stage_goal); a formation whose members can all
+                // fire already is stopped by the plan (item 6), the others take the slot and the fire trim
                 const Vec3 tp = st.position(atu->h);
-                std::vector<objects::ObjectId> path_units;
-                for (const objects::ObjectId id : group.units) {
-                    b_->attack_block_set(id, atu->id, mv::kMoveFlagAttackMove, tp);
-                    const tc::CanHit c = b_->combat_->has_unit(id) ? b_->attack_can_hit(id, atu->id) : tc::CanHit::NoTarget;
-                    if (c != tc::CanHit::Yes) {
-                        path_units.push_back(id);
-                        continue;
-                    }
-                    const objects::ObjectId mover = b_->attack_mover(id);
-                    if (!b_->movement_locked(id) && b_->movement_->has_unit(mover) && b_->movement_->view(mover).has_goal) {
-                        const objects::ObjectId one[] = {id};
-                        b_->movement_->halt(one, b_->frame_);  // s78n t20 review: no speed zeroing (End Move)
-                    }
-                }
-                group.units = std::move(path_units);
-                if (group.units.empty()) return R::None;
-                u = b_->unit_by_id(group.units.front());
+                for (const objects::ObjectId id : group.units) b_->attack_block_set(id, atu->id, mv::kMoveFlagAttackMove, tp);
+                (void)b_->land_attack_order(*mode_, group.units, atu->id, tp, mv::kMoveFlagAttackMove, false, host_->random().synced());
+                return R::None;
             }
             if (tw != cmd::kNoObject && !point_goal && !attack_block) {  // a1h t02: an object goal (kind 3) is followed by the movement layer (§33.4)
                 const Vec3 tp = st.position(st.find(static_cast<objects::ObjectId>(tw)));
@@ -1756,7 +1735,14 @@ void BattleAi::standin_orders() {
         if (dist <= 0.8f * range && !b_->standin_recheck(u, best->id)) continue;
         if (!(dist > 0.0f)) continue;  // s78n t20 review: on the enemy's position there is no approach line
         const Vec3 ep = st.position(best->h);
-        // s78n t20 interim, replaced by t25 (the arc slots): the approach aims with the unit's own range (no 100 floor)
+        if (!b_->space_) {  // s78n t25.3 [port] (MOVEMENT §4.3.2 item 2): the auto-attack block push 0x41fd30, one unit
+            if (b_->movement_locked(u.id)) continue;
+            const objects::ObjectId one[] = {u.id};
+            (void)b_->land_attack_order(*mode_, one, best->id, ep, 0, false, host_->random().synced());
+            ++b_->stats_.orders;
+            continue;
+        }
+        // s78n t20 interim (space): the approach aims with the unit's own range (no 100 floor)
         const float k = (dist - 0.7f * (u.range > 0.0f ? u.range : range)) / dist;
         const Vec3 dest{up.x + (ep.x - up.x) * k, up.y + (ep.y - up.y) * k, 0.0f};
         if (dist <= 0.8f * range && (dest.x - up.x) * (dest.x - up.x) + (dest.y - up.y) * (dest.y - up.y) < 10.0f * 10.0f) continue;

@@ -174,7 +174,7 @@ struct BattleStats {
     // adopt draws, the arrivals started and the arrival ends that registered a new coordinator.
     uint32_t fleet_placed = 0, fleet_adopts = 0, fleet_lock_adopts = 0, fleet_arrivals = 0, fleet_arrival_ends = 0;
     // s78n t20 stage A (land attack blocks; not saved): approaches re-issued by the 30-frame checks, land stops, and
-    // re-approaches skipped because their goal was where the mover stood.
+    // re-approaches skipped because their goal was where the mover stood (s78n t25.3: not retail, dropped - always 0).
     uint32_t attack_reissues = 0, attack_land_stops = 0, attack_reissue_skips = 0;
 };
 
@@ -1622,10 +1622,11 @@ private:
     //   - arrived (no goal, no collision-owned top record) and not c -> plan again (0x410a60);
     //   - moving, c, not braking for its end (Walk End Move) and D <= R -> land stop (0x4192b0 / 0x40e7a0);
     //   - moving and (braking and not c, or D > R) -> plan again.
-    // A plan (land_attack_plan) issues no path when c holds (the members stop: §4.3.2 item 6); else [port] the 0.7 x range
-    // point toward the target (Attack) or the target's position (Attack_Move), skipped when that is where the mover stands.
-    // Dropped by team_attack_drop (every new order and Stop), the target's death or when the lead's order no longer
-    // names it. Saved (battle state 12), hashed while any exists.
+    // A plan (land_attack_order, replan) is the movement's attack block (MOVEMENT §4.3.2 items 6 - 8): no path when
+    // every member can fire, else the path to the staged target point, cut back to where every member can fire.
+    // s78n t25.3: the re-plan takes every block on the same target whose mover is in the same attack formation
+    // (UnitView::atk_form), their timers reset together. Dropped by team_attack_drop (every new order and Stop), the
+    // target's death or when the lead's order no longer names it. Saved (battle state 12), hashed while any exists.
     struct AttackBlock {
         objects::ObjectId mover = objects::kNoObjectId;   // ascending
         objects::ObjectId target = objects::kNoObjectId;  // the target unit, or a TEAM container (TeamAttack)
@@ -1644,13 +1645,31 @@ private:
     void attack_block_set(objects::ObjectId unit, objects::ObjectId target, uint8_t flags, Vec3 goal);  // land only
     void attack_block_drop(std::span<const objects::ObjectId> ids);
     void attack_block_service(TacticalMode& mode, SimRng& rng);
-    enum class AttackPlan : uint8_t { None, Stopped, Moved, Skipped };
-    AttackPlan land_attack_plan(TacticalMode& mode, const Unit& u, objects::ObjectId target, Vec3 tp, uint8_t flags, SimRng& rng);
-    // exec_attack's approach: a movable, unlocked unit farther than 80 % of max(range, 100) from `tp` moves to 70 %. With a
-    // `goal` (the order's object block), a fighter's move names it, and in range the fighter still gets a new formation.
-    // s78n t20 stage A: on land with a `target` the plan is land_attack_plan (no path when the unit can already hit).
+    enum class AttackPlan : uint8_t { None, Stopped, Moved };
+    // s78n t25.3 (MOVEMENT §4.3.2, FIGHTER_FLYING §4.11 A / E): every land attack order on an object - the human and AI
+    // Attack (one call per resolved target), the AI's Attack_Move on an enemy object (flags 0x01), the stand-in loops'
+    // auto-attack pushes (0x41fd30, one unit), the TEAM re-pick and the stage A re-plans (replan) - is one movement order
+    // with the attack block (mv::MoveOrder::attack): locked / immovable units dropped; G = the staging 0x40e260
+    // (attack_stage_goal); the target's footprint half extents (0x396850: its movement collision_half, else the type's
+    // hard extents); per mover (a squad container is answered by its first live member, attack_lead) the engagement
+    // range 0x4f6e40 = Get_Max_Attack_Range + min(hx, hy) ([port] always added: no pending-ability clause), in range =
+    // attack_can_hit in {Yes, LineBlocked} (slots 44 / 45) and the melee test; the fire trim gated by fog (the target
+    // point not fogged for the first unit's owner) and stealth (a stealthed target and a first unit without
+    // Target_Stealth_Units). Returns Moved when some mover got a goal, Stopped when the plan's "every member can fire"
+    // stop took them, None otherwise. Land only.
+    AttackPlan land_attack_order(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp,
+                                 uint8_t flags, bool replan, SimRng& rng);
+    // s78n t25.3 (0x40e260, TACTICAL_COMBAT §2.8): G = T's position, unless the unit with the largest
+    // Targeting_Min_Attack_Distance is inside that min range of T: then min + 0.2 x (base range - min) from T toward it.
+    Vec3 attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp);
+    // s78n t25.3: the unit that answers for mover `mover` (0x40edd0 tests a team container through its first member): a
+    // land squad container's first live member in team slot order, else the mover; kNoObjectId when none.
+    objects::ObjectId attack_lead(objects::ObjectId mover);
+    // exec_attack's approach (space): a movable, unlocked unit farther than 80 % of max(range, 100) from `tp` moves to
+    // 70 %. With a `goal` (the order's object block), a fighter's move names it, and in range the fighter still gets a new
+    // formation. s78n t25.3: on land with a `target` it is land_attack_order for the one unit (`replan` for the TEAM re-pick).
     void attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal = objects::kNoObjectId,
-                         objects::ObjectId target = objects::kNoObjectId);
+                         objects::ObjectId target = objects::kNoObjectId, bool replan = false);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
     // --- end queueable unit actions ---
