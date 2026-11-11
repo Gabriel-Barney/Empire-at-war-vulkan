@@ -18,6 +18,7 @@
 #include <functional>
 #include <span>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
@@ -1359,6 +1360,70 @@ void test_t20_states() {
         for (const uint32_t at : {seen[2][0] + 29u, seen[2][0] + 30u, seen[2][0] + 31u}) check_resume(sc, at, 0);
 }
 
+// s78n t25.2 (MOVEMENT §4.3.2, save version 25): an attack order on land - two attackers with a slot each (Unit::atk_*),
+// a fire hook (host setup, re-set by the loader like every hook) - saved between the order and the arrival, while the
+// slot leg is walked, and after the trim's arrival; the resumed run is identical.
+void build_t25_attack(World& w) {
+    PassabilityGrid g;
+    g.init(100, 60);
+    w.sys.set_grid(std::move(g));
+    w.rng = SimRng(61);
+    const V2 c = cell_center(55, 30);
+    for (const auto& [id, y] : {std::pair<ObjectId, int32_t>{10, 23}, std::pair<ObjectId, int32_t>{11, 37}}) {
+        UnitDesc d = t20_save_vehicle(id, cell_center(5, y));
+        d.hard_x = d.hard_y = 15.0f;
+        CHECK(w.sys.add_unit(d));
+    }
+    UnitDesc t = t20_save_vehicle(900, c);
+    t.hard_x = t.hard_y = 5.0f;
+    t.owner = 2;
+    CHECK(w.sys.add_unit(t));
+    w.sys.set_fire_test([c](ObjectId, V2 p, ObjectId, bool) { return distance(p, c) <= 255.0f; });
+}
+
+void t25_attack_before(World& w, uint32_t f) {
+    if (f != 1) return;
+    MoveOrder o;
+    o.units = {10, 11};
+    o.destination = cell_center(55, 30);
+    o.attack.target = 900;
+    o.attack.c = o.attack.g = cell_center(55, 30);
+    o.attack.t_hx = o.attack.t_hy = 5.0f;
+    for (const ObjectId id : o.units) {
+        LandAttackUnit e;
+        e.id = id;
+        e.range = 250.0f;
+        e.engage = 255.0f;
+        o.attack.units.push_back(e);
+    }
+    w.sys.move(o, w.rng, f);
+}
+
+void test_t25_attack() {
+    Scenario sc;
+    sc.name = "land attack approach (s78n t25.2)";
+    sc.build = build_t25_attack;
+    sc.before = t25_attack_before;
+    sc.after = squad_after;
+    sc.frames = 700;
+    World v(sc.cfg);
+    sc.build(v);
+    uint32_t moving_first = 0, moving_last = 0;
+    for (uint32_t f = 0; f < sc.frames; ++f) {
+        step(sc, v, f, serial_for);
+        const UnitView a = v.sys.view(10);
+        if (a.atk_rho > 0.0f && a.has_goal && a.speed > 0.0f) {
+            if (moving_first == 0) moving_first = f + 1;
+            moving_last = f + 1;
+        }
+    }
+    CHECK(moving_first > 0 && moving_last > moving_first + 100);
+    CHECK(v.sys.view(10).atk_rho > 0.0f && v.sys.view(11).atk_rho > 0.0f && v.sys.view(10).atk_theta != v.sys.view(11).atk_theta);
+    std::printf("land attack saves: approach frames %u..%u\n", moving_first, moving_last);
+    for (const uint32_t at : {2u, moving_first, (moving_first + moving_last) / 2, moving_last, moving_last + 20u}) check_resume(sc, at, 0);
+    check_resume(sc, (moving_first + moving_last) / 2, 31);
+}
+
 // s78n t18 review: a TEAM entry that goes without a steering member leaving - a member suspended for a hero clash that
 // is removed (0), a garrisoned (parked) member that dies inside (1), a rejoin the system refuses (2: the unit is not in
 // it) - leaves the entry list at once: the joint box, the container's radius and the rate 0x5ab540 are those a loaded
@@ -1665,7 +1730,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 23);  // 23: before the s78n t24 TerrainCollision (push_turn_first, the re-plan counts dropped) (24)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 25);
+    put_u32(bad, 0, 24);  // 24: before the s78n t25.2 land attack block (Unit::atk_*, the attack counters) (25)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 26);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
@@ -1841,6 +1908,7 @@ int main() {
     }
     test_t18_states();              // s78n t18 review
     test_t20_states();              // s78n t20
+    test_t25_attack();              // s78n t25.2
     test_stale_team_entries();      // s78n t18 review
     test_hidden_after_load();       // s78n t18 review
     test_t18_review_rejections();   // s78n t18 review

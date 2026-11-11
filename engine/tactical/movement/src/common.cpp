@@ -79,6 +79,11 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.space_guard_range = gc.get_float("Space_Guard_Range", c.space_guard_range);  // S7 t37
     c.land_guard_range = gc.get_float("Land_Guard_Range", c.land_guard_range);
     c.max_waypoints_per_path = get_u32(gc, "MaxWaypointsPerPath", c.max_waypoints_per_path);  // s78f t02
+    c.base_land_targeting_arc_angle_coefficient =  // s78n t25.2
+        gc.get_float("Base_Land_Targeting_Arc_Angle_Coefficient", c.base_land_targeting_arc_angle_coefficient);
+    c.solo_attack_range = gc.get_float("Solo_Attack_Range", c.solo_attack_range);
+    c.short_range_attack_formation_coefficient =
+        gc.get_float("Short_Range_Attack_Formation_Coefficient", c.short_range_attack_formation_coefficient);
     return c;
 }
 

@@ -79,9 +79,10 @@ add_executable(alamo_tactical_movement_b4_tests tests/test_movement_b4.cpp)
 target_link_libraries(alamo_tactical_movement_b4_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_b4_tests COMMAND alamo_tactical_movement_b4_tests)
 set_tests_properties(alamo_tactical_movement_b4_tests PROPERTIES TIMEOUT 300)
-# s78n t25.1 (t20 batch 5): the attack approach geometry on land (MOVEMENT §4.3.2 items 2-4, 6, 7).
+# s78n t25.1 (t20 batch 5): the attack approach geometry on land (MOVEMENT §4.3.2 items 2-4, 6, 7); s78n t25.2: the attack
+# block in MovementSystem (slots, attack plan, re-plan, solo rule).
 add_executable(alamo_tactical_movement_b5_tests tests/test_movement_b5.cpp)
-target_link_libraries(alamo_tactical_movement_b5_tests PRIVATE alamo_tactical_movement alamo_test_support)
+target_link_libraries(alamo_tactical_movement_b5_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_b5_tests COMMAND alamo_tactical_movement_b5_tests)
 set_tests_properties(alamo_tactical_movement_b5_tests PROPERTIES TIMEOUT 300)
 # s78n t26.1: walking while deployed (MOVEMENT 3.2.1), the move order's skip of deployed manual deployers (6.2).

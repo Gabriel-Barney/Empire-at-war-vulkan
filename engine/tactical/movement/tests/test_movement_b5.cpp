@@ -3,14 +3,21 @@
 // the coefficient tries, the chord step, one ring (0x43b520), the ring layout (0x43d380), the trim point, the fire trim
 // (0x410e90) and the slot leg point. Hand numbers are derived in the comments from the spec's rules; each test checks the
 // rule's output against them.
+// s78n t25.2: the attack block in MovementSystem (MoveOrder::attack): the attack slots 0x438c10 with the slot test 0x43a070,
+// the per-formation attack plan (the "every member can fire" stop, the slot leg, the fire trim), the re-plan route, the
+// solo rule (§4.2 item 6) and the slot state of Unit (kept by halt, cleared by stop / teleport / plain orders).
 #include <cmath>
 #include <cstdio>
 #include <utility>
 #include <vector>
 
+#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/attack_approach.hpp"
+#include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/tactical/movement/path_around.hpp"
 #include "alamo/test/support.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical::movement;
@@ -321,9 +328,352 @@ void test_slot_leg() {
     std::printf("slot leg Q' (%.4f, %.4f)\n", static_cast<double>(q.x), static_cast<double>(q.y));
 }
 
+
+// ================================================================ s78n t25.2: MovementSystem scenes (MOVEMENT §4.3.2)
+// Open grid of 100 x 60 cells; every scene is translated by kO = (100, 600) (the spec's worked case has the attacker at
+// the origin). Attackers are vehicles with foot half extents 15 x 15 (HX = HY = 15). The fire hook is geometric:
+// |p - C| <= engage (the host's real one is CombatSystem::can_hit_from, t25.3).
+constexpr V2 kO{100.0f, 600.0f};
+
+PassabilityGrid scene_grid() {
+    PassabilityGrid g;
+    g.init(100, 60);
+    return g;
+}
+
+void scene_system(MovementSystem& sys) {
+    sys.set_grid(scene_grid());
+    sys.set_height_fn([](float, float) { return 0.0f; });
+}
+
+UnitDesc attacker(ObjectId id, V2 pos, float half = 15.0f) {
+    UnitDesc d;
+    d.id = id;
+    d.pos = pos;
+    d.max_speed = 1.0f;
+    d.turn_rate = 6.0f;
+    d.alt_max_speed = 1.0f;
+    d.alt_turn_rate = 6.0f;
+    d.accel = d.decel = 0.05f;
+    d.movement_class = 2;
+    d.collision_class = kUccVehicle;
+    d.radius = 12.0f;
+    d.hard_x = half;
+    d.hard_y = half;
+    d.owner = 1;
+    d.type_name = "B5_ATTACKER";
+    return d;
+}
+
+LandAttackUnit entry(ObjectId id, float engage, bool in_range = false) {
+    LandAttackUnit e;
+    e.id = id;
+    e.range = engage;
+    e.engage = engage;
+    e.in_range = in_range;
+    return e;
+}
+
+MoveOrder attack_order(std::vector<ObjectId> ids, ObjectId target, V2 c, float t_half, float engage, bool in_range = false) {
+    MoveOrder o;
+    o.units = ids;
+    o.destination = c;
+    o.attack.target = target;
+    o.attack.c = c;
+    o.attack.g = c;
+    o.attack.t_hx = o.attack.t_hy = t_half;
+    for (const ObjectId id : ids) o.attack.units.push_back(entry(id, engage, in_range));
+    return o;
+}
+
+void geometric_fire(MovementSystem& sys, V2 c, float engage) {
+    sys.set_fire_test([c, engage](ObjectId, V2 p, ObjectId, bool) { return distance(p, c) <= engage; });
+}
+
+// §4.3.2 item 9, the unit case: one attacker at the origin, a unit with half extents 5 standing at (1000, 0), engage
+// 250 + 5 = 255. R = 255, h = HX = 15 -> ring 240; the first try puts it at theta 0. Plan: G = (1000, 0), v = (1, 0),
+// Q = G + 240 rot(-v, 0) = (760, 0), line clear -> q = 240, Q' = (760, 0), the second path start -> Q' points the same way:
+// taken, path (0,0) -> (760,0) -> (1000,0), L = 1000. Trim (one member at depth 0): s = 1000 .. 750 pass (|p - C| = 250 <=
+// 255), 740 fails (260) -> keep 750: goal (750, 0) (hand).
+// rho is 240 to float rounding (the union box is taken on unit(C - centroid): HX = 15 x |fwd . axis| = 15 - 1 ulp-ish).
+void test_scene_unit_target() {
+    ::alamo::test::section("scene_unit_target");
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO)));
+    UnitDesc t = attacker(900, kO + V2{1000.0f, 0.0f}, 5.0f);
+    t.owner = 2;
+    CHECK(sys.add_unit(t));
+    const V2 c = kO + V2{1000.0f, 0.0f};
+    geometric_fire(sys, c, 255.0f);
+    SimRng rng(7);
+    sys.move(attack_order({10}, 900, c, 5.0f, 255.0f), rng, 1);
+    const UnitView v = sys.view(10);
+    CHECK(v.atk_theta == 0.0f && close_to(v.atk_rho, 240.0f, 1e-3f) && v.atk_form == v.form_id && v.atk_form != 0 && v.atk_target == 900);
+    CHECK(sys.stats().attack_orders == 1 && sys.stats().attack_slotted == 1 && sys.stats().attack_legs == 1 &&
+          sys.stats().attack_leg_refused == 0 && sys.stats().attack_trims == 1);
+    CHECK(close2(v.goal, kO + V2{750.0f, 0.0f}, 0.01f) && v.has_goal && !v.arrived);
+    CHECK(close_to(sys.stats().attack_trim_sum, 250.0f, 0.01f));
+    // the target is not moved and has no block
+    CHECK(sys.view(900).atk_form == 0 && sys.view(900).atk_rho == 0.0f);
+    std::printf("unit target: theta %.7f rho %.4f goal (%.4f, %.4f), legs %u\n", static_cast<double>(v.atk_theta),
+                static_cast<double>(v.atk_rho), static_cast<double>(v.goal.x - kO.x), static_cast<double>(v.goal.y - kO.y),
+                sys.stats().attack_legs);
+}
+
+// §4.3.2 item 9, the structure case: the target's cells x = 53 .. 57, y = 28 .. 32 (world (1000, 0) +- 50 in the scene
+// frame) stamped impassable, half extents 40 x 40, engage 250 + 40 = 290. The line P -> C ends on the stamped cell for
+// every P: no slot (rho 0). The plan's G is re-validated to the ring cell of the lead's zone nearest the lead: (940, 0)
+// (§4.3.1 item 7); without a fire hook the goal is that point. Trim: |p - C| <= 290 down to s = 710 (p.x = 710), 700 fails
+// -> goal (710, 0) (hand: a single member at depth 0; the squad's 730 of the spec is its rear row, t25.1).
+void test_scene_structure() {
+    ::alamo::test::section("scene_structure");
+    for (const bool hook : {false, true}) {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        for (int32_t y = 28; y <= 32; ++y)
+            for (int32_t x = 53; x <= 57; ++x) sys.grid().set_base(x, y, kPassImpassable);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        const V2 c = kO + V2{1000.0f, 0.0f};
+        if (hook) geometric_fire(sys, c, 290.0f);
+        SimRng rng(7);
+        sys.move(attack_order({10}, 901, c, 40.0f, 290.0f), rng, 1);
+        const UnitView v = sys.view(10);
+        CHECK(v.atk_rho == 0.0f && v.atk_theta == 0.0f && v.atk_form != 0 && v.atk_target == 901);
+        CHECK(sys.stats().attack_unslotted == 1 && sys.stats().attack_unslotted_cell == 1 && sys.stats().attack_slotted == 0);
+        CHECK(sys.stats().attack_legs == 0 && sys.stats().attack_leg_refused == 0);
+        const V2 want = kO + (hook ? V2{710.0f, 0.0f} : V2{940.0f, 0.0f});
+        CHECK(close2(v.goal, want, 0.01f) && sys.grid().passable_world(v.goal, sys.mask_of(10)));
+        // the unit walks there and stops beside the footprint (never inside it)
+        for (uint32_t f = 1; f < 1500 && sys.view(10).has_goal; ++f) sys.tick(f, rng);
+        CHECK(sys.view(10).arrived && distance(sys.view(10).pos, want) < 1.0f);
+        std::printf("structure (%s hook): rho %.1f goal (%.4f, %.4f), arrived %d\n", hook ? "with" : "no",
+                    static_cast<double>(v.atk_rho), static_cast<double>(v.goal.x - kO.x), static_cast<double>(v.goal.y - kO.y),
+                    sys.view(10).arrived ? 1 : 0);
+    }
+}
+
+// Two formations 300 apart across the approach (beyond the recruitment distance 100): the order's L holds both, R = 255,
+// one ring 240 (k = 2: h = 15, 255 - 30 >= r_T). Left-most first on the right-hand normal of d0: the y = +150 one (left of
+// an approach heading +x) is index 0, the y = -150 one the middle m = 1 at 2 step(15, 0) = +0.0625102; its left neighbour
+// at 0.0625102 - 2 step(15, 15) = -0.0625713 (hand, t25.1). The slot points are a chord of 30 = HY + HY apart.
+void test_scene_two_formations() {
+    ::alamo::test::section("scene_two_formations");
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO + V2{0.0f, -150.0f})));
+    CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 150.0f})));
+    UnitDesc t = attacker(900, kO + V2{1000.0f, 0.0f}, 5.0f);
+    t.owner = 2;
+    CHECK(sys.add_unit(t));
+    const V2 c = kO + V2{1000.0f, 0.0f};
+    SimRng rng(7);
+    sys.move(attack_order({10, 11}, 900, c, 5.0f, 255.0f), rng, 1);
+    const UnitView a = sys.view(10), b = sys.view(11);
+    CHECK(a.form_id != b.form_id && a.atk_form == a.form_id && b.atk_form == b.form_id);
+    CHECK(close_to(a.atk_rho, 240.0f, 1e-3f) && a.atk_rho == b.atk_rho && sys.stats().attack_slotted == 2);
+    CHECK(close_to(a.atk_theta, 0.0625102f, kTol) && close_to(b.atk_theta, -0.0625713f, kTol));
+    // the slot points around C on the reference approach's axis are 30 apart (touching slot rectangles, no overlap)
+    // (no hook: the goals are G for both; the leg is laid on each formation's own approach)
+    std::printf("two formations: theta %.7f / %.7f, rho %.1f / %.1f, legs %u refused %u\n", static_cast<double>(a.atk_theta),
+                static_cast<double>(b.atk_theta), static_cast<double>(a.atk_rho), static_cast<double>(b.atk_rho),
+                sys.stats().attack_legs, sys.stats().attack_leg_refused);
+    CHECK(sys.stats().attack_legs + sys.stats().attack_leg_refused == 2);
+}
+
+// The slot test's object rule (§4.3.2 item 5 step 4): a standing vehicle with half extents 2 x 2 on the theta 0 slot point
+// (760, 0): (2 + 5)^2 = 49 >= 0.15 x 15 x 15 = 33.75 fails theta 0; at +-5 deg the member rectangle (20 x 20) still
+// overlaps its 7 x 7 (lateral 240 sin 5 deg = 20.9 < 27), at +10 deg (41.7) it is clear -> theta 0.1745329 (hand). A
+// blocker with a path record (a goal) is not counted -> theta 0; one without a locomotor counts even with a goal; a
+// 0.5 x 0.5 blocker: 5.5^2 = 30.25 < 33.75 passes -> theta 0.
+void test_scene_blockers() {
+    ::alamo::test::section("scene_blockers");
+    const V2 c = kO + V2{1000.0f, 0.0f};
+    const V2 slot0 = kO + V2{760.0f, 0.0f};
+    struct Case {
+        const char* name;
+        float half;
+        bool moving;
+        bool no_loco;
+        float want;
+    };
+    const Case cases[] = {{"standing 2x2", 2.0f, false, false, 10.0f * kDegToRad},
+                          {"moving 2x2", 2.0f, true, false, 0.0f},
+                          {"no locomotor 2x2 with a goal", 2.0f, true, true, 10.0f * kDegToRad},
+                          {"standing 0.5x0.5", 0.5f, false, false, 0.0f}};
+    for (const Case& k : cases) {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        UnitDesc t = attacker(900, c, 5.0f);
+        t.owner = 2;
+        CHECK(sys.add_unit(t));
+        UnitDesc bl = attacker(50, slot0, k.half);
+        bl.owner = 3;
+        bl.no_locomotor = k.no_loco;
+        CHECK(sys.add_unit(bl));
+        SimRng rng(7);
+        if (k.moving) {
+            MoveOrder m;
+            m.units = {50};
+            m.destination = kO + V2{760.0f, 400.0f};
+            sys.move(m, rng, 1);
+            CHECK(sys.view(50).has_goal);
+        }
+        sys.move(attack_order({10}, 900, c, 5.0f, 255.0f), rng, 1);
+        const UnitView v = sys.view(10);
+        CHECK(close_to(v.atk_rho, 240.0f, 1e-3f) && close_to(v.atk_theta, k.want, 1e-6f));
+        std::printf("blocker %s: theta %.7f (want %.7f)\n", k.name, static_cast<double>(v.atk_theta), static_cast<double>(k.want));
+    }
+}
+
+// Item 6 first bullet: every member can fire from where it stands -> no path, has_goal false, arrived, the block kept
+// (not in L: no slot test). A unit that was moving keeps its speed and brakes through End Move (halt()).
+void test_scene_all_in_range() {
+    ::alamo::test::section("scene_all_in_range");
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO)));
+    UnitDesc t = attacker(900, kO + V2{400.0f, 0.0f}, 5.0f);
+    t.owner = 2;
+    CHECK(sys.add_unit(t));
+    SimRng rng(7);
+    MoveOrder m;
+    m.units = {10};
+    m.destination = kO + V2{300.0f, 0.0f};
+    sys.move(m, rng, 1);
+    uint32_t f = 1;
+    for (; f < 400 && !(sys.view(10).speed > 0.5f); ++f) sys.tick(f, rng);
+    const float v0 = sys.view(10).speed;
+    CHECK(v0 > 0.5f);
+    const V2 c = sys.view(10).pos + V2{200.0f, 0.0f};  // the target point within 255 of the mover
+    geometric_fire(sys, c, 255.0f);
+    sys.move(attack_order({10}, 900, c, 5.0f, 255.0f, true), rng, f);
+    const UnitView v = sys.view(10);
+    CHECK(!v.has_goal && v.arrived && v.atk_form != 0 && v.atk_rho == 0.0f && v.speed == v0);
+    CHECK(sys.stats().attack_stops == 1 && sys.stats().attack_in_range == 1 && sys.stats().attack_slotted == 0);
+    uint32_t braked = 0;
+    for (; f < 800 && sys.view(10).speed > 0.0f; ++f, ++braked) sys.tick(f, rng);
+    CHECK(sys.view(10).speed == 0.0f && braked > 2 && !sys.view(10).has_goal && sys.view(10).atk_form == v.atk_form);
+    std::printf("all in range: stopped at speed %.3f, braked %u frames\n", static_cast<double>(v0), braked);
+}
+
+// Item 8: a re-plan keeps the slot (bit-identical theta / rho), the formation (atk_form) and runs no slot test, no
+// composition and no RNG draw; the goal follows the new C.
+void test_scene_replan() {
+    ::alamo::test::section("scene_replan");
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO)));
+    UnitDesc t = attacker(900, kO + V2{1000.0f, 0.0f}, 5.0f);
+    t.owner = 2;
+    CHECK(sys.add_unit(t));
+    V2 c = kO + V2{1000.0f, 0.0f};
+    geometric_fire(sys, c, 255.0f);
+    SimRng rng(7);
+    sys.move(attack_order({10}, 900, c, 5.0f, 255.0f), rng, 1);
+    for (uint32_t f = 1; f < 120; ++f) sys.tick(f, rng);
+    const UnitView a = sys.view(10);
+    const MovementStats s0 = sys.stats();
+    c = c + V2{0.0f, 200.0f};
+    CHECK(sys.teleport(900, c, 0.0f, 0.0f, 120));
+    geometric_fire(sys, c, 255.0f);
+    MoveOrder o = attack_order({10}, 900, c, 5.0f, 255.0f);
+    o.attack.replan = true;
+    const SimRng before = rng;
+    const size_t pend = sys.pending_compositions();
+    sys.move(o, rng, 120);
+    const UnitView b = sys.view(10);
+    CHECK(rng == before && sys.pending_compositions() == pend);
+    CHECK(b.atk_theta == a.atk_theta && b.atk_rho == a.atk_rho && b.atk_form == a.atk_form && b.form_id == a.atk_form);
+    CHECK(sys.stats().attack_slotted == s0.attack_slotted && sys.stats().attack_replans == 1 && sys.stats().attack_orders == 1);
+    CHECK(b.has_goal && distance(b.goal, c) <= 255.0f + 0.01f && !(b.goal == a.goal) && b.start_frame == 120);
+    std::printf("re-plan: theta %.7f rho %.1f kept, goal (%.2f, %.2f) -> (%.2f, %.2f)\n", static_cast<double>(b.atk_theta),
+                static_cast<double>(b.atk_rho), static_cast<double>(a.goal.x), static_cast<double>(a.goal.y),
+                static_cast<double>(b.goal.x), static_cast<double>(b.goal.y));
+}
+
+// §4.2 item 6: two Standard vehicles 50 apart go solo (two formations) when the 3-D distance to the target is below
+// r_seed + E_r + 60 = 21.2 + 255 + 60; far away they form one formation of two.
+void test_scene_solo() {
+    ::alamo::test::section("scene_solo");
+    for (const float d : {300.0f, 1500.0f}) {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 50.0f})));
+        SimRng rng(7);
+        sys.move(attack_order({10, 11}, 901, kO + V2{d, 0.0f}, 5.0f, 255.0f), rng, 1);
+        const bool two = sys.view(10).form_id != sys.view(11).form_id;
+        CHECK(two == (d < 336.0f));
+        std::printf("solo rule: target at %.0f -> %s\n", static_cast<double>(d), two ? "two formations" : "one formation");
+    }
+}
+
+// Orders without the block: stop() and a plain move clear the slot, halt() keeps it.
+void test_scene_plain_orders() {
+    ::alamo::test::section("scene_plain_orders");
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO)));
+    const V2 c = kO + V2{1000.0f, 0.0f};
+    SimRng rng(7);
+    sys.move(attack_order({10}, 901, c, 5.0f, 255.0f), rng, 1);
+    CHECK(close_to(sys.view(10).atk_rho, 240.0f, 1e-3f));
+    const ObjectId one[] = {10};
+    sys.halt(one, 1);
+    CHECK(close_to(sys.view(10).atk_rho, 240.0f, 1e-3f) && sys.view(10).atk_form != 0 && !sys.view(10).has_goal);
+    sys.stop(one);
+    CHECK(sys.view(10).atk_rho == 0.0f && sys.view(10).atk_form == 0 && sys.view(10).atk_target == -1);
+    sys.move(attack_order({10}, 901, c, 5.0f, 255.0f), rng, 2);
+    CHECK(close_to(sys.view(10).atk_rho, 240.0f, 1e-3f));
+    MoveOrder m;
+    m.units = {10};
+    m.destination = kO + V2{0.0f, 300.0f};
+    sys.move(m, rng, 3);
+    CHECK(sys.view(10).atk_rho == 0.0f && sys.view(10).atk_form == 0 && sys.view(10).has_goal);
+    sys.move(attack_order({10}, 901, c, 5.0f, 255.0f), rng, 4);
+    CHECK(sys.teleport(10, kO, 0.0f, 0.0f, 4) && sys.view(10).atk_rho == 0.0f && sys.view(10).atk_form == 0);
+    CHECK(sys.stats().attack_orders == 3);
+}
+
+// Serial and 4 workers give the same digest every tick of the unit-target approach (two attackers, a slot each).
+std::vector<uint64_t> run_approach(const ParallelFor& pf) {
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO + V2{0.0f, -150.0f})));
+    CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 150.0f})));
+    UnitDesc t = attacker(900, kO + V2{1000.0f, 0.0f}, 5.0f);
+    t.owner = 2;
+    CHECK(sys.add_unit(t));
+    const V2 c = kO + V2{1000.0f, 0.0f};
+    geometric_fire(sys, c, 255.0f);
+    SimRng rng(7);
+    sys.move(attack_order({10, 11}, 900, c, 5.0f, 255.0f), rng, 1);
+    std::vector<uint64_t> out;
+    for (uint32_t f = 1; f < 900; ++f) {
+        sys.tick(f, rng, pf);
+        StateHasher h;
+        sys.hash_units(h);
+        out.push_back(h.digest());
+    }
+    CHECK(sys.view(10).arrived && sys.view(11).arrived && distance(sys.view(10).pos, c) <= 256.0f &&
+          distance(sys.view(11).pos, c) <= 256.0f);
+    return out;
+}
+
+void test_scene_workers() {
+    ::alamo::test::section("scene_workers");
+    const std::vector<uint64_t> s = run_approach(serial_for);
+    const std::vector<uint64_t> p = run_approach(::alamo::test::make_thread_parallel_for(4));
+    CHECK(s == p);
+    std::printf("approach: serial = 4 workers over %zu ticks: %d\n", s.size(), s == p ? 1 : 0);
+}
+
 }  // namespace
 
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // unbuffered: a crash keeps the log
     test_arc_tries();
     test_arc_step();
     test_ring_place();
@@ -332,5 +682,14 @@ int main() {
     test_trim_point();
     test_fire_trim();
     test_slot_leg();
+    test_scene_unit_target();     // s78n t25.2
+    test_scene_structure();
+    test_scene_two_formations();
+    test_scene_blockers();
+    test_scene_all_in_range();
+    test_scene_replan();
+    test_scene_solo();
+    test_scene_plain_orders();
+    test_scene_workers();
     return ::alamo::test::report("alamo_tactical_movement_b5_tests");
 }

@@ -162,6 +162,30 @@ struct MovementConfig {
     MovementClassTable classes;
 };
 
+// s78n t25.2 (MOVEMENT §4.3.2 items 1, 2, 6 and 7): one unit of a land attack order. range = its raw attack range
+// (0x3749d0); engage = item 1's engagement range (range + min(hx, hy) of the target's extents; guard: min(that, 150));
+// in_range = TARGETING slots 44 / 45 at order time (in max range and not inside min range: the host's range answer);
+// melee = the melee test 0x372210 (§4.2 item 6).
+struct LandAttackUnit {
+    ObjectId id = 0;
+    float range = 0.0f;
+    float engage = 0.0f;
+    bool in_range = false;
+    bool melee = false;
+};
+// s78n t25.2: the object block (kind 3) of a land attack order. target -1 = no block (a plain move).
+struct LandAttack {
+    ObjectId target = -1;
+    V2 c;                    // C = the target's goal point (0x583150: its position, or its hard point)
+    float cz = 0.0f;         // C's height (the solo rule's 3-D distance)
+    V2 g;                    // G = C after the host's staging 0x40e260 (equal to C when not staged)
+    float t_hx = 0.0f, t_hy = 0.0f;  // the target's footprint half extents (0x396850): r_T = sqrt(hx^2 + hy^2)
+    bool guard = false;      // a guard block (t25.4: no slots yet)
+    bool trim = true;        // 0x410e90's gate: T not fogged for the first member's owner, not stealthed (host)
+    bool replan = false;     // a re-plan (0x410a60 / 0x4192b0): no split, no slot test, the slots and formations kept
+    std::vector<LandAttackUnit> units;  // one entry per order unit (looked up by id)
+};
+
 struct MoveOrder {
     std::vector<ObjectId> units;  // selection order
     V2 destination;
@@ -188,6 +212,10 @@ struct MoveOrder {
     // this for its attack approaches (and for the garrison approach until its retail form is ported), and the land
     // destination check and the single-member shortcut are skipped.
     bool skip_destination_check = false;
+    // s78n t25.2 (MOVEMENT §4.3.2): the land attack block. With attack.target >= 0 (land) the order is an object goal:
+    // no destination check and no single-member shortcut (as skip_destination_check), the attack slots 0x438c10 at a new
+    // order and the attack plan (item 6 stop, slot leg, fire trim) per formation. Space ignores it.
+    LandAttack attack;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -223,6 +251,11 @@ struct UnitView {
     uint8_t push_kind = 0;
     bool push_flee = false;
     uint32_t form_id = 0;
+    // s78n t25.2 (MOVEMENT §4.3.2 item 4): the attack slot of the unit's formation (theta radians from the ring axis, rho
+    // the ring radius; 0 / 0 none), the formation of its last attack order (atk_form, 0 none) and that order's target
+    float atk_theta = 0.0f, atk_rho = 0.0f;
+    uint32_t atk_form = 0;
+    ObjectId atk_target = -1;
     V2 goal;
     bool space_fallback = false;  // the last space plan failed every try (straight line flown)
     uint32_t start_frame = 0;     // OI tactical: frame the current order starts moving (stagger / queue delay)
@@ -291,6 +324,13 @@ struct MovementStats {
     // no base path (no order / formation record on the stack, or past its last waypoint), Path Around failed otherwise.
     // `replans` above stays 0 on land (the blocked-frames re-plan is gone).
     uint32_t terrain_records = 0, terrain_detours = 0, terrain_stops_cell = 0, terrain_stops_nobase = 0, terrain_stops_failed = 0;
+    // s78n t25.2 (MOVEMENT §4.3.2): land attack orders (new / re-plans); formations given a slot, in L without one (all six
+    // tries failed or no reference path; *_cell: the target's cell is not enterable for the lead), not in L (every member
+    // in range); plans stopped by "every member can fire" (item 6); fire trims (to the first node; the summed cut length
+    // L - keep); slot legs taken / refused (dot <= 0 or the second path failed).
+    uint32_t attack_orders = 0, attack_replans = 0, attack_slotted = 0, attack_unslotted = 0, attack_unslotted_cell = 0;
+    uint32_t attack_in_range = 0, attack_stops = 0, attack_trims = 0, attack_trims_first = 0, attack_legs = 0, attack_leg_refused = 0;
+    float attack_trim_sum = 0.0f;
 };
 
 // s78n t14 (FIGHTER_FLYING §7.2 Dartboard step 3, 0x241820 / 0x241830): the radical inverse of `index` in `base` (f = 0,
@@ -341,6 +381,12 @@ public:
     // fire" gate and the land stop clear the path stack as stop() does, but the speed is not zeroed - a land Walk unit or
     // squad container brakes through End Move (brake_to_stop). [port] Other locomotors (and space) stop as stop() does.
     void halt(std::span<const ObjectId> ids, uint32_t frame);
+    // s78n t25.2 (MOVEMENT §4.3.2 items 6 - 7): "this mover can fire at the target from p" - los_only false: not inside its
+    // min range (TARGETING slot 46 at p), in max range (slot 43 at p) and the line of fire clear; true (guard blocks):
+    // the line of fire only. A mover that is not tested answers true. Called from move() only (serial). Unset: no fire
+    // trim and no "every member can fire" stop. Transient (host setup): not saved, not hashed.
+    using FireTestFn = std::function<bool(ObjectId mover, V2 p, ObjectId target, bool los_only)>;
+    void set_fire_test(FireTestFn fn) { fire_test_ = std::move(fn); }
     // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): FormationClass ctor 0x40d0d0, one synced int(1, FPS), for a
     // formation the host creates outside move() (the Load_Map-tail GOM post-load pass, TacticalBattle); and whether a unit
     // already has a coordinator ([port]: an order or a formation; unknown ids have none).
@@ -1003,6 +1049,12 @@ private:
         V2 form_slot;
         bool self_arrive = false;
         V2 self_goal;
+        // s78n t25.2 (MOVEMENT §4.3.2 item 4, save version 25): the attack slot of the unit's formation (block +0x3c /
+        // +0x40; 0 / 0 none), the formation of its last attack order (0 none) and that order's target. Cleared by every
+        // order that is not an attack re-plan, by stop() and teleport(); kept by halt().
+        float atk_theta = 0.0f, atk_rho = 0.0f;
+        uint32_t atk_form = 0;
+        ObjectId atk_target = -1;
         CollisionInfo ci;  // s78n t20: set_collision_info (transient, host-set every tick)
         // s78n t23 step 0: an early-arrival cut left a path record of the unit on its last waypoint during this tick's
         // collision driver; tick_land finishes it at the walk step (cut_finished). Transient: false between ticks.
@@ -1558,6 +1610,7 @@ private:
         // s78n t20 batch 2 (MOVEMENT §4.2 step 2): `centre` is the seed's zone-validated point V != the ordered point -
         // a fresh block carrying only the order's flags (no formation facing, no final facing)
         bool fresh = false;
+        uint32_t keep_id = 0;  // s78n t25.2: an attack re-plan's formation (its units' atk_form; 0 = a new formation id)
     };
     void destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms, V2 group_c);
     // s78n t20 batch 2: `forced` = the forced pass after n = 40 (no try accepted: the last try that reached the object
@@ -1566,6 +1619,19 @@ private:
                          bool forced, std::vector<FootRect>& taken, V2& centre) const;
     void move_land(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                    const std::vector<uint32_t>& delays, uint32_t serial, SimRng& rng);
+    // ---- s78n t25.2 (attack_approach.cpp; MOVEMENT §4.3.2)
+    // The extent of a formation's slot rectangles (slot +- the member's footprint half extents 0x396850) in the frame of
+    // `axis` (x along it, y along formation_right(axis)) - the box loop of place_formation; false with no slot.
+    bool formation_box(const std::vector<uint32_t>& idx, const LandForm& f, V2 axis, float& x0, float& x1, float& y0,
+                       float& y1) const;
+    const LandAttackUnit* attack_entry(const MoveOrder& order, ObjectId id) const;
+    // The plan's goal and first path (item 6): G zone-validated for the lead (0x50f480; false when that fails), the start
+    // (the members' centroid when reachable from the lead by a straight line or a path <= 1.9 x the distance, else the
+    // lead's position) and the path start -> G (false: no path).
+    bool attack_path(const Unit& lead, V2 centroid, V2& g, std::vector<V2>& path) const;
+    void attack_slots(const MoveOrder& order, const std::vector<uint32_t>& idx, const std::vector<LandForm>& forms);
+    bool arc_slot_test(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, float hx, float hy, V2 p) const;
+    void attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                     const std::vector<uint32_t>& delays, uint32_t serial);
     void park_space(Unit& u, uint32_t frame);
@@ -1626,6 +1692,7 @@ private:
     void park_record(const Unit& u);  // park_team_member / suspend_team_member: the (member, container, slot, index) record
     bool deferred_compose_ = false;           // cu8j t01: the host runs coordinator_update (not saved: host setup)
     uint32_t form_serial_ = 0;                // s78n t20: the last Unit::form_id given (saved, version 18)
+    FireTestFn fire_test_;                    // s78n t25.2 (not saved: host setup)
     FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11
