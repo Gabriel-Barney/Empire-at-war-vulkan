@@ -1440,26 +1440,33 @@ void MovementSystem::halt(std::span<const ObjectId> ids, uint32_t frame) {
             const float th = u ? u->atk_theta : 0.0f, rh = u ? u->atk_rho : 0.0f;  // s78n t25.2: the block is kept
             const uint32_t af = u ? u->atk_form : 0u;
             const ObjectId at = u ? u->atk_target : -1;
+            const uint32_t fid = u ? u->form_id : 0u;  // s78o (b0066): and the formation identity
             stop(one);
             if (u) {
                 u->atk_theta = th;
                 u->atk_rho = rh;
                 u->atk_form = af;
                 u->atk_target = at;
+                u->form_id = fid;
             }
             continue;
         }
         const float v = u->m.speed;
         const LocoState s = u->m.state;
         // s78n t25.2 (MOVEMENT §4.3.2 item 8): the land stop and item 6's stop end the walk, not the attack block
+        // s78o (b0066, FIGHTER_FLYING §7.5 item 4): nor the formation - form_id (form_slot is not touched by stop()) stays,
+        // so halted mates side-step by the footprint overlap coefficient, not the distance ramp, and the deploy gate keeps
+        // the formation together
         const float th = u->atk_theta, rh = u->atk_rho;
         const uint32_t af = u->atk_form;
         const ObjectId at = u->atk_target;
+        const uint32_t fid = u->form_id;
         stop(one);
         u->atk_theta = th;
         u->atk_rho = rh;
         u->atk_form = af;
         u->atk_target = at;
+        u->form_id = fid;
         if (!(v > 0.0f)) continue;
         u->m.speed = v;  // the speed is kept: the unit brakes through End Move
         u->m.state = s;
@@ -2907,9 +2914,13 @@ bool MovementSystem::around_base(const Unit& u, std::vector<V2>& scratch, std::s
 // way slower -> an obstacle; same way not slower -> not, unless it is on its final approach, not behind u's facing and
 // the pair has an undecided / detouring record. Infantry are obstacles here even for an Infantry / Giant u (the mask
 // has no bit 0).
-bool MovementSystem::goal_obstacle(const Unit& u, const Unit& o) const {
+bool MovementSystem::goal_obstacle(const Unit& u, const Unit& o, const Unit* forced) const {
     if (o.d.id == u.d.id) return false;
     if (crushes(u, o) || !collision_classes_interact(u.d.collision_class, o.d.collision_class) || pair_gated(u, o)) return false;
+    // s78o (b0065, MOVEMENT §5.4.7 "Rejoin candidates" item 2): the forced object (0x67d580's object argument, a flag-1
+    // detour's obstacle) is an obstacle before the partner and relation tests (today only MvM detours pass flag 1, and
+    // their obstacle is a MovingVsMoving partner already)
+    if (forced && o.d.id == forced->d.id) return true;
     for (const CollisionObject& c : coll_.list())
         if (c.kind == CollisionKind::MovingVsMoving && ((c.a == u.d.id && c.b == o.d.id) || (c.a == o.d.id && c.b == u.d.id)))
             return true;
@@ -2921,7 +2932,7 @@ bool MovementSystem::goal_obstacle(const Unit& u, const Unit& o) const {
 // (60), when the unit's rectangle placed at Q, axis along Q - E (its facing when zero), overlaps no layer object that
 // the goal-spot filter counts as an obstacle (s78n t24: goal_obstacle). [port] the tracker argument of goals 2 - 11
 // (the previous window's grown shapes, [M] in the spec) is not modelled: every goal queries the layer.
-bool MovementSystem::rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) const {
+bool MovementSystem::rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q, const Unit* forced) const {
     q = cand;
     const int32_t comp = regions_.component_at(u.slot, world_to_cell(u.m.pos.x), world_to_cell(u.m.pos.y));
     const int32_t cx = world_to_cell(cand.x), cy = world_to_cell(cand.y);
@@ -2937,13 +2948,13 @@ bool MovementSystem::rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) c
     layer_box_query(q, foot_radius(u), near_units);
     for (uint32_t ci : near_units) {
         const Unit& o = units_[ci];
-        if (o.d.id != u.d.id && foot_overlap(r, foot_of(o)) && goal_obstacle(u, o)) return false;
+        if (o.d.id != u.d.id && foot_overlap(r, foot_of(o)) && goal_obstacle(u, o, forced)) return false;
     }
     return true;
 }
 
 bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d,
-                                   const std::function<int(const Rejoin&)>& fn) const {
+                                   const std::function<int(const Rejoin&)>& fn, const Unit* forced) const {
     // 0x675ed0: at most 11 accepted goals (0x676020 cmp r12d, 0xa); the generator itself has no count
     constexpr uint32_t kMaxGoals = 11;
     uint32_t goals = 0;
@@ -2964,7 +2975,7 @@ bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint
         Rejoin r;
         r.on_path = !u.pushed;
         r.resume = u.pushed ? u.m.next : p.next;  // (a detour off an older collision path resumes the order path by its lines)
-        if (rejoin_accept(u, p.p, end, r.q) && offer(r)) return verdict == kRejoinTaken;
+        if (rejoin_accept(u, p.p, end, r.q, forced) && offer(r)) return verdict == kRejoinTaken;
     }
     // 0x679e20: a land path from the end E to the spot no longer than 2 x the straight line
     LandPathScratch sc;
@@ -2993,7 +3004,7 @@ bool MovementSystem::rejoin_search(const Unit& u, std::span<const V2> base, uint
         const V2 spot = end + dir * s;
         Rejoin r;
         r.resume = past;
-        if (!rejoin_accept(u, spot, end, r.q)) continue;
+        if (!rejoin_accept(u, spot, end, r.q, forced)) continue;
         if (!reachable(spot)) break;
         if (offer(r)) return verdict == kRejoinTaken;
     }
@@ -3134,7 +3145,7 @@ bool MovementSystem::path_around(const CollisionObject& c, Unit& u, const Unit* 
         u.around_frame = frame;
         done = true;
         return kRejoinTaken;
-    });
+    }, flag ? o : nullptr);  // s78o (b0065): a flag-1 call's obstacle is the goal-spot filter's forced object
     if (searched) ++stats_.dynamic_repaths;
     return done;
 }

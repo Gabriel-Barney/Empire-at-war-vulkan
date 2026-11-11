@@ -452,8 +452,11 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
         unslotted(forms[ref]);
         return;
     }
-    const V2 d0 = normalize_retail(path[1] - path[0]);
-    const V2 d1 = normalize_retail(path[path.size() - 1] - path[path.size() - 2]);
+    // s78o (b0072): the first / last non-zero segment, as attack_plan takes them ([port] the port's paths may start with the
+    // start point and its cell centre): a zero first segment no longer gives d0 = (0, 0) and the rear-most / left-to-right
+    // ring order by id alone (crossed slots); no non-zero segment -> unslotted below
+    const V2 d0 = first_dir(path);
+    const V2 d1 = last_dir(path);
     if (!(length_sq(d1) > 0.0f)) {
         unslotted(forms[ref]);
         return;
@@ -595,7 +598,11 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
     float goal_s = 0.0f;
     if (order.attack.trim && fire_test_) {
         std::vector<TrimMember> tm;
-        for (const Slot& s : f.slots) tm.push_back({s.member, -s.back, s.lateral, true});
+        // s78o (b0071): a member without TARGETING (the host's LandAttackUnit::targeting) is not tested
+        for (const Slot& s : f.slots) {
+            const LandAttackUnit* e = attack_entry(order, units_[idx[s.member]].d.id);
+            tm.push_back({s.member, -s.back, s.lateral, e == nullptr || e->targeting});
+        }
         const float total = path_length(path);
         const float guard_range = cfg_.constants.land_guard_range;
         const V2 c = order.attack.c;

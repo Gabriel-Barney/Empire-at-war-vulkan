@@ -701,10 +701,13 @@ void test_scene_plain_orders() {
     sys.move(attack_order({10}, 901, c, 5.0f, 255.0f), rng, 1);
     CHECK(close_to(sys.view(10).atk_rho, 240.0f, 1e-3f));
     const ObjectId one[] = {10};
+    const uint32_t fid = sys.view(10).form_id;
     sys.halt(one, 1);
     CHECK(close_to(sys.view(10).atk_rho, 240.0f, 1e-3f) && sys.view(10).atk_form != 0 && !sys.view(10).has_goal);
+    // s78o (b0066, FIGHTER_FLYING §7.5 item 4): halt() keeps the formation identity too; stop() drops it
+    CHECK(fid != 0 && sys.view(10).form_id == fid);
     sys.stop(one);
-    CHECK(sys.view(10).atk_rho == 0.0f && sys.view(10).atk_form == 0 && sys.view(10).atk_target == -1);
+    CHECK(sys.view(10).atk_rho == 0.0f && sys.view(10).atk_form == 0 && sys.view(10).atk_target == -1 && sys.view(10).form_id == 0);
     sys.move(attack_order({10}, 901, c, 5.0f, 255.0f), rng, 2);
     CHECK(close_to(sys.view(10).atk_rho, 240.0f, 1e-3f));
     MoveOrder m;
@@ -801,6 +804,31 @@ void test_scene_guard() {
         SimRng rng(7);
         sys.move(o, rng, 1);
         CHECK(close2(sys.view(10).goal, kO + V2{310.0f, 0.0f}, 0.01f));
+    }
+    // s78o (b0071): an unarmed guard (the host's targeting false: no TARGETING) is not tested by the trim, so the
+    // |p - C| <= 150 term does not hold it back either: with no tested member every s passes and the trim keeps 0 - the
+    // goal is the path's first node (the slot point around the start), where retail trims an all-unarmed guard
+    {
+        MovementSystem sys{MovementConfig{}};
+        scene_system(sys);
+        CHECK(sys.add_unit(attacker(10, kO)));
+        CHECK(sys.add_unit(attacker(900, kO + V2{400.0f, 0.0f}, 5.0f)));
+        uint32_t asked = 0;
+        sys.set_fire_test([&asked](ObjectId, V2, ObjectId, bool) {
+            ++asked;
+            return true;
+        });
+        MoveOrder o = attack_order({10}, 900, kO + V2{400.0f, 0.0f}, 5.0f, 150.0f);
+        o.flags = kMoveFlagGuardMove;
+        o.attack.guard = true;
+        o.attack.units[0].range = 0.0f;
+        o.attack.units[0].targeting = false;
+        SimRng rng(7);
+        sys.move(o, rng, 1);
+        const UnitView v = sys.view(10);
+        std::printf("unarmed guard: goal (%.4f, %.4f), trims first %u, fire tests %u\n", static_cast<double>(v.goal.x - kO.x),
+                    static_cast<double>(v.goal.y - kO.y), sys.stats().attack_trims_first, asked);
+        CHECK(sys.stats().attack_trims_first == 1 && asked == 0 && v.goal.x - kO.x < 50.0f);
     }
 }
 

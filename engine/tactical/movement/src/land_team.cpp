@@ -806,12 +806,17 @@ WalkResult MovementSystem::team_walk(Unit& u, uint32_t frame) const {
             c.pos = m.pos;
             c.yaw = m.yaw;
             c.speed = m.speed;
-            c.state = m.state;
+            // s78o (b0053, C.1 / FIGHTER_FLYING §7.7 item 4): the move step with the top path not started is End Move
+            // from its first tick - a new order's path set leaves a marching container in 0x13, and with it B.7 (T := a)
+            // would not apply, so a straggler cap or an at-once hold below a slowed or stopped it a tick early
+            c.state = m.state == LocoState::WalkMoving || m.state == LocoState::WalkStartMove ? LocoState::WalkEndMove : m.state;
             c.started = false;
             WalkExtras x;
             x.container = true;
             x.cap_now = u.coll_now;
-            x.forced = u.has_goal && u.forced;  // s78n t24 (MOVEMENT §5.4.7 item 1): the coast reports unless forced
+            // s78n t24 (MOVEMENT §5.4.7 item 1): the coast reports unless forced; s78o (b0054): the top record decides -
+            // a push / detour record on the stack (also one walked to its end) reports, only the forced order path does not
+            x.forced = !u.pushed && u.has_goal && u.forced;
             x.vmax_u = vmax;
             r = walk_step(c, p, speed_cap, &grid_, &x);
             m.pos = c.pos;

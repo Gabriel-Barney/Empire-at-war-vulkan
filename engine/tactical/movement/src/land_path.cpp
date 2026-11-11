@@ -662,7 +662,11 @@ void corner_arc_probe(V2 pj, V2 a, float v, float omega, float theta_s, float se
     const bool left = theta_s >= 0.0f;
     const V2 n = left ? V2{-t.y, t.x} : V2{t.y, -t.x};
     const float s = left ? 1.0f : -1.0f;
-    const uint32_t count = static_cast<uint32_t>(th * v / omega / seg + 3.0f);
+    // s78o (b0088) [port]: the point count is capped at kCornerArcProbeMaxPoints (an arc of 2^14 segments of at least 2
+    // units is longer than any map) and a non-finite count takes the cap: a tiny positive Max_Rate_Of_Turn or a corner
+    // near pi in custom data no longer plans ~1e7 points per corner or casts past UINT32_MAX (undefined, MSVC != clang)
+    const float nf = th * v / omega / seg + 3.0f;
+    const uint32_t count = nf < static_cast<float>(kCornerArcProbeMaxPoints) ? static_cast<uint32_t>(nf) : kCornerArcProbeMaxPoints;
     const float sin_th = dmath::sin(th), cos_th = dmath::cos(th);
     for (uint32_t k = 1; k <= count; ++k) {
         const float u = static_cast<float>(k) / static_cast<float>(count);
