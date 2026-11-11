@@ -518,6 +518,41 @@ void test_garrison_keep() {
     std::printf("garrison keep: deployed out and walked deployed; an undeploy resumed and ended at frame %u\n", undeployed);
 }
 
+// ---------------------------------------------------------------- released inside a footprint (FIGHTER_FLYING §7.4)
+void test_released_inside() {
+    ::alamo::test::section("a unit released at a destroyed host's centre gets out on its next order");
+    // A structure footprint: cells 18 .. 22 x 48 .. 52 impassable; the occupant is put at its centre (0x37a060).
+    MovementSystem sys{MovementConfig{}};
+    {
+        PassabilityGrid g;
+        g.init(100, 100);
+        for (int32_t y = 48; y <= 52; ++y)
+            for (int32_t x = 18; x <= 22; ++x) g.set_base(x, y, kPassImpassable);
+        const float hi = static_cast<float>(g.width() - 1) * kCellSize;
+        sys.set_grid(std::move(g));
+        sys.set_height_fn([](float, float) { return 0.0f; });
+        sys.air().set_box({0.0f, 0.0f}, {hi, hi});
+    }
+    const V2 c = cell_center(20, 50);
+    CHECK(sys.add_unit(tank(1, c)));
+    // a death clone of the host at the same spot (no locomotor, the land obstacle)
+    UnitDesc clone = tank(2, c);
+    clone.max_speed = clone.alt_max_speed = 0.0f;
+    clone.no_locomotor = true;
+    clone.death_clone_obstacle = true;
+    clone.owner = 2;
+    CHECK(sys.add_unit(clone));
+    SimRng rng(2609);
+    uint32_t f = 1;
+    for (; f < 10; ++f) sys.tick(f, rng);
+    order(sys, rng, {1}, cell_center(40, 50), f);
+    for (const uint32_t end = f + 600; f < end && !sys.view(1).arrived; ++f) sys.tick(f, rng);
+    const UnitView v = sys.view(1);
+    CHECK(v.arrived && !v.failed && distance(v.pos, cell_center(40, 50)) < 25.0f);
+    std::printf("released inside: arrived %d at (%.1f, %.1f) by frame %u\n", v.arrived ? 1 : 0, static_cast<double>(v.pos.x),
+                static_cast<double>(v.pos.y), f);
+}
+
 }  // namespace
 
 int main() {
@@ -529,5 +564,6 @@ int main() {
     test_push_refusal();
     test_hover_and_exit();
     test_garrison_keep();
+    test_released_inside();
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }
