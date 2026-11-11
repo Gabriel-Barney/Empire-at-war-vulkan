@@ -1266,7 +1266,8 @@ Values 9–0xB are unused. SimpleSpace reuses 0x13 (following a path) and 0x16 (
   frames, following the ABILITIES_HARDPOINTS §4.13 convention [M on the exact end test].
 - **FoC `Deploys = Yes`** (all WALK_LOCOMOTOR): AT_AT, Veers AT_AT, AT_AA (rate 2.0), SPMAT (2.0), MPTL (1.5),
   Abstract_Mobile_Defense_Unit (2.0), Dark_Trooper_PhaseIII (2.0; walk + jetpack), HAV_Juggernaut,
-  Gallofree_HTT_Transport, Destroyer_Droid (3.0).
+  Gallofree_HTT_Transport, Destroyer_Droid (3.0), MAL_Rocket_Vehicle, F9TZ_Cloaking_Transport (*s78n t26 RE 3:* the
+  last two were missing; `Auto_Deploys` per type: §3.2.1).
 - **A locomotor swap undeploys** [H]. The swap (§3.1.1) replaces Walk with a new locomotor. JetPack answers
   "not deployed", and the new Walk built at the swap back starts in 0x16. So a deployed `Dark_Trooper_PhaseIII` that
   uses JET_PACK counts as undeployed in the air and after landing. Its `HP_DarkTrooper_P3_*` missiles
@@ -1351,11 +1352,41 @@ formation speed `0x41b2a0`, the push `0x6859a0`, the StoppedVsStopped chooser `0
 `Destroyer_Droid_Attack` is its variant): `Deployed_Walk_Speed` 2.5, `Deployed_Walk_Anim_Speed` 2, `Max_Speed` 3.6,
 `Max_Rate_Of_Turn` = `Stopped_Rate_Of_Turn` 15.5, `OverrideAcceleration` 0.5, `Deploys` + `Auto_Deploys`,
 `Deployment_Anim_Rate` 3.0, abilities ROCKET_ATTACK only (**no DEPLOY**), `Shielded_Only_When_Deployed` Yes (160
-points), `Fire_Weapon_When_Deployed` Yes / `_Undeployed` No, no TURRET behaviour. The only other `Auto_Deploys` type,
-`MAL_Rocket_Vehicle`, has M = 0, so every order undeploys it (item 1).
+points), `Fire_Weapon_When_Deployed` Yes / `_Undeployed` No, no TURRET behaviour.
+
+**Who is an auto-deployer (s78n t26 RE 3, 2026-11-10; corrects "the only other `Auto_Deploys` type is the MAL")
+[H].** `Auto_Deploys` (tag type 0x0 bool, type +0xd0) **defaults to true**: the type constructor `0x367250` calls
+the bool-block initialiser `0x367100` on type +0x10, whose dword write at block +0xbf = 0x100 sets +0xd0 = 1 and
+`Deploys` +0xd1 = 0; nothing later in `0x367250` rewrites them, and the XML only overrides a tag that is present
+(OBJECT_TYPES §4.5 bool converter, §4.6 defaults). So every `Deploys` type is an auto-deployer unless it writes `Auto_Deploys` No, and only
+three FoC types do: `AT_AT_Walker`, `Veers_AT_AT_Walker`, `AT_AA_Walker`. Every vanilla FoC type with effective
+`Deploys` Yes (Variant_Of_Existing_Type inherits the base's values; a variant's own `Unit_Abilities_Data` replaces
+the base list [M: read from the MAL_Captured comment, not from the variant copy code]):
+
+| type (+ variants) | `Auto_Deploys` | DEPLOY ability | M |
+|---|---|---|---|
+| `AT_AT_Walker` (+ `_REB09`, `_Captured`, `_Cable_Attack_Death_Clone`, `_Death_Clone_00..02`, `CIN_AT-AT_Vehicles`, `FIN_At-AT`, `FIN_At-AT_Death`) | **No** (own) | no (DEPLOY_TROOPERS; `_Captured` EJECT_VEHICLE_THIEF) | 0 |
+| `Veers_AT_AT_Walker` (+ `_Deployed_Death_Clone`, `_Death_Clone`) | **No** (own) | no | 0 |
+| `AT_AA_Walker` (+ `_Captured`) | **No** (own) | no (MISSILE_SHIELD) | 0 |
+| `SPMAT_Walker` (+ `_Captured`, `_Death_Clone`, `_Telekinesis_Death_Clone`, `FIN_SPMAT`) | Yes (default) | yes | 0 |
+| `MPTL` (+ `_Captured`, `_Death_Clone`, `_Telekinesis_Death_Clone`, `CIN_MPTL_Intro`, `FIN_MPTL`) | Yes (default) | yes | 0 |
+| `Abstract_Mobile_Defense_Unit` (+ Underworld, Underworld_Prologue, Empire, Rebel MDU) | Yes (default) | yes | 0 |
+| `Dark_Trooper_PhaseIII` | Yes (default) | yes (+ JET_PACK) | 0 |
+| `MAL_Rocket_Vehicle` | Yes (own) | yes (+ SWAP_WEAPONS) | 0 |
+| `MAL_Captured` | Yes (inherited) | **no** (SWAP_WEAPONS, EJECT_VEHICLE_THIEF) | 0 |
+| `HAV_Juggernaut` (+ `_Captured`) | Yes (default) | no | 0 |
+| `Gallofree_HTT_Transport` | Yes (default) | no | 0 |
+| `F9TZ_Cloaking_Transport` (+ `_Captured`) | Yes (default) | no | 0 |
+| `Destroyer_Droid` (+ `Destroyer_Droid_Attack`) | Yes (own) | no (ROCKET_ATTACK) | 150 |
+
+So the manual deployers (`0x39a320`(x, 1) false) are **only the AT-AT family, Veers' AT-AT and the AT-AA**. Every
+other row has M = 0 and is an auto-deployer, so a move order undeploys it (item 2 member loop → item 1 →
+`Deploy(false)`), the HTT included. The rules that do not read `Auto_Deploys`: the 0x16 stop rule and `Take_Damage`
+(item 3) need `Deploys`, M > 0 and (stop rule only) no DEPLOY ability, so in FoC they fire only for the destroyer
+droids, whatever `Auto_Deploys` says; the cap test `0x3ac100` itself needs only `Deploys` (its callers choose).
 
 **Helpers.** Deployed D(x) = `0x39a390`: `Deploys`, a locomotor, and (+0x2b3 set or Walk state 0x19). Deploying =
-`0x39a400` (state 0x18). Auto-deployer = `0x39a320`(x, 1): `Auto_Deploys` and `Deploys`.
+`0x39a400` (state 0x18). Auto-deployer = `0x39a320`(x, 1): type +0xd0 AND +0xd1 (`Auto_Deploys` and `Deploys`).
 
 1. **The cap test `0x3ac100`(x, d)** (x `Deploys` with a locomotor slot): when the pack exists, d ≥ 0, x is deployed
    (D) or deploying, M > 0 and **d < M** → +0x2b3 := 1 and nothing else (no state change, no clip). Every other case
@@ -1375,8 +1406,9 @@ points), `Fire_Weapon_When_Deployed` Yes / `_Undeployed` No, no TURRET behaviour
      formation with any rolling unit, any non-deployer or any auto-deployer is planned.
    - *Who undeploys a deployed manual deployer at a move order (s78n t26 RE 2, replaces an [M]) [H]:* **nobody.** The
      group move `0x2a7b80` and the waypoint queue `0x2a8240` admit a unit only when it is an auto-deployer
-     (`0x39a320`(x, 1)) or not D (`0x39a390`). A D manual deployer (AT-AT, HTT, any `Deploys` type without
-     `Auto_Deploys`, deployed or walking deployed) is **skipped entirely**: it is not added to the coordinator, its
+     (`0x39a320`(x, 1)) or not D (`0x39a390`). A D manual deployer (a `Deploys` type with `Auto_Deploys` No: in FoC
+     only the AT-AT family, Veers' AT-AT and the AT-AA; *s78n t26 RE 3:* **not the HTT**, an auto-deployer by the
+     default, see the table above; deployed or walking deployed) is **skipped entirely**: it is not added to the coordinator, its
      behaviour orders 5 / 0x22 / 0x29 / 6 are not cleared and it is not moved (`0x2adff0`). It stays deployed and the
      order goes to the other selected units; an all-deployed selection gets no move. Only the DEPLOY ability
      (`0x3a1ce0`; the AI's `Activate_Ability("DEPLOY", false)`, AI_TACTICAL §7.3.3) or the garrison hooks of item 1
@@ -1441,7 +1473,10 @@ points), `Fire_Weapon_When_Deployed` Yes / `_Undeployed` No, no TURRET behaviour
        rate 1.0); no signal 0x29, no `0x39fec0`; the 0x19 handler runs in the same frame.
      - +0x2b3 clear, `Deploys`, M > 0 and **no DEPLOY ability** (`0x3986b0`(obj, 2) false) → `Deploy(true)` (0x18,
        the Deploy clip at `Deployment_Anim_Rate`). So the droid **deploys at every stop**, whatever its target, and
-       is idle only in 0x19.
+       is idle only in 0x19. *s78n t26 RE 3 [H]:* the test (`0x61e930` case 0x16: `0x39a370` = type +0xd1, then
+       type +0x23b0 > 0, then `0x3986b0`(obj, 2) false) **does not read `Auto_Deploys`**; only M > 0 limits it. In
+       FoC every M > 0 type is also `Auto_Deploys` Yes, so the difference never shows; a mod with M > 0 and
+       `Auto_Deploys` No would still deploy at every stop.
    - **0x1A:** +0x2b3 := 0 on every frame of the undeploy.
    - **0x1A entered from a walk (s78n t26 RE 2) [H unless tagged].** `Deploy(false)` (`0x61d300`) only writes state
      0x1A (after the slot +0x35b block test): no stop, no speed or path change. The 0x1A handler only clears +0x2b3,
@@ -1496,8 +1531,9 @@ walks"):
   reaches the anim side (`kAnimDeployedWalk` 115, `anim_behaviors.cpp`).
 - `MovementSystem::Unit`: the walking-deployed flag, saved (`movement_save.cpp`) and hashed (`hash_deploy`).
 - `MovementSystem::move` / `move_land` (`movement_system.cpp`): per member in order, auto-deployers → item 1 with d =
-  the formation path's total length (so `MAL_Rocket_Vehicle` and a far-ordered droid undeploy); a formation of
-  deployed manual deployers only → no plan; path starts follow the `0x61e570` rule (lead-in, collision and guard
+  the formation path's total length (so every M = 0 auto-deployer of the table above, the MAL, SPMAT, MPTL, MDU,
+  Dark Trooper P3, Juggernaut, HTT and F9TZ included, and a far-ordered droid undeploy; `Auto_Deploys` defaults to
+  true); a formation of deployed manual deployers (AT-AT family / AT-AA) only → no plan; path starts follow the `0x61e570` rule (lead-in, collision and guard
   paths).
 - The walk gate (`movement_system.cpp`, `u.deploy != LocoState::None` skips the walk): a 0x19 unit with a path and
   M > 0 starts walking deployed (item 3), with vmax = `Deployed_Walk_Speed` in the speed controller.
@@ -1508,8 +1544,8 @@ walks"):
   deploying **and M ≤ 0**". *Corrected s78n t26 RE 2:* this bullet also listed the Path Around obstacle set
   (`around_obstacles`); that test has **no** M clause in retail (`0x67d580`, §1.5.1 item 3: a standing deployed /
   deploying unit is always an obstacle) and stays as it is.
-- Orders (s78n t26 RE 2): the group move skips D manual deployers (item 2); a formation with a deploying manual
-  deployer waits.
+- Orders (s78n t26 RE 2): the group move skips D manual deployers (item 2; FoC: AT-AT family and AT-AA only, s78n
+  t26 RE 3); a formation with a deploying manual deployer waits.
 - Combat: `CombatSystem::deployed_or_deploying` (`combat_system.cpp`, "vanilla never sets the pending flag") must
   include the flag; the shield absorb in `CombatSystem::take_damage_inner` has no `Shielded_Only_When_Deployed` gate;
   `TacticalBattle::deployed_half_extents` (`apps/sim/src/tactical_battle_bt.cpp`) includes the flag; the host's damage
@@ -2936,12 +2972,17 @@ either side, **either side +0x3a7**, build pad holding the other, existing recor
     host** (`0x3a9880`: locomotor stop, removed from its coordinator), raise signal 0xb and call `0x391260`, which
     **deploys** a `Deploys` type (Walk vf +0x118(1) = `0x61d300`: state 0x18 Deploying). So the HTT lowers with its
     state machine frozen and then continues in 0x18 → 0x19 (Deployed), not in Start Move; its next move undeploys
-    (0x1a → 0) and state 0x12 sets rising again. *s78n t26 RE 2 (replaces an [M]) [H]:* a move order does **not**
-    undeploy it: the group move skips a deployed manual deployer (§3.2.1 item 2, §6.2). The undeploy comes from the
-    garrison hooks `0x636090` / `0x6360b0` (GarrisonHoverTransportBehaviorClass slots +0xF0 / +0xF8: after an entry
-    with no reservation left, at an enter cancel or at the end of an exit → `0x3ac100`(host, 0) = `Deploy(false)` for
-    M = 0) or from the DEPLOY ability; only then does a later order move it. (This
-    corrects "after that the Start Move state runs again" above for the lowering case.)
+    (0x1a → 0) and state 0x12 sets rising again. *s78n t26 RE 3 (2026-11-10; withdraws the s78n t26 RE 2 note that a
+    move order does not undeploy it) [H]:* the HTT is **not** a manual deployer: it has no `Auto_Deploys` tag and the
+    type default is true (§3.2.1 table, `0x367100`). So the group move admits it while deployed, the formation plan's
+    member loop calls `0x3ac100`(HTT, path length) and, with M = 0, `Deploy(false)`: a move order undeploys it
+    (0x1a → 0) and it then moves, as written above. The garrison hooks `0x636090` / `0x6360b0`
+    (GarrisonHoverTransportBehaviorClass slots +0xF0 / +0xF8: after an entry with no reservation left, at an enter
+    cancel or at the end of an exit → `0x3ac100`(host, 0) = `Deploy(false)` for M = 0) also undeploy it; it has no
+    DEPLOY ability. (This corrects "after that the Start Move state runs again" above for the lowering case.) The same holds for the non-hover garrison hosts `HAV_Juggernaut` and
+    `F9TZ_Cloaking_Transport` (auto-deployers, M = 0), whose deploy at slot reserve / eject request goes through
+    `0x635f60` / `0x636030` (GarrisonVehicleBehaviorClass; stop, signal 0xb, `0x391260`) [M: slot meaning by
+    symmetry with `0x635ee0` / `0x635fc0`].
   - **Readers of the state / the tag** (decompile scan for +0x2a8 and 0x23bc): the Walk service, Start Move and
     commit above; the pair gates `0x683790` / `0x442540` (table above, confirmed); the StoppedVsStopped chooser
     `0x687010` (a lowering unit is never the one moved, §5.4.3); the targeting filters `0x567c50` / `0x5662b0` and
