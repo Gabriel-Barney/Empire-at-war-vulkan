@@ -1125,6 +1125,10 @@ void test_events_and_locomotor() {
         CHECK(b.deploy(w, 3, false, 2.0f, dr, 1) && w.current_type(3) == kAnimDeploy && w.slot(3).speed == 2.0f &&
               w.slot(3).variant == static_cast<uint32_t>(dreplay.range_int(0, 1)) && w.crossfading(3));
         CHECK(b.deploy(w, 3, true, 1.5f, dr, 2) && w.current_type(3) == kAnimUndeploy && w.current_frame_count(3) == 40);
+        // s78n t26.1: a walk that ends deployed sets the Deploy clip on its last frame (variant 0, speed 1, no draw).
+        const SimRng before = dr;
+        CHECK(b.deploy_at_end(w, 3, 3) && w.current_type(3) == kAnimDeploy && w.slot(3).variant == 0 && w.slot(3).speed == 1.0f);
+        CHECK(w.slot(3).frame == static_cast<float>(w.current_frame_count(3) - 1) && dr.state() == before.state());
     }
     {
         // Death type by damage kind (Damage_Fire -> FIRE_DIE when the model has it and the type sets none);

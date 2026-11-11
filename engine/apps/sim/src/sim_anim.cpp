@@ -415,6 +415,14 @@ bool SimAnimation::deploy(const GameMode& mode, ObjectId id, bool undeploy, SimR
     return played;
 }
 
+bool SimAnimation::deploy_at_end(const GameMode& mode, ObjectId id, uint64_t frame) {
+    ModeWorld& mw = mode_world(mode);
+    if (!mw.world->contains(id)) return false;
+    const bool played = mw.behaviors->deploy_at_end(*mw.world, id, frame);
+    if (played) ++stats_.deploys;
+    return played;
+}
+
 void SimAnimation::set_berserker(const GameMode& mode, ObjectId id, bool active) { mode_world(mode).world->set_berserker(id, active); }
 
 void SimAnimation::set_frozen(const GameMode& mode, ObjectId id, bool frozen) { mode_world(mode).world->set_frozen(id, frozen); }

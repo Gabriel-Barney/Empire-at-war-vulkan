@@ -114,6 +114,15 @@ struct UnitDesc {
     // S8 t11 (MOVEMENT §3.2 "Deploy states"): Deployment_Anim_Rate (+0x1668, type ctor default 1.0), the speed of the
     // Walk locomotor's deploy / undeploy clips (MovementSystem::deploy).
     float deployment_anim_rate = 1.0f;
+    // s78n t26.1 (MOVEMENT §3.2.1; save version 21): walking while deployed. Deploys (+0xd1), Auto_Deploys (+0xd0),
+    // M = Max_Dist_Walk_While_Deployed (+0x23b0; > 0 only for Destroyer_Droid, 150), Deployed_Walk_Speed (+0x23b8, raw: no
+    // mode multiplier) and deploy_ability: the type has a DEPLOY unit ability (0x3986b0(obj, 2); the host sets it, the
+    // abilities are its data).
+    bool deploys = false;
+    bool auto_deploys = false;
+    float max_walk_deployed = 0.0f;
+    float deployed_walk_speed = 0.0f;
+    bool deploy_ability = false;
     // s78k t01 (MOVEMENT §3.5.1, save version 11): the Walk locomotor's arrival turn. Stopped_Rate_Of_Turn (+0x3b0, raw,
     // read by 0x374310 at speed 0; <= 0 -> Max_Rate_Of_Turn x the mode multiplier) and Movement_Directions_Count (+0x23fc,
     // type default 1).

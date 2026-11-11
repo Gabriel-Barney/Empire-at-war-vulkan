@@ -654,6 +654,7 @@ void BattleCatalog::s9_unit_fields(uint32_t t, tc::UnitDesc& u, BuildState& s) c
     u.must_face_target_when_deployed = ty.get_bool(t, "Must_Face_Target_To_Attack_When_Deployed");
     u.stationary_when_attacking = ty.get_bool(t, "Is_Stationary_When_Attacking");
     u.max_dist_walk_while_deployed = ty.get_float(t, "Max_Dist_Walk_While_Deployed");
+    u.shielded_only_when_deployed = ty.get_bool(t, "Shielded_Only_When_Deployed");  // s78n t26.1
     // s78f t08: the target-type flags of the hold-fire rule and the TURRET cannot-aim branch.
     u.hold_fire_for_special_ability = ty.get_bool(t, "Should_Attacker_Hold_Fire_For_Special_Ability");
     u.limited_turrets_turn = ty.get_bool(t, "Should_Cause_Limited_Turrets_To_Turn");

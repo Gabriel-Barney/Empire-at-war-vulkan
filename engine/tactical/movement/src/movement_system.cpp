@@ -491,6 +491,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     if (is_fighter(*u)) v.fighter_phase = u->fs.phase;
     v.deploy_state = u->deploy;  // S8 t11
     v.deploy_clip = u->dclip;
+    v.walk_deployed = u->walk_deployed;  // s78n t26.1
     v.turret_elevation = u->tcur[1];  // S8 t24
     v.turret_yaw = u->tcur[2];
     if (u->d.turret && u->taim) {  // s78f t03: the aim state (0x386170 equality: negatives wrapped by +360, within 0.0001)
@@ -627,6 +628,11 @@ void MovementSystem::move(const MoveOrder& order, SimRng& rng, uint32_t frame) {
     std::vector<uint32_t> idx = order_indices(order);
     // s78n t18 [port]: a hidden unit (a squad container garrisoned with its whole squad) takes no move order
     std::erase_if(idx, [this](uint32_t i) { return units_[i].hidden; });
+    // s78n t26.1 (MOVEMENT §3.2.1 item 2, the group move 0x2a7b80 / waypoint queue 0x2a8240): a deployed `Deploys` unit
+    // (0x39a390) that is not an auto-deployer (0x39a320) is skipped entirely - not moved, not stopped, its path and orders
+    // kept; the rest of the selection moves, and an all-deployed selection gets no move.
+    if (cfg_.mode == MoveMode::Land)
+        std::erase_if(idx, [this](uint32_t i) { return deployed_d(units_[i]) && !auto_deployer(units_[i]); });
     if (!fform_internal_) fform_waypoint(order, idx);  // s78f t02: fighters with a formation append the block instead
     if (idx.empty()) return;
     if (order.switch_locomotor)  // MOVEMENT §6.2: multi-locomotor units swap first (others ignore the bit)
@@ -1450,6 +1456,11 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
     for (uint32_t i = 0; i < units_.size(); ++i) {
         Unit& u = units_[i];
         if (!u.need_path || frame < u.start_frame) continue;
+        // s78n t26.1 (MOVEMENT §3.2.1 item 2, the plan 0x41c1a0 gate): a formation whose every member is a `Deploys`
+        // type that is deployed or deploying and not an auto-deployer gets no path - no state change; the plan is tried
+        // again ([port] every tick, retail at every formation update), so the formation waits (the group move admits
+        // such a unit only while it deploys; once deployed the gate still holds until a DEPLOY-off or garrison undeploy).
+        if (deploy_gate_holds(u)) continue;
         // s78n t20 (MOVEMENT §4.3.1 item 6, the plan 0x41c1a0): a one-member formation whose goal lies inside its own
         // footprint radius 0x3969f0 (2-D) signals "arrived" and stops: a unit ordered onto its own footprint does not move
         if (u.self_arrive && !is_air(u) && u.d.locomotor == LocomotorKind::Default && distance(u.m.pos, u.self_goal) < foot_radius(u)) {
@@ -1460,7 +1471,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.next = 0;
             u.around.clear();
             u.path_change = frame;
-            u.exit_host = -1;
+            walk_out_done(u);
             if (!u.d.team_container) {  // (a moving container brakes to a stop at its rate, team_walk)
                 u.m.speed = 0.0f;
                 u.m.state = LocoState::WalkStopped;
@@ -1542,6 +1553,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.next = 1;
             u.m.escape_until = 2u;
             u.blocked_frames = 0;
+            plan_deploy_cap(u, frame);  // s78n t26.1
             continue;
         }
         if (out[r].ok) {
@@ -1550,6 +1562,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.escape_until = out[r].start_blocked ? 2u : 0u;
             u.goal = out[r].goal_used;
             u.blocked_frames = 0;
+            plan_deploy_cap(u, frame);  // s78n t26.1
         } else {
             ++stats_.path_failures;
             u.has_goal = false;
@@ -1559,6 +1572,58 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.speed = 0.0f;
         }
     }
+}
+
+// s78n t26.1 (MOVEMENT §3.2.1 item 1, s78n t26 RE 2): a move that finishes ends the garrison-host gate; a unit that walked
+// out of a garrison host is reported (GarrisonUnitBehavior 0x443d10 on the move-finished signal outside states 1 / 2 calls
+// the host's vf +0xf8, 0x6360b0: the cap test with d = 0; [M] the exit).
+void MovementSystem::walk_out_done(Unit& u) {
+    if (u.exit_host >= 0) exit_arrivals_.push_back({u.d.id, u.exit_host});
+    u.exit_host = -1;
+}
+
+std::vector<std::pair<ObjectId, ObjectId>> MovementSystem::take_exit_arrivals() {
+    std::vector<std::pair<ObjectId, ObjectId>> out;
+    out.swap(exit_arrivals_);
+    return out;
+}
+
+// s78n t26.1 (MOVEMENT §3.2.1 item 5, the push 0x6859a0 and the StoppedVsStopped chooser 0x687010 rule 3): deployed or
+// deploying with M <= 0. (Path Around's obstacle set 0x67d580 has no M clause: around_obstacles.)
+bool MovementSystem::deploy_immobile(const Unit& x) {
+    return x.d.max_walk_deployed <= 0.0f && (x.deploy == LocoState::WalkDeploying || x.deploy == LocoState::WalkDeployed);
+}
+
+// s78n t26.1 (MOVEMENT §3.2.1 item 3, Walk 0x19 with M > 0 and a top path): speed 0, the path started, state 0x12 and the
+// flag set, with no length test and no start turn; the frame ends (true). Retail 0x19 = deploy WalkDeployed with the walk
+// stopped; a unit already walking deployed (a Walk move state) is not in it.
+bool MovementSystem::deploy_branch(Unit& u) {
+    if (u.deploy != LocoState::WalkDeployed || u.m.state != LocoState::WalkStopped) return false;
+    u.m.speed = 0.0f;
+    u.walk_deployed = true;
+    u.m.state = LocoState::WalkStartMove;
+    return true;
+}
+
+// s78n t26.1 (MOVEMENT §3.2.1 item 2): the plan's gate - every member of u's formation (form_id; a unit without one alone)
+// is a `Deploys` type, deployed (0x39a390) or deploying (0x18), and not an auto-deployer.
+bool MovementSystem::deploy_gate_holds(const Unit& u) const {
+    if (cfg_.mode != MoveMode::Land) return false;
+    const auto manual_dep = [](const Unit& x) {
+        return x.d.deploys && !auto_deployer(x) && (deployed_d(x) || x.deploy == LocoState::WalkDeploying);
+    };
+    if (!manual_dep(u)) return false;
+    if (u.form_id == 0) return true;
+    for (const Unit& o : units_)
+        if (o.form_id == u.form_id && !manual_dep(o)) return false;
+    return true;
+}
+
+// s78n t26.1 (MOVEMENT §3.2.1 item 2, the plan's member loop): an auto-deployer takes the cap test 0x3ac100 with d = the
+// summed 3-D length of the path ([port] its own planned path: the port plans no formation path), when the path is set.
+void MovementSystem::plan_deploy_cap(Unit& u, uint32_t frame) {
+    if (!auto_deployer(u) || u.d.locomotor != LocomotorKind::Default || is_air(u)) return;
+    deploy_cap_unit(u, path_length_3d(u.m.path), frame);
 }
 
 // ---------------------------------------------------------------- S7 collision layer (TACTICAL_GAPS §6.7)
@@ -2234,7 +2299,7 @@ void MovementSystem::cut_finished(Unit& u, uint32_t frame) {
     }
     u.has_goal = false;  // the order path has no waypoint left: arrived where it stands
     u.arrived = true;
-    u.exit_host = -1;
+    walk_out_done(u);
     u.around.clear();
     u.path_change = frame;
     land_arrival_turn(u);
@@ -2907,7 +2972,9 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
 
 // Push 0x6859a0 (A1_READINGS §36.4, §40): direction = a's heading turned 45 degrees toward b's side; the free-position
 // search (push_spot) and a land path to the spot; b walks it as a pushed move over its order move (§40.3: no return
-// move). A deploying / deployed b is not pushed. [port] A b already on a pushed move counts as pushed (the original
+// move). A deploying / deployed b is not pushed when its Max_Dist_Walk_While_Deployed (M) is <= 0 (s78n t26.1, MOVEMENT
+// §3.2.1 item 5: a deployed Destroyer Droid is pushed and walks the push deployed). [port] A b already on a pushed move
+// counts as pushed (the original
 // pushes a blocker that is moving again, decision 0x684f90 step 2).
 bool MovementSystem::push_aside(const CollisionObject& c, const Unit& a, Unit& b, bool flee, uint32_t frame) {
     // s78n t20 batch 1 (MOVEMENT §5.4.5 item 2, 0x6859a0 first test): a b without a locomotor is not pushed - a death-clone
@@ -2922,7 +2989,7 @@ bool MovementSystem::push_aside(const CollisionObject& c, const Unit& a, Unit& b
     // (s78n t20: a push by another record replaces the older collision path - the claim is forced, A1_READINGS §40.3.)
     if (holds_path(b, c)) return true;
     if (b.anchor >= 0) return false;  // s78n t03 [port]: a steering member is not pushed (it steers back to its slot)
-    if (!(b.lp.max_speed > 0.0f) || b.deploy == LocoState::WalkDeploying || b.deploy == LocoState::WalkDeployed) {
+    if (!(b.lp.max_speed > 0.0f) || deploy_immobile(b)) {
         ++stats_.push_failures;  // s78n t18: an attempt on a blocker that cannot walk counts as a failed push too
         return false;
     }
@@ -3072,20 +3139,19 @@ float MovementSystem::svs_cost(const Unit& x, const Unit& y, V2 d) const {
 }
 
 // Which unit moves, 0x687010 (first match): a Landing Transport -> the other; a lowering hover unit -> the other;
-// deployed / deploying units never move (both: nobody); exactly one has a target -> the one without; two Infantry-class
+// deployed / deploying units with Max_Dist_Walk_While_Deployed <= 0 never move (both: nobody; s78n t26.1: the droid, M > 0,
+// can be the one moved); exactly one has a target -> the one without; two Infantry-class
 // units with targets -> nobody; against a Giant of a higher class only the smaller one is a candidate; else both are,
 // the cheaper first (cost(p1) <= cost(p0) -> p1 first). Of the candidates the first whose locomotor would accept the
 // claim moves (no owner, this record, or an owner of lower weight). A participant without a locomotor (a death clone, s78n t20
-// batch 1) makes the other one move (rule 1). [port] a deployed unit never walks (Max_Dist_Walk_While_Deployed is not modelled), and a
-// unit whose max speed is 0 counts as immobile too (retail has no such case: it would pick it and wait for good).
+// batch 1) makes the other one move (rule 1). [port] A unit whose max speed is 0 counts as immobile too (retail has no
+// such case: it would pick it and wait for good).
 uint8_t MovementSystem::svs_pick_mover(const CollisionObject& c, const Unit& p0, const Unit& p1) const {
     if (p0.d.collision_class == kUccLandingTransport || p0.d.no_locomotor) return 1;  // (s78n t20 batch 1: no locomotor)
     if (p1.d.collision_class == kUccLandingTransport || p1.d.no_locomotor) return 0;
     if (p0.hover == 3) return 1;
     if (p1.hover == 3) return 0;
-    const auto imm = [this](const Unit& x) {
-        return x.deploy == LocoState::WalkDeploying || x.deploy == LocoState::WalkDeployed || !(walk_max_speed(x) > 0.0f);
-    };
+    const auto imm = [this](const Unit& x) { return deploy_immobile(x) || !(walk_max_speed(x) > 0.0f); };
     const bool i0 = imm(p0), i1 = imm(p1);
     if (i0 && i1) return 2;
     if (i0) return 1;
@@ -3154,7 +3220,11 @@ void MovementSystem::svs_service(CollisionObject& c, Unit& a, Unit& b, uint32_t 
         find_land_path(grid_, regions_, q, sc, out);
         if (!out.ok || out.points.size() < 2) return;
         if (!claim(x, c, false, frame)) return;  // an owner of equal or higher weight refuses
+        const float len = path_length_3d(out.points);
         push_top(x, std::move(out.points), 3, false, c, frame);
+        // s78n t26.1 (MOVEMENT §3.2.1 item 5): the path starts through Walk vf +0x148 0x61e570 - a deployed / deploying
+        // mover walks it deployed when it is shorter than M, else it undeploys
+        deploy_path_start(x, len, frame);
         c.state = S::Resolving;
         return;
     }
@@ -3302,7 +3372,9 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // a1k t03 (A1_READINGS §40.3): the collision-owned record is the top of the path stack; the order path waits
             // under it. s78n t20 (MOVEMENT §1.5.1 item 5): it is walked as the order path is - the collision records'
             // speed answer, the steering vector, the team cap - without the formation speed, jiggle or side error.
-            if (u.pushed && u.deploy == LocoState::None) {
+            // s78n t26.1 (MOVEMENT §3.2.1 item 5): a deployed unit with M > 0 walks a push deployed (the 0x19 branch first)
+            if (u.pushed && (u.deploy == LocoState::None || deploy_walks(u))) {
+                if (deploy_branch(u)) continue;
                 // a started order path goes on under the record: no braking for the record's end
                 if (u.has_goal && !u.need_path && frame >= u.start_frame && !u.push_path.empty()) {
                     size_t from = u.m.next;
@@ -3321,6 +3393,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 // deceleration (0x372fe0 / 0x373080: x effective / Max_Speed) x Fleeing_Infantry_Speed_Bonus.
                 LocomotorParams plp = u.lp;
                 if (u.team_cap < kInf && u.speed_factor > 0.0f) plp.max_speed = u.team_cap;
+                if (u.walk_deployed) plp.max_speed = u.d.deployed_walk_speed;  // s78n t26.1
                 if (u.push_flee) {
                     const float fb = cfg_.constants.fleeing_infantry_speed_bonus;
                     plp.max_speed *= fb;
@@ -3365,11 +3438,13 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // s78k t01 / s78l t02 (MOVEMENT §3.5.1): the arrival turn runs in the serial pass below (it reads the clip
             // data hook).
             if (u.aturn != LocoState::None && !u.has_goal && u.d.locomotor == LocomotorKind::Default) continue;
-            // S8 t11: a Walk in a deploy state does not move (MovementSystem::deploy).
-            if (!u.has_goal || u.need_path || frame < u.start_frame || u.deploy != LocoState::None) {
+            // S8 t11: a Walk in a deploy state does not move (MovementSystem::deploy). s78n t26.1 (MOVEMENT §3.2.1 item 3):
+            // but 0x19 with M > 0 and a path walks deployed.
+            if (!u.has_goal || u.need_path || frame < u.start_frame || (u.deploy != LocoState::None && !deploy_walks(u))) {
                 if (bike) bike_frame(u, yaw0, false);
                 continue;
             }
+            if (deploy_branch(u)) continue;
             // s78n t18 / t20 batch 2 (Walk Start Move 0x61ff40): a Hover_Height unit that is not raised rises first; the
             // frame ends. A turn in place (0xf-0x11) comes before Start Move, so it runs on the ground: the start rule is
             // tried on a copy, and a frame that only turns is kept (the walk's own result), one that would move rises.
@@ -3393,6 +3468,9 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             float cap = std::min(std::min(u.formation_speed, u.speed_cap), u.coll_speed);
             LocomotorParams lp = u.lp;
             if (u.team_cap < kInf && u.speed_factor > 0.0f) lp.max_speed = u.team_cap;
+            // s78n t26.1 (MOVEMENT §3.2.1 item 3): walking deployed, the speed controller's vmax is Deployed_Walk_Speed (raw);
+            // the acceleration / deceleration stay ([port] stand-in until the controller of t26.2: the max speed only)
+            if (u.walk_deployed) lp.max_speed = u.d.deployed_walk_speed;
             if (frame < u.hold_until) cap = 0.0f;
             if (u.in_formation) {  // OI tactical: formation members (jiggle, side-error steering)
                 x.jiggle = u.jiggle;
@@ -3408,7 +3486,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
     // this tick's turn clip events.
     for (Unit& u : units_) {
         if (u.aturn == LocoState::None || u.has_goal || u.d.locomotor != LocomotorKind::Default || is_air(u)) continue;
-        if (u.pushed && u.deploy == LocoState::None) continue;  // the pushed walk runs (parallel pass)
+        if (u.pushed && (u.deploy == LocoState::None || deploy_walks(u))) continue;  // the pushed walk runs (parallel pass)
         arrival_turn_frame(u, frame);
         if (u.tplay_set) {
             u.tplay_set = false;
@@ -3462,7 +3540,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 if (popped_arrival) {
                     u.has_goal = false;
                     u.arrived = true;
-                    u.exit_host = -1;
+                    walk_out_done(u);
                     if (!u.d.team_container) {
                         u.m.speed = 0.0f;
                         u.m.state = LocoState::WalkStopped;
@@ -3482,7 +3560,8 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
             // s78n t18: a squad container's arrival is its own state 0x15 (team_walk)
             const bool close = !u.d.team_container && !r.arrived && !r.moved && u.has_goal && !u.need_path &&
                                frame >= u.start_frame &&
-                               u.deploy == LocoState::None && u.speed_factor > 0.0f && u.m.state == LocoState::WalkEndMove &&
+                               (u.deploy == LocoState::None || u.walk_deployed) && u.speed_factor > 0.0f &&
+                               u.m.state == LocoState::WalkEndMove &&
                                u.m.path.size() >= 2 && static_cast<size_t>(u.m.next) + 1 == u.m.path.size() &&
                                dot(u.m.pos - u.m.path.back(),
                                    normalize_retail(u.m.path.back() - u.m.path[u.m.path.size() - 2])) > -5.0f;
@@ -3497,7 +3576,7 @@ void MovementSystem::tick_land(uint32_t frame, SimRng& rng, const ParallelFor& p
                 u.arrived = true;
                 u.around.clear();  // s78n t18: the path is popped
                 u.path_change = frame;
-                u.exit_host = -1;  // (MOVEMENT §5.3: the walk-out move arrived)
+                walk_out_done(u);  // (MOVEMENT §5.3: the walk-out move arrived)
                 land_arrival_turn(u);  // s78k t01: state 0x15
             }
             if (r.blocked && !close) {

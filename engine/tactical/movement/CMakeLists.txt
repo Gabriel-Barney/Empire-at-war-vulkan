@@ -67,6 +67,12 @@ target_link_libraries(alamo_tactical_movement_b2_tests PRIVATE alamo_tactical_mo
 add_test(NAME alamo_tactical_movement_b2_tests COMMAND alamo_tactical_movement_b2_tests)
 set_tests_properties(alamo_tactical_movement_b2_tests PROPERTIES TIMEOUT 300)
 
+# s78n t26.1: walking while deployed (MOVEMENT 3.2.1), the move order's skip of deployed manual deployers (6.2).
+add_executable(alamo_tactical_movement_t26_tests tests/test_movement_t26.cpp)
+target_link_libraries(alamo_tactical_movement_t26_tests PRIVATE alamo_tactical_movement alamo_test_support)
+add_test(NAME alamo_tactical_movement_t26_tests COMMAND alamo_tactical_movement_t26_tests)
+set_tests_properties(alamo_tactical_movement_t26_tests PROPERTIES TIMEOUT 120)
+
 # L1 systems: hyperspace departures, engine control, teleport (hyperspace.hpp, MovementSystem::teleport).
 add_executable(alamo_tactical_hyperspace_tests tests/test_hyperspace.cpp)
 target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement alamo_test_support)
