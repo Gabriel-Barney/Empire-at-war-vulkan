@@ -633,7 +633,8 @@ void test_t23_chooser_rows() {
         for (; f < 600 && distance(sys.view(1).pos, sys.view(2).pos) > 260.0f; ++f) sys.tick(f, rng, serial_for);
         const ObjectId both[] = {1, 2};
         sys.halt(both, f);
-        CHECK(sys.view(1).form_id == 0 && sys.view(2).form_id == 0);
+        // s78o (b0066): halt() keeps each unit's formation id - two separate orders, two formations
+        CHECK(sys.view(1).form_id != 0 && sys.view(2).form_id != 0 && sys.view(1).form_id != sys.view(2).form_id);
         const Decided d = run_pair(sys, rng, 1, 2, f, f + 400, [](uint32_t, const CollisionObject*) {});
         CHECK(d.state == CollisionState::TryAgainLater && d.master == 1);
         std::printf("t23 chooser: halted head-on 1.0 / 0.8 -> port state %d (Try Again Later), master %d after the four failed "

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
@@ -737,6 +738,14 @@ void test_t26_corner_pass() {
     for (const V2 q : pr) max_x = std::max(max_x, q.x);
     CHECK(pr.size() > 3 && pr.front().x == 100.0f && pr.front().y == 0.0f && pr.back().x == 100.0f && pr.back().y == 40.0f &&
           near(max_x, 120.0f, 0.05f));
+    // s78o (b0088): a tiny positive turn rate (custom Max_Rate_Of_Turn) or a corner near pi: the point count is capped
+    // (kCornerArcProbeMaxPoints + P_j + A at most) instead of ~1e7 points or a cast past UINT32_MAX; a non-finite count
+    // takes the cap too
+    for (const float om : {1.0e-9f, 1.0e-30f, 0.0f}) {
+        std::vector<V2> big;
+        corner_arc_probe({100.0f, 0.0f}, {100.0f, 40.0f}, 2.0f, om, -3.14159f, 2.0f, big);
+        CHECK(big.size() >= 2 && big.size() <= kCornerArcProbeMaxPoints + 2u);
+    }
     // no pass when R is not > 0
     CornerPassIn none = corner_in(0.0f, 0.0f);
     none.rate = 0.0f;
@@ -1230,6 +1239,31 @@ void test_t26_container_step() {
         CHECK(w.second == 1.5f && c.second == 1.5f && flee == 2.0f);
         CHECK(w.first == 85.0f && c.first == 80.0f && fl.first == 70.0f);
     }
+    // s78o (b0053): the coast step team_walk runs (no top path) with a straggler cap 0.05 below a = 0.5, at once (cap_now):
+    // in End Move B.7 sets T := a over the cap - v 2 -> a = 0.5 (at once); a step left in 0x13 would take the cap - v 2 ->
+    // 0.05, below a (so the next End Move tick would stop it a tick early). team_walk
+    // now enters End Move before the first coast step (a new order's path set leaves a marching container in 0x13).
+    {
+        LocomotorParams p3;
+        p3.max_speed = 3.0f;
+        p3.accel = p3.decel = 0.5f;
+        p3.turn_rate = 10.0f;
+        const auto first = [&](LocoState s) {
+            LandMotion k;
+            k.pos = {10.0f, 0.0f};
+            k.speed = 2.0f;
+            k.state = s;
+            k.started = false;
+            WalkExtras x;
+            x.container = true;
+            x.cap_now = true;
+            walk_step(k, p3, 0.05f, nullptr, &x);
+            return k.speed;
+        };
+        const float em = first(LocoState::WalkEndMove), mv = first(LocoState::WalkMoving);
+        std::printf("s78o container coast first tick: End Move %.3f, 0x13 %.3f\n", static_cast<double>(em), static_cast<double>(mv));
+        CHECK(em == 0.5f && mv == 0.05f);
+    }
     // The re-lay (FIGHTER_FLYING 7.2 caller 3): a waypoint stepped in C.11 (s > s') re-lays along the new segment; a pop into
     // the started path below re-lays along its segment
     {
@@ -1517,6 +1551,23 @@ void test_t26_walk_transition() {
                 CHECK(m.speed == 0.0f && r.arrived && m.state == LocoState::WalkStopped && m.wt_clip == -1 && m.wt_f0 == 0.0f);
             }
         }
+    }
+    // s78o (b0087): a MOVE clip at a huge, infinite or NaN frame (a damaged save) wraps with one fmod / restarts at 0
+    // instead of looping ~2^24 x count times, and a negative frame in End Move picks an end clip in 17 .. 20, never an
+    // index below MOVE_ENDONE
+    for (const float bad : {3.0e38f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN(), -50.0f}) {
+        LandMotion m;
+        m.path = {V2{0.0f, 0.0f}, V2{450.0f, 0.0f}};
+        m.next = 1;
+        m.pos = {100.0f, 0.0f};
+        m.speed = vmax;
+        m.state = bad < 0.0f ? LocoState::WalkEndMove : LocoState::WalkMoving;
+        m.wt_clip = 2;
+        m.wt_pos = bad;
+        m.wt_rate = vmax / wt.s;
+        for (int c = 1; c <= 3; ++c) (void)walk_step(m, p, 3.0e38f, nullptr, &x);
+        CHECK(std::isfinite(m.wt_pos) && (m.wt_clip == -1 || m.wt_clip == 2 || (m.wt_clip >= 16 && m.wt_clip <= 20)));
+        CHECK(bad < 0.0f || m.wt_clip != 2 || (m.wt_pos >= 0.0f && m.wt_pos < wt.count[0]));
     }
     // 0x12 with a path not started: MOVESTART current -> 0x14; else 0x15 (idle, speed 0)
     {

@@ -165,13 +165,16 @@ struct MovementConfig {
 // s78n t25.2 (MOVEMENT §4.3.2 items 1, 2, 6 and 7): one unit of a land attack order. range = its raw attack range
 // (0x3749d0); engage = item 1's engagement range (range + min(hx, hy) of the target's extents; guard: min(that, 150));
 // in_range = TARGETING slots 44 / 45 at order time (in max range and not inside min range: the host's range answer);
-// melee = the melee test 0x372210 (§4.2 item 6).
+// melee = the melee test 0x372210 (§4.2 item 6). s78o (b0071): targeting = the member has TARGETING (a weapon range or a
+// grenade arc, the host's answer): the fire trim tests only such members (0x410e90 skips the others, also the guard
+// trim's |p - C| <= Land_Guard_Range term); a unit with no entry counts as having it.
 struct LandAttackUnit {
     ObjectId id = 0;
     float range = 0.0f;
     float engage = 0.0f;
     bool in_range = false;
     bool melee = false;
+    bool targeting = true;
 };
 // s78n t25.2: the object block (kind 3) of a land attack order. target -1 = no block (a plain move).
 struct LandAttack {
@@ -1594,10 +1597,12 @@ private:
         bool on_path = false;
     };
     static constexpr int kRejoinNext = 0, kRejoinTaken = 1, kRejoinFail = -1;
-    bool rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d, const std::function<int(const Rejoin&)>& fn) const;
-    bool rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q) const;
+    // s78o (b0065): `forced` = 0x67d580's object argument (a flag-1 Path Around's obstacle): an obstacle for every goal
+    bool rejoin_search(const Unit& u, std::span<const V2> base, uint32_t cur, float d, const std::function<int(const Rejoin&)>& fn,
+                       const Unit* forced = nullptr) const;
+    bool rejoin_accept(const Unit& u, V2 cand, V2 path_end, V2& q, const Unit* forced = nullptr) const;
     // 0x67d580(request, object, 1): the goal-spot obstacle filter of 0x679aa0 (relation mask 0x10)
-    bool goal_obstacle(const Unit& u, const Unit& o) const;
+    bool goal_obstacle(const Unit& u, const Unit& o, const Unit* forced = nullptr) const;
     // 0x67d580 + 0x677650: the obstacle set of a Path Around call among the layer objects around u, ascending id, with
     // their swept boxes; `ids` = their units_ indices.
     void around_obstacles(const Unit& u, const Unit* forced, uint8_t flags, float half, std::vector<AroundObstacle>& out,

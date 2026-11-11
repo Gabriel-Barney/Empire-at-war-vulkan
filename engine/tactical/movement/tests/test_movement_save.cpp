@@ -12,10 +12,15 @@
 //   * a loader that already ran (dirty) is fully replaced by read(); another map or mode is rejected;
 //   * random single-bit corruption never crashes and a rejected load leaves the system unchanged.
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <bit>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <iterator>
+#include <limits>
 #include <span>
 #include <thread>
 #include <utility>
@@ -1427,6 +1432,92 @@ void test_t25_attack() {
     check_resume(sc, (moving_first + moving_last) / 2, 31);
 }
 
+// s78o (b0087): a damaged unit record must not hang or index out of bounds after the load. In the t25.2 attack approach
+// unit 10 carries an attack slot (atk_theta / atk_rho, found by their 8 bytes) and no path record, so its Walk_Transition
+// block (wt_clip, wt_pos, wt_rate, wt_f4, wt_f0) sits a fixed 99 bytes + 20 before atk_theta (io_unit: prev_pos ..
+// self_goal with empty push vectors); the block of a unit without Walk_Transition is -1 and four zero floats.
+void test_s78o_unit_rejections() {
+    Scenario sc;
+    sc.build = build_t25_attack;
+    sc.before = t25_attack_before;
+    sc.after = squad_after;
+    World a(sc.cfg);
+    sc.build(a);
+    for (uint32_t f = 0; f < 700 && !(a.sys.view(10).atk_rho > 0.0f && a.sys.view(10).speed > 0.0f); ++f) step(sc, a, f, serial_for);
+    const UnitView v = a.sys.view(10);
+    CHECK(v.atk_rho > 0.0f && v.push_kind == 0);
+    const Bytes good = bytes_of(a.sys);
+    const auto le = [](float x) {
+        const uint32_t b = std::bit_cast<uint32_t>(x);
+        return std::array<uint8_t, 4>{static_cast<uint8_t>(b), static_cast<uint8_t>(b >> 8), static_cast<uint8_t>(b >> 16),
+                                      static_cast<uint8_t>(b >> 24)};
+    };
+    const std::array<uint8_t, 4> th = le(v.atk_theta), rh = le(v.atk_rho);
+    std::vector<size_t> hits;
+    for (size_t i = 0; i + 8 <= good.size(); ++i)
+        if (std::equal(th.begin(), th.end(), good.begin() + static_cast<std::ptrdiff_t>(i)) &&
+            std::equal(rh.begin(), rh.end(), good.begin() + static_cast<std::ptrdiff_t>(i + 4)))
+            hits.push_back(i);
+    CHECK(hits.size() == 1 && hits[0] >= 119);
+    if (hits.size() != 1 || hits[0] < 119) return;
+    const size_t at_th = hits[0], at_wt = at_th - 99 - 20;
+    const uint8_t idle[20] = {0xFF, 0xFF, 0xFF, 0xFF};  // wt_clip -1, then 4 x 0.0f
+    CHECK(std::equal(std::begin(idle), std::end(idle), good.begin() + static_cast<std::ptrdiff_t>(at_wt)));
+    World t(sc.cfg);
+    sc.build(t);
+    CHECK(load(t.sys, good));
+    const float inf = std::numeric_limits<float>::infinity(), nan = std::numeric_limits<float>::quiet_NaN();
+    const auto put_f = [](Bytes& b, size_t at, float x) { put_u32(b, at, std::bit_cast<uint32_t>(x)); };
+    // the clip: -1, 2, 16 .. 20 load; anything else is refused
+    for (const int32_t c : {-1, 2, 16, 17, 20}) {
+        Bytes x = good;
+        put_u32(x, at_wt, static_cast<uint32_t>(c));
+        CHECK(load(t.sys, x));
+    }
+    for (const int32_t c : {-2, 0, 1, 3, 15, 21, 0x42, INT32_MIN, INT32_MAX}) {
+        Bytes x = good;
+        put_u32(x, at_wt, static_cast<uint32_t>(c));
+        CHECK(rejects(t.sys, x));
+    }
+    // wt_pos / wt_rate / wt_f4 / wt_f0: a non-finite value is refused, a finite one (also a hair below 0) loads
+    for (size_t k = 0; k < 4; ++k) {
+        for (const float bad : {inf, -inf, nan}) {
+            Bytes x = good;
+            put_f(x, at_wt + 4 + 4 * k, bad);
+            CHECK(rejects(t.sys, x));
+        }
+        Bytes x = good;
+        put_f(x, at_wt + 4 + 4 * k, k == 0 ? -1.0e-6f : 3.5f);
+        CHECK(load(t.sys, x));
+    }
+    // the attack slot: a non-finite angle or radius is refused (a negative radius already was)
+    for (const float bad : {inf, -inf, nan}) {
+        Bytes x = good;
+        put_f(x, at_th, bad);
+        CHECK(rejects(t.sys, x));
+        x = good;
+        put_f(x, at_th + 4, bad);
+        CHECK(rejects(t.sys, x));
+    }
+    {
+        Bytes x = good;
+        put_f(x, at_th, 7.0f);  // [port] no |theta| <= pi bound (the arc coefficient is data)
+        CHECK(load(t.sys, x));
+    }
+    // a MOVE clip at a huge (finite) frame loads and the battle runs on (the locomotor side: test_movement_t26)
+    {
+        Bytes x = good;
+        put_u32(x, at_wt, 2u);
+        put_f(x, at_wt + 4, 3.0e38f);
+        put_f(x, at_wt + 8, 1.0f);
+        World w(sc.cfg);
+        sc.build(w);
+        CHECK(load(w.sys, x));
+        for (uint32_t f = 0; f < 30; ++f) step(sc, w, f, serial_for);
+    }
+    std::printf("s78o unit rejections: wt block at %zu, atk_theta at %zu of %zu\n", at_wt, at_th, good.size());
+}
+
 // s78n t18 review: a TEAM entry that goes without a steering member leaving - a member suspended for a hero clash that
 // is removed (0), a garrisoned (parked) member that dies inside (1), a rejoin the system refuses (2: the unit is not in
 // it) - leaves the entry list at once: the joint box, the container's radius and the rate 0x5ab540 are those a loaded
@@ -1920,6 +2011,7 @@ int main() {
     test_t18_states();              // s78n t18 review
     test_t20_states();              // s78n t20
     test_t25_attack();              // s78n t25.2
+    test_s78o_unit_rejections();    // s78o (b0087)
     test_stale_team_entries();      // s78n t18 review
     test_hidden_after_load();       // s78n t18 review
     test_t18_review_rejections();   // s78n t18 review

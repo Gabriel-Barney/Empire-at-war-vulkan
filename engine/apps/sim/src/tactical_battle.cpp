@@ -2048,6 +2048,10 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode,
             const tc::CanHit c = attack_can_hit(lead, target);
             e.in_range = c == tc::CanHit::Yes || c == tc::CanHit::LineBlocked;  // slots 44 / 45: range only
             e.melee = combat_->melee_attacker(lead);
+            // s78o (b0071): TARGETING - a weapon range, or a grenade arc (can_hit answers more than NoTarget)
+            e.targeting = e.range > 0.0f || c != tc::CanHit::NoTarget;
+        } else {
+            e.targeting = false;  // not a combat unit: no TARGETING
         }
         o.attack.units.push_back(e);
     }

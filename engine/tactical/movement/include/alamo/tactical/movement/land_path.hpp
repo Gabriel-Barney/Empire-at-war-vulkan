@@ -294,7 +294,9 @@ std::vector<float> corner_fractions(const std::vector<V2>& poly, const CornerPas
 // (negative for a left turn, d_in x d > 0), segment length seg: N = (uint)(|theta| v / omega / seg + 3) points p_k = P_j +
 // t (sin|theta| - sin((1 - 2u)|theta|)) v / omega + n (cos((2u - 1)|theta|) - cos|theta|) v / omega, u = k / N, t =
 // unit(A - P_j), n its normal toward the incoming direction; it stops before a p_k past the aim line (cross(A - last, p_k -
-// last) x s < 0), then A is appended. `out` starts with P_j.
+// last) x s < 0), then A is appended. `out` starts with P_j. s78o (b0088) [port]: N is at most kCornerArcProbeMaxPoints
+// (also for a non-finite N), so custom data cannot make the pass hang or the cast overflow.
+inline constexpr uint32_t kCornerArcProbeMaxPoints = 16384;
 void corner_arc_probe(V2 pj, V2 a, float v, float omega, float theta_s, float seg, std::vector<V2>& out);
 
 }  // namespace alamo::tactical::movement

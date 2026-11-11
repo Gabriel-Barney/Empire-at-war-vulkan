@@ -134,8 +134,10 @@ void wt_advance(LandMotion& m, const WalkTransition& wt) {
     const int32_t i = wt_index(m.wt_clip);
     if (i < 0) return;
     m.wt_pos += wt_step(m, wt);
-    if (i == 0 && wt.count[0] > 0.0f)
-        while (m.wt_pos >= wt.count[0]) m.wt_pos -= wt.count[0];  // [port] the MOVE loop wraps at its frame count
+    // [port] the MOVE loop wraps at its frame count (s78o b0087: one fmod, exact and equal to the subtraction for a step
+    // below the count, where a huge position no longer loops; a non-finite one restarts the clip at frame 0)
+    if (i == 0 && wt.count[0] > 0.0f && m.wt_pos >= wt.count[0]) m.wt_pos = std::fmod(m.wt_pos, wt.count[0]);
+    if (!std::isfinite(m.wt_pos)) m.wt_pos = 0.0f;
 }
 // 0x372ae0: the transition clips' rate V / S (1.0 when S = 0).
 float wt_vs(const WalkTransition& wt, float vmax) { return wt.s > 0.0f ? vmax / wt.s : 1.0f; }
@@ -154,7 +156,8 @@ bool wt_end_move(LandMotion& m, const WalkTransition& wt, float vmax) {
     if (m.wt_clip == 2 && wt.count[0] > 0.0f && k > 0) {
         // the end clip = 17 + (int(cur / (n_move / k)) % k), switched only when the phase <= the clip step, +0xf4 := the phase
         const float seg = wt.count[0] / static_cast<float>(k);
-        const float q = std::floor(m.wt_pos / seg);
+        float q = std::floor(m.wt_pos / seg);
+        if (!(q >= 0.0f) || q > static_cast<float>(k)) q = 0.0f;  // s78o (b0087): never a clip below 17 or an int overflow
         const float phase = m.wt_pos - q * seg;
         if (phase <= wt_step(m, wt)) {
             int32_t e = 17 + static_cast<int32_t>(q) % k;
