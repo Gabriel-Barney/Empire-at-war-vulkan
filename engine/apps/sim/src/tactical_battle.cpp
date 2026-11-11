@@ -1550,6 +1550,9 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
         float best_d2 = 0.0f;
         for (const Unit& e : units_) {
             if (!e.alive || e.retreated || e.side == u.side) continue;
+            // s78n t25.3 [port]: on land the pick is an enemy of the unit's owner (the auto-attack push 0x41fd30 names what
+            // the targeting scan picked, never a neutral object)
+            if (!space_ && combat_ && !combat_->is_enemy(store.owner(u.h), store.owner(e.h))) continue;
             const Vec3 ep = store.position(e.h);
             const float dx = ep.x - up.x, dy = ep.y - up.y;
             const float d2 = dx * dx + dy * dy;
@@ -1698,7 +1701,8 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     fighter_order(o.units, static_cast<uint8_t>((attack_move ? mv::kMoveFlagAttackMove : 0) | flags), Vec3{o.destination.x, o.destination.y, 0.0f});
 }
 
-// Attack rule of BattleAi::execute_order: order_attack, then a move into 70 % of max(range, 100) beyond 80 %.
+// Attack rule of BattleAi::execute_order: order_attack, then (space) a move into 70 % of max(range, 100) beyond 80 %, or
+// (land, s78n t25.3) one attack-block order per resolved target (land_attack_order).
 uint32_t TacticalBattle::exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp,
                                      SimRng& rng) {
     const objects::ObjectStore& st = mode.primary();

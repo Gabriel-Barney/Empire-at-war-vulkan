@@ -1721,6 +1721,9 @@ void BattleAi::standin_orders() {
         float best_d2 = 0.0f;
         for (const TacticalBattle::Unit& e : b_->units_) {
             if (!e.alive || e.retreated || e.side == u.side) continue;
+            // s78n t25.3 [port]: on land the pick is an enemy of the unit's owner (the auto-attack push 0x41fd30 names what
+            // the targeting scan picked, never a neutral object)
+            if (!b_->space_ && b_->combat_ && !b_->combat_->is_enemy(st.owner(u.h), st.owner(e.h))) continue;
             const Vec3 ep = st.position(e.h);
             const float dx = ep.x - up.x, dy = ep.y - up.y, d2 = dx * dx + dy * dy;
             if (!best || d2 < best_d2) {
