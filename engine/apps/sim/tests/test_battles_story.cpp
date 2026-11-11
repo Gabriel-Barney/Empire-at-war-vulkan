@@ -831,7 +831,13 @@ void test_story_battle(const Data& d) {
 //                    the battle's map (the loader records the name it was asked for)
 //   battle frame 5   Select the Empire troopers + MoveToPosition onto the capture post -> STORY_COMMAND_UNIT
 //   battle frame 40  Select one trooper + Escort another                              -> STORY_GUARD_UNIT
-//   battle frame 60  Garrison (52) of trooper 0 into the neutral bunker (also a capture point) -> approach, 30-frame
+//   battle frame 20  Garrison (52) of the last trooper (placed nearest the bunker; s78n t26.3: the first one, at the back
+//                    of the column, now turns in place before its move - the corner pass's corridor test - and reached
+//                    the bunker too late for the post's capture window; s78n t26.4: frame 20, not 60 - stopped beside
+//                    the post facing away, the trooper turns on the move (CloseEnoughAngleForMoveStart 180, MOVEMENT
+//                    §3.5.2 A / C.7) in a loop, and from frame 60 it took the bunker 10 frames before the Underworld came
+//                    within 300 of the post, too late for its 30-frame capture) into the neutral bunker (also a capture
+//                    point) -> approach, 30-frame
 //                    entering, STORY_GARRISON_UNIT; rule (b) makes the bunker the Empire's -> STORY_CAPTURE_STRUCTURE
 //   60 frames inside: Garrison (52) with garrison = 0x3FFFFF (leave)
 //   battle frame 80  battles.change_owner on the Underworld hero: STORY_CAPTURE_HERO still never fires (§4.3)
@@ -1049,7 +1055,7 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
                 for (const objects::ObjectId id : l) w.push_back(static_cast<uint32_t>(id));
                 return w;
             };
-            if (!corruption && troopers.size() >= 3) {
+            if (!corruption && troopers.size() >= 4) {
                 if (f == 5) {
                     std::vector<uint32_t> all;
                     for (const objects::ObjectId id : troopers) all.push_back(static_cast<uint32_t>(id));
@@ -1066,11 +1072,11 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
                     commands::EventData es(T::Escort);
                     es.set("target", static_cast<uint32_t>(troopers[2]));
                     host.submit(0, es);
-                } else if (f == 60) {
-                    out.can_query = b->can_garrison(troopers[0], bunker) && !b->can_garrison(troopers[0], post) &&
-                                    b->can_garrison_fire(bunker) && b->contained_by(troopers[0]) == objects::kNoObjectId;
+                } else if (f == 20) {
+                    out.can_query = b->can_garrison(troopers.back(), bunker) && !b->can_garrison(troopers.back(), post) &&
+                                    b->can_garrison_fire(bunker) && b->contained_by(troopers.back()) == objects::kNoObjectId;
                     commands::EventData g(T::Garrison);
-                    g.set("unit", static_cast<uint32_t>(troopers[0])).set("garrison", static_cast<uint32_t>(bunker));
+                    g.set("unit", static_cast<uint32_t>(troopers.back())).set("garrison", static_cast<uint32_t>(bunker));
                     host.submit(0, g);
                 }
                 // battle host: the hero is no longer the attacker's lead unit (TACTICAL_GAPS §4.2 land split: the lead is the
@@ -1078,23 +1084,23 @@ S4Run run_s4_battle(const Data& d, const FileProvider& files, int32_t workers, i
                 if (f >= 80 && !out.hero_changed)
                     for (objects::ObjectHandle h : s.owned_by(1))
                         if (s.alive(h) && s.type(h) == d.types.resolve_name("S4_Hero") && !out.hero_changed) out.hero_changed = battles.change_owner(h, 0);
-                if (b->garrison_holder_of(troopers[0]) == bunker && bunker != objects::kNoObjectId) {
+                if (b->garrison_holder_of(troopers.back()) == bunker && bunker != objects::kNoObjectId) {
                     ++out.garrisoned_frames;
-                    out.garrison_flag = (b->combat().flags(troopers[0]) & tactical::combat::kUnitGarrisoned) != 0 &&
-                                        !b->movement().has_unit(troopers[0]);
-                    out.fire_query = b->can_garrison_fire(troopers[0]) && b->garrisoned_units(bunker).size() == 1;
-                    out.contained = b->contained_by(troopers[0]) == bunker;
+                    out.garrison_flag = (b->combat().flags(troopers.back()) & tactical::combat::kUnitGarrisoned) != 0 &&
+                                        !b->movement().has_unit(troopers.back());
+                    out.fire_query = b->can_garrison_fire(troopers.back()) && b->garrisoned_units(bunker).size() == 1;
+                    out.contained = b->contained_by(troopers.back()) == bunker;
                     out.bunker_taken = out.bunker_taken || s.owner(s.find(bunker)) == 0;
                     if (out.garrisoned_frames == 60) {
                         commands::EventData g(T::Garrison);
-                        g.set("unit", static_cast<uint32_t>(troopers[0])).set("garrison", commands::kNoObject);
+                        g.set("unit", static_cast<uint32_t>(troopers.back())).set("garrison", commands::kNoObject);
                         host.submit(0, g);
                     }
                 } else if (out.garrisoned_frames >= 60 && !out.left) {
                     out.left = true;
-                    out.readded = b->movement().has_unit(troopers[0]) &&
-                                  (b->combat().flags(troopers[0]) & tactical::combat::kUnitGarrisoned) == 0 &&
-                                  b->contained_by(troopers[0]) == objects::kNoObjectId;
+                    out.readded = b->movement().has_unit(troopers.back()) &&
+                                  (b->combat().flags(troopers.back()) & tactical::combat::kUnitGarrisoned) == 0 &&
+                                  b->contained_by(troopers.back()) == objects::kNoObjectId;
                 }
                 if (post != objects::kNoObjectId) out.post_taken = out.post_taken || s.owner(s.find(post)) == 0;
             }

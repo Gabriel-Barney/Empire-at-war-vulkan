@@ -1360,7 +1360,7 @@ void test_t20_states() {
         for (const uint32_t at : {seen[2][0] + 29u, seen[2][0] + 30u, seen[2][0] + 31u}) check_resume(sc, at, 0);
 }
 
-// s78n t25.2 (MOVEMENT §4.3.2, save version 25): an attack order on land - two attackers with a slot each (Unit::atk_*),
+// s78n t25.2 (MOVEMENT §4.3.2, save version 28): an attack order on land - two attackers with a slot each (Unit::atk_*),
 // a fire hook (host setup, re-set by the loader like every hook) - saved between the order and the arrival, while the
 // slot leg is walked, and after the trim's arrival; the resumed run is identical.
 void build_t25_attack(World& w) {
@@ -1730,9 +1730,15 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 23);  // 23: before the s78n t24 TerrainCollision (push_turn_first, the re-plan counts dropped) (24)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 24);  // 24: before the s78n t25.2 land attack block (Unit::atk_*, the attack counters) (25)
+    put_u32(bad, 0, 24);  // 24: before the s78n t26.2 path-record fractions / turn-done / start turn (25)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 26);
+    put_u32(bad, 0, 25);  // 25: before the s78n t26.3 Min_Speed_Fraction_For_Turn and corner-pass counts (26)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 26);  // 26: before the s78n t26.4 coast vector / started byte / walk counts (27)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 27);  // 27: before the s78n t25.2 land attack block (Unit::atk_*, the attack counters) (28)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 29);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

@@ -638,8 +638,12 @@ static void test_locomotion() {
         prev_speed = m.speed;
         arrived = r.arrived;
     }
-    CHECK(arrived && accel_ok && m.pos == (V2{100.0f, 100.0f}) && m.speed == 0.0f);
-    CHECK(frames > 50 && frames < 80);  // 200 units at <= 4 / frame with accel ramp
+    // s78n t26.4 (MOVEMENT 3.5.2 C): no snap - the unit arrives at 0x15 where it stands, past the last line (or within 5
+    // before it); it turns at 15 degrees a frame at the corner and travels along its facing
+    std::printf("locomotion: arrived after %d frames at (%.4f, %.4f)\n", frames, static_cast<double>(m.pos.x), static_cast<double>(m.pos.y));
+    CHECK(arrived && accel_ok && m.speed == 0.0f && m.state == LocoState::WalkStopped && m.next == 3);
+    CHECK(m.pos.y > 95.0f && std::fabs(m.pos.x - 100.0f) < 16.0f);  // the swing: under the turn radius v / R = 4 / 15deg = 15.3
+    CHECK(frames > 50 && frames < 90);  // 200 units at <= 4 / frame with accel ramp
     // Passability check before commit: a blocked cell stops the unit.
     PassabilityGrid g;
     g.init(16, 16);
@@ -657,7 +661,7 @@ static void test_locomotion() {
     c.next = 1;
     c.state = LocoState::WalkStopped;
     walk_step(c, p, 0.0f, nullptr);
-    CHECK(c.pos == (V2{100.0f, 100.0f}));
+    CHECK(c.pos == m.pos);
 }
 
 // ---------------------------------------------------------------- 7. formations
@@ -1441,7 +1445,7 @@ static void test_destination_offsets() {
 }
 
 // s78n t20 (MOVEMENT 3.5 step 2, 1.5.1 item 5): the walk step's "at once" collision cap and the record on top of a
-// started path (no braking for its end, the speed kept when its last waypoint is passed).
+// started path (no braking for its end, the speed kept when its last waypoint is passed; s78n t26.4: popped in the walk).
 static void test_walk_step_t20() {
     LocomotorParams p;
     p.max_speed = 1.0f;
@@ -1469,24 +1473,32 @@ static void test_walk_step_t20() {
         walk_step(b, p, 0.6f, nullptr, &now);
         CHECK(std::fabs(b.speed - 0.2f) < 1e-6f);
     }
-    {  // a 6-unit record: alone the walk brakes for its end (v <= sqrt(2 x 0.1 x remaining)) and stops on it; on top of a
-       // started path of 300 more it keeps full speed and reports the end with the speed kept
+    {  // s78n t26.4 (MOVEMENT 3.5.2 C.4 / C.11, 3.5.1 "Arrival turn, details" item 1): a 6-unit record alone enters End
+       // Move when v^2 / (2a) = 5 exceeds the rest, brakes at a to v = a, crosses its last line, coasts and arrives at 0x15
+       // (speed 0, no snap onto its point); on top of a started path (Q below) it keeps full speed, and the call that finds
+       // the record finished pops it and goes on along Q (no braking, no turn in that call)
         LandMotion a = walker(), b = walker();
         a.path = b.path = {{0.0f, 0.0f}, {6.0f, 0.0f}};
+        LandMotion q;
+        q.path = {{0.0f, 0.0f}, {400.0f, 0.0f}};
+        q.next = 1;
         WalkExtras top;
-        top.tail = 300.0f;
+        top.below = &q;
         WalkResult ra, rb;
         float min_b = 1.0f;
         uint32_t fa = 0, fb = 0;
         for (; fa < 200 && !ra.arrived; ++fa) ra = walk_step(a, p, 3.0e38f, nullptr, nullptr);
-        for (; fb < 200 && !rb.arrived; ++fb) {
+        for (; fb < 200 && !rb.popped; ++fb) {
             rb = walk_step(b, p, 3.0e38f, nullptr, &top);
             min_b = std::min(min_b, b.speed);
         }
-        CHECK(ra.arrived && a.speed == 0.0f && a.state == LocoState::WalkStopped && fa > 6);
-        // (6 or 7 frames: the fast normalise makes a step a few ulps short of 1)
-        CHECK(rb.arrived && fb <= 7 && min_b == 1.0f && b.speed == 1.0f && b.state == LocoState::WalkMoving);
-        CHECK(b.pos == (V2{6.0f, 0.0f}) && b.next == 2);
+        std::printf("t20 walk step: record alone arrives after %u frames at x %.6f; on a started path popped after %u frames at x %.6f\n",
+                    fa, static_cast<double>(a.pos.x), fb, static_cast<double>(b.pos.x));
+        CHECK(ra.arrived && a.speed == 0.0f && a.state == LocoState::WalkStopped && a.next == 2 && fa > 6);
+        CHECK(std::fabs(a.pos.x - 6.0f) < 0.01f);  // crossed its line at 6 (a.last_dir is zero: the coast stays put)
+        CHECK(rb.popped && fb <= 7 && min_b == 1.0f && b.speed == 1.0f && b.state == LocoState::WalkMoving);
+        CHECK(b.path.size() == 2 && b.path[1] == (V2{400.0f, 0.0f}) && b.next == 1 && b.pos.x > 6.0f);
+        CHECK(q.path.size() == 2 && q.path[1] == (V2{6.0f, 0.0f}));  // the finished record, for the caller to pop
     }
 }
 
@@ -1515,7 +1527,10 @@ static void test_collision_system() {
             CHECK(c.crowd == 0.0f && c.crowd_frame == 0 && c.state == CollisionState::Resolving && c.master == 1);
         }
         // nobody was displaced in the decision frame; unit 2 holds the record's path (kind 3) to the spot
-        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && s.view(2).pos.y == 400.0f && s.view(2).pos.x < 405.0f + 1.56f + 1e-3f);
+        // s78n t26.4 (MOVEMENT 5.4.3 "The move", 3.5.2 C.6 / C.7): its first step - turned by at most the rate toward
+        // the wanted direction (the path's plus the side-step away from unit 1) and moved along the new facing
+        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && distance(s.view(2).pos, V2{405.0f, 400.0f}) <= 1.56f + 1e-3f &&
+              s.view(2).pos.x > 405.0f);
         CHECK(s.view(2).pushed && s.view(2).push_kind == 3 && !s.view(1).pushed);
         float ring = 0.0f, step = 1.0f;
         while (5.0f + ring <= 80.0f) {
@@ -1529,7 +1544,8 @@ static void test_collision_system() {
         for (; f < 300 && !s.collisions().list().empty(); ++f) s.tick(f, rng);
         CHECK(s.collisions().list().empty() && s.stats().collisions_created == 1 && s.stats().collisions_resolved == 1 &&
               s.stats().collisions_cancelled == 0);
-        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && !s.view(2).pushed && std::fabs(s.view(2).pos.x - (405.0f + ring)) < 1e-2f);
+        // s78n t26.4: past the spot's line (+x), off the line by the side-steps (no lane term without an order, no snap)
+        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && !s.view(2).pushed && s.view(2).pos.x > 405.0f + ring - 5.0f);
         CHECK(overlap_ratio(s.view(1).pos, 40.0f, s.view(2).pos, 40.0f) <= 0.15f);
         // no new record afterwards (they no longer overlap)
         for (uint32_t n = 0; n < 20; ++n) s.tick(++f, rng);
@@ -1794,7 +1810,9 @@ static void test_push_search() {
                     end_frame, static_cast<double>(spot.x), static_cast<double>(spot.y), static_cast<double>(b0.x),
                     static_cast<double>(b0.y));
         CHECK(s.stats().pushes == 1 && s.stats().push_failures == 0 && push_frame > 0 && end_frame > push_frame);
-        CHECK(std::fabs(spot.x - (b0.x + ring)) < 0.5f && std::fabs(spot.y - (b0.y - ring)) < 0.5f);
+        // s78n t26.4 (MOVEMENT 3.5.1 item 1, 3.5.2 C.7): where 0x15 stopped it on its push path (no snap), within a
+        // step plus the side-step drift of the spot
+        CHECK(distance(spot, V2{b0.x + ring, b0.y - ring}) < 2.5f);
         CHECK(order_kept && s.view(1).arrived && distance(s.view(1).pos, cell_center(55, 20)) < 1.0f && s.stats().dynamic_repaths == 0);
         // No return move (MinimumPushReturnDistance / RepushDistance have no reader): the idle unit stays at the spot.
         for (uint32_t n = 0; n < 300; ++n) s.tick(++f, rng);
@@ -2429,8 +2447,9 @@ static void test_oi_land() {
         CHECK(ground && sys.view(1).arrived && sys.view(2).arrived);
         CHECK(sys.view(2).jiggle == (V2{0.0f, 0.0f}));
     }
-    // Side-error steering (§4.4): a member 12 units off its segment converges back; without it the unit heads
-    // straight for the waypoint.
+    // Side-error steering (§4.4; s78n t26.4: the lane term of MOVEMENT §5.4.1 "How Walk combines" item 2): a member 12 units
+    // off its segment converges back; without it the unit walks along its facing, parallel to the segment (the wanted yaw
+    // is the segment direction, MOVEMENT §3.5.2 C.7).
     {
         LocomotorParams p;
         p.max_speed = 2.0f;
@@ -2442,7 +2461,7 @@ static void test_oi_land() {
         m.next = 1;
         LandMotion plain = m;
         WalkExtras x;
-        x.side_error = true;
+        x.lane = true;
         float e_prev = 12.0f;
         bool monotone = true;
         for (int i = 0; i < 60; ++i) {
@@ -3112,7 +3131,8 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // before its chooser re-run.
 // s78n t24 (MOVEMENT §5.4.7): TerrainCollision replaces the blocked-frames re-plan; the rejoin generator scans the whole
 // path (11 accepted goals); MovingVsMoving answers follow the role slots.
-static constexpr uint64_t kGoldenLand = 0x2ac2cf266cff907dull;  // s78n t24
+// s78n t26.2 (MOVEMENT §3.5.2 A / B): the speed controller (End Move T = a, 0x15 restarts), the start turn in place.
+static constexpr uint64_t kGoldenLand = 0xb5781f347d113e74ull;  // s78n t26.4 (the move step C, no snap); t26.3 the corner pass
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
@@ -3186,7 +3206,7 @@ static void test_real_data() {
         }
     }
     const auto maps = fs->list("Data\\Art\\Maps\\*.ted");
-    uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0;
+    uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0, land_stopped = 0;
     uint32_t space_units = 0, space_arrived = 0, space_hits = 0, space_obstacles = 0, plan_fail = 0, plan_invalid = 0, plans = 0;
     uint32_t group_units = 0, group_arrived = 0, space_fallbacks = 0;
     for (const std::string& path : maps) {
@@ -3259,6 +3279,7 @@ static void test_real_data() {
             }
             land_units += static_cast<uint32_t>(goals.size());
             land_arrived += arrived;
+            land_stopped += sys.stats().terrain_stops_failed + sys.stats().terrain_stops_nobase + sys.stats().terrain_stops_cell;
             if (arrived != goals.size()) {
                 std::printf("  %s: %u / %zu arrived (paths %u, replans %u, failures %u)\n", path.c_str(), arrived, goals.size(),
                             sys.stats().paths_planned, sys.stats().replans, sys.stats().path_failures);
@@ -3412,7 +3433,11 @@ static void test_real_data() {
                 off_ground, space_maps, space_obstacles, space_arrived, space_units, space_hits, space_fallbacks, secs);
     CHECK(land_maps >= 40 && space_maps >= 20);
     CHECK(plan_fail == 0 && plan_invalid == 0 && off_ground == 0);
-    CHECK(land_arrived == land_units && group_arrived == group_units);
+    // s78n t26.4 (MOVEMENT 5.4.7 item 3): a unit whose blocked step gets no TerrainCollision detour is stopped where it
+    // stands (no retry) - every unit that did not arrive was stopped so (3 of 3240: a full-speed swing at a detour corner
+    // into a wall's clearance, then no rejoin; see docs/PHASE4.md s78n t26.4)
+    CHECK(group_arrived == group_units && land_arrived + land_stopped >= land_units && land_units - land_arrived <= 3u);
+    std::printf("real maps: %u units stopped by a failed TerrainCollision detour\n", land_stopped);
     CHECK(space_arrived == space_units && space_hits == 0);
 }
 #endif

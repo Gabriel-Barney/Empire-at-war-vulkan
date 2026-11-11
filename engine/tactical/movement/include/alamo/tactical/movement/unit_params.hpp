@@ -100,6 +100,9 @@ struct UnitDesc {
     float max_rate_of_roll = 2.0f;      // Max_Rate_Of_Roll (+0x394), raw
     float bank_turn_angle = 70.0f;      // Bank_Turn_Angle (+0x39c)
     float min_speed = 0.0f;             // Min_Speed (+0x3b4), raw
+    // s78n t26.3 (MOVEMENT §3.5.2 D, save version 26): Min_Speed_Fraction_For_Turn (+0x3ac, default 0) - a corner whose
+    // speed fraction falls below it gets 0 (the unit stops and turns in place there); > 0 enables the corner merge.
+    float min_speed_fraction_for_turn = 0.0f;
     float strafe_distance = 0.0f;       // Strafe_Distance (+0x2118)
     float prepare_strafe_height = 0.0f; // Prepare_Strafe_Height (+0x1e24)
     bool has_pre_turn_anim = false;     // Has_Pre_Turn_Anim (+0x36)

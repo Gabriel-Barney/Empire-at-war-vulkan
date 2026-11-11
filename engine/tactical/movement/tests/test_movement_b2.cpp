@@ -532,7 +532,10 @@ void test_t20_hover_z() {
             }
             yaw = t[n].yaw;
         }
-        CHECK(ground_turn && no_air_turn && turning == 14 && rise < t.size() && rise >= 14);
+        // s78n t26.2 (MOVEMENT §3.5.2 A, §3.5.1 "Arrival turn, details" item 4): the start turn is 0x10 at the rate 6 with
+        // the exact landing - 15 steps of 6 land on the leg with no rate left (not reached), the 16th frame is reached
+        // (rate left over) and goes on to Start Move, where the rise begins
+        CHECK(ground_turn && no_air_turn && turning == 15 && rise < t.size() && rise >= 15);
         if (rise < t.size()) CHECK(t[rise].pos == t[0].pos && std::fabs(wrap_deg(t[rise].yaw)) <= 6.0f);
         std::printf("hover z: 90 degrees off - %u turning ticks on the ground, rising from tick %zu\n", turning, rise);
     }
