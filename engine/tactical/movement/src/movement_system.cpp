@@ -1994,6 +1994,17 @@ float MovementSystem::slave_speed(const Unit& x, const Unit& y, bool& touch) con
     return vmin + (vmax - vmin) * k;
 }
 
+// s78n t20 (MOVEMENT §5.4.6, 0x5c69f0; the MovingVsStopped answer 0x684660 in state 1).
+float MovementSystem::follow_speed(const Unit& s, const CollisionObject& c) const {
+    const float vf = s.formation_speed;
+    if (!holds_path(s, c) || !s.in_formation || !(vf > 0.0f) || !(vf < kInf) || s.push_path.size() < 2) return kInf;
+    float len = 0.0f;
+    for (size_t i = 1; i < s.push_path.size(); ++i) len += distance(s.push_path[i - 1], s.push_path[i]);
+    const float straight = distance(s.push_path.front(), s.push_path.back());
+    if (!(straight > 0.0f)) return kInf;
+    return std::min(walk_max_speed(s), vf * len / straight);
+}
+
 // Destination blocked 0x684710(a, b): a's path approximation reaches the end of its path stack and a's rectangle placed
 // at the path end overlaps b's or that of a layer object standing within the 160 x 160 box around the end. [port] "the
 // approximation reaches the path end" = near_path_end: the path end is no farther from the mover (straight line) than
@@ -2615,6 +2626,7 @@ void MovementSystem::mvs_service(CollisionObject& c, Unit& a, Unit& b, bool full
     switch (c.state) {
         case S::PathAround:  // a no longer holds the path made for this record (vf +0x1c0(record id))
             if (!holds_path(a, c)) c.state = S::Resolved;
+            else if (!crushes(a, b)) c.speed_a = follow_speed(a, c);  // s78n t20: 0x684660 state 1 -> 0x5c69f0
             break;
         case S::Repulsion:  // the obstacle is behind, or the mover has no path left; the contact is not re-tested
             if (mvs_behind(a, b) || !(a.has_goal || a.pushed)) c.state = S::Resolved;

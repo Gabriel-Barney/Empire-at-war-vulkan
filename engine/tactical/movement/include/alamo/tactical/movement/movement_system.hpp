@@ -1338,6 +1338,11 @@ private:
     bool mvs_behind(const Unit& a, const Unit& b) const;
     bool mvm_passed(const Unit& a, const Unit& b) const;
     float slave_speed(const Unit& x, const Unit& y, bool& touch) const;
+    // s78n t20 (MOVEMENT §5.4.6 "State 1 slave speed 0x5c69f0"): the formation-follow speed of a unit `s` walking the
+    // detour of record `c` - max speed (kInf: no cap), lowered to min(max speed, Vf x L / D) only while s holds c's path,
+    // is in a formation of speed Vf > 0 and the path has >= 2 points (L = its length, D = the straight distance from its
+    // first to its last point): the formation speed raised by the detour's extra length.
+    float follow_speed(const Unit& s, const CollisionObject& c) const;
     // [port] End Move with no path record left (MOVEMENT §4.3.2 item 6, §5.4.1 impassable-cell item 3, §5.4.4 item 5): a
     // squad container coasts (team_walk's End Move); a Walk unit gets an owner-less straight top record along its facing
     // of the braking length v^2 / (2 decel) and brakes along it; without a speed or a deceleration it stops at once.

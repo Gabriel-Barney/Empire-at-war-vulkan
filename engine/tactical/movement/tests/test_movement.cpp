@@ -3067,7 +3067,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
 // their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
 // s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the exact single-member goal is hashed).
-static constexpr uint64_t kGoldenLand = 0x61bd1bed9dae9325ull;  // s78n t20 batch 1 item 1.1: the Path Around edge rules (MOVEMENT 1.5.1 item 4a)
+static constexpr uint64_t kGoldenLand = 0x2dd42dfd69bc433eull;  // s78n t20 batch 1 item 1.2: the PathAround record's formation follow speed (MOVEMENT 5.4.6)
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

@@ -5982,6 +5982,59 @@ static void test_t20_path_around() {
         CHECK(sys.stats().pushes == 2 && sys.view(22).pushed && walking && kept && !svs);
         CHECK(sys.stats().collisions_created > created0 && sys.stats().dynamic_repaths == 0);
     }
+
+    {  // s78n t20 batch 1 item 1.2 (MOVEMENT §5.4.6 0x5c69f0, the MovingVsStopped answer in state 1): a two-vehicle
+       // formation, max speeds 2.0 and 1.0; a friendly vehicle stands on the fast one's path. While the fast one walks its
+       // detour, the record answers it the formation-follow speed min(max speed, Vf x L / D) of its top path, and its
+       // speed never exceeds that (before: no cap - it walked the detour at 2.0).
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        CHECK(sys.add_unit(t20_vehicle(10, cell_center(15, 20), 1, 10.0f, 6.0f, 2.0f)));
+        CHECK(sys.add_unit(t20_vehicle(12, cell_center(15, 23), 1, 10.0f, 6.0f, 1.0f)));
+        SimRng rng(303);
+        MoveOrder o;
+        o.units = {10, 12};
+        o.destination = cell_center(45, 21);
+        sys.move(o, rng, 1);
+        uint32_t f = 1;
+        for (; f < 200 && sys.land_path(10).size() < 2; ++f) sys.tick(f, rng, serial_for);
+        const std::vector<V2> path(sys.land_path(10).begin(), sys.land_path(10).end());
+        CHECK(path.size() >= 2 && sys.view(10).formation_speed < 1.0e30f);
+        // the stander: 120 along the fast unit's path from its position
+        V2 at = sys.view(10).pos;
+        float left = 120.0f;
+        for (size_t i = 1; i < path.size() && left > 0.0f; ++i) {
+            const float l = distance(at, path[i]);
+            if (l <= 0.0f) continue;
+            at = l <= left ? path[i] : at + (path[i] - at) * (left / l);
+            left -= std::min(l, left);
+        }
+        CHECK(sys.add_unit(t20_vehicle(11, at, 1)));
+        uint32_t frames = 0;
+        bool capped = true, under = true;
+        float max_speed = 0.0f, answer = 0.0f;
+        for (uint32_t n = 0; n < 600 && !sys.view(10).arrived; ++n, ++f) {
+            sys.tick(f, rng, serial_for);
+            const UnitView v = sys.view(10);
+            max_speed = v.max_speed;
+            if (!v.pushed || v.push_kind != 2) continue;
+            const CollisionObject* rec = nullptr;
+            for (const CollisionObject& c : sys.collisions().list())
+                if (c.a == 10 && c.b == 11 && c.kind == CollisionKind::MovingVsStopped && c.state == CollisionState::PathAround) rec = &c;
+            if (!rec) continue;
+            const std::span<const V2> top = sys.top_path(10);
+            float len = 0.0f;
+            for (size_t i = 1; i < top.size(); ++i) len += distance(top[i - 1], top[i]);
+            const float expect = std::min(v.max_speed, v.formation_speed * len / distance(top.front(), top.back()));
+            capped = capped && std::fabs(rec->speed_a - expect) <= 1e-4f * expect;
+            under = under && v.speed <= rec->speed_a + 1e-4f;
+            answer = rec->speed_a;
+            ++frames;
+        }
+        std::printf("t20 batch 1 follow speed: %u detour frames, answer %.3f (max %.3f, formation %.3f)\n", frames,
+                    static_cast<double>(answer), static_cast<double>(max_speed), static_cast<double>(sys.view(10).formation_speed));
+        CHECK(frames > 0 && capped && under && answer < max_speed);
+    }
 }
 
 // s78n t20 item 4 (MOVEMENT 5.4.4): the early-arrival cut. In every case the blocker appears after the order was composed
