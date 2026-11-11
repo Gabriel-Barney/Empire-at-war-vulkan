@@ -1647,7 +1647,11 @@ static void test_land_group() {
     sys.move(o, rng, 0);
     CHECK(rng.draws() >= 36);  // one start delay per unit
     bool ground = true;
-    const uint32_t frames = run_land(sys, 0, 6000, rng, serial_for, ground);
+    // s78n t23 review fix 2: 6101 frames. Units 13 and 49 stand from frame ~300 to ~4800 as M of Starved records (state
+    // 15, MOVEMENT 5.4.6) with 85: M stands while it has more than one collision record (13 is also S of a Path Around
+    // record of 19), and a Starved record has no contact or end test of its own - it ends by validity when 85 stops at
+    // its goal. Retail-literal by the spec; the bound allows that one hold.
+    const uint32_t frames = run_land(sys, 0, 6500, rng, serial_for, ground);
     uint32_t arrived = 0, near = 0;
     for (ObjectId id : sys.unit_ids()) {
         const UnitView v = sys.view(id);
@@ -1664,7 +1668,7 @@ static void test_land_group() {
                 "collision checks %u, dynamic repaths %u, quota deferrals %u, early arrivals %u, blocked steps %u\n",
                 frames, arrived, near, st.paths_planned, st.path_failures, st.replans, st.collision_checks, st.dynamic_repaths,
                 st.quota_deferrals, st.early_arrivals, st.blocked_steps);
-    CHECK(ground && arrived == 36 && near == 36 && frames < 6000);
+    CHECK(ground && arrived == 36 && near == 36 && frames < 6500);
 
     // Head-on corridor: two units swap ends through a 3-cell-wide corridor.
     MovementSystem s2{MovementConfig{}};
@@ -3096,7 +3100,8 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // s78n t23 (2026-11-10): land moved (MovingVsMoving chooser and states for every pair, MOVEMENT 5.4.2 / 5.4.6; the
 // finished records leave the speed fold).
 // s78n t23 review fix 1: the re-decide stamp by role (MOVEMENT 5.4.1 "The stamp in full" items 2 - 3).
-static constexpr uint64_t kGoldenLand = 0x2f1a6ee6e5881c18ull;  // s78n t23 review fix 1
+// s78n t23 review fix 2: a re-decided record waits (case 0 in its stamped frame; a set-up decision under quota).
+static constexpr uint64_t kGoldenLand = 0xd8e306d6fc2544e8ull;  // s78n t23 review fix 2
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

@@ -1729,10 +1729,15 @@ void MovementSystem::drive_collisions(uint32_t frame, SimRng& rng) {
     std::vector<uint32_t> crowd;
     coll_.run(
         frame, [&](CollisionObject& c) { return collision_valid(c); },
-        // vf +0x50 "takes the quota pass": MovingVsStopped always, MovingVsMoving only undecided, StoppedVsStopped never
-        [](const CollisionObject& c) {
-            return c.kind == CollisionKind::MovingVsStopped ||
-                   (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::Active);
+        // vf +0x50 "takes the quota pass": MovingVsStopped always, StoppedVsStopped never, MovingVsMoving only in state 0
+        // when the chooser asks for a set-up (s78n t23 review fix 2, MOVEMENT §5.4.1 "The stamp in full" item 5,
+        // 0x6811c0: the chooser without side effects, mode != 0 - a Pass or a Path Around; a mode-0 result is decided
+        // at once in the first pass)
+        [&](const CollisionObject& c) {
+            if (c.kind != CollisionKind::MovingVsMoving) return c.kind == CollisionKind::MovingVsStopped;
+            if (c.state != CollisionState::Active) return false;
+            const int32_t ia = find(c.a), ib = find(c.b);
+            return mvm_choose(c, units_[static_cast<size_t>(ia)], units_[static_cast<size_t>(ib)], false).mode != 0;
         },
         [&](const CollisionObject& c) {
             // 5 x the land object-grid objects in the 160 x 160 box on the participants' XY midpoint (s78n t18: the
@@ -3222,7 +3227,10 @@ void MovementSystem::mvm_swap_slots(Unit& f, Unit& b, uint32_t frame) {
 // MovingVsMoving service 0x6814f0 (every frame; the decision 0x682d00 in state 0 under quota).
 void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full, uint32_t frame, SimRng& rng) {
     using S = CollisionState;
-    // the re-decide stamp (§5.4.1): each participant gives up the record id, state 0
+    // the re-decide stamp (§5.4.1 "The stamp in full" item 5): each participant gives up the record id (the detour
+    // stays on its stack), state 0, and case 0 runs at once - no decision in this frame (s78n t23 review fix 2: the
+    // next frame decides, a set-up under quota)
+    bool fired = false;
     if (c.redecide != 0 && c.redecide <= frame) {
         c.redecide = 0;
         for (Unit* u : {&a, &b}) {
@@ -3232,9 +3240,10 @@ void MovementSystem::mvm_service(CollisionObject& c, Unit& a, Unit& b, bool full
             }
         }
         c.state = S::Active;
+        fired = true;
     }
-    if (c.state == S::Active && !full) {  // state 0 without quota: M = p0, speeds 0, both flags 1 (the answer is max)
-        ++stats_.quota_deferrals;
+    if (c.state == S::Active && (!full || fired)) {  // case 0: M = p0, speeds 0, both flags 1 (the answer is max)
+        if (!fired) ++stats_.quota_deferrals;
         c.master = 0;
         c.speed_a = c.speed_b = 0.0f;
         c.now_a = c.now_b = true;
