@@ -1363,7 +1363,11 @@ private:
     // True: b is at or ahead of the stop point (the record resolves with the "at once" flag). False: nothing changed, or
     // the path was cut and b lies behind the stop point (the decision goes on with the shortened path).
     bool early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, uint32_t frame);
-    void cut_order_path(Unit& u, float c, uint32_t frame);  // 0x684100 on one unit's order path: its length less c, from its end
+    // s78n t20 batch 1 (MOVEMENT §5.4.4 item 5): 0x684100 - the order path (kind-1 record; false: none) or the top record
+    // cut by c with 0x54e780 (cut_points), the index untouched; cut_finished then ends a record left on its last waypoint
+    bool cut_order_path(Unit& u, float c, uint32_t frame);
+    void cut_top_path(Unit& u, float c, uint32_t frame);
+    void cut_finished(Unit& u, uint32_t frame);
     // s78n t20 (MOVEMENT §1.5.1): the Path Around call 0x5c80e0(record, u, o, flag, kind, flags) - a visibility-graph
     // detour from u (a point) to a rejoin point on its own current path, pushed as a record on top of its path stack
     // (kind 4; 7 = a crush-flee path). `o` = the obstacle of the record (null: none), forced into the obstacle set when

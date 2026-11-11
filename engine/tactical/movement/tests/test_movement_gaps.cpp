@@ -5963,23 +5963,28 @@ static void test_t20_path_around() {
         CHECK(sys.view(21).pushed && sys.view(21).push_kind == 1 && !sys.view(21).has_goal && sys.stats().pushes == 1);
         const std::vector<V2> top(sys.top_path(21).begin(), sys.top_path(21).end());
         CHECK(top.size() >= 2);
-        // the pusher stops (it is no mover any more); a third vehicle now stands where the pushed one is heading
+        // the pusher stops (it is no mover any more); a third vehicle now stands where the pushed one is heading. s78n t20
+        // batch 1 (MOVEMENT §5.4.1 0x684710, §5.4.4 item 5): the destination of the pushed unit's path stack (its top
+        // record) is blocked, so its record cuts that push path short of the vehicle (the early arrival) - no second push
+        // (before: the top record never counted as blocked, and the third vehicle was pushed in turn)
         const ObjectId pusher = 20;
         sys.stop(std::span<const ObjectId>(&pusher, 1));
         CHECK(sys.add_unit(t20_vehicle(22, top.back(), 1)));
         const uint32_t created0 = sys.stats().collisions_created;
-        bool svs = false, kept = true, walking = false;
-        for (uint32_t n = 0; n < 60 && sys.stats().pushes < 2; ++n, ++f) {
+        bool svs = false;
+        for (uint32_t n = 0; n < 300 && (n < 5 || sys.view(21).pushed); ++n, ++f) {
             sys.tick(f, rng, serial_for);
             for (const CollisionObject& c : sys.collisions().list())
                 svs = svs || (c.kind == CollisionKind::StoppedVsStopped && (c.a == 21 || c.b == 21));
-            walking = sys.view(21).pushed;
-            const std::span<const V2> now = sys.top_path(21);
-            if (walking) kept = kept && now.size() == top.size() && std::equal(now.begin(), now.end(), top.begin());
         }
-        // the only mover left pushed the third vehicle while it still walked its own, unchanged, push path (the record was
-        // made, decided and resolved inside one tick)
-        CHECK(sys.stats().pushes == 2 && sys.view(22).pushed && walking && kept && !svs);
+        const UnitView x = sys.view(21);
+        // (the cut end lies behind the unit here: the record is finished at once and the unit brakes where it is)
+        const bool shorter = distance(x.pos, top.back()) > 20.0f;
+        const float gap = foot_gap(foot_rect(x.pos, x.yaw, 10.0f, 6.0f), foot_rect(sys.view(22).pos, sys.view(22).yaw, 10.0f, 6.0f));
+        std::printf("t20 batch 1 cut top record: the pushed unit stopped %.2f from the vehicle on its push end (gap %.2f)\n",
+                    static_cast<double>(distance(x.pos, top.back())), static_cast<double>(gap));
+        CHECK(sys.stats().pushes == 1 && sys.stats().early_arrivals == 1 && shorter && !x.pushed && x.speed == 0.0f);
+        CHECK(!sys.view(22).pushed && sys.view(22).pos == top.back() && gap >= 5.0f && !svs);
         CHECK(sys.stats().collisions_created > created0 && sys.stats().dynamic_repaths == 0);
     }
 
@@ -6267,22 +6272,25 @@ static void test_t20_early_arrival() {
             sys.tick(f, rng, serial_for);
         }
         CHECK(placed && sys.stats().early_arrivals == 1);
-        // the leader's stop point is 30 before the standing unit: every cut path lost 33 from its end - the member one row
-        // back had more than that left; the member two rows back had less, so its path ends where it stood (it arrives
-        // there); the two beside the lane keep their paths
+        // the leader's stop point is 30 before the standing unit: every cut path lost 33 from its end (s78n t20 batch 1:
+        // 0x54e780 keeps total - 33 measured from the path's first point, the index untouched) - the member one row back
+        // had more than that left and walks on; the member two rows back had less: its record is left on its last
+        // waypoint (it is past the new end's line), so it is finished - arrived, braking where it is; the two beside the
+        // lane keep their paths
         bool cut = near(distance(sys.land_path(10 + lead).back(), goal[lead]), 33.0f, 1e-2f);
-        uint32_t exact = 0, where_it_stood = 0;
+        uint32_t exact = 0, walking = 0, finished = 0;
         for (int i : lane) {
             const V2 end = sys.land_path(10 + i).back();
-            const float back = distance(end, goal[i]);
-            if (near(back, 33.0f, 1e-2f)) ++exact;
-            else if (back < 33.0f && back > 0.0f && distance(sys.view(10 + i).pos, end) < 1.0f && !sys.view(10 + i).has_goal) ++where_it_stood;
+            if (near(distance(end, goal[i]), 33.0f, 1e-2f)) ++exact;
+            const UnitView v = sys.view(10 + i);
+            if (v.has_goal) ++walking;
+            else if (v.arrived && !v.pushed) ++finished;
         }
         bool kept = true;
         for (int i : side) kept = kept && sys.land_path(10 + i).back() == goal[i];
-        CHECK(cut && exact == 1 && where_it_stood == 1 && kept);
-        std::printf("t20 early arrival: formation - leader cut 33, lane members cut 33 / stopped where it stood: %u / %u, side lanes kept %d\n",
-                    exact, where_it_stood, kept ? 1 : 0);
+        CHECK(cut && exact == 2 && walking == 1 && finished == 1 && kept);
+        std::printf("t20 early arrival: formation - leader cut 33, lane members cut 33: %u (walking on %u, finished %u), side lanes kept %d\n",
+                    exact, walking, finished, kept ? 1 : 0);
         bool all = false;
         for (; f < 4000 && !all; ++f) {
             sys.tick(f, rng, serial_for);
@@ -6439,7 +6447,13 @@ static void test_t20_decision_leftovers() {
         const ObjectId pusher = 20;
         sys.stop(std::span<const ObjectId>(&pusher, 1));
         const std::vector<V2> top(sys.top_path(21).begin(), sys.top_path(21).end());
-        UnitDesc blocker = t20_vehicle(22, top.back(), 1);
+        CHECK(top.size() >= 2);
+        // s78n t20 batch 1: the blocker stands across the push path's middle (12 to its side, its long axis across the
+        // path), clear of the path's end - a blocker on the end would be a blocked destination (the push record is cut,
+        // MOVEMENT 5.4.4 item 5) and the decision would never reach step 8
+        const V2 pd = normalize_retail(top.back() - top.front()), side = perp_left(pd);
+        UnitDesc blocker = t20_vehicle(22, (top.front() + top.back()) * 0.5f + side * 12.0f, 1);
+        blocker.yaw_deg = heading_deg(side);
         blocker.collision_class = kUccBike;
         CHECK(sys.add_unit(blocker));
         MovementSystem::CollisionInfo clash;

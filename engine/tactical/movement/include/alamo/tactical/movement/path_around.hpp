@@ -86,6 +86,14 @@ bool ring_search(const RingSetup& s, const std::function<bool(V2 p, uint32_t rin
 // record's axis and the line S -> C (a round record: hx).
 bool ring_blocked(V2 sample, float reach, const FootRect& rec);
 
+// ---- s78n t20: the path record cut 0x54e780(points, keep) (MOVEMENT §5.4.4 item 5) ----
+// Keeps the arc length `keep` measured from the first point: walking the segments from the start (zero-length ones
+// skipped), at the first segment with keep < length so far + its length every point after the segment's first point is
+// erased, and when keep > the length so far one point is appended at that arc length (linear interpolation; keep exactly
+// on a point adds none). keep <= 0: only the first point is left; keep >= the total length or fewer than 2 points:
+// nothing changes. True when a point was appended (the new last point carries no obstacle tag).
+bool cut_points(std::vector<V2>& pts, float keep);
+
 // ---- rejoin candidates along the base path (0x67ad20 part a, MOVEMENT §1.5.1 item 2) ----
 // base = the path points, cur = the index of the current waypoint (the start of the segment the unit is on; port: next -
 // 1). Arc lengths run from base[cur]: s0 = clamp(projection of pos on the current segment, 0, its length) + d + 2.0,

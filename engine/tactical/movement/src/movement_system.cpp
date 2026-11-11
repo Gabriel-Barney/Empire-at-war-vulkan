@@ -1809,6 +1809,19 @@ namespace {
 uint8_t record_weight(CollisionKind k) {  // vf +0x30
     return k == CollisionKind::MovingVsMoving ? uint8_t{1} : k == CollisionKind::MovingVsStopped ? uint8_t{2} : uint8_t{3};
 }
+// s78n t20 batch 1 (MOVEMENT §5.4.4 item 5, 0x5c5910): a path record "on its last waypoint" after a cut - its index is past
+// the end (a one-node or over-cut list), or it heads for its last point and the unit is already past that point's line
+// (the line through it, normal = its segment's direction), so the index steps on. Then `next` = the point count.
+bool record_finished(const std::vector<V2>& pts, uint32_t& next, V2 pos) {
+    const size_t n = pts.size();
+    if (static_cast<size_t>(next) + 1 == n && n >= 2) {
+        const V2 nrm = normalize_retail(pts[n - 1] - pts[n - 2]);
+        if (length_sq(nrm) > 0.0f && dot(pos - pts[n - 1], nrm) >= 0.0f) next = static_cast<uint32_t>(n);
+    }
+    if (static_cast<size_t>(next) < n) return false;
+    next = static_cast<uint32_t>(n);
+    return true;
+}
 }  // namespace
 
 bool MovementSystem::claim(Unit& u, const CollisionObject& c, bool force, uint32_t frame) {
@@ -1854,7 +1867,10 @@ bool MovementSystem::pop_top(Unit& u, bool walked, uint32_t frame) {
     u.path_change = frame;  // s78n t18: the record is popped (pack +0x288)
     LandMotion& m = u.m;
     const size_t n = m.path.size();
-    if (!walked || !u.has_goal || u.need_path || n < 2 || m.next >= n) return false;
+    if (!walked || !u.has_goal || u.need_path) return false;
+    // s78n t20 batch 1: an order path cut to its end underneath (0x54e780 leaves its index; MOVEMENT §5.4.4 item 5) has
+    // no waypoint left - arrived where it stands
+    if (n < 2 || m.next >= n) return true;
     // A detour rejoins the order path on the segment that ends at `resume` (the path size: it ended past the path end).
     if (kind == 2) m.next = std::max(m.next, std::min(resume, static_cast<uint32_t>(n)));
     if (m.next == 0) m.next = 1;
@@ -2048,9 +2064,21 @@ bool MovementSystem::near_path_end(const Unit& a, const Unit& b) const {
 }
 
 bool MovementSystem::destination_blocked(const Unit& a, const Unit& b) const {
-    // ([port] a mover on a collision-owned top record never counts as blocked: no cut of such a record)
-    if (a.pushed || !a.has_goal || a.need_path || a.m.next >= a.m.path.size() || !near_path_end(a, b)) return false;
-    const V2 e = a.m.path.back();
+    // s78n t20 batch 1: E = the end of the path stack (a collision-owned top record included), at or beyond the top
+    // record's current waypoint line: n . (E - W) >= -0.1 (W = its current waypoint, n = the bisector of its two segments;
+    // the last waypoint: its segment's direction)
+    std::vector<V2> scratch;
+    const StackPoly sp = stack_poly(a, scratch);
+    if (sp.next >= sp.pts.size() || !near_path_end(a, b)) return false;
+    const V2 e = sp.pts.back();
+    const std::vector<V2>& top = a.pushed ? a.push_path : a.m.path;
+    const uint32_t ti = a.pushed ? a.push_next : a.m.next;
+    if (ti < top.size()) {
+        const V2 w = top[ti];
+        V2 nrm = normalize_retail(w - (ti > 0 ? top[ti - 1] : a.m.pos));
+        if (static_cast<size_t>(ti) + 1 < top.size()) nrm = normalize_retail(nrm + normalize_retail(top[ti + 1] - w));
+        if (length_sq(nrm) > 0.0f && dot(e - w, nrm) < -0.1f) return false;
+    }
     const FootRect ra = foot_at(a, e);
     if (foot_overlap(ra, foot_of(b))) return true;
     std::vector<uint32_t> cand;
@@ -2076,39 +2104,57 @@ bool MovementSystem::side_step_ok(const Unit& a, const Unit& b, const CollisionO
     return true;
 }
 
-// 0x54e780 on a unit's order path (the kind-1 record): its length is reduced by c from its end. A remaining length <= 0:
-// [port] the path ends at the unit's position (it arrives where it stands).
-void MovementSystem::cut_order_path(Unit& u, float c, uint32_t frame) {
+// 0x684100 on a unit's order path (its kind-1 record): 0x54e780 with keep = the whole list's length (from its first point,
+// the part already walked included) less c; the waypoint index is not touched (s78n t20 batch 1, MOVEMENT §5.4.4 item 5).
+bool MovementSystem::cut_order_path(Unit& u, float c, uint32_t frame) {
     LandMotion& m = u.m;
-    if (!u.has_goal || u.need_path || m.next == 0 || m.next >= m.path.size()) return;
-    // the record's remaining points from where the unit is on it (under a collision-owned top record: its current waypoint)
-    const V2 from = u.pushed ? m.path[m.next - 1] : m.pos;
-    float total = distance(from, m.path[m.next]);
-    for (size_t i = m.next + 1; i < m.path.size(); ++i) total += distance(m.path[i - 1], m.path[i]);
-    const float keep = total - c;
-    // s78n t20 F7: with nothing left to keep, a unit under a top record stops where it stands (its waypoint behind it
-    // would be a zero-length last segment that the pop's line rule cannot pass, and it would walk back to it)
-    V2 stop = keep > 0.0f ? from : m.pos;
-    size_t seg = m.next;
-    if (keep > 0.0f) {
-        float acc = 0.0f;
-        V2 at = from;
-        for (size_t i = m.next; i < m.path.size(); ++i) {
-            const float l = distance(at, m.path[i]);
-            if (acc + l >= keep) {
-                seg = i;
-                stop = l > 0.0f ? lerp(at, m.path[i], std::clamp((keep - acc) / l, 0.0f, 1.0f)) : at;
-                break;
-            }
-            acc += l;
-            at = m.path[i];
-        }
-    }
-    m.path.resize(seg);
-    m.path.push_back(stop);
-    if (u.pushed && u.push_kind == 2 && u.push_resume > seg) u.push_resume = static_cast<uint32_t>(seg);
-    u.goal = stop;
+    if (!u.has_goal || u.need_path || m.path.size() < 2) return false;
+    float total = 0.0f;
+    for (size_t i = 1; i < m.path.size(); ++i) total += distance(m.path[i - 1], m.path[i]);
+    (void)cut_points(m.path, total - c);
+    u.goal = m.path.back();
     u.path_change = frame;
+    return true;
+}
+
+// 0x684100 on the collision-owned top record (a's top path is no formation path): the same cut; the hold-line tags past
+// the new end (and on an appended point, which carries no id) are dropped.
+void MovementSystem::cut_top_path(Unit& u, float c, uint32_t frame) {
+    float total = 0.0f;
+    for (size_t i = 1; i < u.push_path.size(); ++i) total += distance(u.push_path[i - 1], u.push_path[i]);
+    const bool added = cut_points(u.push_path, total - c);
+    const size_t n = u.push_path.size();
+    std::erase_if(u.push_tags, [&](const HoldTag& h) { return h.index >= n || (added && static_cast<size_t>(h.index) + 1 == n); });
+    u.path_change = frame;
+}
+
+// s78n t20 batch 1 (MOVEMENT §5.4.4 item 5 "What the unit then does", the Walk step 0x620820 / container step 0x5adfb0):
+// a top record left on its last waypoint by a cut is finished. A collision-owned one over a started order path (the unit
+// not in End Move) is popped and the unit walks on along the order path; otherwise the unit goes to End Move and brakes
+// from where it is (brake_to_stop; [port] a finished order path ends as arrived at once, the braking follows).
+void MovementSystem::cut_finished(Unit& u, uint32_t frame) {
+    if (u.pushed) {
+        if (!record_finished(u.push_path, u.push_next, u.m.pos)) return;
+        const bool below = u.has_goal && !u.need_path && frame >= u.start_frame && u.m.next < u.m.path.size() &&
+                           (!u.d.team_container || u.path_started);
+        if (!below || u.m.state == LocoState::WalkEndMove) {
+            end_push(u);
+            u.around.clear();
+            u.path_change = frame;
+            brake_to_stop(u, frame);
+            return;
+        }
+        if (!pop_top(u, true, frame)) return;  // walks on along the order path
+    } else if (!u.has_goal || u.need_path || !record_finished(u.m.path, u.m.next, u.m.pos)) {
+        return;
+    }
+    u.has_goal = false;  // the order path has no waypoint left: arrived where it stands
+    u.arrived = true;
+    u.exit_host = -1;
+    u.around.clear();
+    u.path_change = frame;
+    land_arrival_turn(u);
+    brake_to_stop(u, frame);
 }
 
 // Early arrival 0x685e10 with the cut 0x684100 (MOVEMENT §5.4.4; called on the mover's final leg with a blocked
@@ -2117,11 +2163,12 @@ void MovementSystem::cut_order_path(Unit& u, float c, uint32_t frame) {
 // mover TYPE's half extents 0x371be0 (a squad container: (0, 0), not its joint slot box) with hx + 5, turned along the path.
 // Scan s = L, L - 5, ..., the last test at s = 0 (its own position): the first point P whose box overlaps no listed
 // footprint (touching counts) and, with a target, lies within the attack range (+ the target's radius) of it. With a
-// spare point v: P farther from E than v -> fail, nothing changed. Else the path is cut by c = (L - s) + 3.0, so it ends
-// 3.0 before P; on a formation path the order paths of the formation's members whose slot is behind a's and within the
-// two half widths sideways are cut by the same c. True iff b is at or ahead of P: (b - P) . n >= -0.001. [port] the cut
-// applies to the order path (destination_blocked refuses a mover on a collision-owned top record); the target's radius is
-// added whenever the host reports a target (the weapon-list test is [M]).
+// spare point v: P farther from E than v -> fail, nothing changed. Else the path is cut by c = (L - s) + 3.0 (0x54e780,
+// keep measured from each record's first point): a collision-owned top record alone; on a formation path (the order
+// path on top) a's order path and those of the formation's members whose slot is behind a's and within the two half
+// widths sideways, by the same c. A record the cut leaves on its last waypoint is finished (cut_finished). True iff b is
+// at or ahead of P: (b - P) . n >= -0.001. [port] the target's radius is added whenever the host reports a target (the
+// weapon-list test is [M]).
 bool MovementSystem::early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, uint32_t frame) {
     std::vector<V2> pts;
     stack_points(a, pts);
@@ -2166,15 +2213,20 @@ bool MovementSystem::early_arrival(Unit& a, const Unit& b, bool have_v, V2 v, ui
         if (clear) {
             if (have_v && distance(p, end) > distance(v, end)) return false;  // the spare point is nearer the end
             const float c = (total - s) + 3.0f;
+            if (a.pushed) {  // the top path is no formation path: a's top record only (s78n t20 batch 1)
+                cut_top_path(a, c, frame);
+                cut_finished(a, frame);
+                return dot(b.m.pos - p, n) >= -0.001f;
+            }
             const float ax = a.form_slot.x, ay = a.form_slot.y, hwa = half_width(a);
-            if (a.form_id != 0) {
+            if (a.form_id != 0) {  // a formation path: the kind-1 records of the members behind a's slot in its lane too
                 for (Unit& m : units_) {
                     if (m.form_id != a.form_id || m.d.id == a.d.id) continue;
                     if (!(m.form_slot.x < ax) || std::fabs(m.form_slot.y - ay) > half_width(m) + hwa) continue;
-                    cut_order_path(m, c, frame);
+                    if (cut_order_path(m, c, frame)) cut_finished(m, frame);
                 }
             }
-            cut_order_path(a, c, frame);
+            if (cut_order_path(a, c, frame)) cut_finished(a, frame);
             return dot(b.m.pos - p, n) >= -0.001f;
         }
         if (s == 0.0f) return false;  // even its own position fails: nothing changed

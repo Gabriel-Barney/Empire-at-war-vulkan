@@ -1166,6 +1166,26 @@ static void test_path_around() {
         CHECK(ring_blocked({0.0f, 17.6f}, r, rec) && !ring_blocked({0.0f, 17.7f}, r, rec));  // 11.66 + 6 = 17.66
         CHECK(ring_blocked({-22.6f, 0.0f}, r, rec) && !ring_blocked({-22.7f, 0.0f}, r, rec));  // the +x sweep: 1 wider on that side
     }
+    // ---- s78n t20 batch 1: the path record cut 0x54e780(points, keep) - keep measured from the first point
+    {
+        const std::vector<V2> line{{0.0f, 0.0f}, {10.0f, 0.0f}, {20.0f, 0.0f}};
+        std::vector<V2> p = line;
+        CHECK(cut_points(p, 15.0f) && p.size() == 3 && p[1] == (V2{10.0f, 0.0f}) && p[2] == (V2{15.0f, 0.0f}));
+        p = line;
+        CHECK(!cut_points(p, 10.0f) && p.size() == 2 && p[1] == (V2{10.0f, 0.0f}));  // on a point: none added
+        p = line;
+        CHECK(!cut_points(p, 0.0f) && p.size() == 1 && p[0] == (V2{0.0f, 0.0f}));  // keep <= 0: a one-node path
+        p = line;
+        CHECK(!cut_points(p, -4.0f) && p.size() == 1);
+        p = line;
+        CHECK(!cut_points(p, 20.0f) && p == line);  // keep >= the total: unchanged
+        p = line;
+        CHECK(!cut_points(p, 25.0f) && p == line);
+        p = {{0.0f, 0.0f}, {0.0f, 0.0f}, {10.0f, 0.0f}};  // a zero-length segment is skipped
+        CHECK(cut_points(p, 4.0f) && p.size() == 3 && p[2] == (V2{4.0f, 0.0f}));
+        p = {{3.0f, 4.0f}};
+        CHECK(!cut_points(p, -1.0f) && p.size() == 1);  // fewer than 2 points: left alone
+    }
     // ---- rejoin candidates along the path (0x67ad20 a)
     {
         const std::vector<V2> line{{0.0f, 0.0f}, {300.0f, 0.0f}};
@@ -3067,7 +3087,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
 // their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
 // s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the exact single-member goal is hashed).
-static constexpr uint64_t kGoldenLand = 0x2dd42dfd69bc433eull;  // s78n t20 batch 1 item 1.2: the PathAround record's formation follow speed (MOVEMENT 5.4.6)
+static constexpr uint64_t kGoldenLand = 0xc90f668b33d3c9a9ull;  // s78n t20 batch 1 item 1.4: the early-arrival cut 0x54e780 on the path stack top (MOVEMENT 5.4.4 item 5)
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {

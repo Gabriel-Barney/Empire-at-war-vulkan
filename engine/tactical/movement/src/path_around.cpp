@@ -149,6 +149,29 @@ bool ring_blocked(V2 sample, float reach, const FootRect& rec) {
     return distance(near, rec.c) <= reach + rho;
 }
 
+// ---------------------------------------------------------------- path record cut 0x54e780
+bool cut_points(std::vector<V2>& pts, float keep) {
+    if (pts.size() < 2) return false;
+    if (!(keep > 0.0f)) {
+        pts.resize(1);
+        return false;
+    }
+    float acc = 0.0f;
+    for (size_t i = 1; i < pts.size(); ++i) {
+        const float l = distance(pts[i - 1], pts[i]);
+        if (!(l > 0.0f)) continue;
+        if (keep < acc + l) {
+            const V2 at = lerp(pts[i - 1], pts[i], (keep - acc) / l);
+            pts.resize(i);
+            if (!(keep > acc)) return false;
+            pts.push_back(at);
+            return true;
+        }
+        acc += l;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------- rejoin candidates along the path
 void rejoin_on_path(std::span<const V2> base, uint32_t cur, V2 pos, float d, uint32_t max_count, std::vector<RejoinPoint>& out) {
     out.clear();
