@@ -664,9 +664,7 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
                     tg::HolderDesc hd;
                     hd.kind = tg::HolderKind::VehicleThief;
                     hd.slots = 0;
-                    const tactical::Aabb bb = mode.extent_box(vh);
-                    const float bx = bb.max.x - bb.min.x, by = bb.max.y - bb.min.y;
-                    hd.half_diagonal = 0.5f * dmath::sqrt(bx * bx + by * by);
+                    hd.extent_len = s4_extent_len(mode, vh);
                     s4_store_ = &store;
                     s4_init();
                     garrison_.add_holder(id, store.owner(vh), hd);

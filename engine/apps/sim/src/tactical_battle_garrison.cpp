@@ -134,6 +134,13 @@ float TacticalBattle::s4_reach_radius(TacticalMode& mode, objects::ObjectId key)
     return dmath::sqrt(ex * ex + ey * ey + ez * ez);
 }
 
+float TacticalBattle::s4_extent_len(TacticalMode& mode, objects::ObjectHandle h) const {
+    // 0x3982b0: the 3-D length of the half-extent vector of the object's model box (the extent box without model data)
+    const tactical::Aabb b = mode.bounds_of(h);
+    const float hx = 0.5f * (b.max.x - b.min.x), hy = 0.5f * (b.max.y - b.min.y), hz = 0.5f * (b.max.z - b.min.z);
+    return dmath::sqrt(hx * hx + hy * hy + hz * hz);
+}
+
 void TacticalBattle::s4_hover_death(objects::ObjectId id, Vec3 at, Vec3 facing) {
     if (!s4_used_ || !movement_ || !garrison_.is_holder(id)) return;
     const tg::HolderDesc* hd = garrison_.holder_desc(id);
@@ -175,9 +182,7 @@ bool TacticalBattle::s4_placement(TacticalMode& mode, objects::TypeIndex t, cons
     const objects::ObjectId id = mode.primary().id(h);
     if (capture) captures_->add_point(id, p.owner, p.position, cd, frame_);
     if (holder) {
-        const tactical::Aabb b = mode.extent_box(h);
-        const float dx = b.max.x - b.min.x, dy = b.max.y - b.min.y;
-        hd.half_diagonal = 0.5f * dmath::sqrt(dx * dx + dy * dy);
+        hd.extent_len = s4_extent_len(mode, h);  // s78n t20 batch 2: the exit distance fallback
         s4_holder_bones(t, hd);  // s78n t20 batch 2
         garrison_.add_holder(id, p.owner, hd);
     }
@@ -229,9 +234,7 @@ void TacticalBattle::s4_register(TacticalMode& mode, const Unit& u) {
     if (tg::holder_desc_from_type(types, u.type, hd)) {
         s4_store_ = &mode.primary();
         s4_init();
-        const tactical::Aabb b = mode.extent_box(u.h);
-        const float dx = b.max.x - b.min.x, dy = b.max.y - b.min.y;
-        hd.half_diagonal = 0.5f * dmath::sqrt(dx * dx + dy * dy);
+        hd.extent_len = s4_extent_len(mode, u.h);  // s78n t20 batch 2: the exit distance fallback
         s4_holder_bones(u.type, hd);  // s78n t20 batch 2
         garrison_.add_holder(u.id, owner, hd);
         abilities_->set_garrison_count(u.id, 0);
@@ -712,9 +715,7 @@ uint32_t TacticalBattle::s4_approach(TacticalMode& mode, std::span<const objects
     const objects::ObjectHandle hh = store.find(holder);
     if (!movement_ || !store.alive(hh)) return 0;
     const Vec3 hp = store.position(hh), hf = store.facing(hh);
-    const tactical::Aabb hb = mode.bounds_of(hh);
-    const float hx = 0.5f * (hb.max.x - hb.min.x), hy = 0.5f * (hb.max.y - hb.min.y), hz = 0.5f * (hb.max.z - hb.min.z);
-    const float extent_len = dmath::sqrt(hx * hx + hy * hy + hz * hz);
+    const float extent_len = s4_extent_len(mode, hh);
     struct Leg {
         int32_t bone = -1;
         Vec3 to{};
