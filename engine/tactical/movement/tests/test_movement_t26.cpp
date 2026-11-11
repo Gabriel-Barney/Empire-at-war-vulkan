@@ -1240,7 +1240,8 @@ void test_t26_container_step() {
         CHECK(w.first == 85.0f && c.first == 80.0f && fl.first == 70.0f);
     }
     // s78o (b0053): the coast step team_walk runs (no top path) with a straggler cap 0.05 below a = 0.5, at once (cap_now):
-    // in End Move B.7 sets T := a over the cap - v 2 -> 1.5; a step left in 0x13 would take the cap - v 2 -> 0.05. team_walk
+    // in End Move B.7 sets T := a over the cap - v 2 -> a = 0.5 (at once); a step left in 0x13 would take the cap - v 2 ->
+    // 0.05, below a (so the next End Move tick would stop it a tick early). team_walk
     // now enters End Move before the first coast step (a new order's path set leaves a marching container in 0x13).
     {
         LocomotorParams p3;
@@ -1261,7 +1262,7 @@ void test_t26_container_step() {
         };
         const float em = first(LocoState::WalkEndMove), mv = first(LocoState::WalkMoving);
         std::printf("s78o container coast first tick: End Move %.3f, 0x13 %.3f\n", static_cast<double>(em), static_cast<double>(mv));
-        CHECK(em == 1.5f && mv == 0.05f);
+        CHECK(em == 0.5f && mv == 0.05f);
     }
     // The re-lay (FIGHTER_FLYING 7.2 caller 3): a waypoint stepped in C.11 (s > s') re-lays along the new segment; a pop into
     // the started path below re-lays along its segment
