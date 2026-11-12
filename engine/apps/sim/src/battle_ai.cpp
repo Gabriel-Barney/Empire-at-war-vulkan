@@ -871,10 +871,8 @@ void BattleAi::follow_add(const std::vector<objects::ObjectId>& units, objects::
     f.target = target;
     f.gx = x;
     f.gy = y;
-    // R = half the lead member's max attack range (0x3749d0 / 2); bkt1 t02 (b0070, FIGHTER_FLYING §4.11 B 2 / E): a land
-    // guard top caps it at Land_Guard_Range (GC +0x11ec4, 150)
+    // R = half the lead member's max attack range (0x3749d0 / 2) [port: the guard cap constant 0x140b276c0 is not known].
     f.r = lead ? 0.5f * lead->range : 0.0f;
-    if (guard && !b_->space_) f.r = std::min(f.r, b_->movement_->constants().land_guard_range);
     f.threat = threat;
     f.guard = guard;  // s78n t25.4
     f.next = b_->frame_ + 30;  // the formation update runs at most once per FPS frames
@@ -900,20 +898,15 @@ void BattleAi::follow_service() {
         // is the same re-path.
         const Vec3 tp = st.position(th);
         const float dx = tp.x - f.gx, dy = tp.y - f.gy;
-        const bool moved = dx * dx + dy * dy > f.r * f.r;
+        if (dx * dx + dy * dy <= f.r * f.r) continue;
+        f.gx = tp.x;
+        f.gy = tp.y;
         // s78n t25.4 (MOVEMENT §4.3.2 item 8): a land guard block's re-path is its re-plan - item 6 / 7 again from the
         // object's new position, the slot (theta, rho) and the formations kept, no slot test, no composition
         if (f.guard && !b_->space_) {
-            Vec3 goal = tp;
-            if (!guard_follow_due(f, tp, moved, goal)) continue;
-            f.gx = goal.x;
-            f.gy = goal.y;
-            (void)b_->land_attack_order(*mode_, f.units, f.target, goal, mv::kMoveFlagGuardMove, true, host_->random().synced(), true);
+            (void)b_->land_attack_order(*mode_, f.units, f.target, tp, mv::kMoveFlagGuardMove, true, host_->random().synced(), true);
             continue;
         }
-        if (!moved) continue;
-        f.gx = tp.x;
-        f.gy = tp.y;
         // s78n t20 fix (MOVEMENT 4.3.1 item 2): the follow stands for the formation's re-path of a kind-3 goal
         // (0x4192b0) - no destination check. (s78n t26 review round 2: Move_To(object) adds no follow, it is kind 1.)
         if (f.units.size() == 1) {
@@ -928,86 +921,6 @@ void BattleAi::follow_service() {
         b_->movement_->move(o, host_->random().synced(), b_->frame_);
     }
     follows_.erase(std::remove_if(follows_.begin(), follows_.end(), [](const ObjectFollow& f) { return f.units.empty(); }), follows_.end());
-}
-
-// bkt1 t02 (b0070, FIGHTER_FLYING §4.11 A / C 3 / E [H]): a land guard follow's 30-frame step. Moving (some mover has a
-// goal; 0x4192b0 in state 1): re-plan when the guarded object moved more than R (capped at Land_Guard_Range) from the
-// recorded goal. Arrived (states 3 / 4): with the object hidden for the lead's owner or stealthed against its type (C 3),
-// P = the object's position (hidden) or the member nearest the centroid L (stealthed): |L - P| >= 40 re-plans toward P,
-// else the guard becomes a position guard at L ([port] the follow and the movement's attack block end, the members'
-// attack orders are cleared, nothing moves: as TacticalBattle::attack_block_service's C 3 drop); otherwise 0x410a60 - a
-// member with TARGETING out of its max range or inside its min range of the object (or its line of fire blocked) re-plans
-// toward it. A pushed mover waits. True: re-plan toward `goal`.
-bool BattleAi::guard_follow_due(ObjectFollow& f, const Vec3& tp, bool moved, Vec3& goal) {
-    const objects::ObjectStore& st = mode_->primary();
-    std::vector<objects::ObjectId> movers;
-    bool moving = false, pushed = false;
-    for (const objects::ObjectId id : f.units) {
-        const objects::ObjectId m = b_->attack_mover(id);
-        if (!b_->movement_->has_unit(m) || std::find(movers.begin(), movers.end(), m) != movers.end()) continue;
-        movers.push_back(m);
-        const mv::UnitView v = b_->movement_->view(m);
-        moving = moving || v.has_goal;
-        pushed = pushed || v.pushed;
-    }
-    goal = tp;
-    if (moving) return moved;
-    if (pushed || movers.empty()) return false;
-    // members[0]: a squad container through its first live member (0x40edd0, FIGHTER_FLYING §4.11 D 5)
-    const objects::ObjectId lead_id = b_->attack_lead(movers.front());
-    const TacticalBattle::Unit* lead = lead_id == objects::kNoObjectId ? nullptr : b_->unit_by_id(lead_id);
-    if (!lead) return false;
-    bool hidden = false, stealthed = false;
-    b_->attack_target_unseen(st, *lead, f.target, hidden, stealthed);
-    if (hidden || stealthed) {
-        mv::V2 L{0.0f, 0.0f};
-        for (const objects::ObjectId m : movers) L = L + b_->movement_->view(m).pos;
-        L = L * (1.0f / static_cast<float>(movers.size()));
-        if (stealthed) {
-            float best = 0.0f;
-            bool have = false;
-            for (const objects::ObjectId m : movers) {
-                const mv::V2 q = b_->movement_->view(m).pos;
-                const float dd = (q.x - L.x) * (q.x - L.x) + (q.y - L.y) * (q.y - L.y);
-                if (!have || dd < best) {
-                    best = dd;
-                    have = true;
-                    goal = {q.x, q.y, tp.z};
-                }
-            }
-        }
-        const float dx = L.x - goal.x, dy = L.y - goal.y;
-        if (dx * dx + dy * dy >= 40.0f * 40.0f) return true;
-        for (const objects::ObjectId m : movers) {
-            std::vector<objects::ObjectId> us;
-            if (b_->movement_->is_land_team_container(m)) {
-                for (const auto& [mid, slot] : b_->movement_->land_team_slots(m)) {
-                    (void)slot;
-                    us.push_back(mid);
-                }
-            } else {
-                us.push_back(m);
-            }
-            for (const objects::ObjectId id : us)
-                if (b_->combat_ && b_->combat_->has_unit(id)) {
-                    b_->combat_->clear_order(id);
-                    b_->combat_->set_attack_goal(id, tactical::combat::kNoObject);
-                }
-        }
-        b_->movement_->clear_attack_block(movers);
-        f.units.clear();
-        return false;
-    }
-    // a TEAM container object is tested through a member (§4.11 D 7: the viewer's TARGETING pick; [port] its first live one)
-    const objects::ObjectId tgt = b_->movement_->is_land_team_container(f.target) ? b_->attack_lead(f.target) : f.target;
-    if (tgt == objects::kNoObjectId) return false;
-    for (const objects::ObjectId m : movers) {
-        const objects::ObjectId id = b_->attack_lead(m);
-        if (id == objects::kNoObjectId || !b_->combat_ || !b_->combat_->has_unit(id)) continue;
-        const tactical::combat::CanHit c = b_->attack_can_hit(id, tgt);
-        if (c != tactical::combat::CanHit::Yes && c != tactical::combat::CanHit::NoTarget) return true;
-    }
-    return false;
 }
 
 // S7 t26 (AI_TACTICAL §7.3.3 item 2, A1_READINGS §33.3): the orders executed here (group / unit moves, MoveToObject, attack,

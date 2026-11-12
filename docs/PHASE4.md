@@ -892,9 +892,7 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
 - 🟡 **PARTLY DONE** · BKT1 (2026-11-12, tactical attack and combat rules; specs `docs/re/BKT1_ATTACK_RE.md`, MOVEMENT §4.3.2,
   FIGHTER_FLYING §4.11): [port] choices (marked "bkt1 tNN" in code). **t01** staging (`attack_stage_goal`, 0x40e260):
   the free-position search 0x440f90 around M; the hard-point radius term of 0x4f6e40 is not reached (port land attack
-  blocks name no hard point). **t02** guard follow (`BattleAi::guard_follow_due`): moving = some mover has a goal; the C 3
-  position guard at L is the end of the follow and the attack block (no position-guard block, nothing moves); a TEAM
-  container object is tested through its first live member. **t03** the formation lead skips movement-locked members (a
+  blocks name no hard point). **t02** (guard follow, b0070) moved back to the backlog: its arrived re-check stalled foc-land seed 3. **t03** the formation lead (the member nearest the movers' centroid) skips movement-locked members (a
   locked member keeps its order, A1_READINGS §28.9); all locked: the formation waits. **t05** a unit Attack_Move (arg 0) on
   a non-hostile attackable unit is a land attack block with the host-only flag `kAttackBlockNoLock`; an object that is not
   a combat unit (story markers) still gets the plain move and follow. **t06** the line of fire's end G takes the order's C

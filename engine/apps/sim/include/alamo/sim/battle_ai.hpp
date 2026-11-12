@@ -219,7 +219,6 @@ private:
         bool guard = false;
     };
     std::vector<ObjectFollow> follows_;  // issue order
-    bool guard_follow_due(ObjectFollow& f, const alamo::Vec3& tp, bool moved, alamo::Vec3& goal);  // bkt1 t02 (b0070)
     void follow_drop(const std::vector<objects::ObjectId>& units);
     void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat,
                     bool guard = false);
