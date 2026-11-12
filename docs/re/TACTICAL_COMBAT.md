@@ -384,6 +384,8 @@ function or string was found. Obstruction happens only in flight: the projectile
 enemy-tree object (§3.4), the ground test on land, or a passive missile shield deflects it (§3.3).
 
 ### 2.8 Attack_Move on an object: ordered target and staging (refixf t06) [H unless tagged]
+
+**bkr1 (2026-11-12), see `docs/re/BKR1_RE_ANSWERS.md` Q2 / Q8**: 0x40edd0 / 0x410a60 test the block object, not TD +8; Lua `unit.Attack_Move(obj)` neither drops nor replaces the current target or the lock; land `Service_Land` calls the locomotor's `Auto_Engage` (LocomotorCommon 0x42d0f0, an auto attack block when 0x4160a0 != 0) on every service with a target; the land scan range 0x566f50 (R, R + Rr when 0x4160a0 != 0, else R only with a TURRET slot) also extends for the unit's own attackers, and the flags come from blocks[0] while the guard and 0x40 tests use the top. [H]
 Question: when `SpaceTaskForce.Attack_Move(obj)` (0x6e4fc0) or `unit.Attack_Move(obj)` (0x5730e0) gets an
 **enemy object**, do the units take it as their target? **Yes, but never through `Scan_Player`.** The object
 reaches the units by two paths, and neither applies the priority score (§2.4), `Category_Exclusions`,
