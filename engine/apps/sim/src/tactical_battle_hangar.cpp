@@ -594,6 +594,18 @@ uint8_t TacticalBattle::hg_build_check(const objects::ObjectStore& st, int32_t p
             if (allied(static_cast<int32_t>(p))) n += production_->count_type(static_cast<int32_t>(p), static_cast<int32_t>(type));
         if (n >= static_cast<uint32_t>(limit)) return 5;
     }
+    // skai t10 (STRATEGIC_GAPS 23, the galactic rule; SKAI_T06_LAND_RUNS 3 item 6: retail fields one Han_Solo_Team_Land_MP,
+    // the port landed a second while the first lived): Build_Limit_Current_Per_Player 0 -> fail; > 0 -> the player's live
+    // count + queued orders < limit. [port] Live count = the player's battle participants of that type (one per galactic-level
+    // object: a company counts once) that wait in the reinforcement pool or are on the field with a live unit.
+    const int32_t per_player = types.get_int(type, "Build_Limit_Current_Per_Player");  // default -1: none
+    if (per_player == 0) return 5;
+    if (per_player > 0) {
+        uint32_t n = production_->count_type(player, static_cast<int32_t>(type));
+        for (const Participant& q : parts_)
+            if (q.owner == player && q.type == static_cast<uint32_t>(type) && ((q.reserve && !q.deployed) || (q.deployed && q.alive > 0))) ++n;
+        if (n >= static_cast<uint32_t>(per_player)) return 5;
+    }
     return 0;
 }
 

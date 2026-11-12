@@ -1280,9 +1280,10 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             return b_->hg_production_command(*mode_, player, ev);
         case T::TacticalBuild: {
             // --- A2 tactical: TacticalBuildEvent 0x42edf0 for an AI player (L1_S4_REMAINING §3.6): refusals in order,
-            // then the build starts at once without a charge (pad_build, check_rules false). ---
-            // battle host: the shared TacticalBuild hook (TacticalBattle::tactical_build, ai = true: same refusal order, no
-            // charge; the UC / constructed objects become battle combat units).
+            // then the build starts at once (pad_build, check_rules false). ---
+            // battle host: the shared TacticalBuild hook (TacticalBattle::tactical_build, ai = true: same refusal order; no
+            // charge in a campaign battle, the full Tactical_Build_Cost_Multiplayer in land skirmish, skai t09; the UC /
+            // constructed objects become battle combat units).
             const uint32_t pw = ev.u("pad");
             if (pw == commands::kNoObject || pw > 0x7FFFFFFFu) return R::InvalidTarget;
             return b_->tactical_build(*mode_, player, static_cast<objects::ObjectId>(pw), static_cast<objects::TypeIndex>(ev.u("type_index")),

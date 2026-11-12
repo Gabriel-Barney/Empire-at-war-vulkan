@@ -264,8 +264,8 @@ if(_alamo_sim)
                      --golden ${CMAKE_CURRENT_SOURCE_DIR}/headless/testdata/skirmish_ai_foc_land_campaign_golden.crc)
     set_tests_properties(alamo_headless_skirmish_ai_foc_land alamo_headless_skirmish_ai_foc_land_campaign PROPERTIES TIMEOUT 1200)
     # S10 land outcome, t50: the land skirmish played on (0/1/4/16/N workers identical); skipped (exit 0) without ALAMO_FOC_DATA. What it asserts
-    # is structure, not a seed's luck (--expect-skirmish-base): both sides start with their pre-built base (Command Center + Barracks of both
-    # slots), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the game ends is checked by the _end test below.
+    # is structure, not a seed's luck (--expect-skirmish-base): both sides start with their pre-built base (skai t08: the 10 base
+    # structures of each slot), the shipped skirmish AI issues orders, shots are fired, 0 Lua errors. Whether the game ends is checked by the _end test below.
     # OPT3 t08: the worker-count check (alamo_add_worker_count_check, docs/BUILD.md "Worker-count check"): the 0-worker entry writes
     # the CRC log and checks the base (--expect-skirmish-base), _w1 / _w4 / _w16 / _w<N> compare against it.
     alamo_add_worker_count_check(alamo_headless_skirmish_ai_foc_land_outcome
@@ -332,12 +332,15 @@ if(_alamo_sim)
     # attack re-check (FIGHTER_FLYING 4.11 A / E) and F3 - F9. Seeds 1-6 end (Rebel at 15209 / 13742 / 13323 / 13849 / 14507 /
     # 14500). Seed 4 can log the retail-modelled script error of BOBAFETTFLAMEINFANTRY.LUA's MoveUntilDone (Move_To on a target
     # that died during PumpEvents; seen at stage A), which --fail-on-lua-errors refuses: pinned to seed 6; seeds 1 and 5 as before.
+    # skai t07 - t11 (2026-11-12): the full pre-built base (10 structures per slot), start companies on the last spawn marker,
+    # paid AI pad builds, Build_Limit_Current_Per_Player, survivor companies. Seeds 1-6, 30000 ticks: Rebel wins at 21439 /
+    # 29833 / 18993 / 21933 / 24310 / 28372. Pinned to seed 3 (the widest margin); seeds 1 and 4 are checked too.
     add_test(NAME alamo_headless_skirmish_ai_foc_land_end
              COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
-                     --seed 6)
+                     --seed 3)
     set_tests_properties(alamo_headless_skirmish_ai_foc_land_end PROPERTIES TIMEOUT 1800)
     alamo_label_slow(alamo_headless_skirmish_ai_foc_land_end)
-    foreach(_seed 1 5)
+    foreach(_seed 1 4)
       add_test(NAME alamo_headless_skirmish_ai_foc_land_end_seed${_seed}
                COMMAND alamo_headless --skirmish-ai foc-land --ticks 30000 --workers 4 --quiet --expect-battle-end --fail-on-lua-errors
                        --seed ${_seed})

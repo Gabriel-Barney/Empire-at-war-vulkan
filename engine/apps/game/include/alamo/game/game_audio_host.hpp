@@ -65,6 +65,7 @@ struct GameAudioStats {
     uint64_t movie_music = 0, movie_halts = 0, movie_cues = 0, movie_restores = 0;  // movie music modes 14 / 17 (STRATEGIC_GAPS §7.4)
     uint64_t tsw_activations = 0, tsw_fires = 0, tsw_planet_deaths = 0;  // refix t06: tsw_audio cues played
     uint64_t lob_chargeups = 0, lob_charged = 0;                         // S8 t31: lobbing charge-up / charged cues
+    uint64_t control_point_lines = 0;                                    // ccpgu t01: control point countdown lines
 };
 
 class GameAudioHost {
@@ -125,6 +126,14 @@ public:
     // Lobbing_Superweapon_SFXEvent_Fire, both attached to the unit (every owner's). battle_tick calls it.
     void tsw_audio(std::span<const TswCue> cues, const objects::GameObjectTypes& types);
     void sim_tick();  // once per sim tick
+    // ccpgu t01 (SKIRMISH_SETUP 4.2 announcer 0x3611f0, presentation only): the local faction's Faction tag for the control
+    // point domination countdown after a battle tick, or "" for none. Retail plays it when the timer (mode +0x2b4) equals
+    // 60 / 30 / 15 / 5 s x 30 frames: _Owned_ when the local player leads, _Ally_Owned_ for an ally (relation 0),
+    // _Enemy_Owned_ for an enemy; no local player (a Neutral observer) hears nothing. `prev` = the timer after the previous
+    // tick (TacticalBattle::control_point_timer(), -1 = not armed), `timer` = now. [port] The host sees the timer once per
+    // tick: a mark is played when this tick passed it (prev > mark >= timer), and on (re)arming (timer > prev) when the arming
+    // value is the mark or one frame below it (the arm and the first countdown step can fall in the same tick).
+    static std::string_view control_point_line(int32_t prev, int32_t timer, int32_t leader, int32_t local_player, bool leader_is_enemy);
 
     // Mode / music scene with the local faction ("" keeps the previous); `space` / `environment` for battles.
     void music(MusicScene scene, std::string_view faction = {}, bool space = true, std::string_view environment = {});
@@ -169,6 +178,7 @@ private:
     std::map<objects::ObjectId, bool> moving_;                                 // ascending id
     std::unordered_set<uint64_t> inaudible_;  // lookup only (never iterated): hidden / stealthed / fogged for the local player
     size_t upgrades_seen_ = 0;                // TacticalBattle::station_upgrades() announced so far
+    int32_t cp_timer_ = -1;                   // ccpgu t01: TacticalBattle::control_point_timer() at the last battle_tick
     MusicScene scene_ = MusicScene::None;
     uint32_t last_serial_ = 0;
     bool have_serial_ = false;

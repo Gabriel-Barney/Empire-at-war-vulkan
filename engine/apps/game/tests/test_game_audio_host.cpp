@@ -161,10 +161,40 @@ void test_inactive() {
     CHECK(h.stats().movie_music == 0 && h.stats().movie_cues == 0 && h.stats().movie_halts == 0);
 }
 
+// ccpgu t01 (SKIRMISH_SETUP 4.2 announcer): the countdown lines at 60 / 30 / 15 / 5 s (x 30 frames), by the leader's relation
+// to the local player; none for a Neutral observer or while not armed. Both builds (the decision is presentation logic only).
+void test_control_point_lines() {
+    using H = GameAudioHost;
+    const std::string_view owned30 = "SFXEvent_HUD_Reinforcement_Point_Owned_30_Seconds";
+    // Arming at 900 (the shipped 30 s), seen as 900 or, when the first countdown step fell in the same tick, 899.
+    CHECK(H::control_point_line(-1, 900, 1, 1, false) == owned30);
+    CHECK(H::control_point_line(-1, 899, 1, 1, false) == owned30);
+    CHECK(H::control_point_line(-1, 899, 2, 1, false) == "SFXEvent_HUD_Reinforcement_Point_Ally_Owned_30_Seconds");
+    CHECK(H::control_point_line(-1, 899, 2, 1, true) == "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_30_Seconds");
+    CHECK(H::control_point_line(-1, 899, 2, -1, true).empty());  // no local player
+    CHECK(H::control_point_line(5, -1, -1, 1, false).empty());   // disarmed
+    // Counting down: each mark once, on the tick that reaches it.
+    CHECK(H::control_point_line(899, 898, 1, 1, false).empty());
+    CHECK(H::control_point_line(451, 450, 1, 1, false) == "SFXEvent_HUD_Reinforcement_Point_Owned_15_Seconds");
+    CHECK(H::control_point_line(450, 449, 1, 1, false).empty());
+    CHECK(H::control_point_line(151, 150, 2, 1, true) == "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_05_Seconds");
+    CHECK(H::control_point_line(1801, 1800, 1, 1, false) == "SFXEvent_HUD_Reinforcement_Point_Owned_60_Seconds");
+    // A re-arm (900 again after a capture) plays the 30 s line again.
+    CHECK(H::control_point_line(300, 900, 1, 1, false) == owned30);
+    // Over the shipped 30 s countdown exactly three lines: 30 s at arming, 15 s, 5 s.
+    int lines = 0, prev = -1;
+    for (int t = 900; t >= 0; --t) {
+        lines += H::control_point_line(prev, t, 1, 1, false).empty() ? 0 : 1;
+        prev = t;
+    }
+    CHECK(lines == 3);
+}
+
 }  // namespace
 
 int main() {
     test_inactive();
+    test_control_point_lines();
 #ifdef ALAMO_GAME_HAVE_AUDIO
     test_movie_music();
     test_missing_credits_event();

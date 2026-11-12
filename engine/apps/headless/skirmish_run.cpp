@@ -1138,12 +1138,13 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         }
     }
     if (opt.expect_skirmish_base) {  // t50: the land skirmish starts from its base and the shipped AI plays from it
-        // Both slots' Command Center and Barracks pads start built (4), the AI issues orders, shots are fired, no Lua errors. Whether
-        // the battle reaches a result in the frame limit is not asked here: the skirmish AI does not take the enemy base in 15 minutes.
-        // s78n t20 (SKIRMISH_SETUP §2.2): each side's start forces stand at its own spawn-point marker (the rows of 6 of
-        // slot_position put the first unit within about 100 of it).
-        const bool start_ok = first.start_off[0] >= 0.0 && first.start_off[0] <= 300.0 && first.start_off[1] >= 0.0 && first.start_off[1] <= 300.0;
-        const bool base_ok = kind == "foc-land" && first.prebuilt >= 4 && first.pads >= first.prebuilt && first.shots > 0 && first.orders > 0 &&
+        // skai t08 (SKAI_T06_LAND_RUNS 2, retail Utapau frame 0): every slot pad but the five generic <FACTION>_BUILD_PADs starts
+        // built - 10 structures per slot on _MP_LAND_UTAPAU, 20 in all - the AI issues orders, shots are fired, no Lua errors.
+        // Whether the battle reaches a result in the frame limit is not asked here (the _end tests do).
+        // s78n t20 / skai t07 (SKIRMISH_SETUP §2.2; retail: all squads within 41 of the last TEAM_tt spawn marker): each side's
+        // start companies stand on its own spawn-point marker (the free placement ring search around it).
+        const bool start_ok = first.start_off[0] >= 0.0 && first.start_off[0] <= 100.0 && first.start_off[1] >= 0.0 && first.start_off[1] <= 100.0;
+        const bool base_ok = kind == "foc-land" && first.prebuilt >= 20 && first.pads >= first.prebuilt && first.shots > 0 && first.orders > 0 &&
                              first.lua_errors == 0 && start_ok;
         std::printf("skirmish start: first start-force unit %.0f / %.0f from the spawn-point markers\n", first.start_off[0], first.start_off[1]);
         std::printf("skirmish base: %s (%lu pre-built of %lu pads, %lu structures started, %lu shots, %" PRIu64 " AI orders, %zu Lua errors)\n",

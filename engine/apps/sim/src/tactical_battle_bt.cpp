@@ -301,7 +301,11 @@ cmd::RejectReason TacticalBattle::tactical_build(TacticalMode& mode, uint8_t pla
     if (owner < 0 || !bt_allied(static_cast<int32_t>(player), owner)) return R::NotAllowed;  // "not owned by an ally"
     if (const PadState* s = pad_state(pad); s && s->cooldown_end > frame_) return R::NotAllowed;
     if (uc_behavior() == objects::kNoBehavior || !types.has_behavior(type, objects::BehaviorSet::Union, uc_behavior())) return R::InvalidUnit;
-    if (!ai) {
+    // skai t09 (SKAI_T06_LAND_RUNS 2 "Credits" [H, trace]): the AI pays a pad build in full when its under-construction object
+    // appears, like a human (retail Utapau: Mineral Processor -800, Ground Mining Facility -1300, AV turret + Mineral Processor
+    // -1650 in one frame). SKIRMISH_SETUP 3's "the AI is never charged" reading of 0x289050 does not hold for pad builds there.
+    // [port] Campaign land battles keep the free AI pad builds (L1_S4 3.6): no retail trace of an AI pad build there yet.
+    if (!ai || skirmish_land()) {
         const float cost = build_cost(type);
         const float have = credits_get_ ? credits_get_(static_cast<int32_t>(player)) : 0.0f;
         if (cost > have) return R::CannotAfford;
@@ -1270,6 +1274,17 @@ void TacticalBattle::bt_place_forces(TacticalMode& mode, SimRng& rng, const Para
         for (uint32_t i = 0; i < parts_.size(); ++i)
             if (!parts_[i].reserve && !parts_[i].starbase && !parts_[i].structure && !parts_[i].built && parts_[i].side == side) {
                 const size_t u0 = units_.size(), c0 = containers_.size();
+                if (skirmish_land() && !space_ && (spawn_marked & (1u << side)) != 0 && parts_[i].spots.empty()) {
+                    // skai t07 (SKAI_T06_LAND_RUNS 2 [H, trace]): every start company stands on its slot's spawn marker (retail
+                    // Utapau frame 0: the four STORMTROOPER_TEAMs within 12 of marker 93302, all 36 squads within 41), not in rows
+                    // behind it. [port] The members take the free placement ring search around the marker that a script company
+                    // spawn uses (script_member_spots: each member avoids every live object, the earlier companies included),
+                    // facing the marker's way.
+                    const Vec3 at{anchor_[side].x, anchor_[side].y, map_.terrain.present ? map_.terrain.sample_height(anchor_[side].x, anchor_[side].y) : 0.0f};
+                    std::vector<Vec3> spots;
+                    script_member_spots(mode, spawn_types(parts_[i]), at, dmath::atan2(facing_[side].y, facing_[side].x) * (180.0f / dmath::kPiF), spots);
+                    for (const Vec3& sp : spots) parts_[i].spots.emplace_back(sp, facing_[side]);
+                }
                 deploy(mode, i, rng);
                 if (!placement || units_.size() <= u0) continue;
                 const uint32_t g = group;
@@ -1665,28 +1680,22 @@ float TacticalBattle::skirmish_land_unit_cap(int32_t player) const {
 }
 
 void TacticalBattle::bt_skirmish_base(TacticalMode& mode) {
-    // t50 [M]: MP_Default_Pre_Built_Base (GameConstants, shipped yes) with a pad type that respects the option
-    // (Respects_Skirmish_Pre_Build_Bases_Option, L1_S4_REMAINING §3.6 "pre-placed types spawn at start"): the pads of the
-    // MultiplayerStructureMarkers "Team_00_Command Center" and "Team_00_Barracks" start built, for the two slots' factions, at
-    // no charge: the pad's first buildable under-construction type of the owner's faction row, as its Tactical_Buildable_Constructed
-    // type. The other pads (factories, research, power, communications array, generic and resource pads) start empty. The retail
-    // pre-placed type itself is not decoded (.ted mini 0x2B is 3 on exactly the base pads); which pads it builds is the open item.
+    // SKIRMISH_SETUP 2.6 [H]: pad vf13 0x42df80 creates the pad's map-saved pre-placed type (data pack +0x18) for the pad owner at
+    // the build bone with the pad orientation (an under-construction type -> its Tactical_Buildable_Constructed), in skirmish only
+    // with the pre-built-bases option (MP_Default_Pre_Built_Base, shipped yes) and the pad type's
+    // Respects_Skirmish_Pre_Build_Bases_Option (+0xe5, default true). skai t08 (SKAI_T06_LAND_RUNS 2, retail Utapau frame 0):
+    // every pad of each slot starts built (Command Center, Barracks, Light / Heavy Vehicle Factory, Research Facility, Base
+    // Shield, both Turbolaser Towers, Communications Array, Power Generator); the five <FACTION>_BUILD_PAD of a slot (the only
+    // types with the flag false) and every Neutral pad start empty. [port] The pre-placed type itself is not decoded from the
+    // map: an owned slot pad whose type respects the option gets the first under-construction type of its owner's faction row
+    // (the same structure for every shipped base pad).
     if (!skirmish_land() || !combat_ || pad_behavior() == objects::kNoBehavior || uc_behavior() == objects::kNoBehavior) return;
     const objects::GameObjectTypes& types = catalog_->types();
-    std::vector<objects::TypeIndex> pre;
-    for (const char* name : {"Team_00_Command Center", "Team_00_Barracks"}) {
-        const objects::TypeIndex mt = types.resolve_name(name);
-        if (mt == objects::kNone || mt >= types.size()) continue;
-        for (const std::string_view tok : types.get_list(mt, "Marker_For_Specific_Object_Type")) {
-            const objects::TypeIndex x = types.resolve_name(ascii_trim(tok));
-            if (x != objects::kNone && x < types.size()) pre.push_back(x);
-        }
-    }
-    if (pre.empty()) return;
     objects::ObjectStore& st = mode.primary();
     std::vector<objects::ObjectHandle> pads;
     for (const objects::ObjectHandle h : st.all_objects())
-        if (st.active(h) && st.has_behavior(h, pad_behavior()) && std::find(pre.begin(), pre.end(), st.type(h)) != pre.end()) pads.push_back(h);
+        if (st.active(h) && st.has_behavior(h, pad_behavior()) && types.get_bool(st.type(h), "Respects_Skirmish_Pre_Build_Bases_Option"))
+            pads.push_back(h);
     for (const objects::ObjectHandle ph : pads) {
         const int32_t owner = st.owner(ph);
         if (owner < 0 || (owner != skirmish_slot_player(0) && owner != skirmish_slot_player(1))) continue;
@@ -1748,13 +1757,16 @@ uint8_t TacticalBattle::bt_skirmish_anchors() {
         const std::string team_spawn = "Team_0" + std::to_string(slot) + "_Spawn_Point_Marker";
         const std::string team_base = "Team_0" + std::to_string(slot) + "_Base_Position_Marker";
         const MapMarker* pick = nullptr;
+        // skai t07 (SKAI_T06_LAND_RUNS 2 [H, trace]: retail Utapau puts both start companies of a slot on the LAST of its three
+        // TEAM_tt_SPAWN_POINT_MARKERs in id order, 93302 / 93300) [M: why the last]. Land takes the last match in map order
+        // (the port's ids follow it); [port] a space skirmish keeps the first (its retail-checked station / fleet layout).
         for (const std::string* want : {&player_marker, &team_spawn, &team_base}) {
             for (const MapMarker& m : bt_markers_) {
                 if (m.type == objects::kNone || m.type >= types.size()) continue;
                 if (!iequal_trim(types.raw().types().name[m.type], *want)) continue;
                 if (want == &player_marker && m.owner != player) continue;
                 pick = &m;
-                break;
+                if (space_) break;
             }
             if (pick) break;
         }

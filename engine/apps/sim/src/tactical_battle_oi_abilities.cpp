@@ -754,6 +754,18 @@ void TacticalBattle::oi_events(TacticalMode& mode) {
     for (const tc::SurvivorEvent& s : combat_->survivor_events()) {
         if (s.respawn) {
             oi_respawns_.push_back(OiRespawn{s.due_frame, s.type, s.owner, oi_sv(s.position), oi_sv(s.facing)});
+        } else if (s.type >= 0 && static_cast<size_t>(s.type) < rules_->types.size() &&
+                   !rules_->type(static_cast<uint32_t>(s.type)).members.empty()) {
+            // skai t11 (SKAI_T06_LAND_RUNS 1 / 3 item 7 [H, trace]): a company survivor type (the DUMMY_GROUND_COMPANY
+            // Empire_Survivors_*) spawns its Company_Units - retail Utapau: one STORMTROOPER_TEAM with its squads at the
+            // destroyed factory's position, in the same frame - not the company object. [port] Placed like a script
+            // company spawn (script_spawn_company: the free spots around the point, members facing the map origin).
+            objects::SpawnParams sp;
+            sp.type = static_cast<objects::TypeIndex>(s.type);
+            sp.owner = s.owner;
+            sp.position = oi_sv(s.position);
+            sp.facing = oi_sv(s.facing);
+            (void)script_spawn_company(mode, sp);
         } else {
             oi_spawn_unit(mode, s.type, oi_sv(s.position), oi_sv(s.facing), s.owner);
         }

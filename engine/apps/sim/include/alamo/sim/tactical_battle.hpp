@@ -955,8 +955,9 @@ public:
     // one service's worth] and grows by max / build frames per frame; the constructed object carries the UC's health
     // fraction. tactical_build = TacticalBuildEvent 0x42edf0 (command 33) for `player`: refusals in order (UC present,
     // built present -> NotAllowed; pad fogged for the player or not allied-owned -> NotAllowed; cooldown -> NotAllowed;
-    // type without TACTICAL_UNDER_CONSTRUCTION -> InvalidUnit); `ai` (an AI player): built at once without a charge;
-    // otherwise cost = build_cost(type) > credits -> CannotAfford, else charged (credit hooks) and started.
+    // type without TACTICAL_UNDER_CONSTRUCTION -> InvalidUnit); `ai` (an AI player) in a campaign battle: built at once without
+    // a charge; otherwise (a human, or any player in land skirmish: skai t09) cost = build_cost(type) > credits -> CannotAfford,
+    // else charged (credit hooks) and started.
     // The AI agent's TacticalBuild hook: call tactical_build(mode, player, pad, type, rng, /*ai=*/true).
     // tactical_sell = TacticalSellBehavior 0x5248b0 (command 34): the built object of a pad owned by `player`; silently
     // refused (NotAllowed) while the pad is locked; refund = int(cost of the UC entry whose constructed type matches x
@@ -2031,9 +2032,11 @@ private:
     std::vector<PadRecord>* pad_records_ = nullptr;  // §9.4 galactic persistence (GalacticSim::built_objects of the planet)
     bool pad_restore_ = true;                         // §9.4 recreate at setup (false while a save is loaded)
     void bt_pad_restore(TacticalMode& mode);          // setup: persistent pad children back on their pads
-    void bt_skirmish_base(TacticalMode& mode);        // t50 setup: the land skirmish's pre-built base (command center, barracks)
-    // t50 setup: skirmish start positions from the slot's map markers; s78n t20: returns bit `side` set for each side whose
-    // spawn-point marker was found (that side's anchor and facing then come from the marker only).
+    void bt_skirmish_base(TacticalMode& mode);        // t50 / skai t08 setup: the land skirmish's pre-built base (every slot pad
+                                                      // whose type respects the pre-build option)
+    // t50 setup: skirmish start positions from the slot's map markers (skai t07: on land the last matching marker); s78n t20:
+    // returns bit `side` set for each side whose spawn-point marker was found (that side's anchor and facing then come from
+    // the marker only).
     uint8_t bt_skirmish_anchors();
     // skai: skirmish map battles (tactical_battle_skirmish.cpp). Per-type Income_Stream data (parsed on first use, by type).
     struct SkIncome {

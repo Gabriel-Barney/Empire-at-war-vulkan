@@ -30,6 +30,33 @@ struct UnitSounds {};
 
 namespace alamo::game {
 
+std::string_view GameAudioHost::control_point_line(int32_t prev, int32_t timer, int32_t leader, int32_t local_player, bool leader_is_enemy) {
+    if (timer < 0 || leader < 0 || local_player < 0) return {};
+    static constexpr struct {
+        int32_t frames;
+        const char* owned;
+        const char* ally;
+        const char* enemy;
+    } kMarks[] = {
+        {60 * 30, "SFXEvent_HUD_Reinforcement_Point_Owned_60_Seconds", "SFXEvent_HUD_Reinforcement_Point_Ally_Owned_60_Seconds",
+         "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_60_Seconds"},
+        {30 * 30, "SFXEvent_HUD_Reinforcement_Point_Owned_30_Seconds", "SFXEvent_HUD_Reinforcement_Point_Ally_Owned_30_Seconds",
+         "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_30_Seconds"},
+        {15 * 30, "SFXEvent_HUD_Reinforcement_Point_Owned_15_Seconds", "SFXEvent_HUD_Reinforcement_Point_Ally_Owned_15_Seconds",
+         "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_15_Seconds"},
+        {5 * 30, "SFXEvent_HUD_Reinforcement_Point_Owned_05_Seconds", "SFXEvent_HUD_Reinforcement_Point_Ally_Owned_05_Seconds",
+         "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_05_Seconds"},
+    };
+    const bool armed_now = prev < 0 || timer > prev;
+    for (const auto& m : kMarks) {
+        const bool hit = armed_now ? (timer == m.frames || timer + 1 == m.frames) : (prev > m.frames && m.frames >= timer);
+        if (!hit) continue;
+        if (leader == local_player) return m.owned;
+        return leader_is_enemy ? m.enemy : m.ally;
+    }
+    return {};
+}
+
 Vec3 GameAudioHost::position_of(uint64_t id) const {
     const auto it = positions_.find(id);
     return it == positions_.end() ? Vec3{} : it->second;
@@ -309,6 +336,17 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
         faction_sfx(ev);
         ++stats_.station_upgrades;
     }
+    // ccpgu t01 (SKIRMISH_SETUP 4.2): the control point domination countdown lines.
+    {
+        const int32_t timer = battle.control_point_timer(), leader = battle.control_point_leader();
+        const std::string_view line =
+            control_point_line(cp_timer_, timer, leader, local_player, leader >= 0 && local_player >= 0 && cs.is_enemy(local_player, leader));
+        cp_timer_ = timer;
+        if (!line.empty()) {
+            faction_sfx(line);
+            ++stats_.control_point_lines;
+        }
+    }
     for (const tactical::combat::HitEvent& e : cs.hit_events()) {
         if (e.projectile_desc < cs.data().projectiles.size()) {
             const objects::TypeIndex pt = types.resolve_name(cs.data().projectiles[e.projectile_desc].name);
@@ -527,6 +565,7 @@ void GameAudioHost::battle_reset() {
     moving_.clear();
     inaudible_.clear();
     upgrades_seen_ = 0;
+    cp_timer_ = -1;
     retreating_player_ = -1;
 }
 
