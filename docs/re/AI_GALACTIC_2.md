@@ -94,6 +94,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 
 **Candidates are object types, not objects.** A type can be selected many times; each selection is one unit. The candidate list (PP+0xD0) is filled by 0x6c1fb0, which deduplicates through a set:
 - a generic type with behaviour flag 0x5C or 0x5B is first replaced by the planet-specific variant (0x3f8fd0 / 0x3f8c40 on the target planet's surface);
+  - 0x3f8fd0 (corrected a2m r3, `A2M_R3_RE_A.md` §1.2): keyed on the **planet owner's** faction. No starbase: Rebel_Star_Base_1 / Empire_Star_Base_1 for those factions, nothing for any other. A starbase: its Next_Level_Base, returned only when its Base_Level ≤ the allowed level (0 when a starbase item is queued at the planet; else level + 1, 0 when above the planet's Max_Space_Base). No can-build test here. The goal's target planet is used, IgnoreTarget plans included; all expanded 0x5C types dedupe into one candidate [H];
 - candidate order = order of first insertion.
 
 **Fields used below:**
