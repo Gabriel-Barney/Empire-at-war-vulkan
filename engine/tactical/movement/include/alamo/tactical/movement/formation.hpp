@@ -24,8 +24,8 @@
 // layout_formation (§4.3): ranks (Hero first; then the rank key ascending: the attack range 0x3749d0 (§4.3
 //   "Correction, s78n t19" [H]), so the shortest range goes in front; keys within tolerance T are one rank, T (in key
 //   units) starting at 0 and growing by 15 while >= 4 ranks remain, cap 4 steps [L]; equal keys by case-insensitive
-//   type name, then object id - the stable replacement of the retail unstable std::sort, §7. RankKey::MaxSpeed keeps
-//   the older max-speed key for space formations ([port] until a space parity pass)), rows built front to back (a row = one rank, candidates ordered by
+//   type name, then object id - the stable replacement of the retail unstable std::sort, §7. Space formations
+//   use the same key since bkm1 t05 (b0037); RankKey::MaxSpeed has no game caller), rows built front to back (a row = one rank, candidates ordered by
 //   forward projection descending, taken while the cumulative width <= 2 * half-width, overflow
 //   returned to the front, kept members re-sorted by lateral projection so units keep their
 //   left/right order), lateral placement gap = (2hw - sum widths) / (count + 1), rows stepping back
@@ -66,8 +66,14 @@ struct FormationMember {
     // Solo_Attack_Range of the target) recruits nobody, as a Solo seed
     bool solo_attack = false;
     // s78n t25 fix (MOVEMENT §4.2 item 6 / item 4 first bullet): otherwise a short-range seed (d < E_r x
-    // Short_Range_Attack_Formation_Coefficient) recruits nobody
+    // Short_Range_Attack_Formation_Coefficient) recruits only units of its own exact type (bkm1 t04, §4.2 step 2 item 7
+    // test 3; it recruited nobody before)
     bool short_range_attack = false;
+    // bkm1 t04 (b0036, MOVEMENT §4.2 step 2 item 7 test 9 [H]): E = the engagement range 0x4f6e40 (a move: the attack
+    // range; an attack: LandAttackUnit::engage) and K = min(E, Targeting_Min_Attack_Distance), 0 under a guard block. A
+    // candidate C joins seed S only when K(C) <= E(S) and K(S) <= E(C).
+    float engage = 0.0f;
+    float min_engage = 0.0f;
 };
 
 std::vector<std::vector<uint32_t>> kmeans_buckets(std::span<const FormationMember> m, float max_formation_area,

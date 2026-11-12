@@ -145,6 +145,15 @@ struct UnitDesc {
     // s78l t02 (MOVEMENT §3.5.1, save version 12): Rotation_Animation_Speed (+0x388, raw). The arrival turn's begin / band /
     // end clips play at (Stopped_Rate_Of_Turn, else the turn rate) / this when both are > 0, else at 1 (0x3736a0).
     float rotation_animation_speed = 0.0f;
+    // bkm1 t08 (b0050, MOVEMENT §3.5.3; save version 31): UseSecondaryFacing (+0xd2) and its five GameObjectType floats
+    // (type defaults 0x367250): SecondaryTurnInPlaceROTCoefficient +0x1670, SecondaryTurnAngle +0x1674 (degrees),
+    // Min / MaxSecondaryTurnROTCoefficient +0x1678 / +0x167c, SecondaryTurnLookaheadDistance +0x1680 (world units).
+    bool use_secondary_facing = false;
+    float secondary_in_place = 0.5f;
+    float secondary_angle = 90.0f;
+    float secondary_min = 0.0f;
+    float secondary_max = 1.0f;
+    float secondary_lookahead = 0.0f;
     // S8 t24 (MOVEMENT §3.2 "Turret recentre around deploy"): the unit TURRET of a `Deploys` type (TurretBehavior, TD
     // +0x48..+0x5c). [port] Modelled only for Deploys types with the TURRET behaviour and Turret_Rotate_Speed > 0 (the
     // deploy gate is its only sim reader); `turret` false = always at rest. Angles: x (never moves), elevation, yaw

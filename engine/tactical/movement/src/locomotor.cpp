@@ -345,6 +345,43 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     if ((m.state == LocoState::WalkEndMove || m.state == LocoState::WalkStartMove) && !team) budget *= v / vmax_u;
     float s = v;
     if (!(v > 0.0f)) return r;
+    // bkm1 t08 (b0050, MOVEMENT §3.5.3 item 2a): B2 once per call before the loop - delta2 = |wrap(w0 - Y2)| with w0 the
+    // primary wanted yaw; B2 = clamp(delta2 / SecondaryTurnAngle x f, Min, Max) x R (f = v / vmax_u, not x f again in
+    // 0x12 / 0x14)
+    float budget2 = 0.0f;
+    if (p.secondary) {
+        const float d2 = std::fabs(wrap_deg(yaw_of(m) - m.yaw2));
+        const float q = p.sec_angle != 0.0f ? d2 / p.sec_angle * (v / vmax_u) : 0.0f;
+        budget2 = std::clamp(q, p.sec_min, std::max(p.sec_min, p.sec_max)) * p.turn_rate;
+    }
+    // w1 (0x61d890): within SecondaryTurnLookaheadDistance of the current segment's end - the next segment's wanted yaw
+    // (its own side correction), or on the last segment the started path below's (from its index, stepped on while the
+    // unit is past its waypoint lines); else w0
+    const auto yaw2_want = [&]() {
+        V2 wd;
+        const size_t nx = m.next;
+        if (nx >= 1 && nx < m.path.size()) {
+            const V2 a = m.path[nx - 1];
+            const V2 sg = m.path[nx] - a;
+            const float l = length(sg);
+            const V2 d = normalize_retail(sg);
+            if (dot(m.pos - a, d) + p.sec_lookahead > l) {
+                if (nx + 1 < m.path.size()) {
+                    if (walk_wanted_dir(std::span<const V2>(m.path), static_cast<uint32_t>(nx + 1), m.pos, x, wd) && length_sq(wd) > 0.0f)
+                        return heading_deg(wd);
+                } else if (below && below->started && below->next >= 1 && below->next < below->path.size()) {
+                    uint32_t k = below->next;
+                    for (; static_cast<size_t>(k) + 1 < below->path.size(); ++k) {
+                        V2 ql0, qn;
+                        waypoint_line(below->path, k, ql0, qn);
+                        if (!(dot(qn, m.pos - ql0) >= -0.001f)) break;
+                    }
+                    if (walk_wanted_dir(std::span<const V2>(below->path), k, m.pos, x, wd) && length_sq(wd) > 0.0f) return heading_deg(wd);
+                }
+            }
+        }
+        return yaw_of(m);
+    };
     bool no_turn = false;
     const int32_t dirs = x ? x->directions : 1;
     for (size_t guard = 0; guard < 4 * m.path.size() + 16; ++guard) {
@@ -394,6 +431,13 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
             m.yaw = turn_toward(m.yaw, w, budget);
             budget = e > budget ? 0.0f : budget - e;
             if (budget > 0.0f) m.turn_done = true;
+        }
+        // bkm1 t08: Y2 steps with B2 toward w1 under the same conditions, its leftover carried to the next waypoint of the call
+        if (p.secondary && !no_turn && budget2 > 0.0f) {
+            const float w2 = yaw2_want();
+            const float e2 = std::fabs(wrap_deg(w2 - m.yaw2));
+            m.yaw2 = turn_toward(m.yaw2, w2, budget2);
+            budget2 = e2 > budget2 ? 0.0f : budget2 - e2;
         }
         // C.7: the travel direction vf +0x288 (0x61e0f0): Movement_Directions_Count 1 = the facing; N > 1 = of the N
         // directions spaced 360 / N from the facing the one with the largest dot product with the wanted direction (the
@@ -451,10 +495,15 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
         m.pos = np;
         r.moved = true;
         if (s <= sp) {
-            // C.11: the budget ends before the line; rest = (s' - s) + the lengths after path[next] ([port] 2-D);
-            // v^2 / (2a) > rest -> End Move unless a started path lies below
+            // C.11: the budget ends before the line; rest = (s' - s) + the 3-D lengths after path[next] (0x54f700; bkm1 t06:
+            // the stored waypoint z is 0 except a slot-leg path's last, LandMotion::end_z); v^2 / (2a) > rest -> End Move
+            // unless a started path lies below
             float rest = sp - s;
-            for (size_t i = static_cast<size_t>(m.next) + 1; i < m.path.size(); ++i) rest += distance(m.path[i - 1], m.path[i]);
+            for (size_t i = static_cast<size_t>(m.next) + 1; i < m.path.size(); ++i) {
+                float l = distance(m.path[i - 1], m.path[i]);
+                if (i + 1 == m.path.size() && m.end_z != 0.0f && m.path[i] == m.end_at) l = std::sqrt(l * l + m.end_z * m.end_z);
+                rest += l;
+            }
             if ((v * v) / (2.0f * dec_of()) > rest && !(below && below->started)) m.state = LocoState::WalkEndMove;
             return r;
         }
