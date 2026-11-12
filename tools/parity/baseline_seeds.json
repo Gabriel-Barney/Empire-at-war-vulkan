@@ -1,5 +1,5 @@
 {
- "commit": "c3c01834",
+ "commit": "a50fc9e7",
  "mode": "distribution",
  "scenarios": {
   "geonosis_skirmish": {
@@ -93,16 +93,16 @@
     "ai.first_departure_tick[Rebel]": "PASS",
     "ai.first_departure_tick[Underworld]": "PASS",
     "ai.fleet_departures[Empire]": "PASS",
-    "ai.fleet_departures[Rebel]": "FAIL",
+    "ai.fleet_departures[Rebel]": "PASS",
     "ai.fleet_departures[Underworld]": "PASS",
     "ai.fleet_targets[Empire]": "PASS",
-    "ai.fleet_targets[Rebel]": "FAIL",
+    "ai.fleet_targets[Rebel]": "PASS",
     "ai.fleet_targets[Underworld]": "PASS",
     "build.ticks[CORELLIAN_GUNBOAT@NABOO]": "PASS",
     "build.ticks[CRUSADER_GUNSHIP@FELUCIA]": "PASS",
     "build.ticks[DESTROYER_DROID_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[INTERCEPTOR4_FRIGATE@THE_MAW]": "PASS",
-    "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "PASS",
+    "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@KAMINO]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
@@ -177,13 +177,14 @@
     "travel.hop_ticks[Rebel:SHOLA->NALHUTTA]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Rebel:TATOOINE->CORELLIA]": "PASS",
+    "travel.hop_ticks[Rebel:YAVIN->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Rebel:YAVIN->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->KUAT]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->TATOOINE]": "FAIL",
     "travel.hop_ticks[Underworld:KAMINO->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "FAIL",
-    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "PASS",
+    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "FAIL",
     "travel.hop_ticks[Underworld:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->KAMINO]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->SHOLA]": "PASS",
@@ -206,9 +207,8 @@
    },
    "summary": {
     "AI choices": {
-     "FAIL": 2,
      "N/A": 1,
-     "PASS": 14
+     "PASS": 16
     },
     "battle outcomes": {
      "PASS": 7
@@ -221,8 +221,8 @@
      "PASS": 22
     },
     "timing": {
-     "FAIL": 10,
-     "PASS": 62
+     "FAIL": 12,
+     "PASS": 61
     }
    }
   }
