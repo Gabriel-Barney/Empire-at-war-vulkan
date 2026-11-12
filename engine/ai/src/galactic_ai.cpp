@@ -389,12 +389,44 @@ std::vector<PlanetIndex> GalacticAiWorld::stage_list(int32_t player, PlanetIndex
     return pa ? pa->stage_list(target, level) : std::vector<PlanetIndex>{};
 }
 
-uint32_t GalacticAiWorld::Impl::next_starbase_type(int32_t player, PlanetIndex p) const {
-    const auto& all = sim.rules().types;
-    for (size_t t = 0; t < all.size(); ++t)
-        if (all[t].kind == gal::UnitKind::StarBase && can_build_at(player, static_cast<uint32_t>(t), p))
-            return static_cast<uint32_t>(t);
-    return gal::kNoIndex;
+// 0x3f8fd0(planet behaviour, planet): the planet-specific replacement of a generic DUMMY_STAR_BASE team type
+// (A2M_R3_RE_A §1.2, AI_GALACTIC_2 §1.2) [H]. Keyed on the PLANET OWNER's faction, not on the planning player:
+//   - no starbase on the planet: Rebel owner -> Rebel_Star_Base_1, Empire owner -> Empire_Star_Base_1, any other owner
+//     (Underworld included) -> none;
+//   - a starbase: its type's Next_Level_Base (+0x8c0);
+//   - level gate: allowed = 0 when a starbase item is in either production queue of the planet (0x401db0); else 1 when
+//     the starbase has no owner (D +0x13c = -1) and Max_Space_Base != 0; else level + 1 when level < 5 (0 when
+//     Max_Space_Base < level + 1). The candidate is returned when its Base_Level <= allowed.
+// No can-build test here: Production Setup C vetoes a type 0x2804d0 refuses (permanent veto).
+uint32_t GalacticAiWorld::Impl::next_starbase_type(PlanetIndex p) const {
+    if (!valid_planet(p)) return gal::kNoIndex;
+    const auto& rules = sim.rules();
+    const gal::PlanetState& ps = sim.planets()[p];
+    uint32_t cand = gal::kNoIndex;
+    const uint32_t sb = sim.starbase_type(p);
+    if (sb == gal::kNoIndex) {
+        const auto players = sim.players();
+        if (ps.owner < 0 || static_cast<size_t>(ps.owner) >= players.size()) return gal::kNoIndex;
+        const uint32_t f = players[static_cast<size_t>(ps.owner)].faction;
+        if (f >= rules.factions.size()) return gal::kNoIndex;
+        const std::string& fn = rules.factions[f].name;
+        if (ascii_iequals(fn, "Rebel")) cand = rules.find_type("Rebel_Star_Base_1");
+        else if (ascii_iequals(fn, "Empire")) cand = rules.find_type("Empire_Star_Base_1");
+    } else {
+        cand = rules.types[sb].next_level_base;
+    }
+    if (cand >= rules.types.size()) return gal::kNoIndex;
+    const auto& msb = sim.map().planets.max_space_base;
+    const int32_t max_level = p < msb.size() && msb[p] >= 0 ? msb[p] : 5;  // 0x372780 (tag absent -> 5 [port])
+    bool queued = false;
+    for (const auto& q : ps.queue)
+        for (const gal::BuildEntry& e : q)
+            queued = queued || (e.type < rules.types.size() && gal::is_star_base_type(rules.types[e.type]));
+    int32_t allowed = 0;
+    if (queued) allowed = 0;
+    else if (ps.starbase_owner == gal::kNoPlayer) allowed = max_level != 0 ? 1 : 0;
+    else if (ps.starbase_level < 5) allowed = max_level < ps.starbase_level + 1 ? 0 : ps.starbase_level + 1;
+    return rules.types[cand].base_level <= allowed ? cand : gal::kNoIndex;
 }
 
 int32_t GalacticAiWorld::Impl::script_player(int32_t script) const {
@@ -764,6 +796,13 @@ bool PlayerAi::can_fund(const Goal& g) {
     const int32_t c = category_of(g);
     if (ctx.budget.has_goal(c, g.serial)) return ctx.budget.can_fund_goal(c, g.serial);
     return ctx.budget.can_fund(c, g.cost, g.eta, time_limit(g));
+}
+
+// Accept-time gross test 0x6139f0 (A2M_R3_RE_A §1.1) [H]: P / I with the record's or the goal's horizon.
+bool PlayerAi::can_fund_accept(const Goal& g) {
+    const int32_t c = category_of(g);
+    if (ctx.budget.has_goal(c, g.serial)) return ctx.budget.can_fund_gross_goal(c, g.serial);
+    return ctx.budget.can_fund_gross(c, g.cost, g.eta, time_limit(g));
 }
 
 void PlayerAi::budget_add(Goal& g) {

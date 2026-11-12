@@ -187,6 +187,20 @@ bool AiBudget::can_fund_goal(int32_t c, uint32_t goal) const {
     return std::max(std::max(e->h, period_) * k.R + k.A, 0.0f) >= std::max(e->req, 0.0f) + e->alloc - e->a;
 }
 
+bool AiBudget::can_fund_gross(int32_t c, float cost, float eta, float time_limit) const {
+    if (!valid(c)) return cost <= 0.0f;
+    const Category& k = cat_[static_cast<size_t>(c)];
+    const float horizon = time_limit >= 0.0f ? std::min(eta, time_limit) : eta;
+    return std::max(std::max(horizon, period_) * k.I + k.P, 0.0f) >= cost;
+}
+
+bool AiBudget::can_fund_gross_goal(int32_t c, uint32_t goal) const {
+    const GoalEntry* e = find(c, goal);
+    if (!e) return false;
+    const Category& k = cat_[static_cast<size_t>(c)];
+    return std::max(std::max(e->h, period_) * k.I + k.P, 0.0f) >= std::max(e->req, 0.0f) + e->alloc - e->a;
+}
+
 float AiBudget::time_to_afford(int32_t c, uint32_t goal, float n) const {
     const GoalEntry* e = find(c, goal);
     if (!e) return 0.0f;

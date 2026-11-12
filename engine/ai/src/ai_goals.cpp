@@ -259,7 +259,8 @@ bool GoalSystem::proposal_slice(int64_t now) {
 void GoalSystem::accept_tail(Goal g) {
     if (hooks_->uses_budget()) {
         const float at = allowed_time(g);
-        if (!((at <= 0.0f || at >= g.eta) && hooks_->can_fund(g))) {
+        // a2m r3 (A2M_R3_RE_A §1.1) [H]: the accept fund test is the gross P / I test 0x6139f0, not 0x6129c0.
+        if (!((at <= 0.0f || at >= g.eta) && hooks_->can_fund_accept(g))) {
             hooks_->drop_potential_plan(g);
             return;
         }

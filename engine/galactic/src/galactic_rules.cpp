@@ -348,6 +348,7 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
         i.required_ground_base = types.get_int(t, "Required_Ground_Base_Level");
         i.required_star_base = types.get_int(t, "Required_Star_Base_Level");
         i.base_level = types.get_int(t, "Base_Level");
+        i.next_level_base = resolve_or_none(types, types.get_string(t, "Next_Level_Base"));  // 0x3f8fd0 (A2M_R3_RE_A §1.2)
         i.advances_tech = types.get_int(t, "Build_Advances_Tech_Level");
         i.squadron_capacity = types.get_int(t, "Squadron_Capacity");
         i.hyperspace_speed = types.get_float(t, "Hyperspace_Speed");

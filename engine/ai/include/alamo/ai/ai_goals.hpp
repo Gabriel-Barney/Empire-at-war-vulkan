@@ -125,6 +125,8 @@ public:
     virtual void suspend_reservations(Goal& g) = 0;
     virtual bool uses_budget() = 0;                    // galactic context
     virtual bool can_fund(const Goal& g) = 0;          // 0x6129c0 (true when no budget)
+    // Accept-time gross test 0x6139f0 (slot 10 only; A2M_R3_RE_A §1.1): P / I instead of A / R. Default: can_fund.
+    virtual bool can_fund_accept(const Goal& g) { return can_fund(g); }
     virtual float category_credits(int32_t category) = 0;  // cat+0x44 (positive when no budget)
     virtual void budget_add(Goal& g) = 0;
     virtual void budget_release(Goal& g) = 0;
