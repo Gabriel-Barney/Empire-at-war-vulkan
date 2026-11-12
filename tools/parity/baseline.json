@@ -1,5 +1,5 @@
 {
- "commit": "fad3bceb",
+ "commit": "567d6d1e",
  "scenarios": {
   "geonosis_skirmish": {
    "references": [
@@ -11,7 +11,7 @@
     "ai.build_count[Empire]": "FAIL",
     "ai.build_count[Rebel]": "FAIL",
     "ai.build_mix[Empire]": "FAIL",
-    "ai.build_mix[Rebel]": "FAIL",
+    "ai.build_mix[Rebel]": "PASS",
     "ai.first_build_frame[Empire]": "N/A",
     "ai.first_build_frame[Rebel]": "FAIL",
     "combat.damage_taken[Empire]": "PASS",
@@ -26,17 +26,18 @@
     "outcome.battle_ended": "PASS",
     "outcome.units_final[Empire]": "FAIL",
     "outcome.units_final[Rebel]": "FAIL",
-    "outcome.units_lost[Empire]": "FAIL",
+    "outcome.units_lost[Empire]": "PASS",
     "outcome.units_lost[Rebel]": "PASS"
    },
    "summary": {
     "AI choices": {
-     "FAIL": 5,
-     "N/A": 1
+     "FAIL": 4,
+     "N/A": 1,
+     "PASS": 1
     },
     "battle outcomes": {
-     "FAIL": 3,
-     "PASS": 2
+     "FAIL": 2,
+     "PASS": 3
     },
     "damage": {
      "PASS": 3
@@ -68,23 +69,23 @@
     "ai.first_departure_tick[Underworld]": "PASS",
     "ai.fleet_departures[Empire]": "PASS",
     "ai.fleet_departures[Rebel]": "FAIL",
-    "ai.fleet_departures[Underworld]": "PASS",
+    "ai.fleet_departures[Underworld]": "FAIL",
     "ai.fleet_targets[Empire]": "PASS",
     "ai.fleet_targets[Rebel]": "FAIL",
     "ai.fleet_targets[Underworld]": "PASS",
     "build.ticks[CRUSADER_GUNSHIP@FELUCIA]": "PASS",
-    "build.ticks[DESTROYER_DROID_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[INTERCEPTOR4_FRIGATE@THE_MAW]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@KAMINO]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
     "build.ticks[REBEL_INFANTRY_SQUAD@KAMINO]": "PASS",
-    "build.ticks[REBEL_INFANTRY_SQUAD@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_LIGHT_TANK_BRIGADE@YAVIN]": "PASS",
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@KAMINO]": "PASS",
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "PASS",
     "build.ticks[R_GALACTIC_TURBOLASER_TOWER_DEFENSES@YAVIN]": "PASS",
-    "build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]": "FAIL",
+    "build.ticks[UNDERWORLD_DISRUPTOR_MERC_SQUAD@NALHUTTA]": "PASS",
+    "build.ticks[UNDERWORLD_MERC_SQUAD@FELUCIA]": "PASS",
+    "build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]": "PASS",
     "build.ticks[UNDERWORLD_SABOTEUR_TEAM@NALHUTTA]": "PASS",
     "build.ticks[U_GROUND_PALACE@FELUCIA]": "PASS",
     "build.ticks[U_GROUND_PALACE@SHOLA]": "PASS",
@@ -94,7 +95,7 @@
     "econ.credits_at_13500[Rebel]": "PASS",
     "econ.credits_at_13500[Underworld]": "PASS",
     "econ.credits_at_4500[Empire]": "PASS",
-    "econ.credits_at_4500[Rebel]": "FAIL",
+    "econ.credits_at_4500[Rebel]": "PASS",
     "econ.credits_at_4500[Underworld]": "PASS",
     "econ.credits_at_9000[Empire]": "PASS",
     "econ.credits_at_9000[Rebel]": "PASS",
@@ -114,7 +115,7 @@
     "econ.income_cycle1[Underworld]": "FAIL",
     "econ.income_mean[Empire]": "PASS",
     "econ.income_mean[Rebel]": "FAIL",
-    "econ.income_mean[Underworld]": "PASS",
+    "econ.income_mean[Underworld]": "FAIL",
     "outcome.captures[Empire]": "PASS",
     "outcome.captures[Rebel]": "PASS",
     "outcome.captures[Underworld]": "PASS",
@@ -123,47 +124,43 @@
     "outcome.planets_final[Rebel]": "FAIL",
     "outcome.planets_final[Underworld]": "FAIL",
     "travel.hop_ticks[Rebel:CORELLIA->KUAT]": "PASS",
-    "travel.hop_ticks[Rebel:FELUCIA->KASHYYYK]": "PASS",
     "travel.hop_ticks[Rebel:KAMINO->MONCALIMARI]": "PASS",
-    "travel.hop_ticks[Rebel:KASHYYYK->FELUCIA]": "PASS",
     "travel.hop_ticks[Rebel:KASHYYYK->KUAT]": "PASS",
+    "travel.hop_ticks[Rebel:KASHYYYK->NALHUTTA]": "FAIL",
     "travel.hop_ticks[Rebel:KUAT->CORELLIA]": "PASS",
     "travel.hop_ticks[Rebel:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Rebel:MONCALIMARI->SHOLA]": "PASS",
-    "travel.hop_ticks[Rebel:NABOO->SHOLA]": "PASS",
     "travel.hop_ticks[Rebel:NABOO->TATOOINE]": "PASS",
     "travel.hop_ticks[Rebel:NALHUTTA->KASHYYYK]": "FAIL",
+    "travel.hop_ticks[Rebel:SHOLA->NABOO]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->NALHUTTA]": "PASS",
-    "travel.hop_ticks[Rebel:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Rebel:TATOOINE->CORELLIA]": "PASS",
-    "travel.hop_ticks[Rebel:YAVIN->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->KUAT]": "PASS",
-    "travel.hop_ticks[Underworld:KAMINO->MONCALIMARI]": "PASS",
-    "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "PASS",
+    "travel.hop_ticks[Underworld:CORELLIA->TATOOINE]": "FAIL",
+    "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "FAIL",
+    "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "FAIL",
+    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "FAIL",
     "travel.hop_ticks[Underworld:KUAT->KASHYYYK]": "PASS",
-    "travel.hop_ticks[Underworld:MONCALIMARI->KAMINO]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->SHOLA]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->YAVIN]": "PASS",
-    "travel.hop_ticks[Underworld:NABOO->SHOLA]": "PASS",
-    "travel.hop_ticks[Underworld:NABOO->TATOOINE]": "PASS",
-    "travel.hop_ticks[Underworld:NALHUTTA->KASHYYYK]": "FAIL",
+    "travel.hop_ticks[Underworld:NABOO->SHOLA]": "FAIL",
+    "travel.hop_ticks[Underworld:NABOO->TATOOINE]": "FAIL",
     "travel.hop_ticks[Underworld:NALHUTTA->SHOLA]": "FAIL",
-    "travel.hop_ticks[Underworld:SHOLA->MONCALIMARI]": "PASS",
-    "travel.hop_ticks[Underworld:SHOLA->NABOO]": "PASS",
+    "travel.hop_ticks[Underworld:SHOLA->NABOO]": "FAIL",
     "travel.hop_ticks[Underworld:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:TATOOINE->CORELLIA]": "PASS",
-    "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "PASS",
-    "travel.hop_ticks[Underworld:THE_MAW->KASHYYYK]": "PASS",
-    "travel.hop_ticks[Underworld:THE_MAW->SHOLA]": "FAIL",
+    "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "FAIL",
+    "travel.hop_ticks[Underworld:THE_MAW->KASHYYYK]": "FAIL",
+    "travel.hop_ticks[Underworld:THE_MAW->SHOLA]": "PASS",
     "travel.hop_ticks[Underworld:THE_MAW->YAVIN]": "PASS",
     "travel.hop_ticks[Underworld:YAVIN->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Underworld:YAVIN->THE_MAW]": "PASS"
    },
    "summary": {
     "AI choices": {
-     "FAIL": 2,
+     "FAIL": 3,
      "N/A": 1,
-     "PASS": 14
+     "PASS": 13
     },
     "battle outcomes": {
      "FAIL": 2,
@@ -177,8 +174,8 @@
      "PASS": 20
     },
     "timing": {
-     "FAIL": 6,
-     "PASS": 47
+     "FAIL": 12,
+     "PASS": 37
     }
    }
   }

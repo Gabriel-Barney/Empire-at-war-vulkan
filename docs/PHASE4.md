@@ -378,6 +378,24 @@ Produce_Force, and the following Move_To takes it along). [port] a fleet "not be
 a live fleet with contents (the sim removes an emptied fleet at once). Test accessor
 `GalacticAiWorld::task_force_fleet_object`. No behaviour change: no golden moves.
 
+**2026-11-12 (a2m t03, round 1): a repeated `<Function>` in a goal-function entry, last one wins** (marked "a2m r1" in
+`engine/ai/src/ai_definitions.cpp`). Vanilla `BasicDefensiveGalacticSet` lists `Generate_Magic_Space_Defense` with
+`<Function>Zero</Function>` and then `<Function>Needs_Magic_Space_Defense</Function>` (the only entry with two). The port
+kept the first, so the goal never scored; retail reads the entry through a field table with `Function` a converter scalar
+(`docs/re/A2K_T06_RE.md` §1.5 [H]) and a repeated scalar tag keeps its last occurrence (`docs/re/OBJECT_TYPES.md` §4.4 [H]
+for the type tables; [M] that the AI field table reader behaves the same). Retail evidence: in all four HotM reference runs
+the Rebel AI (Normal difficulty) gets ten free single-unit fleets at Yavin on mode frame 56, exactly the
+`GenerateMagicSpaceDefense.lua` task force (`Fighter | Bomber = 6`, `Corvette | Frigate = 4`: X-wing x5, Y-wing, two
+Nebulon-B, a gunboat and a corvette, power 8725), and a second one at Mon Calamari between 6000 and 13500. The port now
+runs the same plan at Yavin on tick 42 in 12 of 12 seeds and at Mon Calamari in 6 of 12. HotM Empire-human, 12 seeds:
+Rebel `build_count` median 24 -> 31, Shola captured 4/12 -> 7/12 (median tick 6759 -> 5934, retail 7498..9898), total
+FAIL 20 -> 18. Open (needs RE): the port's spawn picks the `Millennium_Falcon_Space` / `_Ground` variants (named hero,
+`Fighter | SpaceHero`, Behavior replaced by DUMMY_STARSHIP so not TRANSPORT) for most of the six fighter slots, and the
+hero steal leaves one of each, so the Yavin fleet has 7 units instead of 10; retail never spawns them (0 of about 18
+fighter picks over its runs), so some spawnability rule of AI_GALACTIC_2 §1.4 (the "hero already present" 0x3729f0 test,
+or the +0xF60 / +0xF80 counts) vetoes them and is not yet specified. Also open: the port's Underworld runs the same goal
+at Shola / Nal Hutta after tick 8400 in 4 of 12 seeds; retail's Underworld never does before 13501.
+
 **2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
 FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
 stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final
