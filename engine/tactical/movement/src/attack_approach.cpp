@@ -343,7 +343,7 @@ bool MovementSystem::attack_path(const Unit& lead, uint32_t mask, V2 centroid, V
 bool MovementSystem::arc_slot_test(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, float hx,
                                    float hy, V2 p) const {
     const Unit& lead = units_[idx[f.members[0]]];
-    const uint32_t mask = f.mask;
+    const uint32_t mask = f.best;  // bkm1 t03: 0x43a070 calls 0x4779e0 itself (not 0x414720's plan class)
     const V2 c = order.attack.c;
     if (!grid_.passable_world(p, mask)) return false;
     if (!zone_connected(regions_, mask, p, lead.m.pos)) return false;
@@ -425,7 +425,7 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
     if (l.empty()) return;
     const auto unslotted = [&](const LandForm& rf) {
         stats_.attack_unslotted += static_cast<uint32_t>(l.size());
-        if (!grid_.passable_world(c, rf.mask)) stats_.attack_unslotted_cell += static_cast<uint32_t>(l.size());
+        if (!grid_.passable_world(c, rf.best)) stats_.attack_unslotted_cell += static_cast<uint32_t>(l.size());
     };
     float r = 3.0e38f;
     for (const uint32_t i : idx)

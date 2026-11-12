@@ -85,6 +85,11 @@ add_executable(alamo_tactical_movement_b5_tests tests/test_movement_b5.cpp)
 target_link_libraries(alamo_tactical_movement_b5_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_b5_tests COMMAND alamo_tactical_movement_b5_tests)
 set_tests_properties(alamo_tactical_movement_b5_tests PROPERTIES TIMEOUT 300)
+# bkm1 (2026-11-12): the retail rules of backlog group bkm1 (formation class, lanes, 3-D brake lengths, secondary facing).
+add_executable(alamo_tactical_movement_bkm_tests tests/test_movement_bkm.cpp)
+target_link_libraries(alamo_tactical_movement_bkm_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_bkm_tests COMMAND alamo_tactical_movement_bkm_tests)
+set_tests_properties(alamo_tactical_movement_bkm_tests PROPERTIES TIMEOUT 300)
 # s78n t26.1: walking while deployed (MOVEMENT 3.2.1), the move order's skip of deployed manual deployers (6.2).
 add_executable(alamo_tactical_movement_t26_tests tests/test_movement_t26.cpp)
 target_link_libraries(alamo_tactical_movement_t26_tests PRIVATE alamo_tactical_movement alamo_test_support)

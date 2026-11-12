@@ -2335,6 +2335,36 @@ static void test_space_compose_boxes() {
     }
 }
 
+// bkm1 t05 (b0037, MOVEMENT §4.3 item 1 with its s78n t19 correction [H]): a space formation ranks its rows by the attack
+// range 0x3749d0 (shortest range in front), as on land. Two frigates of one formation with equal speed and type: by the
+// older speed key the tie goes to the lower id (1 in front); by range the 80-range unit 2 leads, 200-range unit 1 behind.
+static void test_space_rank_key() {
+    MovementConfig cfg;
+    cfg.mode = MoveMode::Space;
+    MovementSystem sys(cfg);
+    sys.space().set_box({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
+    for (const ObjectId id : {ObjectId{1}, ObjectId{2}}) {
+        UnitDesc d;
+        d.id = id;
+        d.pos = id == 1 ? V2{0.0f, 0.0f} : V2{0.0f, 40.0f};
+        d.max_speed = 4.0f;
+        d.turn_rate = 1.5f;
+        d.radius = 8.0f;
+        d.space_layer = kLayerFrigate;
+        d.space_layer_type = 0;
+        CHECK(sys.add_unit(d));
+    }
+    sys.set_attack_range_query([](ObjectId id) { return id == 2 ? 80.0f : 200.0f; });
+    SimRng rng(31);
+    MoveOrder o;
+    o.units = {1, 2};
+    o.destination = {1000.0f, 20.0f};
+    o.flags = kMoveFlagSkipValidation;  // the slot points themselves
+    sys.move(o, rng, 100);
+    const UnitView a = sys.view(1), b = sys.view(2);
+    CHECK(b.goal.x > a.goal.x);  // unit 2 (range 80) is the front row
+}
+
 // ---------------------------------------------------------------- OI tactical (PHASE4 S7 open items)
 static void test_oi_land() {
     // PathFrameDelay stagger (§1.6) with the FormationClass ctor draw (cu8j t01, correcting cu8i t02): the order draws
@@ -3895,6 +3925,7 @@ int main() {
     test_space_group();
     test_oi_land();  // OI tactical
     test_space_compose_boxes();  // s78n t10
+    test_space_rank_key();       // bkm1 t05
     test_oi_space();
     test_determinism();
     test_fighter_primitives();  // FIGHTER_FLYING §1-§5

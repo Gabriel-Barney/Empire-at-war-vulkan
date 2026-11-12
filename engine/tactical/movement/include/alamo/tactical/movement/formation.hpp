@@ -24,8 +24,8 @@
 // layout_formation (§4.3): ranks (Hero first; then the rank key ascending: the attack range 0x3749d0 (§4.3
 //   "Correction, s78n t19" [H]), so the shortest range goes in front; keys within tolerance T are one rank, T (in key
 //   units) starting at 0 and growing by 15 while >= 4 ranks remain, cap 4 steps [L]; equal keys by case-insensitive
-//   type name, then object id - the stable replacement of the retail unstable std::sort, §7. RankKey::MaxSpeed keeps
-//   the older max-speed key for space formations ([port] until a space parity pass)), rows built front to back (a row = one rank, candidates ordered by
+//   type name, then object id - the stable replacement of the retail unstable std::sort, §7. Space formations
+//   use the same key since bkm1 t05 (b0037); RankKey::MaxSpeed has no game caller), rows built front to back (a row = one rank, candidates ordered by
 //   forward projection descending, taken while the cumulative width <= 2 * half-width, overflow
 //   returned to the front, kept members re-sorted by lateral projection so units keep their
 //   left/right order), lateral placement gap = (2hw - sum widths) / (count + 1), rows stepping back

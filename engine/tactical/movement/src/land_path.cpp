@@ -241,7 +241,22 @@ struct LanePt {
     V2 p;      // the lane point
     float s;   // its arc length on the formation path
     V2 n;      // the direction its line is crossed in (the waypoint line's normal)
+    V2 o;      // bkm1 t01: its origin on the formation path
 };
+
+// bkm1 t01 (b0095, MOVEMENT §3.5.2 D, port choice (1) of PHASE4 s78p): 0x413340 tests each lane point alone, so a lane
+// segment shifted sideways by L can cross a pillar or a wall corner while both its points pass. Retail keeps the passable
+// formation path as the member's path and only steers toward the lane (the lane term), so its member never walks such a
+// segment; the port walks the lane, so a segment that fails the unit's class (the static line test 0x5a4c10) falls back
+// onto the formation path - its far point to its origin, and while the segment before it then fails, the point before
+// too, backwards. The formation path's segments pass the formation's class, which lies inside each member's.
+void lane_fallback(const PassabilityGrid& grid, std::vector<V2>& p, const std::vector<V2>& o, uint32_t mask) {
+    for (size_t j = 1; j < p.size(); ++j) {
+        if (line_passable(grid, p[j - 1], p[j], mask)) continue;
+        p[j] = o[j];
+        for (size_t k = j; k > 0 && !line_passable(grid, p[k - 1], p[k], mask); --k) p[k - 1] = o[k - 1];
+    }
+}
 // The lane with its arc lengths: one point per waypoint, plus (s78p [port]) inside a segment whose straight lane line fails
 // the unit's class (0x5a4c10), a point at each squeeze row (arc 30 k) whose offset differs from a neighbouring row's -
 // retail's member takes the row's offset as it walks (the row packs F +0xe0[k], the shift F +0xb0[k]), so a squeeze in the
@@ -256,7 +271,7 @@ std::vector<LanePt> lane_points(const PassabilityGrid& grid, std::span<const V2>
         const float s0 = s;
         if (i > 0) s += distance(fpath[i - 1], fpath[i]);
         const V2 n = lane_dir(fpath, i);
-        const LanePt w{lane_point(grid, no_grid, fpath[i], n, shape.offset(s), mask), s, n};
+        const LanePt w{lane_point(grid, no_grid, fpath[i], n, shape.offset(s), mask), s, n, fpath[i]};
         if (i > 0 && rows > 1 && !no_grid && s > s0 && !line_passable(grid, out.back().p, w.p, mask)) {
             const float l = s - s0;
             const V2 d{(fpath[i].x - fpath[i - 1].x) / l, (fpath[i].y - fpath[i - 1].y) / l};
@@ -265,10 +280,20 @@ std::vector<LanePt> lane_points(const PassabilityGrid& grid, std::span<const V2>
                 if (!(a > s0) || !(a < s)) continue;
                 const float o = row_offset(k);
                 if (o == row_offset(k - 1) && o == row_offset(k + 1)) continue;
-                out.push_back({lane_point(grid, no_grid, fpath[i - 1] + d * (a - s0), d, o, mask), a, d});
+                const V2 ro = fpath[i - 1] + d * (a - s0);
+                out.push_back({lane_point(grid, no_grid, ro, d, o, mask), a, d, ro});
             }
         }
         out.push_back(w);
+    }
+    if (!no_grid && out.size() > 1) {
+        std::vector<V2> p(out.size()), o(out.size());
+        for (size_t j = 0; j < out.size(); ++j) {
+            p[j] = out[j].p;
+            o[j] = out[j].o;
+        }
+        lane_fallback(grid, p, o, mask);
+        for (size_t j = 0; j < out.size(); ++j) out[j].p = p[j];
     }
     return out;
 }
@@ -283,6 +308,7 @@ std::vector<V2> formation_lane(const PassabilityGrid& grid, std::span<const V2> 
 std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, float back,
                             uint32_t mask, V2 pos) {
     std::vector<V2> out{pos};
+    std::vector<V2> org{pos};  // bkm1 t01: each point's origin on the formation path (the start: itself)
     const size_t n = fpath.size();
     if (n == 0) return out;
     const std::vector<LanePt> lane = lane_points(grid, fpath, shape, mask);
@@ -292,6 +318,7 @@ std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpa
         if (!(total - lane[i].s > back)) break;  // rest falls along the path
         if (leading && dot(pos - lane[i].p, lane[i].n) >= 0.0f) {
             out[0] = lane[i].p;  // passed: the lane goes on from this point
+            org[0] = lane[i].o;
             passed = true;
             continue;
         }
@@ -300,8 +327,12 @@ std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpa
         // pull-in at a sharp corner) would turn the member back: skipped ([port])
         if (out.size() > 1 && !(dot(lane[i].p - out.back(), lane[i].n) > 0.0f)) continue;
         out.push_back(lane[i].p);
+        org.push_back(lane[i].o);
     }
-    if (out.size() == 1 && !passed) out[0] = lane[0].p;
+    if (out.size() == 1 && !passed) {
+        out[0] = lane[0].p;
+        org[0] = lane[0].o;
+    }
     // the end: arc length q = total - back on the formation path; the segment's direction (exact normalise). A front-row
     // member (back < 0: the layout centres its depth) ends ahead of the path's end, along the last segment.
     const float q = total - back;
@@ -335,7 +366,10 @@ std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpa
             if (!found) o = fpath[n - 1] + d * (q - acc);  // past the end: d is the last segment's direction
         }
     }
-    out.push_back(lane_point(grid, grid.width() == 0 || grid.height() == 0, o, d, shape.offset(q), mask));
+    const bool no_grid = grid.width() == 0 || grid.height() == 0;
+    out.push_back(lane_point(grid, no_grid, o, d, shape.offset(q), mask));
+    org.push_back(o);
+    if (!no_grid) lane_fallback(grid, out, org, mask);  // bkm1 t01: the points kept and the end, as lane_points
     lane_start(out, pos);
     return out;
 }

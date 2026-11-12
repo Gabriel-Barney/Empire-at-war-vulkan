@@ -1690,8 +1690,18 @@ private:
         // s78n t26 review round 2 (MOVEMENT §4.3.1 item 7 (c), §4.3.2 item 5: 0x4779e0): the formation's movement class
         // mask - the class with the most mask bits among those inside the intersection of the members' masks
         uint32_t mask = kPassClear;
+        // bkm1 t03 (b0035): the members' mask intersection and 0x4779e0's class; `mask` is the plan class 0x414720 derives
+        // from them for `centre` (shield_free_mask)
+        uint32_t inter = ~0u;
+        uint32_t best = kPassClear;
     };
-    uint32_t formation_class_mask(const std::vector<uint32_t>& idx, const std::vector<uint32_t>& members) const;
+    // s78n t26 review round 2 / bkm1 t03: the members' intersection, 0x4779e0's class and 0x414720's plan class for `goal`
+    void set_form_mask(const std::vector<uint32_t>& idx, LandForm& lf, V2 goal) const;
+    // bkm1 t03 (b0035): 0x414720's plan class - `best` (0x4779e0's pick) or, when the goal is zone-connected to the lead
+    // for it (or validates) and also for the best class inside `inter` without the Shield bit (0x477b00), that class
+    uint32_t shield_free_mask(uint32_t inter, uint32_t best, V2 lead, V2 goal) const;
+    uint32_t best_class_within(uint32_t inter, bool& found) const;
+    uint32_t plan_mask(const Unit& u) const;  // a single plan: the unit's own class through shield_free_mask
     void destination_check(const MoveOrder& order, const std::vector<uint32_t>& idx, std::vector<LandForm>& forms, V2 group_c);
     // s78n t20 batch 2: `forced` = the forced pass after n = 40 (no try accepted: the last try that reached the object
     // test, or Dn, is taken and true returned)
