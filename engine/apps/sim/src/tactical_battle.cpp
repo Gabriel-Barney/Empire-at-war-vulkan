@@ -1038,6 +1038,15 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         combat_->set_shield_sides_query([this](tactical::Vec3 a, tactical::Vec3 b, bool shield_damage) {
             return opposite_sides_of_shield(sv(a), sv(b), -1, true, shield_damage);
         });
+    if (movement_) {
+        // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): the formation layout's rank key, Get attack range
+        // 0x3749d0 (the value land_attack_order reads); a squad container through its first live member. bkm1 t05
+        // (b0037): space formations rank by it too
+        movement_->set_attack_range_query([this](mv::ObjectId id) {
+            const objects::ObjectId unit = attack_lead(id);
+            return unit != objects::kNoObjectId && combat_->has_unit(unit) ? combat_->attack_range(unit) : 0.0f;
+        });
+    }
     if (!space_ && movement_) {
         // s78n t25.3 (MOVEMENT §4.3.2 items 6 / 7, 0x40edd0 / 0x410e90; TACTICAL_COMBAT §2.8 B 4): the movement's fire
         // test - can the mover hit the target from p: slots 43 / 46 and the line of fire from p at the ground height
@@ -1065,6 +1074,11 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         movement_->set_attack_range_query([this](mv::ObjectId id) {
             const objects::ObjectId unit = attack_lead(id);
             return unit != objects::kNoObjectId && combat_->has_unit(unit) ? combat_->attack_range(unit) : 0.0f;
+        });
+        // bkm1 t04 (MOVEMENT §4.2 step 2 item 7 test 9): Targeting_Min_Attack_Distance for the recruitment's engagement test
+        movement_->set_min_attack_distance_query([this](mv::ObjectId id) {
+            const objects::ObjectId unit = attack_lead(id);
+            return unit != objects::kNoObjectId && combat_->has_unit(unit) ? combat_->min_attack_distance(unit) : 0.0f;
         });
     }
     combat_->bind_rng(&rng);  // Take_Damage listeners called outside the tick (host damage) draw here

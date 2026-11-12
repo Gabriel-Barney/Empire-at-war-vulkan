@@ -186,13 +186,16 @@ MovementSystem::DeployResult MovementSystem::deploy(ObjectId id, bool on, uint32
 
 // ---- s78n t26.1 (MOVEMENT §3.2.1): walking while deployed ----
 
-float MovementSystem::path_length_3d(std::span<const V2> path) const {
-    // 0x54f610: the summed 3-D length of every segment ([port] the land path is 2-D; the heights come from the height hook
-    // at its points, 0 without one).
+float MovementSystem::path_length_3d(std::span<const V2> path, float z0, float z1) {
+    // 0x54f610: the summed 3-D length of every segment from the stored waypoint heights. bkm1 t06 (b0051, MOVEMENT §3.5.2
+    // "waypoint z"): the pathfinder stores z = 0 at every point, so a planned path (and a lane, a push path) is exactly its
+    // 2-D length on any terrain; only a slot leg's G (z1) and a forced path's two ends (z0, z1) carry a height. Before bkm1
+    // the port sampled the terrain at every point.
     float l = 0.0f;
     for (size_t k = 1; k < path.size(); ++k) {
         const V2 a = path[k - 1], b = path[k];
-        const float dz = height_ ? height_(b.x, b.y) - height_(a.x, a.y) : 0.0f;
+        const float za = k == 1 ? z0 : 0.0f, zb = k + 1 == path.size() ? z1 : 0.0f;
+        const float dz = zb - za;
         const float dx = b.x - a.x, dy = b.y - a.y;
         l += std::sqrt(dx * dx + dy * dy + dz * dz);
     }

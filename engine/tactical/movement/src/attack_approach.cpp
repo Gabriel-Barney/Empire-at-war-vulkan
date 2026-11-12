@@ -343,7 +343,7 @@ bool MovementSystem::attack_path(const Unit& lead, uint32_t mask, V2 centroid, V
 bool MovementSystem::arc_slot_test(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, float hx,
                                    float hy, V2 p) const {
     const Unit& lead = units_[idx[f.members[0]]];
-    const uint32_t mask = f.mask;
+    const uint32_t mask = f.best;  // bkm1 t03: 0x43a070 calls 0x4779e0 itself (not 0x414720's plan class)
     const V2 c = order.attack.c;
     if (!grid_.passable_world(p, mask)) return false;
     if (!zone_connected(regions_, mask, p, lead.m.pos)) return false;
@@ -425,7 +425,7 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
     if (l.empty()) return;
     const auto unslotted = [&](const LandForm& rf) {
         stats_.attack_unslotted += static_cast<uint32_t>(l.size());
-        if (!grid_.passable_world(c, rf.mask)) stats_.attack_unslotted_cell += static_cast<uint32_t>(l.size());
+        if (!grid_.passable_world(c, rf.best)) stats_.attack_unslotted_cell += static_cast<uint32_t>(l.size());
     };
     float r = 3.0e38f;
     for (const uint32_t i : idx)
@@ -547,7 +547,9 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         }
     }
     V2 g = order.attack.g;
+    const V2 g_ordered = g;  // bkm1 t06: attack_path's zone re-validation 0x50f480 may replace it (then z = 0)
     std::vector<V2> path;
+    float fz = 0.0f;  // bkm1 t06: the stored height of the path's last point (a slot leg's G)
     if (f.members.size() > 1) ++stats_.formation_paths;  // s78p
     if (!attack_path(lead, f.mask, f.centroid, g, path)) {
         if (f.members.size() > 1) {
@@ -594,20 +596,27 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
                 if (lp.ok && lp.points.size() >= 2 && dot(first_dir(lp.points), first_dir(path)) > 0.0f) {
                     path = std::move(lp.points);
                     path.push_back(g);
+                    // bkm1 t06 (b0051, MOVEMENT §3.5.2 "waypoint z" item 3): G goes in with its xyz, Q' and the rest z = 0;
+                    // G's z = the target's (C's) height ([port] the terrain height at a staged G); a G replaced by the
+                    // zone re-validation has z = 0
+                    fz = !(g == g_ordered) ? 0.0f : g == order.attack.c ? order.attack.cz : terrain(g);
                     taken = true;
                 }
             }
         }
         ++(taken ? stats_.attack_legs : stats_.attack_leg_refused);
     }
+    float b0 = 0.0f;  // bkm1 t02: the front row's slot depth (MOVEMENT §4.3.3 item 2: retail's front row is depth 0)
+    for (const Slot& s : f.slots) b0 = std::min(b0, s.back);
     std::vector<V2> uncut;  // the path before the fire trim's cut (empty: no trim)
     float goal_s = 0.0f;
     if (order.attack.trim && fire_test_) {
         std::vector<TrimMember> tm;
-        // s78o (b0071): a member without TARGETING (the host's LandAttackUnit::targeting) is not tested
+        // s78o (b0071): a member without TARGETING (the host's LandAttackUnit::targeting) is not tested. bkm1 t02 (review):
+        // each at its depth behind the front row (b0), as its lane end (set_lanes) - the point tested is where it stops
         for (const Slot& s : f.slots) {
             const LandAttackUnit* e = attack_entry(order, units_[idx[s.member]].d.id);
-            tm.push_back({s.member, -s.back, s.lateral, e == nullptr || e->targeting});
+            tm.push_back({s.member, -(s.back - b0), s.lateral, e == nullptr || e->targeting});
         }
         const float total = path_length(path);
         const float guard_range = cfg_.constants.land_guard_range;
@@ -621,6 +630,17 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         // path is its first node alone and has no direction; the uncut one extends backwards along its first segment)
         uncut = path;
         cut_points(path, keep);
+        // bkm1 t06: the cut 0x54e780 interpolates z between the two waypoints it cuts between ([port] by the 2-D fraction);
+        // a cut before the last segment leaves only z = 0 points
+        if (fz != 0.0f) {
+            const size_t n0 = uncut.size();
+            if (path.size() < n0) {
+                fz = 0.0f;
+            } else if (n0 >= 2 && !(path.back() == uncut.back())) {
+                const float l0 = distance(uncut[n0 - 2], uncut[n0 - 1]);
+                fz = l0 > 0.0f ? fz * (distance(uncut[n0 - 2], path.back()) / l0) : 0.0f;
+            }
+        }
         goal_s = keep;
         ++stats_.attack_trims;
         if (!(keep > 0.0f)) ++stats_.attack_trims_first;
@@ -632,7 +652,7 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         Unit& x = units_[idx[s.member]];
         if (is_air(x) || kept[s.member]) continue;
         V2 goal = path.back();
-        trim_point(lay, goal_s, -s.back, s.lateral, true, goal);
+        trim_point(lay, goal_s, -(s.back - b0), s.lateral, true, goal);
         x.goal = goal;
         x.self_goal = goal;
         x.has_goal = true;
@@ -648,12 +668,12 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
     }
     // s78p (b0049, MOVEMENT §3.5.2 D / G): the members of a formation of 2+ follow their lanes on the formation path (the slot
     // leg's and the fire trim's cut path), each ending at its slot point above ([port] the members planned singly before)
-    if (f.members.size() > 1 && path.size() >= 2) set_lanes(idx, f, path, kept, mem);
+    if (f.members.size() > 1 && path.size() >= 2) set_lanes(idx, f, path, kept, mem, fz);
 }
 
 void MovementSystem::set_lanes(const std::vector<uint32_t>& idx, const LandForm& f, std::span<const V2> fpath,
-                               const std::vector<uint8_t>& kept, std::span<const FormationMember> mem) {
-    const float d = path_length_3d(fpath);
+                               const std::vector<uint8_t>& kept, std::span<const FormationMember> mem, float fz) {
+    const float d = path_length_3d(fpath, 0.0f, fz);
     // The corridor squeeze 0x412210 of the formation on its path (land formations: type 1, the clearance probe [M]): W = 2 x
     // the layout's half-width +0x254 (x 20), D = the slots' depth in cells ([port] for 2 x +0x250 / 20), the formation's
     // class. Each narrower width-table entry gets its own pack (F +0xe0[k]): the layout again with half the entry's width
@@ -694,9 +714,12 @@ void MovementSystem::set_lanes(const std::vector<uint32_t>& idx, const LandForm&
         sh.shift = sq.shift;
         sh.entry = sq.entry;
         sh.entry_left = el;
-        x.lane = member_lane(grid_, fpath, sh, s.back, x.lp.mask, x.m.pos);
+        // bkm1 t02 (b0096, MOVEMENT §4.3.3 item 2): the depth behind the front row (retail's front row is depth 0, the
+        // port's layout centres its rows)
+        x.lane = member_lane(grid_, fpath, sh, s.back - b0, x.lp.mask, x.m.pos);
         x.lane_d = d;
-        x.goal = x.lane.back();  // the slot at the path's end (an attack member: its trim point, pulled in)
+        x.lane_z = fz;  // [port] the lane's end is G's lateral offset: it keeps G's height
+        x.goal = x.lane.back();  // bkm1 t02: its stop point (MOVEMENT §4.3.3; an attack member: around the cut end)
         x.self_goal = x.goal;
         if (x.d.locomotor != LocomotorKind::Default) x.sm.dest = x.goal;
         ++stats_.lanes_set;

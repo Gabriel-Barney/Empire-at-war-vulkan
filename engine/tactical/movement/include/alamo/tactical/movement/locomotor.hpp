@@ -59,6 +59,12 @@ struct LocomotorParams {
     float turn_rate = 0.0f;   // degrees / frame
     uint32_t mask = kPassClear;
     float close_enough_angle = 180.0f;
+    // bkm1 t08 (b0050, MOVEMENT §3.5.3): UseSecondaryFacing and its coefficients (UnitDesc, raw type values)
+    bool secondary = false;
+    float sec_angle = 90.0f;
+    float sec_min = 0.0f;
+    float sec_max = 1.0f;
+    float sec_lookahead = 0.0f;
 };
 
 struct LandMotion {
@@ -91,6 +97,18 @@ struct LandMotion {
     float wt_rate = 0.0f;
     float wt_f4 = 0.0f;
     float wt_f0 = 0.0f;
+    // bkm1 t06 (b0051, MOVEMENT §3.5.2 "waypoint z" items 3-4; save version 31): the stored height of the path's last waypoint
+    // while path.back() == end_at - every other waypoint is stored with z = 0 (a pathfinder path, a lane, a push path; the
+    // pathfinder drops the heights). Non-zero only on a slot-leg path (G appended with the target's height, interpolated by a
+    // fire-trim cut on that segment), so C.11 sums that last segment 3-D: sqrt(l^2 + end_z^2).
+    float end_z = 0.0f;
+    V2 end_at;
+    // bkm1 t08 (b0050, MOVEMENT §3.5.3; save version 31): the secondary yaw Y2 (Walk pack +0x270, degrees), copied from the
+    // orientation when the Walk attaches (add_unit, a locomotor swap) and never reset after: only stepped - in the move
+    // step with B2 toward the lookahead yaw w1, in the turn in place 0x10 toward its w at r x SecondaryTurnInPlaceROTCoefficient.
+    // Read only by the B2 angle and the arrival turn's reached rule ([port] the formation block pop's snap to Y2, 0x4105a0,
+    // is not modelled: the port has no multi-block land formation). Every unit carries it; only UseSecondaryFacing reads it.
+    float yaw2 = 0.0f;
 };
 
 // s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition" [H], §3.5.2 F): the clip data of a Walk_Transition

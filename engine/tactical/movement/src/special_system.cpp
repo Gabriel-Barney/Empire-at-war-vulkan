@@ -56,6 +56,7 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     u.m.escape_until = 0;
     u.m.speed = 0.0f;
     u.m.state = LocoState::WalkStopped;
+    u.m.yaw2 = u.m.yaw;  // bkm1 t08 (MOVEMENT §3.5.3 item 3 [M]): the new locomotor's Initialise copies the orientation
     u.following = false;
     arrival_reset(u);  // s78l t02
     u.wps.clear();
