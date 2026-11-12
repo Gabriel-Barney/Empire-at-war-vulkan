@@ -800,14 +800,15 @@ it sets the auto-resolve retreat instead) and AI task forces (0x5fdd50).
 
 ### 3.5 Credits, loot, heroes
 
-- A planet captured through the ownership change pays the capture bonus of GALACTIC_ECONOMY §4.2 (step 6). [M]
-- **Corrected 2026-11-12 (a2m r2):** the earlier line "no credit reward is paid by the battle code itself" is wrong for
-  auto-resolve. Retail HotM traces show the Underworld paid the bounty of every enemy object destroyed in its galactic
-  auto-resolve battles, winner or loser (310 at frame 7162, 585 at 7497, exact per-object sums;
-  `A2M_R2_UW_BOUNTY_TRACE.md` §1 [H for the amounts]). The bounty comes from a `Bounty_On_Faction_Ability`
-  (`Underworld_Racketeering_Salvage_Effect` on the Underworld's Racketeering corruption upgrade), not from the battle
-  code; objects removed by an ownership change pay nothing [M]. The call site from the kill recording (§4.4, 0x60da50)
-  to the bounty function 0x392600 is not traced. Port: `docs/PHASE4.md` "a2m r2".
+- **Corrected 2026-11-12 (`A2M_R2_RE_B.md` §2) [H]:** units killed by the auto-resolve pay a **bounty**.
+  - The path is the death handler 0x39bdb0 → 0x392600. The killer is the other side's first combatant.
+  - In galactic mode the killer is paid when two conditions hold: its faction has `Benefits_From_Corruption`, and the
+    dying object's planet is corrupted with Racketeering (type 3).
+  - Alternatively, when the victim is Underworld, the killer is paid if it owns NalHutta.
+  - The amount is the full type bounty, paid per object.
+  - Galactic starbases and the planet's structure lists pay nothing.
+  The sentence "No credit reward is paid by the battle code itself" is wrong for bounty. A planet captured through the ownership change
+  pays the capture bonus of GALACTIC_ECONOMY §4.2 (step 6). [M]
 - Heroes are ordinary units for survival; auto-resolve picks hero-carrying combatants first (§4.4) and
   the result text adds `TEXT_AR_HERO_LOSS` per dead named hero. Overrun is blocked by a hero (§1.6).
 - Survivor health write-back from tactical to galactic objects was not located (open item 1).

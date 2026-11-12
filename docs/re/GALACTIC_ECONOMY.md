@@ -421,7 +421,9 @@ The production service is reached through the galactic store's "planet productio
   (0x403900):
   - each takes a refund flag;
   - removing index 0 starts the next entry;
-  - the UI cancel (`CommandBarClass::Cancel_Production` 0x3cb2f0) passes refund = true.
+  - the UI cancel (`CommandBarClass::Cancel_Production` 0x3cb2f0) passes refund = true;
+  - the AI also cancels with refund = true. 0x53ba60 removes the head entry of a queue whose AI build task ended without
+    being taken by the PAYG reclaim (`A2M_R2_RE_B.md` §1, added 2026-11-12).
   
   [H]
 - **Re-evaluation** (0x402490 ground, 0x402660 space; argument = the current ground/star base level):

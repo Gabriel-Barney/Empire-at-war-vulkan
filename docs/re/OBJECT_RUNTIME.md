@@ -266,7 +266,8 @@ found by ID. [H] (Not done while the store is shutting down, GOM +0x63D.)
 
 **If the counterpart has the same type:**
 - it gets +0x3A0 |= 0x04;
-- its byte +0x330 is copied from the dying object (meaning not identified [L]).
+- its byte +0x330 is copied from the dying object. **Meaning (2026-11-12, `A2M_R2_RE_B.md` §2.1) [H]:** the killer player
+  id. The death handler 0x39bdb0 writes it, and so does the planet-structure removal 0x4bb4a0. The bounty 0x392600 reads it.
 
 **Otherwise the counterpart is a container:**
 - a FLEET (FleetDataPack at +0xC0), or a TRANSPORT (TransportDataPack at +0xC8; galactic transports carry ground
