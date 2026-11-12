@@ -18,7 +18,7 @@ Notation: N = number of objects in the queried set, G = number of goal types, T 
      - recomputes budget-category weights (`AIBudgetClass::Recompute_Category_Weights` on the embedded budget at `+0x190`);
      - commits the proposed set into the active set (`Commit_Proposed_Goals`);
      - clears the flag;
-     - recomputes the per-service evaluation quota `param[0x2f]` as `ceil(evaluations_last_pass / (const * 5))`, clamped to 1..`20/num_players`;
+     - recomputes the per-service evaluation quota `param[0x2f]` as `ceil(evaluations_last_pass / (FPS * 5))`, capped at `(int)(20 / max(1, players - active humans) + 0.5)` and at least 1 (players = the whole PlayerList; A2M_R2_RE_A §2);
      - resets the evaluation counter;
      - reloads the countdown from virtual slot 11 (`+0x58`).
 - **Cost:** amortized and adaptive, so a full proposal pass is spread over several ticks. Every commit is a burst: weight recompute + sort + resolve.
