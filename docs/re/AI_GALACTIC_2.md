@@ -245,7 +245,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 - !MagicPlan:
   - if pop cap is enabled and the type's pop (0x373500) > remaining pop (0x140b3a530) → rec.prodScore = 1e18 (veto);
   - return rec.prodScore. Production's IsPermanentVeto is true, so a pop or slot veto erases the candidate.
-- MagicPlan (galactic): veto when the type is not spawnable (+0x2A or +0x29; non-hero with cost < 1; behaviour 5 (TRANSPORT); tech > 5; 0x375270; a hero already present 0x3729f0; player 0x282550 / 0x282510 locks; unique +0xC1 without 0x282580; generic 0x5C/0x5B; +0xF60 / +0xF80 counts; or not a company/fleet unit and not a 0x5F/0x60 structure). Otherwise return **one synced float draw in [0,1]** (0x5324d0).
+- MagicPlan (galactic): veto when the type is not spawnable (+0x2A or +0x29; non-hero with cost < 1; behaviour 5 (TRANSPORT); tech > 5; 0x375270; a named hero (+0x13) with a space model 0x3729f0(T, 2) (type +0x2a8, from Space_Model_Name; not "a hero already present": bkg1 b0117, `BKG1_RE_ANSWERS.md` 2); player 0x282550 / 0x282510 locks; unique +0xC1 without 0x282580; generic 0x5C/0x5B; +0xF60 / +0xF80 counts; or not a company/fleet unit and not a 0x5F/0x60 structure). Otherwise return **one synced float draw in [0,1]** (0x5324d0).
 
 *Commit* 0x726390: for a produced unit, remaining pop −= pop(T); the structure counters 0x140b3a534 (0x5F) and 0x140b3a540 (0x60) += 1 [H].
 
