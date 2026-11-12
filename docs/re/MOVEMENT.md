@@ -2482,6 +2482,8 @@ locomotors and forced paths; `0x5a0550` beyond its last two points.
 **Port note:** the rank sort is unstable. Use a stable sort with a final tie-break on object ID. Exact retail tie order cannot be reproduced without MSVC's introsort; ties are rare because of the name tie-break.
 
 #### 4.3.2 Attack approach on land: arc slots, the slot leg and the fire trim (s78n t20 RE, 2026-11-10) [H unless tagged]
+
+**bkr1 (2026-11-12): see `docs/re/BKR1_RE_ANSWERS.md` Q7** for guard blocks: never staged (0x40e260 acts only on a non-guard top with an object; item 6 means "non-guard top"), trim start g = L except a LAND_OBSTACLE guard object (range 150 + 0x397780(T)), guard slots through 0x438c10 (members[0], strict 2-D, min(range, 150)), and q on a line blocked at once (same-region shortcut, halving above 40). [H]
 Read from `0x43c1b0`, `0x438c10`, `0x43d380`, `0x43b520`, `0x43a070`, `0x43b210`, `0x4f6e40`, `0x411640`,
 `0x41fd30`, `0x41c1a0`, `0x417520`, `0x40e260`, `0x40eb90`, `0x410e90`, `0x40f7c0`, `0x40edd0`, `0x410a60`,
 `0x5a4c10` / `0x5a50d0` / `0x5a5810` / `0x5a51f0`, `0x567350`, `0x568340`, `0x583150`, `0x5833e0`, `0x583930`.
@@ -2652,6 +2654,8 @@ position finder `0x440f90` of the staging; the value the line test returns as "d
 blocked; whether `0x411640`'s fallback size (mode-0 plan failed) is ever used for an attack block; block +0x5f.
 
 #### 4.3.3 Where each member stops: the formation path, the lane and the end shift (bkm1 RE, 2026-11-12) [H unless tagged]
+
+**bkr1 (2026-11-12): see `docs/re/BKR1_RE_ANSWERS.md` Q3 / Q6**: the value written "ψ = F +0x23c" in this section is FormationClass +0x24c; FormationClass +0x23c is the int formation rank that 0x439360 gives every Land-layer formation of an order (goal projection on the order axis, front-most first; fastest first with order flag 0x80), used by the same-coordinator overtake test. The plan reads the tracker flags taken at the start of the frame (Q6). [H]
 Read from the plan member loop of `0x41c1a0`, `0x411c40`, `0x42c680`, `0x413340`, `0x5c46a0`, `0x5c5060` /
 `0x5c4ec0`, `0x41dbb0`, `0x41afe0`, `0x41b770`, `0x42d440`, `0x411980`, `0x41ece0`. F = the formation, its path
 W = wp[0 … n−1] (ending exactly on the block goal G, §4.3.1 item 7, or on the fire-trim cut point, §4.3.2 item
@@ -4125,6 +4129,8 @@ one push attempt, only when the victim scatters; then (or otherwise) the crusher
 4 until the contact prediction fails; no hold, cut, repath or retry.
 
 #### 5.4.6 MovingVsMoving for pairs that are not two Infantry / Bike movers (s78n t19 RE, 2026-11-10) [H unless tagged]
+
+**bkr1 (2026-11-12) correction, see `docs/re/BKR1_RE_ANSWERS.md` Q1**: row 15's "exactly one record" counts only state-15 MovingVsMoving records whose master is M (0x505630 -> 0x680e80), not every record of M; the detour flag is (yaw_M - yaw_S) mod 360 < 90; S is always an obstacle of the Path Around set (0x67d580). Retail has no Starved timeout. Q3: the head-on tie-break measure 0x41a5c0 is a scalar size, ties go to member-vector index 0, +0x3a0 bit 2 is the removed bit. [H]
 Read from `0x67f7b0` (decompile and the disassembly of the whole non-Infantry part with its jump table `0x6803e0`
 / `0x6803f4`), `0x682d00`, `0x683140`, `0x682e80`, `0x677650`, `0x683260`, `0x679750`, `0x6814f0`, `0x680510`,
 `0x6807e0`, `0x680650`, `0x680c00`, `0x681d30`, `0x681ef0`, `0x682170`, `0x682510`, `0x6826f0`, `0x682930`,
