@@ -363,7 +363,8 @@ MovementBlockStatus holds that one fleet, so members in other fleets stay where 
 launches a surface member at the stage into orbit (TRANSPORTS_TO_ORBIT, [H state; M name]) and merges into the FleetObject
 when it is stationary at the stage. [port] choices: the election is re-checked lazily when Move_To runs (no signal hooks);
 the FleetObject is re-elected when it is dead or holds no member any more (the [M] reading of signal 0x1b; without it the
-Underworld shared home fleet was moved instead of the hero's split fleet). AI world save version 8 (6..8 read). HotM
+Underworld shared home fleet was moved instead of the hero's split fleet; both choices superseded 2026-11-12 by bkg2
+b0097, below). AI world save version 8 (6..8 read). HotM
 Empire-human seed 0: Rebel `credits_at_13500` 1890 -> 805 and `build_count` 19 -> 23 (both PASS now); Shola is taken at
 5970 (retail 7498 / 8214), so the Rebel `Remove_Corruption @Shola` plan flies Han Solo's Millennium Falcon (Hyperspace_Speed
 2.0) Naboo -> Shola in 70 ticks, a leg retail never flies (retail launches the Falcon at Naboo at 6293..7261 and keeps it
@@ -377,6 +378,45 @@ reading; Move_To then moves the other member's fleet and leaves the old fleet's 
 Produce_Force, and the following Move_To takes it along). [port] a fleet "not being removed" (+0x3a0 bit 2) is read as
 a live fleet with contents (the sim removes an emptied fleet at once). Test accessor
 `GalacticAiWorld::task_force_fleet_object`. No behaviour change: no golden moves.
+
+**2026-11-12 (bkg2): galactic task-force ports** (answers `docs/re/BKG1_RE_ANSWERS.md` §1-2 and §9-10; marked
+"bkg2" in `engine/ai/src/galactic_ai.cpp`, `galactic_build.cpp`, `engine/galactic/src/campaign.cpp`).
+- **b0097 FleetObject election is stored state.** `tf_join` (Add_Force) elects the unit's fleet while TF +0x120 is null;
+  `tf_launch` elects after each launch (Launch_Units signal 5 and the build task's launch state, set-if-null 0x6d05c0); a
+  sync task force elects at its split departure. `tf_fleet_object` re-elects only when the stored fleet is dead (signal
+  0x10) and drops it when no member is left; a live fleet that no longer holds a member keeps its place (0x1b never
+  re-elects, [H]). `resolve_claim` now splits a sync member before it joins, so the join elects the split fleet, as retail
+  calls Add_Force after PRE_PATH_SEPERATE. The per-player sweep in `claim_units` settles the election every service, so the
+  hashed value no longer depends on read timing. Test `test_fleet_object_reelection` now expects the 0x1b case to keep
+  the old FleetObject.
+- **b0101 gather.** Produce_Force waits for every member at the stage (WAIT_FOR_ALL) before it launches the surface
+  members (TRANSPORTS_TO_ORBIT), then merges once they are in orbit (READY_TO_MERGE). A launched jumper forms a fleet of
+  its own and merges later, as retail's op 0; a non-jumper stays in the orbit fleet [port, as a2m t02].
+- **b0099 Unit_Destroyed.** `prune_tf` records each lost member; `drain_lost_members` raises PlanEvent::UnitDestroyed
+  (event 2, the member as argument) before the No_Units_Remaining test, re-finding the task force after each Lua call.
+  `write` / `hash` assert that the lost lists are empty.
+- **b0121 blockade after production.** A finished ground unit whose build planet is under blockade fails its build task
+  ("blockaded": Production_Failed) and goes back to the free store (GROUND_UNIT_PRODUCTION 0x648120, [H]); Launch_Units
+  ends with "under blockade, can't launch units" for a blockaded planet. A hostile fleet does not fail an item in
+  production (only a starbase head is cancelled, which the port had), and a released goal's builds already end as §10
+  says: nothing else to port.
+- **b0125 target political control** (`Campaign::target_political_control`): the largest presence (ground-base level,
+  troops 1, starbase level, orbital claim, capital), the planet type's Political_Control leaning (negative for a faction
+  other than Political_Faction), up to 8 structure Political_Control values and the route gains, clamped to [1 with a
+  physical owner else 0, the faction's Planet_Max_Political_Control_For_Faction or 5], then [0, 5]. Parsed in
+  `galactic_rules.cpp`. `derive_owner` is split into `physical_owner` + leaning (same behaviour). The vanilla income curve
+  is flat above 1, so no galactic metric moves; the AI token TargetPoliticalControl reads the new values.
+- **b0003** was ported in a2m t05; [port] the hardpoint minimum of Setup A's health test is left out because the galactic
+  store keeps no hardpoint health (every unit counts at full health).
+- **b0100** [port, M]: the stand-in for TF +0x60 (member types, wanted types, Queued / Producing builds) leaves out Failed
+  builds. Retail erases an entry only on member removal, so No_Units_Remaining can fire earlier in the port when a task
+  force holds only a failed build of a counted type. Matching it needs a saved per-task-force entry list built from the
+  plan solve; the port erases Finished / Failed build tasks at the end of each service, so that list does not exist yet.
+- **b0108** checked, no change: `AiBudget::readd` already subtracts need = request + allocation - available as Add goal
+  0x610d30 does, so queued unpaid PAYG items are counted. The remaining NalHutta difference (DESTROYER_DROID_COMPANY
+  build.ticks) needs the retail budget probe of A2M_R3_RE_A §5 (backlog, Gabriel).
+Parity (hotm_galactic, 12 seeds, against `baseline_seeds.json`): ai.fleet_targets[Rebel] now PASS; see the roadmap for the
+numbers. Goldens: see the landing commit.
 
 **2026-11-12 (a2m t03, round 1): a repeated `<Function>` in a goal-function entry, last one wins** (marked "a2m r1" in
 `engine/ai/src/ai_definitions.cpp`). Vanilla `BasicDefensiveGalacticSet` lists `Generate_Magic_Space_Defense` with

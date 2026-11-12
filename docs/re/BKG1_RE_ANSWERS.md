@@ -23,6 +23,9 @@ Spec pages corrected in the same change: `SKIRMISH_SETUP.md` §3 (0x289050: the 
 | b0001 | land cap 0x2ac5c0 count; pool drops stop after 15232; 0x289050; empty-pad revert | [H] cap = min(capacity, curve(N)) = 9, but "used" is per-member Population_Value shares rounded up, without start forces; drops stop when used reaches 9 (15422). 0x289050 is true for every non-human, so the build manager never charges the AI (see b0138's escrow). Empty owned pads decay to Neutral in 150 frames (151 services); the port already has the rule (capture.cpp). | backlog **b0148** (S2 T1, population count); escrow in b0147; pad revert: none |
 | b0002 | Setup A exclusions, in-transit +0x50, setup_c revealed vs surface, reach 7-9, Produce_Force(nil), paid(), Land_Units at an enemy planet | [H] re-read confirms A2M_T04_RE_ANSWERS with five corrections (lock 0x39ad40 third clause = the parent team's locomotor lock; 0x42e3b0 / 0x42e3d0 = occupied build pad; setup_c returns 1e18 for level ≥ 6; the goal-XML census for 7-9; the 0x647df0 charge reversal). Fleet +0x50 = final destination; setup_c tests revealed (0x3fa420), never 0x375220, so Interceptor4 is estimated at The_Maw; levels 7/8/9 = Low / Medium / High_Threat_Reachability_Tolerance 1000 / 3000 / 5000; Produce_Force(nil) is a script error; paid() is a TF type counter, not money; Land_Units at an enemy planet neither lands nor fails. | none for tier 1/2 (the port already follows it); the level ≥ 6 early exit is cosmetic: backlog **b0154** (S3 T3) |
 
+| b0125 (bkg2) | why political control is 1.0 on every port planet (retail 1 / 2 / 3) | [H] the target is a breakdown: the largest entry per group summed over the groups, clamped to [1 with a physical owner else 0, the faction's Planet_Max_Political_Control_For_Faction or 5], then [0, 5]; with FoC data an owned planet gets max(1, ground-base level, starbase level, troops). The vanilla income curve makes control >= 1 income-neutral; the AI token TargetPoliticalControl reads it. Side finding: an empty planet reverts to neutral unless Planet_Retains_Residual_Influence; the port's leaning follows captures. | ported in bkg2 (campaign.cpp target_political_control); the owner rule: backlog (bkg2) |
+| b0121 (bkg2) | does a hostile fleet fail an AI build in production; does a released goal cancel its builds | [H] no: only a starbase head is cancelled (signal 3 -> Production_Failed, no refund), which the port has; the blockade test applies after production (GROUND_UNIT_PRODUCTION 0x648120). A release ends the tasks without Production_Failed; a producing PAYG item is cancelled with the paid-fraction refund unless reclaimed (already in the port). | ported in bkg2 (claim_units: blockaded GROUND_UNIT_PRODUCTION fails the task) |
+
 Still open (no backlog entry, [L] / probe-only, listed in the sections): the company type field +0x22E0 the member
 count skips and the population registrations 0x2a00b0 / 0x2bf2d0 (7); whether the 0x6c2d60 guard takes the escrow once
 per plan (7); where a unit inside a moving fleet is positioned, whether galactic code writes +0x3a7 / +0x3a8 / +0x210,
@@ -1332,3 +1335,279 @@ Keep the fleet-not-in-orbit guard (retail would dereference null).
 - Position of a unit inside a moving fleet (stale or moved) [M/L]: probe.
 - No galactic writer of +0x3a7 / +0x3a8 / +0x210 [M]: write breakpoints with story scripts running.
 - No reader of TF +0xa8 [M]: read breakpoint during a galactic build plan.
+
+---
+
+## Sections 9-10. b0125 (target political control) and b0121 (AI builds under a hostile fleet; release) (bkg2, 2026-11-12)
+Date: 2026-11-12. Source: Ghidra decompile of Steam FoC x64 (`Global.c`), plus llvm-objdump of the retail exe for two
+call sites. Shipped FoC XML from `extracted/foc_data_text.zip`. Behaviour only, no code copied. Addresses are RVAs. D = the
+planet data pack (planet object +0xB8). Tags: [H] read directly, [M] one inferred link, [L] hypothesis.
+
+### Short answers
+
+- **b0125.** The target is not "1 + route gains". 0x3f6af0 / 0x3f6df0 keep a per-planet breakdown map (D +0xA0). Each
+  key (a group) holds entries of the form (value, expiry frame, tooltip, source id). The target is built in three steps:
+  - take the maximum value within each group;
+  - sum those maxima over the groups;
+  - clamp the sum to [min, max], then to [0, 5]. min = 1 when the planet has an owner from the physical sources,
+    otherwise 0. max = `Planet_Max_Political_Control_For_Faction` for the owner's faction, default 5. [H]
+  
+  The groups:
+  - leaning;
+  - one "presence" group whose entries are the ground-base level, ground troops (0/1), the starbase level, the orbital
+    claim (0/1), capital ships (0/1) and residual influence (0/1);
+  - enemy fleets (−1);
+  - up to 8 structure groups (Political_Control of each structure that has one);
+  - trade routes. [H]
+  
+  With vanilla data, every `Political_Control` is 0, routes give 0 and no faction maximum is listed. So the target is
+  **max(ground-base level, starbase level, 1 if any visible ground unit, …)**, with a floor of 1 for an owned planet. In
+  Heart of the Maw this gives 3 at Kuat / Mon Calamari / The Maw, 2 at Corellia / Tatooine / Naboo / Nal Hutta /
+  Felucia / Shola, and 1 at Kashyyyk / Kamino / Yavin. [H rule, M per-planet result]
+  
+  On the first service, control is set to float(target) directly. The vanilla income curve makes control ≥ 1 income
+  neutral. The AI token `TargetPoliticalControl` (control / 5) is the reader for which 1 / 2 / 3 matters. [H]
+- **b0121 (a).** A hostile fleet arriving does **not** fail, cancel or pause a unit that is already queued or in
+  production. [H]
+  - Only a **starbase** head (flag 0x5C) is cancelled by an orbiting fleet: no refund, planet signal 3. The AI build
+    task hears signal 3 and goes to PRODUCTION_FAILED, which dispatches Production_Failed. [H]
+  - The blockade test 0x3fa370 is applied only after the unit exists: a produced landed ground unit with a destination
+    off the build planet fails the task (GROUND_UNIT_PRODUCTION 0x648120). [H]
+- **b0121 (b).** On a goal release the build is handled by what A2M_R2_RE_B §1 describes, confirmed here:
+  - a not-yet-producing task is only a bid, so nothing is cancelled and no money moves on the planet;
+  - a producing task that the PAYG reclaim took (+0xD9) finishes to the free store;
+  - any other producing task of a PAYG owner is cancelled at the next service with the paid-fraction refund (notify
+    1).
+  
+  No Production_Failed event fires on these paths, because the task's signal bindings were already removed. [H / M]
+
+---
+
+### b0125: target political control
+
+#### 1. Owner and breakdown, 0x3f3830(planet behaviour, planet, D, out owner)
+
+The breakdown map at D +0xA0 is keyed by an int group id; each node holds a vector of 0x30-byte entries:
+- +0 value (int);
+- +4 expiry frame, −1 = never;
+- +8 tooltip id;
+- +0x10 source id (the behaviour plus a source kind).
+
+An existing entry with the same source id is updated in place; a new one is appended. [H]
+
+Group 1, written in this order. The owner is the first non-empty result. [H]
+1. GROUND_BASE: value = ground-base level D +0x130 when it is > 0, else 0. The owner is D +0x124 when the level is > 0.
+   - The level is the count of D +0x158 ground structures whose object flags +0x3A0 & 0x42 are clear, clamped to
+     1..5 (0x4bdaa0). [H]
+2. GROUND_TROOPS: value = 1 if any non-hidden (+0x3A0 bit 2 clear) object is in the surface list (D +0xE0, count
+   +0xE8), else 0. The owner is the first such object's owner. [H]
+3. STARBASE: value = starbase level D +0x148 (0 if none). The owner is D +0x13C when the level is > 0. [H]
+4. With no owner yet: the owner of the head entry of production queue 0, then of queue 1 (0x401960, entry +0x20). This
+   step writes no entry. [H]
+5. ORBITAL_CONTROL: value = 1 when the owner is still unknown, the surface test 0x375220 fails (inaccessible or
+   destroyed) and an orbiting, non-stealthed (0x3a9760) object with a live player claims the planet; else 0. [H]
+6. Fleet sum over every orbit object (D +0xC8, skipping +0x3A0 bit 2): for each contained unit (0x3965f0, recursive),
+   add its type's `Political_Control` (type +0x79C, via 0x3734d0 with no object) when the unit's owner is the derived
+   owner, and subtract it otherwise. Let s be the sum. [H]
+   - s ≥ 0: CAPITAL_SHIPS = min(s, 1) in group 1, and the group-2 entry is removed.
+   - s ≤ −1: ENEMY_FLEETS = −1 in **group 2**, and the group-1 capital entry is removed (0x3fda70). [H]
+7. RESIDUAL_INFLUENCE: value 0. It becomes 1 and the owner is kept as the previous applied owner (D +0x6C) when all of
+   these hold: no owner yet, the planet is not destroyed (D +0x2C8 = 0), the planet type has
+   `Planet_Retains_Residual_Influence` (+0xBA; vanilla only Alderaan, The_Maw and VergessoAsteroids), and D +0x6C ≠ −1. [H]
+
+All of these entries have expiry −1. The GROUND_BASE and ORBITAL_CONTROL entries take theirs from 0x35cd20(−1.0),
+which also gives −1. [H]
+
+#### 2. 0x3f6af0: purge, clamp bounds, leaning, structures, reduction
+
+1. Every entry whose expiry (as unsigned) is < the current frame is removed first. Entries with −1 stay. [H]
+2. 0x3f3830 runs (§1).
+3. Bounds (stored in the map header: +0x10 min, +0x14 max, flags +0x18 / +0x19):
+   - no owner: min = 0, max = 5;
+   - owner found: min = 1; when that player and its faction exist, max = 0x3733f0(planet type, the owner's faction). That
+     function searches the `Planet_Max_Political_Control_For_Faction` pairs (type +0x830, list code 0x3c) by faction
+     name, case-insensitive, and returns 5 when the faction is absent. A result < min is replaced by 5. [H; M that the
+     second argument is the faction's name string]
+4. POLITICAL_LEANING, 0x3f5710, **group 0**. v = the planet type's `Political_Control` (+0x79C), clamped to 0..5; the
+   leaning faction is `Political_Faction` (+0x7C0).
+   - No owner and v > 0: the owner becomes that faction's player.
+   - Owner known and the owner's faction ≠ the leaning faction: the value is −v.
+   - Expiry −1. [H]
+5. Still no owner: the first `Is_Neutral` faction's player (0x331cc0 → 0x294d30). [H]
+6. Structures, 0x3f5980. Each ground structure (D +0x158) and then each orbital structure (D +0x170) whose type has
+   `Political_Control` ≠ 0 gets **its own group** (ids 5, 6, … up to 12; the walk stops after the 8th).
+   - The value is that `Political_Control`, unsigned, with no owner test.
+   - The expiry is 0, so the entry is purged and re-added every call. [H]
+7. Reduction 0x3f7130 with GreaterThan / Plus:
+   - per group, the maximum entry value;
+   - sum over the groups in key order (int);
+   - then the min bound if its flag is set, then the max bound if its flag is set. [H; M that GreaterThan picks the
+     larger value]
+
+#### 3. 0x3f6df0: trade routes and final clamp
+
+- TRADE_ROUTES, **group 13** (expiry −1): the value is the sum of `Political_Control_Gain` (route +0x48) over P's links
+  (D +0x58, stride 0x20; the route is at +8, the neighbour at +0x18). A link counts when all of these hold:
+  - the neighbour's control record passes 0x4ad9a0: the neighbour's owner is self or ally of the derived owner
+    (0x2823c0), and its control is > 0;
+  - P's control ≥ 1;
+  - the neighbour's control ≥ 1.
+  
+  [H; M "self or ally"]
+- The reduction (§2.7) runs again, then the result is clamped to 0..5 (int). The derived owner is returned. [H]
+
+#### 4. Applying it, the first value, and the readers
+
+- 0x3fe1b0 passes the int target as **float(target)** in xmm3 to 0x3fb040 (`movd eax→xmm3; cvtdq2ps` at 0x3fe529). [H]
+- First call (D +0x1C9 = 0): control D +0x68 = float(target) and owner D +0x6C = the derived owner, with no ramp. So
+  Kuat starts at 3.0. [H]
+- Afterwards, control ramps toward the target at Δ = 1 / (30 · m · 7 s) per frame, both up and down (GE §4.2). After a
+  capture it ramps 0 → target, so reaching 3 takes about 3 × 7 s × m. [H, from GE §4.2]
+- Readers:
+  - Income (GE §1.4): term = (q − 1) · base, with q = `Political_Income_Curve`(control). The FoC GameConstants curve is
+    "0,0, 1,1, 5,1" ("Disabling increased income per base level"), so any control ≥ 1 gives a term of 0. Only the
+    0 < c < 1 ramp after a capture costs income. [H data, H formula]
+    - `HYPERGAMECONSTANTS.XML` has "0,0, 1,1, 5,3". It is not the normal constants file. [M]
+  - AI token `TargetPoliticalControl` = (int)|control| / `MaximumPoliticalControl` (5), negated for a non-Self owner
+    (AI_GALACTIC_TOKENS 0x65f000). This is where 1 / 2 / 3 changes AI evaluation. [H, from that doc]
+  - The control record's "held by self or ally with control > 0" test (0x4ad9a0 / 0x4ad9f0): visibility and the route
+    gain above. [H]
+  - The ≥ 1 → < 1 drop calls 0x403490 for both queues (GE §4.2). [H call]
+  - The Political_Control_Breakdown UI (visibility 0x800) lists these tooltip entries. [M]
+
+#### 5. Vanilla data and Heart of the Maw
+
+- Every `<Political_Control>` in FoC XML is 0 (237 hits; 7 commented-out 1s).
+- 10 planets have `Political_Faction` Empire and 4 have Rebel, so the leaning value is 0 everywhere.
+- All 329 `Political_Control_Gain` values are 0.
+- `Planet_Max_Political_Control_For_Faction` never appears.
+
+So the vanilla target is: owned planet → max(1, ground-base level, starbase level, troops 1); neutral with visible
+indigenous units → 1; empty neutral → 0. [H data, H rule]
+
+`Sandbox_Heart_Of_The_Maw_Underworld` starting forces (starbase level / ground structures → target):
+
+| Planets | Starbase / ground structures | Target |
+|---|---|---|
+| Kuat | SB3 / 3 | 3 |
+| Mon Calamari | SB3 / 2 | 3 |
+| The_Maw | SB3 / 0 | 3 |
+| Corellia, Tatooine, Nal Hutta, Felucia, Shola | various / 2 | 2 |
+| Naboo | SB2 / 1 | 2 |
+| Kashyyyk, Kamino | SB1 / 1 | 1 |
+| Yavin | SB1 / 1 | 1 |
+
+[M: assumes the starting structures are in D +0x158 and that D +0x148 = the starbase type's Base_Level.] The Rebel and
+Empire HotM variants (`CAMPAIGNS_UNDERWORLD_GC.XML` lines 4759 / 5020) need the same count.
+
+Side finding (owner rule, tier 1). An empty planet without `Planet_Retains_Residual_Influence` reverts to the neutral
+player: no units, no structures, no starbase, no production. The port's `derive_owner` step 6 instead uses a leaning
+that follows every capture ([L] in the port). Retail uses the leaning only when the type's `Political_Control` > 0. [H]
+
+**Port consequence:**
+- `engine/galactic/src/campaign.cpp` `apply_ownership`: compute the target as follows.
+  - g1 = max(ground-base level (live structure count, clamped 5), starbase level, any visible surface unit ? 1 : 0,
+    orbital claim ? 1 : 0, min(max(fleet PC sum, 0), 1), residual ? 1 : 0).
+  - g2 = −1 if the fleet PC sum ≤ −1, else nothing.
+  - Add the leaning ±v, one term per structure with PC ≠ 0 (at most 8), and the route gains: both controls ≥ 1, the
+    neighbour owned by self or an ally with control > 0.
+  - Clamp to [owned ? 1 : 0, faction max or 5], then to [0, 5].
+  - The first call keeps `control = target`.
+- `derive_owner`: put residual influence (type flag, not destroyed, previous owner) and the leaning (only when PC > 0)
+  in retail's order, then the neutral player.
+- Rules data: planet PC +0x79C, Political_Faction +0x7C0, Retains_Residual_Influence +0xBA, the +0x830 per-faction
+  maximum list, and unit / structure PC.
+
+---
+
+### b0121: AI builds under a hostile fleet; builds of a released goal
+
+#### 6. (a) Planet queue service 0x402840 and the AI build task
+
+- The service first runs the AI queue service 0x53cd60 for queues 0 and 1. Then, per queue, only the head is checked.
+  [H]
+  1. A starbase-family head (flags 0x5E / 0x60 / 4 / 0x61) while D +0x13C ≠ the entry's player is dropped, with no
+     refund.
+  2. **A head with flag 0x5C (DUMMY_STAR_BASE) is cancelled** when the planet is not in an active battle (0x2b0470)
+     and some orbit object has all of these:
+     - fleet data (+0xC0) present;
+     - not being removed;
+     - **owner id ≠ the entry's player** (a plain compare, no ally exemption; GE §2.5 says "or an ally", which the code
+       does not show);
+     - not stealthed;
+     - fleet data byte +0x94 = 1.
+     
+     The cancel logs "...starbase in production and enemy fleet in orbit - Production cancelled", raises **planet
+     signal 3** with the entry, removes it with **no refund** (0x1400475e0, then 0x4033c0 starts the next), shows
+     TEXT_TOOLTIP_INTERRUPTED_PRODUCTION to the local owner, and returns for this frame. [H; L that +0x94 means
+     "armed / hostile-capable"]
+- Rule 2 and the starbase step of buildability (STRATEGIC_GAPS §1.3 step 20) are the only orbit tests on the
+  production path. Every other type keeps counting down or paying installments while a hostile fleet sits in orbit.
+  There is no pause: the only PAYG pause is a refused installment (0x53b900). [H]
+- The AI task while queued or producing (FSM 0x64aec0, PRODUCTION_QUEUED 2 / PRODUCTION_BEGIN 5) polls only these
+  [H]:
+  - player-level buildability 0x2ac320;
+  - ground / orbital structure slot counts for 0x5F / 0x60 types.
+  
+  It has no blockade test.
+- The task's signal binding (production start 0x64abf0 binds planet signals 2, 4, 3; handler 0x649be0) [H]:
+  - 2 (started) → PRODUCTION_BEGIN;
+  - 4 (finished) → claim the object (0x6498f0);
+  - **3 (removed unfinished) → unbind, then state 7 PRODUCTION_FAILED → Production_Failed(tf, type) (0x5fdd90)**.
+    
+    The type (+0xEC), the player and the entry id must match. So the starbase cancel above, and any UI-style cancel of
+    a live task's entry, produce Production_Failed (the port's plan event 4). [H]
+- The AI planet queue's own listener 0x53c4f0 on signal 3 / 4 only hands a produced object of a gone task to the free
+  store and then clears Q +0x18 / +0x20. It sends nothing to the task. [H]
+- **Where 0x3fa370 is used.** After production, WAIT_FOR_FREESTORE_ALLOC (0x16) sends a landed ground unit (with a
+  destination) to GROUND_UNIT_PRODUCTION (4, 0x648120). [H]
+  - unit's parent = the destination → PRODUCTION_END (6);
+  - else the build planet is blockaded (0x3fa370: the first visible orbit entry is not self or ally of the planet
+    owner) → **PRODUCTION_FAILED** (7);
+  - else it launches (FleetManagement op 5 / 0).
+  
+  The money is already spent. The task end (0x64ad00) re-admits the unit to the free store unless +0xD8. [H path; M
+  re-admit on this path]
+- Other blockade users: HIJACK_UNIT 0x648370 (magic), FreeStore `Move_Object` 0x68f5b0, TaskForce `Launch_Units`
+  0x6cf070. [H]
+
+**Port consequence:**
+- `engine/ai/src/galactic_build.cpp`: add the 0x648120 rule to the produced-unit hand-over. A produced ground unit on
+  the surface, with a destination ≠ its build planet, and `sim.ai_blockaded(build planet)` → `fail_build(b,
+  "blockaded")` (Production_Failed), with the unit back to the free store. Today only the magic spawn checks.
+- Keep "production dropped → fail_build" for the starbase cancel: it matches signal 3 → state 7.
+- `engine/galactic/src/campaign.cpp` `enemy_fleet_in_orbit` (used by service_production rule 2): retail tests owner ≠
+  entry player (allies included), not stealthed, not removed, and fleet flag +0x94. It has no `ai_combat_power > 0`
+  test. Aligning it needs the meaning of +0x94 [L]; a Q2 probe can settle it (an allied fleet over an AI starbase
+  build).
+
+#### 7. (b) Release of a goal (0x614880 → reclaim 0x5f7d40, then plan end 0x5f6a50)
+
+- An AI task is in the planet queue only from production start onward. 0x53cd60 starts a new task only when Q +0x20 = −1,
+  so each AI planet queue has at most one entry in flight. "Queued, not producing" is a bid in Q +0x10 with no planet
+  entry and no planet money. [H for the −1 gate; M "at most one"]
+- 0x64ad00, the end of every task, does the following [H]:
+  - sets +0xA8 and state 0x15;
+  - frees the bid record (0x695560 on +0xC8), which removes the pending bid;
+  - unregisters all of the task's signal bindings (0x220ef0 on task +0x40);
+  - re-admits the claimed unit.
+  
+  The goal's money comes back through the release itself (A += c + a, A2M_R2_RE_B §1.3). [H]
+- Producing task (A2M_R2_RE_B §1.1–1.5, re-read) [H]:
+  - **reclaimed** (+0xD9 set by 0x5f7d40: started, remaining cost in (0, amount], oldest first, greedy) → production
+    continues and the object goes to the free store;
+  - **not reclaimed, PAYG owner** → at the planet's next production service, 0x53ba60 cancels the head through 0x403900
+    with refund = clamp(1 − remaining/T, 0, 1) × cost (the paid fraction), Add_Credits notify 1 (`Credit_Multiplier`
+    again, budget P += x′·w);
+  - not PAYG (human) → production continues to the free store.
+  
+  0x403900 also raises signal 3. The ended task is no longer bound, so there is **no Production_Failed** and no plan
+  event on a release. [H unbind; M that 0x220ef0 removes every binding of that listener]
+- A goal that is replaced (dropped at the resolve 0x6c8970) takes the same release, so the same rule applies. A plan that
+  ends by its own script does no reclaim, so every producing build of a PAYG owner is cancelled with the refund. [H]
+
+**Port consequence:**
+- `end_plan_builds` / `cancel_ended_production` already follow this. Check two things:
+  - the reclaim runs only on the goal-system path (A2M_R2_RE_B §1.6 item 1);
+  - no `ProductionFailed` tf_event is emitted on release or cancel.
+- The open part of A2M_R2_RE_B §1.6 item 3 still holds: retail 0x6d0370 (task force emptied) also ends producing tasks.
