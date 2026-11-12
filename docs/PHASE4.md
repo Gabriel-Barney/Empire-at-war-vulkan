@@ -461,6 +461,19 @@ unchanged (7/12 at 5853..7923, the same ticks), total FAIL 18 -> 19 (`travel.hop
 record); the remaining inputs (Underworld starbase power at Shola, production cancel with refund) are shared rules of the Underworld
 lane (A2M_R2_RE_B §3.4 items 2 and 3). No golden moved.
 
+**2026-11-12 (a2m t01 / t03, round 4 integration): stagger off and accept-time queue slots together.** The two round-4
+rules below merged without a code conflict; no rule was added in the merge. HotM Empire-human, 12 seeds, against dev
+79f83684 (Underworld lane alone / Rebel lane alone in brackets): total FAIL 23 -> 21 (19 / 21); every exit credit and
+build_count metric PASS (Underworld `credits_at_9000` mean 1669, retail 2462, allowed 1296); Rebel Shola captures 8/12
+(6/12 / 3/12): 5964, 5967, 5970, 6033 early, 7479, then 7536, 8019, 9042 inside retail's 7498..9898, 4 seeds never (seed 2
+is retaken by the Underworld at 8112). The early captures are the seeds where the Naboo mine survives (no Underworld
+sabotage before Conquer_Pirate at about 2850; r4 Rebel diagnosis causes 2 / 3). `income_cycle1` Rebel / Underworld fail as
+in the Rebel lane alone; `build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]` (1 seed, 992 vs 242; Rebel lane 240 in its
+one seed, Underworld lane never built) is the NalHutta pay-as-you-go stall that `DESTROYER_DROID_COMPANY@NALHUTTA` fails on
+dev and on both lanes (821 vs 362 here), which seed builds it moves with the merge. Goldens: ai_galactic_synthetic_crc, galactic_ai_hotm(_human)_golden,
+game_smoke_campaign.crc (ai_underworld_crc and the galactic_late bench v8 as on the Rebel lane); both parity baselines
+re-recorded.
+
 **2026-11-12 (a2m t03, round 4): AIPlanetBuildQueue slots made at accept** (A1_READINGS §28.6 step 3, AI_GALACTIC_2
 §2.2 / §2.3; marked "a2m r4" in `engine/ai/src`). A PotentialPlan's queue slots (one per selection to be produced, at its
 source planet's queue) are now made by 0x6c2d60 when its goal is accepted inside Resolve_Category, once per PP; they are
