@@ -5,6 +5,7 @@
 //
 //   alamo_ai_galactic_tests [--write-golden]
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -1581,6 +1582,61 @@ static void test_path_finder_world() {
     const std::vector<uint64_t> base = run_path_world(1, frames, &story);
     CHECK(base.size() == static_cast<size_t>(frames) && story.ai_paths() == nullptr);
     for (const unsigned t : {2u, 4u, 15u}) CHECK(run_path_world(t, frames) == base);
+}
+
+// a2m r4 (AI_GALACTIC §1.3 [H]): the galactic AI services every player's clocks from the same frame, as the original
+// (no per-player phase); GalacticAiConfig::stagger (OPT2 t01, off by default) gives the later AI ordinals a fixed phase.
+// Returns per player {planning next, execution next, goal services, planning services} after `frames` frames.
+static std::vector<std::array<int64_t, 4>> run_clock_phase(bool stagger, int32_t frames) {
+    std::vector<std::array<int64_t, 4>> out;
+    MemoryFiles files;
+    AiDefinitions defs;
+    EquationSet eqs;
+    std::vector<std::string> plan_files;
+    syn_data(files, defs, eqs, plan_files);
+    const gal::GalacticRules rules = syn_rules();
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+    GameRandom rng(4242u, 77u);
+    gal::GalacticSim sim(rules, store, rng.synced());
+    std::vector<std::string> diag;
+    if (!sim.start(syn_setup(), &diag)) {
+        ++g_fail;
+        return out;
+    }
+    GalacticAiConfig cfg;
+    CHECK(!cfg.stagger);  // the default is the original timing
+    cfg.stagger = stagger;
+    cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
+    cfg.difficulties = {{"Normal_Default", 1.1f, 0.0f}};
+    std::vector<GalacticAiTypeInfo> tinfo(tTypes);
+    GalacticAiWorld world(sim, store, &types, &files, rng, defs, eqs, tinfo,
+                          [&sim](uint8_t p, const commands::EventData& ev) { return sim.execute(p, ev); }, cfg);
+    std::vector<std::string> pd;
+    CHECK(world.load_plans(plan_files, &pd) && world.start(&pd));
+    for (int32_t f = 1; f <= frames; ++f) {
+        sim.update();
+        for (int32_t p = 0; p < static_cast<int32_t>(sim.players().size()); ++p) world.update_player(p, f, true, false);
+    }
+    for (int32_t p = 0; p < 2; ++p) {
+        const AiContext* c = world.context(p);
+        CHECK(c && c->initialised());
+        if (!c) return out;
+        out.push_back({c->planning_clock.next, c->execution_clock.next, static_cast<int64_t>(c->service_counts[1]),
+                       static_cast<int64_t>(c->service_counts[2])});
+    }
+    return out;
+}
+
+static void test_galactic_clock_phase() {
+    const int32_t frames = 30;  // ordinal 0 plans on 1, 4, .., 28 (next 31), ordinal 1 on 2, .., 29 (next 32)
+    const std::vector<std::array<int64_t, 4>> orig = run_clock_phase(false, frames);
+    CHECK(orig.size() == 2 && orig[0] == orig[1]);  // both players on the same frames, same service counts
+    const std::vector<std::array<int64_t, 4>> phased = run_clock_phase(true, frames);
+    // OPT2 t01: ordinal 1 of 2 starts its planning / goal clocks stagger_offset(1, 2, 3) = 1 frame later.
+    CHECK(phased.size() == 2 && phased[0] == orig[0] && phased[1][0] == phased[0][0] + AiContext::stagger_offset(1, 2, 3));
+    CHECK(phased.size() == 2 && phased[1][2] + 1 == phased[0][2]);  // one goal service fewer for the later ordinal
 }
 
 // A2 galactic: the GalacticSim hooks the galactic AI uses. The §3.1 budget tick comes from the sim's income-tick
@@ -6495,6 +6551,7 @@ int main(int argc, char** argv) {
     test_plan_load_parallel();
     test_synthetic_campaign();
     test_path_finder_world();
+    test_galactic_clock_phase();  // a2m r4
     test_sim_hooks();
     test_starbase_force_split();
     test_leaf_cache();

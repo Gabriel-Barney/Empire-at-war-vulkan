@@ -59,8 +59,10 @@
 //       [--trace-out FILE]: per-tick Q2TRACE 1 state trace (port_trace.hpp) for tools/probe_mod/q2_traces/q2trace.py; with
 //       --skirmish-ai (q4hf t02) the tactical battle's trace (tactical_trace.hpp: owner / type / hull per object, first shot).
 //       [--story]: also run the campaign's story plot sets, as the retail sandbox does (q2f t03).
-//       [--ai-latency F] [--no-ai-stagger] (also --skirmish-ai): OPT2 t02 / t01 parity knobs - the AI path recompute latency
-//       (default 15 frames, 0 = the original timing) and every AI player planning on the same frames (the original).
+//       [--ai-latency F] [--no-ai-stagger | --ai-stagger] (also --skirmish-ai): OPT2 t02 / t01 parity knobs - the AI path
+//       recompute latency (default 15 frames, 0 = the original timing) and every AI player planning on the same frames (the
+//       original; the galactic AI default since a2m r4, --ai-stagger restores the OPT2 per-player phases there; the
+//       tactical / skirmish AI keeps the phases unless --no-ai-stagger).
 //       [--no-pp-streams] [--pp-latency F] (--skirmish-ai): OPT2 t10 parity knobs - slot-10 plan picks and PotentialPlan
 //       solves on the synced stream in proposal order (the original), and the frames from a goal slice to the apply of
 //       its solves (default 1; 0 = in the slice, on the job system).
@@ -208,7 +210,7 @@ struct Options {
     std::vector<std::string> ai_types;      // q6 t07: --ai-type FACTION=TYPE (repeatable)
     std::string trace_out;                  // q2f t05: --trace-out FILE (Q2TRACE 1 state trace, galactic AI runs; q4hf t02: --skirmish-ai)
     int64_t ai_latency = -1;                // OPT2 t02: --ai-latency F (galactic / tactical AI path recomputes)
-    bool ai_stagger = true;                 // OPT2 t01: --no-ai-stagger
+    int8_t ai_stagger = -1;                 // OPT2 t01: --no-ai-stagger 0, --ai-stagger 1, -1 = the mode's default
     bool pp_streams = true;                 // OPT2 t10: --no-pp-streams
     int64_t pp_latency = -1;                // OPT2 t10: --pp-latency F
     // A1 stage 2 tactical AI (skirmish_run.hpp): --skirmish-ai synthetic|foc
@@ -914,7 +916,8 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--ai-type") opt.ai_types.push_back(next());        // q6 t07
         else if (a == "--trace-out") opt.trace_out = next();            // q2f t05
         else if (a == "--ai-latency") opt.ai_latency = std::strtoll(next().c_str(), nullptr, 10);  // OPT2 t02
-        else if (a == "--no-ai-stagger") opt.ai_stagger = false;                                   // OPT2 t01
+        else if (a == "--no-ai-stagger") opt.ai_stagger = 0;                                       // OPT2 t01
+        else if (a == "--ai-stagger") opt.ai_stagger = 1;                                          // a2m r4
         else if (a == "--no-pp-streams") opt.pp_streams = false;                                   // OPT2 t10
         else if (a == "--pp-latency") opt.pp_latency = std::strtoll(next().c_str(), nullptr, 10);   // OPT2 t10
         else if (a == "--aggressor") opt.aggressor = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
