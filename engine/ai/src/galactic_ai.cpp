@@ -1231,8 +1231,30 @@ int32_t GalacticAiWorld::Impl::new_status(int32_t plan, int32_t tf, StatusKind k
 void GalacticAiWorld::Impl::prune_tf(TaskForceRec& tf) {
     auto& u = tf.units;
     const size_t before = u.size();
-    u.erase(std::remove_if(u.begin(), u.end(), [this, &tf](ObjectHandle h) { return !store.alive(h) || store.owner(h) != tf.player; }),
-            u.end());
+    const auto lost = [this, &tf](ObjectHandle h) { return !store.alive(h) || store.owner(h) != tf.player; };
+    // a2m t03 (A2M_T08_T10_T14_RE t10.3, vf +0x188 -> 0x5ff610) [H]: a removed member erases the first TF +0x60 entry of its
+    // type. Since the TF starts with one entry per selection (A2M_T03_PRODUCE_FORCE_CLAIMS Q1), this matters for members
+    // added before Produce_Force turned the entries into build tasks. [port] A member whose slot is already flushed is
+    // typed by its PotentialPlan selection (type, unit); one that was not selected is then skipped.
+    const PotentialPlanRec* pp = nullptr;
+    if (const auto pit = plans.find(tf.plan); pit != plans.end())
+        if (const auto ppit = pps.find(pit->second.pp); ppit != pps.end()) pp = &ppit->second;
+    for (const ObjectHandle h : u) {
+        if (!lost(h)) continue;
+        uint32_t type = gal::kNoIndex;
+        if (store.exists(h)) {
+            type = store.type(h);
+        } else if (pp) {
+            for (const PpSelection& s : pp->sel)
+                if (s.unit == h) type = s.type;
+        }
+        const auto w = std::find(tf.wanted.begin(), tf.wanted.end(), type);
+        if (w == tf.wanted.end()) continue;
+        const auto k = w - tf.wanted.begin();
+        tf.wanted.erase(w);
+        if (static_cast<size_t>(k) < tf.wanted_source.size()) tf.wanted_source.erase(tf.wanted_source.begin() + k);
+    }
+    u.erase(std::remove_if(u.begin(), u.end(), lost), u.end());
     // a2m t10: a member removed (0x10) or no longer the player's (0x1a) reached the TF base handler 0x5fe5d0.
     if (u.size() < before && std::find(lost_tfs.begin(), lost_tfs.end(), tf.id) == lost_tfs.end()) lost_tfs.push_back(tf.id);
 }
@@ -2732,6 +2754,22 @@ uint32_t GalacticAiWorld::task_force_fleet_object(int32_t player, std::string_vi
     for (auto& [id, tf] : impl_->tfs)  // id order
         if (tf.player == player && tf.name == tf_name) return impl_->tf_fleet_object(tf);
     return gal::kNoFleet;
+}
+
+bool GalacticAiWorld::take_selection_units(int32_t player, std::string_view tf_name) {
+    Impl& w = *impl_;
+    for (auto& [id, tf] : w.tfs) {  // id order
+        if (tf.player != player || tf.name != tf_name || !tf.alive) continue;
+        const auto pit = w.plans.find(tf.plan);
+        if (pit == w.plans.end()) return false;
+        const auto ppit = w.pps.find(pit->second.pp);
+        if (ppit == w.pps.end()) return false;
+        const std::vector<PpSelection> sel = ppit->second.sel;
+        for (const PpSelection& s : sel)
+            if (s.unit && s.tf == static_cast<int32_t>(tf.def)) w.tf_add_unit(id, s.unit);
+        return true;
+    }
+    return false;
 }
 
 int32_t GalacticAiWorld::reachable_target(int32_t player, std::string_view perception, std::string_view application,

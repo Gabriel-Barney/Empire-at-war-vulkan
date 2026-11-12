@@ -1069,14 +1069,10 @@ function Base_Definitions()
   if Definitions then Definitions() end
 end
 -- a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS Q1): a task force starts with no members, so the tests that read members
--- without assembling them first add the player's units of the named types (in argument order) with Add_Force.
-function Take_Units(tf, ...)
-  for i = 1, table.getn(arg) do
-    local all = Find_All_Objects_Of_Type(arg[i], PlayerObject)
-    if all then
-      for j = 1, table.getn(all) do tf.Add_Force(all[j]) end
-    end
-  end
+-- without assembling them first wait here until the test has added the selected units (take_selection_units).
+function Wait_For_Members()
+  GlobalValue.Set("take_ready", 1)
+  while not GlobalValue.Get("take_done") do Sleep(1) end
 end
 )";
 static const char* kPlanBuildSpace = R"(
@@ -2251,7 +2247,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
-  Take_Units(MainForce, "HeroShip", "Frigate")
+  Wait_For_Members()
   GlobalValue.Set("a2m_count0", MainForce.Get_Force_Count())
   local block = MainForce.Move_To(Target)
   if block then GlobalValue.Set("a2m_block", 1) else GlobalValue.Set("a2m_block", 0) end
@@ -2272,7 +2268,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
-  Take_Units(MainForce, "HeroShip", "Infantry")
+  Wait_For_Members()
   BlockOnCommand(MainForce.Launch_Units())
   Sleep(2)
   GlobalValue.Set("a2m_l_launched", 1)
@@ -2303,7 +2299,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
-  Take_Units(MainForce, "HeroShip", "Infantry")
+  Wait_For_Members()
   GlobalValue.Set("a2m_n_started", MainForce.Get_Force_Count())
   while true do Sleep(1) end
 end
@@ -2339,7 +2335,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
-  Take_Units(MainForce, "HeroShip", "Frigate")
+  Wait_For_Members()
   GlobalValue.Set("a2m_r_ready", 1)
   while not GlobalValue.Get("a2m_r_go") do Sleep(1) end
   GlobalValue.Set("a2m_r_count", MainForce.Get_Force_Count())
@@ -2480,6 +2476,17 @@ struct ParityWorld {
     }
     bool has(const std::vector<uint32_t>& sel, uint32_t t) const { return std::find(sel.begin(), sel.end(), t) != sel.end(); }
 };
+
+// a2m t03: a test plan that calls Wait_For_Members gets the units its PotentialPlan selected (take_selection_units)
+// once it is waiting; the task force starts with no members (A2M_T03_PRODUCE_FORCE_CLAIMS Q1).
+static void take_when_ready(ParityWorld& pw, lua::GlobalValueStore& gv) {
+    if (gv.get("take_ready").kind != lua::AiGlobalValue::Number || gv.get("take_done").kind == lua::AiGlobalValue::Number) return;
+    CHECK(pw.world->take_selection_units(0, "MainForce"));
+    lua::AiGlobalValue d;
+    d.kind = lua::AiGlobalValue::Number;
+    d.number = 1.0;
+    gv.set("take_done", d);
+}
 
 // a1h t07: a build task of an AllowFreeStoreUnits plan takes its unit through 0x4d2bd0, which does not read the free-store
 // entry's +0x30 owner (A1_READINGS §28.5): a unit another PotentialPlan reserved is still supplied.
@@ -2806,6 +2813,7 @@ static void test_move_to_fleet_object() {
     for (int32_t f = 1; f <= 30 * 300 && num("a2m_done") < 0.0; ++f) {
         pw.sim->update();
         pw.world->update_player(0, f, true, false);
+        take_when_ready(pw, gv);
         hero_left = hero_left || where(pw.hero) != 0;
         frigate_left = frigate_left || where(tFrigate) != 1;
     }
@@ -2836,9 +2844,10 @@ static void test_fleet_object_reelection() {
         pw.world->set_global_values(&gv);
         auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
         int32_t frame = 1;
-        auto step = [&pw, &frame]() {
+        auto step = [&pw, &frame, &gv]() {
             pw.sim->update();
             pw.world->update_player(0, frame, true, false);
+            take_when_ready(pw, gv);
             ++frame;
         };
         while (frame <= 30 * 120 && num("a2m_r_ready") < 0.0) step();
@@ -2992,6 +3001,7 @@ static void test_land_units_owner_rule() {
         for (int32_t f = 1; f <= 30 * 400 && num("a2m_l_done") < 0.0; ++f) {
             pw.sim->update();
             pw.world->update_player(0, f, true, false);
+            take_when_ready(pw, gv);
             if (num("a2m_l_launched") >= 0.0 && num("a2m_l_landed") < 0.0) {
                 const auto& surf = pw.sim->planets()[0].surface;
                 r.home_landed += std::find(surf.begin(), surf.end(), inf) != surf.end() ? 1 : 0;
@@ -3121,6 +3131,7 @@ static void test_no_units_remaining_counted_entries() {
         for (const int32_t e = f + frames; f < e; ++f) {
             pw.sim->update();
             pw.world->update_player(0, f, true, false);
+            take_when_ready(pw, gv);
         }
     };
     while (f <= 30 * 120 && num("a2m_n_started") < 0.0) step(1);

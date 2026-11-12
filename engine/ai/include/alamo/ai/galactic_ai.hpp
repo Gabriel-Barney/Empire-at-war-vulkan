@@ -240,6 +240,10 @@ public:
     // force named `tf_name` (lowest task-force id first), read as Move_To reads it (re-elected when it is gone or holds
     // no member any more, A2L_T01_RE_ANSWERS Q8.2); galactic::kNoFleet when there is no such task force or no fleet.
     uint32_t task_force_fleet_object(int32_t player, std::string_view tf_name);
+    // a2m t03, tests: Add_Force, in selection order, of every free-store unit the PotentialPlan of the AI player's live
+    // task force named `tf_name` (lowest id first) selected for it. A task force starts with no members (retail,
+    // A2M_T03_PRODUCE_FORCE_CLAIMS Q1); this stands in for an assembly the test does not want. False without such a TF.
+    bool take_selection_units(int32_t player, std::string_view tf_name);
     int32_t reachable_target(int32_t player, std::string_view perception, std::string_view application,
                              std::string_view reachability, double probability, PlanetIndex source = kInvalidPlanet,
                              double max_distance = -1.0);
