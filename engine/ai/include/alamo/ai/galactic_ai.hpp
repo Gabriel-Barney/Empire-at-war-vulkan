@@ -95,8 +95,10 @@ struct GalacticAiConfig {
     uint32_t path_latency = galactic::kDefaultAllPairsLatency;
     BackgroundStart background;
     // OPT2 t01: each AI player's Perception / Goal / Planning / Execution / Learning clocks start on a fixed per-player
-    // phase (AiContext::set_stagger). false = every player on the same frames (the original timing).
-    bool stagger = true;
+    // phase (AiContext::set_stagger). false = every player on the same frames (the original timing, AI_GALACTIC §1.3).
+    // a2m r4: off by default; the 2-frame goal-pass shift moved the Underworld's random-driven outcomes (parity tier 2),
+    // so the galactic AI keeps the original timing and the phase is a benchmark knob only (alamo_headless --ai-stagger).
+    bool stagger = false;
     // OPT2 t04: fan-out for the per-frame scheduled Lua collections of this world's VMs (lua/gc_schedule.hpp); any
     // value gives identical results.
     ParallelFor lua_gc_pf = serial_for;

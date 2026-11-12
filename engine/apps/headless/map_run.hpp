@@ -30,7 +30,8 @@ struct MapRunOptions {
     // galactic::kDefaultAllPairsLatency; 0 = the original timing) and --no-ai-stagger (every AI player plans on the same
     // frames, as the original). Not recorded in saves.
     int64_t ai_latency = -1;  // < 0: the default
-    bool ai_stagger = true;
+    // -1 = the mode's default (a2m r4: galactic off, as the original; tactical / skirmish on), 0 = off, 1 = on.
+    int8_t ai_stagger = -1;
     // OPT2 t10 (--skirmish-ai): --no-pp-streams (slot-10 plan picks and solves draw from the synced stream in proposal order,
     // the original) and --pp-latency F (frames from a slice to the apply of its solves, default
     // ai::tactical::kDefaultPpLatency). Not recorded in saves.

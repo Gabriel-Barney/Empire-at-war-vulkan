@@ -1,5 +1,5 @@
 {
- "commit": "f29c761b",
+ "commit": "cf22fd64",
  "mode": "distribution",
  "scenarios": {
   "geonosis_skirmish": {
@@ -112,10 +112,7 @@
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@KAMINO]": "PASS",
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "PASS",
     "build.ticks[R_GALACTIC_TURBOLASER_TOWER_DEFENSES@YAVIN]": "PASS",
-    "build.ticks[R_GROUND_BARRACKS@KAMINO]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@NABOO]": "PASS",
-    "build.ticks[R_GROUND_BARRACKS@SHOLA]": "PASS",
-    "build.ticks[R_GROUND_HEAVY_VEHICLE_FACTORY@YAVIN]": "PASS",
     "build.ticks[UNDERWORLD_DISRUPTOR_MERC_SQUAD@NALHUTTA]": "PASS",
     "build.ticks[UNDERWORLD_MDU_COMPANY@SHOLA]": "PASS",
     "build.ticks[UNDERWORLD_MERC_SQUAD@FELUCIA]": "PASS",
@@ -133,7 +130,7 @@
     "econ.credits_at_4500[Underworld]": "PASS",
     "econ.credits_at_9000[Empire]": "PASS",
     "econ.credits_at_9000[Rebel]": "PASS",
-    "econ.credits_at_9000[Underworld]": "FAIL",
+    "econ.credits_at_9000[Underworld]": "PASS",
     "econ.cycle_tick[10]": "PASS",
     "econ.cycle_tick[1]": "PASS",
     "econ.cycle_tick[2]": "PASS",
@@ -145,8 +142,8 @@
     "econ.cycle_tick[8]": "PASS",
     "econ.cycle_tick[9]": "PASS",
     "econ.income_cycle1[Empire]": "PASS",
-    "econ.income_cycle1[Rebel]": "FAIL",
-    "econ.income_cycle1[Underworld]": "FAIL",
+    "econ.income_cycle1[Rebel]": "PASS",
+    "econ.income_cycle1[Underworld]": "PASS",
     "econ.income_mean[Empire]": "PASS",
     "econ.income_mean[Rebel]": "PASS",
     "econ.income_mean[Underworld]": "PASS",
@@ -171,6 +168,7 @@
     "travel.hop_ticks[Rebel:NABOO->SHOLA]": "FAIL",
     "travel.hop_ticks[Rebel:NABOO->TATOOINE]": "PASS",
     "travel.hop_ticks[Rebel:NALHUTTA->KASHYYYK]": "FAIL",
+    "travel.hop_ticks[Rebel:NALHUTTA->SHOLA]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->MONCALIMARI]": "FAIL",
     "travel.hop_ticks[Rebel:SHOLA->NABOO]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->NALHUTTA]": "PASS",
@@ -182,23 +180,24 @@
     "travel.hop_ticks[Underworld:CORELLIA->TATOOINE]": "FAIL",
     "travel.hop_ticks[Underworld:KAMINO->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "FAIL",
-    "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "FAIL",
+    "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "FAIL",
     "travel.hop_ticks[Underworld:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->KAMINO]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->SHOLA]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->YAVIN]": "PASS",
     "travel.hop_ticks[Underworld:NABOO->SHOLA]": "PASS",
-    "travel.hop_ticks[Underworld:NABOO->TATOOINE]": "PASS",
+    "travel.hop_ticks[Underworld:NABOO->TATOOINE]": "FAIL",
     "travel.hop_ticks[Underworld:NALHUTTA->KASHYYYK]": "FAIL",
-    "travel.hop_ticks[Underworld:NALHUTTA->SHOLA]": "PASS",
+    "travel.hop_ticks[Underworld:NALHUTTA->SHOLA]": "FAIL",
     "travel.hop_ticks[Underworld:SHOLA->MONCALIMARI]": "PASS",
-    "travel.hop_ticks[Underworld:SHOLA->NABOO]": "PASS",
+    "travel.hop_ticks[Underworld:SHOLA->NABOO]": "FAIL",
+    "travel.hop_ticks[Underworld:SHOLA->NALHUTTA]": "PASS",
     "travel.hop_ticks[Underworld:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:TATOOINE->CORELLIA]": "PASS",
-    "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "FAIL",
-    "travel.hop_ticks[Underworld:THE_MAW->KASHYYYK]": "FAIL",
-    "travel.hop_ticks[Underworld:THE_MAW->SHOLA]": "PASS",
+    "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "PASS",
+    "travel.hop_ticks[Underworld:THE_MAW->KASHYYYK]": "PASS",
+    "travel.hop_ticks[Underworld:THE_MAW->SHOLA]": "FAIL",
     "travel.hop_ticks[Underworld:THE_MAW->YAVIN]": "PASS",
     "travel.hop_ticks[Underworld:YAVIN->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Underworld:YAVIN->THE_MAW]": "PASS"
@@ -217,12 +216,11 @@
      "INFO": 1
     },
     "income": {
-     "FAIL": 3,
-     "PASS": 22
+     "PASS": 25
     },
     "timing": {
-     "FAIL": 12,
-     "PASS": 59
+     "FAIL": 13,
+     "PASS": 57
     }
    }
   }
