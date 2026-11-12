@@ -357,6 +357,11 @@ void MovementSystem::configure(Unit& u) const {
     u.lp.decel = u.d.decel > 0.0f ? u.d.decel * mult * sf : u.lp.max_speed;
     u.lp.mask = cfg_.classes.mask(u.d.movement_class);
     u.lp.close_enough_angle = u.d.close_enough_angle > 0.0f ? u.d.close_enough_angle : k.close_enough_angle_for_move_start;
+    u.lp.secondary = u.d.use_secondary_facing && u.d.locomotor == LocomotorKind::Default;  // bkm1 t08: a Walk flag
+    u.lp.sec_angle = u.d.secondary_angle;
+    u.lp.sec_min = u.d.secondary_min;
+    u.lp.sec_max = u.d.secondary_max;
+    u.lp.sec_lookahead = u.d.secondary_lookahead;
     u.slot = regions_built_ ? regions_.mask_slot(u.lp.mask) : -1;
     // REMAINING_GAPS §4.3-4.7: special locomotor parameters (getters 0x372440 / 0x3724d0 / 0x370fd0 apply the mode
     // multiplier).
@@ -377,6 +382,7 @@ bool MovementSystem::add_unit(const UnitDesc& d) {
     configure(u);
     u.m.pos = d.pos;
     u.m.yaw = wrap_deg(d.yaw_deg);
+    u.m.yaw2 = u.m.yaw;  // bkm1 t08 (MOVEMENT §3.5.3 item 3): the Walk's Initialise copies the orientation into Y2
     u.z = d.z;
     u.primary_locomotor = d.locomotor;  // S7 t06
     for (size_t k = 0; k < 3; ++k) u.tcur[k] = u.ttgt[k] = d.turret_rest[k];  // S8 t24 [port: spawn pose = rest]
@@ -698,6 +704,10 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         if (u.d.team_container && u.team_cap < kInf) f.max_speed = u.team_cap;  // s78n t03: a container walks at the team speed
         // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): the layout's rank key, the attack range 0x3749d0
         f.attack_range = attack_range_fn_ ? attack_range_fn_(u.d.id) : 0.0f;
+        // bkm1 t04 (b0036, MOVEMENT §4.2 step 2 item 7 test 9 [H]): E = 0x4f6e40 (a move: the attack range; an attack
+        // order: the entry's engage, set below), K = min(E, Targeting_Min_Attack_Distance), 0 under a guard block
+        f.engage = f.attack_range;
+        f.min_engage = min_attack_fn_ ? min_attack_fn_(u.d.id) : 0.0f;
         f.radius = u.d.radius;
         f.spacing = u.d.formation_spacing;
         f.hero = u.d.hero;
@@ -712,12 +722,17 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     // formations (no split, no slot test)
     const bool attack = order.attack.target >= 0;
     const bool replan = attack && order.attack.replan;
+    for (size_t n = 0; n < idx.size(); ++n) {  // bkm1 t04: E and K of the recruitment's test 9
+        if (attack)
+            if (const LandAttackUnit* e = attack_entry(order, units_[idx[n]].d.id)) mem[n].engage = e->engage;
+        mem[n].min_engage = attack && order.attack.guard ? 0.0f : std::min(mem[n].engage, mem[n].min_engage);
+    }
     if (attack && !replan && !order.attack.guard) {
         // s78n t25.2 (MOVEMENT §4.2 item 6 [H]): a seed goes solo when it is already in max range of the target (slot 44),
         // or melee (0x372210), or its 3-D distance to the target d < r_seed (0x3969f0) + E_r + Solo_Attack_Range. The flag
         // is set on every member and read only for the seed (members are not seeds until picked). Otherwise the seed is
         // short-range when d < E_r x Short_Range_Attack_Formation_Coefficient (1.6), and a short-range seed recruits
-        // nobody either (§4.2 step 2 item 4, first bullet; the worked case §4.3.2 item 9 tests "not short-range").
+        // only units of its own exact type (bkm1 t04: §4.2 step 2 item 7 test 3, correcting "recruits nobody").
         for (size_t n = 0; n < idx.size(); ++n) {
             const Unit& u = units_[idx[n]];
             const LandAttackUnit* e = attack_entry(order, u.d.id);
@@ -1473,6 +1488,7 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
         u->atk_target = -1;
         u->lane.clear();  // s78p: a lane not yet taken goes with the order
         u->lane_d = 0.0f;
+        u->lane_z = 0.0f;
         u->coast = u->fturn = u->path_started = false;  // s78n t18 (0x5ad320): state 0x16, the speed zeroed at once
         u->exit_host = -1;  // s78n t18 [port]: Stop counts as the unit's next order for the garrison-host gate
         end_push(*u);  // a1k t03 [port]: a stop ends a pushed move
@@ -1595,6 +1611,7 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u->atk_target = -1;
     u->lane.clear();  // s78p
     u->lane_d = 0.0f;
+    u->lane_z = 0.0f;
     if (cfg_.mode == MoveMode::Land) u->path_change = frame;
     u->coast = u->fturn = u->path_started = false;
     end_push(*u);  // a1k t03 [port]: a teleport ends a pushed move
@@ -1831,8 +1848,8 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
         u.need_path = false;
         ++stats_.paths_planned;
         // bkm1 t07 (b0055): the path set resets the stack (0x554480): a record pushed onto the old order path after the
-        // order (a TerrainCollision detour while the new order waited) goes with it
-        if (u.pushed) end_push(u);
+        // order (a TerrainCollision detour while the new order waited) goes with it; a failed plan sets no path (review)
+        if (u.pushed && !is_air(u) && (u.forced || use_lane[r] || out[r].ok)) end_push(u);
         std::vector<V2> lane;
         lane.swap(u.lane);  // s78p: a lane is taken by this plan or dropped
         u.around.clear();  // s78n t18: a new path (pack +0x288 := NOW), planned around nobody
@@ -1873,8 +1890,11 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             u.m.escape_until = 2u;
             u.m.frac.clear();  // s78n t26.2: a new record - fractions (1.0, 1.0), turn-done clear
             u.m.turn_done = false;
+            // bkm1 t06 (MOVEMENT §3.5.2 "waypoint z" item 3): 0x40ed70 stores both ends with their heights ([port] the unit's
+            // height and the terrain's at the destination); only the 3-D length reads them (C.11 never sums its one segment)
+            u.m.end_z = 0.0f;
             corner_pass(u);  // s78n t26.3
-            plan_deploy_cap(u, frame);  // s78n t26.1
+            plan_deploy_cap(u, frame, path_length_3d(u.m.path, u.z, terrain(u.goal)));  // s78n t26.1
             set_path_started(u);  // s78n t26.4
             continue;
         }
@@ -1883,6 +1903,9 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             // runs on the lane (§3.5.2 D) and the walk-deployed cap's d is the formation path's 3-D length (§3.2.1 item 2)
             u.m.path = std::move(lane);
             lane_start(u.m.path, u.m.pos);  // where it stands now (it may have walked on since the order)
+            u.m.end_z = u.lane_z;  // bkm1 t06: a slot-leg lane keeps G's height on its last point
+            u.m.end_at = u.m.path.back();
+            u.lane_z = 0.0f;
             u.m.next = 1;
             u.m.escape_until = 0;
             u.m.frac.clear();
@@ -1895,6 +1918,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
         }
         if (out[r].ok) {
             u.m.path = std::move(out[r].points);
+            u.m.end_z = 0.0f;  // bkm1 t06: the pathfinder stores z = 0 at every point
             u.m.next = 1;
             u.m.escape_until = out[r].start_blocked ? 2u : 0u;
             u.m.frac.clear();  // s78n t26.2: a new record - fractions (1.0, 1.0), turn-done clear
@@ -5052,6 +5076,17 @@ void MovementSystem::hash_units(StateHasher& h) const {
                 h.f32(p.y);
             }
             h.f32(u.lane_d);
+            if (u.lane_z != 0.0f) h.f32(u.lane_z);  // bkm1 t06
+        }
+        if (u.lp.secondary) {  // bkm1 t08 (land only): the secondary yaw of a UseSecondaryFacing unit
+            h.u8(0xED);
+            h.f32(u.m.yaw2);
+        }
+        if (u.m.end_z != 0.0f) {  // bkm1 t06 (land only): a stored last-waypoint height
+            h.u8(0xEC);
+            h.f32(u.m.end_z);
+            h.f32(u.m.end_at.x);
+            h.f32(u.m.end_at.y);
         }
         if (u.atk_rho > 0.0f || u.atk_form != 0) {  // s78n t25.2: the attack block of a land attack order (land only)
             h.u8(0xA5);
@@ -5289,7 +5324,9 @@ bool MovementSystem::turn_clip_play(Unit& u, int32_t anim, float speed, float bl
 // s78l t02 (MOVEMENT §3.5.1 "Arrival turn, details" steps 3-6): one frame of the Walk arrival turn. Every handler
 // either ends the frame or runs the next state at once (0x0F -> 0x10 -> 0x11 -> 0x12 -> 0x15 in one frame).
 // [port] "the current clip" A is the clip this turn last played (kAnimNone before the first play: idle-class, not a
-// turn clip); the band threshold T is 10 (ordinary path); UseSecondaryFacing is not modelled.
+// turn clip); the band threshold T is 10 (ordinary path). bkm1 t08 (b0050, MOVEMENT §3.5.3 items 2 / 5): with
+// UseSecondaryFacing, 0x10 also steps Y2 toward the same w at r x SecondaryTurnInPlaceROTCoefficient, and the arrival turn
+// (not a start turn) is reached when Y2 lands with rate left; 0x15's re-test reads the primary yaw only.
 void MovementSystem::arrival_turn_frame(Unit& u, uint32_t frame) const {
     const bool pre = u.d.has_pre_turn_anim;
     const float s = stopped_rate(u);  // 0x374310 at speed 0
@@ -5317,7 +5354,13 @@ void MovementSystem::arrival_turn_frame(Unit& u, uint32_t frame) const {
                 const float e0 = wrap_deg(u.turn_to - u.m.yaw);
                 const float ae0 = std::fabs(e0);
                 u.m.yaw = turn_toward(u.m.yaw, u.turn_to, r);  // 0x61e730: lands exactly when |e| <= r
-                const bool reached = ae0 > r ? false : r - ae0 > 0.0f;
+                bool reached = ae0 > r ? false : r - ae0 > 0.0f;
+                if (u.lp.secondary) {
+                    const float r2 = r * u.d.secondary_in_place;
+                    const float ae2 = std::fabs(wrap_deg(u.turn_to - u.m.yaw2));
+                    u.m.yaw2 = turn_toward(u.m.yaw2, u.turn_to, r2);
+                    if (!u.aturn_start) reached = ae2 > r2 ? false : r2 - ae2 > 0.0f;  // the last waypoint: Y2's leftover
+                }
                 const int32_t a = u.tclip;
                 if (anim_turn_clip(a) && !turn_clip_near_end(u, frame)) return;  // keep the band until the clip ends
                 if (reached) {

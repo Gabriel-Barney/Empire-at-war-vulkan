@@ -230,6 +230,202 @@ void test_lane_segments() {
     }
 }
 
+// ---------------------------------------------------------------- b0036: engagement compatibility in the recruitment
+// MOVEMENT §4.2 step 2 item 7 test 9 [H]: C joins S only when K(C) <= E(S) and K(S) <= E(C), E = the engagement range (a
+// move order: the attack range), K = min(E, Targeting_Min_Attack_Distance). Three vehicles in a row 30 apart; unit 1 is
+// SPMAT-like (E 500, min 220), unit 2 E 200, unit 3 E 500 with no minimum. The seed is the one nearest the centroid, unit
+// 2: unit 1 fails (K 220 > E(2) 200), unit 3 joins; unit 1 seeds its own formation. Without the min-distance query every
+// K is 0 and all three share one formation.
+void test_engagement_recruit() {
+    ::alamo::test::section("engagement_recruit");
+    for (const bool query : {true, false}) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 60);
+        for (const ObjectId id : {ObjectId{1}, ObjectId{2}, ObjectId{3}})
+            CHECK(sys.add_unit(vehicle(id, {200.0f + 30.0f * static_cast<float>(id - 1), 400.0f})));
+        sys.set_attack_range_query([](ObjectId id) { return id == 2 ? 200.0f : 500.0f; });
+        if (query) sys.set_min_attack_distance_query([](ObjectId id) { return id == 1 ? 220.0f : 0.0f; });
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1, 2, 3};
+        o.destination = cell_center(40, 20);
+        sys.move(o, rng, 1);
+        const uint32_t f1 = sys.view(1).form_id, f2 = sys.view(2).form_id, f3 = sys.view(3).form_id;
+        std::printf("engagement recruit (query %d): formations %u %u %u\n", query ? 1 : 0, f1, f2, f3);
+        if (query) {
+            CHECK(f2 == f3 && f1 != f2);
+        } else {
+            CHECK(f1 == f2 && f2 == f3);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- b0096: where a formation member stops
+// MOVEMENT §4.3.3 items 2 - 5 [H]: a member stops on the formation path's last waypoint line moved along the last segment
+// d1 by its depth: G - d1 x depth + d1_perp x lateral, the front row (depth 0) on G's line, the rear rows behind it; not
+// snapped, not reserved. Four vehicles in a 2 x 2 block ordered east on open ground, two of attack range 100 (the front
+// rank, §4.3 item 1) and two of 300: the front pair's goals lie on the line through G (along d1: 0), the rear pair's
+// behind it by the row step, and no goal is on a cell centre.
+void test_member_stop() {
+    ::alamo::test::section("member_stop");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 60);
+    const V2 start[4] = {cell_center(10, 19), cell_center(10, 21), cell_center(8, 19), cell_center(8, 21)};
+    for (ObjectId id = 1; id <= 4; ++id) CHECK(sys.add_unit(vehicle(id, start[id - 1])));
+    sys.set_attack_range_query([](ObjectId id) { return id <= 2 ? 100.0f : 300.0f; });  // two ranks: two rows
+    SimRng rng(5);
+    MoveOrder o;
+    o.units = {1, 2, 3, 4};
+    o.destination = {801.0f, 403.0f};  // off a cell centre
+    sys.move(o, rng, 1);
+    CHECK(sys.stats().formation_paths == 1 && sys.stats().lanes_set == 4);
+    V2 c{};
+    for (const V2& p : start) c = c + p * 0.25f;
+    const V2 g = o.destination;
+    const V2 dd = g - c;
+    const V2 d1 = dd * (1.0f / length(dd));
+    float front = -1e9f, rear = 1e9f;
+    uint32_t on_line = 0, off_centre = 0;
+    for (ObjectId id = 1; id <= 4; ++id) {
+        const V2 goal = sys.view(id).goal;
+        const float a = dot(goal - g, d1);
+        std::printf("member %d goal (%.3f, %.3f) along %.3f\n", static_cast<int>(id), static_cast<double>(goal.x),
+                    static_cast<double>(goal.y), static_cast<double>(a));
+        front = std::max(front, a);
+        rear = std::min(rear, a);
+        if (std::fabs(a) < 1e-2f) ++on_line;
+        const V2 cc = cell_center(world_to_cell(goal.x), world_to_cell(goal.y));
+        if (!(distance(goal, cc) < 1e-3f)) ++off_centre;
+    }
+    CHECK(std::fabs(front) < 1e-2f);  // the front row stops on G's line, not ahead of it
+    CHECK(on_line == 2);
+    CHECK(rear < -10.0f);  // the rear row behind it
+    CHECK(off_centre == 4);
+}
+
+
+// bkm1 t06 (b0051, MOVEMENT §3.5.2 "waypoint z" items 4-5): C.11's rest is the 3-D sum of the stored waypoints, and the
+// pathfinder stores z = 0, so an ordinary path is exactly 2-D (the walk step reads no terrain); only a slot-leg path's last
+// waypoint (G with the target's height, LandMotion::end_z keyed to its point) adds sqrt(l^2 + z^2) on that segment.
+// v^2 / (2a) = 17.5 between the 2-D rest 17 and the 3-D rest 7 + sqrt(10^2 + 6^2) = 18.66.
+void test_stored_z_rest() {
+    ::alamo::test::section("bkm1_stored_z_rest");
+    LocomotorParams lp;
+    lp.max_speed = 2.0f;
+    lp.accel = 1.0f;
+    lp.decel = 4.0f / 35.0f;
+    lp.turn_rate = 10.0f;
+    const auto run = [&](float end_z, V2 end_at) {
+        LandMotion m;
+        m.pos = {1.0f, 0.0f};
+        m.yaw = 0.0f;
+        m.speed = 2.0f;
+        m.state = LocoState::WalkMoving;
+        m.path = {{0.0f, 0.0f}, {10.0f, 0.0f}, {20.0f, 0.0f}};
+        m.next = 1;
+        m.end_z = end_z;
+        m.end_at = end_at;
+        walk_step(m, lp, 3.0e38f, nullptr);
+        return m.state;
+    };
+    const LocoState flat = run(0.0f, {20.0f, 0.0f});
+    const LocoState raised = run(6.0f, {20.0f, 0.0f});
+    const LocoState other = run(6.0f, {20.0f, 1.0f});  // a height stored for another path's end (a push record on top)
+    std::printf("bkm1 stored z: flat %d, slot-leg G at z 6 %d, keyed to another point %d (End Move %d)\n", static_cast<int>(flat),
+                static_cast<int>(raised), static_cast<int>(other), static_cast<int>(LocoState::WalkEndMove));
+    CHECK(flat == LocoState::WalkEndMove);  // 2-D rest 17 < 17.5
+    CHECK(raised != LocoState::WalkEndMove);  // 3-D rest 18.66 > 17.5
+    CHECK(other == LocoState::WalkEndMove);
+}
+
+
+// bkm1 t08 (b0050, MOVEMENT §3.5.3): UseSecondaryFacing. (a) The move step's B2 = clamp(delta2 / SecondaryTurnAngle x f,
+// Min, Max) x R from the error between Y2 and the primary target, the body yaw untouched; (b) within the lookahead of
+// the segment end Y2 aims at the next segment (B2 = Min x R: delta2 is measured to the primary target); (c) the arrival
+// turn ends when Y2 lands at r x SecondaryTurnInPlaceROTCoefficient - with 0.5 a 90-degree turn at 30 / frame lasts
+// 3 frames longer than the body's (Y2 lands on frame 6 with nothing left, reached on frame 7), the body yaws the same.
+void test_secondary_facing() {
+    ::alamo::test::section("bkm1_secondary_facing");
+    LocomotorParams lp;
+    lp.max_speed = 2.0f;
+    lp.accel = lp.decel = 1.0f;
+    lp.turn_rate = 10.0f;
+    lp.secondary = true;
+    {
+        LandMotion m;
+        m.pos = {1.0f, 0.0f};
+        m.speed = 2.0f;
+        m.state = LocoState::WalkMoving;
+        m.path = {{0.0f, 0.0f}, {20.0f, 0.0f}};
+        m.next = 1;
+        m.yaw2 = 45.0f;
+        walk_step(m, lp, 3.0e38f, nullptr);
+        std::printf("bkm1 secondary B2: yaw %.3f, Y2 45 -> %.3f (want 40)\n", static_cast<double>(m.yaw), static_cast<double>(m.yaw2));
+        CHECK(m.yaw == 0.0f && m.yaw2 == 40.0f);
+        LocomotorParams off = lp;
+        off.secondary = false;
+        LandMotion k;
+        k.pos = {1.0f, 0.0f};
+        k.speed = 2.0f;
+        k.state = LocoState::WalkMoving;
+        k.path = {{0.0f, 0.0f}, {20.0f, 0.0f}};
+        k.next = 1;
+        k.yaw2 = 45.0f;
+        walk_step(k, off, 3.0e38f, nullptr);
+        CHECK(k.yaw2 == 45.0f);  // without the flag nothing steps Y2
+    }
+    {
+        LocomotorParams la = lp;
+        la.sec_min = 0.4f;
+        la.sec_max = 0.9f;
+        const auto run = [&](float lookahead) {
+            la.sec_lookahead = lookahead;
+            LandMotion m;
+            m.pos = {8.0f, 0.0f};
+            m.speed = 2.0f;
+            m.state = LocoState::WalkMoving;
+            m.path = {{0.0f, 0.0f}, {10.0f, 0.0f}, {10.0f, 10.0f}};
+            m.next = 1;
+            walk_step(m, la, 3.0e38f, nullptr);
+            return m.yaw2;
+        };
+        const float near_end = run(5.0f), none = run(0.0f);
+        std::printf("bkm1 secondary lookahead: 5 -> Y2 %.3f (want 4), 0 -> %.3f (want 0)\n", static_cast<double>(near_end),
+                    static_cast<double>(none));
+        CHECK(near_end == 4.0f);
+        CHECK(none == 0.0f);
+    }
+    const auto arrival = [](bool secondary, std::vector<float>& yaws) {
+        MovementSystem sys{MovementConfig{}};
+        land_system(sys, 100);
+        UnitDesc d = vehicle(1, cell_center(10, 10), 2.0f);
+        d.stopped_turn_rate = 30.0f;
+        d.use_secondary_facing = secondary;
+        d.secondary_in_place = 0.5f;
+        CHECK(sys.add_unit(d));
+        SimRng rng(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(20, 10);
+        o.final_facing_deg = 90.0f;
+        sys.move(o, rng, 0);
+        uint32_t f = 1;
+        for (; f < 600 && !sys.view(1).arrived; ++f) sys.tick(f, rng);
+        int turning = 0;
+        for (int k = 0; k < 40; ++k, ++f) {
+            sys.tick(f, rng);
+            if (sys.view(1).arrival_turn) ++turning;
+            yaws.push_back(sys.view(1).yaw);
+        }
+        return turning;
+    };
+    std::vector<float> ya, yb;
+    const int plain = arrival(false, ya), sec = arrival(true, yb);
+    std::printf("bkm1 secondary arrival turn: %d frames plain, %d with UseSecondaryFacing\n", plain, sec);
+    CHECK(plain > 0 && sec == plain + 3);
+    CHECK(ya == yb && !ya.empty() && ya.back() == 90.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -237,5 +433,9 @@ int main() {
     test_shield_class();  // bkm1 t03 (b0035)
     test_unplanned_order_kept();  // bkm1 t07 (b0055)
     test_lane_segments();         // bkm1 t01 (b0095)
+    test_engagement_recruit();    // bkm1 t04 (b0036)
+    test_member_stop();           // bkm1 t02 (b0096)
+    test_stored_z_rest();         // bkm1 t06 (b0051)
+    test_secondary_facing();      // bkm1 t08 (b0050)
     return ::alamo::test::report("alamo_tactical_movement_bkm_tests");
 }

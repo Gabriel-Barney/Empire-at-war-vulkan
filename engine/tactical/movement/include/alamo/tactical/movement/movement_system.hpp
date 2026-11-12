@@ -417,6 +417,10 @@ public:
     // move() only (serial). Unset: 0 for every unit (ranks by type name, then id). Transient (host setup): not saved.
     using AttackRangeFn = std::function<float(ObjectId unit)>;
     void set_attack_range_query(AttackRangeFn fn) { attack_range_fn_ = std::move(fn); }
+    // bkm1 t04 (b0036, MOVEMENT §4.2 step 2 item 7 test 9): a unit's Targeting_Min_Attack_Distance (type +0x504; a squad
+    // container: its first live member's), for the recruitment's engagement compatibility. Called from move() only
+    // (serial). Unset: 0 for every unit (the test always passes). Transient (host setup): not saved.
+    void set_min_attack_distance_query(AttackRangeFn fn) { min_attack_fn_ = std::move(fn); }
     // cu8i t02 (CU8G_T02_ENV_PICK_RE §7 / §8 item 7): FormationClass ctor 0x40d0d0, one synced int(1, FPS), for a
     // formation the host creates outside move() (the Load_Map-tail GOM post-load pass, TacticalBattle); and whether a unit
     // already has a coordinator ([port]: an order or a formation; unknown ids have none).
@@ -1092,6 +1096,7 @@ private:
         // formation path's summed 3-D length (the walk-deployed cap's d, §3.2.1 item 2). Cleared by the plan.
         std::vector<V2> lane;
         float lane_d = 0.0f;
+        float lane_z = 0.0f;  // bkm1 t06 (version 31): the stored height of the lane's last point (LandMotion::end_z when taken)
         // s78n t25.2 (MOVEMENT §4.3.2 item 4, save version 28): the attack slot of the unit's formation (block +0x3c /
         // +0x40; 0 / 0 none), the formation of its last attack order (0 none) and that order's target. Cleared by every
         // order that is not an attack re-plan, by stop() and teleport(); kept by halt().
@@ -1297,12 +1302,13 @@ private:
     void deploy_begin_clip(Unit& u, int32_t anim, uint32_t frame);  // start `anim`, reversing the current clip
     void deploy_set(Unit& u, LocoState to, bool finished);
     // s78n t26.1 (deploy_system.cpp): D(x) = 0x39a390, the auto-deployer test 0x39a320(x, 1), the cap test 0x3ac100, the
-    // path start 0x61e570, the idle 0x16 rules and the 3-D length of a land path (heights from the height hook).
+    // path start 0x61e570, the idle 0x16 rules and the 3-D length of a land path (bkm1 t06: the stored waypoint heights -
+    // z0 on the first point, z1 on the last, 0 on every other; MOVEMENT §3.5.2 "waypoint z").
     static bool deployed_d(const Unit& u) { return u.d.deploys && (u.walk_deployed || u.deploy == LocoState::WalkDeployed); }
     static bool auto_deployer(const Unit& u) { return u.d.auto_deploys && u.d.deploys; }
     void deploy_cap_unit(Unit& u, float d, uint32_t frame);
     void deploy_path_start(Unit& u, float remaining, uint32_t frame);
-    float path_length_3d(std::span<const V2> path) const;
+    static float path_length_3d(std::span<const V2> path, float z0 = 0.0f, float z1 = 0.0f);
     bool deploy_walks(const Unit& u) const;  // a 0x19 unit with M > 0 walks a path it holds (the 0x19 branch)
     void walk_out_done(Unit& u);  // s78n t26.1: the move finished - the garrison-host gate ends (reported when set)
     static bool deploy_immobile(const Unit& x);  // deployed / deploying with M <= 0 (push, StoppedVsStopped)
@@ -1726,8 +1732,9 @@ private:
                      const std::vector<uint8_t>& kept, std::span<const FormationMember> mem);
     // s78p (b0049): each member's lane on the formation path `fpath` (Unit::lane, member_lane) and its goal := the lane's end
     // - not for air, forced or `kept` members (indexed like idx) or a member without a goal
+    // bkm1 t06: fz = the stored height of fpath's last point (a slot-leg G; 0 for any other formation path)
     void set_lanes(const std::vector<uint32_t>& idx, const LandForm& f, std::span<const V2> fpath, const std::vector<uint8_t>& kept,
-                   std::span<const FormationMember> mem);
+                   std::span<const FormationMember> mem, float fz = 0.0f);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                     const std::vector<uint32_t>& delays, uint32_t serial);
     void park_space(Unit& u, uint32_t frame);
@@ -1790,6 +1797,7 @@ private:
     uint32_t form_serial_ = 0;                // s78n t20: the last Unit::form_id given (saved, version 18)
     FireTestFn fire_test_;                    // s78n t25.2 (not saved: host setup)
     AttackRangeFn attack_range_fn_;           // s78n t26 review round 2 (not saved: host setup)
+    AttackRangeFn min_attack_fn_;             // bkm1 t04 (not saved: host setup)
     FighterFormationHooks fhooks_;          // s78f t02 (not saved: the loader re-sets them)
     FlyingHooks fly_hooks_;  // FIGHTER_FLYING §6
     // S8 t11

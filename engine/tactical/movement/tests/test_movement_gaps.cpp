@@ -2054,7 +2054,7 @@ static CrcLog mixed_run(const ParallelFor& pf) {
 // cu8j t01 / t02 (2026-11-08): compositions at the next coordinator update (draws, start frames, the jetpack swap's draw)
 // and the hash's pending composition / adopt state.
 // s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the single-member shortcut's exact goal is hashed).
-static constexpr uint64_t kGoldenMixed = 0x46d7924418734dc3ull;  // s78p: formation path and lanes; s78n t26.4: the move step C (no snap); s78n t26.3: the corner pass; s78n t26.2: the speed controller, the start turn (s78n t20: the path stack top, formation identity, the destination check; F5)
+static constexpr uint64_t kGoldenMixed = 0xc3b17af7a5258abeull;  // bkm1: lane fallback / stop point, shield-free class, recruitment, stored z, secondary facing; s78p: formation path and lanes; s78n t26.4: the move step C (no snap); s78n t26.3: the corner pass; s78n t26.2: the speed controller, the start turn (s78n t20: the path stack top, formation identity, the destination check; F5)
 
 // ---------------------------------------------------------------- SPACE_AVOIDANCE (fighter avoidance hook rules)
 // A wall model: one collision mesh, the square x, z in [-50, 50] of the model plane y = 0 (two triangles).

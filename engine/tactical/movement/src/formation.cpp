@@ -96,22 +96,33 @@ std::vector<std::vector<uint32_t>> split_into_formations(std::span<const Formati
         remaining.erase(remaining.begin() + static_cast<std::ptrdiff_t>(si));
         std::vector<uint32_t> f{seed};
         const FormationMember& s = m[seed];
-        // s78n t25.2: the attack solo rule; s78n t25 fix: the short-range rule (MOVEMENT §4.2 item 4 / item 6)
-        if (s.grouping != kGroupingSolo && !s.solo_attack && !s.short_range_attack) {
+        // s78n t25.2: the attack solo rule (MOVEMENT §4.2 item 6). bkm1 t04 (§4.2 step 2 item 7 test 3 [H]): a short-range
+        // seed recruits only units of its own exact type (corrects the s78n t25 fix, which recruited nobody)
+        if (s.grouping != kGroupingSolo && !s.solo_attack) {
             bool grew = true;
             while (grew) {
                 grew = false;
                 for (size_t i = 0; i < remaining.size();) {
                     const uint32_t cand = remaining[i];
                     const FormationMember& o = m[cand];
-                    bool ok = false;
+                    bool ok = !s.short_range_attack || o.type_name == s.type_name;
+                    if (!ok) {
+                        ++i;
+                        continue;
+                    }
                     if (s.grouping == kGroupingStandard) ok = o.grouping == kGroupingStandard;
                     else if (s.grouping == kGroupingSameOrder) ok = o.grouping == kGroupingSameOrder && o.order == s.order;
+                    else ok = false;  // an unknown grouping (a mod's typo) recruits nobody
                     if (ok && compatible) ok = compatible(seed, cand);
                     if (ok && double_click_speed_ratio > 0.0f && o.max_speed != 0.0f) {  // 0x80 speed band (0x43c1b0)
                         const float hi = std::max(o.max_speed, s.max_speed), lo = std::min(o.max_speed, s.max_speed);
                         ok = lo > 0.0f && !(hi / lo > double_click_speed_ratio);
                     }
+                    // bkm1 t04 (b0036, §4.2 step 2 item 7 test 9 [H]): the engagement compatibility, both ways, no tolerance
+                    if (ok) ok = !(o.min_engage > s.engage) && !(s.min_engage > o.engage);
+                    // test 10 [H]: on an attack order a candidate that is solo by item 6 (melee, in max range, or within
+                    // r + E + Solo_Attack_Range of the target) is skipped - it seeds its own formation
+                    if (ok) ok = !o.solo_attack;
                     if (ok) {
                         const float rd = (o.collision_class == 5 && !o.team_member) ? k.infantry_formation_recruitment_distance
                                                                                       : k.vehicle_formation_recruitment_distance;
@@ -132,6 +143,7 @@ std::vector<std::vector<uint32_t>> split_into_formations(std::span<const Formati
                         f.push_back(cand);
                         remaining.erase(remaining.begin() + static_cast<std::ptrdiff_t>(i));
                         grew = true;
+                        i = 0;  // bkm1 t04 (§4.2 step 2 item 7 "Scan" [H]): after every recruit the scan restarts
                     } else {
                         ++i;
                     }

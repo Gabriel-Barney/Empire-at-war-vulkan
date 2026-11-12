@@ -250,10 +250,13 @@ struct LanePt {
 // segment; the port walks the lane, so a segment that fails the unit's class (the static line test 0x5a4c10) falls back
 // onto the formation path - its far point to its origin, and while the segment before it then fails, the point before
 // too, backwards. The formation path's segments pass the formation's class, which lies inside each member's.
-void lane_fallback(const PassabilityGrid& grid, std::vector<V2>& p, const std::vector<V2>& o, uint32_t mask) {
+// `keep_last`: the last point is the member's stop point (MOVEMENT §4.3.3 item 5: never moved), so a failing last segment
+// falls back on the points before it only.
+void lane_fallback(const PassabilityGrid& grid, std::vector<V2>& p, const std::vector<V2>& o, uint32_t mask,
+                   bool keep_last = false) {
     for (size_t j = 1; j < p.size(); ++j) {
         if (line_passable(grid, p[j - 1], p[j], mask)) continue;
-        p[j] = o[j];
+        if (!(keep_last && j + 1 == p.size())) p[j] = o[j];
         for (size_t k = j; k > 0 && !line_passable(grid, p[k - 1], p[k], mask); --k) p[k - 1] = o[k - 1];
     }
 }
@@ -305,6 +308,19 @@ std::vector<V2> formation_lane(const PassabilityGrid& grid, std::span<const V2> 
     return out;
 }
 
+V2 lane_end(std::span<const V2> fpath, const LaneShape& shape, float back) {
+    const size_t n = fpath.size();
+    if (n == 0) return {};
+    V2 d1{};
+    for (size_t k = n - 1; k > 0 && length_sq(d1) == 0.0f; --k) {
+        const V2 d = fpath[k] - fpath[k - 1];
+        const float l = length(d);
+        if (l > 0.0f) d1 = V2{d.x / l, d.y / l};
+    }
+    const float total = path_length(fpath);
+    return fpath[n - 1] - d1 * back + perp_left(d1) * shape.offset(total - back);
+}
+
 std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, float back,
                             uint32_t mask, V2 pos) {
     std::vector<V2> out{pos};
@@ -333,43 +349,12 @@ std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpa
         out[0] = lane[0].p;
         org[0] = lane[0].o;
     }
-    // the end: arc length q = total - back on the formation path; the segment's direction (exact normalise). A front-row
-    // member (back < 0: the layout centres its depth) ends ahead of the path's end, along the last segment.
-    const float q = total - back;
-    const auto seg_dir = [&](size_t k) {
-        const V2 d = fpath[k] - fpath[k - 1];
-        const float l = length(d);
-        return l > 0.0f ? V2{d.x / l, d.y / l} : V2{};
-    };
-    size_t first = 0;
-    for (size_t k = 1; k < n && first == 0; ++k)
-        if (distance(fpath[k - 1], fpath[k]) > 0.0f) first = k;
-    V2 o = fpath[0], d{};
-    if (first != 0) {
-        if (!(q > 0.0f)) {
-            d = seg_dir(first);
-            o = fpath[first - 1] + d * q;
-        } else {
-            float acc = 0.0f;
-            bool found = false;
-            for (size_t k = 1; k < n && !found; ++k) {
-                const float l = distance(fpath[k - 1], fpath[k]);
-                if (!(l > 0.0f)) continue;
-                d = seg_dir(k);
-                if (q <= acc + l) {
-                    o = fpath[k - 1] + d * (q - acc);
-                    found = true;
-                } else {
-                    acc += l;
-                }
-            }
-            if (!found) o = fpath[n - 1] + d * (q - acc);  // past the end: d is the last segment's direction
-        }
-    }
-    const bool no_grid = grid.width() == 0 || grid.height() == 0;
-    out.push_back(lane_point(grid, no_grid, o, d, shape.offset(q), mask));
-    org.push_back(o);
-    if (!no_grid) lane_fallback(grid, out, org, mask);  // bkm1 t01: the points kept and the end, as lane_points
+    // bkm1 t02 (b0096, MOVEMENT §4.3.3 items 2 - 5 [H]): the member stops on the formation path's last waypoint line moved
+    // along the last segment by its depth - G + d1 (-back) + d1_perp L, L its lateral at that arc position (slot +
+    // squeeze); not along the path's arc, not pulled in, not snapped, not reserved (lane_end)
+    out.push_back(lane_end(fpath, shape, back));
+    org.push_back(out.back());
+    if (grid.width() != 0 && grid.height() != 0) lane_fallback(grid, out, org, mask, true);  // bkm1 t01: the end is kept
     lane_start(out, pos);
     return out;
 }

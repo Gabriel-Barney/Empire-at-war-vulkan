@@ -66,8 +66,14 @@ struct FormationMember {
     // Solo_Attack_Range of the target) recruits nobody, as a Solo seed
     bool solo_attack = false;
     // s78n t25 fix (MOVEMENT §4.2 item 6 / item 4 first bullet): otherwise a short-range seed (d < E_r x
-    // Short_Range_Attack_Formation_Coefficient) recruits nobody
+    // Short_Range_Attack_Formation_Coefficient) recruits only units of its own exact type (bkm1 t04, §4.2 step 2 item 7
+    // test 3; it recruited nobody before)
     bool short_range_attack = false;
+    // bkm1 t04 (b0036, MOVEMENT §4.2 step 2 item 7 test 9 [H]): E = the engagement range 0x4f6e40 (a move: the attack
+    // range; an attack: LandAttackUnit::engage) and K = min(E, Targeting_Min_Attack_Distance), 0 under a guard block. A
+    // candidate C joins seed S only when K(C) <= E(S) and K(S) <= E(C).
+    float engage = 0.0f;
+    float min_engage = 0.0f;
 };
 
 std::vector<std::vector<uint32_t>> kmeans_buckets(std::span<const FormationMember> m, float max_formation_area,
