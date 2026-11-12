@@ -844,7 +844,8 @@ def saboteur_data(recs):
             continue
         f = r['f']
         row = {'kind': r['kind'], 'f': num(f.get('f'))}
-        for k in ('stage', 'stage2', 'blk', 'res', 'dt', 'units', 'tgtc', 'by', 'line', 'age', 'k'):
+        for k in ('stage', 'stagek', 'stages', 'stage2', 'stage2k', 'blk', 'res', 'dt', 'units', 'tgtc', 'by', 'line', 'age',
+                  'k'):
             if k in f:
                 row[k] = f[k]
         (run['ends'] if r['kind'] in END_KINDS else run['progress']).append(row)
@@ -852,6 +853,7 @@ def saboteur_data(recs):
         for x in run['progress']:
             if x['kind'] == 'PSTAGE':
                 run['stage'] = up(x.get('stage'))
+                run['stagek'] = x.get('stagek')          # a2m t12: obj / type / ERR (absent before a2m: stage=ERR)
                 run['f_stage'] = x['f']
             elif x['kind'] == 'PPROD':
                 run['produce'] = x.get('res')
@@ -944,7 +946,7 @@ def render_saboteur(res):
                      r['prev']))
     if sab['orphans']:
         L.append('     progress / end records whose PSTART was not found (lost from the scan): %d' % sab['orphans'])
-    L.append('   saboteur timeline per object id (U/US every 30 frames: pl, parent fleet type / id / member count / '
+    L.append('   saboteur timeline per object id (U/US every 30 frames, every 300 after 1400 in a --sab-long run: pl, parent fleet type / id / member count / '
              'planet (parpl=nil: in transit); F/FSAB every free-store service (8 s): st = Is_Object_On_Free_Store, '
              'tr = Is_Unit_In_Transit; F/FSVC = On_Unit_Service (unreserved store entry); F/FADD = admission):')
     if not sab['timeline']:
@@ -998,6 +1000,21 @@ def render_saboteur(res):
                 cells.append('%-17s' % ('-' if d is None else ('%s/%s%s' % (d.get('CP'), d.get('SP'),
                                                                            ' c' if d.get('cor') == 'true' else ''))))
             L.append('     %5s ' % fi(fr) + ' '.join(cells))
+        # a2m t12: the planet owners and corruption at the UD samples (the long run's "who holds Kashyyyk" question)
+        own = []
+        last = {}
+        for fr in frames:
+            for t in tg:
+                d = sab['desire'][fr].get(t) or {}
+                sig = (d.get('own'), d.get('cor'))
+                if t not in last:
+                    last[t] = sig
+                elif sig != last[t]:
+                    own.append('f%s %s %s%s -> %s%s' % (fi(fr), t, last[t][0], ' c' if last[t][1] == 'true' else '',
+                                                        sig[0], ' c' if sig[1] == 'true' else ''))
+                    last[t] = sig
+        L.append('   planet owner / corruption changes at the UD samples (frames %s .. %s; c = corrupted): %s' % (
+            fi(frames[0]) if frames else '-', fi(frames[-1]) if frames else '-', ', '.join(own) or 'none'))
     return L
 
 

@@ -2047,6 +2047,113 @@ function MainForce_Thread()
 end
 )";
 
+// a2m t02 (A2L_T01_RE_ANSWERS Q8): a task force whose two members sit in two fleets; Move_To moves only the FleetObject.
+static const char* kPlanA2mMoveTo = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Frigate = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  GlobalValue.Set("a2m_count0", MainForce.Get_Force_Count())
+  local block = MainForce.Move_To(Target)
+  if block then GlobalValue.Set("a2m_block", 1) else GlobalValue.Set("a2m_block", 0) end
+  BlockOnCommand(block)
+  GlobalValue.Set("a2m_count1", MainForce.Get_Force_Count())
+  GlobalValue.Set("a2m_done", 1)
+  ScriptExit()
+end
+)";
+// a2m t05 (A2M_T04_RE_ANSWERS Q6): Land_Units lands a transport only at a planet whose ground owner is the player or an
+// ally; elsewhere it fires Ground_Activated abilities only. The infantry launches at the Empire's P0, lands back there,
+// launches again, flies with the hero to the target and is not landed there.
+static const char* kPlanA2mLand = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Infantry = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  BlockOnCommand(MainForce.Launch_Units())
+  Sleep(2)
+  GlobalValue.Set("a2m_l_launched", 1)
+  local st = MainForce.Land_Units()
+  if st then GlobalValue.Set("a2m_l_home", 1) else GlobalValue.Set("a2m_l_home", 0) end
+  BlockOnCommand(st)
+  Sleep(2)
+  GlobalValue.Set("a2m_l_landed", 1)
+  BlockOnCommand(MainForce.Launch_Units())
+  Sleep(2)
+  BlockOnCommand(MainForce.Move_To(Target))
+  Sleep(2)
+  local st2 = MainForce.Land_Units()
+  if st2 then GlobalValue.Set("a2m_l_away", 1) else GlobalValue.Set("a2m_l_away", 0) end
+  BlockOnCommand(st2)
+  Sleep(2)
+  GlobalValue.Set("a2m_l_done", 1)
+  ScriptExit()
+end
+)";
+// a2m t10 (A2M_T08_T10_T14_RE t10.3): No_Units_Remaining on each member loss that leaves no counted entry. The handler
+// counts the events and the thread keeps the plan alive.
+static const char* kPlanA2mNur = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Infantry = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  GlobalValue.Set("a2m_n_started", MainForce.Get_Force_Count())
+  while true do Sleep(1) end
+end
+function MainForce_No_Units_Remaining()
+  NurCount = (NurCount or 0) + 1
+  GlobalValue.Set("a2m_nur", NurCount)
+end
+)";
+// a2m t02 (A2L_T01_RE_ANSWERS Q8.2): the thread waits for the test to remove a member, then calls Move_To. The test
+// destroys the member in the FleetObject (TF +0x120); Move_To must move the re-elected fleet. The thread then stays
+// alive, so the task force can still be read.
+static const char* kPlanA2mReelect = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Frigate = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  GlobalValue.Set("a2m_r_ready", 1)
+  while not GlobalValue.Get("a2m_r_go") do Sleep(1) end
+  GlobalValue.Set("a2m_r_count", MainForce.Get_Force_Count())
+  local block = MainForce.Move_To(Target)
+  if block then GlobalValue.Set("a2m_r_block", 1) else GlobalValue.Set("a2m_r_block", 0) end
+  BlockOnCommand(block)
+  GlobalValue.Set("a2m_r_done", 1)
+  while true do Sleep(1) end
+end
+)";
+// a2m t02 (A2K_T08_RE_ANSWERS Q2.3 step 4, A2L_T01_RE_ANSWERS Q8.3): Produce_Force to the stage launches a member that
+// sits on the stage's surface and merges it into the FleetObject, so the following Move_To takes it along. The thread
+// waits for the test between the two.
+static const char* kPlanA2mStage = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Infantry = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  BlockOnCommand(MainForce.Produce_Force(MainForce.Get_Stage()))
+  GlobalValue.Set("a2m_s_produced", 1)
+  while not GlobalValue.Get("a2m_s_go") do Sleep(1) end
+  BlockOnCommand(MainForce.Move_To(Target))
+  GlobalValue.Set("a2m_s_done", 1)
+  ScriptExit()
+end
+)";
 struct ParityWorld {
     MemoryFiles files;
     AiDefinitions defs;
@@ -2081,6 +2188,11 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\MainEscort.lua", kPlanMainEscort);
         files.add("Data\\Scripts\\AI\\A2lNoTarget.lua", kPlanA2lNoTarget);
         files.add("Data\\Scripts\\AI\\A2lPlainProduce.lua", kPlanA2lPlainProduce);
+        files.add("Data\\Scripts\\AI\\A2mMoveTo.lua", kPlanA2mMoveTo);
+        files.add("Data\\Scripts\\AI\\A2mLand.lua", kPlanA2mLand);
+        files.add("Data\\Scripts\\AI\\A2mNur.lua", kPlanA2mNur);
+        files.add("Data\\Scripts\\AI\\A2mReelect.lua", kPlanA2mReelect);
+        files.add("Data\\Scripts\\AI\\A2mStage.lua", kPlanA2mStage);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2282,6 +2394,30 @@ static void test_parity_rules() {
     }
 }
 
+// a2m t09 (A2M_T08_T10_T14_RE t08) [H]: the AI clock leaves use the float spf = 1.0f / 30.0f, not frame / 30.
+static void test_ai_clock_precision() {
+    CHECK(kAiSecondsPerFrame == 0.033333335f);
+    // Game.Age = (double)frame x (double)spf: Age > 120 first holds at frame 3600 (frame / 30 gave exactly 120.0 there).
+    CHECK(galactic_ai_game_age(0) == 0.0);
+    CHECK(galactic_ai_game_age(3599) < 120.0 && galactic_ai_game_age(3600) > 120.0);
+    CHECK(galactic_ai_game_age(3600) == 3600.0 * static_cast<double>(0.033333335f));
+    CHECK(galactic_ai_game_age(30) > 1.0 && galactic_ai_game_age(29) < 1.0);
+    // TimeSinceCorruptionChange = (double)(float)((float)(uint32)(frame - stamp) x spf): rounded to float, so at the
+    // whole seconds it lands on 1.0 / 2.0 exactly while Game.Age is a little above (the saboteur desire "on" frames).
+    CHECK(galactic_ai_time_since_corruption_change(30, 0) == 1.0 && galactic_ai_time_since_corruption_change(60, 0) == 2.0);
+    CHECK(galactic_ai_game_age(30) > galactic_ai_time_since_corruption_change(30, 0));
+    CHECK(galactic_ai_game_age(60) > galactic_ai_time_since_corruption_change(60, 0));
+    CHECK(galactic_ai_time_since_corruption_change(3599, 0) < 120.0 && galactic_ai_time_since_corruption_change(3600, 0) > 120.0);
+    CHECK(galactic_ai_time_since_corruption_change(3600, 0) == static_cast<double>(120.00000762939453f));
+    CHECK(galactic_ai_time_since_corruption_change(130, 100) == static_cast<double>(30.0f * 0.033333335f));
+    // TimeSinceConversion / Ground / SpaceConflict: (double)(int32)(NOW - stamp) x (double)spf, never = (double)1e18f.
+    CHECK(galactic_ai_time_since_stamp(100, -1) == 999999984306749440.0);
+    CHECK(galactic_ai_time_since_stamp(3700, 100) == galactic_ai_game_age(3600));
+    CHECK(galactic_ai_time_since_stamp(3699, 100) < 120.0 && galactic_ai_time_since_stamp(3700, 100) > 120.0);
+    std::printf("ai clock: age(3600) %.13f, since corruption(3600) %.13f, never %.1f\n", galactic_ai_game_age(3600),
+                galactic_ai_time_since_corruption_change(3600, 0), galactic_ai_time_since_stamp(0, -1));
+}
+
 // A2k t02: the per-target stage (A2K_T02_RE_ANSWERS Q1) and FreeStore Setup A (Q2(c)) on the synthetic chain P0..P7
 // (the Empire holds P0 / P1, its hero and frigate at P0; Conquer_Planet = Enemy_destination, level 2).
 static void test_stage_and_setup_a() {
@@ -2342,7 +2478,8 @@ static void test_stage_and_setup_a() {
         CHECK(!drop.has(drop.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok), drop.hero));
     }
     {
-        // a2l t03 (Q4.3): a unit in hyperspace stays a candidate, keyed by its fleet's planet (the hop's source).
+        // a2l t03 (Q4.3): a unit in hyperspace stays a candidate; a2m t05 (A2M_T04_RE_ANSWERS Q1.3): keyed by its fleet's
+        // FleetDataPack +0x50, the move's final destination.
         ParityWorld pw(false, {"HeroDeny"});
         pw.run(2);
         objects::ObjectHandle h;
@@ -2392,6 +2529,287 @@ static void test_null_stage_and_plain_produce() {
     CHECK(num("a2l_nt_stage") == 0.0 && num("a2l_nt_done") == 1.0);  // nil stage; Produce_Force() finishes in place
     CHECK(num("a2l_t_stage") == 1.0 && num("a2l_t_done") == 1.0);    // a targeted TF has a stage ...
     CHECK(!hero_moved);                                                // ... but plain Produce_Force() does not gather
+    pw.world->set_global_values(nullptr);
+}
+
+// a2m t02 (A2L_T01_RE_ANSWERS Q8.1 / Q8.2) [H]: Move_To moves the task force's FleetObject only (the parent fleet of
+// the first member added, TF +0x120); a member in another fleet stays where it is and is still counted.
+static void test_move_to_fleet_object() {
+    // The Empire's frigate starts at P1 instead of P0: the hero (P0) and the frigate (P1) are in two fleets.
+    ParityWorld pw(false, {"A2mMoveTo"}, [](gal::GalacticSetup& s) {
+        for (gal::StartingForce& f : s.forces)
+            if (f.player == 0 && f.type == tFrigate) f.planet = 1;
+    });
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    auto where = [&pw](uint32_t type) -> int64_t {  // the planet of the Empire's unit of this type; -2 in transit
+        for (const gal::FleetState& f : pw.sim->fleets())
+            if (f.alive && f.owner == 0)
+                for (const objects::ObjectHandle u : f.contents)
+                    if (pw.store->alive(u) && pw.store->type(u) == type) return f.moving ? -2 : static_cast<int64_t>(f.planet);
+        return -1;
+    };
+    CHECK(where(pw.hero) == 0 && where(tFrigate) == 1);
+    bool hero_left = false, frigate_left = false;
+    for (int32_t f = 1; f <= 30 * 300 && num("a2m_done") < 0.0; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        hero_left = hero_left || where(pw.hero) != 0;
+        frigate_left = frigate_left || where(tFrigate) != 1;
+    }
+    std::printf("move_to fleet object: block %.0f, members %.0f -> %.0f, hero moved %s, frigate moved %s\n", num("a2m_block"),
+                num("a2m_count0"), num("a2m_count1"), hero_left ? "yes" : "no", frigate_left ? "yes" : "no");
+    CHECK(num("a2m_done") == 1.0 && num("a2m_block") == 1.0);
+    CHECK(num("a2m_count0") == 2.0 && num("a2m_count1") == 2.0);  // the member left behind is still in the task force
+    CHECK(hero_left != frigate_left);                              // exactly one fleet moved
+    pw.world->set_global_values(nullptr);
+}
+
+// a2m t02 (A2L_T01_RE_ANSWERS Q8.2) [H; M on 0x1b]: the FleetObject (TF +0x120) is re-elected when it is destroyed
+// (signal 0x10) and, the port's [M] reading of the members' 0x1b, when it no longer holds any task-force member. The
+// hero (P0) and the frigate (P1) start in two fleets and the test destroys the member that is in the FleetObject. In
+// the "emptied" case a Corvette that is not a member shares each starting fleet, so the FleetObject lives on without a
+// member. Either way the new FleetObject is the other member's fleet, and Move_To moves that fleet and nothing else.
+static void test_fleet_object_reelection() {
+    for (const bool emptied : {false, true}) {
+        ParityWorld pw(false, {"A2mReelect"}, [emptied](gal::GalacticSetup& s) {
+            for (gal::StartingForce& f : s.forces)
+                if (f.player == 0 && f.type == tFrigate) f.planet = 1;
+            if (emptied) {
+                s.forces.push_back({0, 0, tCorvette});
+                s.forces.push_back({0, 1, tCorvette});
+            }
+        });
+        lua::GlobalValueStore gv;
+        pw.world->set_global_values(&gv);
+        auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+        int32_t frame = 1;
+        auto step = [&pw, &frame]() {
+            pw.sim->update();
+            pw.world->update_player(0, frame, true, false);
+            ++frame;
+        };
+        while (frame <= 30 * 120 && num("a2m_r_ready") < 0.0) step();
+        CHECK(num("a2m_r_ready") == 1.0);
+        const uint32_t fo = pw.world->task_force_fleet_object(0, "MainForce");
+        CHECK(fo != gal::kNoFleet && fo < pw.sim->fleets().size());
+        if (fo == gal::kNoFleet || fo >= pw.sim->fleets().size()) continue;
+        // The member in the FleetObject (destroyed) and the member in the other fleet (kept); the non-member Corvette that
+        // shares the FleetObject (one shares the kept member's fleet too and moves with it: Move_To moves the whole fleet).
+        objects::ObjectHandle gone, kept;
+        std::vector<std::pair<objects::ObjectHandle, int64_t>> corvettes;  // unit, start planet
+        for (uint32_t i = 0; i < pw.sim->fleets().size(); ++i) {
+            const gal::FleetState& fs = pw.sim->fleets()[i];
+            if (!fs.alive || fs.owner != 0) continue;
+            for (const objects::ObjectHandle u : fs.contents) {
+                if (!pw.store->alive(u)) continue;
+                const uint32_t t = pw.store->type(u);
+                if (t == pw.hero || t == tFrigate) (i == fo ? gone : kept) = u;
+                if (t == tCorvette && i == fo) corvettes.emplace_back(u, static_cast<int64_t>(fs.planet));
+            }
+        }
+        CHECK(static_cast<bool>(gone) && static_cast<bool>(kept));
+        if (!gone || !kept) continue;
+        const uint32_t kept_fleet = pw.sim->fleet_containing(kept);
+        const int64_t kept_from = static_cast<int64_t>(pw.sim->fleets()[kept_fleet].planet);
+        CHECK(kept_fleet != fo);
+        CHECK(pw.sim->fleets()[fo].contents.size() == (emptied ? 2u : 1u));
+        CHECK(corvettes.size() == (emptied ? 1u : 0u));
+        CHECK(pw.sim->destroy_object(gone));
+        const bool fo_lives = pw.sim->fleets()[fo].alive && !pw.sim->fleets()[fo].contents.empty();
+        CHECK(fo_lives == emptied);  // destroyed (0x10) / alive without a member (0x1b [M])
+        lua::AiGlobalValue go;
+        go.kind = lua::AiGlobalValue::Number;
+        go.number = 1.0;
+        gv.set("a2m_r_go", go);
+        bool kept_left = false, corvette_moved = false;
+        const int32_t end = frame + 30 * 300;
+        while (frame <= end && num("a2m_r_done") < 0.0) {
+            step();
+            const uint32_t kf = pw.sim->fleet_containing(kept);
+            kept_left = kept_left || kf == gal::kNoFleet || pw.sim->fleets()[kf].moving ||
+                        static_cast<int64_t>(pw.sim->fleets()[kf].planet) != kept_from;
+            for (const auto& [c, from] : corvettes) {
+                const uint32_t cf = pw.sim->fleet_containing(c);
+                corvette_moved = corvette_moved || cf == gal::kNoFleet || pw.sim->fleets()[cf].moving ||
+                                 static_cast<int64_t>(pw.sim->fleets()[cf].planet) != from;
+            }
+        }
+        const uint32_t after = pw.world->task_force_fleet_object(0, "MainForce");
+        std::printf("fleet object re-election (%s): FleetObject %u -> %u (kept member's fleet %u), block %.0f, members %.0f, "
+                    "kept member moved %s, the old FleetObject's corvette moved %s\n",
+                    emptied ? "emptied, 0x1b" : "destroyed, 0x10", fo, after, pw.sim->fleet_containing(kept), num("a2m_r_block"),
+                    num("a2m_r_count"), kept_left ? "yes" : "no", corvette_moved ? "yes" : "no");
+        CHECK(num("a2m_r_done") == 1.0 && num("a2m_r_block") == 1.0);  // Move_To found a FleetObject
+        CHECK(num("a2m_r_count") == 1.0);
+        CHECK(kept_left);        // the re-elected fleet moved ...
+        CHECK(!corvette_moved);  // ... and the emptied old FleetObject stayed
+        CHECK(after == pw.sim->fleet_containing(kept) && after != fo);
+        pw.world->set_global_values(nullptr);
+    }
+}
+
+// a2m t02 (A2K_T08_RE_ANSWERS Q2.3 step 4 TRANSPORTS_TO_ORBIT, A2L_T01_RE_ANSWERS Q8.3) [H state; M name]: Produce_Force
+// to the stage launches a member that is on the stage's surface and merges it into the FleetObject (DO_TASK_FORCE_MERGE),
+// so the following Move_To, which moves the FleetObject only, takes it along. Without the launch the infantry would
+// stay on P2's surface and Move_To would leave it behind (the a2l saboteur break: corruption -1 instead of 6).
+static void test_produce_force_stage_launch() {
+    ParityWorld pw(false, {"A2mStage"}, own_p2);  // P2 held: Conquer_Planet @P3 stages at P2, where an infantry waits
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    std::vector<std::pair<objects::ObjectHandle, int64_t>> infantry;  // unit, the planet whose surface it starts on
+    for (uint32_t p = 0; p < pw.sim->planets().size(); ++p)
+        for (const objects::ObjectHandle u : pw.sim->planets()[p].surface)
+            if (pw.store->alive(u) && pw.store->type(u) == tInfantry && pw.sim->planets()[p].owner == 0)
+                infantry.emplace_back(u, static_cast<int64_t>(p));
+    objects::ObjectHandle hero;
+    for (const gal::FleetState& f : pw.sim->fleets())
+        if (f.alive && f.owner == 0)
+            for (const objects::ObjectHandle u : f.contents)
+                if (pw.store->alive(u) && pw.store->type(u) == pw.hero) hero = u;
+    CHECK(static_cast<bool>(hero) && !infantry.empty());
+    int32_t frame = 1;
+    auto step = [&pw, &frame]() {
+        pw.sim->update();
+        pw.world->update_player(0, frame, true, false);
+        ++frame;
+    };
+    while (frame <= 30 * 400 && num("a2m_s_produced") < 0.0) step();
+    CHECK(num("a2m_s_produced") == 1.0);
+    // The claimed infantry is the one in the hero's fleet now.
+    const uint32_t hf = pw.sim->fleet_containing(hero);
+    CHECK(hf != gal::kNoFleet);
+    if (hf == gal::kNoFleet) return;
+    const int64_t stage = static_cast<int64_t>(pw.sim->fleets()[hf].planet);
+    objects::ObjectHandle inf;
+    int64_t inf_from = -1;
+    for (const auto& [u, p] : infantry)
+        if (pw.sim->fleet_containing(u) == hf) {
+            inf = u;
+            inf_from = p;
+        }
+    const uint32_t fo = pw.world->task_force_fleet_object(0, "MainForce");
+    std::printf("produce_force stage launch: stage P%lld, infantry from P%lld's surface in the FleetObject %s (fleet %u, "
+                "FleetObject %u)\n",
+                static_cast<long long>(stage), static_cast<long long>(inf_from), inf ? "yes" : "no", hf, fo);
+    CHECK(!pw.sim->fleets()[hf].moving && stage == 2);
+    CHECK(static_cast<bool>(inf) && inf_from == stage);  // launched from the stage's surface, merged with the hero
+    CHECK(fo == hf);                                     // into the FleetObject
+    if (!inf) return;
+    lua::AiGlobalValue go;
+    go.kind = lua::AiGlobalValue::Number;
+    go.number = 1.0;
+    gv.set("a2m_s_go", go);
+    while (frame <= 30 * 800 && num("a2m_s_done") < 0.0) step();
+    const uint32_t hf2 = pw.sim->fleet_containing(hero), if2 = pw.sim->fleet_containing(inf);
+    const int64_t hero_at = hf2 == gal::kNoFleet ? -1 : static_cast<int64_t>(pw.sim->fleets()[hf2].planet);
+    std::printf("produce_force stage launch: Move_To done %.0f, hero at P%lld, infantry in its fleet %s\n", num("a2m_s_done"),
+                static_cast<long long>(hero_at), hf2 == if2 ? "yes" : "no");
+    CHECK(num("a2m_s_done") == 1.0);
+    CHECK(hf2 != gal::kNoFleet && hf2 == if2 && hero_at != stage);  // the Move_To took the launched infantry along
+    pw.world->set_global_values(nullptr);
+}
+
+// a2m t05 (A2M_T04_RE_ANSWERS Q6) [H]: Land_Units lands a transport (port: a ground-kind fleet member) at the player's
+// own planet, refuses to land it anywhere else, and with the surface count == Max_Ground_Forces_On_Planet lands nothing
+// (The over-full case, count > max, passes Land_Units' == test, but the sim's land order then refuses the unit, so it
+// is not observable end to end.)
+static void test_land_units_owner_rule() {
+    struct Result {
+        bool home_status = false, away_status = false, done = false;
+        int64_t home_landed = 0;   // frames the infantry spent on P0's surface after the first launch
+        int64_t end_planet = -1;   // the infantry's planet at the end (fleet at a planet)
+        bool end_in_fleet = false;
+    };
+    const auto run_case = [](int32_t max_forces) {
+        Result r;
+        ParityWorld pw(false, {"A2mLand"},
+                       [](gal::GalacticSetup& s) {
+                           for (gal::StartingForce& f : s.forces)
+                               if (f.player == 0 && f.type == tInfantry) f.planet = 0;  // with the hero at P0
+                       },
+                       [max_forces](gal::GalacticRules& rr) { rr.constants.max_ground_forces_on_planet = max_forces; });
+        lua::GlobalValueStore gv;
+        pw.world->set_global_values(&gv);
+        auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+        objects::ObjectHandle inf;
+        for (const objects::ObjectHandle u : pw.sim->planets()[0].surface)
+            if (pw.store->type(u) == tInfantry) inf = u;
+        CHECK(static_cast<bool>(inf));
+        for (int32_t f = 1; f <= 30 * 400 && num("a2m_l_done") < 0.0; ++f) {
+            pw.sim->update();
+            pw.world->update_player(0, f, true, false);
+            if (num("a2m_l_launched") >= 0.0 && num("a2m_l_landed") < 0.0) {
+                const auto& surf = pw.sim->planets()[0].surface;
+                r.home_landed += std::find(surf.begin(), surf.end(), inf) != surf.end() ? 1 : 0;
+            }
+        }
+        r.home_status = num("a2m_l_home") == 1.0;
+        r.away_status = num("a2m_l_away") == 1.0;
+        r.done = num("a2m_l_done") == 1.0;
+        const uint32_t fl = pw.sim->fleet_containing(inf);
+        r.end_in_fleet = fl != gal::kNoFleet && !pw.sim->fleets()[fl].moving;
+        r.end_planet = r.end_in_fleet ? static_cast<int64_t>(pw.sim->fleets()[fl].planet) : -1;
+        pw.world->set_global_values(nullptr);
+        return r;
+    };
+    // P0's surface holds nothing else of the Empire's ground forces once the infantry launched: count 0.
+    const Result open = run_case(10), full = run_case(0);
+    std::printf("land units: open home %d landed %lld away %d end planet %lld in fleet %d; full landed %lld\n",
+                open.home_status ? 1 : 0, static_cast<long long>(open.home_landed), open.away_status ? 1 : 0,
+                static_cast<long long>(open.end_planet), open.end_in_fleet ? 1 : 0, static_cast<long long>(full.home_landed));
+    CHECK(open.done && open.home_status && open.away_status);
+    CHECK(open.home_landed > 0);                                       // friendly P0: landed
+    CHECK(open.end_in_fleet && open.end_planet != 0 && open.end_planet >= 0);  // the target (not the Empire's): not landed
+    CHECK(full.home_status && full.home_landed == 0);                  // count 0 == max 0: nothing lands
+}
+
+// a2m t10 (A2M_T08_T10_T14_RE t10.3 / t10.8) [H]: the TF base handler raises No_Units_Remaining on every member loss
+// that leaves no counted entry (not a named / generic hero, not a space special weapon, no lobbing superweapon). The hero
+// left alone after the infantry dies gets the event (the old "every unit lost" rule did not raise it); the hero's own
+// loss raises it again.
+static void test_no_units_remaining_counted_entries() {
+    ParityWorld pw(false, {"A2mNur"}, [](gal::GalacticSetup& s) {
+        for (gal::StartingForce& f : s.forces)
+            if (f.player == 0 && f.type == tInfantry) f.planet = 0;  // with the hero at P0
+    });
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    objects::ObjectHandle inf, hero;
+    for (const objects::ObjectHandle u : pw.sim->planets()[0].surface)
+        if (pw.store->type(u) == tInfantry) inf = u;
+    CHECK(static_cast<bool>(inf));
+    int32_t f = 1;
+    auto step = [&](int32_t frames) {
+        for (const int32_t e = f + frames; f < e; ++f) {
+            pw.sim->update();
+            pw.world->update_player(0, f, true, false);
+        }
+    };
+    while (f <= 30 * 120 && num("a2m_n_started") < 0.0) step(1);
+    const double started = num("a2m_n_started");
+    for (objects::ObjectId id = 0; !hero && id < 4096; ++id) {  // the hero ship: the other member, by type
+        const objects::ObjectHandle h = pw.store->find(id);
+        if (h && pw.store->alive(h) && pw.store->type(h) == pw.hero && pw.store->owner(h) == 0) hero = h;
+    }
+    CHECK(static_cast<bool>(hero));
+    step(30);
+    const double before = num("a2m_nur");
+    CHECK(pw.sim->destroy_object(inf));
+    step(10);
+    const double after_inf = num("a2m_nur");
+    CHECK(pw.sim->destroy_object(hero));
+    step(10);
+    const double after_hero = num("a2m_nur");
+    bool logged = false;
+    for (const AiDecision& d : pw.world->decision_log())
+        logged = logged || d.text.find("MainForce no units remaining (1 uncounted)") != std::string::npos;
+    std::printf("no units remaining: started with %.0f units, events before %.0f, after infantry %.0f, after hero %.0f, logged %d\n",
+                started, before, after_inf, after_hero, logged ? 1 : 0);
+    CHECK(started == 2.0 && before < 0.0 && after_inf == 1.0 && after_hero == 2.0 && logged);
     pw.world->set_global_values(nullptr);
 }
 
@@ -2607,6 +3025,19 @@ static void test_production_unbuildable() {
         fs.run(2);
         const std::vector<uint32_t> f = fs.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
         CHECK(ok && fs.has(f, fs.hero));
+    }
+    {
+        // a2m t05 (A2M_T04_RE_ANSWERS Q2): Production Setup C 0x664210 and the ETA 0x6639f0 have no surface test of their
+        // own; the can-build gate's step 24 lets a space unit through at a planet without an accessible surface (the
+        // retail Interceptor4_Frigate at The_Maw). Every planet type surface-inaccessible: the Corvette is still produced.
+        ParityWorld pw(false, {"HeroDeny"}, no_hero, [](gal::GalacticRules& r) {
+            for (gal::TypeInfo& t : r.types) t.surface_accessible = false;
+        });
+        pw.run(2);
+        const std::vector<uint32_t> s = pw.world->solve_potential_plan(0, "HeroDeny", "Conquer_Planet", 3, &ok, &eta);
+        std::printf("unbuildable: no accessible surface anywhere -> %s, corvette %s, eta %.1f\n", ok ? "solved" : "failed",
+                    pw.has(s, tCorvette) ? "yes" : "no", static_cast<double>(eta));
+        CHECK(ok && pw.has(s, tCorvette) && eta > 0.0f);
     }
     {
         // Build_Initially_Locked (TIE_Fighter_Squadron in HotM): vetoed until unlocked; with the hero gone too the solve fails.
@@ -3999,10 +4430,27 @@ static void test_free_store_path_rules() {
         CHECK(ai_reach_path_cost(cost2, 2, 4) == 0.0 && ai_reach_path_cost(cost3, 3, 4) == 0.5);
         const std::vector<uint32_t> cost3b{gal::pack_edge_weight(1u, 5u), gal::pack_edge_weight(0u, 7u), 0u};
         CHECK(ai_reach_path_cost(cost3b, 3, 4) == kReachNone && ai_reach_path_cost({}, 0, 4) == kReachNone);
-        // Levels 1, 5, 10 (and the unloaded 7 to 9) accept every path, an empty one included.
-        for (const int lv : {1, 5, 7, 8, 9, 10}) {
+        // Levels 1, 5, 10 accept every path, an empty one included.
+        for (const int lv : {1, 5, 10}) {
             CHECK(ai_reach_path_cost(cost2, 2, lv) == 0.7 && ai_reach_path_cost(cost3, 3, lv) == 1.2);
             CHECK(ai_reach_path_cost({}, 0, lv) < kReachNone);
+        }
+        // a2m t05 (A2M_T04_RE_ANSWERS Q3): levels 7 / 8 / 9 accept float((S >> 16) x 100) <= 1000 / 3000 / 5000
+        // (GameConstants Low_ / Medium_ / High_Threat_Reachability_Tolerance); an empty path (S = -1) is rejected.
+        const auto node = [](uint32_t c) { return std::vector<uint32_t>{gal::pack_edge_weight(c, 7u), 0u}; };
+        for (const int lv : {7, 8, 9}) {
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == 0.7 && ai_reach_path_cost(cost3, 3, lv) == 1.2);
+            CHECK(ai_reach_path_cost({}, 0, lv) == kReachNone);
+        }
+        CHECK(ai_reach_path_cost(node(10), 2, 7) == 0.7 && ai_reach_path_cost(node(11), 2, 7) == kReachNone);
+        CHECK(ai_reach_path_cost(node(30), 2, 8) == 0.7 && ai_reach_path_cost(node(31), 2, 8) == kReachNone);
+        CHECK(ai_reach_path_cost(node(50), 2, 9) == 0.7 && ai_reach_path_cost(node(51), 2, 9) == kReachNone);
+        const std::array<float, 3> tr{500.0f, 3000.0f, 5000.0f};  // Thrawn's-Revenge-style override of the low level
+        CHECK(ai_reach_path_cost(node(5), 2, 7, tr) == 0.7 && ai_reach_path_cost(node(6), 2, 7, tr) == kReachNone);
+        // Any other level has threshold 0.0: only a path without node costs passes.
+        for (const int lv : {-1, 11, 40}) {
+            CHECK(ai_reach_path_cost(free2, 2, lv) == 0.7);
+            CHECK(ai_reach_path_cost(cost2, 2, lv) == kReachNone && ai_reach_path_cost({}, 0, lv) == kReachNone);
         }
     }
     // 0x3f9270.
@@ -5764,8 +6212,14 @@ int main(int argc, char** argv) {
     test_type_info_mod_categories();        // A2k t06
     test_parity_rules();
     test_free_store_supply();
+    test_ai_clock_precision();
     test_stage_and_setup_a();
     test_null_stage_and_plain_produce();
+    test_move_to_fleet_object();
+    test_fleet_object_reelection();
+    test_produce_force_stage_launch();
+    test_land_units_owner_rule();
+    test_no_units_remaining_counted_entries();
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

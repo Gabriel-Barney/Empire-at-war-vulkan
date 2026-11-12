@@ -66,6 +66,11 @@ struct TaskForceRec {
     // TF +0x100, the Setup A stage copied at instantiation and returned by Get_Stage (-1 = null: a goal without a target).
     int32_t stage = -1;
     int32_t area = -1;
+    // a2m t02 (A2L_T01_RE_ANSWERS Q8.2) [H]: the task force's FleetObject (TF +0x120), a GalacticSim fleet index
+    // (fleet slots are never reused); gal::kNoFleet = null. Elected by Add_Force (0x6cd1a0) from the added unit's parent
+    // fleet while null, re-elected (GalacticAiWorld::Impl::tf_fleet_object) when it dies or holds no member any more.
+    // Move_To moves this fleet only.
+    uint32_t fleet = gal::kNoFleet;
     // q2f t09 (Q2F_T09_RE_ANSWERS Q2.4 / Q2.6) [H code; M units]: Produce_Force(stage, true) sets every build task's
     // sync flag (BT +0xda). The gather then holds every unit until all are on the free store, each unit's ETA to the
     // stage is computed once (+0xdc), the TF countdown starts at the largest one (+0xe0, initial -1) and drops by the
@@ -97,8 +102,7 @@ struct BuildTask {
     double bid = kPpInfinite;
     int64_t created = 0;
     int64_t next_poll = 0;              // PRODUCTION_QUEUED polls every 3 frames
-    bool charged = false;
-    float charge = 0.0f;
+    bool charged = false;               // BT +0xd0 (no charge amount is stored, A2M_T04_RE_ANSWERS Q5.2)
     int32_t queue_id = -1;              // global counter 0x140a436b4 at production start
     PlanetIndex producing_at = kInvalidPlanet;
     int32_t queue_entries_before = 0;   // the sim queue's entries of this type/player when production started
@@ -139,6 +143,7 @@ struct StatusRec {
     lua::AiStatusResult result = lua::AiStatusResult::Nil;
     PlanetIndex dest = kInvalidPlanet;
     uint8_t mode = 5;
+    uint32_t fleet = gal::kNoFleet;  // a2m t02: MoveTo, the MovementBlockStatus's single fleet (block +0x48, Q8.1)
     int64_t started = 0;
     lua::AiBudgetOp op = lua::AiBudgetOp::WaitSpendable;
     double amount = 0.0;
@@ -472,6 +477,17 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
         return it == tfs.end() ? -1 : it->second.plan;
     }
     void prune_tf(TaskForceRec& tf);
+    // a2m t10 (A2M_T08_T10_T14_RE t10.3 / t10.8, AI_TACTICAL §7.3.3 item 4) [H]: a member lost to signal 0x10 / 0x1a
+    // queues its task force here (prune_tf); drain_lost_members raises No_Units_Remaining for each queued TF whose entry
+    // vector (TF +0x60: members, wanted types, builds in progress) holds no counted type. Drained within the frame
+    // (update_player), so it never crosses a save.
+    bool counted_entry_type(uint32_t type) const;
+    void drain_lost_members();
+    std::vector<int32_t> lost_tfs;
+    // a2m t02 (A2L_T01_RE_ANSWERS Q8.2): Add_Force 0x6cd1a0 (append the unit; elect the FleetObject from its parent
+    // fleet while TF +0x120 is null) and the FleetObject itself (re-elected when null, dead or holding no member).
+    void tf_join(TaskForceRec& tf, ObjectHandle u);
+    uint32_t tf_fleet_object(TaskForceRec& tf);
     std::vector<uint32_t> tf_fleets(const TaskForceRec& tf) const;
     bool movable_fleet(uint32_t f) const;
     bool unit_jumps(ObjectHandle u) const;  // its type can jump alone (a fleet of its own can move)

@@ -19,6 +19,7 @@
 //                        draw, only with >= 2 positive candidates and p < 1.
 // Nothing here iterates a pointer-keyed container; all outputs are pure functions of the inputs.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -71,10 +72,14 @@ bool free_store_path_passes(int32_t sum, float threshold = 0.0f);
 // 0x6913a0 when float(((uint32)S >> 16) x 100) <= the level's threshold, S = the wrapping int32 sum of the hop weights
 // [0, min(1000, path_size - 1)) (empty path: -1), or [0, path_size - 2) at level 4 (the final hop is not counted):
 //   levels 0, 2, 3, 4, 6: 1e-4; levels 1, 5, 10: 1e18 (always accepted, even without a path);
-//   levels 7, 8, 9: GameConstants 0x140b16d7c / d80 / d84 [port: not loaded; 1e18, L: no galactic caller passes them].
+//   levels 7, 8, 9: `threat_tolerance` = GameConstants +0x157c / +0x1580 / +0x1584 Low_ / Medium_ /
+//   High_Threat_Reachability_Tolerance (FoC 1000 / 3000 / 5000; a2m t05, A2M_T04_RE_ANSWERS Q3) [H];
+//   any other level (negative, > 10): 0.0 [H].
 // Accepted: (low 16 bits of S) / 10; rejected: kReachNone. The source == target case (0) is the caller's.
 inline constexpr double kReachNone = 1e18;
-double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level);
+inline constexpr std::array<float, 3> kThreatReachTolerance{1000.0f, 3000.0f, 5000.0f};
+double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level,
+                          const std::array<float, 3>& threat_tolerance = kThreatReachTolerance);
 // 0x691370 (Q2F_T09_RE_ANSWERS Q2.4 step 3) [H]: the length of an all-pairs path, (low 16 bits of the wrapping sum of
 // the hop weights [0, min(1000, path_size - 1))) / 10, in world units (trade-route hops already shortened). Empty path:
 // -1 (the sum's start), so (0xFFFF) / 10.

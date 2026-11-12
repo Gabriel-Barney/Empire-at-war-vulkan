@@ -5,6 +5,8 @@ rem run_a2f.cmd (profile backup, build + install Mods\A2fBudgetProbe with --sabo
 rem profile restore). It reopens itself in its own console window (start), so the recorder does not depend on the shell
 rem or the Claude session that started it. Arguments are passed on to a2f_run.py (--windowed, --no-launch,
 rem --no-sab-desire, --no-mod-equations, --game DIR, --scan-sec S, --non-interactive = no pause at the end).
+rem a2m t12: --sab-long = the 30-minute saboteur run (channel U to frame 54000, every 300 frames after 1400; quit at
+rem "saboteur run recorded (frame 54000)"). Without it the run is the short one above (frame 1400).
 if /i "%~1"=="--here" goto here
 start "A2K t05 saboteur probe" cmd /c ""%~f0" --here %*"
 echo Started in its own window. tools\probe_mod\a2f_budget\out\latest.txt names the run folder, its run_status.txt the state.

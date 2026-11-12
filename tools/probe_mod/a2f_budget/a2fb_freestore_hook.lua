@@ -9,6 +9,11 @@
 -- same 100 samples (about 13 minutes at 8 s). a2j t04 (30-minute run): 300 samples (40 minutes at 8 s), 1600 records
 -- (the Empire's sample has 5 records: PL SM BF SH MJ).
 A2FB_MAX = 1600
+-- a2m t12: a saboteur build adds FSAB / FSABN / FADD / FSVC records (Underworld instance; retail run 20261108-212556:
+-- 69 records in 48 s, 33 of them FADD), so the 30-minute saboteur run (--sab-long) gets more room
+if A2FB_SAB then
+	A2FB_MAX = 4000
+end
 A2FB_CANARY = "Mods\\A2fBudgetProbe\\A2FB_Canary_FreeStore.txt"
 A2FB_FS_N = 0
 

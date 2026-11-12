@@ -125,7 +125,8 @@ bool free_store_path_passes(int32_t sum, float threshold) {
     return static_cast<float>(high * 100u) <= threshold;
 }
 
-double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level) {
+double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level,
+                          const std::array<float, 3>& threat_tolerance) {
     int32_t sum = -1;
     if (path_size > 0) {
         const size_t end = level == 4 ? (path_size >= 2 ? path_size - 2 : 0) : path_size - 1;
@@ -134,8 +135,11 @@ double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_siz
         for (size_t i = 0; i < count; ++i) s += hop_weights[i];
         sum = static_cast<int32_t>(s);
     }
-    const bool strict = level == 0 || level == 2 || level == 3 || level == 4 || level == 6;
-    if (!free_store_path_passes(sum, strict ? 1e-4f : 1e18f)) return kReachNone;
+    float threshold = 0.0f;  // any other level [H]
+    if (level == 0 || level == 2 || level == 3 || level == 4 || level == 6) threshold = 1e-4f;
+    else if (level == 1 || level == 5 || level == 10) threshold = 1e18f;
+    else if (level >= 7 && level <= 9) threshold = threat_tolerance[static_cast<size_t>(level - 7)];
+    if (!free_store_path_passes(sum, threshold)) return kReachNone;
     return static_cast<double>(static_cast<uint32_t>(sum) & 0xFFFFu) / 10.0;
 }
 

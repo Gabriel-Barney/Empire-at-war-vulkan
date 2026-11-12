@@ -94,7 +94,8 @@ public:
     float time_to_afford(int32_t c, uint32_t goal, float n) const;
     // Spend: req -= n, alloc += n (Allocate_Resources, build-task charge 0x6110e0).
     void spend(int32_t c, uint32_t goal, float n);
-    // Committed spend s += n (production paid, 0x5f9f90) [M].
+    // Committed spend s += n: the market bind at production start 0x64abf0 adds (float)cost(T, none) (A2M_T04_RE_ANSWERS
+    // Q5.2) [H]; 0x5f9f90 is not a budget call.
     void paid(int32_t c, uint32_t goal, float n);
     // Pay-as-you-go installment n (0x53b900, AI_GALACTIC_2 §3.4; q2f t01) [H]. With the goal's struct (an item its build
     // task ordered, 0x64adb0): have = min(alloc, c + a); (int)(have - n) < 0 -> s += n - alloc when alloc < n, returns

@@ -4,8 +4,9 @@
 -- Lua_Script ran in retail run 20261106-074145). With the generated header (A2FB_SABCFG, build_a2f_mod.sab_lua) and
 -- a2fb_core.lua in front. Questions: docs/re/A2K_T08_RE_ANSWERS.md section 5 (Q5 items 4 and 5, H1 / H2 of Q4.2).
 --
--- Every A2FB_SABCFG.step frames in frames 0 .. A2FB_SABCFG.stop (one sample on the first service at or after each
--- multiple of the step; the record carries the frame it ran in):
+-- Every A2FB_SABCFG.step frames in frames 0 .. A2FB_SABCFG.stop, then (a2m t12, --sab-long) every A2FB_SABCFG.step2
+-- frames up to A2FB_SABCFG.stop2 (stop2 = stop in the short run: no second phase); one sample on the first service at
+-- or after each multiple of the step; the record carries the frame it ran in:
 --   UN  head: n= saboteurs the Underworld owns, other= saboteurs of other owners, all= objects found
 --   US  per Underworld saboteur (Find_All_Objects_Of_Type(<type>), owner checked here): id= Get_Object_ID,
 --       type=, pl= Get_Planet_Location, par= parent type (Get_Parent_Object; a fleet is GALACTIC_FLEET), parid=,
@@ -13,7 +14,8 @@
 --       a fleet between planets has no planet), ok= Is_Valid; when the parent has a parent itself (the type filter
 --       matches a company and the transport that carries it: Find_All_Objects_Of_Type uses the representative type,
 --       docs/re/LUA_API.md), gp= / gpid= / gpcnt= / gppl= the same for the grandparent (then the fleet)
--- Every A2FB_SABCFG.step frames in frames 0 .. A2FB_SABCFG.des_stop (Q5 item 5, H1), per planet of A2FB_SABCFG.planets:
+-- At the same sample frames in frames 0 .. A2FB_SABCFG.des_stop (Q5 item 5, H1; a2m t12: to the end of the run, was
+-- 0 .. 600; -1 with --no-sab-desire), per planet of A2FB_SABCFG.planets:
 --   UD  tgt=, own= owner faction, cor= Is_Corrupted, CP= EvaluatePerception("Should_Corrupt_Planet", Underworld,
 --       planet), SP= the same for "Should_Sabotage_Planet" (the desire functions of the Corrupt_Planet and
 --       Sabotage_Planet goals, AI_GOALSET_UNDERWORLD_GALACTIC.XML). Evaluated only for planets the Underworld does not
@@ -36,7 +38,8 @@ A2FB_U_PL = {}
 
 A2FB_Rec("LOAD", function()
 	return "saboteur plot script type=" .. A2FB_SABCFG.type .. " step=" .. A2FB_SABCFG.step .. " stop=" ..
-		A2FB_SABCFG.stop .. " des_stop=" .. A2FB_SABCFG.des_stop .. " planets=" .. table.getn(A2FB_SABCFG.planets) ..
+		A2FB_SABCFG.stop .. " step2=" .. A2FB_SABCFG.step2 .. " stop2=" .. A2FB_SABCFG.stop2 .. " des_stop=" ..
+		A2FB_SABCFG.des_stop .. " planets=" .. table.getn(A2FB_SABCFG.planets) ..
 		" modeq=" .. tostring(A2FB_MODEQ)
 end)
 A2FB_Canary(A2FB_CANARY)
@@ -162,10 +165,16 @@ function A2FB_Eval3(name, p, target)
 	return A2FB_Num(v)
 end
 
+-- The next sample frame after frame f: the next multiple of step while it is <= stop, else the next multiple of step2
+-- (a2m t12; in the short run stop2 = stop, so that frame is past the end).
 function A2FB_U_After(f)
 	local step = A2FB_SABCFG.step
-	local k = tonumber(string.format("%d", f / step))
-	return (k + 1) * step
+	local n = (tonumber(string.format("%d", f / step)) + 1) * step
+	if n > A2FB_SABCFG.stop then
+		step = A2FB_SABCFG.step2
+		n = (tonumber(string.format("%d", f / step)) + 1) * step
+	end
+	return n
 end
 
 function A2FB_U_Update()
@@ -178,7 +187,7 @@ function A2FB_U_Update()
 		A2FB_U_FIRST = false
 		A2FB_Rec("FIRST", function() return "t=" .. A2FB_Num(t) .. " f=" .. f .. " humanexists=" .. tostring(A2FB_HumanExists()) end)
 	end
-	if f > A2FB_SABCFG.stop then
+	if f > A2FB_SABCFG.stop2 then
 		if not A2FB_U_DONE then
 			A2FB_U_DONE = true
 			A2FB_Rec("UEND", function() return "t=" .. A2FB_Num(t) .. " f=" .. f .. " records=" .. A2FB_Seq end)
@@ -199,8 +208,13 @@ function A2FB_U_Update()
 		end
 		A2FB_U_NEXT = A2FB_U_After(f)
 	end
-	-- be serviced again on the next sample frame (the engine tests now - last > rate)
-	local rate = (A2FB_U_NEXT - f) / 30 - 0.02
+	-- be serviced again on the next sample frame (the engine tests now - last > rate); after the last sample, just
+	-- after stop2, so that UEND comes before the story's SABDONE at stop2 + 10 (a2m t12)
+	local nxt = A2FB_U_NEXT
+	if nxt > A2FB_SABCFG.stop2 then
+		nxt = A2FB_SABCFG.stop2 + 1
+	end
+	local rate = (nxt - f) / 30 - 0.02
 	if rate < 0.01 then
 		rate = 0.01
 	end

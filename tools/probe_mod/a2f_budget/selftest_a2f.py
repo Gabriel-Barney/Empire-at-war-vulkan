@@ -752,12 +752,36 @@ def sab_build_checks(out, zip_path, mod, exp, gone):
     st = [open(os.path.join(mod3, *p.split('/')), 'rb').read() for p in
           ('Data/Scripts/Story/A2fb_Story.lua', 'Data/Scripts/FreeStore/GalacticFreeStore.lua',
            'Data/Scripts/Story/%s.lua' % build_a2f_mod.SAB_SCRIPT)]
-    check('build --saboteur: story, free store and channel U carry A2FB_SAB and the config (stop 1400, desire to 600)',
-          all(b'A2FB_SAB = true' in t and b'stop = 1400, des_stop = 600' in t for t in st), str([len(t) for t in st]))
+    check('build --saboteur: story, free store and channel U carry A2FB_SAB and the config (stop 1400, no second phase, '
+          'desire to 1400)', all(b'A2FB_SAB = true' in t and
+                                 b'step = 30, stop = 1400, step2 = 300, stop2 = 1400, des_stop = 1400' in t for t in st),
+          str([len(t) for t in st]))
     mod4 = os.path.join(out, 'mod_saboteur_nodes')
     build_a2f_mod.build(None, mod4, zip_path, saboteur=True, sab_desire=False)
     u4 = open(os.path.join(mod4, 'Data', 'Scripts', 'Story', build_a2f_mod.SAB_SCRIPT + '.lua'), 'rb').read()
     check('build --saboteur --no-sab-desire: channel U with des_stop = -1', b'des_stop = -1' in u4)
+    # a2m t12: the 30-minute saboteur run
+    mod5 = os.path.join(out, 'mod_saboteur_long')
+    build_a2f_mod.build(None, mod5, zip_path, saboteur=True, sab_long=True)
+    st5 = [open(os.path.join(mod5, *p.split('/')), 'rb').read() for p in
+           ('Data/Scripts/Story/A2fb_Story.lua', 'Data/Scripts/FreeStore/GalacticFreeStore.lua',
+            'Data/Scripts/Story/%s.lua' % build_a2f_mod.SAB_SCRIPT)]
+    check('build --saboteur --sab-long: config stop 1400 then every 300 frames to 54000, desire to 54000',
+          all(b'step = 30, stop = 1400, step2 = 300, stop2 = 54000, des_stop = 54000' in t for t in st5),
+          str([len(t) for t in st5]))
+    try:
+        build_a2f_mod.build(None, os.path.join(out, 'mod_long_only'), zip_path, sab_long=True)
+        refused = False
+    except SystemExit:
+        refused = True
+    check('build --sab-long without --saboteur is refused', refused)
+    tx = dict(build_a2f_mod.screen_texts(False))
+    tl = dict(build_a2f_mod.screen_texts(True))
+    check('build: TEXT_A2FB_SAB_DONE names the last frame (1400; 54000 with --sab-long), other texts unchanged',
+          '(frame 1400)' in tx['TEXT_A2FB_SAB_DONE'] and '(frame 54000)' in tl['TEXT_A2FB_SAB_DONE'] and
+          not any('@@' in v for v in list(tx.values()) + list(tl.values())) and
+          {k: v for k, v in tx.items() if k != 'TEXT_A2FB_SAB_DONE'} == dict(build_a2f_mod.TEXTS[:-1]),
+          str(tx.get('TEXT_A2FB_SAB_DONE')))
     import a2f_run
     check('run: the recorder\'s scan pattern takes channel U records',
           a2f_run.RECORD_RE.match(b'A2FB1|U|0x1|3|US|t=1 f=30 id=7|END') is not None and
@@ -1128,10 +1152,21 @@ end
 local function block(done, result)
 	return { IsFinished = function() return A2_FR() >= done end, Result = function() return result end }
 end
+-- a2m t12: Get_Stage() returns an AI target (retail: AITargetLocationWrapper, no Get_Type; the planet through
+-- Get_Game_Object; tostring gives a name); A2_STAGE_OBJ = true returns the planet object itself (the fallback path)
+local function aitarget(n)
+	local t = { Get_Game_Object = function() return planet(n) end }
+	setmetatable(t, { __tostring = function() return "AITarget " .. n end })
+	return t
+end
+local function stage_name(st)
+	if st.Get_Game_Object ~= nil then return st.Get_Game_Object().Get_Type().Get_Name() end
+	return st.Get_Type().Get_Name()
+end
 Target = planet("Naboo")
 MainForce = {
-	Get_Stage = function() return planet("Felucia") end,
-	Produce_Force = function(st) log("Produce_Force " .. st.Get_Type().Get_Name())
+	Get_Stage = function() if A2_STAGE_OBJ then return planet("Felucia") end return aitarget("Felucia") end,
+	Produce_Force = function(st) log("Produce_Force " .. stage_name(st))
 		if A2_PROD_NIL then return nil end return block(A2_PROD_DONE, true) end,
 	Move_To = function(t) log("Move_To " .. t.Get_Type().Get_Name()) return block(A2_MOVE_DONE, A2_MOVE_RES) end,
 	Activate_Ability = function() log("Activate_Ability") A2_CORRUPT["Naboo"] = true end,
@@ -1186,7 +1221,7 @@ def sab_plan_tests(lua, lib, out, types, z):
     """Returns the records of the hooked runs (for the report test)."""
     cases = {
         'ok': 'A2_F0 = 3480\nA2_PROD_DONE = 3600\nA2_MOVE_DONE = 3900\nA2_MOVE_RES = false\n',
-        'nilprod': 'A2_F0 = 120\nA2_PROD_NIL = true\nA2_MOVE_DONE = 400\nA2_MOVE_RES = true\n',
+        'nilprod': 'A2_F0 = 120\nA2_PROD_NIL = true\nA2_MOVE_DONE = 400\nA2_MOVE_RES = true\nA2_STAGE_OBJ = true\n',
         'fail': 'A2_F0 = 150\nA2_PROD_DONE = 900\nA2_MOVE_DONE = 1200\nA2_MOVE_RES = true\nA2_FAIL_AT = 300\n',
     }
     recs = []
@@ -1209,12 +1244,14 @@ def sab_plan_tests(lua, lib, out, types, z):
                 r'unalloc=1000 cr=13000 n=1 prev=first goal=Corrupt_Planet tgt=NABOO tgtc=false\|', o) is not None,
                 o[:900])
             # BlockOnCommand pumps once more after the status finishes: the result is seen one frame later (3601)
-            check('sab plan ok: PSTAGE (stage from Get_Stage) / PPROD true / PMOVS / PMOVE false with frames',
-                  '|PSTAGE|plan=AI_Plan_Underworld_DeploySaboteur t=116 f=3480 fac=UNDERWORLD n=1 stage=FELUCIA blk=table|' in o
+            check('sab plan ok: PSTAGE (the Get_Stage AI target named through its game object, a2m t12) / PPROD true / '
+                  'PMOVS / PMOVE false with frames',
+                  '|PSTAGE|plan=AI_Plan_Underworld_DeploySaboteur t=116 f=3480 fac=UNDERWORLD n=1 stage=FELUCIA stagek=obj '
+                  'stages=AITarget_Felucia blk=table|' in o
                   and '|PPROD|plan=AI_Plan_Underworld_DeploySaboteur t=120.033 f=3601 fac=UNDERWORLD n=1 k=1 res=true '
                       'dt=4.03333|' in o
                   and '|PMOVS|plan=AI_Plan_Underworld_DeploySaboteur t=120.033 f=3601 fac=UNDERWORLD n=1 tgt=NABOO '
-                      'stage2=FELUCIA units=1 blk=table|' in o
+                      'stage2=FELUCIA stage2k=obj stage2s=AITarget_Felucia units=1 blk=table|' in o
                   and '|PMOVE|plan=AI_Plan_Underworld_DeploySaboteur t=130.033 f=3901 fac=UNDERWORLD n=1 k=2 res=false '
                       'dt=10|' in o, o[:1500])
             check('sab plan ok: PRET after Sleep(10) with Target.Is_Corrupted() = true and blk=2, plan result set',
@@ -1222,8 +1259,9 @@ def sab_plan_tests(lua, lib, out, types, z):
                             r'age=24.0333 spend=0 unalloc=1000 cr=13000 goal=Corrupt_Planet tgt=NABOO tgtc=true blk=2\|',
                             o) is not None and 'LOG Set_Plan_Result true @4201' in o, o[-900:])
         elif name == 'nilprod':
-            check('sab plan nilprod: Produce_Force returns nothing -> PSTAGE blk=nil, PPROD res=nil, the move still runs',
-                  'stage=FELUCIA blk=nil|' in o and ' k=1 res=nil dt=0.0333333|' in o and ' k=2 res=true ' in o, o[:1500])
+            check('sab plan nilprod: Produce_Force returns nothing -> PSTAGE blk=nil, PPROD res=nil, the move still runs; '
+                  'a stage that is a game object is named by Get_Type (stagek=type)',
+                  re.search(r' stage=FELUCIA stagek=type stages=table:_\S+ blk=nil\|', o) is not None and ' k=1 res=nil dt=0.0333333|' in o and ' k=2 res=true ' in o, o[:1500])
         else:
             check('sab plan fail: Production_Failed -> PFAIL and PEXIT with tgtc, then the script ends (no move)',
                   re.search(r'\|PFAIL\|plan=AI_Plan_Underworld_DeploySaboteur t=10 f=300 fac=UNDERWORLD n=1 age=5 .* args=2 '
@@ -1252,13 +1290,24 @@ end
 local function block(done, result)
 	return { IsFinished = function() return A2_FR() >= done end, Result = function() return result end }
 end
+-- a2m t12: Get_Stage() returns an AI target (retail: AITargetLocationWrapper, no Get_Type; the planet through
+-- Get_Game_Object; tostring gives a name); A2_STAGE_OBJ = true returns the planet object itself (the fallback path)
+local function aitarget(n)
+	local t = { Get_Game_Object = function() return planet(n) end }
+	setmetatable(t, { __tostring = function() return "AITarget " .. n end })
+	return t
+end
+local function stage_name(st)
+	if st.Get_Game_Object ~= nil then return st.Get_Game_Object().Get_Type().Get_Name() end
+	return st.Get_Type().Get_Name()
+end
 local function engine_setup()
 	PlayerObject = A2_PLAYERS["Underworld"]
 	Budget = { Get_Spendable_Resources = function() return 0 end, Get_Unallocated_Resources = function() return 1000 end }
 	Target = planet("Naboo")
 	MainForce = {
-		Get_Stage = function() return planet("Felucia") end,
-		Produce_Force = function(st) log("Produce_Force " .. st.Get_Type().Get_Name()) return block(A2_PROD_DONE, true) end,
+		Get_Stage = function() return aitarget("Felucia") end,
+		Produce_Force = function(st) log("Produce_Force " .. stage_name(st)) return block(A2_PROD_DONE, true) end,
 		Move_To = function(t) log("Move_To " .. t.Get_Type().Get_Name()) return block(A2_MOVE_DONE, false) end,
 		Activate_Ability = function() log("Activate_Ability") A2_CORRUPT["Naboo"] = true end,
 		Get_Goal_Type_Name = function() return "Corrupt_Planet" end,
@@ -1378,7 +1427,7 @@ end
 '''
 
 
-def sab_u_run(lua, lib, out, types, name, desire=True, frames=1500):
+def sab_u_run(lua, lib, out, types, name, desire=True, frames=1500, long=False):
     env = dict(os.environ, LUA_PATH=os.path.join(lib, '?.lua'))
     outfile = os.path.join(out, '%s_out.txt' % name)
     script = os.path.join(out, '%s.lua' % name)
@@ -1386,7 +1435,7 @@ def sab_u_run(lua, lib, out, types, name, desire=True, frames=1500):
         f.write(prelude(outfile, types))
         f.write(SAB_U_SETUP)
         f.write('A2_FRAMES = %d\n' % frames)
-        f.write(build_a2f_mod.sab_lua(True, desire))
+        f.write(build_a2f_mod.sab_lua(True, desire, long))
         f.write(PERC_DRIVER)
     rc, text = lua_run(lua, script, env)
     o = open(outfile).read() if os.path.exists(outfile) else ''
@@ -1426,7 +1475,7 @@ def sab_u_tests(lua, lib, out, types):
           bool(t91) and t91[0].endswith('par=UNDERWORLD_SABOTEUR_TRANSPORT parid=601 cnt=1 parpl=FELUCIA gp=GALACTIC_FLEET '
                                         'gpid=501 gpcnt=3 gppl=FELUCIA'), str(t91[:1]))
     udf = sorted({int(r['f']['f']) for r in ud})
-    check('sab U: UD every 30 frames in 0..600, one per HotM planet',
+    check('sab U: UD every 30 frames in 0..1400 (a2m t12: was 0..600), one per HotM planet',
           udf == list(range(0, build_a2f_mod.SAB_DES_STOP + 1, 30)) and
           len(ud) == len(udf) * len(build_a2f_mod.SAB_PLANETS), '%s / %d' % (udf[:4], len(ud)))
     naboo = [r['text'] for r in ud if r['f']['tgt'] == 'NABOO']
@@ -1440,6 +1489,19 @@ def sab_u_tests(lua, lib, out, types):
     check('sab U --no-sab-desire: no UD records, no EvaluatePerception, the timeline unchanged',
           rc2 == 0 and not [r for r in recs2 if r['kind'] == 'UD'] and
           len([r for r in recs2 if r['kind'] == 'US']) == len([r for r in us if int(r['f']['f']) <= 700]), o2[:400])
+    # a2m t12: --sab-long, the whole 30 minutes (frames 0..54100)
+    rc3, text3, o3, recs3, _p3 = sab_u_run(lua, lib, out, types, 'sab_u_long', frames=54100, long=True)
+    un3 = [int(r['f']['f']) for r in recs3 if r['kind'] == 'UN']
+    ud3 = sorted({int(r['f']['f']) for r in recs3 if r['kind'] == 'UD'})
+    want3 = want + list(range(1500, build_a2f_mod.SAB_LONG_STOP + 1, build_a2f_mod.SAB_LONG_STEP))
+    end3 = [int(r['f']['f']) for r in recs3 if r['kind'] == 'UEND']
+    check('sab U --sab-long: every 30 frames in 0..1400, then every 300 frames to 54000 (UN and UD), UEND once after '
+          '54000, no failed flag', rc3 == 0 and 'SCRIPT_FAILED' not in o3 and 'MAIN_ERROR' not in o3 and
+          un3 == want3 and ud3 == want3 and len(end3) == 1 and 54000 < end3[0] <= 54005 and
+          max(int(r['f'].get('f', 0)) for r in recs3 if r['kind'] in ('UN', 'US', 'UD')) == 54000,
+          '%s .. %s / UEND %s' % (un3[44:50], un3[-3:], end3))
+    check('sab U --sab-long: the run fits in the channel cap (last record UEND, sequence < A2FB_MAX)',
+          bool(recs3) and recs3[-1]['kind'] == 'UEND' and len(recs3) < 6000, str(len(recs3)))
     return path
 
 
@@ -1544,6 +1606,21 @@ def sab_story_test(lua, lib, out, types):
     outfile2 = os.path.join(out, 'story_out.txt')
     plain = open(outfile2).read() if os.path.exists(outfile2) else ''
     check('sab story: a normal story run has no SABDONE', bool(plain) and 'SAB_DONE' not in plain and '|SABDONE|' not in plain)
+    # a2m t12: --sab-long ends at frame 54000 (+ 10), after the story's own MIN30 message
+    outfile3 = os.path.join(out, 'sabstory_long_out.txt')
+    script3 = os.path.join(out, 'sabstory_long.lua')
+    with open(script3, 'w', encoding='ascii') as f:
+        f.write(prelude(outfile3, types))
+        f.write('A2_FRAMES = 55000\n')
+        f.write(build_a2f_mod.story_lua(True, saboteur=True, long=True))
+        f.write(STORY_DRIVER)
+    rc3, text3 = lua_run(lua, script3, env)
+    o3 = open(outfile3).read() if os.path.exists(outfile3) else ''
+    m3 = re.search(r'\|SABDONE\|t=\S+ f=(\d+) ', o3)
+    # after 300 s the story is serviced every 30 s, so SABDONE and MIN30 come in the same service, within 30 s of 54010
+    check('sab story --sab-long: TEXT_A2FB_SAB_DONE once, at frame 54010..54910 (none at 1410), MIN30 too',
+          rc3 == 0 and 'SCRIPT_FAILED' not in o3 and o3.count('GAME_MESSAGE TEXT_A2FB_SAB_DONE') == 1 and m3 is not None
+          and 54010 <= int(m3.group(1)) <= 54910 and o3.count('GAME_MESSAGE TEXT_A2FB_MIN30') == 1, (text3 + o3)[-600:])
 
 
 def sab_report_test(out, plan_recs, u_path, fs_path):
@@ -1558,7 +1635,7 @@ def sab_report_test(out, plan_recs, u_path, fs_path):
     sec = txt[txt.find('== 9.'):]
     check('report sab: section 9 written', '== 9. Underworld saboteur' in txt, txt[-800:])
     check('report sab: DeploySaboteur run line (goal, target, desire at start, stage, produce / move results, end, tgtc)',
-          re.search(r'f= 3480 n=1 Corrupt_Planet\s+tgt=NABOO\s+desire=24@600\s+stage=FELUCIA\s*@3480\s+produce=true\s*@3601\s+'
+          re.search(r'f= 3480 n=1 Corrupt_Planet\s+tgt=NABOO\s+desire=24@1380\s+stage=FELUCIA\s*@3480\s+produce=true\s*@3601\s+'
                     r'move=false\s*@3901\s+stage2=FELUCIA units=1 end=PRET@4201 tgtc false -> true prev=first', sec) is not None
           and re.search(r'produce=nil\s*@121\s+move=true', sec) is not None and 'end=PFAIL+PEXIT@300' in sec, sec[:1600])
     check('report sab: timeline per id with U (changes only) and F rows, transit shown as parpl=nil',
@@ -1572,8 +1649,11 @@ def sab_report_test(out, plan_recs, u_path, fs_path):
           re.search(r'f=  240 F/FSAB\s+pl=FELUCIA st=true tr=false', sec) is not None and
           re.search(r'f=  270 F/FSVC\s+pl=FELUCIA st=- tr=false safe=true', sec) is not None, sec[:2500])
     check('report sab: desire table (enemy planets only) and owned-saboteur count changes',
-          re.search(r'\n\s+600 .*24/0 c', sec) is not None and 'SHOLA' not in sec.split('desire equations')[1] and
-          'f0: 1 (other 1), f600: 2 (other 1)' in sec, sec[-1500:])
+          re.search(r'\n\s+600 .*24/0 c', sec) is not None and 'SHOLA' not in sec.split('desire equations')[1].split(
+              'planet owner')[0] and 'f0: 1 (other 1), f600: 2 (other 1)' in sec, sec[-1500:])
+    check('report sab: planet owner / corruption changes at the UD samples (a2m t12)',
+          'planet owner / corruption changes at the UD samples (frames 0 .. 1380; c = corrupted): '
+          'f600 NABOO EMPIRE -> EMPIRE c' in sec, sec[-600:])
     st = open(os.path.join(rd, 'saboteur.tsv')).read().splitlines()
     check('report sab: saboteur.tsv one row per timeline record', len(st) > 50 and st[0].startswith('id\tsrc\tf'), str(len(st)))
 
@@ -1611,6 +1691,7 @@ def main():
         a2j_report_test(out, os.path.join(out, 'percept_U_records.txt'), sc)
         # a2k t05: the saboteur run
         lua_syntax(lua, os.path.join(out, 'mod_saboteur'), out)
+        lua_syntax(lua, os.path.join(out, 'mod_saboteur_long'), out)
         plan_recs = sab_plan_tests(lua, lib, out, types, z)
         sab_flush_test(lua, lib, out, types, z)
         u_path = sab_u_tests(lua, lib, out, types)
