@@ -1051,6 +1051,14 @@ obj +0x1e0: +8 pending controller player id (−1 none), +0xc progress 0..1) [H 
   complete** (0x500e30, old → new owner), owner change (0x38e5a0 with pending), progress := 0. An
   enemy-held point therefore goes owner → neutral → capturer in two full transitions. Shader
   "MeshAdditiveOffset" UV offset shows progress (1 − progress when the controller is neutral).
+- **Empty-pad revert** (bkg1 b0001, `BKG1_RE_ANSWERS.md` 7.4) [H unless tagged]: an owned CAPTURE_POINT pad whose
+  TACTICAL_BUILD_OBJECTS pack is empty and with no candidate in the radius gets the neutral controller by (d) and
+  decays owner → Neutral in one transition: T = 5.0 s (150 frames; float accumulation of 1/150 reaches 1.0 on the
+  151st service) for SKIRMISH_BUILD_PAD, BUNKER_PAD and SKIRMISH_MINERAL_PROCESSOR_PAD, 8.0 s (240 frames) for
+  SKIRMISH_OUTPOST_PAD; retail traces saw 148..151 frames after the owner's last unit left (SKAI_T06 §2). An owner
+  candidate in the radius walks the progress back down step by step. REINFORCEMENT_POINT and `Ownership_Sticks`
+  types never decay; the faction base `*_BUILD_PAD` types have no CAPTURE_POINT behaviour and keep their owner. A
+  destroyed child still sends the pad to Neutral at once (SKIRMISH_SETUP §8).
 - **Capture complete** 0x500e30, in order: refresh team colour; mode notification 0x360d90(mode, object,
   old, new) [M: stats / victory]; **dispatch STORY_CAPTURE_STRUCTURE**; local SFX (type +0x1788 via
   0x355ca0) when the local player is old or new owner; faction speech from faction tables (0x33e8b0,
