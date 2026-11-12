@@ -789,6 +789,8 @@ these ranges before adding any rule.
 
 ### 4.11 0x4192b0 leftovers: block stack, fog, team objects, non-guard blocks, solo speed (s78f t02, 2026-11-03) [H unless tagged]
 
+**bkr2 (2026-11-12), see `docs/re/BKR2_RE_ANSWERS.md` Q6**: C.3's stored point is the block's last-observed target position (+0x18, `0x584750`), rewritten at every formation step with the lead as viewer (supersedes "[M: no writer]"); C.3 runs every formation step. [H]
+
 Read from 0x4192b0 and its callees 0x4165f0, 0x40edd0, 0x40e7a0, 0x41a9b0, 0x583680, 0x5ca390, and from the block
 writers 0x423c10, 0x4f8200, 0x41fd30, 0x420f70, 0x4105a0, 0x423760, 0x423070, 0x4234d0, 0x410a60, 0x42d0f0. This
 settles the [port] / [M] items left by S7 t35 / t37 and corrects A1_READINGS §33.4.1 in places (list in H).
