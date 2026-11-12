@@ -569,7 +569,7 @@ public:
         for (size_t p = 0; p < setup_.players.size(); ++p) {
             galactic::PlayerSetup& ps = setup_.players[p];
             const std::string fac = ps.faction < rules_.factions.size() ? rules_.factions[ps.faction].name : std::string();
-            std::string type = ai::campaign_ai_type(control, basic_ai, fac, true);
+            std::string type = ai::campaign_ai_type(control, basic_ai, fac, ps.named);  // bkc1 t03 (as ai_run.cpp)
             if (!type.empty() && !defs_.find_player(type)) type.clear();
             if (type.empty() || (ps.faction < rules_.factions.size() && rules_.factions[ps.faction].is_neutral)) continue;
             ps.human = false;

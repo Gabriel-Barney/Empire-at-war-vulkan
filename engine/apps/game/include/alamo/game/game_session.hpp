@@ -114,6 +114,7 @@ struct BattleOrderStats {
 struct PortEventStats {
     uint64_t withdraw = 0, withdraw_accepted = 0, withdraw_dropped = 0;
     uint64_t tactical_auto_resolve = 0, tactical_auto_resolve_refused = 0;
+    uint64_t story_esc = 0;  // bkc1 t01: story Esc commands applied (Story_Handle_Esc offered to the plots)
     uint64_t story_ui = 0, story_ui_dropped = 0;  // L1/S4 wave 1: story UI events applied / dropped (no story, bad payload)
 };
 
@@ -226,6 +227,9 @@ public:
     // to StorySession::notify_ui with the issuing player at the command phase. False without a story session or when
     // the submit failed.
     bool notify_story_ui(const sim::StoryUiNotification& n);
+    // bkc1 t01: true when the story takes this Esc (sim::StorySession::esc_goes_to_story) and the key was sent as a
+    // story Esc command; false = the host goes on with its own Esc handling (pause menu).
+    bool story_esc();
     // P4 host: galactic special abilities (SpecialAbility event 13; galactic special_systems.hpp). activate_special =
     // kind 1 (a hero or fleet of the local player at the planet). The dialog answers use the open special_dialog() and
     // close it once submitted: buy_black_market (kind 4, item = SpecialRules::items index, price from bm_offers;

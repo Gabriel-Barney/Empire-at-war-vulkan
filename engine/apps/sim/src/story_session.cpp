@@ -1491,6 +1491,38 @@ std::string_view tactical_story_event_type(TacticalStoryEvent e) {
 }
 
 bool StorySession::battle_attached() const { return tactical_ != nullptr; }
+
+// bkc1 t01 (BKC1_RE_ANSWERS Q1: controller key-down 0x2cbd00 / the Esc tail of 0x61fe0 -> 0x328440).
+bool StorySession::esc_goes_to_story() const {
+    const lua::PresentationState& p = lua_->presentation.state();
+    return p.camera == lua::CameraMode::Cinematic && p.movie.empty();
+}
+
+uint32_t StorySession::handle_esc() {
+    uint32_t calls = 0;
+    auto offer = [&](Set& s) {
+        for (const uint32_t p : s.model.plot_order()) {
+            if (p >= s.model.plot_count() || !s.model.plot(p).active) continue;
+            for (Script& sc : s.scripts) {
+                if (sc.plot != p || !sc.vm || !sc.vm->has_function("Story_Handle_Esc")) continue;
+                sc.vm->set_time(s.model.time());  // the set's last T9 clock, not the script's last service
+                sc.vm->set_frame(s.model.frame());
+                std::string err;
+                if (!sc.vm->call("Story_Handle_Esc", &err) && !err.empty()) lua_note(sc, err);
+                ++calls;
+                const auto& errors = sc.vm->errors();
+                for (; sc.errors_seen < errors.size(); ++sc.errors_seen) lua_note(sc, errors[sc.errors_seen]);
+                collect_set(s, s.number, "esc");
+            }
+        }
+    };
+    if (tactical_) {
+        if (tactical_->set) offer(*tactical_->set);
+    } else {
+        for (auto& s : sets_) offer(*s);
+    }
+    return calls;
+}
 int32_t StorySession::tactical_player() const { return tactical_ && tactical_->set ? tactical_->set->player : -1; }  // S4
 std::string StorySession::tactical_plots_file() const { return tactical_ && tactical_->set ? tactical_->set->file : std::string(); }
 const lua::StoryModel* StorySession::tactical_model() const { return tactical_ && tactical_->set ? &tactical_->set->model : nullptr; }

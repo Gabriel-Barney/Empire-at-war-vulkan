@@ -1,5 +1,5 @@
 {
- "commit": "dd0ae885325b10d1d8573199a51e5da27d079bf9",
+ "commit": "8ed2debf+bkc1",
  "mode": "distribution",
  "scenarios": {
   "geonosis_skirmish": {
@@ -24,7 +24,7 @@
     "ai.build_count[Empire]": "FAIL",
     "ai.build_count[Rebel]": "FAIL",
     "ai.build_mix[Empire]": "FAIL",
-    "ai.build_mix[Rebel]": "FAIL",
+    "ai.build_mix[Rebel]": "PASS",
     "ai.first_build_frame[Empire]": "N/A",
     "ai.first_build_frame[Rebel]": "FAIL",
     "combat.damage_taken[Empire]": "PASS",
@@ -44,8 +44,9 @@
    },
    "summary": {
     "AI choices": {
-     "FAIL": 5,
-     "N/A": 1
+     "FAIL": 4,
+     "N/A": 1,
+     "PASS": 1
     },
     "battle outcomes": {
      "FAIL": 1,
@@ -92,16 +93,16 @@
     "ai.first_departure_tick[Rebel]": "PASS",
     "ai.first_departure_tick[Underworld]": "PASS",
     "ai.fleet_departures[Empire]": "PASS",
-    "ai.fleet_departures[Rebel]": "PASS",
+    "ai.fleet_departures[Rebel]": "FAIL",
     "ai.fleet_departures[Underworld]": "PASS",
     "ai.fleet_targets[Empire]": "PASS",
-    "ai.fleet_targets[Rebel]": "PASS",
+    "ai.fleet_targets[Rebel]": "FAIL",
     "ai.fleet_targets[Underworld]": "PASS",
     "build.ticks[CORELLIAN_GUNBOAT@NABOO]": "PASS",
     "build.ticks[CRUSADER_GUNSHIP@FELUCIA]": "PASS",
     "build.ticks[DESTROYER_DROID_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[INTERCEPTOR4_FRIGATE@THE_MAW]": "PASS",
-    "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "FAIL",
+    "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@KAMINO]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
@@ -176,7 +177,6 @@
     "travel.hop_ticks[Rebel:SHOLA->NALHUTTA]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Rebel:TATOOINE->CORELLIA]": "PASS",
-    "travel.hop_ticks[Rebel:YAVIN->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Rebel:YAVIN->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->KUAT]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->TATOOINE]": "FAIL",
@@ -206,8 +206,9 @@
    },
    "summary": {
     "AI choices": {
+     "FAIL": 2,
      "N/A": 1,
-     "PASS": 16
+     "PASS": 14
     },
     "battle outcomes": {
      "PASS": 7
@@ -220,7 +221,7 @@
      "PASS": 22
     },
     "timing": {
-     "FAIL": 12,
+     "FAIL": 11,
      "PASS": 61
     }
    }

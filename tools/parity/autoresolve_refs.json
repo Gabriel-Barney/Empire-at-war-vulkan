@@ -10,23 +10,148 @@
    "attacker": "Rebel",
    "defender": "Empire",
    "human_choice": "auto_resolve",
-   "arrival": {"tick": 21094, "gf": 22116, "note": "Rebel fleet 836 enters Tatooine (Naboo gather, departed tick 20981)"},
-   "battle_prompt": {"tick": 21094, "gf": 22117, "note": "galaxy paused (P 1); no mode tick passes during the battle"},
-   "result_applied": {"gf": 22374},
-   "galaxy_resumed": {"gf": 22744},
+   "arrival": {
+    "tick": 21094,
+    "gf": 22116,
+    "note": "Rebel fleet 836 enters Tatooine (Naboo gather, departed tick 20981)"
+   },
+   "battle_prompt": {
+    "tick": 21094,
+    "gf": 22117,
+    "note": "galaxy paused (P 1); no mode tick passes during the battle"
+   },
+   "result_applied": {
+    "gf": 22374
+   },
+   "galaxy_resumed": {
+    "gf": 22744
+   },
    "winner": "Rebel",
    "forces": {
-    "Rebel": {"capital": {"HOME_ONE": 1, "SUNDERED_HEART": 1, "ALLIANCE_ASSAULT_FRIGATE": 2, "CORELLIAN_CORVETTE": 2, "CORELLIAN_GUNBOAT": 2},
-              "squadrons": {"X-WING x5": 2, "Y-WING x3": 1, "ROGUE squadron (WEDGE_XWING_ROGUE + ROGUE_2/4/7/10/11_XWING)": 1}},
-    "Empire": {"capital": {"TARTAN_PATROL_CRUISER": 1}, "squadrons": {"TIE_DEFENDER x3": 1},
-               "starbase": "Space Station Level 1 (result screen only: the starbase is not a store object in the galactic trace)"}
+    "Rebel": {
+     "capital": {
+      "HOME_ONE": 1,
+      "SUNDERED_HEART": 1,
+      "ALLIANCE_ASSAULT_FRIGATE": 2,
+      "CORELLIAN_CORVETTE": 2,
+      "CORELLIAN_GUNBOAT": 2
+     },
+     "squadrons": {
+      "X-WING x5": 2,
+      "Y-WING x3": 1,
+      "ROGUE squadron (WEDGE_XWING_ROGUE + ROGUE_2/4/7/10/11_XWING)": 1
+     }
+    },
+    "Empire": {
+     "capital": {
+      "TARTAN_PATROL_CRUISER": 1
+     },
+     "squadrons": {
+      "TIE_DEFENDER x3": 1
+     },
+     "starbase": "Space Station Level 1 (result screen only: the starbase is not a store object in the galactic trace)"
+    }
    },
    "losses": {
-    "Rebel": {"ALLIANCE_ASSAULT_FRIGATE": 1},
-    "Empire": {"TARTAN_PATROL_CRUISER": 1, "TIE_DEFENDER squadron (3)": 1, "starbase": "Space Station Level 1 destroyed (screen)"}
+    "Rebel": {
+     "ALLIANCE_ASSAULT_FRIGATE": 1
+    },
+    "Empire": {
+     "TARTAN_PATROL_CRUISER": 1,
+     "TIE_DEFENDER squadron (3)": 1,
+     "starbase": "Space Station Level 1 destroyed (screen)"
+    }
    },
    "screen": "Your losses: Space Station Level 1, TIE Defender Squadron, Tartan Patrol Cruiser. Enemy losses: Assault Frigate Mk II. Battle time 00:00:00",
-   "owner_change": null
+   "owner_change": null,
+   "grade": {
+    "players": {
+     "Rebel": 0,
+     "Empire": 1
+    },
+    "sides": [
+     [
+      "Rebel",
+      1,
+      1
+     ],
+     [
+      "Empire",
+      0,
+      1
+     ]
+    ],
+    "combatants": [
+     [
+      "Empire",
+      "Tartan_Patrol_Cruiser",
+      1
+     ],
+     [
+      "Empire",
+      "TIE_Defender_Squadron",
+      1
+     ],
+     [
+      "Rebel",
+      "Home_One",
+      1
+     ],
+     [
+      "Rebel",
+      "Sundered_Heart",
+      1
+     ],
+     [
+      "Rebel",
+      "Alliance_Assault_Frigate",
+      2
+     ],
+     [
+      "Rebel",
+      "Corellian_Corvette",
+      2
+     ],
+     [
+      "Rebel",
+      "Corellian_Gunboat",
+      2
+     ],
+     [
+      "Rebel",
+      "Rebel_X-Wing_Squadron",
+      2
+     ],
+     [
+      "Rebel",
+      "Y-Wing_Squadron",
+      1
+     ],
+     [
+      "Rebel",
+      "Rogue_Squadron_Space",
+      1
+     ]
+    ],
+    "starbase": [
+     "Empire",
+     "Empire_Star_Base_1"
+    ],
+    "winner": "Rebel",
+    "losses": {
+     "Rebel": {
+      "Alliance_Assault_Frigate": 1
+     },
+     "Empire": {
+      "Tartan_Patrol_Cruiser": 1,
+      "TIE_Defender_Squadron": 1
+     }
+    },
+    "starbase_after": "destroyed",
+    "known_fail": {
+     "total lost Rebel": "b0139"
+    }
+   }
   },
   {
    "id": "tatooine_land_day16",
@@ -35,26 +160,160 @@
    "attacker": "Rebel",
    "defender": "Empire",
    "human_choice": "auto_resolve",
-   "arrival": {"tick": 21349, "gf": 22999, "note": "Rebel transport fleet 1459 enters Tatooine; Rebel fleet 836 holds orbit since the space battle"},
-   "battle_prompt": {"tick": 21353, "gf": 23004},
-   "result_applied": {"gf": 23367},
-   "galaxy_resumed": {"gf": 23763},
+   "arrival": {
+    "tick": 21349,
+    "gf": 22999,
+    "note": "Rebel transport fleet 1459 enters Tatooine; Rebel fleet 836 holds orbit since the space battle"
+   },
+   "battle_prompt": {
+    "tick": 21353,
+    "gf": 23004
+   },
+   "result_applied": {
+    "gf": 23367
+   },
+   "galaxy_resumed": {
+    "gf": 23763
+   },
    "winner": "Rebel",
    "forces": {
-    "Rebel": {"companies": {"infantry (SQUAD_REBEL_TROOPER x15)": 20, "Plex (SQUAD_PLEX_SOLDIER x6)": 9, "MPTL (MPTL x2 + MPTL_SPOTTER x2)": 2, "T2-B (T2B_TANK x5)": 2}},
-    "Empire": {"companies": {"stormtroopers (SQUAD_STORMTROOPER x18)": 1, "TIE_CRAWLER x5 (screen: TIE Mauler)": 2, "AT_AT_WALKER x1": 1},
-               "structures": {"E_GROUND_BARRACKS": 1, "E_GROUND_LIGHT_VEHICLE_FACTORY": 1}}
+    "Rebel": {
+     "companies": {
+      "infantry (SQUAD_REBEL_TROOPER x15)": 20,
+      "Plex (SQUAD_PLEX_SOLDIER x6)": 9,
+      "MPTL (MPTL x2 + MPTL_SPOTTER x2)": 2,
+      "T2-B (T2B_TANK x5)": 2
+     }
+    },
+    "Empire": {
+     "companies": {
+      "stormtroopers (SQUAD_STORMTROOPER x18)": 1,
+      "TIE_CRAWLER x5 (screen: TIE Mauler)": 2,
+      "AT_AT_WALKER x1": 1
+     },
+     "structures": {
+      "E_GROUND_BARRACKS": 1,
+      "E_GROUND_LIGHT_VEHICLE_FACTORY": 1
+     }
+    }
    },
    "losses": {
-    "Rebel": {"infantry companies": 10, "Plex companies": 7, "MPTL companies": 2},
-    "Empire": {"all companies": 4, "E_GROUND_BARRACKS": 1, "E_GROUND_LIGHT_VEHICLE_FACTORY": 1}
+    "Rebel": {
+     "infantry companies": 10,
+     "Plex companies": 7,
+     "MPTL companies": 2
+    },
+    "Empire": {
+     "all companies": 4,
+     "E_GROUND_BARRACKS": 1,
+     "E_GROUND_LIGHT_VEHICLE_FACTORY": 1
+    }
    },
-   "survivors": {"Rebel": {"infantry companies": 10, "Plex companies": 2, "T2-B companies": 2}, "Empire": {}},
+   "survivors": {
+    "Rebel": {
+     "infantry companies": 10,
+     "Plex companies": 2,
+     "T2-B companies": 2
+    },
+    "Empire": {}
+   },
    "screen": "Your losses: AT-AT Walker, Barracks, Light Factory, Stormtroopers, TIE Mauler x2. Enemy losses: Infantry Platoon x10, MPTL Artillery x2, Plex Soldiers x7. Battle time 00:00:00",
-   "owner_change": {"tick": 21355, "gf": 23764, "from": "Empire", "to": "Rebel"}
+   "owner_change": {
+    "tick": 21355,
+    "gf": 23764,
+    "from": "Empire",
+    "to": "Rebel"
+   },
+   "grade": {
+    "players": {
+     "Rebel": 0,
+     "Empire": 1
+    },
+    "sides": [
+     [
+      "Rebel",
+      1,
+      1
+     ],
+     [
+      "Empire",
+      0,
+      1
+     ]
+    ],
+    "combatants": [
+     [
+      "Empire",
+      "Imperial_Stormtrooper_Squad",
+      1
+     ],
+     [
+      "Empire",
+      "Imperial_Anti_Infantry_Brigade",
+      2
+     ],
+     [
+      "Empire",
+      "Imperial_Heavy_Assault_Company",
+      1
+     ],
+     [
+      "Rebel",
+      "Rebel_Infantry_Squad",
+      20
+     ],
+     [
+      "Rebel",
+      "Rebel_Tank_Buster_Squad",
+      9
+     ],
+     [
+      "Rebel",
+      "Rebel_Artillery_Brigade",
+      2
+     ],
+     [
+      "Rebel",
+      "Rebel_Light_Tank_Brigade",
+      2
+     ],
+     [
+      "Empire",
+      "E_Ground_Barracks",
+      1
+     ],
+     [
+      "Empire",
+      "E_Ground_Light_Vehicle_Factory",
+      1
+     ]
+    ],
+    "winner": "Rebel",
+    "losses": {
+     "Rebel": {
+      "Rebel_Infantry_Squad": 10,
+      "Rebel_Tank_Buster_Squad": 7,
+      "Rebel_Artillery_Brigade": 2
+     },
+     "Empire": {
+      "Imperial_Stormtrooper_Squad": 1,
+      "Imperial_Anti_Infantry_Brigade": 2,
+      "Imperial_Heavy_Assault_Company": 1,
+      "E_Ground_Barracks": 1,
+      "E_Ground_Light_Vehicle_Factory": 1
+     }
+    }
+   }
   }
  ],
  "other_owner_changes": [
-  {"tick": 7498, "planet": "SHOLA", "from": "Underworld", "to": "Rebel", "note": "AI vs AI, resolved by the game without a prompt (inside the hotm_galactic window, graded by outcome.*)"}
- ]
+  {
+   "tick": 7498,
+   "planet": "SHOLA",
+   "from": "Underworld",
+   "to": "Rebel",
+   "note": "AI vs AI, resolved by the game without a prompt (inside the hotm_galactic window, graded by outcome.*)"
+  }
+ ],
+ "grade_about": "bkc1 t08: 'grade' is the machine-readable form of each battle for tools/parity/autoresolve_check.py (ctest parity_autoresolve): port type names of the combatants in auto-resolve list order (defender units, attacker units, then the defender's structures / starbase), side flags (Rebel AI, Empire human, both playable), the retail winner and the retail combatants destroyed by type (types not listed: 0). The check runs the port's auto-resolve over 200 seeds and passes when the winner matches in >= 90% of them and every retail loss count and the starbase outcome lie inside the port's 5th..95th percentile band (parity tier 2: distribution, docs/DECISIONS.md). Per side, the total destroyed is graded the same way. 'known_fail' names checks that fail for a known reason with their backlog entry: reported KNOWN, not failing the ctest (as baseline.json does for the harness)."
 }

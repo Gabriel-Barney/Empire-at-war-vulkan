@@ -14,6 +14,17 @@ endif()
 set(_parity ${CMAKE_CURRENT_SOURCE_DIR}/parity_harness.py)
 add_test(NAME parity_harness_selftest COMMAND ${ALAMO_PARITY_PYTHON} -I ${_parity} selftest)
 set_tests_properties(parity_harness_selftest PROPERTIES TIMEOUT 60)
+# bkc1 t08 (backlog b0027): the galactic auto-resolve against the retail battles of autoresolve_refs.json, over 200 seeds
+# (autoresolve_check.py; its selftest needs no data). Skips (77) without ALAMO_FOC_DATA.
+add_test(NAME parity_autoresolve_selftest COMMAND ${ALAMO_PARITY_PYTHON} -I ${CMAKE_CURRENT_SOURCE_DIR}/autoresolve_check.py selftest)
+set_tests_properties(parity_autoresolve_selftest PROPERTIES TIMEOUT 60)
+if(TARGET alamo_galactic_autoresolve_parity)
+  add_test(NAME parity_autoresolve
+           COMMAND ${ALAMO_PARITY_PYTHON} -I ${CMAKE_CURRENT_SOURCE_DIR}/autoresolve_check.py run
+                   --exe $<TARGET_FILE:alamo_galactic_autoresolve_parity>
+                   --refs ${CMAKE_CURRENT_SOURCE_DIR}/autoresolve_refs.json --out ${CMAKE_CURRENT_BINARY_DIR}/out_autoresolve)
+  set_tests_properties(parity_autoresolve PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+endif()
 if(TARGET alamo_headless)
   foreach(_s hotm_galactic geonosis_skirmish)
     add_test(NAME parity_harness_${_s}

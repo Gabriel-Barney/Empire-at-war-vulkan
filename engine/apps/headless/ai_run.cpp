@@ -186,7 +186,8 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
     for (size_t p = 0; p < setup.players.size(); ++p) {
         galactic::PlayerSetup& ps = setup.players[p];
         const std::string fac = ps.faction < rules.factions.size() ? rules.factions[ps.faction].name : std::string();
-        std::string type = ai::campaign_ai_type(control, basic_ai, fac, true);
+        // bkc1 t03: only the campaign's own factions fill an unassigned slot (the other players are inert, no AI)
+        std::string type = ai::campaign_ai_type(control, basic_ai, fac, ps.named);
         for (const std::string& o : aopt.ai_types) {  // q6 t07 [port] --ai-type FACTION=TYPE (last one wins)
             const size_t eq = o.find('=');
             if (eq != std::string::npos && ai::ai_iequal(ai::ai_trim(std::string_view(o).substr(0, eq)), fac))

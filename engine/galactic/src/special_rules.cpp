@@ -484,10 +484,9 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
                 c.slot = slot;
                 c.type = static_cast<int8_t>(types.get_enum(t, p + "Type"));
                 c.credit_cost = to_f(types.get_string(t, p + "Credit_Cost"));
-                c.credit_cost_rounded = types.get_int(t, p + "Credit_Cost");
-                if (c.credit_cost_rounded == 0) {  // stored as a float field: rounded half up
+                {  // stored as a float field: rounded half up (bkc1 t07: get_int now truncates a float field)
                     const float f = types.get_float(t, p + "Credit_Cost");
-                    if (f > 0.0f) c.credit_cost_rounded = static_cast<int32_t>(f + 0.5f);
+                    c.credit_cost_rounded = f > 0.0f ? static_cast<int32_t>(f + 0.5f) : types.get_int(t, p + "Credit_Cost");
                 }
                 c.required_unit_types = type_list(types, t, p + "Required_Unit_Type");
                 c.required_unit_count = types.get_int(t, p + "Required_Unit_Count");

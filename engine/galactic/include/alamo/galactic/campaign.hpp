@@ -79,6 +79,7 @@ struct PlayerSetup {
     int32_t tech_level = 1;           // Starting_Tech_Level
     int32_t max_tech_level = 5;       // Max_Tech_Level (P +0x88); 5 when the campaign names none [L: MP_Default_Max_Tech_Level]
     PlanetIndex home = kInvalidPlanet;  // Home_Location (GRC 1.4: the local player's home is revealed at start)
+    bool named = false;  // bkc1 t03: the campaign names the faction (the others are inert players; read by AI-vs-AI hosts)
 };
 struct StartingForce {
     int32_t player = kNoPlayer;

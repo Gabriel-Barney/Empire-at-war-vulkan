@@ -396,6 +396,17 @@ public:
     // tactical VMs / plot set are released (their log lines stay). No-op without an attached battle.
     void end_battle(int32_t winner, uint64_t frame);
     bool battle_attached() const;
+    // bkc1 t01 (docs/re/BKC1_RE_ANSWERS.md Q1 [H]): the Esc key during a story cinematic. esc_goes_to_story(): the
+    // cinematic camera is on (Lua Start_Cinematic_Camera: the controller's state 4) and no Lua Bink movie plays (an Esc
+    // then only stops the movie); the host sends the key here instead of opening the pause menu. handle_esc(): for every
+    // active plot of the current mode's story manager (the attached battle's tactical plot set when a battle runs, which
+    // may have none; else the galactic sets in set order), in plot-table order, calls the plot script's global
+    // Story_Handle_Esc() when it is a Lua function: no arguments, results ignored, a missing function is no error.
+    // Returns the number of calls made. Retail calls it from the message pump between ticks; the port applies it as a
+    // port command (game story_ui.hpp kStoryEscSubtype) before the next tick's systems, so threads it creates first
+    // run at that tick's T9, as in retail.
+    bool esc_goes_to_story() const;
+    uint32_t handle_esc();
     // Tactical notification (battle host, sim thread): names / owners resolved now from the battle's store,
     // queued and routed at the next service. Ignored without an attached battle.
     void notify_tactical(const TacticalStoryNotification& n);

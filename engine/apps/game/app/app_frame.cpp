@@ -468,10 +468,22 @@ void App::frame() {
     }
     input_.update(routed_.world);
     if (screen_ == Screen::Movie) movie_step();
-    if (session_ && !paused_ && (screen_ == Screen::Galactic || screen_ == Screen::Battle) && routed_.keys_to_world &&
+    // bkc1 t01 (BKC1_RE_ANSWERS Q1 step 2): an in-game full-screen Bink takes the key first: Esc or Space stops it
+    // unless the movie is Cannot_Skip, and neither the pause menu nor Story_Handle_Esc sees that Esc.
+    const bool movie_key = session_ && !paused_ && screen_ != Screen::Movie && full_movie_.playing() &&
+                           (input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace));
+    if (movie_key && !full_movie_.cannot_skip()) {
+        story_ui_.movie_done(full_movie_.name());  // as a movie that ends by itself (STORY_MOVIE_DONE)
+        full_movie_.stop(audio_);
+    }
+    if (!movie_key && session_ && !paused_ && (screen_ == Screen::Galactic || screen_ == Screen::Battle) && routed_.keys_to_world &&
         input_.key_pressed(ui::vk::kEscape) && script_.empty() && !(screen_ == Screen::Battle && targeting_.active())) {
-        paused_ = true;  // (Esc during a targeted-ability pick only cancels the pick: battle_input)
-        ui_.front.show_pause_menu();
+        // bkc1 t01 (BKC1_RE_ANSWERS Q1): with the story's cinematic camera on, Esc goes to the plots' Story_Handle_Esc
+        // and consumes the key (no pause menu); otherwise it opens the pause menu.
+        if (!session_->story_esc()) {
+            paused_ = true;  // (Esc during a targeted-ability pick only cancels the pick: battle_input)
+            ui_.front.show_pause_menu();
+        }
     }
     // MAIN_LOOP.md §1.5: the pause menu and the full-screen dialogs it opens (options and their pages, save / load, quit
     // confirm) set the tactical pause in single player - no ticks while any of them is open, whatever opened it.

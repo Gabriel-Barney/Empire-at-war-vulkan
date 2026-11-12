@@ -125,6 +125,12 @@ struct ConflictRules {
 bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase& db, const objects::GameObjectTypes& types,
                          const GalacticRules& galactic, ConflictRules& out, std::vector<std::string>* diagnostics = nullptr);
 
+// The auto-resolve combatant of one object of type `type` owned by `owner` (BT §4.3): its Squadron_Units / Company_Units
+// members first (count x AI_Combat_Power each), then its own piece unless it is a container in a space battle. Used by
+// ConflictManager::auto_setup and the auto-resolve parity check (bkc1 t08, tests/autoresolve_parity.cpp).
+ArCombatant make_ar_combatant(const GalacticRules& galactic, const ConflictRules& rules, uint32_t type, int32_t owner,
+                              bool space);
+
 // ---- records ---------------------------------------------------------------------------------------------------
 enum class ConflictKind : uint8_t { Land = 1, Space = 2 };
 enum class BattleChoice : uint8_t { Pending = 0, Fight = 1, AutoResolve = 2, Retreat = 3 };

@@ -2,6 +2,7 @@
 // order, checksum) and the story bindings (Story_Event, Get_Story_Plot, StoryPlot/EventWrapper,
 // objectives, radar blips, planet highlights, Check_Story_Flag). With ALAMO_FOC_DATA: loads the
 // shipped FoC campaign plot sets through the VFS, runs them and drives PGStoryMode.lua.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -221,6 +222,40 @@ static void test_synthetic() {
         }
         std::printf("  t9 timer: ELAPSED 2 fired at frame %u\n", fired_at);
         CHECK(fired_at == 61 && t.fired().size() == 1);
+    }
+    // bkc1 t04 (backlog b0012; Q6_T15_RETAIL_RUN.md row 3 [H]): a Perpetual prereq-less ELAPSED T driven by the host's T9
+    // series. Retail: T = 2 repeats every 61 frames (T x 30 + 1: the re-arm's next T9 only records LastTime), T = 0.7
+    // alternates 22 / 23 frames (T x 30 = 21 is not a whole frame count in float time).
+    {
+        auto periods = [](const char* t_param, uint32_t frames) {
+            const std::string xml = std::string("<Story><Event Name=\"Cycle\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>") +
+                                    t_param + "</Event_Param1><Perpetual>Yes</Perpetual></Event></Story>";
+            StoryModel c;
+            std::string ec;
+            CHECK(c.add_plot("Story_Cycle.xml", xml.c_str(), true, "", &ec) == 0);
+            std::vector<uint32_t> at;
+            size_t seen = 0;
+            for (uint32_t f = 1; f <= frames; ++f) {
+                c.update(f, StoryModel::t9_seconds(f, 1.0f / 30.0f));
+                for (; seen < c.fired().size(); ++seen) at.push_back(f);
+            }
+            std::vector<uint32_t> d;
+            for (size_t i = 1; i < at.size(); ++i) d.push_back(at[i] - at[i - 1]);
+            return d;
+        };
+        const std::vector<uint32_t> two = periods("2", 1300);
+        CHECK(two.size() >= 19);
+        for (uint32_t p : two) CHECK(p == 61 || p == 62);
+        CHECK(std::count(two.begin(), two.end(), 61u) * 10 >= static_cast<std::ptrdiff_t>(two.size()) * 9);  // 38 of 39 in retail
+        const std::vector<uint32_t> cyc07 = periods("0.7", 1300);
+        uint32_t n22 = 0, n23 = 0;
+        for (uint32_t p : cyc07) {
+            CHECK(p == 22 || p == 23);
+            n22 += p == 22;
+            n23 += p == 23;
+        }
+        std::printf("  perpetual ELAPSED: T=2 %zu periods, T=0.7 %u x 22 + %u x 23 frames\n", two.size(), n22, n23);
+        CHECK(n22 > 0 && n23 > 0);  // both lengths occur
     }
     // A2i t01 (A2I_T01_FRAME_ORDER.md §6, 0x454980): a prereq-less ELAPSED 0 only records its start at its first T9 and
     // fires at the second (tick 2 of the host); a prereq-armed ELAPSED 0 was initialised at its arming (vf7) and fires at
