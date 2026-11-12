@@ -183,7 +183,10 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
     // battle host: the UC joins the battle as a combat unit of the builder; health ramp vf9 / vf6 (rate = max / frames,
     // starting at one service's worth [inferred]).
     const float start = frames > 0 ? 1.0f / static_cast<float>(frames) : 1.0f;
-    if (bt_adopt_built(mode, uc, builder, start, bt_rng_) != 0xFFFFFFFFu && frames > 0) {
+    hg_spawn_off_ = skirmish_land() || skirmish_map();  // bkg3 b0028: the pad's byte (0 on every skirmish pad) is copied
+    const uint32_t adopted = bt_adopt_built(mode, uc, builder, start, bt_rng_);
+    hg_spawn_off_ = false;
+    if (adopted != 0xFFFFFFFFu && frames > 0) {
         const objects::ObjectId id = st.id(uc);
         const float rate = combat_->max_health(id) / static_cast<float>(frames);
         const auto it = std::lower_bound(bt_ramps_.begin(), bt_ramps_.end(), id, [](const UcRamp& r, objects::ObjectId v) { return r.id < v; });
@@ -253,7 +256,11 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                     sp.position.z += 0.1f;
                     sp.facing = st.facing(uh);
                     bh = mode.spawn(sp);
-                    if (st.alive(bh)) bt_adopt_built(mode, bh, sp.owner, frac, bt_rng_);
+                    if (st.alive(bh)) {
+                        hg_spawn_off_ = skirmish_land() || skirmish_map();  // bkg3 b0028: copied from the pad (0 in skirmish)
+                        bt_adopt_built(mode, bh, sp.owner, frac, bt_rng_);
+                        hg_spawn_off_ = false;
+                    }
                 }
                 mode.destroy(uh);
                 s.uc = objects::kNoObjectId;

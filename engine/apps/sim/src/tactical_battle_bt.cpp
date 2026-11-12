@@ -729,6 +729,12 @@ int32_t placement_base_level(const terrain::ObjectPlacement& pl) {
     return (m && !m->data.empty()) ? static_cast<int32_t>(m->data[0]) : 0;
 }
 
+// bkg3 b0028: mini 0x29 of the placement, the garrison / hangar spawn byte (obj +0x3CB, map load 0x39ce40); -1 when absent.
+int32_t placement_garrison_spawn(const terrain::ObjectPlacement& pl) {
+    const terrain::RawMini* m = terrain::find_mini(pl.placement_raw, 0x29);
+    return (m && !m->data.empty()) ? static_cast<int32_t>(m->data[0]) : -1;
+}
+
 // t50: the slot of a skirmish team marker "Team_NN_<what>" (MultiplayerStructureMarker / Marker types of the MP maps): NN as a
 // number, -1 when the name has another shape. [M] team NN = skirmish slot NN.
 int32_t team_marker_slot(std::string_view name) {
@@ -853,6 +859,8 @@ void TacticalBattle::bt_map_prepass() {
     };
     std::vector<terrain::ObjectPlacement> kept;
     kept.reserve(map_.objects.size());
+    std::vector<uint8_t> swapped;  // bkg3 b0028: parallel to kept, 1 = made by the team-marker swap
+    swapped.reserve(map_.objects.size());
     const size_t before = types_used_.size();
     auto use = [this](uint32_t t) {
         if (std::find(types_used_.begin(), types_used_.end(), t) == types_used_.end()) types_used_.push_back(t);
@@ -900,6 +908,7 @@ void TacticalBattle::bt_map_prepass() {
                         if (combat_candidate(x)) use(static_cast<uint32_t>(x));
                 }
                 kept.push_back(std::move(pad));
+                swapped.push_back(1);
                 continue;
             }
         }
@@ -918,8 +927,10 @@ void TacticalBattle::bt_map_prepass() {
                 if (combat_candidate(x)) use(static_cast<uint32_t>(x));
         }
         kept.push_back(std::move(pl));
+        swapped.push_back(0);
     }
     map_.objects = std::move(kept);
+    bt_team_swap_ = std::move(swapped);
     if (types_used_.size() != before) tables_extend();
 }
 
@@ -973,7 +984,12 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
                                          [](const std::pair<objects::ObjectId, int32_t>& e, objects::ObjectId v) { return e.first < v; });
         if (it == pad_levels_.end() || it->first != id) pad_levels_.insert(it, {id, level});
     };
+    const bool skirmish = skirmish_land() || skirmish_map();
     for (const terrain::ObjectPlacement& pl : map_.objects) {
+        // bkg3 b0028: a skirmish's team-marker structures and its map placements with byte 0 spawn nothing from their
+        // hangar lists ([port] campaign / story maps keep spawning on: their placement byte is not read yet).
+        const size_t pi_map = static_cast<size_t>(&pl - map_.objects.data());
+        hg_spawn_off_ = skirmish && ((pi_map < bt_team_swap_.size() && bt_team_swap_[pi_map] != 0) || placement_garrison_spawn(pl) == 0);
         objects::TypeIndex t = index.find(pl.type_crc);
         int32_t owner = static_cast<int32_t>(pl.owner);
         const Vec3 pos{pl.position[0], pl.position[1], pl.position[2]};
@@ -1085,6 +1101,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             bt_markers_.push_back(std::move(m));
         }
     }
+    hg_spawn_off_ = false;
 }
 
 // ---- post-load placement of the galactic forces (REMAINING_GAPS §3.2, 0x2a1eb0) -------------------------------------
@@ -1643,7 +1660,9 @@ void TacticalBattle::bt_pad_restore(TacticalMode& mode) {
         sp.facing = st.facing(ph);
         const objects::ObjectHandle bh = mode.spawn(sp);
         if (!st.alive(bh)) continue;
+        hg_spawn_off_ = skirmish_land() || skirmish_map();  // bkg3 b0028: a pre-built structure copies the pad's byte
         bt_adopt_built(mode, bh, rec->owner, 1.0f, bt_rng_);
+        hg_spawn_off_ = false;
         PadState* s = pad_state(st.id(ph), true);
         pads_mode_ = &mode;
         s->built = st.id(bh);
@@ -1726,7 +1745,9 @@ void TacticalBattle::bt_skirmish_base(TacticalMode& mode) {
         sp.facing = st.facing(ph);
         const objects::ObjectHandle bh = mode.spawn(sp);
         if (!st.alive(bh)) continue;
+        hg_spawn_off_ = skirmish_land() || skirmish_map();  // bkg3 b0028: copied from the pad
         bt_adopt_built(mode, bh, owner, 1.0f, bt_rng_);
+        hg_spawn_off_ = false;
         PadState* s = pad_state(st.id(ph), true);
         pads_mode_ = &mode;
         s->built = st.id(bh);

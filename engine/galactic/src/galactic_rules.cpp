@@ -6,6 +6,7 @@
 
 #include "alamo/data/game_database.hpp"
 #include "alamo/core/ascii.hpp"
+#include "alamo/core/hash.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/data/xml_list.hpp"
 #include "alamo/objects/behaviors.hpp"
@@ -184,6 +185,15 @@ uint32_t GalacticRules::find_type(std::string_view name) const {
     for (size_t i = 0; i < types.size(); ++i)
         if (ascii_iequals(types[i].name, name)) return static_cast<uint32_t>(i);
     return kNoIndex;
+}
+
+const GalacticRules::HopRoute* GalacticRules::find_hop_route(uint32_t planet_crc_a, uint32_t planet_crc_b) const {
+    const uint32_t lo = std::min(planet_crc_a, planet_crc_b), hi = std::max(planet_crc_a, planet_crc_b);
+    const auto it = std::lower_bound(hop_routes.begin(), hop_routes.end(), std::pair<uint32_t, uint32_t>{lo, hi},
+                                     [](const HopRoute& r, const std::pair<uint32_t, uint32_t>& k) {
+                                         return r.lo != k.first ? r.lo < k.first : r.hi < k.second;
+                                     });
+    return it != hop_routes.end() && it->lo == lo && it->hi == hi ? &*it : nullptr;
 }
 
 uint32_t GalacticRules::neutral_faction() const {
@@ -481,6 +491,28 @@ bool load_galactic_rules(const FileProvider& provider, const data::GameDatabase&
     out.types = extract_type_info(types, out.factions);
     out.terrain_effectiveness = load_terrain_effectiveness(provider, types, diagnostics);
     load_special_rules(provider, db, types, out, diagnostics);  // P4 sim
+    // bkg3 b0115: the hop-factor route per planet pair = the lowest name CRC among every loaded TradeRoute joining the two
+    // planet types (a name defined twice counts once, with its last definition: GameDatabase keeps one entry per name).
+    out.hop_routes.clear();
+    for (const data::TradeRouteDef& r : db.trade_routes()) {
+        const uint32_t a = name_crc(r.point_a), b = name_crc(r.point_b);
+        GalacticRules::HopRoute h;
+        h.lo = std::min(a, b);
+        h.hi = std::max(a, b);
+        h.route_crc = r.name_crc;
+        h.hs = r.hs_speed_factor;
+        out.hop_routes.push_back(h);
+    }
+    std::sort(out.hop_routes.begin(), out.hop_routes.end(), [](const GalacticRules::HopRoute& x, const GalacticRules::HopRoute& y) {
+        if (x.lo != y.lo) return x.lo < y.lo;
+        if (x.hi != y.hi) return x.hi < y.hi;
+        return x.route_crc < y.route_crc;
+    });
+    out.hop_routes.erase(std::unique(out.hop_routes.begin(), out.hop_routes.end(),
+                                     [](const GalacticRules::HopRoute& x, const GalacticRules::HopRoute& y) {
+                                         return x.lo == y.lo && x.hi == y.hi;
+                                     }),
+                         out.hop_routes.end());
     // OI galactic: faction victory inputs (STRATEGIC_GAPS 1.4).
     for (FactionRules& f : out.factions) {
         if (!f.home_planet.empty()) f.home_planet_type = out.find_type(f.home_planet);

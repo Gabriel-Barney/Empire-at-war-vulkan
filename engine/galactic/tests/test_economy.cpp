@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "alamo/core/hash.hpp"
 #include "alamo/commands/pipeline.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
@@ -2772,6 +2773,32 @@ void test_foc_hotm_political_target(const FocData& d) {
     }
 }
 
+void test_foc_hotm_hop_route(const FocData& d) {
+    std::printf("  FoC HotM hop factor route (bkg3 b0115)\n");
+    // HotM lists NalHutta_Kashyyyk (HS 5); the table also holds Kashyyyk_NalHutta (HS 6, CRC 765897670 < 3159653329), which
+    // the hop factor takes (retail 21 ticks for the hop, not 25). The listed route keeps the path cost.
+    const GalacticRules::HopRoute* h = d.rules.find_hop_route(name_crc("NalHutta"), name_crc("Kashyyyk"));
+    CHECK(h != nullptr);
+    if (h) {
+        std::printf("    Kashyyyk<->NalHutta: route crc %u, HS %.1f\n", h->route_crc, static_cast<double>(h->hs));
+        CHECK(h->route_crc == name_crc("Kashyyyk_NalHutta") && h->hs == 6.0f);
+        CHECK(d.rules.find_hop_route(name_crc("Kashyyyk"), name_crc("NalHutta")) == h);
+    }
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, d.types, &ids);
+    SimRng rng(1u);
+    GalacticSim s(d.rules, store, rng);
+    CHECK(s.start(build_campaign_setup(d.db, d.rules, "Sandbox_Heart_Of_The_Maw_Underworld")));
+    const PlanetIndex k = s.map().planets.find("Kashyyyk"), n = s.map().planets.find("NalHutta");
+    CHECK(k != kInvalidPlanet && n != kInvalidPlanet);
+    if (k == kInvalidPlanet || n == kInvalidPlanet) return;
+    float listed = 0.0f;
+    const auto& rt = s.map().routes;
+    for (size_t r = 0; r < rt.point_a.size(); ++r)
+        if ((rt.point_a[r] == k && rt.point_b[r] == n) || (rt.point_a[r] == n && rt.point_b[r] == k)) listed = rt.hs_speed_factor[r];
+    CHECK(listed == 5.0f);
+}
+
 void test_foc_hotm_rebel_income(const FocData& d) {
     std::printf("  FoC HotM Rebel entry: Empire income at the first payment (a2j t03)\n");
     objects::IdCounter ids;
@@ -2947,6 +2974,7 @@ void test_foc_campaign() {
     test_foc_corellia_kuat_hop(d);  // G1
     test_foc_hotm_rebel_income(d);  // a2j t03
     test_foc_hotm_political_target(d);  // bkg2 b0125
+    test_foc_hotm_hop_route(d);         // bkg3 b0115
     test_foc_hotm_build_cost(d);    // a2k t01
     const int32_t days = 10;
     RunResult base;

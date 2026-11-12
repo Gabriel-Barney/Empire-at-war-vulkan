@@ -168,10 +168,17 @@ struct GalPp {
     // keeps the player-level flood (no target reachability object).
     // Production Setup C queue time (A2M_T04_RE_ANSWERS Q2.2 step 3) [H]: first solve (flag 0x140b3a524 = 1) the planet
     // production's current item remaining time 0x401ba0; re-solves the AIPlanetBuildQueue time 0x53bb20(q, 1, 0).
+    // bkg3 b0103 (A2M_R2_RE_A §1.5, AI_GALACTIC_2 §2.3 corrected [H]): 0x401ba0 is the current item's remaining time plus
+    // the build times of the rest of that queue; the head's remaining time is read from its timer at this frame [M: the
+    // timer object's own getter], not BuildEntry::remaining (the value cached when the queue last advanced).
     float queue_time(PlanetIndex p, uint32_t q) const {
         if (!first_solve) return w.planet_queue_time(p, q);
         const auto queue = w.sim.queue_of(p, q);
-        return queue.empty() ? 0.0f : queue[0].remaining;
+        float t = 0.0f;
+        for (size_t i = 0; i < queue.size(); ++i)
+            t += i == 0 ? gal::econ::timer_remaining_seconds(queue[0].start, queue[0].duration, w.sim.frame())
+                        : queue[i].build_time;
+        return t;
     }
     const std::vector<PlanetIndex>& source_list() const {
         const int level = std::min(reach_level, 5);
@@ -658,7 +665,10 @@ public:
                 // (0x559b40 -> 0x53bb20(q, 1, 0), planet_queue_time).
                 double sum = 0.0;
                 int32_t n = 0;
-                const uint32_t q = p_.w.sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
+                // bkg3 b0103 (A2M_T04_RE_ANSWERS Q2.2 step 3 [H]): sel = 1 when T +0x86c (build cost) < 1, else by the
+                // queue kind (+0xf0c / kind 0x5F; the port's queue_kind).
+                const gal::TypeInfo* tx = p_.ti(t);
+                const uint32_t q = tx && tx->build_cost >= 1 && p_.w.sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
                 for (const PlanetIndex k : p_.source_list()) {
                     if (!p_.w.sim.is_planet_revealed(k) || !p_.w.can_build_at(p_.player, t, k)) continue;
                     sum += static_cast<double>(p_.w.btime_at(p_.player, t, k)) + static_cast<double>(p_.queue_time(k, q));
