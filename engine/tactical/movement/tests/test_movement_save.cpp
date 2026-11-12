@@ -1434,8 +1434,9 @@ void test_t25_attack() {
 
 // s78o (b0087): a damaged unit record must not hang or index out of bounds after the load. In the t25.2 attack approach
 // unit 10 carries an attack slot (atk_theta / atk_rho, found by their 8 bytes) and no path record, so its Walk_Transition
-// block (wt_clip, wt_pos, wt_rate, wt_f4, wt_f0) sits a fixed 99 bytes + 20 before atk_theta (io_unit: prev_pos ..
-// self_goal with empty push vectors); the block of a unit without Walk_Transition is -1 and four zero floats.
+// block (wt_clip, wt_pos, wt_rate, wt_f4, wt_f0) sits a fixed 107 bytes + 20 before atk_theta (io_unit: prev_pos ..
+// self_goal with empty push vectors, then s78p's lane (empty: its count) and lane_d); the block of a unit without
+// Walk_Transition is -1 and four zero floats.
 void test_s78o_unit_rejections() {
     Scenario sc;
     sc.build = build_t25_attack;
@@ -1458,9 +1459,9 @@ void test_s78o_unit_rejections() {
         if (std::equal(th.begin(), th.end(), good.begin() + static_cast<std::ptrdiff_t>(i)) &&
             std::equal(rh.begin(), rh.end(), good.begin() + static_cast<std::ptrdiff_t>(i + 4)))
             hits.push_back(i);
-    CHECK(hits.size() == 1 && hits[0] >= 119);
-    if (hits.size() != 1 || hits[0] < 119) return;
-    const size_t at_th = hits[0], at_wt = at_th - 99 - 20;
+    CHECK(hits.size() == 1 && hits[0] >= 127);
+    if (hits.size() != 1 || hits[0] < 127) return;
+    const size_t at_th = hits[0], at_wt = at_th - 107 - 20;
     const uint8_t idle[20] = {0xFF, 0xFF, 0xFF, 0xFF};  // wt_clip -1, then 4 x 0.0f
     CHECK(std::equal(std::begin(idle), std::end(idle), good.begin() + static_cast<std::ptrdiff_t>(at_wt)));
     World t(sc.cfg);
@@ -1834,7 +1835,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 28);  // 28: before the s78n t26 closing review Walk_Transition fields (29)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 30);
+    put_u32(bad, 0, 29);  // 29: before the s78p formation member lanes (Unit::lane / lane_d, the lane counters) (30)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 31);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode

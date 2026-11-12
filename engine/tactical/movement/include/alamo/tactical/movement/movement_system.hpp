@@ -348,6 +348,9 @@ struct MovementStats {
     // s78n t26.4 (MOVEMENT §3.5.2 C): Walk move steps - End Move coast steps (C.4), 0x15 restarts away from the end, waypoints
     // skipped by tau = 0 (C.9) and by a degenerate segment (C.8).
     uint32_t walk_coasts = 0, walk_restarts = 0, walk_tau_skips = 0, walk_degen_skips = 0;
+    // s78p (b0049): formation paths built for land formations of 2+ (move orders and attack plans), formation paths that
+    // failed (the members then plan singly), members given a lane, and plans that took the lane as the path.
+    uint32_t formation_paths = 0, formation_path_failures = 0, lanes_set = 0, lanes_taken = 0;
 };
 
 // s78n t14 (FIGHTER_FLYING §7.2 Dartboard step 3, 0x241820 / 0x241830): the radical inverse of `index` in `base` (f = 0,
@@ -1083,6 +1086,12 @@ private:
         V2 form_slot;
         bool self_arrive = false;
         V2 self_goal;
+        // s78p (b0049, MOVEMENT §3.5.2 D / G; save version 30): the member's lane on its formation's path (member_lane), set
+        // by the order (move_land / attack_plan) for a member of a land formation of 2+ and taken as the unit's path by
+        // its next plan when it still ends at the unit's goal (the plan then makes no search of its own); lane_d = the
+        // formation path's summed 3-D length (the walk-deployed cap's d, §3.2.1 item 2). Cleared by the plan.
+        std::vector<V2> lane;
+        float lane_d = 0.0f;
         // s78n t25.2 (MOVEMENT §4.3.2 item 4, save version 28): the attack slot of the unit's formation (block +0x3c /
         // +0x40; 0 / 0 none), the formation of its last attack order (0 none) and that order's target. Cleared by every
         // order that is not an attack re-plan, by stop() and teleport(); kept by halt().
@@ -1299,7 +1308,7 @@ private:
     static bool deploy_immobile(const Unit& x);  // deployed / deploying with M <= 0 (push, StoppedVsStopped)
     static bool deploy_branch(Unit& u);          // Walk 0x19 with a path: start walking deployed (true = the frame ends)
     bool deploy_gate_holds(const Unit& u) const;  // the plan's gate (every member a deployed / deploying manual deployer)
-    void plan_deploy_cap(Unit& u, uint32_t frame);  // the plan's cap test for an auto-deployer
+    void plan_deploy_cap(Unit& u, uint32_t frame, float d = -1.0f);  // the plan's cap test for an auto-deployer (d < 0: own path)
     // s78n t26.3 (MOVEMENT §3.5.2 D): the corner-speed pass 0x5070b0 on a new land order path (u.m.frac); serial.
     void corner_pass(Unit& u);
     std::vector<uint8_t> corner_static_;  // per unit index: Static (not moving) before this plan; scratch, not saved
@@ -1704,7 +1713,11 @@ private:
     bool arc_slot_test(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, float hx, float hy, V2 p) const;
     // `kept` (indexed like idx): the members a re-path leaves on their own path (LandAttack::repath, G 5)
     void attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame,
-                     const std::vector<uint8_t>& kept);
+                     const std::vector<uint8_t>& kept, std::span<const FormationMember> mem);
+    // s78p (b0049): each member's lane on the formation path `fpath` (Unit::lane, member_lane) and its goal := the lane's end
+    // - not for air, forced or `kept` members (indexed like idx) or a member without a goal
+    void set_lanes(const std::vector<uint32_t>& idx, const LandForm& f, std::span<const V2> fpath, const std::vector<uint8_t>& kept,
+                   std::span<const FormationMember> mem);
     void move_space(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame,
                     const std::vector<uint32_t>& delays, uint32_t serial);
     void park_space(Unit& u, uint32_t frame);

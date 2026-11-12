@@ -188,11 +188,7 @@ std::vector<RankedMember> rank_members(std::span<const FormationMember> m, std::
     return out;
 }
 
-std::vector<Slot> layout_formation(std::span<const FormationMember> m, std::span<const uint32_t> members, V2 forward,
-                                   const MovementConstants& k, RankKey key) {
-    std::vector<Slot> out;
-    if (members.empty()) return out;
-    const V2 right = formation_right(forward);
+float formation_half_width(std::span<const FormationMember> m, std::span<const uint32_t> members, const MovementConstants& k) {
     float cell = 0.0f, area = 0.0f;
     for (uint32_t i : members) {
         cell = std::max(cell, member_width(m[i]));
@@ -200,7 +196,15 @@ std::vector<Slot> layout_formation(std::span<const FormationMember> m, std::span
         area += d * d;
     }
     const float side = std::ceil(std::sqrt(static_cast<float>(members.size())));
-    const float hw = std::max(side * cell + 0.25f, std::sqrt(std::max(1.0f, area * k.spread_out_spacing_coefficient)));
+    return std::max(side * cell + 0.25f, std::sqrt(std::max(1.0f, area * k.spread_out_spacing_coefficient)));
+}
+
+std::vector<Slot> layout_formation(std::span<const FormationMember> m, std::span<const uint32_t> members, V2 forward,
+                                   const MovementConstants& k, RankKey key, float half_width) {
+    std::vector<Slot> out;
+    if (members.empty()) return out;
+    const V2 right = formation_right(forward);
+    const float hw = half_width > 0.0f ? half_width : formation_half_width(m, members, k);
 
     std::vector<RankedMember> remaining = rank_members(m, members, key);
     float depth = 0.0f;

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <numeric>
 
+#include "alamo/tactical/movement/corridor.hpp"
 #include "alamo/tactical/movement/formation.hpp"
 #include "alamo/tactical/movement/land_path.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
@@ -516,7 +517,7 @@ void MovementSystem::attack_slots(const MoveOrder& order, const std::vector<uint
 // s78n t26 review round 3: no item-6 stop when T is unseen (LandAttack::unseen: 0x40edd0's fog / stealth terms, FIGHTER_FLYING
 // §4.11 E [H]); the members a re-path keeps (G 5, `kept`) get no goal and are not stopped by a failed plan.
 void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint32_t>& idx, const LandForm& f, uint32_t frame,
-                                 const std::vector<uint8_t>& kept) {
+                                 const std::vector<uint8_t>& kept, std::span<const FormationMember> mem) {
     const Unit& lead = units_[idx[f.members[0]]];
     if (is_air(lead)) return;
     const ObjectId target = order.attack.target;
@@ -547,7 +548,12 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
     }
     V2 g = order.attack.g;
     std::vector<V2> path;
+    if (f.members.size() > 1) ++stats_.formation_paths;  // s78p
     if (!attack_path(lead, f.mask, f.centroid, g, path)) {
+        if (f.members.size() > 1) {
+            --stats_.formation_paths;
+            ++stats_.formation_path_failures;
+        }
         // the plan fails: the members do not move ([port] stopped and failed, as the batch-2 zone failure; the block kept)
         for (const uint32_t m : f.members) {
             if (kept[m]) continue;
@@ -637,7 +643,63 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         x.self_arrive = false;
         x.facing = kNoFacing;
         x.final_facing = kNoFacing;
+        x.lane.clear();
         if (x.d.locomotor != LocomotorKind::Default) x.sm.dest = goal;
+    }
+    // s78p (b0049, MOVEMENT §3.5.2 D / G): the members of a formation of 2+ follow their lanes on the formation path (the slot
+    // leg's and the fire trim's cut path), each ending at its slot point above ([port] the members planned singly before)
+    if (f.members.size() > 1 && path.size() >= 2) set_lanes(idx, f, path, kept, mem);
+}
+
+void MovementSystem::set_lanes(const std::vector<uint32_t>& idx, const LandForm& f, std::span<const V2> fpath,
+                               const std::vector<uint8_t>& kept, std::span<const FormationMember> mem) {
+    const float d = path_length_3d(fpath);
+    // The corridor squeeze 0x412210 of the formation on its path (land formations: type 1, the clearance probe [M]): W = 2 x
+    // the layout's half-width +0x254 (x 20), D = the slots' depth in cells ([port] for 2 x +0x250 / 20), the formation's
+    // class. Each narrower width-table entry gets its own pack (F +0xe0[k]): the layout again with half the entry's width
+    // ([port] along the path's first direction, as the full pack) - fewer members per row, so a narrow stretch is walked in
+    // more columns of single file instead of side by side.
+    const float hw = formation_half_width(mem, f.members, cfg_.constants);
+    float b0 = 0.0f, b1 = 0.0f;
+    for (const Slot& s : f.slots) {
+        b0 = std::min(b0, s.back);
+        b1 = std::max(b1, s.back);
+    }
+    CorridorParams cp;
+    cp.width = 2.0f * hw * kCellSize;
+    cp.depth_cells = (b1 - b0) / kCellSize + 1.0f;
+    cp.type = kCorridorProbe;
+    cp.mask = f.mask;
+    const CorridorSqueeze sq = squeeze_corridor(grid_, fpath, cp);
+    V2 fwd0 = lane_dir(fpath, 0);
+    if (length_sq(fwd0) == 0.0f) fwd0 = f.fwd;
+    // packs[e][n]: slot n's member's offset (+ = left) in entry e's pack
+    std::vector<std::vector<float>> packs(sq.table.size());
+    for (size_t e = 1; e < sq.table.size(); ++e) {
+        const std::vector<Slot> narrow =
+            layout_formation(mem, f.members, fwd0, cfg_.constants, RankKey::AttackRange, 0.5f * sq.table[e]);
+        packs[e].assign(f.slots.size(), 0.0f);
+        for (size_t n = 0; n < f.slots.size(); ++n)
+            for (const Slot& q : narrow)
+                if (q.member == f.slots[n].member) packs[e][n] = -q.lateral;
+    }
+    for (size_t n = 0; n < f.slots.size(); ++n) {
+        const Slot& s = f.slots[n];
+        Unit& x = units_[idx[s.member]];
+        if (is_air(x) || x.forced || !x.has_goal || (s.member < kept.size() && kept[s.member])) continue;
+        std::vector<float> el(packs.size(), 0.0f);
+        for (size_t e = 1; e < packs.size(); ++e) el[e] = packs[e][n];
+        LaneShape sh;
+        sh.left = -s.lateral;
+        sh.shift = sq.shift;
+        sh.entry = sq.entry;
+        sh.entry_left = el;
+        x.lane = member_lane(grid_, fpath, sh, s.back, x.lp.mask, x.m.pos);
+        x.lane_d = d;
+        x.goal = x.lane.back();  // the slot at the path's end (an attack member: its trim point, pulled in)
+        x.self_goal = x.goal;
+        if (x.d.locomotor != LocomotorKind::Default) x.sm.dest = x.goal;
+        ++stats_.lanes_set;
     }
 }
 

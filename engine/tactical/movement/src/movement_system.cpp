@@ -968,6 +968,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
                 u.atk_target = attack ? order.attack.target : -1;
                 u.self_goal = exact;  // s78n t20 F5: the shortcut measures to the exact goal, not a snapped cell
                 u.goal = target;
+                u.lane.clear();  // s78p: set below for a formation of 2+
                 u.has_goal = true;
                 u.need_path = true;
                 u.arrived = false;
@@ -1026,6 +1027,34 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
             }
         }
     }
+    // s78p (b0049, MOVEMENT §3.5.2 D / G, s78n t26 RE 2): a land formation of 2+ plans one formation path (0x417520: from
+    // the members' centroid when the lead reaches it, else from the lead, to the formation's destination, for the
+    // formation's class - attack_path) and every member follows its lane on it (0x413340, set_lanes), ending at its slot.
+    // [port] built here at the order, with the order frame's positions (retail: at the plan, after the composition); not
+    // for a forced-path order (flag 0x20: the straight path) or air members; a failed formation path leaves the members to
+    // plan singly to their slots, as before.
+    // The layout 0x40eb90 runs after the path (the form-up box oriented at the path's start, §4.3.1 item 1): [port] the
+    // slots are laid out again along the formation path's first segment, so the members' left / right order is the
+    // lanes' order (the layout keeps it, §4.3 item 2), and each member's slot is updated.
+    if (!attack && !(order.flags & kMoveFlagSkipValidation) && !no_grid)
+        for (LandForm& lf : forms) {
+            if (lf.members.size() < 2) continue;
+            const Unit& lead = units_[idx[lf.members[0]]];
+            if (is_air(lead)) continue;
+            V2 g = lf.centre;
+            std::vector<V2> fpath;
+            if (!attack_path(lead, lf.mask, lf.centroid, g, fpath) || fpath.size() < 2) {
+                ++stats_.formation_path_failures;
+                continue;
+            }
+            ++stats_.formation_paths;
+            const V2 fwd0 = lane_dir(fpath, 0);
+            if (length_sq(fwd0) > 0.0f) {
+                lf.slots = layout_formation(mem, lf.members, fwd0, k);
+                for (const Slot& s : lf.slots) units_[idx[s.member]].form_slot = {-s.back, s.lateral};
+            }
+            set_lanes(idx, lf, fpath, atk_keep, mem);
+        }
     // s78n t25.2 (MOVEMENT §4.3.2 items 2 and 6 - 7): the attack slots of a new order (0x438c10; not at a re-plan;
     // s78n t25.4: guard blocks too, by the guard L rule), then the attack plan of every formation (the "every member can
     // fire" stop, the slot leg, the fire trim, the member goals), before the squad start-delay draws below (a stopped
@@ -1033,7 +1062,7 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     if (attack) {
         ++(replan ? stats_.attack_replans : stats_.attack_orders);
         if (!replan) attack_slots(order, idx, forms);
-        for (const LandForm& lf : forms) attack_plan(order, idx, lf, frame, atk_keep);
+        for (const LandForm& lf : forms) attack_plan(order, idx, lf, frame, atk_keep, mem);
     }
     // s78n t14 (FIGHTER_FLYING §7.3 item 2, the path-set hook 0x5ad140 for a kind-1 path): a squad container standing still
     // (speed 0) that gets this move draws every steering member's start delay, synced int [0, Max_Move_Frame_Delay], in team
@@ -1404,6 +1433,8 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
         u->atk_theta = u->atk_rho = 0.0f;  // s78n t25.2: a stop drops the attack block (halt() keeps it)
         u->atk_form = 0;
         u->atk_target = -1;
+        u->lane.clear();  // s78p: a lane not yet taken goes with the order
+        u->lane_d = 0.0f;
         u->coast = u->fturn = u->path_started = false;  // s78n t18 (0x5ad320): state 0x16, the speed zeroed at once
         u->exit_host = -1;  // s78n t18 [port]: Stop counts as the unit's next order for the garrison-host gate
         end_push(*u);  // a1k t03 [port]: a stop ends a pushed move
@@ -1524,6 +1555,8 @@ bool MovementSystem::teleport(ObjectId id, V2 pos, float z, float yaw_deg, uint3
     u->atk_theta = u->atk_rho = 0.0f;  // s78n t25.2
     u->atk_form = 0;
     u->atk_target = -1;
+    u->lane.clear();  // s78p
+    u->lane_d = 0.0f;
     if (cfg_.mode == MoveMode::Land) u->path_change = frame;
     u->coast = u->fturn = u->path_started = false;
     end_push(*u);  // a1k t03 [port]: a teleport ends a pushed move
@@ -1707,6 +1740,17 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
         req.push_back(i);
     }
     if (req.empty()) return;
+    // s78p (b0049): a member with a lane takes it as its path (no search of its own) while the lane still ends at its goal
+    // and both its position and that goal pass its class ([port] else it plans singly, as before: the search's start escape
+    // and goal snap)
+    std::vector<uint8_t> use_lane(req.size(), 0);
+    for (size_t r = 0; r < req.size(); ++r) {
+        const Unit& u = units_[req[r]];
+        use_lane[r] = !u.lane.empty() && u.lane.size() >= 2 && !u.forced && !is_air(u) && u.lane.back() == u.goal &&
+                              grid_.passable_world(u.m.pos, u.lp.mask) && grid_.passable_world(u.goal, u.lp.mask)
+                          ? 1
+                          : 0;
+    }
     std::vector<LandPath> out(req.size());
     std::vector<SpacePath> air_out(req.size());  // §4.3-4.6: timed paths of land air units
     MovementConstants air_k = cfg_.constants;     // the planner's land branches (MOVEMENT §2.1)
@@ -1726,7 +1770,7 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
                 plan_space_path(air_, air_k, q, ssc, air_out[r]);
                 continue;
             }
-            if (u.forced) continue;  // s78k t01: the straight path is built below
+            if (u.forced || use_lane[r]) continue;  // s78k t01: the straight path is built below; s78p: the lane
             LandPathRequest q;
             q.start = u.m.pos;
             q.goal = u.goal;
@@ -1748,6 +1792,8 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
         Unit& u = units_[req[r]];
         u.need_path = false;
         ++stats_.paths_planned;
+        std::vector<V2> lane;
+        lane.swap(u.lane);  // s78p: a lane is taken by this plan or dropped
         u.around.clear();  // s78n t18: a new path (pack +0x288 := NOW), planned around nobody
         u.path_change = frame;
         if (is_air(u)) {
@@ -1789,6 +1835,21 @@ void MovementSystem::plan_land(uint32_t frame, const ParallelFor& pf) {
             corner_pass(u);  // s78n t26.3
             plan_deploy_cap(u, frame);  // s78n t26.1
             set_path_started(u);  // s78n t26.4
+            continue;
+        }
+        if (use_lane[r]) {
+            // s78p (b0049, MOVEMENT §3.5.2 G): the path set of the member's lane - from where it stands now; the corner pass
+            // runs on the lane (§3.5.2 D) and the walk-deployed cap's d is the formation path's 3-D length (§3.2.1 item 2)
+            u.m.path = std::move(lane);
+            lane_start(u.m.path, u.m.pos);  // where it stands now (it may have walked on since the order)
+            u.m.next = 1;
+            u.m.escape_until = 0;
+            u.m.frac.clear();
+            u.m.turn_done = false;
+            ++stats_.lanes_taken;
+            corner_pass(u);
+            plan_deploy_cap(u, frame, u.lane_d);
+            set_path_started(u);
             continue;
         }
         if (out[r].ok) {
@@ -1858,10 +1919,11 @@ bool MovementSystem::deploy_gate_holds(const Unit& u) const {
 }
 
 // s78n t26.1 (MOVEMENT §3.2.1 item 2, the plan's member loop): an auto-deployer takes the cap test 0x3ac100 with d = the
-// summed 3-D length of the path ([port] its own planned path: the port plans no formation path), when the path is set.
-void MovementSystem::plan_deploy_cap(Unit& u, uint32_t frame) {
+// summed 3-D length of the formation path when the path is set. s78p (b0049): `d` >= 0 is that length for a member on a
+// lane (Unit::lane_d); else ([port] a unit alone, or one that planned singly) its own planned path's.
+void MovementSystem::plan_deploy_cap(Unit& u, uint32_t frame, float d) {
     if (!auto_deployer(u) || u.d.locomotor != LocomotorKind::Default || is_air(u)) return;
-    deploy_cap_unit(u, path_length_3d(u.m.path), frame);
+    deploy_cap_unit(u, d >= 0.0f ? d : path_length_3d(u.m.path), frame);
 }
 
 // s78n t26.4 (MOVEMENT §3.5.2 G, s78n t26 RE 2): the path set (0x42c680 / push 0x554310) does not set the started byte
@@ -1899,8 +1961,8 @@ void MovementSystem::set_path_started(Unit& u) const {
 // s78n t26.3 (MOVEMENT §3.5.2 D, s78n t26 RE 2): the corner-speed pass 0x5070b0 of the Walk path set vf +0x190 0x42c680
 // and of the squad container's 0x5ad140 - land mode, a formation path (every land order composes a formation: form_id;
 // [port] the flag-0x20 straight path too, it is the formation's path) of a Walk unit or a squad container. The input is
-// the unit's own path ([port] the lane 0x413340 is the formation path offset by the slot; the port plans each member's
-// path to its slot, so the path stands for it, with no lateral pull-in). vmax = the effective max speed (a container: its
+// the unit's own path: s78p (b0049) for a member of a formation of 2+ its lane 0x413340 (set_lanes / member_lane, with the
+// pull-in); a unit alone (or one that planned singly) its own planned path. vmax = the effective max speed (a container: its
 // team speed), vmin = Min_Speed x mode, R, f_min, a = the deceleration (a container: its rate 0x5ab540, team_rate); probe
 // segment max(2, 10 x 0x397830) = max(2, the soft radius) ([port] UnitDesc::radius stands for Scale_Factor x the
 // radius), a container max(2, max(HX, HY) / 2). Line test = 0x5a4c10 for the unit's movement class; corridor 0x5093c0 =
@@ -1958,7 +2020,15 @@ void MovementSystem::corner_pass(Unit& u) {
         return true;
     };
     CornerPassStats st;
-    std::vector<float> f = corner_fractions(u.m.path, in, &st);
+    // s78p: corner 0 is the unit's own position (a lane path starts at its foot on the lane, lane_start)
+    std::vector<float> f;
+    if (u.m.path[0] == u.m.pos) {
+        f = corner_fractions(u.m.path, in, &st);
+    } else {
+        std::vector<V2> poly = u.m.path;
+        poly[0] = u.m.pos;
+        f = corner_fractions(poly, in, &st);
+    }
     stats_.corner_zero += st.zero;
     stats_.corner_slowed += st.slowed;
     stats_.corner_stepdowns += st.stepdowns;
@@ -4926,6 +4996,15 @@ void MovementSystem::hash_units(StateHasher& h) const {
                 h.f32(u.self_goal.x);
                 h.f32(u.self_goal.y);
             }
+        }
+        if (!u.lane.empty()) {  // s78p: a lane the next plan takes
+            h.u8(0x1A);
+            h.u32(static_cast<uint32_t>(u.lane.size()));
+            for (const V2 p : u.lane) {
+                h.f32(p.x);
+                h.f32(p.y);
+            }
+            h.f32(u.lane_d);
         }
         if (u.atk_rho > 0.0f || u.atk_form != 0) {  // s78n t25.2: the attack block of a land attack order (land only)
             h.u8(0xA5);

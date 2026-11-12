@@ -103,8 +103,11 @@ struct Slot {
     uint32_t row = 0;
 };
 // Slots in front-to-back, left-to-right order.
+// `half_width` > 0 (cells) replaces the computed half-width (s78p: the corridor squeeze's narrower packs, F +0xe0[k]).
 std::vector<Slot> layout_formation(std::span<const FormationMember> m, std::span<const uint32_t> members, V2 forward,
-                                   const MovementConstants& k, RankKey key = RankKey::AttackRange);
+                                   const MovementConstants& k, RankKey key = RankKey::AttackRange, float half_width = 0.0f);
+// The layout's half-width +0x254 in cells (max(side x cell + 0.25, sqrt(max(1, area x 1.8)))).
+float formation_half_width(std::span<const FormationMember> m, std::span<const uint32_t> members, const MovementConstants& k);
 inline V2 formation_right(V2 forward) { return {forward.y, -forward.x}; }
 inline V2 slot_world(V2 destination, V2 forward, const Slot& s) {
     return destination + formation_right(forward) * s.lateral - forward * s.back;

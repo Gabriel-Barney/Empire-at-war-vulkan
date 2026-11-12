@@ -95,7 +95,8 @@ bool walk_wanted_dir(std::span<const V2> path, uint32_t next, V2 pos, const Walk
     const V2 sd = normalize_retail(path[next] - a);
     float k = 0.0f;
     if (x && x->lane) {
-        // 0x41dbb0: e = (the slot's side offset (0 [port]) + the jiggle's side on a formation path) - the unit's signed side
+        // 0x41dbb0: e = (the slot's side offset + the jiggle's side on a formation path) - the unit's signed side
+        // (s78p [port]: the slot's side offset is 0 - a formation member's path is its lane, already offset by its slot)
         // offset from its segment; |e| <= 0.1 -> 0, else (e -+ 0.1) / 30
         float e = -cross(sd, pos - a);
         if (x->formation_path) e += cross(sd, x->jiggle);

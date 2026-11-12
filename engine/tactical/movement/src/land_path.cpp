@@ -1,5 +1,7 @@
 #include "alamo/tactical/movement/land_path.hpp"
 
+#include "alamo/tactical/movement/corridor.hpp"
+
 #include <algorithm>
 #include <limits>
 
@@ -196,6 +198,162 @@ float path_length(std::span<const V2> points) {
     float l = 0.0f;
     for (size_t i = 1; i < points.size(); ++i) l += distance(points[i - 1], points[i]);
     return l;
+}
+
+V2 lane_dir(std::span<const V2> fpath, size_t i) {
+    const size_t n = fpath.size();
+    if (n < 2 || i >= n) return {};
+    if (i == 0) {
+        const V2 d = normalize_retail(fpath[1] - fpath[0]);
+        const float l = length(d);
+        return l > 0.0f ? V2{d.x / l, d.y / l} : V2{};
+    }
+    const V2 din = normalize_retail(fpath[i] - fpath[i - 1]);
+    return i + 1 < n ? normalize_retail(din + normalize_retail(fpath[i + 1] - fpath[i])) : din;
+}
+
+float LaneShape::offset(float s) const {
+    if (shift.empty()) return left;
+    const float r = s > 0.0f ? s / kCorridorSampleStep : 0.0f;
+    const size_t k = std::min(static_cast<size_t>(r), shift.size() - 1);
+    const uint32_t e = k < entry.size() ? entry[k] : 0u;
+    return shift[k] + (e != 0 && e < entry_left.size() ? entry_left[e] : left);
+}
+
+namespace {
+// One lane point: origin o, unit direction n, the pull-in of 0x413340.
+V2 lane_point(const PassabilityGrid& grid, bool no_grid, V2 o, V2 n, float left, uint32_t mask) {
+    const V2 side = perp_left(n);
+    const float step = left / 5.0f;
+    float l = left;
+    V2 p = o + side * l;
+    while (!no_grid && !grid.passable_world(p, mask)) {
+        l -= step;
+        if (!(std::fabs(l) > std::fabs(step))) return o;
+        p = o + side * l;
+    }
+    return p;
+}
+}  // namespace
+
+namespace {
+struct LanePt {
+    V2 p;      // the lane point
+    float s;   // its arc length on the formation path
+    V2 n;      // the direction its line is crossed in (the waypoint line's normal)
+};
+// The lane with its arc lengths: one point per waypoint, plus (s78p [port]) inside a segment whose straight lane line fails
+// the unit's class (0x5a4c10), a point at each squeeze row (arc 30 k) whose offset differs from a neighbouring row's -
+// retail's member takes the row's offset as it walks (the row packs F +0xe0[k], the shift F +0xb0[k]), so a squeeze in the
+// middle of a long segment narrows its lane there.
+std::vector<LanePt> lane_points(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, uint32_t mask) {
+    std::vector<LanePt> out;
+    const bool no_grid = grid.width() == 0 || grid.height() == 0;
+    const size_t rows = shape.shift.size();
+    const auto row_offset = [&](size_t k) { return shape.offset(static_cast<float>(k) * kCorridorSampleStep); };
+    float s = 0.0f;
+    for (size_t i = 0; i < fpath.size(); ++i) {
+        const float s0 = s;
+        if (i > 0) s += distance(fpath[i - 1], fpath[i]);
+        const V2 n = lane_dir(fpath, i);
+        const LanePt w{lane_point(grid, no_grid, fpath[i], n, shape.offset(s), mask), s, n};
+        if (i > 0 && rows > 1 && !no_grid && s > s0 && !line_passable(grid, out.back().p, w.p, mask)) {
+            const float l = s - s0;
+            const V2 d{(fpath[i].x - fpath[i - 1].x) / l, (fpath[i].y - fpath[i - 1].y) / l};
+            for (size_t k = 1; k + 1 < rows; ++k) {
+                const float a = static_cast<float>(k) * kCorridorSampleStep;
+                if (!(a > s0) || !(a < s)) continue;
+                const float o = row_offset(k);
+                if (o == row_offset(k - 1) && o == row_offset(k + 1)) continue;
+                out.push_back({lane_point(grid, no_grid, fpath[i - 1] + d * (a - s0), d, o, mask), a, d});
+            }
+        }
+        out.push_back(w);
+    }
+    return out;
+}
+}  // namespace
+
+std::vector<V2> formation_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, uint32_t mask) {
+    std::vector<V2> out;
+    for (const LanePt& q : lane_points(grid, fpath, shape, mask)) out.push_back(q.p);
+    return out;
+}
+
+std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, float back,
+                            uint32_t mask, V2 pos) {
+    std::vector<V2> out{pos};
+    const size_t n = fpath.size();
+    if (n == 0) return out;
+    const std::vector<LanePt> lane = lane_points(grid, fpath, shape, mask);
+    const float total = lane.back().s;
+    bool leading = true, passed = false;
+    for (size_t i = 1; i < lane.size(); ++i) {
+        if (!(total - lane[i].s > back)) break;  // rest falls along the path
+        if (leading && dot(pos - lane[i].p, lane[i].n) >= 0.0f) {
+            out[0] = lane[i].p;  // passed: the lane goes on from this point
+            passed = true;
+            continue;
+        }
+        leading = false;
+        // a point that lies behind the last one across its own line (a squeeze row's lateral jump on a short step, or a
+        // pull-in at a sharp corner) would turn the member back: skipped ([port])
+        if (out.size() > 1 && !(dot(lane[i].p - out.back(), lane[i].n) > 0.0f)) continue;
+        out.push_back(lane[i].p);
+    }
+    if (out.size() == 1 && !passed) out[0] = lane[0].p;
+    // the end: arc length q = total - back on the formation path; the segment's direction (exact normalise). A front-row
+    // member (back < 0: the layout centres its depth) ends ahead of the path's end, along the last segment.
+    const float q = total - back;
+    const auto seg_dir = [&](size_t k) {
+        const V2 d = fpath[k] - fpath[k - 1];
+        const float l = length(d);
+        return l > 0.0f ? V2{d.x / l, d.y / l} : V2{};
+    };
+    size_t first = 0;
+    for (size_t k = 1; k < n && first == 0; ++k)
+        if (distance(fpath[k - 1], fpath[k]) > 0.0f) first = k;
+    V2 o = fpath[0], d{};
+    if (first != 0) {
+        if (!(q > 0.0f)) {
+            d = seg_dir(first);
+            o = fpath[first - 1] + d * q;
+        } else {
+            float acc = 0.0f;
+            bool found = false;
+            for (size_t k = 1; k < n && !found; ++k) {
+                const float l = distance(fpath[k - 1], fpath[k]);
+                if (!(l > 0.0f)) continue;
+                d = seg_dir(k);
+                if (q <= acc + l) {
+                    o = fpath[k - 1] + d * (q - acc);
+                    found = true;
+                } else {
+                    acc += l;
+                }
+            }
+            if (!found) o = fpath[n - 1] + d * (q - acc);  // past the end: d is the last segment's direction
+        }
+    }
+    out.push_back(lane_point(grid, grid.width() == 0 || grid.height() == 0, o, d, shape.offset(q), mask));
+    lane_start(out, pos);
+    return out;
+}
+
+void lane_start(std::vector<V2>& path, V2 pos) {
+    if (path.size() < 2) {
+        if (!path.empty()) path[0] = pos;
+        return;
+    }
+    const V2 a = path[0], t = path[1];
+    const float l = distance(a, t);
+    if (!(l > 0.0f)) {
+        path[0] = pos;
+        return;
+    }
+    const V2 d{(t.x - a.x) / l, (t.y - a.y) / l};
+    const V2 foot = a + d * dot(pos - a, d);
+    path[0] = dot(t - foot, d) > 0.0f ? foot : pos;
 }
 
 // ---------------------------------------------------------------- region A*

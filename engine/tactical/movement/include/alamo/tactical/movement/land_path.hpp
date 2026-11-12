@@ -177,6 +177,44 @@ bool cell_astar(const PassabilityGrid& grid, const RegionMap& regions, V2 start,
 void smooth_path(const PassabilityGrid& grid, std::vector<V2>& points, uint32_t mask, float clearance = 0.0f,
                  const RegionMap* regions = nullptr, int32_t slot = -1, const ThreatCost* threat = nullptr);
 float path_length(std::span<const V2> points);
+
+// s78p (b0049, MOVEMENT §3.5.2 D, s78n t26 RE 2; 0x413340): the lane of a formation member - one point per waypoint of the
+// formation path `fpath`. Point i: origin fpath[i], direction n = lane_dir(fpath, i) (i = 0: unit(wp1 - wp0), fast then
+// exact normalise; i > 0: the waypoint line's bisector of 0x5c5060, the last waypoint its incoming direction); row k =
+// min(int(s_i / 30), rows - 1), s_i = the 2-D arc length to i; lateral offset L0 = LaneShape::offset(s_i) (+ = toward
+// (-n.y, n.x), retail's sign); point = origin + L (-n.y, n.x); while the point fails the unit's `mask` (0x50e0c0, the
+// cell test) L -= L0 / 5, and once |L| <= |L0 / 5| L = 0 (the origin). z = 0 for every point (the port's paths are 2-D).
+// An empty grid (unit tests without terrain) passes every point. s78p [port]: with a squeeze, inside a segment whose
+// straight lane line fails the class (line_passable), a point is also placed at each row (arc 30 k) whose offset differs
+// from a neighbouring row's - retail's member takes the row's offset as it walks, so a squeeze in the middle of a long
+// segment narrows the lane there too.
+struct LaneShape {
+    float left = 0.0f;                  // the slot's lateral offset (+ = left; a port Slot's lateral is to the right: -lateral)
+    std::span<const float> shift;       // the corridor squeeze's per-row shift F +0xb0[k].+4 (+ = left; empty: no squeeze)
+    std::span<const uint32_t> entry;    // its per-row width-table entry (0: the full width)
+    std::span<const float> entry_left;  // the unit's offset in each entry's pack F +0xe0[k] (+ = left; entry 0 unused)
+    // L0 at arc length s: shift[k] + the unit's offset in row k's pack (`left` for the full-width entry 0).
+    float offset(float s) const;
+};
+V2 lane_dir(std::span<const V2> fpath, size_t i);
+std::vector<V2> formation_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, uint32_t mask);
+// s78p (b0049) [port]: the member's path on its lane - its start (lane_start from the last lane point it has passed), then
+// the lane points whose waypoint it has not passed yet (the leading points with dot(pos - lane[i], lane_dir(i)) >= 0 are
+// skipped: retail steps a waypoint whose line the unit has crossed) and whose rest length on the formation path (2-D)
+// exceeds the member's depth `back` (a point behind the previous one across its own line is skipped: it would turn the
+// member back), then the end point: the formation path's point at arc length total - back (before the
+// start: back along the first segment), offset across that segment's direction by the shape's L0 there, with the same
+// pull-in. Retail keeps the formation path as the unit's path, steers it onto its lane with the lane term and shifts the
+// waypoints within |+0x68| of the end back along their segments ([L]); the port walks the lane itself, and its end is the
+// member's goal (its slot at the path's end; the formation's final rotation 0x411980 to an ordered facing is not
+// modelled).
+std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, float back,
+                            uint32_t mask, V2 pos);
+// s78p (b0049) [port]: the start of a lane path for a unit at `pos` - path[0] := the foot of pos on the line path[0] ->
+// path[1] when that foot lies before path[1], else pos. A member off its lane then walks the lane's direction and the lane
+// term (0x41dbb0, error / 30) pulls it onto the line, as retail's member converges on its slot offset from the formation
+// path; a member already past the lane's first point toward its end walks straight to it.
+void lane_start(std::vector<V2>& path, V2 pos);
 // Nearest passable cell (to `p`) with the given component, ring search up to max_rings; ties: the
 // first in (ring, y, x) scan order. False if none.
 bool snap_to_component(const PassabilityGrid& grid, const RegionMap& regions, V2 p, uint32_t mask, int32_t component,

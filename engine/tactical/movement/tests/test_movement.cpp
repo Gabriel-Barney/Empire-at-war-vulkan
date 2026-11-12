@@ -1764,7 +1764,10 @@ static void test_land_group() {
     // record (MOVEMENT §5.4.6 state table, row 15 [H]), so 19 stands; the Pass records hold their S (37 behind 19, 55 behind
     // 37, 16 held by 55) at speed 0 while M passes, and no record of the four ends (Starved has no contact or end test;
     // no jam breaker in retail, RE f36dc98b). The jammed units are counted apart and checked to be exactly that cycle.
-    const uint32_t frames = run_land(sys, 0, 6500, rng, serial_for, ground);
+    // s78p (b0049): with one formation path per formation and each member on its lane the formations no longer cross in
+    // the maze, so the cycle does not form; all 36 arrive at frame ~8460 (the lanes are longer than the singly planned
+    // paths). The cap is 9000; the jam bound stays for the record.
+    const uint32_t frames = run_land(sys, 0, 9000, rng, serial_for, ground);
     uint32_t arrived = 0, near = 0;
     for (ObjectId id : sys.unit_ids()) {
         const UnitView v = sys.view(id);
@@ -1811,7 +1814,7 @@ static void test_land_group() {
         cycle = cycle && held && v.has_goal && v.speed == 0.0f;
     }
     std::printf("land group: %u unit(s) jammed in a Starved / Pass cycle (MOVEMENT 5.4.6 row 15), cycle %d\n", jammed, cycle ? 1 : 0);
-    CHECK(ground && arrived + jammed == 36 && jammed <= 4 && cycle && 36 - near <= stops + jammed && (jammed > 0 || frames < 6500));
+    CHECK(ground && arrived + jammed == 36 && jammed <= 4 && cycle && 36 - near <= stops + jammed && (jammed > 0 || frames < 9000));
 
     // Head-on corridor: two units swap ends through a 3-cell-wide corridor.
     MovementSystem s2{MovementConfig{}};
@@ -3253,7 +3256,7 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // path (11 accepted goals); MovingVsMoving answers follow the role slots.
 // s78n t26.2 (MOVEMENT §3.5.2 A / B): the speed controller (End Move T = a, 0x15 restarts), the start turn in place.
 // s78n t26 closing review (FIGHTER_FLYING §7.5 item 4): formation mates side-step by their footprint overlap.
-static constexpr uint64_t kGoldenLand = 0xdf12b8f6a72240fbull;  // s78n t26 review round 2 (mixed formations, range rank); closing review; t26.4 the move step C; t26.3 the corner pass
+static constexpr uint64_t kGoldenLand = 0x2e42e49bb780e4cbull;  // s78p: formation path and lanes; s78n t26 review round 2 (mixed formations, range rank); closing review; t26.4 the move step C; t26.3 the corner pass
 static constexpr uint64_t kGoldenSpace = 0xd701881d8713d135ull;
 
 static void test_determinism() {
