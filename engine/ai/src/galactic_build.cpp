@@ -158,13 +158,21 @@ bool GalacticAiWorld::Impl::resolve_claim(BuildTask& b) {
             wait = true;
             continue;
         }
-        const auto tit = tfs.find(b.tf);  // 0: 0x647df0 gives the unit to the task
+        const auto tit = tfs.find(b.tf);  // 0: 0x647df0 gives the unit to the task (the entry is erased)
         off_free_store(u);
-        if (tit != tfs.end()) {
-            tf_join(tit->second, u);
-            tit->second.had_units = true;
-        }
         finish_build(b);
+        if (tit == tfs.end() || tit->second.stage < 0) {
+            // a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS Q3) [H]: no destination (plain Produce_Force()):
+            // WAIT_FOR_FREESTORE_ALLOC -> PRODUCTION_FINISHED -> 0x6c27d0 re-admits the unit as a fresh, unreserved entry
+            // (On_Unit_Added runs) and removes its selection from the PP. It never joins the task force. [port] In the
+            // same poll as the hand-over, not at the task's next FSM update.
+            pp_handed_back(b.plan, u);
+            free_store_admitted(b.player, u);
+            return true;
+        }
+        tf_join(tit->second, u);  // with a destination: PRE_PATH_SEPERATE ... PRODUCTION_END -> Add_Force
+        tit->second.had_units = true;
+        claim_split(tit->second, u);
         return true;
     }
     if (wait) return false;

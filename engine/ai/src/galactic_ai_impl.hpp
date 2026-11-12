@@ -58,7 +58,7 @@ struct TaskForceRec {
     uint32_t def = 0;  // index into the plan's task forces
     std::string name;
     std::vector<ObjectHandle> units;
-    std::vector<uint32_t> wanted;          // types to produce (PotentialPlan selections without a free unit)
+    std::vector<uint32_t> wanted;          // TF +0x60: one type per PotentialPlan selection, free or to produce (a2m t03); Produce_Force empties it
     std::vector<PlanetIndex> wanted_source;  // ETA source planet per wanted type (PP+0x180)
     std::vector<int32_t> builds;           // AIBuildTask ids (Produce_Force)
     // a2l t03 (A2L_T03_RE_ANSWERS Q5) [H]: `stage` is the last Produce_Force destination (AIPlanetBuildTask +0x98: the
@@ -404,6 +404,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     std::vector<ObjectHandle> free_units(int32_t p) const;
     ObjectHandle free_store_supply(int32_t player, uint32_t type) const;  // 0x4d2bd0 (galactic_build.cpp)
     bool resolve_claim(BuildTask& b);  // free-store service 0x4d5a70 for a claiming build task (galactic_build.cpp)
+    void claim_split(const TaskForceRec& t, ObjectHandle u);  // PRE_PATH_SEPERATE of a claimed unit (a2m t03)
     void free_store_admitted(int32_t player, ObjectHandle u);  // On_Unit_Added of an admission (galactic_ai.cpp)
     PlanetIndex planet_arg(const lua::AiArg& a) const;
     cmd::RejectReason order(int32_t player, const cmd::EventData& ev, const std::string& what);
@@ -451,6 +452,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     void suspend_pp(int32_t handle);               // 0x6c0be0: units + queue slots flagged 1 (Commit step 4)
     bool pp_stolen(int32_t handle) const;          // 0x6c45e0
     void pp_unit_left(int32_t plan_id, ObjectHandle u);  // 0x6c27d0 with the plan's PP: a task force released u
+    void pp_handed_back(int32_t plan_id, ObjectHandle u);  // 0x6c27d0 for a null-destination claim (a2m t03)
     void off_free_store(ObjectHandle u) { unit_reserved.erase(store.id(u)); }  // a task force took u (node erased)
     bool on_free_store(int32_t player, objects::ObjectId id) const;
     void release_pp(int32_t handle);         // drop: free-store entries and queue reservations (0x6c2320)

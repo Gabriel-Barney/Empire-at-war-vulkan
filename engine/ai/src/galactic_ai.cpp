@@ -515,33 +515,41 @@ int32_t GalacticAiWorld::Impl::tf_produce_force(int32_t tf, const lua::AiArg& st
     t.sync_frame = now;
     t.sync_units.clear();
     t.sync_etas.clear();
+    // a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS Q2) [H]: one build task per TF +0x60 entry, the free selections included
+    // (their tasks claim the free-store units, resolve_claim, which also does the PRE_PATH_SEPERATE split).
     create_build_tasks(t);
-    // AIBuildTask WAIT_FOR_FREESTORE_ALLOC -> PRE_PATH_SEPERATE (0x64aec0, A2K_T08_RE_ANSWERS Q2.3) [H]: a claimed
-    // free-store unit (the TF's units before any build finished) in a fleet of more than one object is split into a
-    // fleet of its own (op 2, then op 0) before it paths to the stage, so the gather never carries foreign units.
-    // [port] Done once here for the units in a stationary fleet; one in transit keeps its fleet. A unit that cannot jump
-    // by itself stays in its fleet (free_store_move's rule). No destination: PRODUCTION_FINISHED, no split.
-    // With the sync flag the split waits for the unit's departure (WAIT_FOR_SYNC_MOVE: no split and no move yet, Q2.1).
-    if (t.stage >= 0 && !t.sync) {
-        const std::vector<ObjectHandle> claimed = t.units;
-        for (const ObjectHandle u : claimed) {
-            if (!store.alive(u) || !unit_jumps(u)) continue;
-            const uint32_t f = fleet_of_unit(u);
-            if (f == gal::kNoFleet || sim.fleets()[f].moving || sim.fleets()[f].contents.size() < 2) continue;
-            const PlanetIndex at = sim.fleets()[f].planet;
-            if (!valid_planet(at)) continue;
-            fleet_op(t.player, gal::kFleetDetach, static_cast<uint32_t>(store.id(sim.planets()[at].object)),
-                     static_cast<uint32_t>(store.id(sim.fleets()[f].object)), static_cast<uint32_t>(store.id(u)),
-                     "split " + std::to_string(store.id(u)) + " at " + planet_name(at));
-        }
-    }
     return new_status(t.plan, tf, StatusKind::ProduceForce);
 }
 
+// AIBuildTask WAIT_FOR_FREESTORE_ALLOC -> PRE_PATH_SEPERATE (0x64aec0, A2K_T08_RE_ANSWERS Q2.3) [H]: a claimed free-store
+// unit in a fleet of more than one object is split into a fleet of its own (op 2, then op 0) before it paths to the
+// stage, so the gather never carries foreign units. [port] Done at the hand-over for a unit in a stationary fleet; one
+// in transit keeps its fleet. A unit that cannot jump by itself stays in its fleet (free_store_move's rule). No
+// destination: PRODUCTION_FINISHED, no split. With the sync flag the split waits for the unit's departure
+// (WAIT_FOR_SYNC_MOVE: no split and no move yet, Q2.1).
+void GalacticAiWorld::Impl::claim_split(const TaskForceRec& t, ObjectHandle u) {
+    if (t.stage < 0 || t.sync || !store.alive(u) || !unit_jumps(u)) return;
+    const uint32_t f = fleet_of_unit(u);
+    if (f == gal::kNoFleet || sim.fleets()[f].moving || sim.fleets()[f].contents.size() < 2) return;
+    const PlanetIndex at = sim.fleets()[f].planet;
+    if (!valid_planet(at)) return;
+    fleet_op(t.player, gal::kFleetDetach, static_cast<uint32_t>(store.id(sim.planets()[at].object)),
+             static_cast<uint32_t>(store.id(sim.fleets()[f].object)), static_cast<uint32_t>(store.id(u)),
+             "split " + std::to_string(store.id(u)) + " at " + planet_name(at));
+}
+
 bool GalacticAiWorld::Impl::tf_all_on_free_store(int32_t tf) {
-    // Are_All_Units_On_Free_Store (0x5fa090) = not 0x6bffe0(PP): every selection of the TF had a free unit.
+    // Are_All_Units_On_Free_Store (0x5fa090) = not 0x6bffe0(PP): PP +0x108 has no null slot, over the whole PP (every
+    // task force), not the free store or the TF (A2M_T03_PRODUCE_FORCE_CLAIMS Q1) [H]. A plan without a PP: false.
     const auto it = tfs.find(tf);
-    return it != tfs.end() && it->second.wanted.empty() && it->second.builds.empty();
+    if (it == tfs.end()) return false;
+    const auto pit = plans.find(it->second.plan);
+    if (pit == plans.end()) return false;
+    const auto ppit = pps.find(pit->second.pp);
+    if (ppit == pps.end()) return false;
+    for (const PpSelection& s : ppit->second.sel)
+        if (!s.unit) return false;
+    return true;
 }
 
 void GalacticAiWorld::Impl::tf_release_forces(int32_t tf, double fraction) {
@@ -1049,22 +1057,21 @@ int32_t GalacticAiWorld::Impl::instantiate(PlayerAi& p, Goal& g) {
             tf.area = st == kInvalidPlanet ? g.target : static_cast<int32_t>(st);
         }
         stages.push_back(tf.area >= 0 ? static_cast<PlanetIndex>(tf.area) : kInvalidPlanet);
+        // a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS Q1) [H]: 0x66fb30 -> 0x6c0100 / 0x5f9fd0 gives the TF one wanted type
+        // (TF +0x60) per selection, free or to be produced, and no members: the selected units stay on the free store,
+        // reserved by the PP (+0x30), until a Produce_Force build task claims them (resolve_claim). The log keeps the
+        // "free + produced" split of the selection.
+        size_t free_sel = 0;
         for (const PpSelection& s : pp.sel) {
             if (s.tf != static_cast<int32_t>(i)) continue;
-            if (s.unit) {
-                if (store.alive(s.unit) && store.owner(s.unit) == p.player && !tf_owns(s.unit)) {
-                    off_free_store(s.unit);
-                    tf_join(tf, s.unit);
-                }
-            } else {
-                tf.wanted.push_back(s.type);
-                tf.wanted_source.push_back(s.source);
-            }
+            tf.wanted.push_back(s.type);
+            tf.wanted_source.push_back(s.source);
+            if (s.unit) ++free_sel;
         }
-        tf.had_units = !tf.units.empty();
+        tf.had_units = false;
         lua::set_task_force_global(*vm, tf.name, tf.id, lua::AiTaskForceKind::Galactic);
         if (vm->create_thread(tf.name + "_Thread") < 0) continue;  // a missing thread removes the TF
-        tf_names += " " + tf.name + "(" + std::to_string(tf.units.size()) + "+" + std::to_string(tf.wanted.size()) + ")";
+        tf_names += " " + tf.name + "(" + std::to_string(free_sel) + "+" + std::to_string(tf.wanted.size() - free_sel) + ")";
         pi.tfs.push_back(tf.id);
         tfs.emplace(tf.id, std::move(tf));
     }
@@ -1382,7 +1389,10 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
                 q.current_type = gal::kNoIndex;
             }
             finish_build(*match);  // a2m t05: PRODUCTION_END makes no budget call (0x5f9f90 is a TF type counter, Q5.1)
-            if (tit != tfs.end()) {
+            // a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS Q3) [H]: 0x6498f0 with a null destination (plain Produce_Force())
+            // admits the new object to the free store (PRODUCTION_FINISHED); only a task with a destination goes on to
+            // PRODUCTION_END -> Add_Force.
+            if (tit != tfs.end() && tit->second.stage >= 0) {
                 tf_join(tit->second, u);  // PRODUCTION_END -> JOIN_TASK_FORCE
                 tit->second.had_units = true;
                 continue;

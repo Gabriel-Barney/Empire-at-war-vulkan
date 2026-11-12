@@ -1232,6 +1232,20 @@ void GalacticAiWorld::Impl::pp_unit_left(int32_t plan_id, ObjectHandle u) {
     v.erase(std::remove(v.begin(), v.end(), id), v.end());
 }
 
+// a2m t03: 0x6c27d0 (PP, unit) for a claimed unit a null-destination build task gives back (A2M_T03_PRODUCE_FORCE_CLAIMS
+// Q3) [H]: the reservation goes, the unit leaves PP +0x108 and its selection slot leaves the PP's lists (PP +0x58 ...),
+// so Are_All_Units_On_Free_Store, AllowedTime and the validity test no longer see it.
+void GalacticAiWorld::Impl::pp_handed_back(int32_t plan_id, ObjectHandle u) {
+    pp_unit_left(plan_id, u);
+    const auto pit = plans.find(plan_id);
+    if (pit == plans.end() || pit->second.pp < 0) return;
+    const auto it = pps.find(pit->second.pp);
+    if (it == pps.end()) return;
+    auto& sel = it->second.sel;
+    const auto s = std::find_if(sel.begin(), sel.end(), [u](const PpSelection& x) { return x.unit == u; });
+    if (s != sel.end()) sel.erase(s);
+}
+
 void GalacticAiWorld::Impl::release_pp(int32_t handle) {
     const auto it = pps.find(handle);
     if (it == pps.end()) return;

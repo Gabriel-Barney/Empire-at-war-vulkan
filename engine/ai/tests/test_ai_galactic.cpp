@@ -1068,6 +1068,16 @@ function Base_Definitions()
   PlanDefinitionLoad = nil
   if Definitions then Definitions() end
 end
+-- a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS Q1): a task force starts with no members, so the tests that read members
+-- without assembling them first add the player's units of the named types (in argument order) with Add_Force.
+function Take_Units(tf, ...)
+  for i = 1, table.getn(arg) do
+    local all = Find_All_Objects_Of_Type(arg[i], PlayerObject)
+    if all then
+      for j = 1, table.getn(all) do tf.Add_Force(all[j]) end
+    end
+  end
+end
 )";
 static const char* kPlanBuildSpace = R"(
 require("SynAICommands")
@@ -2213,6 +2223,25 @@ function MainForce_Thread()
 end
 )";
 
+// a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS Q1-Q3): the task force starts with no members; Are_All_Units_On_Free_Store is
+// false while the PotentialPlan has a unit to produce; plain Produce_Force() hands the claimed hero back to the free store
+// and sends the produced corvette there too, so the task force still has no member when it returns.
+static const char* kPlanA2mT03Plain = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Corvette = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  GlobalValue.Set("t03_count0", MainForce.Get_Force_Count())
+  if MainForce.Are_All_Units_On_Free_Store() then GlobalValue.Set("t03_all", 1) else GlobalValue.Set("t03_all", 0) end
+  BlockOnCommand(MainForce.Produce_Force())
+  GlobalValue.Set("t03_count1", MainForce.Get_Force_Count())
+  GlobalValue.Set("t03_done", 1)
+  while true do Sleep(1) end
+end
+)";
 // a2m t02 (A2L_T01_RE_ANSWERS Q8): a task force whose two members sit in two fleets; Move_To moves only the FleetObject.
 static const char* kPlanA2mMoveTo = R"(
 require("SynAICommands")
@@ -2222,6 +2251,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
+  Take_Units(MainForce, "HeroShip", "Frigate")
   GlobalValue.Set("a2m_count0", MainForce.Get_Force_Count())
   local block = MainForce.Move_To(Target)
   if block then GlobalValue.Set("a2m_block", 1) else GlobalValue.Set("a2m_block", 0) end
@@ -2242,6 +2272,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
+  Take_Units(MainForce, "HeroShip", "Infantry")
   BlockOnCommand(MainForce.Launch_Units())
   Sleep(2)
   GlobalValue.Set("a2m_l_launched", 1)
@@ -2272,6 +2303,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
+  Take_Units(MainForce, "HeroShip", "Infantry")
   GlobalValue.Set("a2m_n_started", MainForce.Get_Force_Count())
   while true do Sleep(1) end
 end
@@ -2307,6 +2339,7 @@ function Definitions()
 end
 function MainForce_Thread()
   MainForce.Set_As_Goal_System_Removable(false)
+  Take_Units(MainForce, "HeroShip", "Frigate")
   GlobalValue.Set("a2m_r_ready", 1)
   while not GlobalValue.Get("a2m_r_go") do Sleep(1) end
   GlobalValue.Set("a2m_r_count", MainForce.Get_Force_Count())
@@ -2378,6 +2411,7 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\A2mReelect.lua", kPlanA2mReelect);
         files.add("Data\\Scripts\\AI\\A2mStage.lua", kPlanA2mStage);
         files.add("Data\\Scripts\\AI\\A2mCancel.lua", kPlanA2mCancel);
+        files.add("Data\\Scripts\\AI\\A2mT03Plain.lua", kPlanA2mT03Plain);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2991,6 +3025,43 @@ static void test_land_units_owner_rule() {
 // (here: the plan ended through its own script, so no goal-system release ran), is cancelled at the producing planet's
 // next production service: the head entry leaves the queue, the AI owner gets the paid fraction back, and no corvette is
 // ever made.
+// a2m t03 (A2M_T03_PRODUCE_FORCE_CLAIMS) [H]: instantiation leaves the selected hero on the free store, reserved by
+// the PotentialPlan; plain Produce_Force() claims it, gives it straight back unreserved (it never joins the task force)
+// and admits the produced corvette to the free store; the thread resumes when every task has ended.
+static void test_plain_produce_hands_back() {
+    ParityWorld pw(false, {"A2mT03Plain"}, own_p2);  // P2 held: Conquer_Planet @P3 stages at P2
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    objects::ObjectHandle hero;
+    for (const gal::FleetState& fl : pw.sim->fleets())
+        if (fl.alive && fl.owner == 0)
+            for (const objects::ObjectHandle u : fl.contents)
+                if (pw.store->alive(u) && pw.store->type(u) == pw.hero) hero = u;
+    CHECK(static_cast<bool>(hero));
+    bool reserved_seen = false;
+    for (int32_t f = 1; f <= 30 * 300 && num("t03_done") < 0.0; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        reserved_seen = reserved_seen || (num("t03_count0") >= 0.0 && num("t03_done") < 0.0 && pw.world->free_store_owner(hero) >= 0);
+    }
+    uint32_t corvettes = 0;
+    for (const gal::FleetState& fl : pw.sim->fleets())
+        if (fl.alive && fl.owner == 0)
+            for (const objects::ObjectHandle u : fl.contents) corvettes += pw.store->alive(u) && pw.store->type(u) == tCorvette ? 1u : 0u;
+    const int32_t owner = hero ? pw.world->free_store_owner(hero) : -2;
+    std::printf("plain produce hand-back: members %.0f -> %.0f, all on free store %.0f, done %.0f, reserved while blocked %d, "
+                "hero owner %d, corvettes %u\n",
+                num("t03_count0"), num("t03_count1"), num("t03_all"), num("t03_done"), reserved_seen ? 1 : 0, owner, corvettes);
+    CHECK(num("t03_count0") == 0.0 && num("t03_all") == 0.0);   // no members; a unit to produce
+    CHECK(num("t03_done") == 1.0 && num("t03_count1") == 0.0);  // returned with no member
+    CHECK(hero && pw.store->alive(hero) && owner == -1);         // back on the store, unreserved
+    CHECK(corvettes == 1);                                       // produced into the free store
+    if (num("t03_done") != 1.0 || corvettes != 1)
+        for (const AiDecision& d : pw.world->decision_log()) std::printf("    %s\n", d.text.c_str());
+    pw.world->set_global_values(nullptr);
+}
+
 static void test_ended_production_cancel() {
     ParityWorld pw(false, {"A2mCancel"}, own_p2);  // P2 held: Conquer_Planet @P3 stages at P2
     lua::GlobalValueStore gv;
@@ -6616,6 +6687,7 @@ int main(int argc, char** argv) {
     test_ai_clock_precision();
     test_stage_and_setup_a();
     test_null_stage_and_plain_produce();
+    test_plain_produce_hands_back();
     test_move_to_fleet_object();
     test_fleet_object_reelection();
     test_produce_force_stage_launch();
