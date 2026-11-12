@@ -380,6 +380,8 @@ int32_t GalacticAiWorld::Impl::find_stage_area(int32_t, const lua::AiArg& player
     return s == kInvalidPlanet ? -1 : static_cast<int32_t>(s);
 }
 
+uint32_t GalacticAiWorld::starbase_candidate(PlanetIndex planet) const { return impl_->next_starbase_type(planet); }
+
 PlanetIndex GalacticAiWorld::stage_area(int32_t player, PlanetIndex target, int level) {
     return impl_->lua_stage_area(player, target, level);
 }
@@ -410,8 +412,10 @@ uint32_t GalacticAiWorld::Impl::next_starbase_type(PlanetIndex p) const {
         const uint32_t f = players[static_cast<size_t>(ps.owner)].faction;
         if (f >= rules.factions.size()) return gal::kNoIndex;
         const std::string& fn = rules.factions[f].name;
+        // [name-ok-begin: retail faction and type names in 0x3f8fd0, docs/re/A2M_R3_RE_A.md §1.2]
         if (ascii_iequals(fn, "Rebel")) cand = rules.find_type("Rebel_Star_Base_1");
         else if (ascii_iequals(fn, "Empire")) cand = rules.find_type("Empire_Star_Base_1");
+        // [name-ok-end]
     } else {
         cand = rules.types[sb].next_level_base;
     }

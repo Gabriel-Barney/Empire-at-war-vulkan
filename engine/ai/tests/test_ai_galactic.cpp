@@ -869,10 +869,19 @@ static void test_definitions_and_templates() {
     CHECK(b.add_goal(0, 7, 500.0f, 30.0f, 20.0f));
     const AiBudget::GoalEntry* e = b.goal(0, 7);
     CHECK(e && e->req == 500.0f && e->h == 20.0f && e->c == 500.0f && b.available(0) == 250.0f && e->q == 0.0f);
+    // a2m r3 (A2M_R3_RE_A §1.1): the accept-time gross test 0x6139f0 reads P / I, not A / R: the goal's 500 is held out
+    // of A (250) but not out of P (750).
+    CHECK(!b.can_fund(0, 300.0f, 10.0f, -1.0f) && b.can_fund_gross(0, 750.0f, 10.0f, -1.0f) && !b.can_fund_gross(0, 751.0f, 10.0f, -1.0f));
     // Tick: income 450 over T = 45 s -> rate 10; I = 0.75 x 10; share 0 (Iprev 0); x = 500/20 = 25 -> a = 1125.
     b.tick(450.0f, 45.0f, 1450.0f);
     e = b.goal(0, 7);
     CHECK(e && e->a == 25.0f * 45.0f && e->h == 0.0f && b.category(0).I == 7.5f);
+    // 0x6139f0 horizon: min(ETA, Time_Limit), at least the period T (45 s): P + 45 x I.
+    {
+        const float p0 = b.pool(0) + 45.0f * 7.5f;
+        CHECK(b.can_fund_gross(0, p0, 10.0f, 5.0f) && !b.can_fund_gross(0, p0 + 1.0f, 10.0f, 5.0f));
+        CHECK(b.can_fund_gross(0, b.pool(0) + 60.0f * 7.5f, 90.0f, 60.0f) && !b.can_fund_gross(0, b.pool(0) + 60.0f * 7.5f + 1.0f, 90.0f, 60.0f));
+    }
     // P0 = 250 + (0 - 25) x 45 + 500 + 1125 = 750; Σ = 750 + 0 + 250 = 1000 -> drift (1450 - 1000) x w.
     CHECK(b.pool(0) == 750.0f + 450.0f * 0.75f && b.pool(2) == 250.0f + 450.0f * 0.25f);
     b.reweight(raw);  // A = P - a, c = 0, needs re-add
@@ -6028,6 +6037,47 @@ static void test_ai_type_switch() {
 #ifdef ALAMO_AI_HAVE_VFS
 using ::alamo::test::env_or_empty;
 
+// a2m r3 (A2M_R3_RE_A §1.2): GalacticAiWorld::starbase_candidate (0x3f8fd0) against the rule on every planet: with a
+// starbase item queued -> none; no starbase -> Rebel_Star_Base_1 / Empire_Star_Base_1 for a Rebel / Empire owner, none
+// otherwise (level gate: allowed 1 when Max_Space_Base != 0); a starbase -> its Next_Level_Base when Base_Level <=
+// level + 1 <= Max_Space_Base (level < 5).
+static size_t starbase_candidates_check(const gal::GalacticSim& sim, const gal::GalacticRules& rules, const GalacticAiWorld& world,
+                                        const char* when) {
+    const uint32_t rsb1 = rules.find_type("Rebel_Star_Base_1"), esb1 = rules.find_type("Empire_Star_Base_1");
+    const auto& msb = sim.map().planets.max_space_base;
+    size_t checked = 0, none = 0, empty = 0;
+    for (PlanetIndex t = 0; t < sim.planets().size(); ++t) {
+        const gal::PlanetState& ps = sim.planets()[t];
+        if (!ps.is_planet || ps.type >= rules.types.size()) continue;
+        const int32_t mx = t < msb.size() && msb[t] >= 0 ? msb[t] : 5;
+        bool queued = false;
+        for (const auto& q : ps.queue)
+            for (const gal::BuildEntry& e : q) queued = queued || (e.type < rules.types.size() && gal::is_star_base_type(rules.types[e.type]));
+        uint32_t want = gal::kNoIndex;
+        const uint32_t sb = sim.starbase_type(t);
+        if (sb == gal::kNoIndex) {
+            ++empty;
+            const bool owned = ps.owner >= 0 && static_cast<size_t>(ps.owner) < sim.players().size();
+            const std::string fac = owned ? rules.factions[sim.players()[static_cast<size_t>(ps.owner)].faction].name : "";
+            want = ai_iequal(fac, "Rebel") ? rsb1 : ai_iequal(fac, "Empire") ? esb1 : gal::kNoIndex;
+            if (queued || mx == 0) want = gal::kNoIndex;
+        } else {
+            const uint32_t nl = rules.types[sb].next_level_base;
+            const int32_t allowed = queued ? 0 : (ps.starbase_level < 5 && mx >= ps.starbase_level + 1 ? ps.starbase_level + 1 : 0);
+            if (nl < rules.types.size() && rules.types[nl].base_level <= allowed) want = nl;
+        }
+        const uint32_t c = world.starbase_candidate(t);
+        CHECK(c == want);
+        if (c != want)
+            std::printf("  starbase candidate %s at %s: %u, want %u (starbase %u level %d, max %d, queued %d)\n", when,
+                        rules.types[ps.type].name.c_str(), c, want, sb, ps.starbase_level, mx, queued ? 1 : 0);
+        none += c == gal::kNoIndex ? 1u : 0u;
+        ++checked;
+    }
+    std::printf("FoC starbase candidates (0x3f8fd0) %s: %zu planets, %zu without a starbase, %zu with none\n", when, checked, empty, none);
+    return checked;
+}
+
 static void test_foc_data() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     std::error_code ec;
@@ -6124,6 +6174,13 @@ static void test_foc_data() {
     }
     // Token coverage of the galactic goal / budget / template equations.
     CHECK(world.start(&pd));
+    // a2m r3 (A2M_R3_RE_A §1.2): 0x3f8fd0 at the HotM start (every planet has a starbase and empty queues): the
+    // candidate is the current starbase's Next_Level_Base when its Base_Level <= level + 1 <= Max_Space_Base, else none.
+    // Shola starts with Underworld_Star_Base_1 in this campaign -> Underworld_Star_Base_2.
+    starbase_candidates_check(sim, rules, world, "start");
+    for (PlanetIndex t = 0; t < sim.planets().size(); ++t)
+        if (sim.planets()[t].is_planet && sim.planets()[t].type < rules.types.size() && ai_iequal(rules.types[sim.planets()[t].type].name, "Shola"))
+            CHECK(world.starbase_candidate(t) == rules.find_type("Underworld_Star_Base_2"));
     for (int32_t f = 1; f <= 30 * 120; ++f) {
         sim.update();
         for (int32_t p = 0; p < static_cast<int32_t>(sim.players().size()); ++p) world.update_player(p, f, true, false);
@@ -6264,6 +6321,20 @@ static void test_foc_data() {
         std::printf("FoC player %zu free store: Friendly_Only reach %zu planets, Get_Next_Hop %u of %u pairs pass (%u fail), "
                     "%zu moves ended without a path\n", p, r0.size(), pass, pairs, blocked, no_path);
         CHECK((!r0.empty() || sim.planets_owned(pi) == 0) && pass > 0);
+    }
+    {
+        // a2m r3: the no-starbase branch of 0x3f8fd0. Destroy the starbases at the end of the run (nothing runs after):
+        // Rebel -> Rebel_Star_Base_1, Empire -> Empire_Star_Base_1, the Underworld -> none.
+        size_t rebel = 0, empire = 0, other = 0;
+        for (PlanetIndex t = 0; t < sim.planets().size(); ++t) {
+            const gal::PlanetState& ps = sim.planets()[t];
+            if (!ps.is_planet || sim.starbase_type(t) == gal::kNoIndex) continue;
+            sim.replace_starbase(t, gal::kNoIndex);
+            const bool owned = ps.owner >= 0 && static_cast<size_t>(ps.owner) < sim.players().size();
+            const std::string fac = owned ? rules.factions[sim.players()[static_cast<size_t>(ps.owner)].faction].name : "";
+            (ai_iequal(fac, "Rebel") ? rebel : ai_iequal(fac, "Empire") ? empire : other) += 1;
+        }
+        CHECK(starbase_candidates_check(sim, rules, world, "after the starbases are destroyed") > 0 && rebel > 0 && empire > 0 && other > 0);
     }
 }
 
