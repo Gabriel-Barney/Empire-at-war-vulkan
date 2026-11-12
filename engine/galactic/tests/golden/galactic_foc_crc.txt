@@ -4,7 +4,7 @@ parity 2 galactic.objects.parity rng.parity
 checkpoint 64
 # S3 FoC Sandbox_Heart_Of_The_Maw_Underworld, 10 galactic days, every 150th frame + last
 # 2026-10-28 OI galactic: M = 5.0, companies as transports, galactic stealth, buildability order, build counts
-0 6144ca01926d03d1 8de918c4 c7c6eeef512c1c1e 4a0c832a7a530ff6 fd5f1c67472ea33c
-4800 3b58cb1a3c2a2f2c be16a78c 1e1a1a80646f722d 8af0bdf781ca558e 70258c8f4f906f09
-9600 7375e4f5b4ed04f4 b0a1a89a a37d72470cfd335c 6f6c39cfe75184a1 f463c3ed9a39db51
-13499 ed6466e529615fec 6426b5b5 204341d47722fabf b0960b96b6e0d9d6 65fe7b23a76928ab
+0 809e1d63a19fc1be 8de918c4 4ef00f76c83b13b7 4a0c832a7a530ff6 fd5f1c67472ea33c
+4800 5ad9c0553e2a6942 be16a78c 6c4904a41671d70c 8af0bdf781ca558e 70258c8f4f906f09
+9600 9dd5b35073b4529c b0a1a89a 350c500a105ebabf 6f6c39cfe75184a1 f463c3ed9a39db51
+13499 15d69e951e573cb4 6426b5b5 3189c5a18fff6989 b0960b96b6e0d9d6 65fe7b23a76928ab

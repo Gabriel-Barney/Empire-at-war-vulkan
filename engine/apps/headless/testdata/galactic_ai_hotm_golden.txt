@@ -1,15 +1,15 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 18000
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (3978.8 ms), galactic frame 18000, decisions 553, orders 164 (rejected 0), conflicts 25, battles 0, planet owner changes 0, running plans 7, Lua errors 0, planets: 0=4/1607 1=4/2111 2=0/0 3=0/0 4=0/0 5=4/2571, final CRC f581aceaf646b2b0
-# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 11 conflicts 3 crc 4bc0755b6f5cfadb
-# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 8 crc c166bd29f4f01d0b
-# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 10 crc e2858d1e7000b339
-# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 8 conflicts 10 crc 4db5303b073492ee
-# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 10 crc e04285fb6ea75008
-# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 13 crc 9a17c3b07faddadf
-# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 11 conflicts 20 crc e1bbc5f350970d07
-# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 25 crc d941139e661201f8
-# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 25 crc 1ca60b7f8a7750ee
-# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 25 crc f581aceaf646b2b0
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (7169.2 ms), galactic frame 18000, decisions 553, orders 164 (rejected 0), conflicts 25, battles 0, planet owner changes 0, running plans 7, Lua errors 0, planets: 0=4/1607 1=4/2111 2=0/0 3=0/0 4=0/0 5=4/2571, final CRC 1781e5ff6b8d3f34
+# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 11 conflicts 3 crc 4fd4d7cbac672faa
+# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 8 crc 2183fad4b1eb0712
+# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 10 crc 1ae0672e5f34b271
+# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 8 conflicts 10 crc db1cc9188f576c8d
+# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 10 crc d80871bbee3771b2
+# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 13 crc 3d2a8b8705f71cdc
+# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 11 conflicts 20 crc f585bca0a309e0a4
+# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 25 crc 5cbb9ed3028f70e3
+# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 5 conflicts 25 crc af58bd905dde309e
+# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 25 crc 1781e5ff6b8d3f34
 1 p0 opponent 5
 1 p0 templates Basic_Rebel_Default
 1 p1 opponent 5
