@@ -833,35 +833,38 @@ void test_scene_guard() {
 }
 
 // s78n t25 review fix 2 (MOVEMENT §4.2 item 6 [H]: "Otherwise short-range is set when d < E_r x
-// Short_Range_Attack_Formation_Coefficient 1.6"; item 4 first bullet: recruitment needs a seed that is not one; the worked
-// case §4.3.2 item 9 checks "not short-range"). The scene of scene_solo: two Standard vehicles 50 apart, E_r = 255,
-// r_seed = sqrt(15^2 + 15^2) = 21.2 -> solo below 336.2, short-range below 255 x 1.6 = 408 (hand). A target at 380 is past
-// the solo limit but short-range: the seed recruits nobody -> two formations, a slot each (one ring, two angles). At 420
-// (past 408) the seed recruits -> one formation of two.
+// Short_Range_Attack_Formation_Coefficient 1.6"); bkm1 t04 (§4.2 step 2 item 7 test 3 [H]): a short-range seed recruits only
+// units of its own exact type. The scene of scene_solo: two Standard vehicles 50 apart, E_r = 255, r_seed = sqrt(15^2 +
+// 15^2) = 21.2 -> solo below 336.2, short-range below 255 x 1.6 = 408 (hand). A target at 380 is past the solo limit but
+// short-range: the seed recruits the other vehicle only when it has the seed's type -> one formation; another type -> two
+// formations, a slot each (one ring, two angles). At 420 (past 408) the seed recruits either -> one formation of two.
 void test_scene_short_range() {
     ::alamo::test::section("scene_short_range");
-    for (const float d : {380.0f, 420.0f}) {
-        MovementSystem sys{MovementConfig{}};
-        scene_system(sys);
-        CHECK(sys.add_unit(attacker(10, kO)));
-        CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 50.0f})));
-        UnitDesc t = attacker(900, kO + V2{d, 0.0f}, 5.0f);
-        t.owner = 2;
-        CHECK(sys.add_unit(t));
-        SimRng rng(7);
-        sys.move(attack_order({10, 11}, 900, kO + V2{d, 0.0f}, 5.0f, 255.0f), rng, 1);
-        const UnitView a = sys.view(10), b = sys.view(11);
-        const bool two = a.form_id != b.form_id;
-        CHECK(two == (d < 408.0f));
-        if (two) {
-            CHECK(a.atk_form == a.form_id && b.atk_form == b.form_id && sys.stats().attack_slotted == 2);
-            CHECK(a.atk_rho > 0.0f && a.atk_rho == b.atk_rho && a.atk_theta != b.atk_theta);
-        } else {
-            CHECK(a.atk_form == b.atk_form && sys.stats().attack_slotted == 1);
+    for (const float d : {380.0f, 420.0f})
+        for (const bool same : {true, false}) {
+            MovementSystem sys{MovementConfig{}};
+            scene_system(sys);
+            CHECK(sys.add_unit(attacker(10, kO)));
+            UnitDesc c = attacker(11, kO + V2{0.0f, 50.0f});
+            if (!same) c.type_name = "B5_OTHER";
+            CHECK(sys.add_unit(c));
+            UnitDesc t = attacker(900, kO + V2{d, 0.0f}, 5.0f);
+            t.owner = 2;
+            CHECK(sys.add_unit(t));
+            SimRng rng(7);
+            sys.move(attack_order({10, 11}, 900, kO + V2{d, 0.0f}, 5.0f, 255.0f), rng, 1);
+            const UnitView a = sys.view(10), b = sys.view(11);
+            const bool two = a.form_id != b.form_id;
+            CHECK(two == (d < 408.0f && !same));
+            if (two) {
+                CHECK(a.atk_form == a.form_id && b.atk_form == b.form_id && sys.stats().attack_slotted == 2);
+                CHECK(a.atk_rho > 0.0f && a.atk_rho == b.atk_rho && a.atk_theta != b.atk_theta);
+            } else {
+                CHECK(a.atk_form == b.atk_form && sys.stats().attack_slotted == 1);
+            }
+            std::printf("short-range rule: target at %.0f, %s type -> %s, slotted %u\n", static_cast<double>(d),
+                        same ? "same" : "other", two ? "two formations" : "one formation", sys.stats().attack_slotted);
         }
-        std::printf("short-range rule: target at %.0f -> %s, slotted %u\n", static_cast<double>(d),
-                    two ? "two formations" : "one formation", sys.stats().attack_slotted);
-    }
 }
 
 // s78n t25 review fix 1 (MOVEMENT §4.3.2 item 7 [H]: "s = 0 -> the path is cut to its first node (the formation can fire

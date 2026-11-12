@@ -73,6 +73,18 @@ UnitDesc unit_desc_from_type(const objects::GameObjectTypes& t, uint32_t ti) {
     if (t.value(ti, objects::find_type_field("Movement_Directions_Count")) != nullptr)
         d.movement_directions = t.get_int(ti, "Movement_Directions_Count");
     d.rotation_animation_speed = t.get_float(ti, "Rotation_Animation_Speed");  // s78l t02
+    // bkm1 t08 (b0050, MOVEMENT §3.5.3 item 6): UseSecondaryFacing and its coefficients; an unset row keeps the type default
+    d.use_secondary_facing = t.get_bool(ti, "UseSecondaryFacing");
+    const auto sec = [&](const char* name, float def) {
+        if (t.value(ti, objects::find_type_field(name)) == nullptr) return def;
+        const float f = t.get_float(ti, name);
+        return f != 0.0f ? f : static_cast<float>(t.get_int(ti, name));  // the schema lists two rows as int
+    };
+    d.secondary_in_place = sec("SecondaryTurnInPlaceROTCoefficient", 0.5f);
+    d.secondary_angle = sec("SecondaryTurnAngle", 90.0f);
+    d.secondary_min = sec("MinSecondaryTurnROTCoefficient", 0.0f);
+    d.secondary_max = sec("MaxSecondaryTurnROTCoefficient", 1.0f);
+    d.secondary_lookahead = sec("SecondaryTurnLookaheadDistance", 0.0f);
     // S8 t24: the TURRET of a Deploys type (MOVEMENT §3.2 "Turret recentre around deploy"). s78f t08 (TACTICAL_COMBAT
     // §3.1.1 "s78f t08 answers" 6 [H]): every TURRET type slews the same way (0x632050: one Turret_Rotate_Speed step per
     // service, no shortcut for non-deployers; the deploy state only picks the deployed extents / rest angle), so the model

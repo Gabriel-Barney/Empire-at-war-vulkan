@@ -1842,7 +1842,8 @@ detour, §5.4.7 item 6).
    0x14, else 0) (visual).
 2. Turn budget **B = R, × f in states 0x12 and 0x14**. `UseSecondaryFacing` (+0xd2): a second budget B2 =
    clamp(|angle| / `SecondaryTurnAngle` (+0x1674) × f, `MinSecondaryTurnROTCoefficient` (+0x1678),
-   `MaxSecondaryTurnROTCoefficient` (+0x167c)) × R for the secondary facing (§3.5 item 3).
+   `MaxSecondaryTurnROTCoefficient` (+0x167c)) × R for the secondary facing (§3.5 item 3; in full, with the
+   angle, the targets and the 0x10 rule: §3.5.3, bkm1 RE).
 3. Formation jiggle `0x42c270` (§3.5 item 6). Distance budget s = v. Then the loop, items 4–11 (v = 0 → return):
 4. **Nothing to walk** (P null, P on its last waypoint `0x5c5910`: idx + 1 ≥ count, or P not started): Q = the
    path below (`0x556960`). Q null, Q not started, or state 0x14 → state := 0x14 and **coast**: pos += s ×
@@ -1948,6 +1949,46 @@ grid pathfinder `0x5a2200` … `0x5a49c0` and for the start / goal vertices) mak
 height differences. A port that sums 3-D lengths over the same stored points matches in both cases; a 2-D sum is
 exact only for z = 0 paths and otherwise an approximation that is short on slopes.
 
+*Waypoint z of a land order path (bkm1 RE, 2026-11-12; replaces the [L] above) [H unless tagged].* Read from
+`0x5a2830`, `0x5a2e00`, `0x5a2200`, `0x5a3ba0`, `0x5a0550`, `0x5a4560`, `0x5a49c0`, `0x5a4130`, `0x417520`,
+`0x40ed70`, `0x5070b0`.
+1. **The builders write z = 0 for every point.** The same-region builder `0x5a3ba0` takes only x and y of the
+   request's start (pathfinder +0x108 / +0x10c) and goal (+0x114 / +0x118); the start, the start cell centre, the
+   goal cell centre and the exact goal G are all stored with z = 0.0. The region-path builder `0x5a0550` writes
+   every border-crossing cell centre with z = 0 and then inserts the start and appends the goal, again from x / y
+   only with z = 0. The grid search `0x5a2200`, for start cell = goal cell, emits the cell centre with z = 0. The
+   request's own z (start / goal +0x110 / +0x11c) is copied into the pathfinder by `0x5a2e00` but not used by any
+   of these. Exception [L]: `0x5a2e00` emits the request start and goal **with their z** when pathfinder byte
+   +0x181 is set; no writer of that byte was found in the decompile (none of the requests of `0x417520` or
+   `0x43c1b0` set it).
+2. **The passes keep z = 0.** `0x5a4560` / the visibility pass `0x5a49c0` copy the input points' xyz unchanged
+   (all 0). The shortcut pass `0x5a4130` inserts points taken at an arc length on the path (`0x54ead0`,
+   interpolated between two stored waypoints, z included), so between z = 0 points they get z = 0. `0x5a0d20` is
+   a debug draw. So a pathfinder path (`0x5a2830`) has **z = 0 at every waypoint**, on any terrain.
+3. **The formation path `0x417520`.** Request start = the members' centroid (`0x41a9b0`, a 3-D mean, so z = the
+   mean unit height) when it is reachable from the lead, else the lead's position (obj +0x78..+0x80); request goal
+   = G = `0x5833e0`(block, lead): the block destination with its z (the order point's dequantised z; 0 when §4.2
+   step 2 replaced it with a validated cell centre) or the goal object's position (its terrain z); a G replaced by
+   the zone re-validation `0x50f480` has z = 0. These z values are dropped by the builders (item 1). Three cases
+   do store a non-zero z:
+   - **the slot leg** (§4.3.2 item 6): after the path start → Q' (z = 0), **G is appended with its full xyz**, so
+     the last waypoint of a slot-leg path carries the target's z while Q' has z = 0;
+   - **a forced path** (block flag 0x20, garrison exit / unload): `0x40ed70` stores the start (centroid xyz) and
+     then G (xyz): both ends carry real heights;
+   - the mode-0 test plan (two points, start and G with their z) used only for sizing (`0x411640`); never walked.
+   A fire-trim cut (`0x54e780`) interpolates z between the two waypoints it cuts between.
+4. **So, on a sloped map:** for an ordinary move (and every re-plan, and an attack path without a slot) every
+   waypoint has z = 0 and `0x54f700` (C.11) is **exactly** the 2-D sum: a straight path up a 10 % slope gives no
+   difference at all. It differs only for the stored heights of item 3: a forced path of 100 units straight up a
+   10 % slope (Δz = 10 between its two points) gives √(100² + 10²) = 100.499 instead of 100 (+0.5 %); a slot-leg
+   path whose last segment Q' → G has 2-D length L and a target at absolute height h gives √(L² + h²) on that
+   segment, ≈ L + h² / (2L) (L = 240, h = 20: 240.83). Note it is the target's **absolute** z, not the slope,
+   since Q' has z = 0. A port that stores z = 0 for pathfinder points, the target's z on an appended slot-leg G
+   and the real ends on forced paths, and sums 3-D lengths, matches.
+5. **The brake pass of item D.7 is 2-D [H], as written** (backlog b0051's "3-D" is wrong): `0x5070b0` takes the
+   segment vector from `0x5c5850` (which fills x, y and z) but its square root uses only dx² + dy²; the waypoint
+   count test is "more than 2".
+
 **F. `Walk_Transition` states (s78n t26 RE 2) [H unless tagged].** Acceleration and deceleration: §3.4.
 - **0x12** (`0x61ff40`), started path: the current clip ≠ 16 → play 16 (MOVESTART; variant index 0xFFFF = random
   draw, blend `0x140b39904`, rate `0x372ae0` = V / S, 1.0 when S = 0), +0xec := 0, the move step in 0x12, return.
@@ -2008,6 +2049,96 @@ walk (`land_team.cpp`):
 - the start test needs wp[idx].+4 > 0 for the CE shortcut;
 - the land path record needs per-waypoint fractions, filled by item D for formation paths (with the probes and the
   brake pass); `land_team.cpp`'s note "the port's land paths carry no per-waypoint fractions" then goes.
+
+#### 3.5.3 `UseSecondaryFacing` in full (bkm1 RE, 2026-11-12) [H unless tagged]
+Read from `0x620820` (move step), `0x620190` (state 0x10), `0x61fc30` (state 0x15), `0x61e840`, `0x61e730`,
+`0x61d570`, `0x61d890`, `0x42d440`, `0x61e0a0`, `0x61dea0`, `0x61e690`, `0x553f00`, `0x4105a0`, the type ctor
+`0x367250`, and the Walk vftable `0x8ad798` in the FoC exe. Y2 = the **secondary yaw**, locomotor pack +0x270 (the
+pack is obj +0xa8; +0x268 / +0x26c are a pitch / roll pair that the step always writes as 0). R = `0x372560`.
+**All five coefficients are GameObjectType fields, not GameConstants** (parser type 0x8, float): +0x1670
+`SecondaryTurnInPlaceROTCoefficient`, +0x1674 `SecondaryTurnAngle` (degrees), +0x1678
+`MinSecondaryTurnROTCoefficient`, +0x167c `MaxSecondaryTurnROTCoefficient`, +0x1680
+`SecondaryTurnLookaheadDistance` (world units); flag +0xd2 `UseSecondaryFacing`.
+1. **The step `0x61e840`(loco, wanted, budget)** is `0x61e730` applied to Y2: e = wrap(yaw(wanted) − Y2); |e| >
+   budget → Y2 moves by the budget toward it and the budget becomes 0; else Y2 **lands exactly** on it and the
+   budget becomes budget − |e|. It never touches the object orientation and commits nothing.
+2. **(a) Targets and the budget in the move step `0x620820`** (states 0x12 / 0x13 / 0x14):
+   - B2 is computed **once per call, before the waypoint loop**, only when +0xd2 is set: δ2 = |wrap(w0 − Y2)|
+     with w0 = `0x61d570`(loco, 0), the **primary** wanted yaw (the same one the body turns to); B2 =
+     clamp(δ2 / `SecondaryTurnAngle` × f, Min, Max) × R, f = v / vmax_u (C.1). So the "angle" is the error between
+     the secondary yaw and the primary target. B2 is **not** × f again in 0x12 / 0x14 (only B is).
+   - In the loop (C.6, same conditions as the primary turn: budget > 0 and nothing popped in this call) Y2 steps
+     with B2 toward w1 = `0x61d570`(loco, **1**), the leftover carrying over to the next waypoint of the call. w1
+     differs from w0 only inside `0x61d890` and only with +0xd2 set: let d = the 2-D unit direction of the current
+     segment (idx → idx + 1), ℓ = its 3-D length; **when (pos − wp[idx])·d + `SecondaryTurnLookaheadDistance` >
+     ℓ** (the unit is within the lookahead of the segment end):
+     - if idx + 2 < count: the direction of the **next** segment (idx + 1 → idx + 2);
+     - else, if a path Q lies below P on the stack: starting at Q's index, step on while the unit is on the far
+       side (≥ −0.001) of Q's waypoint line and idx + 2 < count(Q); then Q's segment direction;
+     - in both cases the lane term is `0x42d440` on that segment (the side-error correction of §4.4 toward the
+       slot lateral measured on that segment), not pack +0x15c;
+     - else (last segment, no Q): the ordinary rule.
+     Otherwise (not within the lookahead) w1 = w0. The collision vector (§5.4.1) is added in both, and both pass
+     through `Movement_Directions_Count` (`0x61ca90`). On the last waypoint both are the final facing or the
+     current **primary** orientation (§3.5.1).
+   - The primary yaw, not Y2, is what the move step turns with B and what the travel direction t (vf +0x288 is
+     called with obj +0x84..+0x8c) and the corner cap B.4 use.
+   - **State 0x10 (`0x620190`)**: one wanted yaw w = `0x61d570`(loco, **0**) for both: the body steps with r
+     (§3.5.1 item 4), then Y2 steps toward the **same w** with r2 = r × `SecondaryTurnInPlaceROTCoefficient`. 0x10
+     is entered both by the start turn (A, not on the last waypoint) and by the arrival turn (0x15).
+3. **(b) Initialisation.** The pack ctor `0x553f00` zeroes +0x264..+0x273. The Walk behaviour's **vf9 Initialise**
+   (`0x61dea0`, vftable +0x48: attach to the object; state := 0x16 via `0x559250`, commit the position unless obj
+   +0x3a0 & 0x80) and its **vf10** (`0x61e690`, +0x50, when its flag argument is set [M: the re-attach / post-load
+   call of the behaviour base `0x4c3000`]) copy the object's orientation (+0x84, +0x88, +0x8c) into +0x268..+0x270.
+   This runs for every Walk unit, flag or not. **No other writer exists**: Y2 is **not** reset at a new path, a
+   new order, a stop or arrival; it is only stepped. A locomotor swap builds a new behaviour, so its vf9 re-copies
+   the orientation [M: the swap's attach call was not traced]. [L] Whether a spawned unit's final facing is set
+   before or after vf9 (then Y2 would start at the pre-spawn yaw) was not traced.
+4. **(c) Every other reader.** The only readers of +0xd2 in the decompile are `0x61d890`, `0x61e0a0`, `0x620190`
+   and `0x620820`; the only readers of pack +0x268..+0x270 are `0x61e840`, `0x620820` (the B2 angle) and
+   `0x61e0a0`. `0x61e0a0` is the Walk **vf +0x1e8** ("current facing"): the object's (pitch, roll, yaw) with the
+   yaw replaced by Y2 when +0xd2 is set. Its only locomotor caller found is the formation block pop `0x4105a0`
+   (a formation with more than one block, §4.7 / FIGHTER_FLYING §4.11 B): for each member with a non-zero
+   `0x397900`(m, 1) (Land units included) the **object orientation is set** (`0x3a8710`) to vf +0x1e8, so at
+   each such pop a secondary-facing unit's body yaw **snaps to Y2** (pitch and roll kept). Nothing else reads Y2:
+   the start test A and the aligned test `0x410170` (obj +0x84..), `Close_Enough_Angle_For_Move_Start`, the corner
+   cap, the travel direction, the 0x15 Δ (obj +0x98), the collision system, targeting and firing arcs all use the
+   **primary** (object) yaw. [L] Which way the model is drawn (likely the hull at vf +0x1e8) was not traced;
+   no render-side reader of pack +0x270 was found.
+5. **(d) The 0x10 reached rule** with +0xd2 set: both yaws step every 0x10 frame. On the **last waypoint** of a
+   started path, reached := r2_left > 0 (Y2 landed on w this frame with budget left); elsewhere reached := r_left
+   > 0 as without the flag. reached → 0x11 → 0x12 → **0x15**, whose Δ is the primary yaw's only (obj +0x98 vs w).
+   - Primary reached first: each further frame it lands on w again (e = 0, so it stays exactly on w) while Y2
+     keeps stepping at r2 (½ r in FoC); the turn ends when Y2 lands, then 0x15 finds Δ = 0 and pops.
+   - Y2 reached first (it started nearer w): 0x11 → 0x15; Δ > threshold (10°) → 0xf / 0x10 again (with begin /
+     end clips each time for `Has_Pre_Turn_Anim`; no FoC secondary-facing type has it); Δ ≤ threshold → pop with
+     the primary up to 10° short.
+   - Y2 is never tested at 0x15: an arrival whose primary Δ ≤ 10° pops at once and **Y2 keeps whatever error it
+     had**; with no final facing w = the current primary yaw, so Δ = 0 and Y2 is not turned at arrival. Idle
+     (0x16) never steps Y2.
+6. **(e) Values.** Type defaults (`0x367250`): TurnInPlace 0.5, Angle 90, Min 0, Max 1.0, Lookahead 0, flag false.
+   FoC types with `UseSecondaryFacing` true, all `WALK_LOCOMOTOR`, values from their own XML (no GameConstants
+   entry exists):
+
+   | type | Max_Rate_Of_Turn | InPlace | Angle | Min | Max | Lookahead |
+   |---|---|---|---|---|---|---|
+   | `T2B_Tank` | 20 | 0.5 | 90 | 0.01 | 0.7 | 0 |
+   | `M1_Repulsor_Tank` | 16 | 0.4 | 90 | 0.4 | 0.9 | 60 |
+   | `Skiff` | 10 | 0.5 | 65 | 0.25 | 0.9 | 30 |
+   | `Abstract_Mobile_Defense_Unit` (and its variants `Empire_` / `Rebel_` / `Underworld_Mobile_Defense_Unit`, `Underworld_Mobile_Defense_Unit_Prologue`, no overrides) | 20 | 0.5 | 90 | 0.01 | 0.7 | 0 |
+   | `Swamp_Speeder` | 18 | 0.5 | 90 | 0.2 | 0.7 | 20 |
+   | `Canderous_Assault_Tank` | 4.5 | 0.4 | 90 | 0.4 | 0.9 | 60 |
+   | `F9TZ_Cloaking_Transport` | 4 | 0.5 | 90 | 0.01 | 0.7 | 0 |
+
+   `MZ8_Pulse_Cannon_Tank` sets the coefficients but `UseSecondaryFacing` false; `Gallofree_HTT_Transport` sets
+   false. Neither reads them.
+
+***Port spec (secondary facing):*** keep Y2 per Walk unit, initialised to the yaw at locomotor attach and never
+reset. Each move-step call with the flag: B2 = clamp(|wrap(w0 − Y2)| / Angle × v / vmax, Min, Max) × R, then in
+the waypoint loop step Y2 toward w1 (w0, or the next segment's direction plus its side correction once within
+Lookahead of the segment end) with the B2 leftover carried over. In 0x10 step Y2 toward the same w at r ×
+InPlace and, on the last waypoint, end the turn when Y2 lands (not the body). At a formation block pop with more
+than one block, set the body yaw to Y2. Nothing else (start test, travel, collision, weapons) reads Y2.
 
 ### 3.6 Terrain conform and commit (vf95 `0x42d6a0` → `0x42bb40`) [H]
 
@@ -2107,6 +2238,54 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
    - a straight passable line exists (`0x5a4c10`), or a real path (`0x5a2830`) is ≤ 1.4 × the nearest-member distance.
 5. **Teams.** Team members are split across formations only when ShouldInfantryTeamsSplitAcrossFormations (true). [M]
 6. **Attack orders** (object goal without the guard flag; s78n t20: read from `0x43c1b0`, was [M]) [H]. With E_r = the seed's engagement range `0x4f6e40` (§4.3.2 item 1) and d = the 3-D distance seed to target: the seed goes **solo** (no recruitment) when it is already in max range of the target (TARGETING slot 44), or its type is melee (`0x372210`), or d < r_seed (`0x3969f0`) + E_r + **Solo_Attack_Range (GC +0x1548, 60)**. Otherwise "short-range" is set when d < E_r × **Short_Range_Attack_Formation_Coefficient (GC +0x1544, 1.6)**.
+7. **The recruitment loop in full (bkm1 RE, 2026-11-12) [H unless tagged].** Read from `0x43c1b0`, `0x4f6e40`,
+   `0x372210`, `0x39ad40`, `0x583670`. S = the seed, C = a candidate, B = the order block; E(u) = the engagement
+   range `0x4f6e40`(u, B) (§4.3.2 item 1: the attack range `0x3749d0`, plus the goal object's min(hx, hy) on an
+   object goal, guard cap); **K(u) = min(E(u), `Targeting_Min_Attack_Distance` (type +0x504))**, and K(u) := 0
+   when B has the guard flag 2. Both are computed for S once (before the loop) and for C per test.
+   - **Seed side, before the loop:** recruitment runs only when S's grouping ≠ Solo, S is not solo by item 6, and
+     S is not "movement locked" (`0x39ad40`: obj +0x3a8 > 0, or its locomotor / its team container's locomotor
+     answers vf +0x1d0). S's team container (behaviour 0x16), if any, is put on a "joined teams" list.
+   - **Scan:** the remaining bucket members in vector order; **after every recruit the scan restarts from the first
+     remaining member**. Per C, in this order (the first failure skips C):
+     1. C has a type. If C belongs to a team on the joined-teams list (`0x405500`) → **joins at once**, no
+        further test.
+     2. The combined class X = `0x477ab0`(the formation's class so far, C's MovementClass) (starting with S's),
+        and the occupation O = max(so far, C's) are taken (used in test 6). C has a locomotor.
+     3. (S has no team, or the GC byte `0x140b16c9d` is clear [M: name]) and (not an attack order, or S not
+        short-range, or **C has S's exact type**). So the item-4 bullet "the seed is not an engaged short-range
+        attacker" means: a short-range attack seed recruits only its own type.
+     4. Same locomotor kind: vf +0x240 and vf +0x238 equal.
+     5. Grouping by **C's** value (C Solo → skip): C Standard needs S Standard; C SameOrder needs S SameOrder and
+        equal `FormationOrder`.
+     6. Zones (`0x50ee10`): S ↔ C for C's MovementClass and OccupationStyle; X ≠ −1; S ↔ the validated
+        destination V for X and O. (So "both connected to the destination" is: C connected to S, and S to V for
+        the combined class.)
+     7. C has no team, or S has one. (C's team is added to the joined list when C joins.)
+     8. C's speed `0x370f00` ≠ 0; with the run flag 0x80: max(vC, vS) / min(vC, vS) ≤
+        `DoubleClickMoveMaxSpeedRatio` (GC, 1.25): **pairwise against the seed**, not over the formation.
+     9. **Engagement compatibility: K(C) ≤ E(S) and K(S) ≤ E(C)** (both "≤", no tolerance, no ratio, no
+        GameConstants value). In words: neither unit's minimum attack distance (capped at its own engagement
+        range) may exceed the other's engagement range. It is tested for **every** order kind (move, attack,
+        guard); under guard both K are 0 and it always passes.
+     10. Attack order only: C is not melee (`0x372210`: `Targeting_Max_Attack_Distance` ≤ `Melee_Cutoff_Range`),
+         C is not already in max range of T (TARGETING slot 44), and |C − T| (3-D) ≥ r_C (`0x3969f0`) + E(C) +
+         `Solo_Attack_Range` (60); otherwise C is skipped (it will seed its own, solo formation).
+     11. d_min = the 3-D distance from C to the **nearest current member** ≤ the recruitment distance
+         (`InfantryFormationRecruitmentDistance` 60 when C's UnitCollisionClass is Infantry and C's locomotor
+         answers vf +0x230 false, else `VehicleFormationRecruitmentDistance` 100).
+     12. The terrain line test `0x5a4c10` **from C to S** with C's MovementClass passes, or a pathfinder path C → S
+         exists with length (`0x54f610`) ≤ 1.4 × d_min.
+   - **Units without weapons:** `Targeting_Max_Attack_Distance` and `_Min_` default 0, so E = 0 on a move order
+     (plus a transport contribution `0x4160a0` [M] and, on an object goal, the target's extents) and K = 0. Such a
+     candidate always passes K(C) ≤ E(S), and passes K(S) ≤ E(C) = 0 only when **the seed's minimum distance is
+     0**. FoC land types with a minimum distance > 0 (type XML; hardpoints can raise it, OBJECT_TYPES §6.2):
+     `AT_AT_Walker` 90 (max 400), `SPMAT_Walker` 220 (500), `MPTL` 200 (500), `MAL_Rocket_Vehicle` 10,
+     `Underworld_Merc` 50, `Sand_Person_Sniper_A` 100. So e.g. an SPMAT seed (E 500, K 220) does not recruit a unit
+     whose engagement range is below 220 (most infantry, every unarmed unit), and such a seed is not recruited by
+     them either.
+   *Port spec:* run the tests in the order above; restart the scan after each recruit; use K = min(E,
+   min-distance) both ways; on a short-range attack only same-type units join.
 
 ### 4.3 Shape and slot assignment (`0x41a740`, `0x41ece0`) [H]
 
@@ -2471,6 +2650,68 @@ record), expanded blocker areas, < 15 % of HX × HY.
 *Not read:* TARGETING slots 43 / 46 at a point (taken from TACTICAL_COMBAT §2.8 / TACTICAL_GAPS §3.1); the
 position finder `0x440f90` of the staging; the value the line test returns as "distance" when the first cell is
 blocked; whether `0x411640`'s fallback size (mode-0 plan failed) is ever used for an attack block; block +0x5f.
+
+#### 4.3.3 Where each member stops: the formation path, the lane and the end shift (bkm1 RE, 2026-11-12) [H unless tagged]
+Read from the plan member loop of `0x41c1a0`, `0x411c40`, `0x42c680`, `0x413340`, `0x5c46a0`, `0x5c5060` /
+`0x5c4ec0`, `0x41dbb0`, `0x41afe0`, `0x41b770`, `0x42d440`, `0x411980`, `0x41ece0`. F = the formation, its path
+W = wp[0 … n−1] (ending exactly on the block goal G, §4.3.1 item 7, or on the fire-trim cut point, §4.3.2 item
+7), d1 = the unit direction of its last segment. For a member m: (D_m, L_m) = its slot offset (depth, lateral) from
+`0x41ece0` (**the front row has depth 0, rear rows negative**: row centres 0, −(w1 + w2) / 2, … × 20); ψ = F +0x23c,
+the full requested final-facing rotation (radians; `0x411980`, 0 without a final facing or below 10°).
+1. **Each member walks a copy of the formation path, not its lane.** The path set vf +0x190 (`0x42c680`) builds the
+   lane `0x413340` (§3.5.2 D) only as the **input of the corner pass**; the record pushed is a copy of W
+   (`0x5c46a0`) carrying the corner fractions computed on the lane. So every member's waypoints are F's waypoints,
+   and the lateral offset is held only by steering: the lane term pack +0x15c (`0x41dbb0`, each frame, §5.4.1
+   item 2) pulls the member toward lateral = its current slot lateral (`0x5566a0`) + its jiggle (pack +0x130) +
+   the corridor squeeze at its arc position (`0x41b770` at `0x41afe0`'s projection), measured from its current
+   segment. The port's "lane as the member's own path" is therefore not retail.
+2. **The end shift, record +0x68.** Right after pushing the record, the plan writes into it (only for members in
+   the map built by `0x411c40`, which is non-empty only for land formations, type +0x218 = 1, with corridor rows):
+   **+0x68 = cos ψ · D'_m − sin ψ · L'_m**, where D'_m = m's depth from `0x411c40` (its slot depth for the last
+   corridor row, minus a compaction term when its row is narrower than the end row [M: the compaction formula]),
+   and L'_m = its slot lateral for the row k = min(round((|W| + D'_m) / 30), rows − 1) (`0x556710` with that row's
+   key). Members not in the map keep +0x68 = 0.
+3. **What +0x68 does.** The waypoint line `0x5c5060`(record, i) (used by the move step's line crossing, its D / s'
+   and by the 0x15 "within 5" test) is, for a formation record (kind 1), **moved along its incoming segment
+   direction by (rest + +0x68)** whenever rest = the 3-D length after that waypoint < |+0x68|. For the last
+   waypoint rest = 0, so its line passes through **G + d1 · (+0x68)**. Rear members (negative shift) therefore
+   pass their last waypoint |shift| before G and front members up to D beyond it; the End Move test (C.11) brakes
+   to stop at that line, then the member coasts in End Move and arrives (§3.5.1, 0x15).
+4. **So the stop point** is, to within the End Move coast: **G + d1 · (cos ψ · D − sin ψ · L) + d1⊥ · L_end**,
+   d1⊥ = (−d1.y, d1.x), L_end = the lane term's lateral target on the last segment (slot lateral + jiggle +
+   squeeze at the end). With no final facing (ψ = 0): **the formation path's end, shifted back along the last
+   segment by the member's depth and sideways by its lateral offset**, i.e. the slot box with its front row on G,
+   oriented along d1. It is **not** the form-up box (`0x414d90` is laid out at the path start and stored only as
+   the form-up point, pack +0x120), and not the lane's last point (the lane is pulled in for passability; the
+   steering target is not). [M] With ψ ≠ 0 only the along-path component is rotated here; the lateral target is
+   the slot lateral as stored in the pack (whatever rotation `0x411980`'s per-row slots carry), not cos ψ · L +
+   sin ψ · D.
+5. **No snapping, no per-member validation, no reservation.** The stop point is a float, never rounded to a cell;
+   it is not tested for passability for the member's class, not zone-checked, and not reserved against other
+   formations or members. The only checks are formation-level and at the order: the destination check's
+   rectangles (§4.3.1 item 4) and the attack slot test (§4.3.2 item 5); and at run time the per-frame move test
+   (`0x50e280`) and the collision system (early-arrival cut §5.4.4, TerrainCollision §5.4.7). The port's
+   `pick_land_slot` per-member reservation has no retail counterpart.
+6. **Attack orders.** The rule is the same on the trimmed path: the trim (`0x410e90`, inside the layout `0x40eb90`)
+   runs **before** the member loop, so +0x68 is computed with |W| = the cut length and the shifted end line goes
+   through the cut end point. The trim evaluated each member at the path point at arc s + D, shifted by L (§4.3.2
+   item 7), which is where the member stops (exactly so when the last segment is longer than |D|). A slot-leg
+   path (start → … → Q' → G) cut by the trim ends on its Q' → G leg or before; members stop around that cut end
+   in the slot box oriented along the cut path's last segment. Nothing stops a member on "its lane".
+7. **A lane point that is impassable for the member's class.** Only the lane polyline is pulled in (`0x413340`:
+   L, then L − L0 / 5 each failed test while |L| > |L0 / 5|, then 0 untested), and the lane feeds **only the
+   corner speeds** (§3.5.2 D: the probe arcs between lane points get the static line test `0x5a4c10` and the
+   corridor test `0x5093c0`; a failure only lowers the corner speed, down to vmin or 0). There is no line test per
+   lane segment and no pull-in of the steering target: the lane term (`0x41dbb0` / `0x42d440`) keeps steering
+   toward the full slot lateral, so a member whose slot runs over ground it cannot enter is steered into it, the
+   move step's passability test refuses the step (no commit, speed 0) and a TerrainCollision record is made
+   (§5.4.7: wait / Path Around), on the way or at the end. [M: that no other per-member clamp exists; the
+   formation update `0x41dbb0` and `0x42d440` were read in full for the lateral target.]
+
+***Port spec (member stop):*** give each member the formation's path (shared waypoints, per-member corner
+fractions from its lane), steer it to its lateral offset with the side-error term, and move every waypoint line
+within |s| of the end along its incoming segment by (rest + s), s = cos ψ · depth − sin ψ · lateral (0 for
+members outside a land corridor formation). Do not snap, validate or reserve the end point.
 
 ### 4.4 Moving as a group
 

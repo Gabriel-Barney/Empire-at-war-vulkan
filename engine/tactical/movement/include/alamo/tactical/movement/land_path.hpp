@@ -202,14 +202,17 @@ std::vector<V2> formation_lane(const PassabilityGrid& grid, std::span<const V2> 
 // the lane points whose waypoint it has not passed yet (the leading points with dot(pos - lane[i], lane_dir(i)) >= 0 are
 // skipped: retail steps a waypoint whose line the unit has crossed) and whose rest length on the formation path (2-D)
 // exceeds the member's depth `back` (a point behind the previous one across its own line is skipped: it would turn the
-// member back), then the end point: the formation path's point at arc length total - back (before the
-// start: back along the first segment), offset across that segment's direction by the shape's L0 there, with the same
-// pull-in. Retail keeps the formation path as the unit's path, steers it onto its lane with the lane term and shifts the
-// waypoints within |+0x68| of the end back along their segments ([L]); the port walks the lane itself, and its end is the
-// member's goal (its slot at the path's end; the formation's final rotation 0x411980 to an ordered facing is not
-// modelled).
+// member back), then the end point lane_end. bkm1 t01 (b0095): a segment that fails `mask` (line_passable) falls back onto
+// the formation path (its far point to its origin, then backwards), never moving the end. Retail keeps the formation path
+// as the unit's path, steers it onto its lane with the lane term and shifts the waypoint lines within |+0x68| of the end
+// along their segments (MOVEMENT §4.3.3); the port walks the lane itself, and its end is the member's goal.
 std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, float back,
                             uint32_t mask, V2 pos);
+// bkm1 t02 (b0096, MOVEMENT §4.3.3 items 2 - 5 [H]): where a formation member stops - the last waypoint G moved along the
+// last segment's direction d1 by -back (back >= 0: the member's depth behind the front row, which stops on G) and across
+// it by the shape's L at arc length total - back: G - d1 back + (-d1.y, d1.x) L. Not along the path's arc, not pulled in,
+// not snapped to a cell, not reserved. [port] the final-facing rotation psi (0x411980) is not modelled (psi = 0).
+V2 lane_end(std::span<const V2> fpath, const LaneShape& shape, float back);
 // s78p (b0049) [port]: the start of a lane path for a unit at `pos` - path[0] := the foot of pos on the line path[0] ->
 // path[1] when that foot lies before path[1], else pos. A member off its lane then walks the lane's direction and the lane
 // term (0x41dbb0, error / 30) pulls it onto the line, as retail's member converges on its slot offset from the formation
