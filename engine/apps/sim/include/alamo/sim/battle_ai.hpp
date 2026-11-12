@@ -219,6 +219,8 @@ private:
         bool guard = false;
     };
     std::vector<ObjectFollow> follows_;  // issue order
+    bool guard_follow_due(ObjectFollow& f, const alamo::Vec3& tp, bool moved, alamo::Vec3& goal);  // bkt1 t02 (b0070)
+    uint32_t guard_position_drops_ = 0;  // bkt1 t02: C 3 drops (a test counter; not saved, not hashed)
     void follow_drop(const std::vector<objects::ObjectId>& units);
     void follow_add(const std::vector<objects::ObjectId>& units, objects::ObjectId target, float x, float y, float threat,
                     bool guard = false);

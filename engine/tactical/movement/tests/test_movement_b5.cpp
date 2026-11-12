@@ -387,7 +387,7 @@ MoveOrder attack_order(std::vector<ObjectId> ids, ObjectId target, V2 c, float t
 }
 
 void geometric_fire(MovementSystem& sys, V2 c, float engage) {
-    sys.set_fire_test([c, engage](ObjectId, V2 p, ObjectId, bool) { return distance(p, c) <= engage; });
+    sys.set_fire_test([c, engage](ObjectId, V2 p, ObjectId, bool, V2, float) { return distance(p, c) <= engage; });
 }
 
 // §4.3.2 item 9, the unit case: one attacker at the origin, a unit with half extents 5 standing at (1000, 0), engage
@@ -764,8 +764,10 @@ void test_scene_guard() {
         const V2 c = kO + V2{d, 0.0f};
         bool los_only_always = true;
         uint32_t asked = 0;
-        sys.set_fire_test([&](ObjectId, V2, ObjectId, bool los_only) {
+        bool to_g = true;  // bkt1 t06 (b0079): the trim's line of fire ends at the plan's goal G (a guard block: G = C)
+        sys.set_fire_test([&](ObjectId, V2, ObjectId, bool los_only, V2 g, float) {
             los_only_always = los_only_always && los_only;
+            to_g = to_g && close2(g, c, 0.01f);
             ++asked;
             return true;
         });
@@ -776,7 +778,7 @@ void test_scene_guard() {
         SimRng rng(7);
         sys.move(o, rng, 1);
         const UnitView v = sys.view(10);
-        CHECK(asked > 0 && los_only_always && sys.stats().attack_stops == 0);
+        CHECK(asked > 0 && los_only_always && to_g && sys.stats().attack_stops == 0);
         CHECK(v.atk_form != 0 && v.atk_target == 900 && v.has_goal && !v.arrived);
         if (d > 150.0f) {
             CHECK(v.atk_theta == 0.0f && close_to(v.atk_rho, 135.0f, 1e-3f) && sys.stats().attack_slotted == 1);
@@ -797,7 +799,7 @@ void test_scene_guard() {
         scene_system(sys);
         CHECK(sys.add_unit(attacker(10, kO)));
         CHECK(sys.add_unit(attacker(900, kO + V2{400.0f, 0.0f}, 5.0f)));
-        sys.set_fire_test([](ObjectId, V2 p, ObjectId, bool) { return p.x - kO.x > 305.0f; });
+        sys.set_fire_test([](ObjectId, V2 p, ObjectId, bool, V2, float) { return p.x - kO.x > 305.0f; });
         MoveOrder o = attack_order({10}, 900, kO + V2{400.0f, 0.0f}, 5.0f, 150.0f);
         o.attack.guard = true;
         o.attack.units[0].range = 250.0f;
@@ -814,7 +816,7 @@ void test_scene_guard() {
         CHECK(sys.add_unit(attacker(10, kO)));
         CHECK(sys.add_unit(attacker(900, kO + V2{400.0f, 0.0f}, 5.0f)));
         uint32_t asked = 0;
-        sys.set_fire_test([&asked](ObjectId, V2, ObjectId, bool) {
+        sys.set_fire_test([&asked](ObjectId, V2, ObjectId, bool, V2, float) {
             ++asked;
             return true;
         });
@@ -879,7 +881,7 @@ void test_scene_guard_formation() {
     CHECK(sys.add_unit(attacker(10, kO + V2{0.0f, -25.0f})));
     CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 25.0f})));
     CHECK(sys.add_unit(attacker(900, kO + V2{100.0f, 0.0f}, 5.0f)));
-    sys.set_fire_test([](ObjectId, V2, ObjectId, bool) { return true; });
+    sys.set_fire_test([](ObjectId, V2, ObjectId, bool, V2, float) { return true; });
     MoveOrder o = attack_order({10, 11}, 900, kO + V2{100.0f, 0.0f}, 5.0f, 150.0f);
     o.flags = kMoveFlagGuardMove;
     o.attack.guard = true;

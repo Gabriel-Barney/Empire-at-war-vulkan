@@ -1386,7 +1386,7 @@ void build_t25_attack(World& w) {
     t.hard_x = t.hard_y = 5.0f;
     t.owner = 2;
     CHECK(w.sys.add_unit(t));
-    w.sys.set_fire_test([c](ObjectId, V2 p, ObjectId, bool) { return distance(p, c) <= 255.0f; });
+    w.sys.set_fire_test([c](ObjectId, V2 p, ObjectId, bool, V2, float) { return distance(p, c) <= 255.0f; });
 }
 
 void t25_attack_before(World& w, uint32_t f) {

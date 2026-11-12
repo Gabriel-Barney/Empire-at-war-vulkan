@@ -1779,7 +1779,7 @@ CanHit CombatSystem::can_hit(ObjectId attacker, ObjectId target) const {
     return can_hit_from(attacker, can_hit_origin(attacker), target);
 }
 
-CanHit CombatSystem::can_hit_from(ObjectId attacker, Vec3 from, ObjectId target) const {
+CanHit CombatSystem::can_hit_from(ObjectId attacker, Vec3 from, ObjectId target, const Vec3* to) const {
     const Unit* u = unit(attacker);
     const Unit* t = unit(target);
     if (!live(u) || !live(t)) return CanHit::NoTarget;
@@ -1789,11 +1789,11 @@ CanHit CombatSystem::can_hit_from(ObjectId attacker, Vec3 from, ObjectId target)
     if (!grenade_weapon(src) && !(fire_range(base_attack_range(src), mod_r(src, ModList::FireRange)) > 0.0f)) return CanHit::NoTarget;
     const CanHit r = range_test(src, from, *t);
     if (r != CanHit::Yes) return r;
-    return fire_line(src, from, *t);
+    return fire_line(src, from, *t, to);
 }
 
 // s78n t25.4 (MOVEMENT §4.3.2 item 7, guard blocks): the line-of-fire half of can_hit_from alone.
-CanHit CombatSystem::line_of_fire_from(ObjectId attacker, Vec3 from, ObjectId target) const {
+CanHit CombatSystem::line_of_fire_from(ObjectId attacker, Vec3 from, ObjectId target, const Vec3* to) const {
     const Unit* u = unit(attacker);
     const Unit* t = unit(target);
     if (!live(u) || !live(t)) return CanHit::NoTarget;
@@ -1801,10 +1801,10 @@ CanHit CombatSystem::line_of_fire_from(ObjectId attacker, Vec3 from, ObjectId ta
     const Unit& src = head ? team_weapon_source(*head) : *u;
     // a member without TARGETING is not tested (as can_hit_from)
     if (!grenade_weapon(src) && !(fire_range(base_attack_range(src), mod_r(src, ModList::FireRange)) > 0.0f)) return CanHit::NoTarget;
-    return fire_line(src, from, *t);
+    return fire_line(src, from, *t, to);
 }
 
-CanHit CombatSystem::fire_line(const Unit& src, Vec3 from, const Unit& tu) const {
+CanHit CombatSystem::fire_line(const Unit& src, Vec3 from, const Unit& tu, const Vec3* to) const {
     const Unit* t = &tu;  // (the body as it stood in can_hit_from)
     if (cfg_.mode == GameMode::Land && shield_sides_) {
         // 0x3b5ad0's projectile gate: every projectile the attacker would fire (its WEAPON projectile and its live weapon
@@ -1818,7 +1818,7 @@ CanHit CombatSystem::fire_line(const Unit& src, Vec3 from, const Unit& tu) const
             if (hp_out(h) || !is_weapon(hd.kind) || hd.projectile < 0) continue;
             if (!data_->projectiles[static_cast<size_t>(hd.projectile)].does_shield_damage) shield_damage = false;
         }
-        Vec3 a = from, b = t->pos;
+        Vec3 a = from, b = to ? *to : t->pos;  // bkt1 t06: the trim's G when given
         a.z = a.z + ud.ranged_target_z_adjust;
         b.z = b.z + desc_of(*t).ranged_target_z_adjust;
         if (shield_sides_(a, b, shield_damage)) return CanHit::LineBlocked;

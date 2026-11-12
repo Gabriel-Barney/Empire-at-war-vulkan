@@ -71,8 +71,10 @@ DECORATIONS.md §2.1 labels +0x08 / +0x10 as unknown; they are the reveal count 
     |fy| × 0.5, |zmax − zmin| × 0.5) with zmin / zmax over every vertex height × 0.048828125, both started at 0.
     So the land fog box is **[0, 20·W] × [0, 20·H], the whole terrain, not the playable box** (Endor: [0, 6220]²
     against the playable (300, 1160)–(5920, 5060)). No terrain → the zero box → no grids.
-    Port status (2026-11-01): the port still uses the playable box on land; it switches together with the AI threat
-    grid, which uses the same box (AI_TACTICAL_PERCEPTION §4.1), FOWF t01.
+    Port status (FOWF t01, 2026-11-08): `TacticalBattle::map_extents` gives this box to the fog and to the AI threat
+    grid / perception map (BattleAi `cfg.map`, `w.map`; AI_TACTICAL_PERCEPTION §4.1) together. [port] A land map
+    without terrain (synthetic test maps) keeps the playable box instead of the zero box. Movement destination clamps
+    still use the playable box.
   - **Space** (0x4d7780): mode +0x390.., the **playable box** (.ted 0x103 minis 04/05, SPACE_AND_OPEN). (The camera
     box +0x3a8, minis 07/08, is vf +0x208.)
   - Base `GameModeClass` (0x35e390): the zero box (galactic).

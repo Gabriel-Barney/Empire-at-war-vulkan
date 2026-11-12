@@ -389,6 +389,9 @@ public:
     uint8_t countdown_phase(ObjectId id, uint8_t type) const;
     int32_t pending_type(ObjectId id) const;  // -1 none
     ObjectId pending_target(ObjectId id) const;
+    // bkt1 t01 (b0068, BKT1_ATTACK_RE §1.1 [H]): the pending targeted ability's Activation_Min_Range / Activation_Max_Range
+    // (the special named by the pending CRC in the unit's ability list); false when nothing is pending or it is unknown.
+    bool pending_ranges(ObjectId id, float& min_range, float& max_range) const;
     bool is_stealthed(ObjectId id, uint32_t frame) const;  // Is_Stealthed (0x39b140)
     bool tractored(ObjectId id) const;                     // CD +0x132
     bool interdicting(ObjectId id) const;

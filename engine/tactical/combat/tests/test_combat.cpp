@@ -1876,6 +1876,14 @@ void test_s78n_can_hit() {
         CHECK(calls == (land ? 1 : 0));
         if (land) CHECK(qa.z == 5.0f && qb.z == 2.0f && qd);
         CHECK(w.sys->can_hit_from(1, Vec3{100, 0, 0}, 2) == CanHit::Yes);  // both points on one side
+        // bkt1 t06 (b0079, MOVEMENT §4.3.2 item 7): an end point G given - the line of fire ends there (raised by T's
+        // Ranged_Target_Z_Adjust), the range tests still measure to T
+        const Vec3 g{40.0f, 0.0f, 7.0f};
+        CHECK(w.sys->can_hit_from(1, Vec3{0, 0, 0}, 2, &g) == CanHit::Yes);  // G on the attacker's side of the edge
+        if (land) CHECK(qb.x == 40.0f && qb.z == 9.0f);
+        const Vec3 g2{60.0f, 0.0f, 0.0f};
+        CHECK(w.sys->line_of_fire_from(1, Vec3{0, 0, 0}, 2, &g2) == (land ? CanHit::LineBlocked : CanHit::Yes));
+        CHECK(w.sys->can_hit_from(1, Vec3{-100, 0, 0}, 2, &g) == CanHit::OutOfMaxRange);  // range to T, not to G
         w.sys->set_position(1, Vec3{-100, 0, 0});
         const int before = calls;
         CHECK(w.sys->can_hit(1, 2) == CanHit::OutOfMaxRange && calls == before);  // the range tests come first

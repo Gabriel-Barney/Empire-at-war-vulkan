@@ -1565,6 +1565,19 @@ ObjectId AbilitySystem::pending_target(ObjectId id) const {
     const Obj* o = obj(id);
     return o ? o->pending_target : kNoObject;
 }
+bool AbilitySystem::pending_ranges(ObjectId id, float& min_range, float& max_range) const {
+    min_range = max_range = 0.0f;
+    const Obj* o = obj(id);
+    if (!o || o->pending_type < 0 || o->pending_crc == 0) return false;
+    for (const SpecialState& sp : o->specials) {
+        const SpecialAbilityDesc& s = data_->specials[sp.desc];
+        if (s.name_crc != o->pending_crc) continue;
+        min_range = s.min_range;
+        max_range = s.max_range;
+        return true;
+    }
+    return false;
+}
 bool AbilitySystem::is_stealthed(ObjectId id, uint32_t frame) const {
     const Obj* o = obj(id);
     return o && stealthed_now(*o, frame);

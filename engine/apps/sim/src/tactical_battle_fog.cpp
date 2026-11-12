@@ -16,6 +16,22 @@ namespace alamo::sim {
 
 namespace fw = alamo::tactical::fog;
 
+tactical::Aabb TacticalBattle::map_extents(const TacticalMode& mode) const {
+    // Land (0x3b8020): the terrain box, x / y = [0, W x 20] x [0, H x 20] with W, H the vertex grid size; z = [zmin, zmax]
+    // over every vertex height, both started at 0. Space (0x4d7780): the playable box. [port] A land map without terrain
+    // (synthetic test maps) keeps the playable box instead of retail's zero box (no grids).
+    const terrain::Terrain& t = map_.terrain;
+    if (space_ || !t.present || t.width == 0 || t.height == 0) return mode.bounds();
+    float zmin = 0.0f, zmax = 0.0f;
+    for (const int16_t h : t.heights) {
+        const float z = static_cast<float>(h) * terrain::kHeightScale;
+        zmin = std::min(zmin, z);
+        zmax = std::max(zmax, z);
+    }
+    return {{0.0f, 0.0f, zmin},
+            {static_cast<float>(t.width) * terrain::kVertexSpacing, static_cast<float>(t.height) * terrain::kVertexSpacing, zmax}};
+}
+
 void TacticalBattle::fog_begin(TacticalMode& mode, uint32_t players) {
     fog_on_ = false;
     fog_mode_ = &mode;
@@ -25,11 +41,9 @@ void TacticalBattle::fog_begin(TacticalMode& mode, uint32_t players) {
     fog_team_beh_ = objects::beh::Team;
     fw::FogSetup s;
     s.mode = space_ ? fw::FogMode::Space : fw::FogMode::Land;
-    // [port] The playable box stands in for the mode's map extents (vf +0x1f8). Traced (FOG_OF_WAR §1.2 [H], FOWF t01):
-    // space uses the playable box, land the whole terrain box [0, 20 W] x [0, 20 H]. The land switch waits for the AI
-    // threat grid, which must use the same box (AI_TACTICAL_PERCEPTION §4.1; BattleAi builds it from bounds()): switching
-    // the fog alone stalled the FoC Utapau skirmish on 4 of 5 seeds (2026-11-01).
-    const tactical::Aabb& b = mode.bounds();
+    // FOWF t01: the mode's map extents (FOG_OF_WAR §1.2 [H]), the same box as the AI threat grid (BattleAi cfg.map /
+    // w.map, AI_TACTICAL_PERCEPTION §4.1).
+    const tactical::Aabb b = map_extents(mode);
     s.box = {b.min.x, b.min.y, b.max.x, b.max.y};
     s.constants = catalog_->fog_constants();
     s.fow_active = fog_global_active_;
