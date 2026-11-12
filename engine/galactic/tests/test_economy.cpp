@@ -2898,6 +2898,25 @@ void test_foc_campaign() {
           d.rules.types[cg].hyperspace_speed == 2.0f && d.rules.types[cg].required_star_base == 2);
     const uint32_t sb = d.rules.find_type("Underworld_Star_Base_1");
     CHECK(sb != kNoIndex && d.rules.types[sb].kind == UnitKind::StarBase && d.rules.types[sb].base_level == 1);
+    {  // bkc1 t03 (BKC1_RE_ANSWERS Q2 [H]): one player per faction, index = faction table index (the UM01 retail trace: 8
+       // players, human Underworld at 6). The story campaign and a sandbox get the same list.
+        const char* const order[] = {"Rebel", "Empire", "Pirates", "Neutral", "Hostile", "Sarlacc", "Underworld", "Hutts"};
+        for (const char* campaign : {"Sandbox_Heart_Of_The_Maw_Underworld", "Full_Story_Campaign_Underworld"}) {
+            std::vector<std::string> sd;
+            const GalacticSetup s = build_campaign_setup(d.db, d.rules, campaign, {}, &sd);
+            if (s.map.planets.size() == 0) {
+                std::printf("  player list: campaign %s not found\n", campaign);
+                continue;
+            }
+            CHECK(s.players.size() == 8);
+            std::string names;
+            for (size_t i = 0; i < s.players.size() && i < 8; ++i) {
+                CHECK(s.players[i].faction == d.rules.find_faction(order[i]));
+                names += d.rules.factions[s.players[i].faction].name + (s.players[i].human ? "*" : "") + " ";
+            }
+            std::printf("  player list %s: %s\n", campaign, names.c_str());
+        }
+    }
     test_oi_foc(d);  // OI galactic
     test_foc_player_fleet_moves(d);
     test_foc_corellia_kuat_hop(d);  // G1

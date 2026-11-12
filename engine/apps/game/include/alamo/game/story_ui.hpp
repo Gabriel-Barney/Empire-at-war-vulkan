@@ -57,6 +57,11 @@ inline constexpr uint8_t kStoryUiTacticalBit = 0x80;
 commands::EventData story_ui_event(const sim::StoryUiNotification& n);
 // False when `ev` is not a well-formed story UI event (n.player is left at -1: the issuer fills it).
 bool read_story_ui_event(const commands::EventData& ev, sim::StoryUiNotification& n);
+// bkc1 t01 (BKC1_RE_ANSWERS Q1): the local player's Esc during a story cinematic camera as a port-only command (no
+// payload). Retail calls Story_Handle_Esc from the message pump between ticks; the port records the key and applies it at
+// the next command phase (GameSession::port_event -> sim::StorySession::handle_esc), so replays repeat it.
+inline constexpr uint16_t kStoryEscSubtype = 0x5345;  // "SE"
+commands::EventData story_esc_event();
 
 // A presentation cue of a fired story reward (story_reward_media).
 struct StoryMediaCue {

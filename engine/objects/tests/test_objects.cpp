@@ -312,6 +312,9 @@ static void test_types_synthetic() {
                "  <CategoryMask>Fighter</CategoryMask><AI_Combat_Power>1.5</AI_Combat_Power></SpaceUnit>\n"
                " <SpaceUnit Name=\"F2\"><Max_Speed>3.5</Max_Speed><Build_Cost_Credits>20</Build_Cost_Credits>\n"
                "  <CategoryMask>Fighter | Bomber</CategoryMask><AI_Combat_Power>2</AI_Combat_Power></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Num\"><Override_Bounty_SP>50</Override_Bounty_SP>\n"
+               "  <Bombing_Run_Prevention_Radius>800.7</Bombing_Run_Prevention_Radius><Population_Value>3</Population_Value>\n"
+               "  <Override_Bounty_MP>-2.5</Override_Bounty_MP></SpaceUnit>\n"
                "</R>\n");
     write_file(root / "Data/XML/T2.xml",
                "<R><SpaceUnit Name=\"Later\"><Variant_Of_Existing_Type>Base_Ship</Variant_Of_Existing_Type></SpaceUnit>\n"
@@ -334,6 +337,17 @@ static void test_types_synthetic() {
     CHECK(ty.get_bool(base, "Is_Dummy") && !ty.get_bool(base, "Hyperspace") && ty.get_float(base, "Mass") == 2.0f);
     CHECK(ty.get_list(base, "Behavior").size() == 3 && ty.get_list(base, "Behavior")[2] == "STARSHIP_COMBATANT");
     CHECK(ty.get_int(base, "Required_Ground_Base_Level") == 1);  // §6.1 normalisation
+    // bkc1 t07 (b0126): numeric getters read the field's own slot whatever its schema kind. Override_Bounty_SP and
+    // Bombing_Run_Prevention_Radius are float-parsed (code 0x8): get_int truncates; Population_Value is int (0x6).
+    {
+        const TypeIndex num = T("Num");
+        CHECK(num != kNone);
+        CHECK(ty.get_int(num, "Override_Bounty_SP") == 50 && ty.get_float(num, "Override_Bounty_SP") == 50.0f);
+        CHECK(ty.get_int(num, "Bombing_Run_Prevention_Radius") == 800);
+        CHECK(ty.get_int(num, "Override_Bounty_MP") == -2);  // toward zero, as a C cast
+        CHECK(ty.get_float(num, "Population_Value") == 3.0f && ty.get_int(num, "Population_Value") == 3);
+        CHECK(ty.get_int(base, "Override_Bounty_SP") == 0);  // unset: the zero default
+    }
     CHECK(ty.get_sub_objects(base, "Abilities").size() == 1);
     CHECK(ty.stats().tbd == 1 && ty.stats().tags_ignored >= 1 && ty.stats().subobject_lists == 1);
     // Variant: clearing list (last occurrence), type-name list (all), empty tag no-op, scalars inherited.
@@ -1598,6 +1612,31 @@ static void integration(const std::string& root, const char* label, bool foc) {
                 types.faction_names().size(), ts.factions_dropped);
     if (foc) CHECK(ts.variants == 911 && ts.resolved_pass0 == 911 && ts.unresolved == 0);
     else CHECK(ts.variants == 449 && ts.resolved_later == 7 && ts.unresolved == 0);
+    if (foc) {  // bkc1 t07 (b0126): the float field read as an int (A2M_R2_UW_BOUNTY_TRACE section 1: Gallofree 50)
+        const TypeIndex g = db.find("Gallofree_Transport");
+        CHECK(g != kNone && types.get_int(g, "Override_Bounty_SP") == 50);
+    }
+    if (foc) {  // bkc1 t04 (b0012, COMMANDS 2.4.1, q6 t15 probe 6): what SelectAll leaves out, in the shipped data
+        const BehaviorTypeId pad = behavior_type_id("TACTICAL_BUILD_OBJECTS");
+        const BehaviorTypeId ground = behavior_type_id("DUMMY_GROUND_STRUCTURE");
+        const BehaviorTypeId star_base = behavior_type_id("DUMMY_STAR_BASE");
+        uint32_t pads = 0, selectable_pads = 0;
+        for (TypeIndex t = 0; t < types.size(); ++t) {
+            if (!types.has_behavior(t, BehaviorSet::Union, pad)) continue;
+            ++pads;
+            selectable_pads += types.has_behavior(t, BehaviorSet::Union, beh::Selectable) ? 1u : 0u;
+        }
+        std::printf("  build pads %u (SELECTABLE %u)\n", pads, selectable_pads);
+        CHECK(pads > 0 && selectable_pads == 0);  // a pad is never selected itself (its turret is a unit of its own)
+        for (const char* n : {"E_Ground_Barracks", "E_Ground_Light_Vehicle_Factory", "R_Ground_Barracks"}) {
+            const TypeIndex t = db.find(n);
+            CHECK(t != kNone && types.has_behavior(t, BehaviorSet::Union, ground));
+        }
+        for (const char* n : {"Empire_Star_Base_1", "Rebel_Star_Base_3", "Underworld_Star_Base_5"}) {
+            const TypeIndex t = db.find(n);
+            CHECK(t != kNone && types.has_behavior(t, BehaviorSet::Union, star_base));
+        }
+    }
     CHECK(ts.subobject_unprocessed == 0);
     // §9 rules on real data.
     std::printf("  section 9: enums converted %u failed %u, masks converted %u failed %u; STARSHIP_COMBATANT appended "

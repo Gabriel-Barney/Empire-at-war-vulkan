@@ -45,11 +45,11 @@ int64_t bounty_of(const BountyTable& table, bool has_override, float override_am
 
 int64_t type_bounty(const BountyTable& table, const objects::GameObjectTypes& types, objects::TypeIndex t) {
     if (t >= types.size()) return 0;
-    // Override_Bounty_SP is a float field (parser kind 0x8, A2M_R2_RE_B §2.2). It is read from the field's text: the
-    // typed view's get_int gives 0 for it (seen on Gallofree_Transport, text "50"). Absent = negative = category default.
-    const std::string_view text = ascii_trim(types.get_string(t, "Override_Bounty_SP"));
-    const bool has_override = !text.empty();
-    return bounty_of(table, has_override, has_override ? static_cast<float>(objects::c_atof(text)) : -1.0f,
+    // Override_Bounty_SP is a float field (parser kind 0x8, A2M_R2_RE_B section 2.2), read through the typed view
+    // (bkc1 t07 fixed get_int / get_float for float-parsed fields). Absent = negative = category default.
+    const objects::FieldId f = objects::find_type_field("Override_Bounty_SP");
+    const bool has_override = types.value(t, f) != nullptr;
+    return bounty_of(table, has_override, has_override ? types.get_float(t, "Override_Bounty_SP") : -1.0f,
                      types.get_mask(t, "CategoryMask"));
 }
 
