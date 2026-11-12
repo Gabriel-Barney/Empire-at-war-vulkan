@@ -1624,9 +1624,11 @@ private:
     void team_attack_service(TacticalMode& mode, SimRng& rng);  // after the combat tick's events
     // ---- s78n t20 stage A: land attack blocks (FIGHTER_FLYING §4.11 A / E [H], MOVEMENT §4.3.2 items 6 / 8) ----
     // One record per mover (a steering squad's container, else the unit) that was given an attack on an object: the
-    // Attack order (human and AI) and the AI's Attack_Move on an attackable enemy object. Every 30 frames (serial, ascending
+    // Attack order (human and AI) and the AI's Attack_Move on an attackable object (bkt1 t05: a non-hostile one too, with
+    // kAttackBlockNoLock). Every 30 frames (serial, ascending
     // mover, before the collision feed and the movement tick), per attack formation (s78n t26 review round 2: the
-    // blocks on one target whose movers share UnitView::atk_form; lead = the first mover), with c = every member's
+    // blocks on one target whose movers share UnitView::atk_form; lead: bkt1 t03, the unlocked member nearest the
+    // movers' centroid), with c = every member's
     // attack_can_hit (a mover's tested unit: the first unit of the mover whose combat order or attack goal still names
     // the target), D = |the lead's recorded goal - target position| and R = half the lead unit's attack range:
     //   - arrived (no member has a goal, none on a collision-owned top record) and not c -> plan again (0x410a60);
@@ -1642,7 +1644,7 @@ private:
     // every member can fire, else the path to the staged target point, cut back to where every member can fire.
     // s78n t25.3: the re-plan takes every block on the same target whose mover is in the same attack formation
     // (UnitView::atk_form), their timers reset together. Dropped by team_attack_drop (every new order and Stop), the
-    // target's death or when the lead's order no longer names it. Saved (battle state 12), hashed while any exists.
+    // target's death or when the lead's order no longer names it (not for a kAttackBlockNoLock block). Saved (battle state 12), hashed while any exists.
     struct AttackBlock {
         objects::ObjectId mover = objects::kNoObjectId;   // ascending
         objects::ObjectId target = objects::kNoObjectId;  // the target unit, or a TEAM container (TeamAttack)
@@ -1671,7 +1673,8 @@ private:
     // with the attack block (mv::MoveOrder::attack): locked / immovable units dropped; G = the staging 0x40e260
     // (attack_stage_goal); the target's footprint half extents (0x396850: its movement collision_half, else the type's
     // hard extents); per mover (a squad container is answered by its first live member, attack_lead) the engagement
-    // range 0x4f6e40 = Get_Max_Attack_Range + min(hx, hy) ([port] always added: no pending-ability clause), in range =
+    // range 0x4f6e40 = Get_Max_Attack_Range + min(hx, hy) (bkt1 t01: a pending targeted ability with an Activation_Max_Range
+    // > 0 gives min(range, that range) instead), in range =
     // attack_can_hit in {Yes, LineBlocked} (slots 44 / 45) and the melee test; the fire trim gated by fog (the target
     // point not fogged for the first unit's owner) and stealth (a stealthed target and a first unit without
     // Target_Stealth_Units). Returns Moved when some mover got a goal, Stopped when the plan's "every member can fire"
@@ -1687,8 +1690,11 @@ private:
     // 0x35f470, force 1), or stealthed (0x39b140) while `unit`'s type lacks Target_Stealth_Units.
     void attack_target_unseen(const objects::ObjectStore& st, const Unit& unit, objects::ObjectId target, bool& hidden,
                               bool& stealthed);
-    // s78n t25.3 (0x40e260, TACTICAL_COMBAT §2.8): G = T's position, unless the unit with the largest
-    // Targeting_Min_Attack_Distance is inside that min range of T: then min + 0.2 x (base range - min) from T toward it.
+    // s78n t25.3 / bkt1 t01 (0x40e260, BKT1_ATTACK_RE §1.1 / §1.2.1 [H]): G = T's position, unless the unit M with the
+    // largest min range (Targeting_Min_Attack_Distance, or a pending ability's Activation_Min_Range) is inside it: then
+    // the free-position search 0x440f90 around M (rings from min - |M - T|, counter-clockwise from T -> M, inside the map
+    // box and zone-connected for M's movement class) for the first point at least min + 0.2 x (base range - min) from T;
+    // a lone crusher on a squashable target keeps T; no point found keeps T.
     Vec3 attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp,
                            size_t movers);  // movers: the formation's mover count (the crush case needs one)
     // bkt1 t01: the pending targeted ability's activation ranges of `unit` or its squad container, and its target

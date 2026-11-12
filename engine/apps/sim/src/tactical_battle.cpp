@@ -2044,7 +2044,7 @@ Vec3 TacticalBattle::attack_stage_goal(const TacticalMode& mode, std::span<const
     float R = std::max(0.0f, mn - dist3(mp, tp));
     float step = 1.0f;
     for (int ring = 0; ring < 20; ++ring) {
-        int32_t n = r > 0.0f ? static_cast<int32_t>(R * 2.0f * dmath::kPiF / r) + 1 : 1;
+        int32_t n = r > 0.0f ? static_cast<int32_t>(std::min(R * 2.0f * dmath::kPiF / r, 4096.0f)) + 1 : 1;
         if (ring > 0) n = std::max<int32_t>(4, n);
         for (int32_t k = 0; k < n; ++k) {
             const float th = 2.0f * dmath::kPiF * static_cast<float>(k) / static_cast<float>(n) + yaw;
@@ -2052,7 +2052,7 @@ Vec3 TacticalBattle::attack_stage_goal(const TacticalMode& mode, std::span<const
             if (d > dist3(q, tp)) continue;
             if (q.x < box.min.x || q.x > box.max.x || q.y < box.min.y || q.y > box.max.y) continue;
             if (!movement_ || !mv::zone_connected(movement_->regions(), mask, {mp.x, mp.y}, {q.x, q.y})) continue;
-            return q;  // the sample at M's z
+            return q;  // land_attack_order reads its x / y; the fire trim's end height is C's (bkt1 t06)
         }
         R += step;
         step = std::min(step + 0.8f, max_step);
@@ -2236,8 +2236,8 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
                                 [](const AttackBlock& b, objects::ObjectId v) { return b.mover < v; });
     };
     // s78n t26 review round 2 (FIGHTER_FLYING §4.11 A / E [H]): the checks are per attack formation F - the blocks on the
-    // same target whose movers share UnitView::atk_form (0: the block alone), in ascending mover order, lead = the first
-    // ([port] as the re-plan's lead). F is checked when its lead's block is due (0x410a60 / 0x4192b0: frame + int(FPS +
+    // same target whose movers share UnitView::atk_form (0: the block alone), in ascending mover order (lead: bkt1 t03
+    // below). F is checked when its lead's block is due (0x410a60 / 0x4192b0: frame + int(FPS +
     // 0.5)); every member's timer then resets. c = 0x40edd0(F): EVERY member can hit from where it stands (each block's
     // lead: a squad through its first member that names the target, D 5); moving = some member has a goal; stopping =
     // the lead's Walk state 0x14 (End Move) or 0x15 (Pre Stopped: [port] never observed, the port's walk passes it within
@@ -2245,10 +2245,9 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
     //   - arrived (no member has a goal), no member on a collision-owned top record, and not c -> plan again (0x410a60);
     //   - moving, c, not stopping and D <= R -> the land stop: every member with a goal halts at once;
     //   - moving and (stopping and not c, or D > R) -> plan again.
-    // bkt1 t03 (b0073, FIGHTER_FLYING §4.11 G 3 [H]): F's members are grouped by the unit their leads' orders name (tid,
-    // the C the checks test; a TEAM container target splits by the member named) and the attack formation. F's lead =
-    // the member nearest the 3-D centroid L of F's movers (summed in member order; strict <, first wins) among the movers
-    // that stand off the target's point, [port] skipping movement-locked ones (hero clash, immobilize, landing, Lua lock:
+    // bkt1 t03 (b0073, FIGHTER_FLYING §4.11 G 3 [H]): F's lead = the member nearest the 3-D centroid L of F's movers
+    // (summed in member order; strict <, first wins) among the movers that stand off their goal point (the unit their
+    // lead's order names, tid: D 5's tested member of a TEAM container target), [port] skipping movement-locked ones (hero clash, immobilize, landing, Lua lock:
     // they keep their order, A1_READINGS §28.9); fallback the first unlocked member. Every member locked: F is not
     // checked, the timers wait. F is checked when its lead's block is due.
     std::vector<uint8_t> grouped(checked.size(), 0);
@@ -2264,7 +2263,8 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
         std::vector<size_t> g{i0};
         if (form != 0)
             for (size_t j = i0 + 1; j < checked.size(); ++j)
-                if (!grouped[j] && checked[j].tid == checked[i0].tid && movement_->view(checked[j].mover).atk_form == form) {
+                if (!grouped[j] && bi(checked[j].mover)->target == bi(checked[i0].mover)->target &&
+                    movement_->view(checked[j].mover).atk_form == form) {
                     grouped[j] = 1;
                     g.push_back(j);
                 }
@@ -2279,14 +2279,14 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
             }
             const float inv = 1.0f / static_cast<float>(g.size());
             L = Vec3{L.x * inv, L.y * inv, L.z * inv};
-            const Vec3 tc0 = st.position(unit_by_id(checked[i0].tid)->h);
             float best = 0.0f;
             size_t first_free = checked.size();
             for (const size_t j : g) {
                 if (checked[j].locked) continue;
                 if (first_free == checked.size()) first_free = j;
                 const Vec3 q = pos3(checked[j].mover);
-                if (q.x == tc0.x && q.y == tc0.y && q.z == tc0.z) continue;  // its goal point is where it stands
+                const Vec3 tc = st.position(unit_by_id(checked[j].tid)->h);
+                if (q.x == tc.x && q.y == tc.y && q.z == tc.z) continue;  // its goal point is where it stands
                 const float dx = q.x - L.x, dy = q.y - L.y, dz = q.z - L.z;
                 const float dd = (dx * dx + dy * dy) + dz * dz;
                 if (i == checked.size() || dd < best) {
@@ -2386,14 +2386,15 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
     for (size_t i = 0; i < checked.size(); ++i) {
         if (!checked[i].plan || done[i]) continue;
         const auto ri = bi(checked[i].mover);
+        const objects::ObjectId target = ri->target;
         const uint8_t flags = ri->flags;
         const uint32_t form = movement_->view(checked[i].mover).atk_form;
         const Vec3 tp = checked[i].at_p ? checked[i].p : st.position(unit_by_id(checked[i].tid)->h);
         std::vector<objects::ObjectId> leads;
         for (size_t j = 0; j < checked.size(); ++j) {
             if (done[j] || checked[j].halted || checked[j].dropped) continue;
-            if (j != i && (form == 0 || checked[j].tid != checked[i].tid || movement_->view(checked[j].mover).atk_form != form))
-                continue;  // bkt1 t03: grouped by tid, as the checks
+            if (j != i && (form == 0 || bi(checked[j].mover)->target != target || movement_->view(checked[j].mover).atk_form != form))
+                continue;
             done[j] = 1;
             AttackBlock& rj = *bi(checked[j].mover);
             rj.next = frame_ + 30u;

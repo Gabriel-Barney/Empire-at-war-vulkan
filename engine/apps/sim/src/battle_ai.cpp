@@ -1302,8 +1302,8 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             const bool object_block = fobj != objects::kNoObjectId;
             // s78n t25.4: a land Guard_Target on an object is a guard block of the movement (land_attack_order, guard)
             const bool land_guard = !b_->space_ && order == lua::LuaOrder::Guard && object_block;
-            // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 item 6): a land Attack_Move on an attackable enemy
-            // object is an attack block of each mover (TacticalBattle::AttackBlock, whose 30-frame checks re-path it: the
+            // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 item 6): a land Attack_Move on an attackable
+            // object (bkt1 t05: a non-hostile one too, no lock) is an attack block of each mover (TacticalBattle::AttackBlock, whose 30-frame checks re-path it: the
             // object follow below leaves it out), and a unit that can already hit it from where it stands takes no path.
             const TacticalBattle::Unit* atu = tw != cmd::kNoObject && tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
             const bool attack_block = !b_->space_ && order == lua::LuaOrder::AttackMove && !point_goal && atu && atu->alive &&
