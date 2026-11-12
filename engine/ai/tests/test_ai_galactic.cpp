@@ -3174,6 +3174,57 @@ static void test_structure_eta_queue_wait() {
     CHECK(ok && wait > 0.0f && busy == wait + idle);
 }
 
+// a2m r4 (A1_READINGS §28.6 step 3, AI_GALACTIC_2 §2.3 market step 5) [H]: a PotentialPlan's AIPlanetBuildQueue slot
+// is made when its goal is accepted (0x6c2d60, inside Resolve_Category), so it is there when the plan starts, and the
+// production start of the matching task removes it. The port made it at the next Commit's step 4 instead, after the
+// production had started, so the slot was never removed and the finished build counted in every later re-solve ETA
+// at that planet (the Rebel Naboo mine at 744 in seed 0).
+static void test_queue_slot_lifetime() {
+    ParityWorld pw(false, {"BuildBarracks"});
+    const auto slots = [&pw] {
+        size_t n = 0;
+        for (PlanetIndex p = 0; p < pw.sim->planets().size(); ++p) n += pw.world->planet_queue_slots(p, 0) + pw.world->planet_queue_slots(p, 1);
+        return n;
+    };
+    const auto barracks_queued = [&pw](PlanetIndex& at) {
+        for (PlanetIndex p = 0; p < pw.sim->planets().size(); ++p)
+            for (uint32_t q = 0; q < 2; ++q)
+                for (const gal::BuildEntry& e : pw.sim->queue_of(p, q))
+                    if (e.type == tBarracks && e.player == 0) {
+                        at = p;
+                        return true;
+                    }
+        return false;
+    };
+    size_t log_seen = 0;
+    int32_t accepted = -1, started = -1;
+    size_t slots_at_accept = 0, slots_after_start = 99;
+    PlanetIndex at = kInvalidPlanet;
+    for (int32_t f = 1; f <= 30 * 200 && (started < 0 || f < started + 30 * 60); ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        const std::vector<AiDecision>& log = pw.world->decision_log();
+        for (; log_seen < log.size(); ++log_seen)
+            if (accepted < 0 && log[log_seen].text.find("BUILDBARRACKS for") != std::string::npos) {
+                accepted = f;
+                slots_at_accept = slots();
+            }
+        if (started < 0 && barracks_queued(at)) started = f;
+        if (started >= 0) slots_after_start = slots();
+    }
+    const float wait = at != kInvalidPlanet ? pw.world->planet_queue_wait(at, 0) : -1.0f;
+    float own = 0.0f;
+    if (at != kInvalidPlanet) {
+        const auto q = pw.sim->queue_of(at, 0);
+        for (size_t i = 0; i < q.size(); ++i) own += i == 0 ? q[i].remaining : q[i].build_time;
+    }
+    std::printf("queue slot lifetime: accepted %d (slots %zu), production %d, slots %zu a minute later, wait %.2f (queue %.2f)\n",
+                accepted, slots_at_accept, started, slots_after_start, static_cast<double>(wait), static_cast<double>(own));
+    CHECK(accepted > 0 && slots_at_accept >= 1);           // made at accept, before the plan's first commit step 4
+    CHECK(started >= accepted && slots_after_start == 0);  // the production start removed it; no later commit re-made it
+    CHECK(wait == own);                                     // the re-solve wait has no stale slot
+}
+
 // A2 f t01 (2): BudgetFractionToBuild 0x667120 fails only without a goal system / for an unknown type. Before the
 // budget's Init it reads the constructed zeros (an empty category = income rate + credits; a category = 0 / 0 -> D = 0
 // -> never), so a template budget equation that reads it does not fail at Init (AI_GALACTIC_2 §3.2): the category keeps
@@ -6486,6 +6537,7 @@ int main(int argc, char** argv) {
     test_goal_pass_cadence();  // a2m r2
     test_desire_and_hysteresis();
     test_goal_reservations();
+    test_queue_slot_lifetime();
     test_goal_batched_values();
     test_goal_batched_accept();  // OPT2 t10
     test_plan_pick_and_solver();
