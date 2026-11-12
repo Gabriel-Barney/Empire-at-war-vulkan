@@ -440,6 +440,27 @@ at Shola / Nal Hutta after tick 8400 in 4 of 12 seeds; retail's Underworld never
   frames per pass). [port] the path finder's stagger K keeps the session-player count (`path_stagger_players`, not re-read);
   the tactical goal system keeps the old cadence (not re-checked).
 
+**2026-11-12 (a2m t03, round 3): hero records need a live object script** (`docs/re/A2M_R2_RE_B.md` §3 [H code, M
+combined]; marked "a2m t03" in `engine/ai/src/galactic_pp.cpp` `HeroM::setup_c` and `engine/ai/src/galactic_ai.cpp`
+`galactic_object_script_live`). Hero Setup C 0x726710 makes a candidate a hero record when the first eligible free-store
+unit of the type still has its live object script, else when the representative H has an `Execute_Script_On_Type`
+type instance; the `Lua_Script` tag alone does not count. In galactic, Home_One (`ObjectScript_PowerToShields`) and
+Sundered_Heart call `ScriptExit()` at their first pump (State_Init exits unless the mode is Space), so they are plain
+units from their first galactic service on; the port vetoed them as records (about 5000 Rebel power missing from every
+Conquer_Pirate / Conquer_To_Reconnect solve). [port] option 2 of §3.3: the port does not host galactic object scripts;
+it derives "exits in galactic" once per script name by running the script's attach and first pump in a sandbox VM
+(the galactic store, so `Get_Game_Mode()` = "Galactic"; `Object` = the AI player's unit; the players world attached for
+`Get_Owner` / `Is_Human`; a copy of the random streams, so no draw reaches the sim). The result is derived from the script
+files, so it is not saved. A script that does not load counts as no live script. [port] The one-frame window before an
+object's first galactic service (a new object is still a record on its creation frame) is not modelled. [M] The port's
+galactic unit is its own 0x6c0020 object (no first fleet member / carried object lookup). HotM data: PowerToShields
+(Home_One) and Sundered_Heart exit, HanSoloPlan stays alive (Han Solo stays a vetoed record, as retail). HotM Empire-human,
+12 seeds, against dev b39baeb5: Rebel `credits_at_9000` mean 484 -> 570, `build_count` 30.5 -> 31.4, Shola captures
+unchanged (7/12 at 5853..7923, the same ticks), total FAIL 18 -> 19 (`travel.hop_ticks[Underworld:SHOLA->NABOO]` 10/12 ->
+9/12 seeds in tolerance; nothing else changed verdict). Most Rebel Conquer_Pirate solves still fail on Budget (the few `last veto Hero` left are Han Solo's
+record); the remaining inputs (Underworld starbase power at Shola, production cancel with refund) are shared rules of the Underworld
+lane (A2M_R2_RE_B §3.4 items 2 and 3). No golden moved.
+
 **2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
 FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
 stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final

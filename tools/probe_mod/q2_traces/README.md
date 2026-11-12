@@ -207,6 +207,11 @@ game closes itself after 12 cycles (about 10 min wall). `rebel_slice\out\latest.
 trace folder>`). Since a2m t13 the watcher names the unlocked types (`slice_watch.jsonl` `list` events: `added` holds
 type names, `ok` true); `rebel_slice\selftest_slice.py` checks the decoder on the raw list bytes of run 20261108-212955,
 and the rerun 20261109-055936 named all five slices (`docs/re/A2M_T07_REBEL_SLICE_RUN.md` §7).
+Since a2m r2 (2026-11-12, open item t14.4 of `docs/re/A2M_T08_T10_T14_RE.md`) the hook also writes one `PCAND` record per
+planet before the shipped `FindTarget`: the planet, its owner and `EvaluatePerception("Is_Good_Slice_Target")`, read-only.
+Report section 4 lists them per plan run and names the enemy planets that score > 0 but are never picked (retail picked
+none of Corellia, Kashyyyk, Shola in 12 runs; the port picks them about a third of the time). One run of 12 cycles is
+enough to tell a perception 0 from a filter in front of the pick.
 
 ### Lua probe run (q2f t06): steps for Gabriel
 

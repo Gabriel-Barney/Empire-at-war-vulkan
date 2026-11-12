@@ -769,7 +769,7 @@ private:
 // Hero marshaller (AI_GALACTIC_3 §2) [H]. Hero records need an AI script; their Commit's escort accumulation is
 // dead code in the shipped binary (§2.4), so rec+0x40 stays 0 and a hero record never scores finite in a non-magic
 // plan: it is vetoed (non-permanent) every iteration. Heroes therefore join plans only as plain units (every TF
-// DenyHeroAttach, or no script / record) or through MagicPlans with a team. [port] The record's Lua calls
+// DenyHeroAttach, or no live script, so no record: A2M_R2_RE_B §3) or through MagicPlans with a team. [port] The record's Lua calls
 // (PlayerObject, MinPlanAttachCost, MaxPlanAttachCost, Evaluate_Attack_Ability, Get_Escort_Ability_Weights) are not
 // run: none of their values can change a score while rec+0x40 is 0, and the hero object scripts are not hosted.
 class HeroM final : public PpMarshaller {
@@ -797,15 +797,22 @@ public:
             const uint32_t h = rep(r.type);
             if (!(named(h) || generic(h) || special(h))) continue;  // (+ behaviour 0x37: land mode only)
             if (!allowed(h)) continue;
-            // A unit: the first eligible free-store unit of the type (galactic: no pool); none -> the type itself.
-            bool unit = false;
-            for (const FsUnit& f : p_.units) unit = unit || f.type == r.type;
-            // The script: the unit's per-object script (its type's or representative's Lua_Script [M]), else the type
-            // instance, which exists only with Execute_Script_On_Type.
-            const GalacticAiTypeInfo* a = info(r.type);
+            // A unit: the first eligible free-store unit of the type (galactic: no pool).
+            ObjectHandle unit{};
+            bool have_unit = false;
+            for (const FsUnit& f : p_.units)
+                if (f.type == r.type) {
+                    unit = f.h;
+                    have_unit = true;
+                    break;
+                }
+            // The script (A2M_R2_RE_B §3.1 step 4) [H]: the unit's LIVE object script (0x6c0020(u)'s +0x2D8; the port's
+            // galactic unit is its own object [M]); without one, H's type-level instance, which exists only with
+            // Execute_Script_On_Type. The Lua_Script tag alone does not make a record: a galactic object whose script
+            // exits at its first galactic pump (Home_One, Sundered_Heart) is a plain unit (§3.2, [port] option 2).
             const GalacticAiTypeInfo* b = info(h);
-            const bool script = unit ? ((a && !a->lua_script.empty()) || (b && !b->lua_script.empty()))
-                                     : ((a && !a->lua_script.empty() && a->script_on_type) || (b && !b->lua_script.empty() && b->script_on_type));
+            const bool script = (have_unit && p_.w.galactic_object_script_live(unit)) ||
+                                (b && !b->lua_script.empty() && b->script_on_type);
             if (!script) continue;
             r.is_hero = true;
         }

@@ -282,6 +282,13 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     std::vector<AiDecision> log;
     std::vector<std::string> errors;
     std::map<std::string, uint32_t> stats;  // port diagnostics (never hashed)
+    // a2m t03 (A2M_R2_RE_B §3.2 / §3.3, [port] option 2 in docs/PHASE4.md): per Lua_Script name (upper-cased), true when
+    // the script ends itself (ScriptExit) at its first galactic pump. Derived from the script files on first use (a
+    // sandbox VM), so it is not saved.
+    std::map<std::string, bool> script_exits_galactic;
+    // Hero Setup C's "the unit has a live object script" (0x726710 step 4) for a galactic object: its type has a
+    // Lua_Script that does not exit in galactic.
+    bool galactic_object_script_live(objects::ObjectHandle u);
     // (plan, task force, team) -> expanded type list (static per data, lookup cache)
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<uint32_t>> team_types;
     int64_t eval_count = 0;  // perception evaluations (diagnostic)
