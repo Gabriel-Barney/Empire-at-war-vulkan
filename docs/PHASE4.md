@@ -485,6 +485,27 @@ TATOOINE]` fail, `build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]` and `travel.
 out). Goldens: ai_galactic_synthetic_crc, galactic_ai_hotm(_human)_golden, galactic_late bench; baseline_seeds.json
 re-recorded.
 
+**2026-11-12 (a2m t01, round 4): galactic AI clocks start on the same frame for every player** ([port] reversal of
+OPT2 t01 for the galactic AI; AI_GALACTIC §1.3 [H]: the Goal service runs every frame, a subsystem runs when next <= NOW,
+no per-player phase). `GalacticAiConfig::stagger` now defaults to false, so the game app, the save host and
+`alamo_headless --galactic-ai` give every AI player the original timing; `alamo_headless --ai-stagger` restores the per-ordinal
+phase as a benchmark knob, `--no-ai-stagger` is unchanged; the tactical / skirmish AI keeps its stagger (follow-up). Why: the
+stagger put the Underworld (ordinal 2) on goal slices from frame 3, so pass 2 evaluated Corrupt_Planet@Corellia on frame 56,
+where the Can_Corrupt_Planet clock term (a2m t09) is 0, and the starting saboteur corrupted MonCalimari with Piracy (8 of 12
+seeds), which unlocks the Black_Market corruption choices (P4_SIM_SYSTEMS §5.2) and shifts the Underworld budget to
+Offensive; retail corrupts only Naboo (Intimidation) before 9000. With the original timing, pass 1 commits at 53 and Corellia
+is evaluated at 54 (desire 41); the saboteur corrupts Naboo first in 9 of 12 seeds (at 370; retail 617, see the cadence note
+below). Test: `test_galactic_clock_phase` (`alamo_ai_galactic_tests`). HotM Empire-human, 12 seeds, against dev 79f83684:
+Underworld `credits_at_9000` mean 856 -> 2105 (FAIL -> PASS, retail 2462), `credits_at_4500` 1286 -> 915, `credits_at_13500`
+1796 -> 937, `build_count` 24.3 -> 23.8 (all PASS); `income_cycle1` Rebel and Underworld FAIL -> PASS;
+`travel.hop_ticks[Rebel:NABOO->SHOLA]` 2/10 -> 7/10 seeds; Shola captures 5/12 -> 6/12 (5958, 7542, 7545, 7551, 7629, 7794;
+five inside retail's 7498..9898); total FAIL 23 -> 19. Open (cause 2 of the r4 diagnosis, not ported): the port's goal passes
+still end 1-2 frames after retail's (53 / 105 vs 52 / 103: E1 = 158, E2 = 153 Evaluate calls where retail's frames give
+E1 153..155 and E2 <= 150), so pass 3 runs at quota 2 (77 frames) instead of retail's quota 1 (147 frames); the surplus is a
+few candidates that retail's `Applies` (galactic planet body [L], AI_GALACTIC §1.4) or slot 9 skip, which needs RE.
+Goldens: ai_galactic_synthetic_crc, galactic_ai_hotm(_human)_golden, game_smoke_campaign.crc (galactic_late bench unchanged: its
+saved clocks are already initialised); baseline_seeds.json re-recorded.
+
 **2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
 FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
 stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final
