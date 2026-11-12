@@ -47,6 +47,12 @@ if /i "!ACOMP!"=="clang" (
 )
 if "!ATESTS!"=="" (set FILTER=-LE slow) else if /i "!ATESTS!"=="all" (set FILTER=) else set FILTER=-R "!ATESTS!"
 if /i "!AMODS!"=="all" (set MODULES=-U ALAMO_ENGINE_MODULES) else set MODULES="-DALAMO_ENGINE_MODULES=!AMODS!"
+rem Cheap check first (2026-11-12): a string literal an edit split across lines (C2001, the most common compile error)
+rem fails here in a second instead of in a build. Scans the C++ files changed against origin/dev.
+python -I tools\lint\check_string_literals.py --changed
+if errorlevel 1 (echo build_agent: fix the literal above first; nothing was built.& exit /b 1)
+rem Stamp for tools\land_on_dev.cmd: HEAD, clean or not, modules and test filter; becomes %B%\verified.json on a pass.
+python -I tools\lint\verified_build.py begin %B% --modules "!AMODS!" --tests "!ATESTS!"
 > %LOG% (
   cmake -S . -B %B% -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MAKE_PROGRAM=%TC%\venv\Scripts\ninja.exe" !COMPILER! !MODULES! 2>&1
   echo configure exit !ERRORLEVEL!
@@ -63,5 +69,8 @@ if /i "!AMODS!"=="all" (set MODULES=-U ALAMO_ENGINE_MODULES) else set MODULES="-
 echo AGENT_DONE>> %LOG%
 python roadmap-store\roadmap_store.py record-build !ACOMP! %B% %LOG%
 python tools\lint\build_summary.py %LOG%
+set "ARC=!ERRORLEVEL!"
+if "!ARC!"=="0" python -I tools\lint\verified_build.py pass %B%
 echo full log: %LOG%
 if defined ALAMO_FULL_LOG type %LOG%
+exit /b !ARC!

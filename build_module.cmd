@@ -19,6 +19,9 @@ call toolchain\msvc\setup_x64.bat >nul
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
 set PATH=%~dp0toolchain\venv\Scripts;%PATH%
+rem Cheap check first (2026-11-12): a string literal split across lines (C2001) fails here instead of in a build.
+python -I tools\lint\check_string_literals.py --changed
+if errorlevel 1 (echo build_module: fix the literal above first; nothing was built.& exit /b 1)
 > %LOG% (
   cmake -S . -B build-%~1 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl "-DALAMO_ENGINE_MODULES=!MODULES!" 2>&1
   echo configure exit !ERRORLEVEL!

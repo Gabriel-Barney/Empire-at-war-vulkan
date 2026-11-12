@@ -12,6 +12,8 @@ call toolchain\msvc\setup_x64.bat >nul
 set PATH=%~dp0toolchain\venv\Scripts;%PATH%
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
+rem Stamp for tools\land_on_dev.cmd (tools\lint\verified_build.py): becomes build-msvc\verified.json on a pass.
+python -I tools\lint\verified_build.py begin build-msvc --modules all --tests all
 > logs\msvc_configure.txt (
   where cl.exe 2>&1
   cl.exe 2>&1
@@ -33,4 +35,5 @@ call "%~dp0tools\cache_env.cmd"
 )
 echo BUILD_DONE>> logs\msvc_configure.txt
 python tools\lint\build_summary.py logs\msvc_configure.txt logs\msvc_build.txt
+if not errorlevel 1 python -I tools\lint\verified_build.py pass build-msvc
 python roadmap-store\roadmap_store.py record-build msvc build-msvc logs\msvc_configure.txt logs\msvc_build.txt

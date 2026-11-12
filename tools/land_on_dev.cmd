@@ -6,10 +6,13 @@ rem Usage (from any worktree, branch committed):  tools\land_on_dev.cmd [--creat
 rem   1. refuses on main, on detached HEAD and with uncommitted tracked edits
 rem   2. fetches origin; with --create makes origin/dev from origin/main when dev does not exist yet
 rem   3. merges origin/dev INTO THIS BRANCH (conflicts are resolved here, so dev never holds a broken merge)
-rem   4. refuses generated or oversized new files (tools\lint\check_tracked.py), then
+rem   4. refuses generated or oversized new files (tools\lint\check_tracked.py)
+rem   5. refuses a merged HEAD that has no passing MSVC build of every module with the fast tier (tools\lint\verified_build.py;
+rem      runs build_agent.cmd msvc wt all itself when there is none; docs / *.md / .claude-only changes need none), then
 rem      pushes HEAD to origin dev as a plain fast-forward (never --force; a rejected push means dev moved: rerun)
-rem   5. deletes this branch on origin when it is not dev
-rem Run the build / tests the change needs (docs/BUILD.md) BEFORE this; dev must stay green.
+rem   6. deletes this branch on origin when it is not dev
+rem Run the build / tests the change needs (docs/BUILD.md) BEFORE this; dev must stay green. Step 5 covers only the
+rem MSVC fast tier: clang, ASan and slow tests are still yours to run when the change needs them.
 rem The local branch and its worktree are left alone (git cannot delete a checked-out branch); the app or
 rem "git branch -d <name>" from another checkout removes them once the work is on dev.
 setlocal
@@ -69,6 +72,24 @@ if errorlevel 1 (
   echo.
   echo land_on_dev: new files failed the tracked-file check above. Nothing was pushed.
   exit /b 1
+)
+
+rem dev must stay green (2026-11-12): push only a commit that was built and tested AS MERGED. Two branches that each pass
+rem can still break dev together, so a pass before the merge with origin/dev does not count. tools\lint\verified_build.py
+rem accepts a build-wt-msvc or build-msvc stamp for exactly HEAD (every module, fast tier or all tests; build_agent.cmd and
+rem build_msvc.cmd write it), or a change to docs / *.md / .claude only. Otherwise this runs the fast tier itself.
+"%PY%" -I "%~dp0lint\verified_build.py" land-check --base origin/dev --head HEAD --tree build-wt-msvc --tree build-msvc
+if errorlevel 1 (
+  echo land_on_dev: building and testing the merged HEAD: build_agent.cmd msvc wt all, the fast tier. This takes a while.
+  call "%~dp0..\build_agent.cmd" msvc wt all
+  cd /d "%~dp0.."
+  "%PY%" -I "%~dp0lint\verified_build.py" land-check --base origin/dev --head HEAD --tree build-wt-msvc
+  if errorlevel 1 (
+    echo.
+    echo land_on_dev: the merged HEAD did not pass the MSVC build and fast tier above. Nothing was pushed.
+    echo Fix it here, commit, then rerun this script. If the failure is already on origin/dev, say so to Gabriel and fix dev first.
+    exit /b 1
+  )
 )
 
 git push origin HEAD:refs/heads/dev
