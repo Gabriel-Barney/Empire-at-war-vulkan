@@ -481,6 +481,47 @@ void test_scene_two_formations() {
     CHECK(sys.stats().attack_legs + sys.stats().attack_leg_refused == 2);
 }
 
+// bkm3 t02 (b0072): the two-formation scene with both leads standing on their cell centres ((100, 440) and (100, 760) from
+// kO: cell centres are at 20 x the cell index). attack_slots takes d0 from the first non-zero segment (first_dir, s78o), so
+// the ring order is the left-most first on its right-hand normal: the y = +160 formation (11) index 0, the y = -160 one
+// (10) the middle at 2 step(15, 0) = +0.0625102, 11 at -0.0625713, as the off-centre scene. With d0 = (0, 0) every
+// projection would tie and the id order would put 10 left (the thetas swap).
+// A zero first segment does not occur today: find_land_path drops it (region_astar's std::unique; cell_astar never emits
+// the start cell's centre; a blocked start's escape leg is non-zero). The path checks below pin that, so the scene's
+// thetas catch a d0 = normalize(path[1] - path[0]) only once a path with a repeated start can be made (b0072).
+void test_scene_zero_first_segment() {
+    ::alamo::test::section("scene_zero_first_segment");
+    MovementSystem sys{MovementConfig{}};
+    scene_system(sys);
+    CHECK(sys.add_unit(attacker(10, kO + V2{0.0f, -160.0f})));
+    CHECK(sys.add_unit(attacker(11, kO + V2{0.0f, 160.0f})));
+    UnitDesc t = attacker(900, kO + V2{1000.0f, 0.0f}, 5.0f);
+    t.owner = 2;
+    CHECK(sys.add_unit(t));
+    const V2 c = kO + V2{1000.0f, 0.0f};
+    SimRng rng(7);
+    sys.move(attack_order({10, 11}, 900, c, 5.0f, 255.0f), rng, 1);
+    const UnitView a = sys.view(10), b = sys.view(11);
+    CHECK(a.form_id != b.form_id && a.atk_form == a.form_id && b.atk_form == b.form_id);
+    CHECK(close_to(a.atk_rho, 240.0f, 1e-3f) && a.atk_rho == b.atk_rho && sys.stats().attack_slotted == 2);
+    CHECK(close_to(a.atk_theta, 0.0625102f, kTol) && close_to(b.atk_theta, -0.0625713f, kTol));
+    // the lead's own path from its cell centre, region A* (smoothed) and cell A* (unsmoothed): no zero first segment
+    for (const bool cell : {false, true}) {
+        LandPathScratch sc;
+        LandPathRequest q;
+        q.start = kO + V2{0.0f, -160.0f};
+        q.goal = c;
+        q.mask = sys.mask_of(10);
+        q.smooth = !cell;
+        q.use_cell_astar = cell;
+        LandPath p;
+        CHECK(find_land_path(sys.grid(), sys.regions(), q, sc, p) && p.points.size() >= 2 && p.points[0] == q.start);
+        CHECK(p.points.size() >= 2 && length_sq(p.points[1] - p.points[0]) > 0.0f);
+    }
+    std::printf("zero first segment: theta %.7f / %.7f, rho %.1f / %.1f\n", static_cast<double>(a.atk_theta),
+                static_cast<double>(b.atk_theta), static_cast<double>(a.atk_rho), static_cast<double>(b.atk_rho));
+}
+
 // The slot test's object rule (§4.3.2 item 5 step 4): a standing vehicle with half extents 2 x 2 on the theta 0 slot point
 // (760, 0): (2 + 5)^2 = 49 >= 0.15 x 15 x 15 = 33.75 fails theta 0; at +-5 deg the member rectangle (20 x 20) still
 // overlaps its 7 x 7 (lateral 240 sin 5 deg = 20.9 < 27), at +10 deg (41.7) it is clear -> theta 0.1745329 (hand). A
@@ -920,6 +961,7 @@ int main() {
     test_scene_unit_target();     // s78n t25.2
     test_scene_structure();
     test_scene_two_formations();
+    test_scene_zero_first_segment();
     test_scene_blockers();
     test_scene_all_in_range();
     test_scene_replan();

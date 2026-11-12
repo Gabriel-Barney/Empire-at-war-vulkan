@@ -238,6 +238,12 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
     // / 0x11 (the caller runs it, WalkResult::turn). Start Move (0x12, a deployed walk's start) goes to 0x13 with no start
     // test. A started path on its last waypoint: 0x12 -> 0x15, arrived.
     const LocoState s0 = m.state;
+    // bkm3 t03 (b0052 item 1, §3.5.2 A / G): state 0 with a path not started -> 0x16 and the frame ends; only the 0x16
+    // handler starts a path (the next frame). The speed is kept (0x16 does not write it).
+    if (s0 == LocoState::None && !m.path.empty() && !m.started) {
+        m.state = LocoState::WalkStopped;
+        return r;
+    }
     if (s0 == LocoState::WalkStopped || s0 == LocoState::None || s0 == LocoState::WalkStartTurn ||
         s0 == LocoState::WalkTurning || s0 == LocoState::WalkEndTurn) {
         m.wt_clip = -1;  // idle / turn clips: no transition clip current
@@ -259,13 +265,23 @@ WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, c
         if (err <= p.turn_rate || (err <= p.close_enough_angle && cur > 0.0f)) {
             m.state = wts ? LocoState::WalkStartMove : LocoState::WalkMoving;
         } else {
+            // bkm3 t03 (b0052 item 1, §3.2.1 item 3 "0x1A entered from a walk", §3.5.1 step 4): 0xf does not write the
+            // speed; a unit that enters it moving (the stale v after an undeploy) turns at R in 0x10 and starts from v
             m.state = LocoState::WalkStartTurn;
-            m.speed = 0.0f;
             r.turn = true;
             r.want = desired;
             return r;
         }
     } else if (s0 == LocoState::WalkStartMove && !wts) {
+        // bkm3 t03 (b0052 item 3, §3.5.2 A 0x12): a path not started -> 0x15, whose entry zeroes +0xec / +0xf0; no
+        // started path -> idle 0x16, the frame ends (not 0x13 -> 0x14 and a coast)
+        if (!m.path.empty() && !m.started) {
+            m.speed = 0.0f;
+            m.wt_f0 = 0.0f;
+            m.wt_clip = -1;
+            m.state = LocoState::WalkStopped;
+            return r;
+        }
         m.state = LocoState::WalkMoving;
     }
     // s78n t26 closing review (§3.5.2 A / F 0x12, 0x61ff40): with Walk_Transition the MOVESTART clip plays (speed 0 on its

@@ -1903,6 +1903,128 @@ void test_bkm2_goal_behind() {
 
 }  // namespace
 
+// bkm3 t03 (b0052 item 1, MOVEMENT §3.2.1 item 3 "0x1A entered from a walk", §3.5.1 step 4): a droid walking deployed
+// is ordered far behind it (>= M): Deploy(false), 0x1A freezes it with its walking speed kept. At the undeploy's end
+// state 0 -> 0x16; the next frame starts the path, start test A -> 0xf (CE 30, the path is behind) with the stale v,
+// and the turn 0x10 uses R (Stopped_Rate_Of_Turn only at speed <= 0).
+void test_bkm3_undeploy_start_turn() {
+    ::alamo::test::section("bkm3 b0052 item 1: the start turn after an undeploy keeps the stale speed and turns at R");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys);
+    const V2 p0 = cell_center(30, 50);
+    UnitDesc d = droid(1, p0);
+    d.close_enough_angle = 30.0f;
+    d.stopped_turn_rate = 5.0f;
+    CHECK(sys.add_unit(d));
+    SimRng rng(5201);
+    uint32_t f = settle_deployed(sys, rng, 1, 1, 60);
+    order(sys, rng, {1}, p0 + V2{120.0f, 0.0f}, f);
+    for (uint32_t end = f + 20; f < end; ++f) sys.tick(f, rng);
+    CHECK(sys.walking_deployed(1) && sys.view(1).speed == 2.5f);
+    order(sys, rng, {1}, sys.view(1).pos - V2{400.0f, 0.0f}, f);
+    uint32_t end_frame = 0;
+    for (uint32_t end = f + 60; f < end && end_frame == 0; ++f) {
+        sys.tick(f, rng);
+        for (const DE& e : sys.take_deploy_events())
+            if (e.to == LocoState::None && e.finished) end_frame = f;
+    }
+    CHECK(end_frame > 0);
+    const UnitView v0 = sys.view(1);
+    // the next frame: 0x16 starts the path, A -> 0xf -> 0x10 (no pre-turn clips) with the stale 2.5: the first step at R =
+    // 15.5 x 1.56 = 24.18 (not Stopped_Rate_Of_Turn 5), the unit in place
+    sys.tick(f++, rng);
+    const UnitView v1 = sys.view(1);
+    CHECK(v1.walk_state == LocoState::WalkTurning && v1.speed == 2.5f && v1.pos == v0.pos);
+    CHECK(near(wrap_deg(v1.yaw - v0.yaw), 24.18f, 1e-3f));
+    // the turn lands on 180 and waits for its TURNL clip (30 frames); then 0x11 -> 0x12 -> 0x13, the controller from the
+    // stale v: 2.5 + acc 0.5 x 5.616 / 3.6 = 3.28 (from 0 it would be 0.78)
+    uint32_t moving = 0;
+    float v_first = 0.0f;
+    bool held = true;  // every turning frame keeps the stale speed and the position
+    for (uint32_t end = f + 60; f < end && moving == 0; ++f) {
+        sys.tick(f, rng);
+        const UnitView v = sys.view(1);
+        if (v.walk_state == LocoState::WalkTurning) held = held && v.speed == 2.5f && v.pos == v0.pos;
+        if (v.walk_state == LocoState::WalkMoving) {
+            moving = f;
+            v_first = v.speed;
+        }
+    }
+    std::printf("bkm3 undeploy end frame %u: first turn step %.4f at v %.2f; moving at frame %u, v %.4f, yaw %.4f\n", end_frame,
+                static_cast<double>(wrap_deg(v1.yaw - v0.yaw)), static_cast<double>(v1.speed), moving, static_cast<double>(v_first),
+                static_cast<double>(sys.view(1).yaw));
+    CHECK(held && moving > 0 && near(v_first, 2.5f + 0.78f, 1e-4f) && std::fabs(wrap_deg(sys.view(1).yaw - 180.0f)) < 1e-3f);
+}
+
+// bkm3 t03 (b0052 items 1 and 3, MOVEMENT §3.5.2 A): walk_step on an unstarted path.
+// - State 0 (None) with a path not started -> 0x16, the frame ends (only the 0x16 handler starts a path): no start, no
+//   move, the speed kept.
+// - State 0x12 (Start Move) without Walk_Transition and a path not started -> 0x15 (not 0x13 -> 0x14): 0x15's entry zeroes
+//   +0xec / +0xf0, no started path -> 0x16, the frame ends. The unit does not move.
+// - The 0x16 handler itself still starts the path and runs start test A in the same call.
+// bkm3 review (MOVEMENT §3.2.1 item 3, §3.5.2 G): a droid walking deployed is re-ordered behind itself, within M, while it
+// is not aligned (Close_Enough_Angle_For_Move_Start 30): the new path stays unstarted, it coasts to 0x15 and stops still
+// deployed (0x19). The 0x19 branch starts the path (+0x6d := 1) and walks it deployed - before the fix it set 0x12 with
+// the path unstarted and cycled 0x12 <-> 0x16 for good, never moving again.
+void test_bkm3_deployed_reorder_behind() {
+    ::alamo::test::section("bkm3_deployed_reorder_behind");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys);
+    const V2 p0 = cell_center(30, 50);
+    UnitDesc d = droid(1, p0);
+    d.close_enough_angle = 30.0f;
+    CHECK(sys.add_unit(d));
+    SimRng rng(5201);
+    uint32_t f = settle_deployed(sys, rng, 1, 1, 60);
+    order(sys, rng, {1}, p0 + V2{120.0f, 0.0f}, f);
+    for (const uint32_t end = f + 20; f < end; ++f) sys.tick(f, rng);
+    CHECK(sys.walking_deployed(1));  // the case needs the walk-while-deployed path
+    const V2 goal = sys.view(1).pos - V2{60.0f, 0.0f};
+    order(sys, rng, {1}, goal, f);
+    uint32_t arrived = 0;
+    for (const uint32_t end = f + 400; f < end && arrived == 0; ++f) {
+        sys.tick(f, rng);
+        (void)sys.take_deploy_events();
+        if (!sys.view(1).has_goal) arrived = f;
+    }
+    const float left = distance(sys.view(1).pos, goal);
+    std::printf("bkm3 deployed re-order behind: arrived at frame %u, %.2f from the goal\n", arrived, static_cast<double>(left));
+    CHECK(arrived > 0 && left < 10.0f);
+}
+
+void test_bkm3_unstarted_walk_states() {
+    ::alamo::test::section("bkm3 b0052 items 1 / 3: state 0 and 0x12 with a path not started");
+    LocomotorParams lp;
+    lp.max_speed = 2.0f;
+    lp.accel = lp.decel = 0.5f;
+    lp.turn_rate = 10.0f;
+    const auto motion = [](LocoState st) {
+        LandMotion m;
+        m.pos = {0.0f, 0.0f};
+        m.yaw = 0.0f;
+        m.speed = 1.5f;
+        m.state = st;
+        m.path = {{0.0f, 0.0f}, {40.0f, 0.0f}};
+        m.next = 1;
+        m.started = false;
+        return m;
+    };
+    LandMotion a = motion(LocoState::None);
+    const WalkResult ra = walk_step(a, lp, 3.0e38f, nullptr);
+    std::printf("bkm3 state 0 unstarted: state 0x%X started %d speed %.4f pos (%.4f, %.4f)\n", static_cast<unsigned>(a.state),
+                a.started ? 1 : 0, static_cast<double>(a.speed), static_cast<double>(a.pos.x), static_cast<double>(a.pos.y));
+    CHECK(a.state == LocoState::WalkStopped && !a.started && a.speed == 1.5f && a.pos == V2{} && !ra.moved && !ra.turn);
+    LandMotion b = motion(LocoState::WalkStartMove);
+    const WalkResult rb = walk_step(b, lp, 3.0e38f, nullptr);
+    std::printf("bkm3 state 0x12 unstarted: state 0x%X started %d speed %.4f pos (%.4f, %.4f)\n", static_cast<unsigned>(b.state),
+                b.started ? 1 : 0, static_cast<double>(b.speed), static_cast<double>(b.pos.x), static_cast<double>(b.pos.y));
+    CHECK(b.state == LocoState::WalkStopped && !b.started && b.speed == 0.0f && b.wt_f0 == 0.0f && b.pos == V2{} && !rb.moved);
+    // the 0x16 handler (WalkStopped) starts it: +0x6d := 1, start test A (aligned) -> 0x12 -> 0x13 and the move step
+    LandMotion c = motion(LocoState::WalkStopped);
+    const WalkResult rc = walk_step(c, lp, 3.0e38f, nullptr);
+    CHECK(c.started && c.state == LocoState::WalkMoving && rc.moved && c.pos.x > 0.0f);
+}
+
 int main() {
     test_droid();
     test_pose_after_turn();
@@ -1925,5 +2047,8 @@ int main() {
     test_t26_walk_transition();      // s78n t26 closing review
     test_bkm2_corner_system();       // bkm2 t03 (b0045)
     test_bkm2_goal_behind();         // bkm2 t04 (b0046)
+    test_bkm3_undeploy_start_turn();  // bkm3 t03 (b0052 item 1)
+    test_bkm3_unstarted_walk_states();  // bkm3 t03 (b0052 items 1 / 3)
+    test_bkm3_deployed_reorder_behind();  // bkm3 review: the 0x19 branch starts the path
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }
