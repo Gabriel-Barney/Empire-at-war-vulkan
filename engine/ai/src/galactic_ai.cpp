@@ -2265,6 +2265,52 @@ GalacticAiWorld::GalacticAiWorld(gal::GalacticSim& sim, objects::ObjectStore& st
     w.gate.start_game();
 }
 
+// a2m t03 (A2M_R2_RE_B §3.2, §3.3) [port, option 2]: the port does not host galactic object scripts, so it models only
+// whether a galactic object's script is still alive. Retail attaches the type's Lua_Script to every galactic object and
+// pumps it at the next service; a script whose first pump calls ScriptExit() (Home_One / Sundered_Heart: State_Init
+// exits unless the mode is Space) is freed for good. "Exits in galactic" is derived once per script by that first pump
+// in a sandbox VM (the galactic store, so Get_Game_Mode() = "Galactic"; Object = the AI player's unit; a copy of the
+// random streams, so no draw reaches the sim). The one-frame window before the first service is not modelled.
+bool GalacticAiWorld::Impl::galactic_object_script_live(objects::ObjectHandle u) {
+    if (!store.alive(u)) return false;
+    const uint32_t t = store.type(u);
+    if (t >= tinfo.size() || tinfo[t].lua_script.empty()) return false;
+    const std::string& name = tinfo[t].lua_script;
+    const std::string key = ai_upper_copy(name);
+    auto it = script_exits_galactic.find(key);
+    if (it == script_exits_galactic.end()) {
+        bool exits = true;  // a script that does not load never attaches (no live script)
+        if (files) {
+            GameRandom scratch = rng;
+            lua::LuaHost h;
+            h.store = &store;
+            h.types = types;
+            h.rng = &scratch;
+            h.campaign = true;
+            h.files = files;
+            lua::LuaVmOptions opt;
+            opt.script_name = name;
+            opt.upper_type_names = true;  // as a game-object script (OBJECT_SCRIPTS §6.1 step 4)
+            lua::LuaVm vm(h, opt);
+            lua::attach_player_world(vm, &world);  // Object.Get_Owner() / Is_Human()
+            if (vm.require(name)) {
+                // Attach (OBJECT_SCRIPTS §1.3): Base_Definitions, the "main" thread, Object; then the first pump.
+                if (vm.has_function("Base_Definitions")) vm.call("Base_Definitions");
+                vm.create_thread("main");
+                vm.set_object_global("Object", u);
+                vm.set_time(now_seconds(sim));
+                vm.set_frame(static_cast<uint32_t>(sim.frame()));
+                vm.service_threads();
+                exits = vm.exit_requested();
+            }
+            lua::attach_player_world(vm, nullptr);
+        }
+        ++stats["~ object script " + name + (exits ? " exits" : " stays alive") + " in galactic (hero records)"];
+        it = script_exits_galactic.emplace(key, exits).first;
+    }
+    return !it->second;
+}
+
 GalacticAiWorld::~GalacticAiWorld() {
     if (!impl_) return;
     if (impl_->story_world) impl_->story_world->attach_ai_paths(nullptr);  // the story world may outlive us

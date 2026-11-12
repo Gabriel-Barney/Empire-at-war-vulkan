@@ -1952,6 +1952,23 @@ function Definitions()
 end
 function MainForce_Thread() ScriptExit() end
 )";
+// a2m t03 (A2M_R2_RE_B §3.2): game-object scripts of the hero. HeroShipScript keeps running in galactic (a HeroService
+// loop, as HeroPlanAttach); SpaceOnlyScript exits at its first pump unless the mode is Space (Home_One's
+// ObjectScript_PowerToShields State_Init), then reads Object as the shipped script does.
+static const char* kObjHeroShip = R"(
+require("SynBase")
+function main()
+  while 1 do PumpEvents() end
+end
+)";
+static const char* kObjSpaceOnly = R"(
+require("SynBase")
+function main()
+  if Get_Game_Mode() ~= "Space" then ScriptExit() end
+  if Object.Get_Owner().Is_Human() then ScriptExit() end
+  while 1 do PumpEvents() end
+end
+)";
 static const char* kPlanHeroDeny = R"(
 require("SynAICommands")
 function Definitions()
@@ -2189,6 +2206,8 @@ struct ParityWorld {
         syn_data(files, defs, eqs, plan_files);
         files.add("Data\\Scripts\\AI\\HeroAttach.lua", kPlanHeroAttach);
         files.add("Data\\Scripts\\AI\\HeroDeny.lua", kPlanHeroDeny);
+        files.add("Data\\Scripts\\GameObject\\HeroShipScript.lua", kObjHeroShip);
+        files.add("Data\\Scripts\\GameObject\\SpaceOnlyScript.lua", kObjSpaceOnly);
         files.add("Data\\Scripts\\AI\\MagicSpace.lua", kPlanMagic);
         files.add("Data\\Scripts\\AI\\BuildBarracks.lua", kPlanBuildBarracks);
         files.add("Data\\Scripts\\AI\\MaskCorvette.lua", kPlanMaskCorvette);
@@ -2374,6 +2393,38 @@ static void test_parity_rules() {
         ls.record_survival(7u, false);
         ls.record_survival(7u, false);
         CHECK(ls.survival_ratio(7u) * 3.0 == 1.0 && ls.survival_ratio(8u) == 1.0 && ls.survival_entries() == 1);
+    }
+    {
+        // a2m t03 (A2M_R2_RE_B §3.1, §3.2): the record needs the unit's LIVE object script. A script that exits at its
+        // first galactic pump (SpaceOnlyScript, as Home_One's) or does not load leaves a plain unit, which the hero-attach
+        // plan takes; H's Execute_Script_On_Type instance still makes a record (vetoed).
+        struct Case {
+            const char* script;
+            bool on_type;
+            bool hero_selected;
+        };
+        for (const Case& c : {Case{"HeroShipScript", false, false}, Case{"SpaceOnlyScript", false, true},
+                              Case{"NoSuchScript", false, true}, Case{"SpaceOnlyScript", true, false}}) {
+            ParityWorld pw(false, {"HeroAttach"}, own_p2, {}, {}, [&c](std::vector<GalacticAiTypeInfo>& ti) {
+                for (GalacticAiTypeInfo& x : ti)
+                    if (x.hero) {
+                        x.lua_script = c.script;
+                        x.script_on_type = c.on_type;
+                    }
+            });
+            pw.run(2);
+            bool ok = false;
+            const std::vector<uint32_t> a = pw.world->solve_potential_plan(0, "HeroAttach", "Conquer_Planet", 3, &ok);
+            std::printf("parity: hero script %s%s -> hero %s\n", c.script, c.on_type ? " (on type)" : "",
+                        pw.has(a, pw.hero) ? "selected" : "vetoed");
+            CHECK(ok && pw.has(a, pw.hero) == c.hero_selected);
+            if (std::string(c.script) == "SpaceOnlyScript" && !c.on_type) {
+                bool logged = false;
+                for (const auto& [k, n] : pw.world->proposal_stats())
+                    logged = logged || k.find("object script SpaceOnlyScript exits in galactic") != std::string::npos;
+                CHECK(logged);
+            }
+        }
     }
     {
         // §3.5: with AI_Uses_Galactic_Pop_Cap a produced Corvette (pop 50) exceeds the remaining population.
