@@ -293,7 +293,11 @@ void AiDefinitions::add_function_set(std::string_view set_name, std::string_view
         GoalFunctionEntry e;
         const std::string_view goal = n.child_text("Goal");
         e.goal = find_goal(goal);
-        e.function = std::string(n.child_text("Function"));
+        // a2m r1: a repeated <Function> is a scalar field read twice: the last occurrence wins (A2K_T06_RE §1.5: the entry is
+        // read through a field table, Function a converter scalar; OBJECT_TYPES §4.4: repeated scalar tags, last wins).
+        // Vanilla BasicDefensiveGalacticSet Generate_Magic_Space_Defense lists Zero then Needs_Magic_Space_Defense;
+        // retail spawns that magic defense (a2m r1: the Rebel fleet at Yavin on mode frame 56, docs/PHASE4.md).
+        for (const data::XmlNode f : n.children("Function")) e.function = std::string(f.text_trimmed());
         if (e.goal == kAiNone) {
             diagnostics.push_back(diag(file, n.line(), "unknown goal '" + std::string(goal) + "' in set " + s.name));
             continue;

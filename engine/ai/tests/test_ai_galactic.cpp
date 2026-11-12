@@ -747,6 +747,14 @@ static void test_definitions_and_templates() {
     CHECK(d.goals[cq].reachability == Reachability::EnemyDestination && d.goals[cq].is_like.size() == 1);
     CHECK(d.goals[3].mode == AiMode::Land && d.goals[2].reachability == Reachability::FriendlyOnly);
     CHECK(d.find_set("synset") && d.find_set("SynSet")->entries.size() == 4);
+    CHECK(d.find_set("SynSet")->entries[2].function == "Needs_Starbase_Upgrade");
+    // a2m r1: a repeated <Function> is one scalar field, the last occurrence wins (vanilla BasicDefensiveGalacticSet
+    // Generate_Magic_Space_Defense: Zero, then Needs_Magic_Space_Defense; retail spawns the magic defense).
+    d.add_function_set("RepSet", R"(<FunctionSet>
+  <M><Goal>Upgrade_Starbase</Goal><Function>Zero</Function> <!-- x --> <Function> Needs_Magic </Function></M>
+</FunctionSet>)", "RepSet.xml");
+    CHECK(d.find_set("RepSet") && d.find_set("RepSet")->entries.size() == 1 &&
+          d.find_set("RepSet")->entries[0].function == "Needs_Magic");
     const AiPlayerTypeDef* p = d.find_player("SynEmpire");
     CHECK(p && p->templates[0].size() == 2 && p->free_store_script[0] == "SynFreeStore");
     // Template switches: base turns Offensive + Infrastructure on (priority 1); Syn_Rich (priority 3)
