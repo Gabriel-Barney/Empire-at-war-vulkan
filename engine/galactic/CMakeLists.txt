@@ -101,4 +101,15 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
   endif()
   add_test(NAME alamo_galactic_save_tests COMMAND alamo_galactic_save_tests)
   set_tests_properties(alamo_galactic_save_tests PROPERTIES TIMEOUT 600)
+
+  # bkc1 t08 (backlog b0027): auto-resolve outcomes over many seeds for a battle spec; graded against the retail
+  # outcomes in tools/parity/autoresolve_refs.json by tools/parity/autoresolve_check.py (ctest parity_autoresolve,
+  # tools/parity/CMakeLists.txt). Exits 77 without ALAMO_FOC_DATA.
+  add_executable(alamo_galactic_autoresolve_parity tests/autoresolve_parity.cpp)
+  target_include_directories(alamo_galactic_autoresolve_parity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  target_link_libraries(alamo_galactic_autoresolve_parity PRIVATE alamo_galactic_sim alamo_test_support)
+  if(TARGET alamo_vfs)
+    target_link_libraries(alamo_galactic_autoresolve_parity PRIVATE alamo_vfs)
+    target_compile_definitions(alamo_galactic_autoresolve_parity PRIVATE ALAMO_GALACTIC_TESTS_HAVE_VFS=1)
+  endif()
 endif()

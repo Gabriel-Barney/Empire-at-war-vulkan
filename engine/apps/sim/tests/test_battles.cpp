@@ -2169,18 +2169,22 @@ galactic::GalacticSetup campaign_setup(const Data& d, bool drop_hostile) {
     galactic::GalacticSetup s = galactic::build_campaign_setup(d.db, d.rules, "S10_GC", {}, &diag);
     for (uint32_t i = 0; i < s.map.planets.size(); ++i)  // the synthetic planets carry no Galactic_Position
         s.map.planets.position[i] = {static_cast<float>(i) * 60.0f, 0.0f, 0.0f};
-    if (drop_hostile && !s.players.empty() && s.players.back().faction == d.rules.find_faction("Hostile")) s.players.pop_back();
+    // bkc1 t03: one player per faction in table order (player = faction index), so Hostile (3), S10_Natives (4) and
+    // S10_Absent (5) trail the campaign's factions; dropping them is the run without the Hostile / native players.
+    if (drop_hostile)
+        while (!s.players.empty() && s.players.back().faction >= d.rules.find_faction("Hostile")) s.players.pop_back();
     return s;
 }
 
 // The S10_GC land invasion of S10_B (Underworld 1 attacks Empire 0): map posts at x 600.. with raw owners (faction
-// indices) 0 Empire, 1 Underworld, 4 S10_Natives, 3 Hostile; returns x -> owner at battle frame 1.
+// indices) 0 Empire, 1 Underworld, 4 S10_Natives, 3 Hostile; returns x -> owner at battle frame 1. bkc1 t03: the campaign
+// holds a player per faction (player = faction index), so the native post keeps its own faction's player 4.
 std::map<int, int32_t> campaign_battle_posts(const Data& d, bool drop_hostile) {
     std::map<int, int32_t> out;
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     SimConfig cfg;
     cfg.seed = 2026;
-    cfg.players = 4;
+    cfg.players = 8;
     SimHost host(d.types, js, cfg);
     galactic::GalacticSim* gs = host.start_galactic(d.rules, campaign_setup(d, drop_hostile));
     CHECK(gs != nullptr);
@@ -2202,7 +2206,7 @@ std::map<int, int32_t> campaign_battle_posts(const Data& d, bool drop_hostile) {
                                 };
                                 place("S4_Post", 600.0f, 1800.0f, 0);   // Empire (defender) -> player 0
                                 place("S4_Post", 700.0f, 1800.0f, 1);   // Underworld (attacker): branched-map discard
-                                place("S4_Post", 800.0f, 1800.0f, 4);   // native faction without a player -> Hostile
+                                place("S4_Post", 800.0f, 1800.0f, 4);   // native faction: its own player 4
                                 place("S4_Post", 1000.0f, 1800.0f, 3);  // Hostile
                                 return true;
                             },
@@ -2234,23 +2238,28 @@ std::map<int, int32_t> campaign_battle_posts(const Data& d, bool drop_hostile) {
     return out;
 }
 
-// [probe 2026-10-29, inferred] the campaign's Hostile player: present after Neutral in faction order, inert on the galactic
-// map (no AI, no credits, no planets, no income), and the owner of the map's native objects in a campaign land battle.
+// [probe 2026-10-29, inferred] the campaign's Hostile player: inert on the galactic map (no AI, no credits, no planets, no
+// income), and the owner of the map's Hostile objects in a campaign land battle. bkc1 t03 (docs/re/BKC1_RE_ANSWERS.md Q2
+// [H]): a campaign creates one player for every faction of the table, in table order (player = faction index), so the
+// factions the campaign does not name (Hostile 3, S10_Natives 4, S10_Absent 5) are all such inert players.
 void test_campaign_hostile(const Data& d) {
     const galactic::GalacticSetup s = campaign_setup(d, false);
     const uint32_t hostile = d.rules.find_faction("Hostile");
-    CHECK(s.players.size() == 4 && s.players[0].faction == d.rules.find_faction("Empire") && s.players[0].human &&
+    CHECK(s.players.size() == 6 && s.players.size() == d.rules.factions.size());
+    for (size_t i = 0; i < s.players.size(); ++i) CHECK(s.players[i].faction == static_cast<uint32_t>(i));
+    CHECK(s.players.size() == 6 && s.players[0].faction == d.rules.find_faction("Empire") && s.players[0].human &&
           s.players[1].faction == d.rules.find_faction("Underworld") && s.players[2].faction == d.rules.find_faction("Neutral"));
-    CHECK(s.players.size() == 4 && s.players[3].faction == hostile && !s.players[3].human && !s.players[3].ai &&
-          s.players[3].credits == 0.0f);
-    for (const galactic::StartingForce& f : s.forces) CHECK(f.player != 3);
+    CHECK(s.players.size() == 6 && s.players[3].faction == hostile);
+    for (size_t i = 3; i < s.players.size(); ++i)
+        CHECK(!s.players[i].human && !s.players[i].ai && s.players[i].credits == 0.0f);
+    for (const galactic::StartingForce& f : s.forces) CHECK(f.player < 3);
     // Galactic behaviour per faction is the same with and without the Hostile player (no battle: 2400 ticks of economy).
     auto run = [&d](bool drop) {
         std::vector<float> trace;
         jobs::JobSystem js(jobs::JobSystemConfig{0});
         SimConfig cfg;
         cfg.seed = 2026;
-        cfg.players = 4;
+        cfg.players = 8;
         SimHost host(d.types, js, cfg);
         galactic::GalacticSim* gs = host.start_galactic(d.rules, campaign_setup(d, drop));
         CHECK(gs != nullptr);
@@ -2276,13 +2285,13 @@ void test_campaign_hostile(const Data& d) {
     };
     const std::vector<float> with = run(false), without = run(true);
     CHECK(!with.empty() && with == without);
-    // The land battle: the Hostile- and native-owned posts survive with the Hostile player; without it they are dropped.
+    // The land battle: the Hostile- and native-owned posts survive with their players; without them they are dropped.
     std::map<int, int32_t> posts = campaign_battle_posts(d, false);
     std::printf("  campaign land battle posts:");
     for (const auto& [x, o] : posts) std::printf(" %d:%d", x, o);
     std::printf("\n");
     CHECK(posts.size() == 3 && posts.count(600) && posts[600] == 0 && !posts.count(700));
-    CHECK(posts.count(800) && posts[800] == 3 && posts.count(1000) && posts[1000] == 3);
+    CHECK(posts.count(800) && posts[800] == 4 && posts.count(1000) && posts[1000] == 3);
     posts = campaign_battle_posts(d, true);
     CHECK(posts.size() == 1 && posts.count(600) && posts[600] == 0);
 }

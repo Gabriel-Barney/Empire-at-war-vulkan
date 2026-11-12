@@ -1,5 +1,5 @@
 {
- "commit": "c3c01834",
+ "commit": "8ed2debf+bkc1",
  "mode": "distribution",
  "scenarios": {
   "geonosis_skirmish": {
@@ -183,7 +183,7 @@
     "travel.hop_ticks[Underworld:KAMINO->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "FAIL",
-    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "PASS",
+    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "FAIL",
     "travel.hop_ticks[Underworld:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->KAMINO]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->SHOLA]": "PASS",
@@ -221,8 +221,8 @@
      "PASS": 22
     },
     "timing": {
-     "FAIL": 10,
-     "PASS": 62
+     "FAIL": 11,
+     "PASS": 61
     }
    }
   }

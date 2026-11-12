@@ -665,20 +665,19 @@ void ConflictManager::run(ConflictKind kind) {
 
 // ---- auto-resolve ----
 
-ArCombatant ConflictManager::combatant_of(ObjectHandle h, bool space) const {
-    const auto& store = sim_->store();
-    const uint32_t t = static_cast<uint32_t>(store.type(h));
-    const auto& ti = sim_->rules().types;
-    const ConflictTypeInfo& ct = rules_->type(t);
+ArCombatant make_ar_combatant(const GalacticRules& galactic, const ConflictRules& rules, uint32_t t, int32_t owner,
+                              bool space) {
+    const auto& ti = galactic.types;
+    const ConflictTypeInfo& ct = rules.type(t);
     ArCombatant c;
-    c.owner = store.owner(h);
+    c.owner = owner;
     c.own_power = t < ti.size() ? ti[t].ai_combat_power : 0.0f;
     c.hero = ct.hero;
     c.super_killer = ct.super_killer;
     uint64_t first_cats = ct.categories;
     bool first = true;
     for (const auto& [mt, n] : ct.members) {
-        const ConflictTypeInfo& mi = rules_->type(mt);
+        const ConflictTypeInfo& mi = rules.type(mt);
         ArPiece p;
         p.type = mt;
         p.name = mt < ti.size() ? std::string_view(ti[mt].name) : std::string_view();
@@ -698,8 +697,13 @@ ArCombatant ConflictManager::combatant_of(ObjectHandle h, bool space) const {
         p.power = c.own_power;
         c.pieces.push_back(p);
     }
-    c.super = rules_->super_category != 0 && (first_cats & rules_->super_category) != 0;
+    c.super = rules.super_category != 0 && (first_cats & rules.super_category) != 0;
     return c;
+}
+
+ArCombatant ConflictManager::combatant_of(ObjectHandle h, bool space) const {
+    const auto& store = sim_->store();
+    return make_ar_combatant(sim_->rules(), *rules_, static_cast<uint32_t>(store.type(h)), store.owner(h), space);
 }
 
 void ConflictManager::auto_setup(const ConflictInfo& head) {
