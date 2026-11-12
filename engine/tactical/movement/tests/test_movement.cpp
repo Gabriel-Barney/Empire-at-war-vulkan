@@ -644,6 +644,13 @@ static void test_locomotion() {
     CHECK(arrived && accel_ok && m.speed == 0.0f && m.state == LocoState::WalkStopped && m.next == 3);
     CHECK(m.pos.y > 95.0f && std::fabs(m.pos.x - 100.0f) < 16.0f);  // the swing: under the turn radius v / R = 4 / 15deg = 15.3
     CHECK(frames > 50 && frames < 90);  // 200 units at <= 4 / frame with accel ramp
+    // bkm2 t06 (b0042): two-sided. Along the last segment (+y, the last line y = 100): from 5 before it (0x15) to the coast
+    // past it, v^2 / (2a) = 16 / 2 = 8; across (+x), the swing lies outside the corner (x >= 100) and under the turn radius
+    // v / R = 4 / (15 deg in rad) = 15.28. The run is a pure function of its inputs, so the end point and the frame count
+    // are also checked as measured.
+    std::printf("locomotion: end (%.6f, %.6f)\n", static_cast<double>(m.pos.x), static_cast<double>(m.pos.y));
+    CHECK(m.pos.y >= 95.0f && m.pos.y <= 100.0f + 8.0f && m.pos.x >= 100.0f && m.pos.x <= 100.0f + 4.0f / (15.0f * kDegToRad));
+    CHECK(frames == 57 && std::fabs(m.pos.x - 111.2592f) < 1e-3f && std::fabs(m.pos.y - 98.6733f) < 1e-3f);
     // Passability check before commit: a blocked cell stops the unit.
     PassabilityGrid g;
     g.init(16, 16);
@@ -1636,6 +1643,14 @@ static void test_collision_system() {
               s.stats().collisions_cancelled == 0);
         // s78n t26.4: past the spot's line (+x), off the line by the side-steps (no lane term without an order, no snap)
         CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && !s.view(2).pushed && s.view(2).pos.x > 405.0f + ring - 5.0f);
+        // bkm2 t06 (b0042): two-sided along the last segment (+x, the spot's line x = 405 + ring): from 5 before the line
+        // (0x15) to the coast past it, v^2 / (2a) = vmax / 2 = 0.78 (1.0 x LandSpeedMultiplier 1.56; decel unset = vmax,
+        // §3.4); the end point itself is deterministic and checked as measured
+        const V2 e2 = s.view(2).pos;
+        std::printf("StoppedVsStopped: unit 2 ended at (%.4f, %.4f), %.4f past the spot's line\n", static_cast<double>(e2.x),
+                    static_cast<double>(e2.y), static_cast<double>(e2.x - (405.0f + ring)));
+        CHECK(e2.x >= 405.0f + ring - 5.0f && e2.x <= 405.0f + ring + 0.5f * 1.56f + 1e-4f);
+        CHECK(std::fabs(e2.x - 489.3083f) < 1e-3f && std::fabs(e2.y - 360.0799f) < 1e-3f);
         CHECK(overlap_ratio(s.view(1).pos, 40.0f, s.view(2).pos, 40.0f) <= 0.15f);
         // no new record afterwards (they no longer overlap)
         for (uint32_t n = 0; n < 20; ++n) s.tick(++f, rng);
@@ -1723,13 +1738,66 @@ static void build_land_scenario(MovementSystem& sys, uint32_t units) {
     }
 }
 
+// bkm2 t01 / t02 (b0040 / b0041; MOVEMENT §5.4.7 items 3.4 / 3.5 / 4): the units stopped by their own TerrainCollision
+// record, observed per tick through the public views. A Terrain record in state None (0, waiting for its decision)
+// before a tick that is gone after it, while its unit walks no detour (a taken detour moves the record to Resolving and
+// keeps it), stopped its unit: own cell impassable, Path Around failed, or no base path. One unit can lose several
+// records in one tick (no duplicate rule, item 1: the first decision stops it and clears its paths, the next one then
+// has no base path). The kinds are the stats counters that moved in that tick, named only when one unit stopped in it.
+// Observation only: nothing here feeds the simulation.
+struct TerrainStop {
+    ObjectId id = -1;
+    uint32_t frame = 0;
+    std::string kind;  // one letter per record: 'c' own cell, 'f' failed detour, 'n' no base path; "?" several units
+};
+struct TerrainStopLog {
+    std::vector<TerrainStop> stops;
+    std::vector<std::pair<uint32_t, ObjectId>> waiting;  // scratch: (record seq, unit) in state None before the tick
+};
+static void terrain_stops_before(const MovementSystem& sys, TerrainStopLog& t) {
+    t.waiting.clear();
+    for (const CollisionObject& c : sys.collisions().list())
+        if (c.kind == CollisionKind::Terrain && c.state == CollisionState::Active) t.waiting.push_back({c.seq, c.a});
+}
+static void terrain_stops_after(const MovementSystem& sys, TerrainStopLog& t, uint32_t frame, const MovementStats& s0) {
+    const MovementStats& s1 = sys.stats();
+    const uint32_t dc = s1.terrain_stops_cell - s0.terrain_stops_cell, df = s1.terrain_stops_failed - s0.terrain_stops_failed,
+                   dn = s1.terrain_stops_nobase - s0.terrain_stops_nobase;
+    const size_t first = t.stops.size();
+    for (const auto& [seq, id] : t.waiting) {
+        bool kept = false;
+        for (const CollisionObject& c : sys.collisions().list()) kept = kept || c.seq == seq;
+        if (kept || !sys.has_unit(id) || sys.view(id).pushed) continue;
+        bool seen = false;
+        for (size_t i = first; i < t.stops.size(); ++i) seen = seen || t.stops[i].id == id;
+        if (!seen) t.stops.push_back({id, frame, "?"});
+    }
+    if (t.stops.size() == first + 1) t.stops.back().kind = std::string(dc, 'c') + std::string(df, 'f') + std::string(dn, 'n');
+    if ((dc + df + dn > 0 || t.stops.size() != first) && std::getenv("BKM2_DEBUG")) {
+        std::printf("  [stop] frame %u: d cell %u failed %u nobase %u, waiting", frame, dc, df, dn);
+        for (const auto& [seq, id] : t.waiting) std::printf(" %d(#%u)", id, seq);
+        std::printf(", found");
+        for (size_t i = first; i < t.stops.size(); ++i) std::printf(" %d", t.stops[i].id);
+        std::printf("; records now:");
+        for (const CollisionObject& c : sys.collisions().list())
+            if (c.kind == CollisionKind::Terrain) std::printf(" %d/%u/c%u", c.a, static_cast<unsigned>(c.state), c.created);
+        std::printf("\n");
+    }
+}
+
 // Runs until every unit stopped; returns frames. Checks passability every frame.
 static uint32_t run_land(MovementSystem& sys, uint32_t first, uint32_t max_frames, SimRng& rng, const ParallelFor& pf,
-                         bool& on_ground, CrcLog* log = nullptr, CrcRegistry* reg = nullptr) {
+                         bool& on_ground, CrcLog* log = nullptr, CrcRegistry* reg = nullptr, TerrainStopLog* stops = nullptr) {
     on_ground = true;
     uint32_t f = first;
+    MovementStats s0;
     for (; f < first + max_frames; ++f) {
+        if (stops) {
+            terrain_stops_before(sys, *stops);
+            s0 = sys.stats();
+        }
         sys.tick(f, rng, pf);
+        if (stops) terrain_stops_after(sys, *stops, f, s0);
         bool any = false;
         for (ObjectId id : sys.unit_ids()) {
             const UnitView v = sys.view(id);
@@ -1767,12 +1835,17 @@ static void test_land_group() {
     // s78p (b0049): with one formation path per formation and each member on its lane the formations no longer cross in
     // the maze, so the cycle does not form; all 36 arrive at frame ~8460 (the lanes are longer than the singly planned
     // paths). The cap is 9000; the jam bound stays for the record.
-    const uint32_t frames = run_land(sys, 0, 9000, rng, serial_for, ground);
+    // bkm2 t01 (b0040): the run is deterministic, so its counts are checked exactly as measured (dev 7f063b20, MSVC and
+    // clang): see the checks below the summary line.
+    TerrainStopLog tlog;
+    const uint32_t frames = run_land(sys, 0, 9000, rng, serial_for, ground, nullptr, nullptr, &tlog);
     uint32_t arrived = 0, near = 0;
+    std::vector<ObjectId> far_ids;
     for (ObjectId id : sys.unit_ids()) {
         const UnitView v = sys.view(id);
         if (v.arrived) ++arrived;
         if (distance(v.pos, cell_center(75, 80)) < 400.0f) ++near;
+        else far_ids.push_back(id);
         if (!v.arrived && std::getenv("MOVEMENT_DEBUG"))
             std::printf("  unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f pushed %d path %zu\n", id,
                         static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), static_cast<double>(v.goal.x),
@@ -1814,7 +1887,26 @@ static void test_land_group() {
         cycle = cycle && held && v.has_goal && v.speed == 0.0f;
     }
     std::printf("land group: %u unit(s) jammed in a Starved / Pass cycle (MOVEMENT 5.4.6 row 15), cycle %d\n", jammed, cycle ? 1 : 0);
-    CHECK(ground && arrived + jammed == 36 && jammed <= 4 && cycle && 36 - near <= stops + jammed && (jammed > 0 || frames < 9000));
+    for (const TerrainStop& t : tlog.stops) {
+        const UnitView v = sys.view(t.id);
+        std::printf("land group: unit %d stopped by its TerrainCollision record(s) at frame %u (kinds %s) at (%.3f, %.3f), %.1f "
+                    "from the destination\n",
+                    t.id, t.frame, t.kind.c_str(), static_cast<double>(v.pos.x), static_cast<double>(v.pos.y),
+                    static_cast<double>(distance(v.pos, cell_center(75, 80))));
+    }
+    for (ObjectId id : far_ids) std::printf("land group: unit %d ended 400 or more from the destination\n", id);
+    // bkm2 t01 (b0040): exact, as measured (a port measurement; retail's count for this maze is unknown). The jam check is
+    // PROVISIONAL (b0034): the Starved / Pass cycle of the s78n t26 review formed without the formation path / lanes
+    // (s78p, b0049) and may have been a port artefact rather than retail; with them no unit jams. Every unit arrives
+    // (36), one of them only as "done": unit 1 is stopped at frame 365 by its own TerrainCollision records (MOVEMENT
+    // §5.4.7 item 7: its order is lost and the member counts as arrived) - it had two records waiting (no duplicate rule,
+    // item 1); the first decision's kind-3 Path Around failed (the "failed detour" stop), which cleared its paths, so the
+    // second found no base path (the "no base" stop). It is the one unit that ends 400 or more from the destination.
+    CHECK(ground && frames == 8402 && arrived == 36 && jammed == 0 && cycle);
+    CHECK(near == 35 && stops == 2 && st.terrain_stops_failed == 1 && st.terrain_stops_nobase == 1 && st.terrain_stops_cell == 0);
+    CHECK(st.terrain_records == 22 && st.terrain_detours == 20);
+    CHECK(tlog.stops.size() == 1 && far_ids == std::vector<ObjectId>{1});
+    if (tlog.stops.size() == 1) CHECK(tlog.stops[0].id == 1 && tlog.stops[0].frame == 365 && tlog.stops[0].kind == "fn");
 
     // Head-on corridor: two units swap ends through a 3-cell-wide corridor.
     MovementSystem s2{MovementConfig{}};
@@ -1935,7 +2027,16 @@ static void test_push_search() {
         CHECK(s.stats().pushes == 1 && s.stats().push_failures == 0 && push_frame > 0 && end_frame > push_frame);
         // s78n t26.4 (MOVEMENT 3.5.1 item 1, 3.5.2 C.7): where 0x15 stopped it on its push path (no snap), within a
         // step plus the side-step drift of the spot
-        CHECK(distance(spot, V2{b0.x + ring, b0.y - ring}) < 2.5f);
+        // bkm2 t06 (b0042): two-sided along the push path's last segment b0 -> spot T (open ground: one straight leg, unit
+        // dir): from 5 before T's line (0x15's -5) to the coast past it, v^2 / (2a) = vmax / 2 = 1.17 (Infantry 1.5 x
+        // LandSpeedMultiplier 1.56 = 2.34; decel unset = vmax, §3.4); across, the side-step drift is the measured exact value
+        const V2 tgt{b0.x + ring, b0.y - ring};
+        const V2 pdir = normalize_retail(tgt - b0);
+        const float along = dot(spot - tgt, pdir), across = dot(spot - tgt, V2{-pdir.y, pdir.x});
+        std::printf("push search: end %.4f along the last segment past the spot's line, %.4f across\n", static_cast<double>(along),
+                    static_cast<double>(across));
+        CHECK(along >= -5.0f && along <= 0.5f * 2.34f + 1e-4f);
+        CHECK(std::fabs(spot.x - 643.97f) < 5e-3f && std::fabs(spot.y - 358.45f) < 5e-3f);
         CHECK(order_kept && s.view(1).arrived && distance(s.view(1).pos, cell_center(55, 20)) < 1.0f && s.stats().dynamic_repaths == 0);
         // No return move (MinimumPushReturnDistance / RepushDistance have no reader): the idle unit stays at the spot.
         for (uint32_t n = 0; n < 300; ++n) s.tick(++f, rng);
@@ -3363,6 +3464,13 @@ static void test_real_data() {
     uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0, land_stopped = 0;
     uint32_t space_units = 0, space_arrived = 0, space_hits = 0, space_obstacles = 0, plan_fail = 0, plan_invalid = 0, plans = 0;
     uint32_t group_units = 0, group_arrived = 0, space_fallbacks = 0;
+    struct NotArrived {
+        std::string map;
+        ObjectId id = -1;
+        std::string kind = "-";
+    };
+    std::vector<NotArrived> not_arrived;  // bkm2 t02 (b0041)
+    uint32_t all_stops = 0, stopped_units = 0;  // terrain stops observed per unit (TerrainStopLog), every map
     for (const std::string& path : maps) {
         std::vector<uint8_t> bytes;
         terrain::MapData map;
@@ -3423,14 +3531,28 @@ static void test_real_data() {
             }
             bool ground = true;
             SimRng tick_rng(1);
-            run_land(sys, 0, 12000, tick_rng, serial_for, ground);
+            TerrainStopLog tlog;
+            run_land(sys, 0, 12000, tick_rng, serial_for, ground, nullptr, nullptr, &tlog);
             if (!ground) ++off_ground;
             uint32_t arrived = 0;
             for (const auto& [id, goal] : goals) {
                 const UnitView v = sys.view(id);
                 // Arrived at the goal, or early at a blocked destination (contact + LandDestinationProximity).
-                if (v.arrived && distance(v.pos, goal) < 160.0f) ++arrived;
+                if (v.arrived && distance(v.pos, goal) < 160.0f) {
+                    ++arrived;
+                    continue;
+                }
+                // bkm2 t02 (b0041): each unit that did not arrive was stopped by its own TerrainCollision record
+                const auto it = std::find_if(tlog.stops.begin(), tlog.stops.end(), [&](const TerrainStop& t) { return t.id == id; });
+                const std::string m = path.substr(path.find_last_of('\\') + 1);
+                const std::string kind = it != tlog.stops.end() ? it->kind : std::string("-");
+                std::printf("  not arrived: %s unit %d, own terrain stop %d (frame %u, kinds %s), has_goal %d\n", m.c_str(), id,
+                            it != tlog.stops.end() ? 1 : 0, it != tlog.stops.end() ? it->frame : 0u, kind.c_str(), v.has_goal ? 1 : 0);
+                not_arrived.push_back({m, id, kind});
             }
+            for (const TerrainStop& t : tlog.stops)
+                all_stops += t.kind.find('?') == std::string::npos ? static_cast<uint32_t>(t.kind.size()) : 0u;
+            stopped_units += static_cast<uint32_t>(tlog.stops.size());
             land_units += static_cast<uint32_t>(goals.size());
             land_arrived += arrived;
             land_stopped += sys.stats().terrain_stops_failed + sys.stats().terrain_stops_nobase + sys.stats().terrain_stops_cell;
@@ -3588,10 +3710,21 @@ static void test_real_data() {
     CHECK(land_maps >= 40 && space_maps >= 20);
     CHECK(plan_fail == 0 && plan_invalid == 0 && off_ground == 0);
     // s78n t26.4 (MOVEMENT 5.4.7 item 3): a unit whose blocked step gets no TerrainCollision detour is stopped where it
-    // stands (no retry) - every unit that did not arrive was stopped so (3 of 3240: a full-speed swing at a detour corner
-    // into a wall's clearance, then no rejoin; see docs/PHASE4.md s78n t26.4)
-    CHECK(group_arrived == group_units && land_arrived + land_stopped >= land_units && land_units - land_arrived <= 3u);
-    std::printf("real maps: %u units stopped by a failed TerrainCollision detour\n", land_stopped);
+    // stands (no retry) - every unit that did not arrive was stopped so (a full-speed swing at a detour corner into a
+    // wall's clearance, then no rejoin; see docs/PHASE4.md s78n t26.4).
+    // bkm2 t02 (b0041): exact, as measured (dev 7f063b20, MSVC and clang): 3 of 3240 do not arrive - EM01_TRAIL_OF_A_JEDI unit
+    // 18, EM08_SITH_TOMBS unit 15, _MP_LAND_NABOO unit 13 - and each was stopped by its own TerrainCollision record whose
+    // kind-3 Path Around failed (kind 'f'); no other unit on any map was stopped by a terrain record. A port measurement:
+    // why these three swing into the clearance (and whether retail does) is not settled (b0041's replay / RE part is open).
+    std::printf("real maps: %u units stopped by a failed TerrainCollision detour (%u stop(s) of %u unit(s) observed per unit)\n",
+                land_stopped, all_stops, stopped_units);
+    CHECK(group_arrived == group_units && land_units - land_arrived == 3u && land_stopped == 3u && all_stops == 3u && stopped_units == 3u);
+    CHECK(not_arrived.size() == 3);
+    if (not_arrived.size() == 3) {
+        CHECK(not_arrived[0].map == "EM01_TRAIL_OF_A_JEDI.TED" && not_arrived[0].id == 18 && not_arrived[0].kind == "f");
+        CHECK(not_arrived[1].map == "EM08_SITH_TOMBS.TED" && not_arrived[1].id == 15 && not_arrived[1].kind == "f");
+        CHECK(not_arrived[2].map == "_MP_LAND_NABOO.TED" && not_arrived[2].id == 13 && not_arrived[2].kind == "f");
+    }
     CHECK(space_arrived == space_units && space_hits == 0);
 }
 #endif
