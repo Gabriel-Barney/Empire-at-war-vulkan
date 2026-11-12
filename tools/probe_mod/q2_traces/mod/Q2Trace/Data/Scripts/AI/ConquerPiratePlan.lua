@@ -276,6 +276,15 @@ function Q2P_Target()
 	return Q2P_Str(function() return Target.Get_Type().Get_Name() end)
 end
 
+function Q2P_TName()
+	return Q2P_Str(function() return Target.Get_Name() end)
+end
+
+function Q2P_Extra()
+	return ""
+end
+
+
 function Q2P_Record(kind, tf, extra)
 	local n = "?"
 	if tf ~= "?" then
@@ -292,7 +301,7 @@ function Q2P_Record(kind, tf, extra)
 	end
 	Q2L_Say(kind, "t=" .. Q2P_Str(GetCurrentTime) .. " frame=" .. Q2P_Str(function() return GetCurrentTime.Frame() end) ..
 		" plan=" .. Q2P_PLAN .. " player=" .. Q2P_Str(function() return PlayerObject.Get_Faction_Name() end) ..
-		" target=" .. Q2P_Target() .. " tf=" .. tf .. " n=" .. n .. (extra or "") ..
+		" target=" .. Q2P_Target() .. Q2P_Extra() .. " tf=" .. tf .. " n=" .. n .. (extra or "") ..
 		" spend=" .. Q2P_Str(function() return Budget.Get_Spendable_Resources() end) ..
 		" unalloc=" .. Q2P_Str(function() return Budget.Get_Unallocated_Resources() end) ..
 		" cr=" .. Q2P_Str(function() return PlayerObject.Get_Credits() end) .. tail)
@@ -328,7 +337,7 @@ function Q2P_Begin(tf)
 			Q2P_Set("tid " .. tostring(id), tf)
 		end
 	end
-	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_Str(function() return Target.Get_Name() end))
+	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_TName())
 end
 
 function Q2P_Done(tf)

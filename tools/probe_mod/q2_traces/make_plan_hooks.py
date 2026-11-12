@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """make_plan_hooks.py - writes the Q2 kit's AI plan hooks (mod\\Q2Trace\\Data\\Scripts\\AI\\*.lua).
 
-  python -I make_plan_hooks.py            (re)write the seven files
+  python -I make_plan_hooks.py            (re)write the plan files (galactic plans in AI, land plans in AI/LandMode)
   python -I make_plan_hooks.py --check    compare only; exit 1 when a file differs, 2 when the zip is missing
 
 Each file is the shipped script from extracted\\foc_data_text.zip (Data\\SCRIPTS\\AI\\<NAME>.LUA, CRLF -> LF, otherwise
@@ -40,7 +40,16 @@ PLANS = [
     ('UpgradeStarbasePlan', 'Upgrade_Starbase', ['BaseForce']),
     ('AI_Plan_Underworld_BuildUnderworldVehicleFactory', 'Build_Underworld_Vehicle_Factory', ['BaseForce']),
     ('AI_Plan_Underworld_DeploySaboteur', 'Deploy_Saboteur', ['MainForce']),
+    # skai t14 (land skirmish, docs/re/SKAI_T06_LAND_RUNS.md 5): the land attack plans, to see which of them retail runs
+    # against the idle human's base and what they attack. Land records name AITarget by tostring (its wrapper class is
+    # not known for every plan) and add tgt= (AITarget.Get_Game_Object: type#id) and, in BurnUnitsLand, near= (its
+    # Find_Nearest result nearest_enemy: type#id, or dead once TestValid fails).
+    ('LandMode/BurnUnitsLand', 'Burn_Units_Land', ['MainForce']),
+    ('LandMode/DestroyStructure', 'Destroy_Structure', ['MainForce', 'GuardForce']),
+    ('LandMode/DestroyTurbolaser', 'Destroy_Turbolaser', ['MainForce', 'GuardForce']),
+    ('LandMode/DestroyLandUnit', 'Destroy_Land_Unit', ['MainForce', 'GuardForce']),
 ]
+LAND_PREFIX = 'LandMode/'
 
 BLOCK = r'''-- Q2 reference traces (tools/probe_mod/q2_traces): AI plan probe (q2f t09, rewritten in q2f t08 2026-11-08, extended
 -- 2026-11-08 with target, stage, force count, Conquer_Opponent and Crush), appended by make_plan_hooks.py to an unchanged
@@ -192,12 +201,7 @@ function Q2P_CurTF()
 	return Q2P_Get("tid " .. tostring(id), "?")
 end
 
-function Q2P_Target()
-	if Target == nil then
-		return "none"
-	end
-	return Q2P_Str(function() return Target.Get_Type().Get_Name() end)
-end
+@TARGET_BODY@
 
 function Q2P_Record(kind, tf, extra)
 	local n = "?"
@@ -215,7 +219,7 @@ function Q2P_Record(kind, tf, extra)
 	end
 	Q2L_Say(kind, "t=" .. Q2P_Str(GetCurrentTime) .. " frame=" .. Q2P_Str(function() return GetCurrentTime.Frame() end) ..
 		" plan=" .. Q2P_PLAN .. " player=" .. Q2P_Str(function() return PlayerObject.Get_Faction_Name() end) ..
-		" target=" .. Q2P_Target() .. " tf=" .. tf .. " n=" .. n .. (extra or "") ..
+		" target=" .. Q2P_Target() .. Q2P_Extra() .. " tf=" .. tf .. " n=" .. n .. (extra or "") ..
 		" spend=" .. Q2P_Str(function() return Budget.Get_Spendable_Resources() end) ..
 		" unalloc=" .. Q2P_Str(function() return Budget.Get_Unallocated_Resources() end) ..
 		" cr=" .. Q2P_Str(function() return PlayerObject.Get_Credits() end) .. tail)
@@ -250,7 +254,7 @@ function Q2P_Begin(tf)
 			Q2P_Set("tid " .. tostring(id), tf)
 		end
 	end
-	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_Str(function() return Target.Get_Name() end))
+	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_TName())
 end
 
 function Q2P_Done(tf)
@@ -363,6 +367,71 @@ if Q2P_Exit == nil and ScriptExit ~= nil then
 end
 @FAILS@'''
 
+TARGET_GALACTIC = r'''function Q2P_Target()
+	if Target == nil then
+		return "none"
+	end
+	return Q2P_Str(function() return Target.Get_Type().Get_Name() end)
+end
+
+function Q2P_TName()
+	return Q2P_Str(function() return Target.Get_Name() end)
+end
+
+function Q2P_Extra()
+	return ""
+end
+'''
+
+# Land plans: AITarget by tostring only (safe on every wrapper); the game object behind it by type#id; BurnUnitsLand's
+# global nearest_enemy behind TestValid (PGBase), so no method is called on a dead object.
+TARGET_LAND = r'''function Q2P_Clean(s)
+	return string.gsub(string.sub(tostring(s), 1, 60), " ", "_")
+end
+
+function Q2P_Target()
+	if AITarget == nil then
+		return "none"
+	end
+	return Q2P_Str(function() return Q2P_Clean(tostring(AITarget)) end)
+end
+
+function Q2P_TName()
+	if Target == nil then
+		return "none"
+	end
+	return Q2P_Str(function() return Q2P_Clean(tostring(Target)) end)
+end
+
+function Q2P_ObjId(o)
+	return Q2P_Str(function() return o.Get_Type().Get_Name() end) .. "#" .. Q2P_Str(function() return o.Get_Object_ID() end)
+end
+
+function Q2P_Extra()
+	local s = ""
+	if AITarget ~= nil then
+		local ok, o = pcall(function() return AITarget.Get_Game_Object() end)
+		if ok and o ~= nil then
+			local okv, valid = pcall(TestValid, o)
+			if okv and valid then
+				s = s .. " tgt=" .. Q2P_ObjId(o)
+			else
+				s = s .. " tgt=dead"
+			end
+		end
+	end
+	if nearest_enemy ~= nil then
+		local okv, valid = pcall(TestValid, nearest_enemy)
+		if okv and valid then
+			s = s .. " near=" .. Q2P_ObjId(nearest_enemy)
+		else
+			s = s .. " near=dead"
+		end
+	end
+	return s
+end
+'''
+
 THREAD = r'''Q2P_Thread_@TF@ = @TF@_Thread
 function @TF@_Thread(...)
 	Q2P_Try("PSTART", Q2P_Begin, "@TF@")
@@ -406,7 +475,8 @@ def block(name, plan, tfs, text):
             ('@THREADS@', each(THREAD)),
             ('@FAILS@', ''.join(FAIL.replace('@TF@', tf) for tf in tfs
                                 if re.search(r'(?m)^function %s_Production_Failed\(' % tf, text))),
-            ('@UPPER@', name.upper()), ('@PLAN@', plan), ('@TFS@', ','.join(tfs)),
+            ('@TARGET_BODY@', TARGET_LAND if name.startswith(LAND_PREFIX) else TARGET_GALACTIC),
+            ('@UPPER@', name.upper().replace('/', chr(92))), ('@PLAN@', plan), ('@TFS@', ','.join(tfs)),
             ('@ONE@', tfs[0] if len(tfs) == 1 else '')):
         out = out.replace(key, val)
     for tf in tfs:
@@ -445,6 +515,7 @@ def main():
         if a.check:
             bad.append(os.path.basename(path))
         else:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, 'wb') as f:
                 f.write(data)
             print('wrote %s' % os.path.relpath(path, REPO))

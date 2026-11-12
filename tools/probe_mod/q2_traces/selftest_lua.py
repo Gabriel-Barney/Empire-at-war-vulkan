@@ -384,6 +384,129 @@ PLANS2 = [('ConquerOpponentPlan.lua', 'Conquer_Opponent', ['SpaceForce', 'Ground
           ('LiftBlockadePlan.lua', 'Lift_Blockade', ['MainForce'], True,
            {'LOAD': 1, 'PSTART': 2, 'PSTAGE': 2, 'PBLOCK': 2, 'PEXIT': 3, 'PFAIL': 1},
            'RESULT exits=3 produced=2 landsecured=nil category=Lift_Blockade flushed=', 'SynchronizedAssemble', 'PEXIT')]
+# skai t14: the land attack plans (LandMode\*.lua). PLAN2's coroutine driver with land stubs: AITarget is a location
+# whose Get_Game_Object is the target structure; BurnUnitsLand's Find_Nearest gives a structure that dies after two
+# Attack_Move blocks (TestValid false), so its while loop ends; DestroyStructure's GuardForce escorts until MainForce's
+# ScriptExit ends the plan. Records must carry tgt= / near= as type#id, and near=dead once the structure is gone.
+PLAN3 = r'''
+Q2S.tid = -1
+Q2S.svc = 0
+Q2S.exits = 0
+Q2S.exitflag = false
+Q2S.attacks = 0
+function GetThreadID() return Q2S.tid end
+function _ScriptExit() Q2S.exitflag = true end
+function ScriptExit()
+	_ScriptExit()
+	Q2S.exits = Q2S.exits + 1
+	if GetThreadID() >= 0 then coroutine.yield(false) end
+end
+function PumpEvents() coroutine.yield(true) end
+function BlockOnCommand(block, max_duration, alternate_break_func)
+	PumpEvents()
+	if not block then return nil end
+	repeat PumpEvents() until block.IsFinished() == true
+	return block.Result()
+end
+function Sleep(time)
+	local start = GetCurrentTime()
+	while GetCurrentTime() - start < time do PumpEvents() end
+end
+function TestValid(wrapper)
+	if wrapper == nil then return false end
+	if wrapper.Is_Valid == nil then return false end
+	return wrapper.Is_Valid()
+end
+function EvaluatePerception(eq, player, target) return 0 end
+function Purge_Goals() end
+function Find_All_Objects_Of_Type() return {} end
+function Set_Land_AI_Targeting_Priorities(tf) end
+function QuickReinforce() end
+function Escort(a, b) PumpEvents() end
+function Q2S_Block(services, result)
+	local at = Q2S.svc + services
+	return { IsFinished = function() return Q2S.svc >= at end, Result = function() return result end }
+end
+function Q2S_Obj(tname, id, alive_fn)
+	return { Get_Type = function() return { Get_Name = function() return tname end } end,
+		Get_Object_ID = function() return id end, Is_Valid = alive_fn }
+end
+Q2S_CC = Q2S_Obj("IMPERIAL_COMMAND_CENTER", 1501, function() return Q2S.attacks < 2 end)
+function Find_Nearest(tf, a, b, c) return Q2S_CC end
+function Q2S_Unit(utype)
+	return { Get_Type = function() return { Get_Name = function() return utype end } end }
+end
+function Q2S_MakeForce(utype)
+	local f = {}
+	local units = {}
+	f.Set_As_Goal_System_Removable = function() end
+	f.Set_Plan_Result = function(r) Q2S.result = r end
+	f.Produce_Force = function()
+		table.insert(units, Q2S_Unit(utype))
+		return Q2S_Block(2, true)
+	end
+	f.Collect_All_Free_Units = function()
+		if table.getn(units) == 0 then table.insert(units, Q2S_Unit(utype)) end
+	end
+	f.Activate_Ability = function(name, on) end
+	f.Attack_Move = function() Q2S.attacks = Q2S.attacks + 1 return Q2S_Block(2, true) end
+	f.Get_Self_Threat_Max = function() return 10 end
+	f.Guard_Target = function() end
+	f.Set_Targeting_Priorities = function() end
+	f.Release_Forces = function() end
+	f.Get_Unit_Table = function() return units end
+	f.Get_Force_Count = function() return table.getn(units) end
+	return f
+end
+function Q2S_Attach()
+	for _, tf in ipairs(Q2S_TFS) do getfenv(0)[tf] = Q2S_MakeForce(Q2S_UNIT[tf]) end
+	PlayerObject = Q2S_Players.Rebel
+	Target = nil
+	if Q2S_HAS_TARGET then
+		local bar = Q2S_Obj("E_GROUND_BARRACKS", 1502, function() return true end)
+		AITarget = setmetatable({ Get_Game_Object = function() return bar end },
+			{ __tostring = function() return "E Ground Barracks" end })
+	else
+		AITarget = nil
+	end
+end
+function Q2S_RunPlan()
+	Q2S.exitflag = false
+	local th = {}
+	for i, tf in ipairs(Q2S_TFS) do
+		th[i] = { id = i - 1, co = coroutine.create(getfenv(0)[tf .. "_Thread"]), alive = true }
+	end
+	for pass = 1, 2000 do
+		local live = false
+		for _, t in ipairs(th) do
+			if t.alive and not Q2S.exitflag then
+				Q2S.tid = t.id
+				local ok, v = coroutine.resume(t.co)
+				Q2S.tid = -1
+				if not ok then error("thread " .. t.id .. ": " .. tostring(v)) end
+				if v ~= true or coroutine.status(t.co) == "dead" then t.alive = false end
+			end
+			live = live or t.alive
+		end
+		if Q2S.exitflag or not live then return pass end
+		Q2S.svc = Q2S.svc + 1
+		Q2S.t = Q2S.t + 0.1
+		Q2S.frame = Q2S.frame + 3
+	end
+	error("plan did not end")
+end
+Q2S_Attach()
+dofile(Q2S_SCRIPT)
+Definitions()
+Q2S_RunPlan()
+print("RESULT exits=" .. Q2S.exits .. " attacks=" .. Q2S.attacks .. " category=" .. tostring(Category))
+Q2S_Dump()
+'''
+# (file, plan label, task forces, AITarget set, expected kind counts, RESULT line)
+PLANS3 = [('LandMode/BurnUnitsLand.lua', 'Burn_Units_Land', ['MainForce'], False,
+           {'LOAD': 1, 'PSTART': 1, 'PBLOCK': 2, 'PDONE': 1}, 'RESULT exits=0 attacks=2 category=Burn_Units_Land'),
+          ('LandMode/DestroyStructure.lua', 'Destroy_Structure', ['MainForce', 'GuardForce'], True,
+           {'LOAD': 1, 'PSTART': 2, 'PBLOCK': 3, 'PEXIT': 1}, 'RESULT exits=1 attacks=1 category=Destroy_Structure')]
 UNITS = {'SpaceForce': 'CORELLIAN_GUNBOAT', 'GroundForce': 'REBEL_INFANTRY_SQUAD', 'MainForce': 'REBEL_INFANTRY_SQUAD'}
 
 
@@ -604,6 +727,35 @@ def main():
         check(ex and ex[-1].get('tf') == '?' and ex[-1].get('units') == '?' and
               ex[-1].get('count') == ','.join('%s:1' % t for t in tfs) if len(tfs) > 1 else ex[-1].get('tf') == tfs[0],
               '%s: PEXIT outside the threads %s' % (plan, [r[4] for r in recs if r[3] == 'PEXIT'][-1:]))
+        check(all(len(r) <= 400 for r in raw), '%s: every record fits one scan hit' % plan)
+        if found is not None:
+            check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
+
+    for fname, plan, tfs, has_target, want, result in PLANS3:
+        body = ('Q2S_TFS = { %s }\nQ2S_HAS_TARGET = %s\nQ2S_UNIT = { %s }\n' % (
+            ', '.join(lua_str(t) for t in tfs), 'true' if has_target else 'false',
+            ', '.join('%s = %s' % (t, lua_str('REBEL_INFANTRY_SQUAD')) for t in tfs)) + PLAN3)
+        lines, found = run_harness(lua, 'plan_' + plan, os.path.join(MOD, 'AI', *fname.split('/')), body)
+        recs, raw = records_of(lines)
+        kinds = {}
+        for r in recs:
+            kinds[r[3]] = kinds.get(r[3], 0) + 1
+        check(len(recs) == len(raw) and recs and all(r[0] == 'P' for r in recs),
+              '%s: records parse, src P (%d)' % (plan, len(recs)))
+        check(kinds == want, '%s: one land plan run %s' % (plan, kinds))
+        check(any(ln.startswith(result) for ln in lines),
+              '%s: shipped threads ran to their ends (%s)' % (plan, [ln for ln in lines if ln.startswith('RESULT')]))
+        d = [(r[3], q2lua_reader.kv(r[4])) for r in recs]
+        blocks = [x for k, x in d if k == 'PBLOCK']
+        if has_target:
+            check(all(x.get('target') == 'E_Ground_Barracks' and x.get('tgt') == 'E_GROUND_BARRACKS#1502'
+                      for k, x in d if k != 'LOAD'), '%s: target / tgt on every record %s' % (plan, recs[1][4]))
+            check(any(x.get('tf') == 'MainForce' and x.get('count') == '1' for x in blocks),
+                  '%s: MainForce PBLOCK after Produce_Force %s' % (plan, [r[4] for r in recs if r[3] == 'PBLOCK']))
+        else:
+            check([x.get('near') for x in blocks] == ['IMPERIAL_COMMAND_CENTER#1501', 'dead'] and
+                  all(x.get('target') == 'none' and 'tgt' not in x for x in blocks),
+                  '%s: near= the Find_Nearest structure, then dead %s' % (plan, [r[4] for r in recs if r[3] == 'PBLOCK']))
         check(all(len(r) <= 400 for r in raw), '%s: every record fits one scan hit' % plan)
         if found is not None:
             check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
