@@ -9,7 +9,7 @@ setlocal
 set T=%~1
 if "%T%"=="" set T=03:00
 set "GCD="
-for /f "delims=" %%G in ('git -C "%~dp0.." rev-parse --path-format=absolute --git-common-dir') do set "GCD=%%G"
+for /f "delims=" %%G in ('git -C "%~dp0.." rev-parse --path-format^=absolute --git-common-dir') do set "GCD=%%G"
 if not defined GCD (echo install_gate_task: not inside a checkout of the repository.& exit /b 2)
 for %%I in ("%GCD%\..") do set "MAIN=%%~fI"
 set "DEST=%LOCALAPPDATA%\AlamoGate"

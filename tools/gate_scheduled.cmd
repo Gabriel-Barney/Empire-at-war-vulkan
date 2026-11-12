@@ -13,7 +13,7 @@ setlocal EnableDelayedExpansion
 set "ROOT=%~1"
 if "%ROOT%"=="" set "ROOT=%~dp0.."
 set "GCD="
-for /f "delims=" %%G in ('git -C "%ROOT%" rev-parse --path-format=absolute --git-common-dir 2^>nul') do set "GCD=%%G"
+for /f "delims=" %%G in ('git -C "%ROOT%" rev-parse --path-format^=absolute --git-common-dir 2^>nul') do set "GCD=%%G"
 if not defined GCD (
   echo gate_scheduled: %ROOT% is not a checkout of the repository.
   exit /b 4
