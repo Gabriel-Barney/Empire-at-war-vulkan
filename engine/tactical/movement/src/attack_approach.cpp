@@ -528,7 +528,7 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         bool all = true;
         for (const uint32_t m : f.members) {
             const Unit& x = units_[idx[m]];
-            if (!fire_test_(x.d.id, x.m.pos, target, false)) {
+            if (!fire_test_(x.d.id, x.m.pos, target, false, order.attack.c, order.attack.cz)) {
                 all = false;
                 break;
             }
@@ -624,7 +624,7 @@ void MovementSystem::attack_plan(const MoveOrder& order, const std::vector<uint3
         const float keep = fire_trim(path, tm, guard, guard_range, [&](const TrimMember& m, V2 p) {
             // guard (item 7): within the guard range of T (2-D) and the line of fire clear; else the fire test
             if (guard && distance(p, c) > guard_range) return false;
-            return fire_test_(units_[idx[m.member]].d.id, p, target, guard);
+            return fire_test_(units_[idx[m.member]].d.id, p, target, guard, g, order.attack.cz);  // bkt1 t06: to G
         });
         // the member goals are the slot points the trim tested: on the uncut path at arc length keep (at keep 0 the cut
         // path is its first node alone and has no direction; the uncut one extends backwards along its first segment)

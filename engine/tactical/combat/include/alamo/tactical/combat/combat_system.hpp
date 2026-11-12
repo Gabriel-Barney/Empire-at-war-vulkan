@@ -1154,6 +1154,7 @@ public:
     // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids. s78n t02:
     // slot 46 in full (TACTICAL_COMBAT §5.4.4 item 1, min_range_hit).
     bool inside_min_range(ObjectId attacker, ObjectId target) const;
+    bool inside_min_range_of(ObjectId attacker, ObjectId target, float r) const;  // bkt1 t01: slot 46 with min range r
     // s78n t20 (FIGHTER_FLYING §4.11 E "c" per member, 0x40edd0; the same three tests as the fire trim 0x410e90,
     // MOVEMENT §4.3.2 item 7): can `attacker` hit `target` from where it stands / from `from`? Outside max range (slot
     // 43), inside min range (slot 46), then on land a blocked line of fire (0x3b5ad0: the two points on opposite sides
@@ -1162,10 +1163,12 @@ public:
     // the same position with the same weapon - a land team member answers for its team (the container's position, the
     // head's weapon, else the first member's with one; 0x40edd0 tests a team container through its first member).
     CanHit can_hit(ObjectId attacker, ObjectId target) const;
-    CanHit can_hit_from(ObjectId attacker, Vec3 from, ObjectId target) const;
+    // bkt1 t06 (b0079, MOVEMENT §4.3.2 item 7): `to` (when given) is the line of fire's end point before T's
+    // Ranged_Target_Z_Adjust (the fire trim's goal G); else T's position. The range tests always measure to T.
+    CanHit can_hit_from(ObjectId attacker, Vec3 from, ObjectId target, const Vec3* to = nullptr) const;
     // s78n t25.4 (MOVEMENT §4.3.2 item 7, a guard block's trim): only the land line-of-fire term of can_hit_from (0x3b5ad0,
     // from `from` with the same weapon source): LineBlocked or Yes; NoTarget for an unknown / dead attacker or target.
-    CanHit line_of_fire_from(ObjectId attacker, Vec3 from, ObjectId target) const;  // (no TARGETING: NoTarget)
+    CanHit line_of_fire_from(ObjectId attacker, Vec3 from, ObjectId target, const Vec3* to = nullptr) const;  // (no TARGETING: NoTarget)
     // The position can_hit measures from (the unit's, or its land team container's).
     Vec3 can_hit_origin(ObjectId attacker) const;
     void set_shield_sides_query(ShieldSidesFn fn) { shield_sides_ = std::move(fn); }
@@ -1877,7 +1880,7 @@ private:
     bool in_attack_range(const Unit& u, Vec3 from, const Unit& t) const;
     // s78n t20: the same test with its reason (Yes / OutOfMaxRange / InsideMinRange), max range first.
     CanHit range_test(const Unit& u, Vec3 from, const Unit& t) const;
-    CanHit fire_line(const Unit& src, Vec3 from, const Unit& t) const;  // s78n t25.4: can_hit_from's line-of-fire term
+    CanHit fire_line(const Unit& src, Vec3 from, const Unit& t, const Vec3* to = nullptr) const;  // s78n t25.4: can_hit_from's line-of-fire term
     // s78n t20: the unit whose weapon a land team's range test uses (slot 42: the head's, else the first member's that
     // has one, team list order; the head itself when none has).
     const Unit& team_weapon_source(const Unit& head) const;

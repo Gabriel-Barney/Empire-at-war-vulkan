@@ -4364,6 +4364,8 @@ struct LandGuardRun {
     bool moved = false, replanned = false, same_slot = false, near_goal2 = false, arrived2 = false;
     float rho = 0.0f, theta = 0.0f, goal_d = 0.0f, goal_d2 = 0.0f, end_d = 0.0f;
     uint32_t replan_frames = 0;
+    bool own_attack_move = false, block_kept = false;  // bkt1 t05
+    size_t blocks0 = 0;
 };
 
 LandGuardRun run_land_guard(const Data& d) {
@@ -4506,10 +4508,54 @@ LandGuardRun run_land_guard(const Data& d) {
             if (!v.has_goal && v.speed == 0.0f) {
                 out.arrived2 = true;
                 out.end_d = gd(v.pos);
-                stage = 9;
+                stage = 5;
             } else if (b->frame() > stage_frame + 1500) {
                 stage = 9;
             }
+            continue;
+        }
+        if (stage == 5) {
+            // bkt1 t05 (b0075, BKT1_ATTACK_RE §3 [H]): the guard squad's own Attack_Move (arg 0) on the friendly squad, moved
+            // 600 away first: the land attack move on the object - an attack block (atk_target = the squad), no lock
+            const objects::ObjectHandle gh = st.find(sq[1]);
+            const Vec3 gp0 = st.position(gh);
+            CHECK(b->teleport(*tm, sq[1], Vec3{gp0.x + dir.x * 600.0f, gp0.y + dir.y * 600.0f, gp0.z}, st.facing(gh)));
+            const Vec3 gp = st.position(gh);
+            std::vector<uint8_t> pay;
+            const auto put = [&pay](uint32_t v) {
+                for (int i = 0; i < 4; ++i) pay.push_back(static_cast<uint8_t>(v >> (8 * i)));
+            };
+            objects::ObjectId tgt = objects::kNoObjectId;  // a trooper of the friendly squad (a combat unit)
+            for (const auto& [mid, slot] : ms.land_team_slots(sq[1])) {
+                (void)slot;
+                if (tgt == objects::kNoObjectId) tgt = mid;
+            }
+            put(static_cast<uint32_t>(sq[0]));
+            put(static_cast<uint32_t>(tgt));
+            put(std::bit_cast<uint32_t>(gp.x));
+            put(std::bit_cast<uint32_t>(gp.y));
+            put(std::bit_cast<uint32_t>(gp.z));
+            put(0u);
+            const auto sub = static_cast<uint16_t>(lua::kLuaOrderSubtype + static_cast<uint16_t>(lua::LuaOrder::AttackMove));
+            const bool ok = bai->execute(0, commands::ev::port_extension(sub, pay)) == commands::RejectReason::None;
+            const mv::UnitView v = ms.view(sq[0]);
+            bool no_lock = true;
+            for (const auto& [mid, slot] : ms.land_team_slots(sq[0])) {
+                (void)slot;
+                no_lock = no_lock && cs.attack_goal(mid) == tc::kNoObject;
+            }
+            std::printf("  own Attack_Move: ok %d goal %d atk_target %d (trooper %d) no lock %d goal %.1f from it\n", ok ? 1 : 0,
+                        v.has_goal ? 1 : 0, static_cast<int>(v.atk_target), static_cast<int>(tgt), no_lock ? 1 : 0,
+                        static_cast<double>(gd(v.goal)));
+            out.own_attack_move = ok && v.has_goal && v.atk_target == tgt && no_lock && gd(v.goal) < 300.0f;
+            out.blocks0 = b->attack_blocks();
+            stage = 6;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 6 && b->frame() >= stage_frame + 45) {  // through the block's first 30-frame check: kept (no lock)
+            out.block_kept = out.blocks0 > 0 && b->attack_blocks() == out.blocks0;
+            stage = 9;
         }
     }
     return out;
@@ -4526,6 +4572,8 @@ void test_land_guard() {
                 r.same_slot ? 1 : 0, static_cast<double>(r.goal_d2), r.arrived2 ? 1 : 0, static_cast<double>(r.end_d));
     CHECK(r.ordered && r.slotted && r.near_goal && r.arrived);
     CHECK(r.moved && r.replanned && r.replan_frames <= 31 && r.same_slot && r.near_goal2 && r.arrived2);
+    std::printf("  own Attack_Move on the friendly squad: attack block, no lock %d\n", r.own_attack_move ? 1 : 0);
+    CHECK(r.own_attack_move && r.block_kept);  // bkt1 t05
 }
 
 // s78n t26 review round 2 (LUA_API "Move_To / Attack_Move / Guard_Target - Move_Internal 0x57da90" [H]: for Move_To,
@@ -4677,6 +4725,10 @@ void test_land_move_to_object() {
 // recruits both). The third squad's troopers get +140 % fire range (600 instead of 250), so it can hit long before the
 // others. While it can hit and the seed is still well out of its own range (> 280) with every squad walking, no 30-frame
 // check may land-stop (the formation walks on together); the window is longer than one check interval.
+// bkm2 t08 (b0048): the target is revealed for player 0 (else the hidden term stops nothing at all), and a frame counts
+// when every squad was walking at its start (a land stop in the frame ends "walking" in that same frame, so the old
+// end-of-frame test could not see the stop it is about). Run on the pre-fix per-mover check (the grouping by atk_form
+// disabled) it fails: the long-range squad's own block land-stops it (1 stop, the window cut short).
 struct LandAttackFormationStopRun {
     bool ordered = false, one_form = false, ended = false;
     uint32_t window = 0, stops_in_window = 0;
@@ -4693,6 +4745,7 @@ LandAttackFormationStopRun run_land_attack_formation_stop(const Data& d) {
     if (!s.gs) return out;
     int stage = 0;
     uint32_t stage_frame = 0, stops0 = 0;
+    bool was_walking = false;  // every squad walking at the start of the frame
     objects::ObjectId sq[3] = {objects::kNoObjectId, objects::kNoObjectId, objects::kNoObjectId};
     std::vector<objects::ObjectId> mem[3];
     objects::ObjectId target = objects::kNoObjectId;
@@ -4707,6 +4760,10 @@ LandAttackFormationStopRun run_land_attack_formation_stop(const Data& d) {
         auto& cs = const_cast<tc::CombatSystem&>(b->combat());
         const mv::MovementSystem& ms = b->movement();
         if (stage == 0) {
+            // bkm2 t08 (b0048): the test data has no reveal source, so without this the target is hidden for player 0 and
+            // the hidden term (FIGHTER_FLYING §4.11 C 1 / C 4, s78n t26 review round 3) suppresses every land stop - the
+            // check then passed on the per-mover stop too. The scenario is about a visible target.
+            if (b->fog()) b->fog()->reveal_all(0);
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
             for (size_t i = 0; i < cs.unit_count(); ++i) {
                 const auto id = cs.unit_id_at(i);
@@ -4763,11 +4820,12 @@ LandAttackFormationStopRun run_land_attack_formation_stop(const Data& d) {
             const float d0 = std::sqrt((v0.pos.x - tp.x) * (v0.pos.x - tp.x) + (v0.pos.y - tp.y) * (v0.pos.y - tp.y));
             const bool far_hit = cs.can_hit(mem[2].front(), target) == tc::CanHit::Yes;
             const bool walking = ms.view(sq[0]).has_goal && ms.view(sq[1]).has_goal && ms.view(sq[2]).has_goal;
-            if (far_hit && walking && d0 > 280.0f) {
+            if (far_hit && was_walking && d0 > 280.0f) {
                 ++out.window;
                 out.stops_in_window += stops - stops0;
             }
             stops0 = stops;
+            was_walking = walking;
             if (!walking && d0 <= 280.0f) {
                 out.ended = true;
                 stage = 9;
