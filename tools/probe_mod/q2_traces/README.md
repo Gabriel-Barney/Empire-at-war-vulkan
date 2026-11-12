@@ -78,7 +78,7 @@ Nor can it write a file: in retail 1.121 `_CustomScriptMessage`, `_ScriptMessage
   (`Target.Get_Name()`). New record `PSTAGE` when `AssembleForce` / `SynchronizedAssemble` is called, before it
   produces: `via=`, `strongest=` (its second argument), `stage=` (planet of `<tf>.Get_Stage()`; `nil` = no stage, the
   plan then exits) and `stagestr=` (`tostring` of it). `PFAIL` names the event's first argument `tf` (the task force,
-  which has no `Get_Name`). The seven files are written by `make_plan_hooks.py` (shipped script + generated block);
+  which has no `Get_Name`). The plan files are written by `make_plan_hooks.py` (shipped script + generated block);
   edit the generator, not the files. `lua_summary.json` → `plans` sums them per `player plan tf`: starts, stagings,
   blocks, first frame, targets, stages and the unit types the task force held.
   **Also 2026-11-08:** `ContrastToReconnect.lua` (Conquer_To_Reconnect, `SpaceForce` / `GroundForce`, both staged by
@@ -212,6 +212,19 @@ planet before the shipped `FindTarget`: the planet, its owner and `EvaluatePerce
 Report section 4 lists them per plan run and names the enemy planets that score > 0 but are never picked (retail picked
 none of Corellia, Kashyyyk, Shola in 12 runs; the port picks them about a third of the time). One run of 12 cycles is
 enough to tell a perception 0 from a filter in front of the pick.
+
+### Underworld plan hooks (a2m r3, 2026-11-12)
+
+`make_plan_hooks.py` also hooks three Underworld plans, with the same records (`PSTART` with `tname=`, `spend=` /
+`unalloc=` of the plan's budget category and `cr=`, then `PSTAGE` / `PBLOCK` / `PDONE` / `PEXIT` / `PFAIL`):
+`UpgradeStarbasePlan` (Upgrade_Starbase, `BaseForce`), `AI_Plan_Underworld_BuildUnderworldVehicleFactory`
+(Build_Underworld_Vehicle_Factory, `BaseForce`) and `AI_Plan_Underworld_DeploySaboteur` (Deploy_Saboteur, `MainForce`).
+They answer the open parts of `docs/re/A2M_R3_RE_A.md` (§1.5 / §5): which Underworld Infrastructure plans run before
+retail's first starbase upgrade (NalHutta's Underworld_Star_Base_2 at 11059 in all three Empire-human runs), with which
+spendable Infrastructure money, and how the saboteur plans whose production ends early (queue tags 60 / 65 / 68 of run
+20261108-170824) end: `PFAIL` = Production_Failed, `PEXIT` = the script exited, no end record = the goal system released
+it. Run: step 2 above (`run_galactic.cmd`, human Empire, Medium, hands off; it ends after 10 galactic days, frame 13500).
+`lua_summary.json` → `plans` lists them per player and plan; the raw records are in `lua_records.txt`.
 
 ### Lua probe run (q2f t06): steps for Gabriel
 
@@ -375,7 +388,7 @@ It imports `analysis/q2_parity.py`, so keep that module's functions stable.
 | `reader\q2reader.cpp`, `reader\fake_game.cpp` | recorder; test target that lays out the same structures, including a real MSVC `unordered_map` |
 | `q2trace.py` | `validate` (rebuild state, recompute every digest, RNG draws per tick, fiscal cycles, credits, ownership), `to-q1`, `compare`, `selftest`, `selftest-fake`. Standard library only (project venv) |
 | `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), `Scripts\AI\` copies of seven plan scripts (original + plan probe, q2f t09; Conquer_Opponent, Crush, Conquer_To_Reconnect and Lift_Blockade added 2026-11-08), and the two canary files |
-| `make_plan_hooks.py` | writes the seven `Scripts\AI\` plan hooks from `extracted\foc_data_text.zip` (shipped script, CRLF → LF, + the generated probe block); `--check` compares only (`selftest_lua.py` runs it) |
+| `make_plan_hooks.py` | writes the ten `Scripts\AI\` plan hooks from `extracted\foc_data_text.zip` (shipped script, CRLF → LF, + the generated probe block); `--check` compares only (`selftest_lua.py` runs it) |
 | `run_lua_probe.cmd` | `run_trace.ps1 -Scenario galactic -LuaProbe` |
 | `q2lua_reader.py` | `run` (started by the run: read-only memory scan for the probe's `Q2L1` records), `summarize` (rebuild the outputs from `lua_reader.log`), `selftest` |
 | `selftest_lua.py` | runs the probe scripts under stock Lua 5.0.2 (`tools\probe_mod\out\tools\lua50.exe`, built by `common\build_lua50.cmd`) with stubbed engine calls, and checks that a memory scan of that process finds every record. Conquer_Opponent, Crush, Conquer_To_Reconnect and Lift_Blockade run as real coroutines with PGBase's yielding `BlockOnCommand` / `Sleep` / `ScriptExit` (a probe `pcall` around a yield would fail; the two-thread plans interleave) |
