@@ -461,6 +461,30 @@ unchanged (7/12 at 5853..7923, the same ticks), total FAIL 18 -> 19 (`travel.hop
 record); the remaining inputs (Underworld starbase power at Shola, production cancel with refund) are shared rules of the Underworld
 lane (A2M_R2_RE_B §3.4 items 2 and 3). No golden moved.
 
+**2026-11-12 (a2m t03, round 3): accept-time fund test 0x6139f0 and the starbase replacement 0x3f8fd0**
+(`docs/re/A2M_R3_RE_A.md` §1.1 / §1.2 [H]; marked "a2m r3" in `engine/ai/src`). (1) Slot 10's budget test is the gross
+test 0x6139f0 on the category's pool P and income rate I: horizon = min(ETA, Time_Limit) and at least the budget period
+T, pass when `max(horizon x I + P, 0) >= cost` (`AiBudget::can_fund_gross`, hook `can_fund_accept`); commit, resolve and
+maintenance keep the A / R test 0x6129c0. [port] A goal that already has a budget record is tested with the record's
+horizon and need `max(req, 0) + alloc - a`, as 0x6129c0's struct branch (the RE names only "its own horizon and request");
+a fresh candidate never has a record in the port. (2) A generic DUMMY_STAR_BASE team type is replaced on the goal's target
+planet (IgnoreTarget plans too) by the planet owner's next starbase: the current starbase's `Next_Level_Base` (new
+`TypeInfo::next_level_base`), or Rebel_Star_Base_1 / Empire_Star_Base_1 on a Rebel / Empire planet without one, nothing
+for any other owner; level gate as §1.2; no can-build test (Production Setup C keeps the veto). Without a replacement the
+generic types stay candidates (§1.3). [port] the two factions and two types are matched by name; `Max_Space_Base` absent
+-> 5 as elsewhere; `next_level_base` is not in the save session's rules fingerprint (save format, tier 3). Found on the
+way: the port's Build_Underworld_Vehicle_Factory proposals fail their PotentialPlan on the **Budget** marshaller (the
+"last veto Plan" of the dump is a hero record): Infrastructure A + btime x R < 2400 once the two Palaces (accepted at
+frame 55, as retail's at 65 / 81) hold 4000; retail starts NalHutta's vehicle factory at 5573, so its Infrastructure money
+is higher then. Why needs the retail per-cycle budget (§5; `tools/probe_mod/q2_traces` now hooks the Underworld
+Upgrade_Starbase, vehicle factory and saboteur plans). HotM Empire-human, 12 seeds, against dev 1d35e9f8: Shola captures
+3/12 -> 5/12 (5892, 5895, 5961, 6942, 7560; retail 4/4 at 7498..9898); NalHutta SB2 still starts early (1456..5524 in 10
+of 12 seeds), Shola SB2 before 9000 in 2 seeds (was 7); Underworld `credits_at_9000` mean 1275 -> 856 (PASS on spread ->
+FAIL); total FAIL 21 -> 23 (also `build.ticks[UNDERWORLD_MERC_SQUAD@FELUCIA]`, `travel.hop_ticks[Underworld:NABOO->
+TATOOINE]` fail, `build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]` and `travel.hop_ticks[Rebel:NALHUTTA->SHOLA]` drop
+out). Goldens: ai_galactic_synthetic_crc, galactic_ai_hotm(_human)_golden, galactic_late bench; baseline_seeds.json
+re-recorded.
+
 **2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
 FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
 stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final

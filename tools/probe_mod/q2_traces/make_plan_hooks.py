@@ -35,6 +35,11 @@ PLANS = [
     ('ContrastToReconnect', 'Conquer_To_Reconnect', ['SpaceForce', 'GroundForce']),
     # Category Lift_Blockade: SynchronizedAssemble, then Sleep(120) and ScriptExit
     ('LiftBlockadePlan', 'Lift_Blockade', ['MainForce']),
+    # a2m r3 (docs/re/A2M_R3_RE_A.md §5): the Underworld's Infrastructure competitors of Upgrade_Starbase (NalHutta's
+    # Underworld_Star_Base_2 at 11059 in retail) and the saboteur plan (how tags 60 / 65 / 68 end: PEXIT / PFAIL / none)
+    ('UpgradeStarbasePlan', 'Upgrade_Starbase', ['BaseForce']),
+    ('AI_Plan_Underworld_BuildUnderworldVehicleFactory', 'Build_Underworld_Vehicle_Factory', ['BaseForce']),
+    ('AI_Plan_Underworld_DeploySaboteur', 'Deploy_Saboteur', ['MainForce']),
 ]
 
 BLOCK = r'''-- Q2 reference traces (tools/probe_mod/q2_traces): AI plan probe (q2f t09, rewritten in q2f t08 2026-11-08, extended

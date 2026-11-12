@@ -256,6 +256,9 @@ public:
     PlanetIndex stage_area(int32_t player, PlanetIndex target, int level);
     // The per-target list itself (copy; empty for a non-AI player or level outside 0..5).
     std::vector<PlanetIndex> stage_list(int32_t player, PlanetIndex target, int level);
+    // a2m r3: the planet-specific starbase that replaces a generic DUMMY_STAR_BASE team type in a PotentialPlan
+    // (0x3f8fd0, A2M_R3_RE_A §1.2; keyed on the planet owner's faction), galactic::kNoIndex for none. Read-only.
+    uint32_t starbase_candidate(PlanetIndex planet) const;
     // The same queries for Lua Find_Path / hosts (lives as long as this object), but WITHOUT lazy creation: false for a
     // player whose finder is not created. Attached to this world's own LuaPlayerWorld at construction and to the story
     // world by attach_story_world (detached again on replacement and in the destructor).

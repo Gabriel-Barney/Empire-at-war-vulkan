@@ -425,7 +425,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // Not the legacy <Max_Ground_Base> tag (set only on Galaxy_Core_Art_Model, so 0 on every real planet).
     int32_t ground_slot_max(PlanetIndex p) const { return galactic_ai_ground_slot_max(sim, p); }
     int32_t ground_slots_used(PlanetIndex p) const { return galactic_ai_ground_slots_used(sim, p); }
-    uint32_t next_starbase_type(int32_t player, PlanetIndex p) const;
+    uint32_t next_starbase_type(PlanetIndex p) const;  // 0x3f8fd0 (A2M_R3_RE_A §1.2)
     bool applies(int32_t self, int32_t target, uint32_t flags) const;
     int32_t script_player(int32_t script) const;
     PlanInstance* plan_of_script(int32_t script) {
@@ -667,6 +667,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     int32_t category_of(const Goal& g) const { return w->defs.goals[g.type].category; }
     float time_limit(const Goal& g) const { return w->defs.goals[g.type].time_limit; }
     bool can_fund(const Goal& g) override;
+    bool can_fund_accept(const Goal& g) override;
     float category_credits(int32_t category) override { return ctx.budget.available(category); }
     void budget_add(Goal& g) override;
     void budget_release(Goal& g) override;

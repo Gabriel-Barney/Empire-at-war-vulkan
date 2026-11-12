@@ -48,6 +48,7 @@ struct TypeInfo {
     int32_t required_ground_base = 0;   // Required_Ground_Base_Level
     int32_t required_star_base = 0;     // Required_Star_Base_Level
     int32_t base_level = 0;             // Base_Level (starbases)
+    uint32_t next_level_base = kNoIndex;  // Next_Level_Base (starbases, type +0x8c0; kNoIndex = none / unresolved)
     int32_t advances_tech = 0;          // Build_Advances_Tech_Level (tech upgrades)
     int32_t squadron_capacity = 0;      // Squadron_Capacity
     bool hyperspace = false;            // Hyperspace

@@ -1,5 +1,5 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 36000 human Rebel
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 0: 36000 ticks (9122.1 ms), galactic frame 36000, decisions 649, orders 240 (rejected 0), conflicts 24, battles 0, planet owner changes 0, running plans 8, Lua errors 0, human p0: 12 commands, pipeline applied 255 rejected 1, planets: 0=4/12673 1=4/5203 2=0/0 3=0/0 4=0/0 5=4/13220, final CRC bf4a0c388e7b2531
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 0: 36000 ticks (8679.6 ms), galactic frame 36000, decisions 649, orders 240 (rejected 0), conflicts 24, battles 0, planet owner changes 0, running plans 8, Lua errors 0, human p0: 12 commands, pipeline applied 255 rejected 1, planets: 0=4/12673 1=4/5203 2=0/0 3=0/0 4=0/0 5=4/13220, final CRC bf4a0c388e7b2531
 # t=60s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 7 conflicts 4 crc e8416d3cae7ff238
 # t=120s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 6 crc 34be8c0406c31473
 # t=180s planets 0=4 1=4 2=0 3=0 4=0 5=4 plans 6 conflicts 6 crc f3aa54fe065c95d5

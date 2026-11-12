@@ -546,9 +546,12 @@ public:
                 // DUMMY_GROUND_BASE variant (0x3f8c40) is not modelled [port: no team names one].
                 const bool generic = p_.is_orbital_structure(t);
                 if (generic) {
-                    // Replaced by the planet-specific variant (0x3f8fd0 / 0x3f8c40 on the target) [M].
-                    t = p_.has_target() ? p_.w.next_starbase_type(p_.player, p_.tplanet()) : gal::kNoIndex;
-                    if (t == gal::kNoIndex) continue;
+                    // Replaced by the planet-specific variant 0x3f8fd0 on the goal's target planet (IgnoreTarget plans
+                    // too); every generic entry maps to the same type and dedupes through ensure_rec (A2M_R3_RE_A §1.2)
+                    // [H]. No replacement -> the generic expansion itself stays a candidate (A2M_R3_RE_A §1.3) and
+                    // Production Setup C vetoes it when 0x2804d0 refuses it (wrong faction: step 2; level: step 20).
+                    const uint32_t rep = p_.has_target() ? p_.w.next_starbase_type(p_.tplanet()) : gal::kNoIndex;
+                    if (rep != gal::kNoIndex) t = rep;
                 }
                 if (!(p_.affiliated(t) || generic || p_.free_store_holds(t))) continue;
                 PpRec& r = p_.recs[p_.ensure_rec(t)];

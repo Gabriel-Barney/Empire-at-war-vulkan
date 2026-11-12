@@ -90,6 +90,14 @@ public:
     bool can_fund(int32_t c, float cost, float eta, float time_limit) const;
     // With the goal's struct: max(max(h, T) x R + A, 0) >= max(req, 0) + alloc - a.
     bool can_fund_goal(int32_t c, uint32_t goal) const;
+    // Accept-time gross fund test 0x6139f0 (goal service slot 10 only; A2M_R3_RE_A §1.1) [H]: reads the pool P and the
+    // income rate I, not A / R. Without a struct: horizon = min(eta, tl) (tl < 0 = none), at least the period T;
+    // max(horizon x I + P, 0) >= cost.
+    bool can_fund_gross(int32_t c, float cost, float eta, float time_limit) const;
+    // With the goal's struct (0x612bd0) the record's own horizon h and request are used: max(max(h, T) x I + P, 0) >=
+    // max(req, 0) + alloc - a. [port] the record branch mirrors 0x6129c0's struct branch (the RE names "its own horizon
+    // and request"); a fresh accept candidate never has a struct in the port (serial 0).
+    bool can_fund_gross_goal(int32_t c, uint32_t goal) const;
     // Time to afford 0x613720 (seconds; 0 when affordable now or without a struct).
     float time_to_afford(int32_t c, uint32_t goal, float n) const;
     // Spend: req -= n, alloc += n (Allocate_Resources, build-task charge 0x6110e0).
