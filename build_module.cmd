@@ -31,7 +31,7 @@ if errorlevel 1 (echo build_module: fix the literal above first; nothing was bui
   if not exist build-%~1\tmp mkdir build-%~1\tmp
   set "TMP=%~dp0build-%~1\tmp"
   set "TEMP=%~dp0build-%~1\tmp"
-  ctest --test-dir build-%~1 --output-on-failure --output-junit "%~dp0build-%~1\ctest_junit.xml" -j 4 !SLOWFILTER! -R "%~1" 2>&1
+  python -I tools\lint\test_slot.py -- ctest --test-dir build-%~1 --output-on-failure --output-junit "%~dp0build-%~1\ctest_junit.xml" -j 4 !SLOWFILTER! -R "%~1" 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0build-%~1\ctest_junit.xml"
 )

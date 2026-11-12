@@ -62,7 +62,7 @@ python -I tools\lint\verified_build.py begin %B% --modules "!AMODS!" --tests "!A
   if not exist %B%\tmp mkdir %B%\tmp
   set "TMP=%~dp0%B%\tmp"
   set "TEMP=%~dp0%B%\tmp"
-  ctest --test-dir %B% --output-on-failure --output-junit "%~dp0%B%\ctest_junit.xml" -j 4 !FILTER! 2>&1
+  python -I tools\lint\test_slot.py -- ctest --test-dir %B% --output-on-failure --output-junit "%~dp0%B%\ctest_junit.xml" -j 4 !FILTER! 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0%B%\ctest_junit.xml"
 )

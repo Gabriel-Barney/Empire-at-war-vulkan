@@ -42,7 +42,7 @@ echo %ALAMO_SANITIZE%| findstr /c:address >nul && set SAN=!SAN! -mllvm -asan-sta
   if not exist build-asan\tmp mkdir build-asan\tmp
   set "TMP=%~dp0build-asan\tmp"
   set "TEMP=%~dp0build-asan\tmp"
-  "%CTEST%" --test-dir build-asan --output-on-failure --output-junit "%~dp0build-asan\ctest_junit.xml" -j 4 2>&1
+  python -I tools\lint\test_slot.py -- "%CTEST%" --test-dir build-asan --output-on-failure --output-junit "%~dp0build-asan\ctest_junit.xml" -j 4 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0build-asan\ctest_junit.xml"
 )

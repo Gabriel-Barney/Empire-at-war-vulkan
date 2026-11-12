@@ -1,4 +1,24 @@
 {
+  "permissions": {
+    "allow": [
+      "PowerShell(cmd /c tools\\land_on_dev.cmd)",
+      "PowerShell(cmd /c \"tools\\land_on_dev.cmd\")",
+      "PowerShell(.\\tools\\land_on_dev.cmd)",
+      "PowerShell(& .\\tools\\land_on_dev.cmd)",
+      "PowerShell(python -I tools\\worktree\\delete_merged_branch.py *)",
+      "PowerShell(python -I tools/worktree/delete_merged_branch.py *)",
+      "Bash(python -I tools/worktree/delete_merged_branch.py *)",
+      "PowerShell(python -I tools\\worktree\\stop_tree_procs.py)",
+      "PowerShell(python -I tools\\worktree\\stop_tree_procs.py *)",
+      "PowerShell(python -I tools/worktree/stop_tree_procs.py)",
+      "PowerShell(python -I tools/worktree/stop_tree_procs.py *)",
+      "Bash(python -I tools/worktree/stop_tree_procs.py)",
+      "Bash(python -I tools/worktree/stop_tree_procs.py *)",
+      "PowerShell(python -I tools\\lint\\test_slot.py --status)",
+      "PowerShell(python -I tools/lint/test_slot.py --status)",
+      "Bash(python -I tools/lint/test_slot.py --status)"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {

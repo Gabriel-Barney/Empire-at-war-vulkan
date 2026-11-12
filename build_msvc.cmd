@@ -29,7 +29,7 @@ python -I tools\lint\verified_build.py begin build-msvc --modules all --tests al
   if not exist build-msvc\tmp mkdir build-msvc\tmp
   set "TMP=%~dp0build-msvc\tmp"
   set "TEMP=%~dp0build-msvc\tmp"
-  ctest --test-dir build-msvc --output-on-failure --output-junit "%~dp0build-msvc\ctest_junit.xml" -j 8 2>&1
+  python -I tools\lint\test_slot.py -- ctest --test-dir build-msvc --output-on-failure --output-junit "%~dp0build-msvc\ctest_junit.xml" -j 8 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0build-msvc\ctest_junit.xml"
 )

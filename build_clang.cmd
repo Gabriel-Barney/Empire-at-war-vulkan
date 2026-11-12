@@ -31,7 +31,7 @@ call "%~dp0tools\cache_env.cmd"
   if not exist build-clang\tmp mkdir build-clang\tmp
   set "TMP=%~dp0build-clang\tmp"
   set "TEMP=%~dp0build-clang\tmp"
-  "%CTEST%" --test-dir build-clang --output-on-failure --output-junit "%~dp0build-clang\ctest_junit.xml" -j 8 2>&1
+  python -I tools\lint\test_slot.py -- "%CTEST%" --test-dir build-clang --output-on-failure --output-junit "%~dp0build-clang\ctest_junit.xml" -j 8 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0build-clang\ctest_junit.xml"
 )
