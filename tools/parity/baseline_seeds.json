@@ -1,5 +1,5 @@
 {
- "commit": "567d6d1e",
+ "commit": "e0438966",
  "mode": "distribution",
  "scenarios": {
   "geonosis_skirmish": {
@@ -102,6 +102,7 @@
     "build.ticks[CRUSADER_GUNSHIP@FELUCIA]": "PASS",
     "build.ticks[DESTROYER_DROID_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[INTERCEPTOR4_FRIGATE@THE_MAW]": "PASS",
+    "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@KAMINO]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
@@ -110,7 +111,7 @@
     "build.ticks[REBEL_INFANTRY_SQUAD@NABOO]": "PASS",
     "build.ticks[REBEL_LIGHT_TANK_BRIGADE@YAVIN]": "PASS",
     "build.ticks[REBEL_TANK_BUSTER_SQUAD@KAMINO]": "PASS",
-    "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "FAIL",
+    "build.ticks[REBEL_TANK_BUSTER_SQUAD@NABOO]": "PASS",
     "build.ticks[R_GALACTIC_TURBOLASER_TOWER_DEFENSES@YAVIN]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@KAMINO]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@NABOO]": "PASS",
@@ -132,7 +133,7 @@
     "econ.credits_at_4500[Underworld]": "PASS",
     "econ.credits_at_9000[Empire]": "PASS",
     "econ.credits_at_9000[Rebel]": "PASS",
-    "econ.credits_at_9000[Underworld]": "PASS",
+    "econ.credits_at_9000[Underworld]": "FAIL",
     "econ.cycle_tick[10]": "PASS",
     "econ.cycle_tick[1]": "PASS",
     "econ.cycle_tick[2]": "PASS",
@@ -181,8 +182,8 @@
     "travel.hop_ticks[Underworld:CORELLIA->TATOOINE]": "FAIL",
     "travel.hop_ticks[Underworld:KAMINO->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "PASS",
-    "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "FAIL",
-    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "PASS",
+    "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "PASS",
+    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "FAIL",
     "travel.hop_ticks[Underworld:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->KAMINO]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->SHOLA]": "PASS",
@@ -196,7 +197,7 @@
     "travel.hop_ticks[Underworld:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:TATOOINE->CORELLIA]": "PASS",
     "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "FAIL",
-    "travel.hop_ticks[Underworld:THE_MAW->KASHYYYK]": "FAIL",
+    "travel.hop_ticks[Underworld:THE_MAW->KASHYYYK]": "PASS",
     "travel.hop_ticks[Underworld:THE_MAW->SHOLA]": "PASS",
     "travel.hop_ticks[Underworld:THE_MAW->YAVIN]": "PASS",
     "travel.hop_ticks[Underworld:YAVIN->MONCALIMARI]": "PASS",
@@ -215,12 +216,12 @@
      "INFO": 1
     },
     "income": {
-     "FAIL": 3,
-     "PASS": 22
+     "FAIL": 4,
+     "PASS": 21
     },
     "timing": {
-     "FAIL": 10,
-     "PASS": 60
+     "FAIL": 9,
+     "PASS": 62
     }
    }
   }
