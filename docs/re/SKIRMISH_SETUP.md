@@ -229,6 +229,15 @@ Enqueue 0x496a20(manager, type, builder, queue) [H]:
 - Pay-as-you-go test 0x289050: an AI player always counts as PAYG; a human uses GC Pay_As_You_Go
   (+0x320, false in FoC). Not PAYG (FoC humans): fail if credits < cost, else deduct the full cost at
   enqueue. PAYG: no charge at enqueue. [H]
+- **Correction (bkg1 b0001, `BKG1_RE_ANSWERS.md` 7.3) [H]:** "PAYG" for the AI does not mean the AI pays per
+  frame. 0x289050 returns 1 for every player whose is-human byte +0x62 is 0, and the service 0x498170 only advances
+  the timer for such a player: **the build manager never charges an AI player** (only a PAYG human pays
+  slice / total × cost per frame, 0x498ec0, and stalls when broke). The AI pays in the AI layer instead: 0x6c2d60 at
+  plan instantiation takes the plan's whole net cost (PP+0x44) in one Add_Credits step and holds it as escrow
+  (PP+0x1A4); each accepted order and pad reservation draws the escrow down (0x6c1e80, base price 0x3743f0, clamped
+  at 0); plan end 0x5f6a50 refunds the rest (× Credit_Multiplier for an AI). Cancel refund 0x499000: full cost for a
+  non-PAYG payer, the paid fraction clamp(1 − remaining / total) × cost for a PAYG one, so an AI auto-cancel hands the
+  AI progress × cost [M effect].
 - Entry (ObjectUnderConstruction): type, total time, timer, remaining, player, queue, cost, builder id
   (0x3fffff if none). Local player: queue SFX (type +0x1490 / +0x1450) or speech (+0x1570).
 
@@ -506,6 +515,13 @@ Sources: 0x344710 case 0x15, 0x360d90 (arm), 0x3639d0 (tactical tick), 0x3611f0 
 - Interpolator vf2 0x2c8660: points sorted by x on first use; piecewise linear between points; x below the
   first point or above the last gives 0; fewer than two points gives 0.
 - FoC data: N = 2 gives 9.29, cap 9; N = 4 gives 7; N = 8 gives 5; N > 8 gives 0.
+- **What "used" counts (bkg1 b0001, `BKG1_RE_ANSWERS.md` 7.1) [H]:** 0x2aba70 is not a company count. Each
+  registered company member holds Population_Value / its company's Company_Units count and the float sum is rounded
+  up. Start forces (0x2a4fc0 → 0x29e960 with the population flag off) never count; a landing transport counts the
+  full company from the drop to the unload; Droids_Team has Population_Value 0, heroes 1, structures and pool entries
+  0. Capacity +0x404 is at least 100 (the owned REINFORCEMENT_POINT), so the curve is the limit. TF.Reinforce reads
+  the remaining room once, so one call can drop several companies past the cap. This is why retail fields 13-14
+  companies under a cap of 9, and why pool drops stop when used reaches 9 (frame 15422 in SKAI_T06).
 
 ## 7. Lua build list and Find_Nearest (item 6) [H]
 
