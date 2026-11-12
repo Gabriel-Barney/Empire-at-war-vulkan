@@ -380,6 +380,8 @@ Goals and plans with no template entry stay at −1, i.e. off. In particular, **
 
 **Can fund** (0x6129c0): `max(horizon, lastDt) × availRate + avail ≥ need`. [H]
 
+**Accept-time fund test** (0x6139f0, slot 10 only; corrected a2m r3, `A2M_R3_RE_A.md` §1.1): it reads the **pool P (+0x4c) and income rate I (+0x50)**, not A / R: horizon = goal ETA, or Time_Limit when it is not −1 and ≤ ETA, then at least the budget period (+0x70); pass when `max(horizon × I + P, 0) ≥ goal cost`. A goal with a budget record uses that record instead; a switched-off budget always passes. The A / R test above is used at commit, resolve and maintenance. [H]
+
 **Per-tick update** (0x614340, from 0x4b2ef0, galactic only; dt from the game clock) [H/L]:
 - Rates are redistributed by weight and goals accrue their share.
 - Drift between real player credits and the summed pools is redistributed by weight.
