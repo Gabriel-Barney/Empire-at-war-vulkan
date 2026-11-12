@@ -465,7 +465,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
                 }
             }
             pt.is_hero = types.get_bool(ti, "Is_Named_Hero");
-            pt.bombing_run_prevention_radius = static_cast<float>(types.get_int(ti, "Bombing_Run_Prevention_Radius"));
+            pt.bombing_run_prevention_radius = types.get_float(ti, "Bombing_Run_Prevention_Radius");  // float field (bkc1 t07)
             pt.community_property = types.get_bool(ti, "Is_Community_Property");
             // --- A2 tactical: PotentialPlan inputs (tactical_pp.hpp) ---
             pt.tech_level = types.get_int(ti, "Tech_Level");

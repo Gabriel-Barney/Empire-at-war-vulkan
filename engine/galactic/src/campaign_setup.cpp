@@ -51,6 +51,14 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
     // (GalacticRules::native_owner_faction; FoC: Hostile), not by name.
     const uint32_t hostile = rules.native_owner_faction();
     if (hostile != kNoIndex) used[hostile] = 1;
+    const std::vector<uint8_t> named = used;  // the campaign's own factions (+ Neutral, Hostile)
+    // bkc1 t03 (docs/re/BKC1_RE_ANSWERS.md Q2 [H], Create_Default_Players 0x293390): a campaign has no required-player
+    // list, so retail creates one player for EVERY faction of the faction table, in table order, with no Is_Playable /
+    // Is_Neutral filter: player index = faction index (FoC: 0 Rebel, 1 Empire, 2 Pirates, 3 Neutral, 4 Hostile, 5 Sarlacc,
+    // 6 Underworld, 7 Hutts; the UM01 trace has 8 players, human Underworld at 6). The factions the campaign names only
+    // decide human / AI / credits / tech below. A repeated <Faction> definition is one faction (its first entry).
+    for (uint32_t f = 0; f < rules.factions.size(); ++f)
+        if (rules.find_faction(rules.factions[f].name) == f) used[f] = 1;
 
     const std::string_view human = options.human_faction.empty() ? std::string_view(c->starting_active_player)
                                                                   : std::string_view(options.human_faction);
@@ -60,6 +68,7 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
         if (!used[f]) continue;
         PlayerSetup p;
         p.faction = f;
+        p.named = named[f] != 0;
         p.human = ascii_iequals(rules.factions[f].name, data::trim(human));
         for (const std::string& r : c->ai_player_control) {
             const std::vector<std::string_view> fields = data::split_fields(r);

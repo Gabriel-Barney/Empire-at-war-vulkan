@@ -19,6 +19,8 @@ commands::EventData story_ui_event(const sim::StoryUiNotification& n) {
     return commands::ev::port_extension(kStoryUiSubtype, std::span<const uint8_t>(b));
 }
 
+commands::EventData story_esc_event() { return commands::ev::port_extension(kStoryEscSubtype, {}); }
+
 bool read_story_ui_event(const commands::EventData& ev, sim::StoryUiNotification& n) {
     if (ev.type() != commands::EventType::PortExtension || ev.u("subtype") != kStoryUiSubtype) return false;
     const std::span<const uint8_t> b = ev.bytes_view("data");

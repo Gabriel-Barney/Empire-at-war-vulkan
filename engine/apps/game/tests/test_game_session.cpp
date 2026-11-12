@@ -624,6 +624,13 @@ bool auto_resolve_run(const game::GameData& data, const game::SessionSpec& spec,
     for (int i = 0; i < 3; ++i) s.tick();
     t += 3;
     CHECK(s.port_stats().withdraw == early + 1 && s.port_stats().withdraw_dropped == 1 && s.host().commands_rejected() == rej0);
+    // bkc1 t01: without a cinematic camera (here: no story session) Esc is the host's (pause menu); a story Esc command
+    // sent anyway is applied at the command phase for the local player and offers nothing (no story).
+    CHECK(!s.story_esc() && s.port_stats().story_esc == 0);
+    CHECK(s.submit(game::story_esc_event()).ok());
+    for (int i = 0; i < 3; ++i) s.tick();
+    t += 3;
+    CHECK(s.port_stats().story_esc == 1 && s.host().commands_rejected() == rej0);
     out.crc = s.host().crc_log();
     out.ticks = s.ticks();
     std::printf("auto-resolve run: %" PRIu64 " ticks, final CRC %016" PRIx64 "\n", t, out.crc.records.empty() ? 0 : out.crc.records.back().combined);
@@ -2015,6 +2022,10 @@ static void story_ui_test() {
     n.name.assign(400, 'x');
     CHECK(game::read_story_ui_event(game::story_ui_event(n), back) && back.name.size() == game::kStoryUiMaxName);
     CHECK(!game::read_story_ui_event(game::tactical_auto_resolve_event(), back));
+    // bkc1 t01: the story Esc command is a data-free PortExtension of its own subtype, not a story UI event.
+    CHECK(game::story_esc_event().type() == commands::EventType::PortExtension &&
+          game::story_esc_event().u("subtype") == game::kStoryEscSubtype && game::story_esc_event().bytes_view("data").empty());
+    CHECK(!game::read_story_ui_event(game::story_esc_event(), back));
     const uint8_t bad[5] = {static_cast<uint8_t>(E::Count), 0, 0, 0, 0};
     CHECK(!game::read_story_ui_event(commands::ev::port_extension(game::kStoryUiSubtype, std::span<const uint8_t>(bad, 5)), back));
     CHECK(!back.tactical);  // the old payload layout (bit 7 clear) decodes as galactic

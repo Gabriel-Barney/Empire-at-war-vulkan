@@ -285,7 +285,7 @@ bool TacticalBattle::bombing_run_target_valid(int32_t player, Vec3 target) const
     const objects::ObjectStore& st = l1_mode_->primary();
     for (const objects::ObjectHandle h : st.all_objects()) {  // Bombing_Run_Prevention_Radius of objects not the player's
         if (!st.active(h) || st.owner(h) == player) continue;
-        const float r = static_cast<float>(catalog_->types().get_int(st.type(h), "Bombing_Run_Prevention_Radius"));
+        const float r = catalog_->types().get_float(st.type(h), "Bombing_Run_Prevention_Radius");  // float field (bkc1 t07)
         if (!(r > 0.0f)) continue;
         const Vec3 c = st.position(h);
         const float dx = target.x - c.x, dy = target.y - c.y, dz = target.z - c.z;

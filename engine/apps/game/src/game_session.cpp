@@ -555,6 +555,11 @@ bool GameSession::notify_story_ui(const sim::StoryUiNotification& n) {
     return host_ && host_->story() && submit(story_ui_event(n)).ok();
 }
 
+bool GameSession::story_esc() {
+    sim::StorySession* story = host_ ? host_->story() : nullptr;
+    return story && story->esc_goes_to_story() && submit(story_esc_event()).ok();
+}
+
 // --- P4 host: galactic special abilities (SpecialAbility 13) and their dialogs ---
 bool GameSession::submit_special(commands::EventData ev) {
     if (!host_ || !submit(std::move(ev)).ok()) return false;
@@ -794,6 +799,15 @@ commands::RejectReason GameSession::port_event(uint8_t player, const commands::E
             ++port_stats_.tactical_auto_resolve_refused;
             return R::NotAllowed;
         }
+        return R::None;
+    }
+    if (sub == kStoryEscSubtype) {
+        // bkc1 t01 (story_ui.hpp): Story_Handle_Esc for every active plot of the current mode. The cinematic camera was
+        // on when the key was sent; the call is not gated again here (retail calls it at once, before any tick).
+        sim::StorySession* story = host_ ? host_->story() : nullptr;
+        if (!local) return R::NotAllowed;
+        if (story) story->handle_esc();
+        ++port_stats_.story_esc;
         return R::None;
     }
     if (sub == kStoryUiSubtype) {
