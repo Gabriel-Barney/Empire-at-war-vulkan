@@ -2345,6 +2345,11 @@ function MainForce_Thread()
   GlobalValue.Set("a2m_r_done", 1)
   while true do Sleep(1) end
 end
+function MainForce_Unit_Destroyed(tf, unit)
+  local n = GlobalValue.Get("a2m_r_destroyed") or 0
+  GlobalValue.Set("a2m_r_destroyed", n + 1)
+  if unit then GlobalValue.Set("a2m_r_destroyed_arg", 1) end
+end
 )";
 // a2m t02 (A2K_T08_RE_ANSWERS Q2.3 step 4, A2L_T01_RE_ANSWERS Q8.3): Produce_Force to the stage launches a member that
 // sits on the stage's surface and merges it into the FleetObject, so the following Move_To takes it along. The thread
@@ -2903,6 +2908,10 @@ static void test_fleet_object_reelection() {
                     num("a2m_r_count"), kept_left ? "yes" : "no", corvette_moved ? "yes" : "no");
         CHECK(num("a2m_r_done") == 1.0 && num("a2m_r_block") == 1.0);  // Move_To found a FleetObject
         CHECK(num("a2m_r_count") == 1.0);
+        // bkg2 b0099 (base handler 0x5fe5d0 step 1) [H]: one event 2 Unit_Destroyed with the removed member as argument.
+        std::printf("fleet object re-election: Unit_Destroyed raised %.0f time(s), unit argument %s\n", num("a2m_r_destroyed"),
+                    num("a2m_r_destroyed_arg") == 1.0 ? "yes" : "no");
+        CHECK(num("a2m_r_destroyed") == 1.0);  // (the unit argument reads nil once the object is gone [port])
         if (emptied) {
             // bkg2 b0097 (BKG1_RE_ANSWERS 1.4) [H]: 0x1b never re-elects, so the FleetObject that lives on without a TF
             // member keeps its place: Move_To moves it (with its non-member corvette) and leaves the member's fleet.

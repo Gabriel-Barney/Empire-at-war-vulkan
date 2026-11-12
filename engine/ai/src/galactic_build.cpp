@@ -174,6 +174,18 @@ bool GalacticAiWorld::Impl::resolve_claim(BuildTask& b) {
         // by the add is the unit's own fleet after the split (bkg2 b0097). [port] The unit joins the member list here
         // also with the sync flag, where retail's Add_Force waits for the departure (WAIT_FOR_SYNC_MOVE): it then
         // elects nothing until the departure (step_status, tf_elect).
+        // bkg2 b0121 (A2K_T08 Q2.3 step 1, BKG1_RE_ANSWERS 10) [H path; M re-admit]: a claimed unit on a planet surface goes
+        // to GROUND_UNIT_PRODUCTION (0x648120), which fails the task (Production_Failed) when that planet is blockaded and
+        // is not the stage; the unit goes back to the free store. [port] A sync task force runs the test at its departure
+        // in retail (Q2F_T09 Q2.4); the port does not test it there.
+        if (!tit->second.sync && on_surface(u) && static_cast<int32_t>(planet_of_unit(u)) != tit->second.stage) {
+            const gal::TypeInfo* uti = type_info(store.type(u));
+            if (uti && ground_kind(uti->kind) && sim.ai_blockaded(planet_of_unit(u))) {
+                fail_build(b, "blockaded");
+                free_store_admitted(b.player, u);
+                return true;
+            }
+        }
         claim_split(tit->second, u);
         tf_join(tit->second, u, !tit->second.sync);
         tit->second.had_units = true;

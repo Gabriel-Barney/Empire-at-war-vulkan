@@ -580,12 +580,16 @@ int32_t GalacticSim::physical_owner(PlanetIndex planet) const {
 //     control > 0, when both controls are >= 1.
 // lo = 1 with a physical owner (GE 4.1 steps 1-5), else 0; hi = the owner faction's Planet_Max_Political_Control_For_Faction
 // (5 when absent or below lo). FoC data sets every Political_Control and route gain to 0 and lists no maximum, so an owned
-// planet gets max(1, ground-base level, starbase level, troops). [port] The residual-influence entry (0 / 1, its owner
-// rule) is not modelled (the owner falls back to the leaning, see derive_owner).
+// planet gets max(1, ground-base level, starbase level, troops). The leaning sign and the orbit sum s use the physical
+// owner (0x3f3830), so neutral troops count as an owner and no physical owner gives +v. [port] The residual-influence
+// owner rule is not modelled (derive_owner keeps the leaning owner on an emptied planet, backlog b0158): such a planet
+// counts as owned (lo = 1, orbital-claim entry 1), as retail's residual-influence entry gives it.
 int32_t GalacticSim::target_political_control(PlanetIndex planet, int32_t derived) const {
     const PlanetState& p = planets_[planet];
     const TypeInfo* pt = p.type < rules_->types.size() ? &rules_->types[p.type] : nullptr;
     const int32_t physical = physical_owner(planet);
+    const int32_t owner = physical != kNoPlayer ? physical
+                          : (valid_player(derived) && derived != neutral_player_ ? derived : kNoPlayer);  // [port] residual
     // group 1 presence
     int32_t presence = ground_base_level(planet);
     bool troops = false;
@@ -595,7 +599,7 @@ int32_t GalacticSim::target_political_control(PlanetIndex planet, int32_t derive
     const bool owned_on_ground = ground_base_level(planet) > 0 || troops || p.starbase_level > 0;
     bool from_ground = owned_on_ground;
     for (uint32_t q = 0; q < 2 && !from_ground; ++q) from_ground = !p.queue[q].empty();
-    if (!from_ground && physical != kNoPlayer) presence = std::max(presence, 1);  // ORBITAL_CONTROL
+    if (!from_ground && owner != kNoPlayer) presence = std::max(presence, 1);  // ORBITAL_CONTROL (or residual [port])
     int32_t s = 0;
     for (uint32_t f : p.orbit) {
         if (!fleets_[f].alive) continue;
@@ -603,7 +607,7 @@ int32_t GalacticSim::target_political_control(PlanetIndex planet, int32_t derive
             if (!store_->alive(u)) continue;
             const uint32_t ut = static_cast<uint32_t>(store_->type(u));
             const int32_t pc = ut < rules_->types.size() ? rules_->types[ut].political_control : 0;
-            s += store_->owner(u) == derived ? pc : -pc;
+            s += physical != kNoPlayer && store_->owner(u) == physical ? pc : -pc;
         }
     }
     int32_t sum = 0;
@@ -612,8 +616,8 @@ int32_t GalacticSim::target_political_control(PlanetIndex planet, int32_t derive
     if (pt) {
         const int32_t v = std::clamp(pt->political_control, 0, 5);
         if (v > 0) {
-            const bool owner_known = valid_player(derived) && derived != neutral_player_;
-            sum += owner_known && players_[static_cast<size_t>(derived)].faction != pt->political_faction ? -v : v;
+            const bool other = valid_player(physical) && players_[static_cast<size_t>(physical)].faction != pt->political_faction;
+            sum += other ? -v : v;
         }
     }
     sum += presence;
@@ -639,10 +643,10 @@ int32_t GalacticSim::target_political_control(PlanetIndex planet, int32_t derive
         if ((rel == Relation::Self || rel == Relation::Ally) && n.control > 0.0f && n.control >= 1.0f && p.control >= 1.0f)
             sum += static_cast<int32_t>(map_.routes.political_control_gain[r]);
     }
-    const int32_t lo = physical != kNoPlayer ? 1 : 0;
+    const int32_t lo = owner != kNoPlayer ? 1 : 0;
     int32_t hi = 5;
-    if (physical != kNoPlayer && valid_player(physical) && pt) {
-        const uint32_t fi = players_[static_cast<size_t>(physical)].faction;
+    if (valid_player(owner) && pt) {
+        const uint32_t fi = players_[static_cast<size_t>(owner)].faction;
         for (const auto& [f, m] : pt->max_political_control)
             if (f == fi) {
                 hi = m;

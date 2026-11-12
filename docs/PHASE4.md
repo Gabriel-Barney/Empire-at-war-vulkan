@@ -387,8 +387,11 @@ a live fleet with contents (the sim removes an emptied fleet at once). Test acce
   0x10) and drops it when no member is left; a live fleet that no longer holds a member keeps its place (0x1b never
   re-elects, [H]). `resolve_claim` now splits a sync member before it joins, so the join elects the split fleet, as retail
   calls Add_Force after PRE_PATH_SEPERATE. The per-player sweep in `claim_units` settles the election every service, so the
-  hashed value no longer depends on read timing. Test `test_fleet_object_reelection` now expects the 0x1b case to keep
-  the old FleetObject.
+  hashed value no longer depends on read timing; `tf_elect` drops a dead stored fleet first. [port] Launches into the
+  shared orbit fleet (no company transports) stand in for retail's new launch fleet: when no live member is in any fleet
+  (they landed), the stored fleet is dropped as retail's emptied launch fleet would be (0x10). Test
+  `test_fleet_object_reelection` now expects the 0x1b case to keep the old FleetObject, and one Unit_Destroyed per
+  destroyed member.
 - **b0101 gather.** Produce_Force waits for every member at the stage (WAIT_FOR_ALL) before it launches the surface
   members (TRANSPORTS_TO_ORBIT), then merges once they are in orbit (READY_TO_MERGE). A launched jumper forms a fleet of
   its own and merges later, as retail's op 0; a non-jumper stays in the orbit fleet [port, as a2m t02].
@@ -396,14 +399,19 @@ a live fleet with contents (the sim removes an emptied fleet at once). Test acce
   (event 2, the member as argument) before the No_Units_Remaining test, re-finding the task force after each Lua call.
   `write` / `hash` assert that the lost lists are empty.
 - **b0121 blockade after production.** A finished ground unit whose build planet is under blockade fails its build task
-  ("blockaded": Production_Failed) and goes back to the free store (GROUND_UNIT_PRODUCTION 0x648120, [H]); Launch_Units
+  ("blockaded": Production_Failed) and goes back to the free store (GROUND_UNIT_PRODUCTION 0x648120, [H]); so does a
+  claimed free-store ground unit on a blockaded surface that is not the stage (A2K_T08 Q2.3 step 1; [port] a sync task
+  force is not tested at its departure, where retail tests it); Launch_Units
   ends with "under blockade, can't launch units" for a blockaded planet. A hostile fleet does not fail an item in
   production (only a starbase head is cancelled, which the port had), and a released goal's builds already end as §10
   says: nothing else to port.
 - **b0125 target political control** (`Campaign::target_political_control`): the largest presence (ground-base level,
   troops 1, starbase level, orbital claim, capital), the planet type's Political_Control leaning (negative for a faction
   other than Political_Faction), up to 8 structure Political_Control values and the route gains, clamped to [1 with a
-  physical owner else 0, the faction's Planet_Max_Political_Control_For_Faction or 5], then [0, 5]. Parsed in
+  physical owner else 0, the faction's Planet_Max_Political_Control_For_Faction or 5], then [0, 5]; the leaning sign and
+  the orbit sum use the physical owner. [port] An emptied planet that keeps its owner through the leaning (the
+  residual-influence owner rule is not ported, backlog b0158) counts as owned (target 1), as retail's residual entry
+  gives it. Test `test_foc_hotm_political_target`: Kuat / Mon Calamari / The Maw 3, Naboo 2, Kashyyyk / Yavin 1. Parsed in
   `galactic_rules.cpp`. `derive_owner` is split into `physical_owner` + leaning (same behaviour). The vanilla income curve
   is flat above 1, so no galactic metric moves; the AI token TargetPoliticalControl reads the new values.
 - **b0003** was ported in a2m t05; [port] the hardpoint minimum of Setup A's health test is left out because the galactic

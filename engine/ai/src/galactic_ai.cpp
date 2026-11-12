@@ -1344,6 +1344,8 @@ void GalacticAiWorld::Impl::tf_join(TaskForceRec& tf, ObjectHandle u, bool elect
 // formed into) and the build task's TRANSPORTS_TO_ORBIT signal 5 (0x649be0); the port calls it right after the launch,
 // since its fleet orders run synchronously.
 void GalacticAiWorld::Impl::tf_elect(TaskForceRec& tf, uint32_t f) {
+    // A dead stored fleet is dropped first (retail clears it on 0x10 at once and re-elects in member order).
+    if (tf.fleet != gal::kNoFleet) tf_fleet_object(tf);
     if (tf.fleet != gal::kNoFleet || f == gal::kNoFleet) return;
     if (f < sim.fleets().size() && sim.fleets()[f].alive && !sim.fleets()[f].contents.empty()) tf.fleet = f;
 }
@@ -1372,7 +1374,20 @@ uint32_t GalacticAiWorld::Impl::tf_fleet_object(TaskForceRec& tf) {
     }
     const auto fleets = sim.fleets();
     auto live = [&fleets](uint32_t f) { return f < fleets.size() && fleets[f].alive && !fleets[f].contents.empty(); };
-    if (live(tf.fleet)) return tf.fleet;
+    if (live(tf.fleet)) {
+        // [port] The launches into a shared orbit fleet (launch_and_form with kNoFleet: no company transports) stand in
+        // for retail's new fleet (op 0). When no member is in the stored fleet and no live member is in any fleet (they
+        // landed), retail's own launch fleet would have emptied and died (0x10, nothing to re-elect), so the stored fleet
+        // is dropped. A member that moved on to another fleet (0x1b) keeps the stored fleet in place.
+        bool in_fo = false, in_any = false;
+        for (const ObjectHandle u : tf.units) {
+            if (!store.alive(u)) continue;
+            const uint32_t uf = fleet_of_unit(u);
+            in_fo = in_fo || uf == tf.fleet;
+            in_any = in_any || uf != gal::kNoFleet;
+        }
+        if (in_fo || in_any) return tf.fleet;
+    }
     tf.fleet = gal::kNoFleet;  // 0x10 (b): dropped, then re-elected
     for (const ObjectHandle u : tf.units) {
         if (!store.alive(u)) continue;

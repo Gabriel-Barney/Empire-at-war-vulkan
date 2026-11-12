@@ -507,7 +507,8 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // Unit_Destroyed for each (base handler 0x5fe5d0 step 1) before the event 7 test. Drained with lost_tfs.
     std::vector<std::pair<int32_t, ObjectHandle>> lost_members;
     // a2m t02 (A2L_T01_RE_ANSWERS Q8.2): Add_Force 0x6cd1a0 (append the unit; elect the FleetObject from its parent
-    // fleet while TF +0x120 is null) and the FleetObject itself (re-elected when null, dead or holding no member).
+    // fleet while TF +0x120 is null) and the FleetObject itself (stored; dropped and re-elected when its fleet dies,
+    // null when the member list empties; bkg2 b0097, see tf_fleet_object).
     void tf_join(TaskForceRec& tf, ObjectHandle u, bool elect = true);
     void tf_elect(TaskForceRec& tf, uint32_t fleet);
     bool tf_launch(TaskForceRec& tf, PlanetIndex p, ObjectHandle u, uint32_t fleet);
