@@ -2210,6 +2210,8 @@ Both are 0xb8 bytes and are created per order by `0x426010`, appended in creatio
 
 ### 4.2 Splitting a selection into formations (land; coordinator vf12 `0x43e5b0` → `0x43c1b0`) [H]
 
+**bkr2 (2026-11-12), see `docs/re/BKR2_RE_ANSWERS.md` Q5 / Q8**: item 4's "engaged short-range attacker" is only item 6's d < 1.6 E_r flag; item 7 test 3's "[M: name]" is `ShouldInfantryTeamsSplitAcrossFormations` (GC +0x149d, true in FoC); a squad member's pack +0x1f0 is always null (formations hold squad containers and lone units). [H]
+
 **Step 1: spatial buckets** (k-means, `0x43aac0`).
 - k = floor(Σ over members of (4·halfX·halfY) / 400 / **Max_Formation_Area (14)**) + 1. The 400 is 20², i.e. the area is measured in cells.
 - If k = 1 or k > member count, there is a single bucket.
@@ -3473,6 +3475,8 @@ in §5.4.1 / §5.4.2, 2026-11-10, which replace it where they differ.)*
   have no reader in the binary.
 
 #### 5.4.1 The driver and MovingVsStopped in full (s78n t18 RE, 2026-11-10) [H unless tagged]
+
+**bkr2 (2026-11-12), see `docs/re/BKR2_RE_ANSWERS.md` Q3**: step 10 runs only when alt is true (alt false -> state 7); `0x685490` does a Path Around search (flags 2) whose path is not pushed, then gives the mover's formation a kind-3 attack block on the first hostile unit on that path (state 8); otherwise state 7 (mover held at speed 0, re-decided every 30 frames). Nothing lets the mover walk through b. [H]
 Read from `0x50a780`, `0x679740`, the four vftables (`0x8b5090`, `0x8b52e8`, `0x8b5450`, `0x8b5568`), `0x684cf0`
 (with its jump table `0x684f64`), `0x684f90`, `0x684450`, `0x683ee0`, `0x684660`, `0x6845c0`, `0x684710`, `0x6835c0`,
 `0x5c6ba0`, `0x685e10`, `0x684100`, `0x685920`, `0x685490`, `0x6859a0`, `0x554310`, `0x50a020`, `0x5c7cb0`,
@@ -3879,6 +3883,8 @@ answer of 0; such a pair re-decides every frame and is answered max speed. Only 
 the rear unit. §5.4.6, "State 2 service".)*
 
 #### 5.4.3 StoppedVsStopped in full (s78n t19 RE, 2026-11-10) [H unless tagged]
+
+**bkr2 (2026-11-12), see `docs/re/BKR2_RE_ANSWERS.md` Q4**: a failed StoppedVsStopped record stays in Try Again Later until validity ends it; detection skips any pair with a live record of any kind (`0x5c7900`), so the pair gets no MovingVsStopped / MovingVsMoving record meanwhile. The mover cost `0x686b20` gives a max-speed-0 unit cost 0 (picked as mover); there is no "immobile" rule. [H]
 Read from the vftable `0x8b5450`, `0x686de0`, `0x687570`, `0x687720`, `0x686e80`, `0x687010`, `0x686b20`,
 `0x5c74b0`, `0x5c62a0`, `0x5c6650` / `0x505490`, `0x440be0`, `0x441750`, `0x440f90`, `0x538330` / `0x5d7c00` /
 `0x6b24f0`, `0x5a2830`, `0x686f80`, `0x5c78e0`, the Walk slots `0x42c7d0`, `0x42cba0`, `0x42cdd0`, `0x42d060`,

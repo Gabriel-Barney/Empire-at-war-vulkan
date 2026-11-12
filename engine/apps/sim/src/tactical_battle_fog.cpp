@@ -16,6 +16,22 @@ namespace alamo::sim {
 
 namespace fw = alamo::tactical::fog;
 
+tactical::Aabb TacticalBattle::map_extents(const TacticalMode& mode) const {
+    // Land (0x3b8020): the terrain box, x / y = [0, W x 20] x [0, H x 20] with W, H the vertex grid size; z = [zmin, zmax]
+    // over every vertex height, both started at 0. Space (0x4d7780): the playable box. [port] A land map without terrain
+    // (synthetic test maps) keeps the playable box instead of retail's zero box (no grids).
+    const terrain::Terrain& t = map_.terrain;
+    if (space_ || !t.present || t.width == 0 || t.height == 0) return mode.bounds();
+    float zmin = 0.0f, zmax = 0.0f;
+    for (const int16_t h : t.heights) {
+        const float z = static_cast<float>(h) * terrain::kHeightScale;
+        zmin = std::min(zmin, z);
+        zmax = std::max(zmax, z);
+    }
+    return {{0.0f, 0.0f, zmin},
+            {static_cast<float>(t.width) * terrain::kVertexSpacing, static_cast<float>(t.height) * terrain::kVertexSpacing, zmax}};
+}
+
 void TacticalBattle::fog_begin(TacticalMode& mode, uint32_t players) {
     fog_on_ = false;
     fog_mode_ = &mode;
@@ -28,7 +44,9 @@ void TacticalBattle::fog_begin(TacticalMode& mode, uint32_t players) {
     // [port] The playable box stands in for the mode's map extents (vf +0x1f8). Traced (FOG_OF_WAR §1.2 [H], FOWF t01):
     // space uses the playable box, land the whole terrain box [0, 20 W] x [0, 20 H]. The land switch waits for the AI
     // threat grid, which must use the same box (AI_TACTICAL_PERCEPTION §4.1; BattleAi builds it from bounds()): switching
-    // the fog alone stalled the FoC Utapau skirmish on 4 of 5 seeds (2026-11-01).
+    // the fog alone stalled the FoC Utapau skirmish on 4 of 5 seeds (2026-11-01); switching both (map_extents, bkt1 t08,
+    // 2026-11-12) slows the Rebel win on foc-land seed 7 from 23121 to 42347 frames (Burn_Units_Land fails every pass
+    // from about frame 15000; backlog). map_extents() serves the staging search's map box (bkt1 t01) meanwhile.
     const tactical::Aabb& b = mode.bounds();
     s.box = {b.min.x, b.min.y, b.max.x, b.max.y};
     s.constants = catalog_->fog_constants();

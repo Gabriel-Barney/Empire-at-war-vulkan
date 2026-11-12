@@ -36,6 +36,7 @@
 // only part read in place, is read after the whole stream validated; then everything is committed.
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <span>
 
 #include "ai_save_io.hpp"
@@ -470,6 +471,8 @@ void GalacticAiWorld::set_save_lua_state(bool on) { impl_->lua_state = on; }
 
 void GalacticAiWorld::write(ByteWriter& w) const {
     const Impl& m = *impl_;
+    // bkg2 b0099: lost_tfs / lost_members are neither saved nor hashed; every prune_tf caller drains them in the frame.
+    assert(m.lost_tfs.empty() && m.lost_members.empty());
     const objects::ObjectStore& st = m.store;
     w.u32(kWorldVersion);
     // ---- shape ----

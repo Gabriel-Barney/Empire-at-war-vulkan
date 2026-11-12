@@ -1143,6 +1143,7 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             float x = std::bit_cast<float>(le32(b, 8)), y = std::bit_cast<float>(le32(b, 12));
             const uint32_t tw = le32(b, 4);
             bool point_goal = false;  // S7 t29 rework: a land Attack_Move on a non-hostile object goes to its position
+            bool nonhostile_block = false;  // bkt1 t05: a unit Attack_Move on a non-hostile object (land attack block, no lock)
             if (tw != cmd::kNoObject) {
                 const objects::ObjectHandle th = tw <= 0x7FFFFFFFu ? st.find(static_cast<objects::ObjectId>(tw)) : objects::ObjectHandle{};
                 if (!st.alive(th)) {
@@ -1160,7 +1161,16 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     // object stays the goal. No Order_Attack, no formation attack target (path B needs relation 1): the units
                     // go there, auto-engage on the way and never attack the object itself.
                     for (const objects::ObjectId id : group.units) b_->combat_->set_attack_goal(id, tc::kNoObject);
-                    point_goal = !b_->space_;
+                    // bkt1 t05 (b0075, BKT1_ATTACK_RE §3 [H]): an object's own Attack_Move (arg 0; Move_Internal 0x57da90) is
+                    // the land attack move on the object itself - kind 3 with flag 0x01, the exact goal, slots, staging and
+                    // the fire trim as for an enemy, no lock (the attack block below, kAttackBlockNoLock)
+                    point_goal = !b_->space_ && (le32(b, 20) & at::kTfAttackMoveIssueAttack) != 0;
+                    // (not on the caller itself or its container: BKT1_ATTACK_RE §3.1, those stay a move to the point)
+                    bool self = false;
+                    for (const objects::ObjectId id : group.units)
+                        self = self || id == tu->id || b_->attack_mover(id) == tu->id || b_->attack_mover(id) == b_->attack_mover(tu->id);
+                    nonhostile_block = !b_->space_ && !point_goal && !self;
+                    if (self) point_goal = !b_->space_;
                 } else if (order == lua::LuaOrder::AttackMove && attackable) {
                     // refixf t06 (TACTICAL_COMBAT §2.8): an Attack_Move on an object. A: a task-force order (arg bit, header)
                     // issues Order_Attack (ordered 1) to every unit now; a refusing unit is dropped from the move, none left
@@ -1205,18 +1215,20 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
             const bool object_block = fobj != objects::kNoObjectId;
             // s78n t25.4: a land Guard_Target on an object is a guard block of the movement (land_attack_order, guard)
             const bool land_guard = !b_->space_ && order == lua::LuaOrder::Guard && object_block;
-            // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 item 6): a land Attack_Move on an attackable enemy
-            // object is an attack block of each mover (TacticalBattle::AttackBlock, whose 30-frame checks re-path it: the
+            // s78n t20 stage A (FIGHTER_FLYING §4.11 A / E, MOVEMENT §4.3.2 item 6): a land Attack_Move on an attackable
+            // object (bkt1 t05: a non-hostile one too, no lock) is an attack block of each mover (TacticalBattle::AttackBlock, whose 30-frame checks re-path it: the
             // object follow below leaves it out), and a unit that can already hit it from where it stands takes no path.
             const TacticalBattle::Unit* atu = tw != cmd::kNoObject && tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
             const bool attack_block = !b_->space_ && order == lua::LuaOrder::AttackMove && !point_goal && atu && atu->alive &&
-                                      !atu->retreated && b_->combat_->has_unit(atu->id) && hostile_owner(player, st.owner(atu->h));
+                                      !atu->retreated && b_->combat_->has_unit(atu->id) &&
+                                      (nonhostile_block || hostile_owner(player, st.owner(atu->h)));
             if (attack_block) {
                 // s78n t25.3 (MOVEMENT §4.3.2 items 2 / 6 / 7): one movement order with the attack block (flags 0x01) for
                 // the movers; the staging 0x40e260 is the builder's (attack_stage_goal); a formation whose members can all
                 // fire already is stopped by the plan (item 6), the others take the slot and the fire trim
                 const Vec3 tp = st.position(atu->h);
-                for (const objects::ObjectId id : group.units) b_->attack_block_set(id, atu->id, mv::kMoveFlagAttackMove, tp);
+                const uint8_t bf = static_cast<uint8_t>(mv::kMoveFlagAttackMove | (nonhostile_block ? TacticalBattle::kAttackBlockNoLock : 0));
+                for (const objects::ObjectId id : group.units) b_->attack_block_set(id, atu->id, bf, tp);
                 (void)b_->land_attack_order(*mode_, group.units, atu->id, tp, mv::kMoveFlagAttackMove, false, host_->random().synced());
                 return R::None;
             }
@@ -1747,6 +1759,7 @@ void BattleAi::standin_orders() {
     for (const TacticalBattle::Unit& u : b_->units_) {
         if (!u.alive || u.retreated || !u.movable || controls(st.owner(u.h))) continue;
         if (b_->commanded_by_player(st.owner(u.h))) continue;  // integration fixes: human units take commands only
+        if (!b_->space_ && !b_->standin_owner(st.owner(u.h))) continue;  // bkt1 t07 (b0084): land third parties idle
         const Vec3 up = st.position(u.h);
         const TacticalBattle::Unit* best = nullptr;
         float best_d2 = 0.0f;

@@ -68,8 +68,8 @@ struct TaskForceRec {
     int32_t area = -1;
     // a2m t02 (A2L_T01_RE_ANSWERS Q8.2) [H]: the task force's FleetObject (TF +0x120), a GalacticSim fleet index
     // (fleet slots are never reused); gal::kNoFleet = null. Elected by Add_Force (0x6cd1a0) from the added unit's parent
-    // fleet while null, re-elected (GalacticAiWorld::Impl::tf_fleet_object) when it dies or holds no member any more.
-    // Move_To moves this fleet only.
+    // fleet while null, or by a launch's signal 5 (tf_elect, bkg2 b0097); re-elected only when it dies (signal 0x10,
+    // GalacticAiWorld::Impl::tf_fleet_object), null when the member list empties. Move_To moves this fleet only.
     uint32_t fleet = gal::kNoFleet;
     // q2f t09 (Q2F_T09_RE_ANSWERS Q2.4 / Q2.6) [H code; M units]: Produce_Force(stage, true) sets every build task's
     // sync flag (BT +0xda). The gather then holds every unit until all are on the free store, each unit's ETA to the
@@ -503,9 +503,15 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool counted_entry_type(uint32_t type) const;
     void drain_lost_members();
     std::vector<int32_t> lost_tfs;
+    // bkg2 b0099: the members prune_tf removed, per task force in removal order; drain_lost_members raises event 2
+    // Unit_Destroyed for each (base handler 0x5fe5d0 step 1) before the event 7 test. Drained with lost_tfs.
+    std::vector<std::pair<int32_t, ObjectHandle>> lost_members;
     // a2m t02 (A2L_T01_RE_ANSWERS Q8.2): Add_Force 0x6cd1a0 (append the unit; elect the FleetObject from its parent
-    // fleet while TF +0x120 is null) and the FleetObject itself (re-elected when null, dead or holding no member).
-    void tf_join(TaskForceRec& tf, ObjectHandle u);
+    // fleet while TF +0x120 is null) and the FleetObject itself (stored; dropped and re-elected when its fleet dies,
+    // null when the member list empties; bkg2 b0097, see tf_fleet_object).
+    void tf_join(TaskForceRec& tf, ObjectHandle u, bool elect = true);
+    void tf_elect(TaskForceRec& tf, uint32_t fleet);
+    bool tf_launch(TaskForceRec& tf, PlanetIndex p, ObjectHandle u, uint32_t fleet);
     uint32_t tf_fleet_object(TaskForceRec& tf);
     std::vector<uint32_t> tf_fleets(const TaskForceRec& tf) const;
     bool movable_fleet(uint32_t f) const;

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -80,6 +81,12 @@ struct TypeInfo {
     bool surface_accessible = true;      // Planet_Surface_Accessible
     ForceSide the_force = ForceSide::Neutral;  // The_Force
     float force_strength = 0.0f;         // Force_Strength
+    // bkg2 b0125 (BKG1_RE_ANSWERS 9) [H]: political control inputs. Political_Control (+0x79C) of a planet (its leaning),
+    // a unit in orbit (capital ships / enemy fleets) or a structure (its own breakdown group); Political_Faction (+0x7A0)
+    // of a planet; Planet_Max_Political_Control_For_Faction (+0x830) pairs (faction index, maximum). All 0 / empty in FoC.
+    int32_t political_control = 0;
+    uint32_t political_faction = kNoIndex;
+    std::vector<std::pair<uint32_t, int32_t>> max_political_control;
 
     // ---- OI galactic (docs/re/STRATEGIC_GAPS.md = SG) -----------------------------------------------------------
     // Defaults are the hand-built-rules values (tests): no dummy behaviour, no limits, unlimited slots. The data path

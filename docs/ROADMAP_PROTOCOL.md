@@ -27,8 +27,8 @@ The claude.ai page https://claude.ai/artifact/56dGptBoT3JcDH4rHZ6BjT is retired:
 | Collection | Document id | Fields |
 |---|---|---|
 | `meta` | `page` | `eyebrow`, `title`, `lede`, `build` (last verified build line), `updated` |
-| `meta` | `backlog` | The backlog's settings: `cats` (category id → `label`, `parent`, `order`, `desc`), `rules` (ordered category filters), `sevs` (severity meanings), and the limits `cap`, `wip`, `inbox_days`. See "Backlog and group exit tests" |
-| `backlog` | `b0001`… | One finding that is not part of an open group: `t` (text), `cat` (category id), `sev` (`S1`/`S2`/`S3`), `kind`, `s` (`open`/`promoted`/`dropped`), `from` (group it was found in), `task`, `ref`, `g` (only Gabriel can do it), `added`, `by`, and when closed `promoted` (`group/task`) or `why` |
+| `meta` | `backlog` | The backlog's settings: `cats` (category id → `label`, `parent`, `order`, `desc`, `node`: the flowchart box its entries belong to), `rules` (ordered category filters), `sevs` (severity meanings), and the limits `cap`, `wip`, `inbox_days`. See "Backlog and group exit tests" |
+| `backlog` | `b0001`… | One finding that is not part of an open group: `t` (text), `cat` (category id), `node` (flowchart box, and so the stage, the work belongs to), `sev` (`S1`/`S2`/`S3`), `kind`, `s` (`open`/`promoted`/`dropped`), `from` (group it was found in), `task`, `ref`, `g` (only Gabriel can do it), `added`, `by`, and when closed `promoted` (`group/task`) or `why` |
 | `lanes` | short id (`st1`…) | One stage of the plan: `title`, `goal` (what the stage is for), `exit` ("done when" condition), `order`. Stages run in `order`, top to bottom in both the plan and the flowchart |
 | `nodes` | box id (`N1`, `MOVE`…) | `label`, `sub`, `lane`, `status`, `shape` (`box`/`pill`), `order`, `to` (map of target box id → `solid` "do before" or `dash` "feeds into") |
 | `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta`, `exit` (the exit test: the metric or test that says the group is done), `cap` (most tasks the group may hold; default `meta/backlog` `cap`, 8), `closed` (set by `close-group`: `at`, `passed`, `moved`, `dropped`); claim fields, all optional, set by `claim` (below): `claimed_by` (session), `claimed_at` (ISO time), `touches` (list of module folders/files the work edits; default: `mod` split on `·` `,` `;`) |
@@ -131,9 +131,17 @@ leave the group.
 - **Categories.** `inbox` ("Untriaged") is the intake. `meta/backlog` `rules` (ordered; first match on the entry's own text, then
   on its group's `mod`; `gab` matches Gabriel-only entries) file a new entry into a more specific category straight away; an entry no
   rule matches stays in `inbox`, and triage moves it (`backlog move`, `backlog retag --apply` re-runs the rules). Categories are
-  data too (`backlog cats --add <id> --label ... --parent ...`): Parity (`parity-sim` tactical rules, `parity-ai`, `parity-campaign`),
-  Engine (`lua-data`, `render-ui`, `mods`, `perf`), Process (`tools-harness`, `docs-process`), Research (`re-research`, `gabriel`).
-  The page's Backlog tab shows the counts per category and severity and filters by category, severity and kind.
+  data too (`backlog cats --add <id> --label ... --parent ... --node <box>`). Since 2026-11-12 every category has a flowchart box
+  (`node`), so an entry also says which stage and box its work belongs to, as Stage 5 · OPT is performance: Parity (`parity-sim`
+  movement and collision → MOVE, `parity-combat` → MOVE, `parity-anim` → ANIM, `parity-rules` other tactical rules → ABIL,
+  `parity-ai` galactic AI → Q2F, `parity-tactical-ai` → AIVIEW, `parity-campaign` galactic rules → Q2F, `parity-story` → STORY),
+  Engine (`lua-data` → RE, `render-ui` → UIART, `mods` → MODC, `perf` → OPT), Process (`tools-harness`, `docs-process` → PROC),
+  Research (`re-research`, `gabriel` → CONFIRM). `backlog cats` lists them with their stage. Every entry carries its own
+  `node`: `backlog add` sets the category's box (else the `--from` group's), `--node` overrides it, `backlog move --cat` brings the
+  new category's box, `backlog move --node` re-files only the box, `backlog list --node <box|stage lane>` filters, `cats --set <id>
+  --node <box>` changes a category's box, and `promote --new` without `--node` uses the entries' shared box. Lint flags an entry
+  without a box (warning) or with an unknown one (error). The page's Backlog tab shows the counts per category and severity, each
+  category's and entry's stage and box, and filters by category, box, severity, kind and tier; a box's view links to its backlog.
 - **Closing.** `python roadmap-store/roadmap_store.py close-group <group> --by <session> --passed "<evidence>" [--cat C]
   [--drop t05,t06 --why "..."]` checks nothing itself (the exit test is the lane's evidence) and, in one commit: moves every open
   task to the backlog (filed by the rules, `--sev` default S2, Gabriel-only tasks flagged) or drops the named ones, sets the group

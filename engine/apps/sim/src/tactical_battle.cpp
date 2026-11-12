@@ -12,6 +12,7 @@
 #include "alamo/galactic/special_data.hpp"  // P4 tactical: special_name_crc (Black Market gate)
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/map_spawn.hpp"
+#include "alamo/tactical/movement/land_path.hpp"  // bkt1 t01: zone_connected (the staging search)
 #include "alamo/tactical/movement/space_avoid.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
@@ -1052,14 +1053,20 @@ void TacticalBattle::setup(TacticalMode& mode, terrain::MapData map, SimRng& rng
         // (CombatSystem::can_hit_from; a squad container through its first live member). Yes or NoTarget (nothing
         // tested) = it can fire. s78n t25.4: los_only (a guard block's trim, item 7: the movement tests the guard range)
         // answers the line of fire alone (CombatSystem::line_of_fire_from).
-        movement_->set_fire_test([this](mv::ObjectId mover, mv::V2 p, mv::ObjectId target, bool los_only) {
+        movement_->set_fire_test([this](mv::ObjectId mover, mv::V2 p, mv::ObjectId target, bool los_only, mv::V2 g, float gz) {
             const objects::ObjectId unit = attack_lead(mover);
             if (unit == objects::kNoObjectId || !combat_->has_unit(unit)) return true;
             tactical::Vec3 from = combat_->can_hit_origin(unit);
             from.x = p.x;
             from.y = p.y;
+            // bkt1 t06 (b0079, MOVEMENT §4.3.2 item 7 / 0x40f7c0): from p at the terrain height, or the water height for a
+            // Water-capable class (the mover's movement mask has the Water bit) where the water lies above; to G at its
+            // height (the movement's goal point); CombatSystem raises both by their Ranged_Target_Z_Adjust
             from.z = map_.terrain.sample_height(p.x, p.y);
-            const tc::CanHit c = los_only ? combat_->line_of_fire_from(unit, from, target) : combat_->can_hit_from(unit, from, target);
+            if ((movement_->mask_of(mover) & mv::kPassWater) != 0u && map_.terrain.header.water_type != terrain::WaterType::None)
+                from.z = std::max(from.z, map_.terrain.header.water_height);
+            const tactical::Vec3 to{g.x, g.y, gz};
+            const tc::CanHit c = los_only ? combat_->line_of_fire_from(unit, from, target, &to) : combat_->can_hit_from(unit, from, target, &to);
             return c == tc::CanHit::Yes || c == tc::CanHit::NoTarget;
         });
         // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): the formation layout's rank key, Get attack range
@@ -1566,6 +1573,7 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
         if (commanded_by_player(store.owner(u.h))) continue;  // integration fixes: human units take commands only
+        if (!space_ && !standin_owner(store.owner(u.h))) continue;  // bkt1 t07 (b0084): land third parties idle
         const Vec3 up = store.position(u.h);
         const Unit* best = nullptr;
         float best_d2 = 0.0f;
@@ -1652,6 +1660,11 @@ void TacticalBattle::drop_locked(std::vector<objects::ObjectId>& ids) const {
 }
 
 // ---- integration fixes: human order API (rules of BattleAi::execute_order) -----------------------------------------
+
+bool TacticalBattle::standin_owner(int32_t player) const {
+    if (req_.info.attacker < 0 && req_.info.defender < 0) return player >= 0;  // a battle built without sides: everyone
+    return player >= 0 && (player == req_.info.attacker || player == req_.info.defender);
+}
 
 bool TacticalBattle::commanded_by_player(int32_t player) const {
     return cfg_.skip_human_units && player >= 0 && static_cast<size_t>(player) < galaxy_->players().size() &&
@@ -1973,25 +1986,92 @@ objects::ObjectId TacticalBattle::attack_lead(objects::ObjectId mover) {
     return objects::kNoObjectId;
 }
 
+bool TacticalBattle::pending_ability_ranges(objects::ObjectId unit, float& min_range, float& max_range, objects::ObjectId& on) const {
+    // the unit's pending targeted ability, else its squad container's (AbilitySystem keeps a squad's on the container)
+    on = objects::kNoObjectId;
+    if (!abilities_) return false;
+    for (const objects::ObjectId id : {unit, attack_mover(unit)})
+        if (abilities_->pending_ranges(id, min_range, max_range)) {
+            on = abilities_->pending_target(id);
+            return true;
+        }
+    return false;
+}
+
 Vec3 TacticalBattle::attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target,
-                                       Vec3 tp) {
-    // s78n t25.3 (0x40e260 [M], TACTICAL_COMBAT §2.8; the AI's Attack_Move staging and stage A's per-plan staging merged):
-    // the unit M with the largest Targeting_Min_Attack_Distance (first wins), when inside that min range of T, moves the
-    // goal to min + 0.2 x (Get_Base_Attack_Range(M) - min) from T [port: on the line from T to M]
+                                       Vec3 tp, size_t movers) {
+    // bkt1 t01 (b0068; 0x40e260, BKT1_ATTACK_RE §1.2 [H], TACTICAL_COMBAT §2.8; the AI's Attack_Move staging and stage
+    // A's per-plan staging merged). M = the first unit with the largest minimum range: its type's
+    // Targeting_Min_Attack_Distance, or its pending targeted ability's Activation_Min_Range when > 0. Only when M is inside
+    // that min range of T is G moved:
+    //   - crush case: a one-member formation whose M has SQUASH and T Is_Squashable (or M Is_Supercrusher and T
+    //     Is_Squashable_By_Supercrusher) -> G = T's position (no hostility test);
+    //   - else d = min + 0.2 x (Get_Base_Attack_Range(M) - min) and G = the free-position search 0x440f90 (mode 3) around
+    //     M: rings centred on M from R0 = max(0, min - |M - G|) (3-D), step 1.0 growing by 0.8 up to min(1.5 r, 10)
+    //     (r = M's hard footprint radius; maxStep 5 when r = 0), 20 rings, n = trunc(2 pi R / r) + 1 samples (at least
+    //     4 after ring 0), counter-clockwise from the T -> M direction; the first sample >= d from G (3-D, the sample at
+    //     M's z), inside the map extents and in M's zone for M's own movement class wins. None: G stays at T's point.
+    // (the gate: slot 46 with the ability's Activation_Min_Range when M's pending ability is on T, else the type's)
     objects::ObjectId m = objects::kNoObjectId;
-    float mn = 0.0f;
-    for (const objects::ObjectId id : ids)
-        if (combat_->has_unit(id) && combat_->min_attack_distance(id) > mn) {
-            mn = combat_->min_attack_distance(id);
+    float mn = 0.0f, gate = 0.0f;
+    for (const objects::ObjectId id : ids) {
+        if (!combat_->has_unit(id)) continue;
+        const float tmin = combat_->min_attack_distance(id);
+        float v = tmin, g = tmin;
+        float amin = 0.0f, amax = 0.0f;
+        objects::ObjectId on = objects::kNoObjectId;
+        if (pending_ability_ranges(id, amin, amax, on) && amin > 0.0f) {
+            v = std::max(v, amin);
+            if (on == target) g = amin;
+        }
+        if (v > mn) {
+            mn = v;
+            gate = g;
             m = id;
         }
-    if (m == objects::kNoObjectId || !combat_->inside_min_range(m, target)) return tp;
+    }
+    if (m == objects::kNoObjectId || !combat_->inside_min_range_of(m, target, gate)) return tp;
     const Unit* mu = unit_by_id(m);
     if (!mu) return tp;
+    const objects::GameObjectTypes& types = catalog_->types();
+    const Unit* tu = unit_by_id(target);
+    if (movers == 1 && attack_mover(m) == m && tu && mu->type < types.size() && tu->type < types.size() &&
+        types.has_behavior(mu->type, objects::BehaviorSet::Union, 0x26)) {  // SQUASH
+        const bool squash = types.get_bool(tu->type, "Is_Squashable") ||
+                            (types.get_bool(mu->type, "Is_Supercrusher") && types.get_bool(tu->type, "Is_Squashable_By_Supercrusher"));
+        if (squash) return tp;
+    }
     const float d = mn + 0.2f * (combat_->base_attack_range_of(m) - mn);
     const Vec3 mp = mode.primary().position(mu->h);
-    const float dx = mp.x - tp.x, dy = mp.y - tp.y, len = dmath::sqrt(dx * dx + dy * dy);
-    return len > 0.0f ? Vec3{tp.x + dx / len * d, tp.y + dy / len * d, tp.z} : Vec3{tp.x + d, tp.y, tp.z};
+    const objects::ObjectId mover = attack_mover(m);
+    const uint32_t mask = movement_ && movement_->has_unit(mover) ? movement_->mask_of(mover) : 0u;
+    float hx = 0.0f, hy = 0.0f;
+    unit_half_extents(*mu, hx, hy);
+    const float r = dmath::sqrt(hx * hx + hy * hy);
+    const float max_step = std::min(r > 0.0f ? 1.5f * r : 5.0f, 10.0f);
+    const tactical::Aabb box = map_extents(mode);
+    const float yaw = dmath::atan2(mp.y - tp.y, mp.x - tp.x);
+    const auto dist3 = [](Vec3 a, Vec3 b) {
+        const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+        return dmath::sqrt((dx * dx + dy * dy) + dz * dz);
+    };
+    float R = std::max(0.0f, mn - dist3(mp, tp));
+    float step = 1.0f;
+    for (int ring = 0; ring < 20; ++ring) {
+        int32_t n = r > 0.0f ? static_cast<int32_t>(std::min(R * 2.0f * dmath::kPiF / r, 4096.0f)) + 1 : 1;
+        if (ring > 0) n = std::max<int32_t>(4, n);
+        for (int32_t k = 0; k < n; ++k) {
+            const float th = 2.0f * dmath::kPiF * static_cast<float>(k) / static_cast<float>(n) + yaw;
+            const Vec3 q{mp.x + R * dmath::cos(th), mp.y + R * dmath::sin(th), mp.z};
+            if (d > dist3(q, tp)) continue;
+            if (q.x < box.min.x || q.x > box.max.x || q.y < box.min.y || q.y > box.max.y) continue;
+            if (!movement_ || !mv::zone_connected(movement_->regions(), mask, {mp.x, mp.y}, {q.x, q.y})) continue;
+            return q;  // land_attack_order reads its x / y; the fire trim's end height is C's (bkt1 t06)
+        }
+        R += step;
+        step = std::min(step + 0.8f, max_step);
+    }
+    return tp;
 }
 
 TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode, std::span<const objects::ObjectId> ids,
@@ -2021,10 +2101,10 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode,
         unit_half_extents(*tu, thx, thy);
     }
     // s78n t25.4 [port]: a guard block is not staged (G = C; 0x40e260's min-range rule is for an attack on T)
-    const Vec3 g = guard ? tp : attack_stage_goal(mode, o.units, target, tp);
+    const Vec3 g = guard ? tp : attack_stage_goal(mode, o.units, target, tp, movers.size());
     const tactical::Aabb& bb = mode.bounds();
     o.destination = {std::clamp(g.x, bb.min.x, bb.max.x), std::clamp(g.y, bb.min.y, bb.max.y)};
-    o.flags = flags;
+    o.flags = static_cast<uint8_t>(flags & ~kAttackBlockNoLock);  // bkt1 t05: the host-only bit stays here
     o.goal_object = -1;  // land: the block's object is attack.target
     o.attack.target = target;
     o.attack.c = {tp.x, tp.y};
@@ -2054,11 +2134,19 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode,
         mv::LandAttackUnit e;
         e.id = mover;
         if (lead != objects::kNoObjectId && combat_->has_unit(lead)) {
-            e.range = combat_->attack_range(lead);  // 0x3749d0
-            // 0x4f6e40 (§4.3.2 item 1): + min(hx, hy) of the target's extents ([port] no pending-ability clause)
-            e.engage = e.range + std::min(thx, thy);
-            // s78n t25.4 (item 1): a guard block's engagement range is capped at Land_Guard_Range (GC +0x11ec4)
-            if (guard) e.engage = std::min(e.engage, movement_->constants().land_guard_range);
+            e.range = combat_->attack_range(lead);  // 0x3749d0 (Get_Base_Attack_Range)
+            // 0x4f6e40 (§4.3.2 item 1; bkt1 t01, BKT1_ATTACK_RE §1.1 [H]): a pending targeted ability with an
+            // Activation_Max_Range > 0 gives min(range, that range) - no extent, no guard cap; else + min(hx, hy) of the
+            // target's extents ([port] land blocks name no hard point: the hard-point radius term is not reached)
+            float amin = 0.0f, amax = 0.0f;
+            objects::ObjectId on = objects::kNoObjectId;
+            if (pending_ability_ranges(lead, amin, amax, on) && amax > 0.0f) {
+                e.engage = std::min(e.range, amax);
+            } else {
+                e.engage = e.range + std::min(thx, thy);
+                // s78n t25.4 (item 1): a guard block's engagement range is capped at Land_Guard_Range (GC +0x11ec4)
+                if (guard) e.engage = std::min(e.engage, movement_->constants().land_guard_range);
+            }
             const tc::CanHit c = attack_can_hit(lead, target);
             e.in_range = c == tc::CanHit::Yes || c == tc::CanHit::LineBlocked;  // slots 44 / 45: range only
             e.melee = combat_->melee_attacker(lead);
@@ -2099,6 +2187,7 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
     struct Checked {  // s78n t25.3: this pass's checked blocks (ascending mover)
         objects::ObjectId mover, lead, tid;
         bool due, plan, halted;
+        bool locked = false;                   // bkt1 t03: the block's lead is movement-locked (not a formation lead)
         bool repath = false, dropped = false;  // s78n t26 review round 3: a moving formation's re-path (G 5); C 3's drop
         bool at_p = false;                     // C 3: the plan goes toward p (an unseen target after arrival)
         Vec3 p{};
@@ -2138,11 +2227,18 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
             lead = unit_by_id(r.mover);
             tid = names(lead);
         }
+        // bkt1 t05 (b0075, BKT1_ATTACK_RE §3 [H]): a unit Attack_Move on a non-hostile object - no unit's order names it
+        // (nothing locks it), the block stands for the movement's object block alone: lead = the mover (a squad through
+        // its first live member), C = the object
+        if ((r.flags & kAttackBlockNoLock) != 0 && !ct) {
+            const objects::ObjectId l = attack_lead(r.mover);
+            lead = l == objects::kNoObjectId ? nullptr : unit_by_id(l);
+            tid = r.target;
+        }
         if (!lead || tid == objects::kNoObjectId) return false;  // the order no longer names the target
-        // s78n t26 review round 2: the checks are the attack formation's (below); here the timer gate only
-        const bool due = frame_ >= r.next && !movement_locked(lead->id);
-        if (frame_ >= r.next && !due) r.next = frame_ + 30u;
-        checked.push_back({r.mover, lead->id, tid, due, false, false, false, false, false, Vec3{}});
+        // s78n t26 review round 2: the checks are the attack formation's (below); here the timer gate only. bkt1 t03: a
+        // locked lead no longer suspends its formation here - the formation's lead is picked below among unlocked members.
+        checked.push_back({r.mover, lead->id, tid, frame_ >= r.next, false, false, movement_locked(lead->id), false, false, false, Vec3{}});
         return true;
     };
     size_t w = 0;
@@ -2154,8 +2250,8 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
                                 [](const AttackBlock& b, objects::ObjectId v) { return b.mover < v; });
     };
     // s78n t26 review round 2 (FIGHTER_FLYING §4.11 A / E [H]): the checks are per attack formation F - the blocks on the
-    // same target whose movers share UnitView::atk_form (0: the block alone), in ascending mover order, lead = the first
-    // ([port] as the re-plan's lead). F is checked when its lead's block is due (0x410a60 / 0x4192b0: frame + int(FPS +
+    // same target whose movers share UnitView::atk_form (0: the block alone), in ascending mover order (lead: bkt1 t03
+    // below). F is checked when its lead's block is due (0x410a60 / 0x4192b0: frame + int(FPS +
     // 0.5)); every member's timer then resets. c = 0x40edd0(F): EVERY member can hit from where it stands (each block's
     // lead: a squad through its first member that names the target, D 5); moving = some member has a goal; stopping =
     // the lead's Walk state 0x14 (End Move) or 0x15 (Pre Stopped: [port] never observed, the port's walk passes it within
@@ -2163,19 +2259,63 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
     //   - arrived (no member has a goal), no member on a collision-owned top record, and not c -> plan again (0x410a60);
     //   - moving, c, not stopping and D <= R -> the land stop: every member with a goal halts at once;
     //   - moving and (stopping and not c, or D > R) -> plan again.
+    // bkt1 t03 (b0073, FIGHTER_FLYING §4.11 G 3 [H]): F's lead = the member nearest the 3-D centroid L of F's movers
+    // (summed in member order; strict <, first wins) among the movers that stand off their goal point (the unit their
+    // lead's order names, tid: D 5's tested member of a TEAM container target), [port] skipping movement-locked ones (hero clash, immobilize, landing, Lua lock:
+    // they keep their order, A1_READINGS §28.9); fallback the first unlocked member. Every member locked: F is not
+    // checked, the timers wait. F is checked when its lead's block is due.
     std::vector<uint8_t> grouped(checked.size(), 0);
-    for (size_t i = 0; i < checked.size(); ++i) {
-        if (grouped[i]) continue;
-        grouped[i] = 1;
-        const auto ri = bi(checked[i].mover);
-        const uint32_t form = movement_->view(checked[i].mover).atk_form;
-        std::vector<size_t> g{i};
+    const auto pos3 = [&](objects::ObjectId id) {
+        const mv::V2 p = movement_->view(id).pos;
+        const objects::ObjectHandle h = st.find(id);
+        return Vec3{p.x, p.y, st.alive(h) ? st.position(h).z : 0.0f};
+    };
+    for (size_t i0 = 0; i0 < checked.size(); ++i0) {
+        if (grouped[i0]) continue;
+        grouped[i0] = 1;
+        const uint32_t form = movement_->view(checked[i0].mover).atk_form;
+        std::vector<size_t> g{i0};
         if (form != 0)
-            for (size_t j = i + 1; j < checked.size(); ++j)
-                if (!grouped[j] && bi(checked[j].mover)->target == ri->target && movement_->view(checked[j].mover).atk_form == form) {
+            for (size_t j = i0 + 1; j < checked.size(); ++j)
+                if (!grouped[j] && bi(checked[j].mover)->target == bi(checked[i0].mover)->target &&
+                    movement_->view(checked[j].mover).atk_form == form) {
                     grouped[j] = 1;
                     g.push_back(j);
                 }
+        size_t i = checked.size();
+        {
+            Vec3 L{};
+            for (const size_t j : g) {
+                const Vec3 q = pos3(checked[j].mover);
+                L.x += q.x;
+                L.y += q.y;
+                L.z += q.z;
+            }
+            const float inv = 1.0f / static_cast<float>(g.size());
+            L = Vec3{L.x * inv, L.y * inv, L.z * inv};
+            float best = 0.0f;
+            size_t first_free = checked.size();
+            for (const size_t j : g) {
+                if (checked[j].locked) continue;
+                if (first_free == checked.size()) first_free = j;
+                const Vec3 q = pos3(checked[j].mover);
+                const Vec3 tc = st.position(unit_by_id(checked[j].tid)->h);
+                if (q.x == tc.x && q.y == tc.y && q.z == tc.z) continue;  // its goal point is where it stands
+                const float dx = q.x - L.x, dy = q.y - L.y, dz = q.z - L.z;
+                const float dd = (dx * dx + dy * dy) + dz * dz;
+                if (i == checked.size() || dd < best) {
+                    best = dd;
+                    i = j;
+                }
+            }
+            if (i == checked.size()) i = first_free;
+        }
+        if (i == checked.size()) {  // every member locked: the formation waits
+            for (const size_t j : g)
+                if (checked[j].due) bi(checked[j].mover)->next = frame_ + 30u;
+            continue;
+        }
+        const auto ri = bi(checked[i].mover);
         if (!checked[i].due) continue;
         for (const size_t j : g) bi(checked[j].mover)->next = frame_ + 30u;
         bool can = true, moving = false, pushed = false;

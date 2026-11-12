@@ -409,8 +409,10 @@ public:
     // s78n t25.2 (MOVEMENT §4.3.2 items 6 - 7): "this mover can fire at the target from p" - los_only false: not inside its
     // min range (TARGETING slot 46 at p), in max range (slot 43 at p) and the line of fire clear; true (guard blocks):
     // the line of fire only. A mover that is not tested answers true. Called from move() only (serial). Unset: no fire
-    // trim and no "every member can fire" stop. Transient (host setup): not saved, not hashed.
-    using FireTestFn = std::function<bool(ObjectId mover, V2 p, ObjectId target, bool los_only)>;
+    // trim and no "every member can fire" stop. Transient (host setup): not saved, not hashed. bkt1 t06 (b0079, item 7):
+    // g / gz = the line of fire's end point before T's Ranged_Target_Z_Adjust - the plan's goal G in the fire trim, the
+    // target point C in the "every member can fire" gate; gz is the order's C height (attack.cz).
+    using FireTestFn = std::function<bool(ObjectId mover, V2 p, ObjectId target, bool los_only, V2 g, float gz)>;
     void set_fire_test(FireTestFn fn) { fire_test_ = std::move(fn); }
     // s78n t26 review round 2 (MOVEMENT §4.3 correction [H]): a unit's attack range 0x3749d0, the rank key of the land
     // formation layout (0x41a080; a squad container: its first live member's, as the attack order's lead). Called from

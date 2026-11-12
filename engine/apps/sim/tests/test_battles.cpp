@@ -2035,6 +2035,8 @@ void test_map_owners(const Data& d) {
         TacticalBattle* b = battles.battle();
         if (!b || !host.tactical() || b->frame() != 1) continue;
         CHECK(b->request().info.attacker == 0 && b->request().info.defender == 1);
+        // bkt1 t07 (b0084): the stand-in orders drive the attacker and the defender only; a third party idles
+        CHECK(b->standin_owner(0) && b->standin_owner(1) && !b->standin_owner(2) && !b->standin_owner(-1));
         const objects::ObjectStore& st = host.tactical()->primary();
         const objects::TypeIndex post = d.types.resolve_name("S4_Post"), rp = d.types.resolve_name("S4_RPoint");
         std::map<int, int32_t> post_owner;  // x position -> owner
