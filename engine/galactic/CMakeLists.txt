@@ -37,6 +37,7 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
     src/special_rules.cpp    # P4 sim: special-system tables (special_data.hpp)
     src/special_systems.cpp  # P4 sim: hero trigger / respawn, black market, sabotage, hack, income abilities, corruption
     src/galactic_save.cpp    # N1: GalacticSim / ConflictManager write / read
+    src/bounty.cpp           # a2m r2: bounty values (auto-resolve bounty, results screen)
   )
   add_library(alamo::galactic_sim ALIAS alamo_galactic_sim)
   target_link_libraries(alamo_galactic_sim PUBLIC alamo_galactic alamo_objects alamo_commands alamo_data alamo_core)

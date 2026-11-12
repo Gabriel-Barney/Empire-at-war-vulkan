@@ -396,6 +396,50 @@ fighter picks over its runs), so some spawnability rule of AI_GALACTIC_2 §1.4 (
 or the +0xF60 / +0xF80 counts) vetoes them and is not yet specified. Also open: the port's Underworld runs the same goal
 at Shola / Nal Hutta after tick 8400 in 4 of 12 seeds; retail's Underworld never does before 13501.
 
+**2026-11-12 (a2m t01 / t03 / t11, round 2): the r2 RE answers** (`docs/re/A2M_R2_RE_A.md`, `docs/re/A2M_R2_RE_B.md`; marked
+"a2m r2" in the code).
+- **Galactic auto-resolve bounty** (`engine/galactic/src/conflicts.cpp` `pay_auto_resolve_bounty`, RE_B §2 [H]; amounts
+  traced in `A2M_R2_UW_BOUNTY_TRACE.md` §1). Each object the auto-resolve kills pays its killer K, the other battle side,
+  `round(B)` with `add_credits(K, n, notify 0)`, one call per object (Credit_Multiplier inside), winner or loser. Case A:
+  K's faction has `Benefits_From_Corruption` and the battle planet is Racketeering-corrupted (D +0x2f4 == 3). Case B:
+  otherwise, the victim's faction has `Benefits_From_Corruption` and K owns a NalHutta / NalHutta_Story planet. Gates: the
+  victim is not K and not allied with K. B (`engine/galactic/bounty.hpp`): the float `Override_Bounty_SP` when >= 0 (0 stays
+  0), else the largest `Default_Bounty_By_Category_SP` over the CategoryMask bits; rounded half away from zero (the
+  results screen shows the same values). No `Bounty_On_Faction_Ability` in galactic: the ability data stays parsed
+  (`SpecialRules::bounty`, `FactionRules::automatic_corruption_upgrades`) for the tactical bounty, which is not modelled.
+  [port] (1) objects: each dying combatant pays its own type's bounty, except a squadron / company holder (the traced
+  battles pay 0 for every holder, while the port's typed view gives a holder such as `Rebel_X-Wing_Squadron` a
+  CategoryMask worth 15), then one per `Squadron_Units` / `Company_Units` member (the linked objects die with it), then a
+  carried company's `Company_Transport_Unit`; the starbase (a planet level)
+  and the planet's ground structures (removed through 0x4bb4a0 -> 0x391310, not the death handler) pay nothing [H]; the
+  port's planet structures are all treated as that list (RE_B §2.5's own-combatant garrison objects are not separate
+  objects in the port). (2) killer = the other side's player even when that side has no combatant [M]. (3) order:
+  combatants, then cargo (draw-free). (4) `Override_Bounty_SP` is read from the field text (the typed view's get_int gives 0
+  for it; schema fix is a follow-up). Bounty collection on/off story rewards are not modelled (always on [M]).
+- **Ended in-production builds** (`engine/ai/src/galactic_build.cpp` `cancel_ended_production`, RE_B §1 [H]). The PAYG
+  reclaim (0x5f7d40) runs only on a goal-system release (`end_plan(id, by_goal_system = true)`); a plan that ends through
+  its own script reclaims nothing. At the producing planet's next production service (before the market's period test),
+  a queue whose task ended unreclaimed cancels the head of the planet's production queue with the refund
+  (`GalacticSim::cancel(..., refund = true)`: paid fraction x cost, Add_Credits notify 1) when the planet owner pays as it
+  goes; reclaimed builds finish to the free store as before. [port] the port's only task end that leaves a production
+  running is the plan end (`end_plan_builds`): its Production_Failed / planet-lost paths clear the queue record, and an empty
+  task force waits for its producing tasks; the queue save (0x53c7f0) does not apply the cancel first, so a save between
+  the end and the next service keeps the ended state, which the next service after loading cancels.
+- **Structure ETA** (`engine/ai/src/galactic_pp.cpp` `recompute_eta`, RE_A §1.5 [H]): a structure takes its build time at
+  list[0] and, when list[0] is the target, marks the target's pool entry used, so its ETA = the target queue's wait + the
+  build time, and the accept / resolve test `0 < AllowedTime < ETA` sees the wait. The pools start at 0x401ba0 (the planet
+  production queue's own time) on the first solve and at 0x53bb20 on re-solves [M: 0x401ba0's queue argument is the
+  pool's]. The Setup C `queue_time` (A2M_T04 Q2.2: the current item's remaining time) is unchanged; AI_GALACTIC_2 §2.3 and
+  RE_A §1.5 describe 0x401ba0 differently (follow-up). Ground base level (`GalacticSim::ground_base_level`): the recount
+  0x4bdaa0 is [H] now, the live finished 0x5F structures, clamped to 5.
+- **Goal-pass cadence** (`engine/ai/src/ai_goals.cpp`, `GoalSystemConfig::retail_cadence`, galactic only; RE_A §2 [H]).
+  The cap's N is the whole PlayerList (session players plus one per faction of the faction table with no player; a
+  faction name defined twice counts once [port]) minus active humans (`PlayerAi::quota_players`; HotM 8 - 1 -> cap 3).
+  Init seeds evalsLastPass with sources x max(1, targets) and takes the first quota from it; the seed is kept, so pass 1
+  counts on top of it (passes 1 and 2 run at the cap). A slice ends as soon as its counter reaches the quota (floor(E / q) + 1
+  frames per pass). [port] the path finder's stagger K keeps the session-player count (`path_stagger_players`, not re-read);
+  the tactical goal system keeps the old cadence (not re-checked).
+
 **2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
 FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
 stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final

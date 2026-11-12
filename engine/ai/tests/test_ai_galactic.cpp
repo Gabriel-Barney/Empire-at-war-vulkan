@@ -139,6 +139,82 @@ static void test_cadence() {
     std::printf("cadence: %zu trace entries\n", stub.trace.size());
 }
 
+// a2m r2 (A2M_R2_RE_A §2.1) [H]: the retail goal-pass cadence. 2 sources x 100 targets that all apply: every pass makes
+// E = 200 evaluations. N - H = 7 -> cap (int)(20 / 7 + 0.5) = 3. Init seeds evalsLastPass with 2 x 100 = 200 -> pass 1
+// quota min(ceil(200 / 150), 3) = 2; the seed is kept, so pass 1 ends with 400 -> pass 2 quota 3; pass 2 ends with 200 ->
+// pass 3 quota 2. A slice stops when its counter reaches the quota, so a pass takes floor(E / q) + 1 frames: 101, 67, 101.
+// Without retail_cadence: quota 3 at once and ceil(E / q) = 67 frames per pass.
+static void test_goal_pass_cadence() {
+    struct CadenceHooks final : GoalModeHooks {
+        uint32_t target_count() override { return 100; }
+        bool applies(int32_t, uint32_t) override { return true; }
+        bool blocked(uint32_t, int32_t) override { return false; }
+        bool evaluate(const std::string&, int32_t, double&) override { return false; }  // counted all the same
+        bool accept(Goal&) override { return false; }
+        bool plan_activatable(Goal&) override { return false; }
+        bool plan_invalid(const Goal&) override { return true; }
+        bool replaceable(const Goal&) override { return true; }
+        void refresh_plan(Goal&) override {}
+        void suspend_reservations(Goal&) override {}
+        bool uses_budget() override { return false; }
+        bool can_fund(const Goal&) override { return true; }
+        float category_credits(int32_t) override { return 1.0f; }
+        void budget_add(Goal&) override {}
+        void budget_release(Goal&) override {}
+        void budget_weights() override {}
+        std::vector<int32_t> category_order() override { return {}; }
+        void queue_production(Goal&) override {}
+        void instantiate(Goal&) override {}
+        void end_plan(Goal&, bool) override {}
+        void drop_potential_plan(Goal&) override {}
+        float elapsed_eta(const Goal&) override { return 0.0f; }
+        int32_t quota_players() override { return 7; }
+    };
+    AiDefinitions defs;
+    for (const char* n : {"Goal_A", "Goal_B"}) {
+        GoalTypeDef d;
+        d.name = n;
+        d.application = app::Enemy;
+        d.category = 0;
+        defs.goals.push_back(d);
+    }
+    const std::vector<GoalSource> sources{{0, "A"}, {1, "B"}};
+    auto run = [&](bool retail) {
+        CadenceHooks hooks;
+        LearningSystem learning;
+        SimRng rng(5);
+        GoalSystem gs;
+        GoalSystemConfig cfg;
+        cfg.retail_cadence = retail;
+        gs.init(defs, sources, &hooks, &learning, nullptr, &rng, cfg);
+        std::vector<std::pair<int64_t, uint32_t>> ends;  // (frame the pass ended, quota of the pass that ran)
+        uint32_t passes = 0, quota = 0;
+        for (int64_t f = 1; f <= 300 && ends.size() < 3; ++f) {
+            gs.service(f);
+            if (f == 1) quota = gs.quota();
+            if (gs.passes() != passes) {
+                passes = gs.passes();
+                ends.emplace_back(f, quota);
+                quota = gs.quota();
+            }
+        }
+        return ends;
+    };
+    const auto retail = run(true), old = run(false);
+    CHECK(retail.size() == 3 && old.size() == 3);
+    if (retail.size() == 3) {
+        CHECK(retail[0] == (std::pair<int64_t, uint32_t>{101, 2u}));
+        CHECK(retail[1] == (std::pair<int64_t, uint32_t>{168, 3u}));
+        CHECK(retail[2] == (std::pair<int64_t, uint32_t>{269, 2u}));
+    }
+    if (old.size() == 3) {
+        CHECK(old[0] == (std::pair<int64_t, uint32_t>{67, 3u}));
+        CHECK(old[1].first - old[0].first == 100 && old[1].second == 2u);  // ceil(200 / 150) = 2 -> ceil(200 / 2) frames
+    }
+    std::printf("goal pass cadence: retail passes end at %lld / %lld / %lld\n", static_cast<long long>(retail.empty() ? 0 : retail[0].first),
+                static_cast<long long>(retail.size() > 1 ? retail[1].first : 0), static_cast<long long>(retail.size() > 2 ? retail[2].first : 0));
+}
+
 static void test_desire_and_hysteresis() {
     Goal g;
     g.desire = 10.0f;
@@ -2122,6 +2198,22 @@ function MainForce_No_Units_Remaining()
   GlobalValue.Set("a2m_nur", NurCount)
 end
 )";
+// a2m r2 (A2M_R2_RE_B §1): the plan starts the production of a corvette and ends through its own script while the
+// corvette is in production: no PAYG reclaim, so the AI queue cancels it with the refund at the next production service.
+static const char* kPlanA2mCancel = R"(
+require("SynAICommands")
+function Definitions()
+  Category = "Conquer_Planet"
+  TaskForce = { { "MainForce", "DenyHeroAttach", "HeroShip = 1", "Corvette = 1" } }
+end
+function MainForce_Thread()
+  MainForce.Set_As_Goal_System_Removable(false)
+  MainForce.Produce_Force()
+  Sleep(4)
+  GlobalValue.Set("a2m_c_exit", 1)
+  ScriptExit()
+end
+)";
 // a2m t02 (A2L_T01_RE_ANSWERS Q8.2): the thread waits for the test to remove a member, then calls Move_To. The test
 // destroys the member in the FleetObject (TF +0x120); Move_To must move the re-elected fleet. The thread then stays
 // alive, so the task force can still be read.
@@ -2201,6 +2293,7 @@ struct ParityWorld {
         files.add("Data\\Scripts\\AI\\A2mNur.lua", kPlanA2mNur);
         files.add("Data\\Scripts\\AI\\A2mReelect.lua", kPlanA2mReelect);
         files.add("Data\\Scripts\\AI\\A2mStage.lua", kPlanA2mStage);
+        files.add("Data\\Scripts\\AI\\A2mCancel.lua", kPlanA2mCancel);
         plan_files = list_plan_files([this](std::string_view glob) {
             const std::string g(glob);
             return files.list(g.substr(0, g.find('*')));
@@ -2778,6 +2871,52 @@ static void test_land_units_owner_rule() {
 // that leaves no counted entry (not a named / generic hero, not a space special weapon, no lobbing superweapon). The hero
 // left alone after the infantry dies gets the event (the old "every unit lost" rule did not raise it); the hero's own
 // loss raises it again.
+// a2m r2 (A2M_R2_RE_B §1.1-1.5) [H]: a build task that ends while its unit is in production, not taken by the PAYG reclaim
+// (here: the plan ended through its own script, so no goal-system release ran), is cancelled at the producing planet's
+// next production service: the head entry leaves the queue, the AI owner gets the paid fraction back, and no corvette is
+// ever made.
+static void test_ended_production_cancel() {
+    ParityWorld pw(false, {"A2mCancel"}, own_p2);  // P2 held: Conquer_Planet @P3 stages at P2
+    lua::GlobalValueStore gv;
+    pw.world->set_global_values(&gv);
+    auto num = [&gv](const char* n) { const lua::AiGlobalValue v = gv.get(n); return v.kind == lua::AiGlobalValue::Number ? v.number : -1.0; };
+    const auto corvette_queued = [&pw] {
+        for (uint32_t q = 0; q < 2; ++q)
+            for (const gal::BuildEntry& e : pw.sim->queue_of(0, q))
+                if (e.type == tCorvette && e.player == 0) return true;
+        return false;
+    };
+    const auto corvettes = [&pw] {
+        uint32_t n = 0;
+        for (const gal::FleetState& fl : pw.sim->fleets())
+            if (fl.alive && fl.owner == 0)
+                for (const objects::ObjectHandle u : fl.contents) n += pw.store->alive(u) && pw.store->type(u) == tCorvette ? 1u : 0u;
+        return n;
+    };
+    bool produced = false;
+    int32_t f = 1;
+    for (; f <= 30 * 120 && num("a2m_c_exit") < 0.0; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+        produced = produced || corvette_queued();
+    }
+    const bool queued_at_exit = corvette_queued();
+    for (const int32_t e = f + 30 * 30; f < e; ++f) {
+        pw.sim->update();
+        pw.world->update_player(0, f, true, false);
+    }
+    bool cancelled = false;
+    for (const AiDecision& d : pw.world->decision_log())
+        cancelled = cancelled || d.text.find("cancel ended build Corvette at P0 (refund)") != std::string::npos;
+    std::printf("ended production cancel: queued %d, queued at exit %d, cancelled %d, corvettes %u\n", produced ? 1 : 0,
+                queued_at_exit ? 1 : 0, cancelled ? 1 : 0, corvettes());
+    CHECK(num("a2m_c_exit") == 1.0 && produced && queued_at_exit);
+    CHECK(cancelled && !corvette_queued() && corvettes() == 0);
+    if (!cancelled)
+        for (const AiDecision& d : pw.world->decision_log()) std::printf("    %s\n", d.text.c_str());
+    pw.world->set_global_values(nullptr);
+}
+
 static void test_no_units_remaining_counted_entries() {
     ParityWorld pw(false, {"A2mNur"}, [](gal::GalacticSetup& s) {
         for (gal::StartingForce& f : s.forces)
@@ -2951,6 +3090,28 @@ static void test_ground_structure_slots() {
         const std::vector<uint32_t> s = solve(pw, ok);
         CHECK(!ok && !pw.has(s, tBarracks));
     }
+}
+
+// a2m r2 (A2M_R2_RE_A §1.5) [H]: a structure's ETA includes the target queue's wait. The target P0 is held, so its
+// source list starts at P0 and the structure marks P0's ground pool entry used: ETA = the planet production queue's time
+// (0x401ba0 on the first solve: the current item's remaining time + the rest's build times) + the build time.
+static void test_structure_eta_queue_wait() {
+    ParityWorld pw(false, {"BuildBarracks"});
+    pw.run(2);
+    bool ok = false;
+    float idle = -1.0f, busy = -1.0f;
+    pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 0, &ok, &idle);
+    CHECK(ok && idle > 0.0f);
+    CHECK(pw.sim->enqueue(0, 0, tInfantry) == commands::RejectReason::None);
+    CHECK(pw.sim->enqueue(0, 0, tInfantry) == commands::RejectReason::None);
+    const auto q = pw.sim->queue_of(0, 0);
+    CHECK(q.size() == 2);
+    const float wait = q.size() == 2 ? q[0].remaining + q[1].build_time : 0.0f;
+    ok = false;
+    pw.world->solve_potential_plan(0, "BuildBarracks", "Upgrade_Starbase", 0, &ok, &busy);
+    std::printf("structure ETA: idle %.3f, queue wait %.3f -> %.3f\n", static_cast<double>(idle), static_cast<double>(wait),
+                static_cast<double>(busy));
+    CHECK(ok && wait > 0.0f && busy == wait + idle);
 }
 
 // A2 f t01 (2): BudgetFractionToBuild 0x667120 fails only without a goal system / for an unknown type. Before the
@@ -6200,6 +6361,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--write-golden") == 0) g_write_golden = true;
     test_cadence();
+    test_goal_pass_cadence();  // a2m r2
     test_desire_and_hysteresis();
     test_goal_reservations();
     test_goal_batched_values();
@@ -6228,6 +6390,8 @@ int main(int argc, char** argv) {
     test_produce_force_stage_launch();
     test_land_units_owner_rule();
     test_no_units_remaining_counted_entries();
+    test_ended_production_cancel();  // a2m r2
+    test_structure_eta_queue_wait();  // a2m r2
     test_production_disabled_and_delivery();
     test_ground_structure_slots();
     test_budget_fraction_before_init();

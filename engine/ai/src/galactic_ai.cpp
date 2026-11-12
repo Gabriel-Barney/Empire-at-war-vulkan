@@ -7,6 +7,7 @@
 #include <span>
 
 #include "alamo/ai/ai_free_store_path.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/profile.hpp"
 
 #include "alamo/data/xml.hpp"
@@ -850,7 +851,30 @@ PlayerAi::PlayerAi(GalacticAiWorld::Impl* world, int32_t p, const AiPlayerTypeDe
     paths.set_background(world->cfg.path_latency, world->cfg.background);  // OPT2 t02
 }
 
+// a2m r2 (A2M_R2_RE_A §2.1) [H]: the goal quota's cap divides by N - H, N = the whole PlayerList. Create_Default_Players
+// 0x293390 puts the session players first, then one player for every faction of the faction table that has no player
+// yet, in faction order; players are never removed. H = the active human players. (FoC: 8 factions, so HotM gives 8 - 1.)
+// A faction defined twice under one name counts once [port].
 int32_t PlayerAi::quota_players() {
+    const auto players = w->sim.players();
+    const auto& factions = w->sim.rules().factions;
+    int32_t n = 0, humans = 0;
+    for (const gal::PlayerState& ps : players) {
+        ++n;
+        humans += ps.human ? 1 : 0;
+    }
+    for (size_t f = 0; f < factions.size(); ++f) {
+        bool seen = false;
+        for (size_t g = 0; g < f && !seen; ++g) seen = ascii_iequals(factions[g].name, factions[f].name);
+        for (const gal::PlayerState& ps : players) seen = seen || ps.faction == f;
+        n += seen ? 0 : 1;
+    }
+    return n - humans;
+}
+
+// Path-finder stagger K (execution slot 6, PHASE2_ANSWERS Q11): the session players minus the humans [M], unchanged by
+// the a2m r2 PlayerList reading (not re-checked for this count).
+int32_t PlayerAi::path_stagger_players() const {
     int32_t n = 0, humans = 0;
     for (const gal::PlayerState& ps : w->sim.players()) {
         ++n;
@@ -883,7 +907,7 @@ void PlayerAi::first_service(int64_t) {
     w->decide(player, "opponent " + std::to_string(pick));
     // Execution slot 6 (0x526120, PHASE2_ANSWERS Q11): create the path finder, recompute at once, stagger the next
     // recompute by slot (player index [M: PlayerClass +0x48]) over K = players - humans.
-    paths.create(w->sim.graph(), w->path_input(player), w->sim.frame(), player, quota_players(), w->cfg.path_pf);
+    paths.create(w->sim.graph(), w->path_input(player), w->sim.frame(), player, path_stagger_players(), w->cfg.path_pf);
 }
 
 void PlayerAi::template_init(int64_t) {
@@ -1021,7 +1045,10 @@ void GalacticAiWorld::Impl::end_plan(int32_t id, bool by_goal_system) {
     PlanInstance& pi = it->second;
     pi.ended = true;
     for (auto s = statuses.begin(); s != statuses.end();) s = s->second.plan == id ? statuses.erase(s) : std::next(s);
-    if (PlayerAi* owner = player_ai(pi.player)) {  // the PAYG reclaim of the goal's release (0x614880 -> 0x5f7d40)
+    // The PAYG reclaim of the goal's budget release (0x614880 -> 0x5f7d40). a2m r2 (A2M_R2_RE_B §1.3-1.4) [H]: only the goal
+    // system's releases (maintenance 0x722a30, resolve 0x6c8970) run it, before the plan ends; a plan that ends through its
+    // own script (0x5f8310) reaches the release with no plan and reclaims nothing.
+    if (PlayerAi* owner = by_goal_system ? player_ai(pi.player) : nullptr) {
         const AiBudget::GoalEntry* e = owner->ctx.budget.goal(pi.category, pi.goal_key);
         if (e && sim.pays_as_you_go(pi.player) && e->c + e->a > 0.0f) reclaim[pi.goal_key] = payg_reclaim(id, e->c + e->a);
     }
@@ -2319,6 +2346,7 @@ std::unique_ptr<PlayerAi> GalacticAiWorld::Impl::make_player(int32_t player, con
     gcfg.sleep_frames = static_cast<int32_t>(static_cast<float>(kAiFps) * sleep);
     gcfg.extra_goals_per_category = type->goal_set_extension_size;  // AIPlayerType +0xE8 (0x721b60) [H]
     gcfg.nominal_allowed_time = true;  // A2f t09: AllowedTime = 0x6c0450(PP) x tolerance (A2F_RE_READS §1.4 item 2) [H]
+    gcfg.retail_cadence = true;        // a2m r2 (A2M_R2_RE_A §2.1): seeded first quota, slice ends at the quota
     p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
     p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
     if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)

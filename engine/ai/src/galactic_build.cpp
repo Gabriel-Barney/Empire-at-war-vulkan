@@ -222,8 +222,10 @@ void GalacticAiWorld::Impl::end_plan_builds(int32_t plan) {
         for (auto& pq : planet_queues)
             for (PlanetBuildQueue& q : pq) {
                 q.tasks.erase(std::remove(q.tasks.begin(), q.tasks.end(), b.id), q.tasks.end());
-                // A production in progress keeps the queue busy; its object goes to the free store (signals 3 / 4
-                // with the task gone). Whether the PAYG reclaim took the task stays readable (BudgetFractionToBuild).
+                // A production in progress keeps the queue busy until the next production service of the planet:
+                // reclaimed, it goes on and its object goes to the free store (signals 3 / 4 with the task gone);
+                // otherwise a PAYG owner's queue cancels it with a refund there (cancel_ended_production, a2m r2).
+                // Whether the PAYG reclaim took the task stays readable (BudgetFractionToBuild).
                 if (q.current == b.id) q.current = b.reclaimed ? kQueueTaskEndedReclaimed : kQueueTaskEnded;
             }
         it = builds.erase(it);
@@ -315,6 +317,31 @@ bool GalacticAiWorld::Impl::delivery_reachable(int32_t owner, const BuildTask& b
     return b.dest < it->second.size() && it->second[b.dest] != 0;
 }
 
+// AIPlanetBuildQueue 0x53ba60 (a2m r2, A2M_R2_RE_B §1.1-1.2, §1.5) [H]: at the top of every AI queue service (0x53cd60, run
+// by the planet's production service for queue 0 then 1 before the queues advance), a queue whose current build task has
+// ended (+0xA8) while it produced, and was not taken by the PAYG reclaim (+0xD9), cancels the head entry of its production
+// queue with the refund (0x403900 refund = true: the paid fraction clamp(1 - remaining / T, 0, 1) x cost through
+// Add_Credits notify 1, so Credit_Multiplier applies and the goal budget's P grows) when the planet's owner pays as it
+// goes. In every case the queue lets go of the task. [port] The port's only task end that leaves a production running is
+// the plan end (end_plan_builds); its other task ends (Production_Failed, the planet lost) clear the queue record, and an
+// empty task force does not end its producing tasks (the empty test waits for them). The head is cancelled without
+// checking its id, as the original does; the port marks the state with current_queue_id >= 0 and current ==
+// kQueueTaskEnded.
+void GalacticAiWorld::Impl::cancel_ended_production(PlanetIndex p, uint32_t qi, int32_t owner) {
+    PlanetBuildQueue& Q = planet_queues[p][qi];
+    if (Q.current != kQueueTaskEnded || Q.current_queue_id < 0) return;
+    if (sim.pays_as_you_go(owner)) {
+        const auto queue = sim.queue_of(p, qi);
+        if (!queue.empty()) {
+            const gal::BuildEntry head = queue[0];
+            if (sim.cancel(head.player, p, qi, 0, true) == cmd::RejectReason::None)
+                decide(owner, "cancel ended build " + type_name(head.type) + " at " + planet_name(p) + " (refund)");
+        }
+        Q.current_queue_id = -1;
+        Q.current_type = gal::kNoIndex;
+    }
+}
+
 void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
     if (sim.frame() != market_sim_frame) {
         // [port] The galactic tick (T5) runs before this frame's T7 AI update, which sets `now` to the host frame:
@@ -346,6 +373,7 @@ void GalacticAiWorld::Impl::market_planet(PlanetIndex p) {
         if (f < rules.factions.size() && rules.factions[f].is_neutral) return;
         for (uint32_t qi = 0; qi < 2; ++qi) {
             PlanetBuildQueue& Q = planet_queues[pi][qi];
+            cancel_ended_production(p, qi, owner);  // 0x53ba60, every service, before the market period test
             if (now - Q.last_run <= kMarketPeriod) continue;
             Q.last_run = now;
             // A finished or dropped production whose task is gone frees the queue.

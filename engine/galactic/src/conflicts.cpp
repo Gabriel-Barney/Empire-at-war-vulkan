@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/galactic/bounty.hpp"
 #include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
@@ -99,6 +100,8 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
         return v ? static_cast<uint64_t>(*v) : 0u;
     };
     out.super_category = category_mask("Super");
+    for (const char* n : {"NalHutta", "NalHutta_Story"})  // a2m r2 (A2M_R2_RE_B §2.3 case B)
+        if (const objects::TypeIndex t = types.resolve_name(n); t != objects::kNone) out.nalhutta_types.push_back(static_cast<uint32_t>(t));
     // OI galactic (TACTICAL_GAPS 4.2): land split constants (same reading as the battle host's BattleCatalog).
     {
         auto words = [](std::string_view s, bool bars) {
@@ -128,9 +131,11 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
 
     // Per type.
     out.types.assign(types.size(), ConflictTypeInfo{});
+    const BountyTable bounty_table = load_bounty_table(g, types);  // a2m r2
     for (objects::TypeIndex t = 0; t < types.size(); ++t) {
         ConflictTypeInfo& i = out.types[t];
         i.categories = types.get_mask(t, "CategoryMask");
+        i.bounty = static_cast<int32_t>(type_bounty(bounty_table, types, t));
         i.population = types.columns().population_value[t];
         if (!types.get_string(t, "Space_Override_Population_Value").empty())
             i.space_population_override = types.get_int(t, "Space_Override_Population_Value");
@@ -763,6 +768,7 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
         for (size_t i = 0; i < ar_objects_.size() && i < r.survives.size(); ++i)
             if (sim_->store().exists(ar_objects_[i]))
                 on_survival_roll(ar_in_.combatants[i].owner, static_cast<uint32_t>(sim_->store().type(ar_objects_[i])), r.survives[i] != 0);
+    pay_auto_resolve_bounty(head);  // a2m r2, before the objects are removed
     // Destroyed combatants, starbase level.
     for (size_t i = 0; i < ar_objects_.size(); ++i) {
         const ObjectHandle h = ar_objects_[i];
@@ -802,6 +808,75 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
     log_.push_back(std::move(e));
     release_pause();
     pop_head(head.kind);
+}
+
+// a2m r2: the galactic auto-resolve bounty (docs/re/A2M_R2_RE_B.md §2 [H]; amounts traced in A2M_R2_UW_BOUNTY_TRACE.md §1).
+// Every object the auto-resolve kills runs the death handler 0x39bdb0 -> 0x392600 with the other battle side as the killer
+// K (0x60b930: the first combatant of the other side's list). Galactic branch, per dying object of owner O and type T:
+// - gates: O != K and O not allied with K (an ownerless object passes); B = T's bounty (bounty.hpp) > 0;
+// - case A, K's faction has Benefits_From_Corruption: paid when the planet the object dies at (its parent chain ends at
+//   the battle planet) is corrupted with Racketeering (D +0x2f4 == 3);
+// - case B, else when O's faction has Benefits_From_Corruption: paid when K owns a NalHutta / NalHutta_Story planet;
+// - paid as Add_Credits(K, round(B), notify 0), one call per object (Credit_Multiplier applies inside add_credits).
+// No Bounty_On_Faction ability, percentage or stacking in galactic. Objects: each dying combatant pays its own type's
+// bounty, except a squadron / company holder [port: the traced battles pay 0 for every holder, while the port's typed
+// view gives holders a CategoryMask], then each member of a holder (the linked objects die with it), then a carried company's
+// Company_Transport_Unit (orbit cargo, or a land attacker coming down from orbit). The galactic starbase (a planet level,
+// not an object) and the planet's ground structures (cleared through 0x4bb4a0 -> 0x391310, not the death handler) pay
+// nothing. Order: combatant order, then cargo order [port: draw-free, tier 3].
+void ConflictManager::pay_auto_resolve_bounty(const ConflictInfo& head) {
+    const GalacticRules& gr = sim_->rules();
+    const auto& players = sim_->players();
+    if (head.attacker == head.defender) return;
+    const auto valid = [&](int32_t p) { return p >= 0 && static_cast<size_t>(p) < players.size(); };
+    const auto benefits = [&](int32_t p) {
+        if (!valid(p)) return false;
+        const uint32_t f = players[static_cast<size_t>(p)].faction;
+        return f < gr.factions.size() && gr.factions[f].benefits_from_corruption;
+    };
+    const bool racketeering = sim_->planets()[head.planet].corruption == kCorruptionRacketeering;
+    const auto owns_nalhutta = [&](int32_t k) {
+        for (const PlanetState& p : sim_->planets())
+            if (p.is_planet && p.owner == k &&
+                std::find(rules_->nalhutta_types.begin(), rules_->nalhutta_types.end(), p.type) != rules_->nalhutta_types.end())
+                return true;
+        return false;
+    };
+    const auto pay = [&](uint32_t t, int32_t owner, int32_t killer) {
+        if (!valid(killer) || owner == killer || (owner != kNoPlayer && sim_->allied(owner, killer))) return;
+        const int32_t n = rules_->type(t).bounty;  // already rounded (type_bounty)
+        if (n <= 0) return;
+        if (benefits(killer)) {
+            if (!racketeering) return;
+        } else if (!benefits(owner) || !owns_nalhutta(killer)) {
+            return;
+        }
+        sim_->add_credits(killer, static_cast<float>(n), false);
+    };
+    const auto object_dies = [&](ObjectHandle h, int32_t owner, bool carried) {
+        if (!sim_->store().exists(h)) return;
+        const int32_t killer = owner == head.attacker ? head.defender : head.attacker;
+        const uint32_t t = static_cast<uint32_t>(sim_->store().type(h));
+        const ConflictTypeInfo& ct = rules_->type(t);
+        if (ct.members.empty()) pay(t, owner, killer);  // [port] a holder pays nothing itself (the traces: 0)
+        for (const auto& [mt, n] : ct.members)
+            for (int32_t k = 0; k < n; ++k) pay(mt, owner, killer);
+        if (carried && t < gr.types.size() && gr.types[t].company_transport != kNoIndex)
+            pay(gr.types[t].company_transport, owner, killer);
+    };
+    const AutoResolveResult& r = last_ar_;
+    const bool space = head.kind == ConflictKind::Space;
+    const std::vector<ObjectHandle>& structures = sim_->planets()[head.planet].structures;
+    for (size_t i = 0; i < ar_objects_.size() && i < r.survives.size(); ++i) {
+        if (r.survives[i]) continue;
+        const ArCombatant& c = ar_in_.combatants[i];
+        if (!c.starbase.empty()) continue;  // the starbase level: no object dies
+        if (!space && std::find(structures.begin(), structures.end(), ar_objects_[i]) != structures.end()) continue;
+        // Land: the attacker's units are the companies coming down from orbit (auto_setup).
+        object_dies(ar_objects_[i], c.owner, !space && c.owner == head.attacker);
+    }
+    for (size_t i = 0; i < ar_cargo_.size() && i < r.cargo_survives.size(); ++i)
+        if (!r.cargo_survives[i]) object_dies(ar_cargo_[i], ar_in_.cargo[i].owner, true);
 }
 
 // ---- tactical battle ----

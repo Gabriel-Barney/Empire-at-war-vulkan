@@ -78,9 +78,20 @@ void GoalSystem::service(int64_t now) {
         --countdown_;
         return;
     }
-    if (quota_ == 0) {  // [port] first pass: the cap term
+    if (quota_ == 0) {  // first pass
         const int32_t players = std::max(1, hooks_->quota_players());
-        quota_ = static_cast<uint32_t>(std::max(1, static_cast<int32_t>(20.0f / static_cast<float>(players) + 0.5f)));
+        const auto cap = static_cast<int32_t>(20.0f / static_cast<float>(players) + 0.5f);
+        if (cfg_.retail_cadence) {
+            // Init 0x6ca1f0 (A2M_R2_RE_A §2.1) [H]: +0x188 = S x max(1, T) (the slice's sources, the unfiltered target
+            // list); quota = max(1, min(ceil(+0x188 / (FPS x 5)), cap)); +0x188 is kept, so pass 1 counts on top of it.
+            const uint64_t seed = static_cast<uint64_t>(sources_.size()) * std::max<uint64_t>(1, hooks_->target_count());
+            evals_pass_ += static_cast<uint32_t>(std::min<uint64_t>(seed, 0xFFFFFFFFu - evals_pass_));
+            const auto need = static_cast<int32_t>(std::min<double>(
+                std::ceil(static_cast<double>(evals_pass_) / static_cast<double>(kAiFps * 5)), 1e9));
+            quota_ = static_cast<uint32_t>(std::max(1, std::min(need, cap)));
+        } else {  // [port]: the cap term
+            quota_ = static_cast<uint32_t>(std::max(1, cap));
+        }
     }
     if (!proposal_slice(now)) return;
     if (pending_ready_ >= 0) {  // OPT2 t10: Commit once the last slice's solves are applied
@@ -210,6 +221,10 @@ bool GoalSystem::proposal_slice(int64_t now) {
             }
             ++cursor_source_;
             cursor_target_ = 0;
+            if (cfg_.retail_cadence && used >= quota_) {  // 0x6cb120: the slice ends when its counter reaches the quota
+                flush();
+                return false;
+            }
             continue;
         }
         const uint32_t n = hooks_->target_count();
@@ -226,6 +241,10 @@ bool GoalSystem::proposal_slice(int64_t now) {
             ++used;
             visit(cursor_source_, t);
             ++cursor_target_;
+            if (cfg_.retail_cadence && used >= quota_) {  // 0x6cb120 (see above)
+                flush();
+                return false;
+            }
         }
         ++cursor_source_;
         cursor_target_ = 0;

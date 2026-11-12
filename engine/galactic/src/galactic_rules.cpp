@@ -283,6 +283,9 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
                                              r.corruption_time_mult);
             r.corruption_price_mult = pair_or(n.child_text("Corruption_Galactic_Production_Price_Multipliers"),
                                               r.corruption_price_mult);
+            // a2m r2: the corruption upgrades by corruption type (resolved in load_galactic_rules).
+            for (std::string_view u : objects::split_type_list(n.child_text("Automatic_Planetary_Corruption_Upgrade_Type")))
+                r.automatic_corruption_upgrade_names.emplace_back(u);
             r.base_population_capacity = static_cast<int32_t>(atof_or(n.child_text("Base_Population_Capacity"), 0.0f));
             r.displayed_tech_level_adjustment =  // P4 sim ("+1" parses as 1)
                 static_cast<int32_t>(atof_or(n.child_text("Displayed_Tech_Level_Adjustment"), 0.0f));
@@ -463,6 +466,8 @@ bool load_galactic_rules(const FileProvider& provider, const data::GameDatabase&
         if (!f.leader_name.empty()) f.leader = out.find_type(f.leader_name);
         if (!f.leader_company_name.empty()) f.leader_company = out.find_type(f.leader_company_name);
         if (!f.primary_enemy_name.empty()) f.primary_enemy = out.find_faction(f.primary_enemy_name);
+        f.automatic_corruption_upgrades.clear();  // a2m r2
+        for (const std::string& u : f.automatic_corruption_upgrade_names) f.automatic_corruption_upgrades.push_back(out.find_type(u));
     }
     return !out.factions.empty();
 }

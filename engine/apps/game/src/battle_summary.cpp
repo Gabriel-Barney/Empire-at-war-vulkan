@@ -8,46 +8,6 @@
 
 namespace alamo::game {
 
-namespace {
-
-std::string_view trimmed(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
-}  // namespace
-
-BountyTable load_bounty_table(const data::GameConstants& constants, const objects::GameObjectTypes& types) {
-    BountyTable t;
-    const objects::EnumConverter& cat = types.enums().get(objects::EnumId::GameObjectCategory);
-    for (const auto& [tag, text] : constants.fields) {
-        if (!iequals(tag, "Default_Bounty_By_Category_SP")) continue;
-        // "<Category>, <credits>"
-        const size_t comma = text.find(',');
-        if (comma == std::string_view::npos) continue;
-        BountyTable::Entry e;
-        if (const auto v = cat.lookup(trimmed(text.substr(0, comma)))) e.categories = static_cast<uint64_t>(*v);
-        e.amount = static_cast<int32_t>(objects::c_atof(trimmed(text.substr(comma + 1))));
-        t.entries.push_back(e);
-    }
-    return t;
-}
-
-int64_t bounty_of(const BountyTable& table, bool has_override, int32_t override_amount, uint64_t categories) {
-    if (has_override) return std::max<int64_t>(0, override_amount);
-    for (const BountyTable::Entry& e : table.entries)
-        if ((e.categories & categories) != 0) return std::max<int64_t>(0, e.amount);
-    return 0;
-}
-
-int64_t type_bounty(const BountyTable& table, const objects::GameObjectTypes& types, objects::TypeIndex t) {
-    if (t >= types.size()) return 0;
-    const bool has_override = !types.get_string(t, "Override_Bounty_SP").empty();
-    return bounty_of(table, has_override, has_override ? types.get_int(t, "Override_Bounty_SP") : 0,
-                     types.get_mask(t, "CategoryMask"));
-}
-
 int64_t auto_resolve_battle_seconds(uint32_t combatants, uint32_t losses) {
     return kArBaseSeconds + kArSecondsPerCombatant * static_cast<int64_t>(combatants) +
            kArSecondsPerLoss * static_cast<int64_t>(losses);

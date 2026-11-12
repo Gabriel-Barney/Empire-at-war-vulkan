@@ -12,6 +12,7 @@
 
 #include "alamo/game/battle_summary.hpp"
 #include "alamo/game/game_data.hpp"
+#include "alamo/objects/type_fields.hpp"
 #include "alamo/test/support.hpp"
 
 using namespace alamo;
@@ -22,16 +23,18 @@ namespace {
 
 void test_rules() {
     game::BountyTable t;
-    t.entries = {{0x1, 5}, {0x2, 50}, {0x6, 500}, {0x0, 9999}};  // the last never matches (unknown category name)
-    CHECK(game::bounty_of(t, false, 0, 0x1) == 5);
-    CHECK(game::bounty_of(t, false, 0, 0x2) == 50);
-    CHECK(game::bounty_of(t, false, 0, 0x4) == 500);
-    CHECK(game::bounty_of(t, false, 0, 0x3) == 5);      // first matching entry in document order
-    CHECK(game::bounty_of(t, false, 0, 0x8) == 0);      // no category matches
-    CHECK(game::bounty_of(t, false, 0, 0) == 0);
-    CHECK(game::bounty_of(t, true, 1800, 0x1) == 1800);  // Override_Bounty_SP beats the category
-    CHECK(game::bounty_of(t, true, 0, 0x1) == 0);        // an override of 0 stays 0
-    CHECK(game::bounty_of(t, true, -7, 0x1) == 0);       // never negative
+    t.entries = {{0x1, 5.0f}, {0x2, 50.0f}, {0x4, 500.0f}, {0x0, 9999.0f}};  // the last never matches (unknown category name)
+    CHECK(game::bounty_of(t, false, 0.0f, 0x1) == 5);
+    CHECK(game::bounty_of(t, false, 0.0f, 0x2) == 50);
+    CHECK(game::bounty_of(t, false, 0.0f, 0x4) == 500);
+    CHECK(game::bounty_of(t, false, 0.0f, 0x3) == 50);    // a2m r2 (A2M_R2_RE_B §2.2): the largest matching default
+    CHECK(game::bounty_of(t, false, 0.0f, 0x5) == 500);
+    CHECK(game::bounty_of(t, false, 0.0f, 0x8) == 0);     // no category matches
+    CHECK(game::bounty_of(t, false, 0.0f, 0) == 0);
+    CHECK(game::bounty_of(t, true, 1800.0f, 0x1) == 1800);  // Override_Bounty_SP beats the category
+    CHECK(game::bounty_of(t, true, 0.0f, 0x1) == 0);        // an override of 0 stays 0
+    CHECK(game::bounty_of(t, true, -7.0f, 0x1) == 5);       // a negative override means "category default"
+    CHECK(game::bounty_of(t, true, 12.5f, 0x1) == 13);      // rounded half away from zero
 
     CHECK(game::auto_resolve_battle_seconds(0, 0) == game::kArBaseSeconds);
     CHECK(game::auto_resolve_battle_seconds(10, 4) ==
@@ -89,7 +92,8 @@ void test_data(const char* foc) {
         if (b > 0) ++positive;
         if (!data.types.get_string(t, "Override_Bounty_SP").empty()) {
             ++with_override;
-            CHECK(b == std::max<int64_t>(0, data.types.get_int(t, "Override_Bounty_SP")));
+            // a2m r2: the value as written (the typed view's get_int reads 0 for this field).
+            CHECK(b == std::max<int64_t>(0, static_cast<int64_t>(objects::c_atof(data.types.get_string(t, "Override_Bounty_SP")))));
         }
     }
     CHECK(positive > 100 && with_override >= 1 && max_bounty >= 500);

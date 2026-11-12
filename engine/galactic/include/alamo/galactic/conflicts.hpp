@@ -71,6 +71,7 @@ struct ConflictTypeInfo {
     bool hero = false;                        // Is_Named_Hero
     bool super_killer = false;                // Is_Super_Weapon_Killer [L field name]
     std::vector<std::pair<uint32_t, int32_t>> members;  // Squadron_Units / Company_Units: (type, count), first-seen order
+    int32_t bounty = 0;                       // a2m r2: the type's own bounty, rounded (bounty.hpp type_bounty)
     uint32_t lower_starbase = kNoIndex;       // next lower starbase level type (last name digit - 1) [M]
     // planet types
     std::string space_map, land_map;          // Space_Tactical_Map / Land_Tactical_Map (trimmed)
@@ -105,6 +106,8 @@ struct ConflictRules {
     bool land_base_destruction_forces_retreat = false;   // Land_Base_Destruction_Forces_Retreat
     bool space_station_destruction_forces_retreat = false;  // Space_Station_Destruction_Forces_Retreat
     uint64_t super_category = 0;              // GameObjectCategoryType "Super"
+    // a2m r2 (A2M_R2_RE_B §2.3 case B): the NalHutta / NalHutta_Story types (0x407e00 by name), resolved ones only.
+    std::vector<uint32_t> nalhutta_types;
     // OI galactic (TACTICAL_GAPS 4.2): land force split 0x2bc6a0.
     std::vector<std::string> preferred_pathfinder_types;  // Preferred_Pathfinder_Types (GC +0x119f0), order kept
     std::string raid_required_faction;                     // Raid_Force_Required_Faction (+0x11750), empty = any
@@ -370,6 +373,8 @@ private:
     // auto-resolve
     void auto_setup(const ConflictInfo& head);
     void auto_finish(const ConflictInfo& head);
+    // a2m r2: the Bounty_On_Faction credits for the auto-resolve's destroyed objects (before they are removed).
+    void pay_auto_resolve_bounty(const ConflictInfo& head);
     ArCombatant combatant_of(ObjectHandle h, bool space) const;
     // battle
     enum class Linked : uint8_t { No, Plain, Sandbox };  // start_linked's force rule (BT §2.9.5)

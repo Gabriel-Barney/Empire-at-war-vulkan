@@ -343,9 +343,9 @@ Called from 0x6bfcf0 after each solver commit. Inputs: the selection with free-s
 - Two pools, each entry = {used flag, queue time}:
   - pool A (queue 0, ground/structures): types with cost > 0 and (+0xF0C ≠ 0 or behaviour 0x5F);
   - pool B (queue 1): the rest.
-  - The initial queue time comes from the planet's AIPlanetBuildQueue 0x53bb20(…, 1, 0) (§2.3).
+  - The initial queue time comes from the planet's AIPlanetBuildQueue 0x53bb20(…, 1, 0) (§2.3) on the re-solves; on the first solve (byte 0x140b3a524 = 1, Init at proposal) it is 0x401ba0, the planet production queue's own time (current item's remaining time + the rest's build times) (corrected 2026-11-12, A2M_R2_RE_A §1.5) [H].
 - For each selected unit, in selection order:
-  - **Structure or generic type** (0x5C/0x5B/0x5F/0x60): source = target planet; structureSum += btime(T, target). If the first planet of the list is the target, its queue time also grows.
+  - **Structure or generic type** (0x5C/0x5B/0x5F/0x60): source = target planet; structureSum += btime(T, list[0]'s planet). If the first planet of the list is the target (always so for a target the player holds), that pool entry is **marked used** and its queue time grows by the same build time, so the ETA includes the target's queue wait (corrected 2026-11-12, A2M_R2_RE_A §1.5: the used flag was missing here and is missing in the port) [H].
   - **Other types:** over the pool's planets in list order, a planet is eligible if 0x3fa420 (`Is_Planet_Revealed`: the local reveal state, always true in multiplayer; GALACTIC_REVEAL_CORRUPTION §1.1, A2GAL_READINGS §2.3; formerly misread here as "surface usable") and 0x2804d0(player, T, planet) (can build T there). Then:
     - c = queueTime + |pos(target) − pos(planet)| / (speed × factionSpeed (faction +0x3B0) × FPS), where speed = type +0x648 (first variant's for behaviour 0x5D), and the travel term is added only if speed > 0;
     - c ×= 1 + (planetBaseLevel − requiredLevel) × K, using starbase level 0x3f8b30 − type +0xF10 when +0xF0C == 0, else ground base level 0x3f8aa0 − +0xF0C, with K = 0x140b16c8c;
@@ -394,6 +394,11 @@ Each run:
 **Claiming the produced unit** [H]
 - The queue listens to its planet's signals 3 / 4 / 0xE (0x53c4f0).
 - On 3 or 4 (production done) with the matching queue id: if the task is gone or MagicPlan, and an object was produced, the new object (or its fleet head) goes to the player's galactic free store (vf+0x98).
+- **Corrected 2026-11-12 (`A2M_R2_RE_B.md` §1) [H]:** a production whose task **ended** (+0xA8, 0x64ad00) usually never reaches signal 3 / 4.
+  - At the planet's next AI queue service (0x53cd60 → 0x53ba60), a PAYG owner's head entry is cancelled with the
+    paid-fraction refund (0x403900, Add_Credits notify 1).
+  - The exception is a task taken by the PAYG reclaim (+0xD9, §3.4 Release). Only those, and productions of non-PAYG
+    owners, finish to the free store as above.
 - The task's FSM PRODUCTION_END (6) re-binds the object signals, pays (0x5f9f90) unless prepaid, and continues through FREESTORE_ALLOC / PATHING_DEST / WAIT_FOR_ALL / TRANSPORTS_TO_ORBIT / READY_TO_MERGE / JOIN_TASK_FORCE / PRODUCTION_FINISHED.
   - It moves the unit to the destination with a MovementBlockStatus (id 0x808, mode 0, or 3 if +0xDA, or 5 for a fleet object).
   - A landed ground unit at the destination with a usable orbit is launched first (0x647b90 ops, below).
@@ -472,6 +477,11 @@ Called from 0x4b2ef0 inside the fiscal cycle's payment loop, per player right af
   - Used by the build market (§2.3).
 - **Release 0x614880:** A += c + a; delete the struct.
   - If c + a > 0 and the player is PAYG (AI): r = 0x5f7d40(goal's plan, c + a) (committed spend reclaimed from unfinished production) [M]; A −= r, P −= r, budget +0x80 += r.
+    - [H, `A2M_R2_RE_B.md` §1.3]: the reclaim needs the goal's plan (goal +0x60). It flags +0xD9 on the plan's started
+      builds that fit greedily. The flagged builds keep producing, and every other ended build is cancelled with a refund
+      (0x53ba60).
+    - Only the goal system's releases (0x722a30, 0x6c8970) reach it with the plan still attached. A plan that ends by
+      its own script (0x5f8310) reclaims nothing.
   - So +0x80 accumulates reclaimed spend, enters Σ every tick, and the drift term offsets it. Port it as is.
 - **Spend:** `Allocate_Resources(n)` and the build-task charge 0x6110e0: req −= n, alloc += n.
 - **Installment 0x53b900(Q, n)** (pay-as-you-go production, GALACTIC_ECONOMY §2.5; q2f t01) [H]. Q = the planet's

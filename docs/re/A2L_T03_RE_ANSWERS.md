@@ -121,7 +121,7 @@ no galactic slot-5 caller outside the level-4 ETA (Q3). The [M] covers calls the
 The GalacticGoalSystem vtable is 0x8be298. Its slot 9 is 0x6b84f0. The space goal system's slot 9 (0x6b8900) only
 does step 1 below. The land version is 0x6b8710.
 
-1. If the goal is in the active set (+0x38, lookup 0x721a50): not blocked.
+1. If the goal is in the active set (+0x38, lookup 0x721a50): **skipped** (slot 9 returns 1). (Corrected 2026-11-12, A2M_R2_RE_A §4: this line said "not blocked"; AI_GALACTIC §1.5 and the port have it right.)
 2. If the goal target (+0x58) is null: not blocked.
 3. Otherwise: reach = target vf+0x38. Unlike land, there is no null check. Then call
    **slot 6(level = goal type +0x2c, link mask −1, no exclude list, no include list)**.
