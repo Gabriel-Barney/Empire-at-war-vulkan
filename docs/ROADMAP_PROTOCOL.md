@@ -31,7 +31,7 @@ The claude.ai page https://claude.ai/artifact/56dGptBoT3JcDH4rHZ6BjT is retired:
 | `backlog` | `b0001`… | One finding that is not part of an open group: `t` (text), `cat` (category id), `node` (flowchart box, and so the stage, the work belongs to), `sev` (`S1`/`S2`/`S3`), `kind`, `s` (`open`/`promoted`/`dropped`), `from` (group it was found in), `task`, `ref`, `g` (only Gabriel can do it), `added`, `by`, and when closed `promoted` (`group/task`) or `why` |
 | `lanes` | short id (`st1`…) | One stage of the plan: `title`, `goal` (what the stage is for), `exit` ("done when" condition), `order`. Stages run in `order`, top to bottom in both the plan and the flowchart |
 | `nodes` | box id (`N1`, `MOVE`…) | `label`, `sub`, `lane`, `status`, `shape` (`box`/`pill`), `order`, `to` (map of target box id → `solid` "do before" or `dash` "feeds into") |
-| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks`, `eta`, `exit` (the exit test: the metric or test that says the group is done), `cap` (most tasks the group may hold; default `meta/backlog` `cap`, 8), `closed` (set by `close-group`: `at`, `passed`, `moved`, `dropped`); claim fields, all optional, set by `claim` (below): `claimed_by` (session), `claimed_at` (ISO time), `touches` (list of module folders/files the work edits; default: `mod` split on `·` `,` `;`) |
+| `items` | group id (`s7`, `n1`…) | `title`, `tag`, `node` (box id), `status`, `preset`, `mod`, `why`, `order`, `after` (list of group ids that must finish first), `updated` (date), `by` (session name), `tasks` (key `t01`… → `t` text, `s` `todo`/`done`/`oos`, `o` order, optional `sev`, `tier`, `g`, `moved`, `why`), `eta`, `exit` (the exit test: the metric or test that says the group is done), `cap` (most tasks the group may hold; default `meta/backlog` `cap`, 8), `closed` (set by `close-group`: `at`, `passed`, `moved`, `dropped`); claim fields, all optional, set by `claim` (below): `claimed_by` (session), `claimed_at` (ISO time), `touches` (list of module folders/files the work edits; default: `mod` split on `·` `,` `;`) |
 | `log` | `yyyymmdd-hhmmss-<session>` | `at` (ISO time), `by`, `text` |
 | `builds` | `yyyymmddhhmmss-<machine>-<tree>-<compiler>` | `at`, `by`, `machine`, `compiler`, `tree`, `status` (`pass`/`fail`), `exits`, `warnings`, `tests`, `tests_failed`, `test_seconds`, `excerpt` (first error or warning lines), `group` (optional roadmap group id) |
 
@@ -154,9 +154,14 @@ leave the group.
   failing metric (without one it is S3, and one seed's outcome moving is not a finding); **3** free (internals, draw order,
   precision of internal timers, performance, save format): S3 at most, and retail-matching tier-3 work is dropped
   (`backlog drop --why`) unless a tier-2 metric fails. `backlog add --tier T`, `backlog move ID --tier T|none`, `backlog list --tier T`;
-  `trim-group` / `close-group` carry a task's tier into the entry and `promote` back. The page shows a T1 / T2 / T3 badge and filters
-  the Backlog by tier. 2026-11-10: every open task and entry was tagged (open tasks 27 tier 1, 6 tier 2, 4 tier 3, 15 none; backlog
+  `trim-group` / `close-group` carry a task's tier into the entry and `promote` back. The page filters the Backlog by tier and shows
+  the tier in the severity badge's tooltip (since 2026-11-12 it shows S1 / S2 / S3 badges, not T1 / T2 / T3; see "Task severity"). 2026-11-10: every open task and entry was tagged (open tasks 27 tier 1, 6 tier 2, 4 tier 3, 15 none; backlog
   open 13 tier 1, 5 tier 2, 5 tier 3, 4 none); 5 tier-3 entries (b0005, b0006, b0011, b0030, b0031) were dropped and 2 (b0008, b0029) lowered to S3.
+- **Task severity** (2026-11-12). Every group task carries `sev` (`S1` / `S2` / `S3`, the backlog's meanings above, applied to the
+  problem or need the task addresses; tier 3 is S3 at most). `trim-group` / `close-group` move a task with its own `sev` unless `--sev`,
+  `--sevs` or `t04:S2` gives one; `promote` gives the entry's severity to the new task. Lint: a bad `sev` is an error, an open task
+  without one or a tier-3 open task above S3 a warning. The page and `ROADMAP.md` show the severity on every task. 2026-11-12: all
+  1165 tasks were classified (S1 76, S2 468, S3 621; open tasks S1 12, S2 24, S3 55).
 - **Current focus: tier 1 and tier 2 only** (Gabriel, 2026-11-10, until he lifts it; `docs/DECISIONS.md`). Plan and `batch` only groups
   whose open tasks are tier 1 or 2 (or untagged work that serves them: harness, probes, Gabriel's runs). Tier-3 tasks are not started; a
   tier-3 finding is dropped or filed `--tier 3` (S3), never a task. A crash, hang or save corruption is fixed whatever its tier. Open tier-3
