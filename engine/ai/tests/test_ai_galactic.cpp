@@ -2878,7 +2878,7 @@ static void test_fleet_object_reelection() {
         CHECK(corvettes.size() == (emptied ? 1u : 0u));
         CHECK(pw.sim->destroy_object(gone));
         const bool fo_lives = pw.sim->fleets()[fo].alive && !pw.sim->fleets()[fo].contents.empty();
-        CHECK(fo_lives == emptied);  // destroyed (0x10) / alive without a member (0x1b [M])
+        CHECK(fo_lives == emptied);  // destroyed (0x10) / alive without a member (kept: 0x1b never re-elects)
         lua::AiGlobalValue go;
         go.kind = lua::AiGlobalValue::Number;
         go.number = 1.0;
@@ -2903,9 +2903,17 @@ static void test_fleet_object_reelection() {
                     num("a2m_r_count"), kept_left ? "yes" : "no", corvette_moved ? "yes" : "no");
         CHECK(num("a2m_r_done") == 1.0 && num("a2m_r_block") == 1.0);  // Move_To found a FleetObject
         CHECK(num("a2m_r_count") == 1.0);
-        CHECK(kept_left);        // the re-elected fleet moved ...
-        CHECK(!corvette_moved);  // ... and the emptied old FleetObject stayed
-        CHECK(after == pw.sim->fleet_containing(kept) && after != fo);
+        if (emptied) {
+            // bkg2 b0097 (BKG1_RE_ANSWERS 1.4) [H]: 0x1b never re-elects, so the FleetObject that lives on without a TF
+            // member keeps its place: Move_To moves it (with its non-member corvette) and leaves the member's fleet.
+            CHECK(!kept_left);
+            CHECK(corvette_moved);
+            CHECK(after == fo);
+        } else {
+            CHECK(kept_left);  // the fleet re-elected on 0x10 moved ...
+            CHECK(!corvette_moved);
+            CHECK(after == pw.sim->fleet_containing(kept) && after != fo);
+        }
         pw.world->set_global_values(nullptr);
     }
 }

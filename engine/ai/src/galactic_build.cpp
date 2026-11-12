@@ -170,9 +170,13 @@ bool GalacticAiWorld::Impl::resolve_claim(BuildTask& b) {
             free_store_admitted(b.player, u);
             return true;
         }
-        tf_join(tit->second, u);  // with a destination: PRE_PATH_SEPERATE ... PRODUCTION_END -> Add_Force
-        tit->second.had_units = true;
+        // With a destination: PRE_PATH_SEPERATE (the split) ... PRODUCTION_END -> Add_Force, so the FleetObject elected
+        // by the add is the unit's own fleet after the split (bkg2 b0097). [port] The unit joins the member list here
+        // also with the sync flag, where retail's Add_Force waits for the departure (WAIT_FOR_SYNC_MOVE): it then
+        // elects nothing until the departure (step_status, tf_elect).
         claim_split(tit->second, u);
+        tf_join(tit->second, u, !tit->second.sync);
+        tit->second.had_units = true;
         return true;
     }
     if (wait) return false;
