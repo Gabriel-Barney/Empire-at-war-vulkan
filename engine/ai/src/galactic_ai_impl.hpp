@@ -113,10 +113,16 @@ struct BuildTask {
 };
 
 // AIPlanetBuildQueue (per planet x queue index), §2.2-2.3.
+// A slot is made when its PP is accepted (0x6c2d60, A1_READINGS §28.6 step 3) and removed by the production start of
+// the matching task (market step 5, AI_GALACTIC_2 §2.3) or the PP's release (0x6c2320). `suspended` = the 0x53bee0
+// flag 1 of Commit start (0x6c0be0) until 0x6c2d60 re-asserts the kept goal; such a slot is not counted
+// (planet_queue_time) [M, a2m r4]. Every kept goal is re-asserted in its category's resolve, so the flag is always 0
+// between commits and is neither saved nor hashed.
 struct QueueReservation {
     int32_t pp = -1;  // PotentialPlan handle
     uint32_t type = gal::kNoIndex;
     float time = 0.0f;
+    bool suspended = false;
 };
 // PlanetBuildQueue::current while the production of a task whose plan ended goes on (current_queue_id >= 0): the
 // original keeps the ended task (+0xA8) on the queue; the port keeps only whether the PAYG reclaim took it (+0xD9), which
@@ -166,7 +172,7 @@ struct PotentialPlanRec {
     std::vector<PpSelection> sel;
     float gross = 0.0f, net = 0.0f, eta = 0.0f;
     bool contrast_ok = true;              // PP+0x4D (Test_Target_Contrast)
-    bool queues_reserved = false;         // PP+0x4E (0x6c0be0 ran)
+    bool queues_reserved = false;         // PP+0x100: 0x6c2d60 made its queue slots at accept (a2m r4)
     double pop = 0.0;                     // PP+0x1A8: population of the units to produce (AI_GALACTIC_3 §3.5)
     // PP+0x108: the selection's free-store units (filled by the solve). 0x6c2d60 reserves those still on the free
     // store (+0x30 = this PP, unit_reserved); 0x6c27d0 removes a unit that left the plan (A1_READINGS §28.4).
@@ -441,12 +447,14 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool resolve_pp(PlayerAi& pa, const Goal& g);  // 0x6c4a50: re-solve at accept (A1_READINGS §28.6 step 3)
     void reserve_pp_units(int32_t handle);         // 0x6c2d60's +0x30 part (0x6c2b20)
     void suspend_pp_units(int32_t handle);         // 0x6c0be0's +0x30 part (Commit step 4)
+    void reserve_pp(int32_t handle);               // 0x6c2d60: units + queue slots (made at accept, re-flagged 0 after)
+    void suspend_pp(int32_t handle);               // 0x6c0be0: units + queue slots flagged 1 (Commit step 4)
     bool pp_stolen(int32_t handle) const;          // 0x6c45e0
     void pp_unit_left(int32_t plan_id, ObjectHandle u);  // 0x6c27d0 with the plan's PP: a task force released u
     void off_free_store(ObjectHandle u) { unit_reserved.erase(store.id(u)); }  // a task force took u (node erased)
     bool on_free_store(int32_t player, objects::ObjectId id) const;
     void release_pp(int32_t handle);         // drop: free-store entries and queue reservations (0x6c2320)
-    void reserve_pp_queues(int32_t handle);  // commit step 4 (0x6c0be0)
+    void reserve_pp_queues(int32_t handle);  // 0x6c2d60 at accept: one slot per selection to be produced (a2m r4)
     float production_queue_time(PlanetIndex p, uint32_t q) const;  // 0x401ba0 (a2m r2)
     float planet_queue_time(PlanetIndex p, uint32_t q) const;
 
@@ -661,8 +669,8 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     }
     bool plan_invalid(const Goal& g) override;
     bool replaceable(const Goal& g) override;
-    void refresh_plan(Goal& g) override { w->reserve_pp_units(g.pp_handle); }
-    void suspend_reservations(Goal& g) override { w->suspend_pp_units(g.pp_handle); }
+    void refresh_plan(Goal& g) override { w->reserve_pp(g.pp_handle); }
+    void suspend_reservations(Goal& g) override { w->suspend_pp(g.pp_handle); }
     bool uses_budget() override { return true; }
     int32_t category_of(const Goal& g) const { return w->defs.goals[g.type].category; }
     float time_limit(const Goal& g) const { return w->defs.goals[g.type].time_limit; }

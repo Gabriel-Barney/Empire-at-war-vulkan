@@ -1248,14 +1248,40 @@ void GalacticAiWorld::Impl::release_pp(int32_t handle) {
     it->second.queues_reserved = false;
 }
 
+// a2m r4: 0x6c2d60 makes the PP's AIPlanetBuildQueue slots at accept, inside Resolve_Category (A1_READINGS §28.6
+// step 3; it is the PP function that calls the slot insert 0x53b810, 0x6c0be0 calls only the flag 0x53bee0). They were
+// made at the next Commit's step 4 before, after the plan had started, so the production start (market step 5,
+// AI_GALACTIC_2 §2.3) could not clear them and a finished build kept counting for the goal's whole life. Once per PP
+// (PP+0x100); a later 0x6c2d60 of the kept goal only re-flags its slots 0 (reserve_pp).
 void GalacticAiWorld::Impl::reserve_pp_queues(int32_t handle) {
     const auto it = pps.find(handle);
-    if (it == pps.end() || it->second.queues_reserved) return;  // PP+0x4E guard
+    if (it == pps.end() || it->second.queues_reserved) return;
     it->second.queues_reserved = true;
     for (const PpSelection& s : it->second.sel) {
         if (s.unit || s.source == kInvalidPlanet || s.source >= planet_queues.size()) continue;
-        planet_queues[s.source][s.queue].reservations.push_back({handle, s.type, s.btime});
+        planet_queues[s.source][s.queue].reservations.push_back({handle, s.type, s.btime, false});
     }
+}
+
+// 0x53bee0(slot, flag) over the PP's slots: 1 at Commit start (0x6c0be0), 0 when 0x6c2d60 re-asserts the kept goal.
+static void flag_pp_slots(std::vector<std::array<PlanetBuildQueue, 2>>& queues, int32_t handle, bool flag) {
+    for (auto& pq : queues)
+        for (PlanetBuildQueue& q : pq)
+            for (QueueReservation& r : q.reservations)
+                if (r.pp == handle) r.suspended = flag;
+}
+
+void GalacticAiWorld::Impl::reserve_pp(int32_t handle) {
+    reserve_pp_units(handle);
+    const auto it = pps.find(handle);
+    if (it == pps.end()) return;
+    if (it->second.queues_reserved) flag_pp_slots(planet_queues, handle, false);
+    else reserve_pp_queues(handle);
+}
+
+void GalacticAiWorld::Impl::suspend_pp(int32_t handle) {
+    suspend_pp_units(handle);
+    flag_pp_slots(planet_queues, handle, true);
 }
 
 // The AIPlanetBuildQueue time of a planet queue (0x53bb20(..., 1, 0)) [M]: the sim queue's remaining time (head:
@@ -1279,7 +1305,8 @@ float GalacticAiWorld::Impl::planet_queue_time(PlanetIndex p, uint32_t q) const 
         if (it != builds.end() && it->second.state == BuildState::Queued)
             t += btime_at(it->second.player, it->second.type, p);
     }
-    for (const QueueReservation& r : pq.reservations) t += r.time;
+    for (const QueueReservation& r : pq.reservations)  // 0x53bda0: flag-1 slots left out [M, a2m r4]
+        if (!r.suspended) t += r.time;
     return t;
 }
 

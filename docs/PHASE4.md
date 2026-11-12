@@ -461,6 +461,28 @@ unchanged (7/12 at 5853..7923, the same ticks), total FAIL 18 -> 19 (`travel.hop
 record); the remaining inputs (Underworld starbase power at Shola, production cancel with refund) are shared rules of the Underworld
 lane (A2M_R2_RE_B §3.4 items 2 and 3). No golden moved.
 
+**2026-11-12 (a2m t03, round 4): AIPlanetBuildQueue slots made at accept** (A1_READINGS §28.6 step 3, AI_GALACTIC_2
+§2.2 / §2.3; marked "a2m r4" in `engine/ai/src`). A PotentialPlan's queue slots (one per selection to be produced, at its
+source planet's queue) are now made by 0x6c2d60 when its goal is accepted inside Resolve_Category, once per PP; they are
+removed, as before, by the production start of the matching task (market step 5 [H]) or by the PP's release (0x6c2320).
+They used to be made at the next Commit's step 4 (0x6c0be0), after the plan had already started, so the production start
+never found them and a finished build counted in every later re-solve ETA at that planet for the goal's whole life (seed
+0: Build_Economic_Structure @Naboo refused at 744 by the 12 s slot of a tank buster finished at about 524). The call graph
+backs the move (`docs/re/ghidra/callgraph.csv`: 0x6c2d60 calls the slot insert 0x53b810 and the flag 0x53bee0; 0x6c0be0
+calls only 0x53bee0 and 0x6c2320). [M] 0x53bee0(slot, flag): Commit start flags every active goal's slots 1 and the kept
+goal's 0x6c2d60 re-flags them 0, like the free-store +0x30 entries; 0x53bda0 (the `extra` part of 0x53bb20) is read as
+leaving flag-1 slots out, so inside a commit a kept goal's slots count only after its category re-asserted it. The flag
+is always 0 between commits, so it is neither saved nor hashed (no save format change). [port] the RE subagent the plan
+asked for (what 0x53bee0 / 0x53bda0 do exactly, whether a slot can be removed earlier than the production start) could
+not be run from this lane; the rule above uses only [H] text plus the call graph, not the "running plans' slots do not
+count" fallback (ALAMO_EXP_RES=2 of the r4 diagnosis): a slot still counts from accept to production start, including
+inside the accepting commit (seed 0 at 110: the Turbolasers slot at Yavin puts Build_Ground_Forces' ETA at 84 instead of
+36, so Naboo's mine starts at 164 before the tank buster). Test `test_queue_slot_lifetime`. HotM Empire-human, 12 seeds,
+against dev 79f83684: total FAIL 23 -> 21; Underworld `credits_at_9000` FAIL -> PASS (mean 856 -> 1589, retail 2462,
+allowed 1269); every exit credit / build_count metric PASS; Shola captures 5/12 -> 3/12 (5895, 5898, 7629; retail 4/4 at
+7498..9898). Goldens: ai_galactic_synthetic_crc, ai_underworld_crc, galactic_ai_hotm(_human)_golden, game_smoke_campaign,
+galactic_late bench; baseline_seeds.json re-recorded.
+
 **2026-11-12 (a2m t03, round 3): accept-time fund test 0x6139f0 and the starbase replacement 0x3f8fd0**
 (`docs/re/A2M_R3_RE_A.md` §1.1 / §1.2 [H]; marked "a2m r3" in `engine/ai/src`). (1) Slot 10's budget test is the gross
 test 0x6139f0 on the category's pool P and income rate I: horizon = min(ETA, Time_Limit) and at least the budget period

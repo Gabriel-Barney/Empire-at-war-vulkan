@@ -877,9 +877,9 @@ std::vector<int32_t> PlayerAi::category_order() {
     return order;
 }
 
-void PlayerAi::queue_production(Goal& g) {
-    if (g.pp_handle >= 0) w->reserve_pp_queues(g.pp_handle);
-}
+// 0x6c0be0 makes no queue slot (a2m r4): they are made at accept (reserve_pp, 0x6c2d60); its slot flag 1 is
+// suspend_reservations' part (suspend_pp), which Commit step 4 runs for every active goal with a PP.
+void PlayerAi::queue_production(Goal&) {}
 
 void PlayerAi::drop_potential_plan(Goal& g) {
     if (g.pp_handle >= 0) {
@@ -2777,6 +2777,14 @@ bool GalacticAiWorld::potential_plan_cost(int32_t pp_handle, float* net, float* 
     if (eta) *eta = it->second.eta;
     return true;
 }
+
+size_t GalacticAiWorld::planet_queue_slots(PlanetIndex p, uint32_t queue) const {
+    const Impl& w = *impl_;
+    if (p >= w.planet_queues.size() || queue > 1) return 0;
+    return w.planet_queues[p][queue].reservations.size();
+}
+
+float GalacticAiWorld::planet_queue_wait(PlanetIndex p, uint32_t queue) const { return impl_->planet_queue_time(p, queue); }
 
 std::vector<uint32_t> GalacticAiWorld::solve_potential_plan(int32_t player, std::string_view plan, std::string_view goal,
                                                            int32_t target, bool* ok, float* eta) {
