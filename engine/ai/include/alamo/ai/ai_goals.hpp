@@ -6,8 +6,8 @@
 // `quota` evaluations; when the pass completes: budget weights (hook), Commit, then
 //   quota = clamp(min(ceil(evalsLastPass / (FPS*5)), (int)(20 / max(1, players - activeHumans) + 0.5)), >= 1)
 // and countdown = the difficulty's Goal_Cycle_Sleep frames.
-// [port] The quota of the very first pass is the cap term (no previous pass exists; the original's initial
-// value is not traced).
+// First pass: GoalSystemConfig::retail_cadence (galactic, a2m r2) seeds it from sources x targets; otherwise [port] the
+// quota of the very first pass is the cap term.
 //
 // PROPOSAL CURSOR (0x6cb120, §1.5): sources = the player type's (goal type, function) pairs in
 // GoalProposalFunctionSets order, filtered by the context's mode. For each proposable source (block list
@@ -182,6 +182,12 @@ struct GoalSystemConfig {
     // Build_Time_Delay_Tolerance, and nominal_time is hashed. The galactic AI (A2f t09) and the tactical AI (A2g t06,
     // Land_ / Space_Build_Time_Multiplier) set it; off keeps the PP ETA x tolerance base.
     bool nominal_allowed_time = false;
+    // a2m r2 (A2M_R2_RE_A §2.1) [H], set by the galactic AI: the goal-system Init 0x6ca1f0 seeds evalsLastPass with
+    // sources x max(1, targets), the first quota comes from that seed, and the seed is not cleared, so pass 1's
+    // evaluations add to it; a slice ends as soon as its counter reaches the quota (a pass of E evaluations at quota q
+    // takes floor(E / q) + 1 frames). Off (the tactical AI, not re-checked): first quota = the cap term, a slice scans on
+    // to the next counted candidate.
+    bool retail_cadence = false;
 };
 
 class GoalSystem {

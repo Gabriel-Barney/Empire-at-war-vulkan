@@ -193,9 +193,12 @@ struct GalPp {
             float time = 0.0f;
         };
         std::vector<Pool> pool_a(list.size()), pool_b(list.size());
+        // a2m r2 (A2M_R2_RE_A §1.5, AI_GALACTIC_2 §2.1) [H]: the start time is the planet production queue's own time
+        // (0x401ba0: the current item's remaining time + the rest's build times) on the first solve (Init at proposal),
+        // the AIPlanetBuildQueue time 0x53bb20(q, 1, 0) on re-solves. [M] the queue argument of 0x401ba0 is the pool's.
         for (size_t k = 0; k < list.size(); ++k) {
-            pool_a[k].time = w.planet_queue_time(list[k], 0);
-            pool_b[k].time = w.planet_queue_time(list[k], 1);
+            pool_a[k].time = first_solve ? w.production_queue_time(list[k], 0) : w.planet_queue_time(list[k], 0);
+            pool_b[k].time = first_solve ? w.production_queue_time(list[k], 1) : w.planet_queue_time(list[k], 1);
         }
         float structure_sum = 0.0f;
         const gal::FactionRules* fr = nullptr;
@@ -210,11 +213,18 @@ struct GalPp {
             sel_queue[i] = queue_a ? 0 : 1;
             std::vector<Pool>& pool = queue_a ? pool_a : pool_b;
             if (is_structure(t)) {
-                const float bt = w.btime_at(player, t, tplanet());
+                // a2m r2 (A2M_R2_RE_A §1.5) [H]: the build time is taken at list[0] (the target whenever the player holds
+                // it: the flood starts there); when list[0] is the target its pool entry is also marked used, so the
+                // structure's ETA includes the target queue's wait (the accept test 0 < AllowedTime < ETA then sees it).
+                const PlanetIndex at = list.empty() ? tplanet() : list[0];
+                const float bt = w.btime_at(player, t, at);
                 sel_source[i] = tplanet();
                 sel_btime[i] = bt;
                 structure_sum += bt;
-                if (!list.empty() && list[0] == tplanet()) pool[0].time += bt;
+                if (!list.empty() && list[0] == tplanet()) {
+                    pool[0].used = true;
+                    pool[0].time += bt;
+                }
                 continue;
             }
             const gal::TypeInfo* tx = ti(w.travel_type_of(t));  // a company travels as its transport (SG 1.7)
@@ -1240,11 +1250,19 @@ void GalacticAiWorld::Impl::reserve_pp_queues(int32_t handle) {
 
 // The AIPlanetBuildQueue time of a planet queue (0x53bb20(..., 1, 0)) [M]: the sim queue's remaining time (head:
 // its remaining seconds, others their build time) + claimed AI tasks not yet producing + committed reservations.
-float GalacticAiWorld::Impl::planet_queue_time(PlanetIndex p, uint32_t q) const {
+// 0x401ba0 (A2M_R2_RE_A §1.5): the planet production queue's own time, the current item's remaining time plus the build
+// times of the rest of the queue.
+float GalacticAiWorld::Impl::production_queue_time(PlanetIndex p, uint32_t q) const {
     if (!valid_planet(p) || q > 1) return 0.0f;
     float t = 0.0f;
     const auto queue = sim.queue_of(p, q);  // A2 galactic: GalacticSim::queue_of
     for (size_t i = 0; i < queue.size(); ++i) t += i == 0 ? queue[i].remaining : queue[i].build_time;
+    return t;
+}
+
+float GalacticAiWorld::Impl::planet_queue_time(PlanetIndex p, uint32_t q) const {
+    if (!valid_planet(p) || q > 1) return 0.0f;
+    float t = production_queue_time(p, q);
     const PlanetBuildQueue& pq = planet_queues[p][q];
     for (const int32_t id : pq.tasks) {
         const auto it = builds.find(id);

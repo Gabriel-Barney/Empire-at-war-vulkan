@@ -525,66 +525,63 @@ void test_cargo_losses() {
     CHECK(e.attacker_losses == dead_att && e.defender_losses == dead_def);
 }
 
-// a2m r2 (docs/re/A2M_R2_UW_BOUNTY_TRACE.md §1): a space auto-resolve pays the Underworld the bounty of every destroyed
-// Empire object while the Underworld holds a Racketeering planet whose faction upgrade carries a Bounty_On_Faction ability
-// against the Empire. Holders count their members (the holder's own bounty is not used), carried cargo adds its company
-// transport, the Empire (no ability) gets nothing, and without the corruption nobody is paid. The battle itself (RNG,
-// losses) is the same with and without the bounty, so a twin world without it gives the expected credit difference.
+// a2m r2 (docs/re/A2M_R2_RE_B.md §2): the galactic auto-resolve bounty. The Underworld (Benefits_From_Corruption) attacks
+// the Empire at B. Each dying object pays its killer (the other side) its own rounded type bounty, then one bounty per
+// squadron member, then a carried company's transport, one add_credits per object, notify 0:
+// - case A: the killer's faction benefits from corruption and the battle planet is Racketeering-corrupted (mode 1); a
+//   Racketeering planet elsewhere pays nothing (mode 2); without the faction flag nothing is paid (mode 0);
+// - case B, roles swapped (mode 3: the Empire's faction benefits, the Underworld's does not): an Empire object killed by
+//   the owner of a NalHutta planet (the Underworld holds C) pays that owner; B is not Racketeering.
+// The battle itself (RNG, losses) is the same in every mode, so a twin world gives the expected credit difference.
 void test_auto_resolve_bounty() {
     const std::vector<StartingForce> forces = {{pEmpire, rB, tCorvette}, {pEmpire, rB, tFighters}, {pEmpire, rB, tInfantry},
                                                {pEmpire, rB, tInfantry}, {pUnder, rC, tFrigate}, {pUnder, rC, tFrigate},
                                                {pUnder, rC, tFrigate}, {pUnder, rC, tFrigate}};
     struct Run {
         float under = 0.0f, empire = 0.0f;
-        int64_t expected = 0;  // bounty of the dead Empire objects (from the records taken before the battle)
+        int64_t expected_under = 0, expected_empire = 0;  // bounty of the dead objects (records taken before the battle)
         uint32_t dead = 0;
         uint64_t log_digest = 0;
     };
-    // mode 0: no ability; 1: ability + Racketeering planet; 2: ability but the planet is not corrupted.
     auto run = [&forces](int mode) {
         World w(forces, false);
-        BountyAbilityDef salvage;
-        salvage.name = "Salvage";
-        salvage.percentage = 1.0f;
-        salvage.stacking_category = 1;
-        salvage.target_factions = {0};  // Empire
-        BountyAbilityDef weaker = salvage;  // same stacking category: the larger percentage counts, no stacking
-        weaker.name = "Weaker";
-        weaker.percentage = 0.5f;
-        if (mode != 0) {
-            w.rules.special.bounty = {salvage, weaker};
-            w.rules.special.types.resize(tTypeCount);
-            w.rules.special.types[tUpgrade].bounty = {0, 1};
-            w.rules.factions[1].automatic_corruption_upgrades = {kNoIndex, kNoIndex, kNoIndex, tUpgrade};
-        }
+        w.rules.factions[1].benefits_from_corruption = mode == 1 || mode == 2;
+        w.rules.factions[0].benefits_from_corruption = mode == 3;
         w.rules.types[tInfantry].company_transport = tUpgrade;
         w.crules.types[tUpgrade].bounty = 40;     // the "transport"
         w.crules.types[tCorvette].bounty = 50;
-        w.crules.types[tFighters].bounty = 999;   // holder: never paid itself
+        w.crules.types[tFighters].bounty = 7;     // the holder pays nothing itself [port], its 2 corvette members do
         w.crules.types[tInfantry].bounty = 5;
-        if (mode == 1) w.sim.set_corruption(rC, kCorruptionRacketeering, pUnder);
+        w.crules.types[tFrigate].bounty = 250;
+        if (mode == 1) w.sim.set_corruption(rB, kCorruptionRacketeering, pUnder);
+        if (mode == 2) w.sim.set_corruption(rC, kCorruptionRacketeering, pUnder);
+        if (mode == 3) w.crules.nalhutta_types = {tPlanetC};  // the Underworld owns C
         // Empire infantry into orbit of B (cargo of the space battle).
         std::vector<objects::ObjectHandle> ground;
         for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
             if (w.store.alive(h) && w.store.owner(h) == pEmpire) ground.push_back(h);
         CHECK(ground.size() == 2);
         if (!ground.empty()) CHECK(w.sim.launch_units(pEmpire, rB, ground) == commands::RejectReason::None);
-        std::vector<objects::ObjectHandle> emp;
+        std::vector<objects::ObjectHandle> all;
         std::vector<int64_t> value;
-        for (uint32_t f : w.sim.fleets_at(rB, pEmpire))
-            for (objects::ObjectHandle h : w.sim.fleets()[f].contents) {
-                emp.push_back(h);
-                const uint32_t t = static_cast<uint32_t>(w.store.type(h));
-                value.push_back(t == tCorvette ? 50 : t == tFighters ? 2 * 50 : t == tInfantry ? 5 + 40 : 0);
-            }
-        CHECK(emp.size() == 4);
+        std::vector<int32_t> owner;
+        for (int32_t pl : {pEmpire, pUnder})
+            for (PlanetIndex at : {rB, rC})
+                for (uint32_t f : w.sim.fleets_at(at, pl))
+                    for (objects::ObjectHandle h : w.sim.fleets()[f].contents) {
+                        all.push_back(h);
+                        owner.push_back(pl);
+                        const uint32_t t = static_cast<uint32_t>(w.store.type(h));
+                        value.push_back(t == tCorvette ? 50 : t == tFighters ? 2 * 50 : t == tInfantry ? 5 + 40 : t == tFrigate ? 250 : 0);
+                    }
+        CHECK(all.size() == 8);
         const float u0 = w.sim.players()[pUnder].account.credits, e0 = w.sim.players()[pEmpire].account.credits;
         w.arrive_at_b();
         Run r;
         CHECK(w.cm->log().size() == 1);
-        for (size_t i = 0; i < emp.size(); ++i)
-            if (!w.store.alive(emp[i])) {
-                r.expected += value[i];
+        for (size_t i = 0; i < all.size(); ++i)
+            if (!w.store.alive(all[i])) {
+                (owner[i] == pEmpire ? r.expected_under : r.expected_empire) += value[i];
                 ++r.dead;
             }
         r.under = w.sim.players()[pUnder].account.credits - u0;
@@ -594,13 +591,17 @@ void test_auto_resolve_bounty() {
         r.log_digest = h.digest();
         return r;
     };
-    const Run plain = run(0), paid = run(1), clean = run(2);
-    CHECK(plain.log_digest == paid.log_digest && plain.dead == paid.dead && plain.dead > 0);  // same battle
-    CHECK(paid.expected > 0);
-    CHECK(paid.under - plain.under == static_cast<float>(paid.expected));
-    CHECK(paid.empire == plain.empire);
-    CHECK(clean.under == plain.under);
-    std::printf("auto-resolve bounty: %u Empire objects dead, Underworld +%.1f\n", paid.dead, static_cast<double>(paid.under - plain.under));
+    const Run plain = run(0), paid = run(1), elsewhere = run(2), hutta = run(3);
+    for (const Run* o : {&paid, &elsewhere, &hutta})
+        CHECK(plain.log_digest == o->log_digest && plain.dead == o->dead);  // same battle
+    CHECK(plain.dead > 0 && paid.expected_under > 0);
+    CHECK(paid.under - plain.under == static_cast<float>(paid.expected_under));
+    CHECK(paid.empire == plain.empire);  // the Empire neither benefits nor owns NalHutta
+    CHECK(elsewhere.under == plain.under && elsewhere.empire == plain.empire);
+    CHECK(hutta.under - plain.under == static_cast<float>(hutta.expected_under));  // case B
+    CHECK(hutta.empire == plain.empire);  // B is not Racketeering: the Empire's case A pays nothing
+    std::printf("auto-resolve bounty: %u objects dead, Underworld +%.1f, NalHutta owner +%.1f\n", paid.dead,
+                static_cast<double>(paid.under - plain.under), static_cast<double>(hutta.under - plain.under));
 }
 
 // q6 t18 (AI_GALACTIC_TOKENS §9.12, BT §1.6): the overrun side strengths 0x2ab880, float. Space: the side's orbit combat

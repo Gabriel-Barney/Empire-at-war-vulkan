@@ -440,6 +440,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     bool on_free_store(int32_t player, objects::ObjectId id) const;
     void release_pp(int32_t handle);         // drop: free-store entries and queue reservations (0x6c2320)
     void reserve_pp_queues(int32_t handle);  // commit step 4 (0x6c0be0)
+    float production_queue_time(PlanetIndex p, uint32_t q) const;  // 0x401ba0 (a2m r2)
     float planet_queue_time(PlanetIndex p, uint32_t q) const;
 
     // ---- build tasks + market (galactic_build.cpp) ----
@@ -452,6 +453,7 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     void fail_build(BuildTask& b, const char* why);
     void finish_build(BuildTask& b);
     void end_plan_builds(int32_t plan);
+    void cancel_ended_production(PlanetIndex p, uint32_t qi, int32_t owner);  // 0x53ba60 (a2m r2)
     float funds_time(const BuildTask& b) const;
     const Goal* goal_of_plan(int32_t player, int32_t plan) const;  // the active goal running `plan` (null: none)
     void init_queue_phases();  // each planet queue's first last-run frame (A2J_RE_BUILD_MARKET §4)
@@ -674,6 +676,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         return galactic_maintenance_eta(w->goal_production_time(g.running), g.created, w->now);
     }
     int32_t quota_players() override;
+    int32_t path_stagger_players() const;
 
     // ---- ContextModeServices ----
     void first_service(int64_t) override;

@@ -1283,6 +1283,11 @@ void test_foc() {
         if (inf != kNoIndex)
             for (const auto& [mt, n] : cr.type(inf).members) members += static_cast<int64_t>(cr.type(mt).bounty) * n;
         CHECK(members == 15 * 5);  // 7497: 15 Rebel trooper squads
+        // A2M_R2_RE_B §2.2: the largest category default (Corvette 50 | SpaceHero 500).
+        CHECK(bounty("Sundered_Heart") == 500);
+        std::printf("bounty: Sundered_Heart %d, X-wing squadron %d, infantry squad %d\n", bounty("Sundered_Heart"),
+                    bounty("Rebel_X-Wing_Squadron"), bounty("Rebel_Infantry_Squad"));
+        CHECK(cr.nalhutta_types.size() == 2);  // NalHutta, NalHutta_Story (§2.3 case B)
     }
     CHECK(s.items[0].name == "Buzz_Droid_Tech" && s.items[0].ability_crcs[0] == special_name_crc("Buzz_Droids_Viper") &&
           s.find_item(special_name_crc("Buzz_Droid_Tech")) == 0);

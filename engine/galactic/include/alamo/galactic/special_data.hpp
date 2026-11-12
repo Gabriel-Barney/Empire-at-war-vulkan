@@ -143,8 +143,9 @@ struct CorruptionChoiceDef {
     std::string tactical_plots;
 };
 
-// a2m r2: Bounty_On_Faction_Ability (docs/re/A2M_R2_UW_BOUNTY_TRACE.md §1). The holder's player gains
-// Bounty_Percentage_Amount x the bounty (bounty.hpp) of each destroyed object owned by a Target_Faction_Names faction.
+// a2m r2: Bounty_On_Faction_Ability. In tactical (A2M_R2_RE_B §2.4, not modelled) the holder's player gains
+// Bounty_Percentage_Amount x the bounty (bounty.hpp) of each destroyed object owned by a Target_Faction_Names faction (max
+// per Stacking_Category, summed over categories). The galactic bounty does not read it (§2.3, ConflictManager).
 // Vanilla FoC: Underworld_Racketeering_Salvage_Effect (1.0, on the Underworld's Racketeering corruption upgrade),
 // Underworld_Planetary_Corruption_Bounty (1.2, a tactical upgrade) and NalHutta_Bounty (0.15, Nal Hutta's planet bonus).
 struct BountyAbilityDef {

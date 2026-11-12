@@ -131,13 +131,14 @@ std::vector<uint32_t> GalacticSim::fleets_at(PlanetIndex planet, int32_t player)
 }
 
 int32_t GalacticSim::ground_base_level(PlanetIndex planet) const {
-    // Ground base level (planet data +0x130) is not modelled as its own counter: it is the number of live ground-family
-    // structures on the surface (is_ground_structure_type, 0x5F); orbital structures do not count [M] (A2f t08;
-    // STRATEGIC_GAPS §1.3 step 18 reads the same surface count, "0 when no ground base").
+    // Ground base level (planet data +0x130) is not kept as its own counter: it is the recount 0x4bdaa0 (A2M_R2_RE_A §1.1-1.2
+    // [H], a2m r2), the number of live, finished ground structures (DUMMY_GROUND_STRUCTURE 0x5F, is_ground_structure_type)
+    // in the planet's ground-structure list, each counting 1, clamped to 5. Queued structures and orbital structures never
+    // count. The original recounts on every add / remove; counting on read gives the same value.
     int32_t n = 0;
     for (ObjectHandle s : planets_[planet].structures)
         if (store_->alive(s) && is_ground_structure_type(rules_->types[static_cast<size_t>(store_->type(s))])) ++n;
-    return n;
+    return std::min(n, 5);
 }
 
 int32_t GalacticSim::planets_owned(int32_t player) const {
