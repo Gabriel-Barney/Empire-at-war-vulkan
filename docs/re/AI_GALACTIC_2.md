@@ -394,6 +394,11 @@ Each run:
 **Claiming the produced unit** [H]
 - The queue listens to its planet's signals 3 / 4 / 0xE (0x53c4f0).
 - On 3 or 4 (production done) with the matching queue id: if the task is gone or MagicPlan, and an object was produced, the new object (or its fleet head) goes to the player's galactic free store (vf+0x98).
+- **Corrected 2026-11-12 (`A2M_R2_RE_B.md` §1) [H]:** a production whose task **ended** (+0xA8, 0x64ad00) usually never reaches signal 3 / 4.
+  - At the planet's next AI queue service (0x53cd60 → 0x53ba60), a PAYG owner's head entry is cancelled with the
+    paid-fraction refund (0x403900, Add_Credits notify 1).
+  - The exception is a task taken by the PAYG reclaim (+0xD9, §3.4 Release). Only those, and productions of non-PAYG
+    owners, finish to the free store as above.
 - The task's FSM PRODUCTION_END (6) re-binds the object signals, pays (0x5f9f90) unless prepaid, and continues through FREESTORE_ALLOC / PATHING_DEST / WAIT_FOR_ALL / TRANSPORTS_TO_ORBIT / READY_TO_MERGE / JOIN_TASK_FORCE / PRODUCTION_FINISHED.
   - It moves the unit to the destination with a MovementBlockStatus (id 0x808, mode 0, or 3 if +0xDA, or 5 for a fleet object).
   - A landed ground unit at the destination with a usable orbit is launched first (0x647b90 ops, below).
@@ -472,6 +477,11 @@ Called from 0x4b2ef0 inside the fiscal cycle's payment loop, per player right af
   - Used by the build market (§2.3).
 - **Release 0x614880:** A += c + a; delete the struct.
   - If c + a > 0 and the player is PAYG (AI): r = 0x5f7d40(goal's plan, c + a) (committed spend reclaimed from unfinished production) [M]; A −= r, P −= r, budget +0x80 += r.
+    - [H, `A2M_R2_RE_B.md` §1.3]: the reclaim needs the goal's plan (goal +0x60). It flags +0xD9 on the plan's started
+      builds that fit greedily. The flagged builds keep producing, and every other ended build is cancelled with a refund
+      (0x53ba60).
+    - Only the goal system's releases (0x722a30, 0x6c8970) reach it with the plan still attached. A plan that ends by
+      its own script (0x5f8310) reclaims nothing.
   - So +0x80 accumulates reclaimed spend, enters Σ every tick, and the drift term offsets it. Port it as is.
 - **Spend:** `Allocate_Resources(n)` and the build-task charge 0x6110e0: req −= n, alloc += n.
 - **Installment 0x53b900(Q, n)** (pay-as-you-go production, GALACTIC_ECONOMY §2.5; q2f t01) [H]. Q = the planet's
