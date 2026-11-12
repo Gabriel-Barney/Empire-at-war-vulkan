@@ -147,6 +147,12 @@ end
 --   PDONE   the thread function returned
 --   PEXIT   the plan called ScriptExit (wrapped only where PGBase defines it)
 --   PFAIL   the shipped <force>_Production_Failed handler was called (wrapped only where the script defines it)
+--   FNEAR   a Find_Nearest call returned (BurnUnitsLand only): fn_src = the task force passed (? = not one of the
+--           plan's), fn_count = its Get_Force_Count at the call, fn_filter, fn_ret = the result as type#id@owner or nil.
+--           When it is nil and the source is a task force, two more reads with the same source: fn_any = the call
+--           without the player (no fog test, any owner: nil means the task force has no position), fn_foe = with the
+--           other faction's own player and true (its own objects, under its own fog: set while fn_ret is nil means the
+--           plan player's fog or relation test dropped them)
 --   ERR     a probe error (each distinct one once); the shipped code still runs
 -- Every record carries time, frame, plan, faction, target (Target.Get_Type().Get_Name(): Target is the goal's planet as
 -- a game object wrapper; none = the goal has no target), tf (the task force), n, the goal's budget
@@ -503,5 +509,62 @@ if Q2P_Exit == nil and ScriptExit ~= nil then
 	function ScriptExit()
 		Q2P_Try("PEXIT", Q2P_Exiting)
 		return Q2P_Exit()
+	end
+end
+
+function Q2P_NearStr(o)
+	if o == nil then
+		return "nil"
+	end
+	return Q2P_ObjId(o) .. "@" .. Q2P_Str(function() return o.Get_Owner().Get_Faction_Name() end)
+end
+
+function Q2P_Foe()
+	local mine = Q2P_Str(function() return PlayerObject.Get_Faction_Name() end)
+	if mine == "REBEL" then
+		return Find_Player("Empire")
+	elseif mine == "EMPIRE" then
+		return Find_Player("Rebel")
+	end
+	return nil
+end
+
+function Q2P_Near(a, r)
+	local src = a[1]
+	local tf = Q2P_ForceName(src)
+	local filter = a[2]
+	local s = " fn_src=" .. tf .. " fn_args=" .. table.getn(a)
+	if tf ~= "?" then
+		s = s .. " fn_count=" .. Q2P_Str(function() return src.Get_Force_Count() end)
+	end
+	if type(filter) == "string" then
+		s = s .. " fn_filter=" .. filter
+	else
+		filter = nil
+	end
+	s = s .. " fn_ret=" .. Q2P_NearStr(r)
+	if r == nil and tf ~= "?" then
+		local foe = Q2P_Foe()
+		if filter ~= nil then
+			s = s .. " fn_any=" .. Q2P_NearStr(Q2P_FN(src, filter))
+			if foe ~= nil then
+				s = s .. " fn_foe=" .. Q2P_NearStr(Q2P_FN(src, filter, foe, true))
+			end
+		else
+			s = s .. " fn_any=" .. Q2P_NearStr(Q2P_FN(src))
+			if foe ~= nil then
+				s = s .. " fn_foe=" .. Q2P_NearStr(Q2P_FN(src, foe, true))
+			end
+		end
+	end
+	Q2P_Safe("FNEAR", Q2P_CurTF(), s)
+end
+
+if Q2P_FN == nil and Find_Nearest ~= nil then
+	Q2P_FN = Find_Nearest
+	function Find_Nearest(...)
+		local r = Q2P_FN(unpack(arg))
+		Q2P_Try("FNEAR", Q2P_Near, arg, r)
+		return r
 	end
 end

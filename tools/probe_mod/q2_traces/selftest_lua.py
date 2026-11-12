@@ -429,10 +429,16 @@ function Q2S_Block(services, result)
 end
 function Q2S_Obj(tname, id, alive_fn)
 	return { Get_Type = function() return { Get_Name = function() return tname end } end,
-		Get_Object_ID = function() return id end, Is_Valid = alive_fn }
+		Get_Object_ID = function() return id end, Is_Valid = alive_fn,
+		Get_Owner = function() return Q2S_Players.Empire end }
 end
 Q2S_CC = Q2S_Obj("IMPERIAL_COMMAND_CENTER", 1501, function() return Q2S.attacks < 2 end)
-function Find_Nearest(tf, a, b, c) return Q2S_CC end
+-- Q2S_NEAR_NIL: every call that passes the plan's own player finds nothing (as retail's BurnUnitsLand from its second
+-- run); the probe's own reads (no player, or the foe's player) still find the CC.
+function Find_Nearest(tf, a, b, c)
+	if Q2S_NEAR_NIL and (rawequal(a, PlayerObject) or rawequal(b, PlayerObject)) then return nil end
+	return Q2S_CC
+end
 function Q2S_Unit(utype)
 	return { Get_Type = function() return { Get_Name = function() return utype end } end }
 end
@@ -451,6 +457,10 @@ function Q2S_MakeForce(utype)
 	f.Activate_Ability = function(name, on) end
 	f.Attack_Move = function() Q2S.attacks = Q2S.attacks + 1 return Q2S_Block(2, true) end
 	f.Get_Self_Threat_Max = function() return 10 end
+	f.Build_All = function()
+		table.insert(units, Q2S_Unit(utype))
+		return Q2S_Block(2, true)
+	end
 	f.Guard_Target = function() end
 	f.Set_Targeting_Priorities = function() end
 	f.Release_Forces = function() end
@@ -498,15 +508,41 @@ end
 Q2S_Attach()
 dofile(Q2S_SCRIPT)
 Definitions()
-Q2S_RunPlan()
-print("RESULT exits=" .. Q2S.exits .. " attacks=" .. Q2S.attacks .. " category=" .. tostring(Category))
+if Q2S_NORUN then
+	print("RESULT loaded category=" .. tostring(Category))
+else
+	Q2S_RunPlan()
+	print("RESULT exits=" .. Q2S.exits .. " attacks=" .. Q2S.attacks .. " category=" .. tostring(Category))
+end
 Q2S_Dump()
 '''
-# (file, plan label, task forces, AITarget set, expected kind counts, RESULT line)
+# (file, plan label, task forces, AITarget set, expected kind counts, RESULT line, mode). Modes: burn (Find_Nearest
+# finds the CC), burn_nil (nothing for the plan's player: FNEAR adds the probe's own reads), target (AITarget,
+# Produce_Force, Attack_Move), produce (Produce_Force / Build_All, then ScriptExit), load (Definitions only: the hooks of
+# the run-2 land plans load and record LOAD under Lua 5.0.2; their threads need more stubs than this harness has).
+PRODUCE = {'LOAD': 1, 'PSTART': 1, 'PBLOCK': 1, 'PEXIT': 1}
 PLANS3 = [('LandMode/BurnUnitsLand.lua', 'Burn_Units_Land', ['MainForce'], False,
-           {'LOAD': 1, 'PSTART': 1, 'PBLOCK': 2, 'PDONE': 1}, 'RESULT exits=0 attacks=2 category=Burn_Units_Land'),
+           {'LOAD': 1, 'PSTART': 1, 'PBLOCK': 2, 'PDONE': 1, 'FNEAR': 1},
+           'RESULT exits=0 attacks=2 category=Burn_Units_Land', 'burn'),
+          ('LandMode/BurnUnitsLand.lua', 'Burn_Units_Land', ['MainForce'], False,
+           {'LOAD': 1, 'PSTART': 1, 'PDONE': 1, 'FNEAR': 2},
+           'RESULT exits=0 attacks=0 category=Burn_Units_Land', 'burn_nil'),
           ('LandMode/DestroyStructure.lua', 'Destroy_Structure', ['MainForce', 'GuardForce'], True,
-           {'LOAD': 1, 'PSTART': 2, 'PBLOCK': 3, 'PEXIT': 1}, 'RESULT exits=1 attacks=1 category=Destroy_Structure')]
+           {'LOAD': 1, 'PSTART': 2, 'PBLOCK': 3, 'PEXIT': 1}, 'RESULT exits=1 attacks=1 category=Destroy_Structure',
+           'target'),
+          ('LandMode/BuildEconStructure.lua', 'Build_Econ_Structure', ['MainForce'], False, PRODUCE,
+           'RESULT exits=1 attacks=0 category=Build_Econ_Structure', 'produce'),
+          ('LandMode/TechUpgradeEmergency.lua', 'Tech_Upgrade_Emergency', ['ReserveForce'], False, PRODUCE,
+           'RESULT exits=1 attacks=0 category=Tech_Upgrade_Emergency', 'produce')]
+for _f, _p, _t in [('TacticalMultiplayerBuildLandUnitsGeneric', 'Tactical_Multiplayer_Build_Land_Units_Generic',
+                    ['ReserveForce']),
+                   ('BuildInfantryEmergency', 'Tactical_Multiplayer_Build_Infantry_Emergency', ['ReserveForce']),
+                   ('PurchaseEarlyLandUpgrades', 'Purchase_Early_Land_Upgrades', ['ReserveForce']),
+                   ('PurchaseLandUpgradesGeneric', 'Purchase_Land_Upgrades_Generic', ['ReserveForce']),
+                   ('LandHeroes', 'Land_Heroes', ['MainForce']), ('Droids', 'Droids', ['MainForce']),
+                   ('SecureBuildPad', 'Secure_Contestable', ['MainForce', 'EscortForce']),
+                   ('LandScout', 'Land_Scout_Area', ['MainForce'])]:
+    PLANS3.append(('LandMode/%s.lua' % _f, _p, _t, False, {'LOAD': 1}, 'RESULT loaded category=' + _p, 'load'))
 UNITS = {'SpaceForce': 'CORELLIAN_GUNBOAT', 'GroundForce': 'REBEL_INFANTRY_SQUAD', 'MainForce': 'REBEL_INFANTRY_SQUAD'}
 
 
@@ -731,10 +767,13 @@ def main():
         if found is not None:
             check(found == set(raw), '%s: live memory scan finds exactly the printed records' % plan)
 
-    for fname, plan, tfs, has_target, want, result in PLANS3:
-        body = ('Q2S_TFS = { %s }\nQ2S_HAS_TARGET = %s\nQ2S_UNIT = { %s }\n' % (
+    for fname, plan, tfs, has_target, want, result, mode in PLANS3:
+        body = ('Q2S_TFS = { %s }\nQ2S_HAS_TARGET = %s\nQ2S_UNIT = { %s }\nQ2S_NEAR_NIL = %s\nQ2S_NORUN = %s\n' % (
             ', '.join(lua_str(t) for t in tfs), 'true' if has_target else 'false',
-            ', '.join('%s = %s' % (t, lua_str('REBEL_INFANTRY_SQUAD')) for t in tfs)) + PLAN3)
+            ', '.join('%s = %s' % (t, lua_str('REBEL_INFANTRY_SQUAD')) for t in tfs),
+            'true' if mode == 'burn_nil' else 'false', 'true' if mode == 'load' else 'false') + PLAN3)
+        if mode in ('burn_nil', 'load', 'produce'):
+            plan = plan + '_' + mode
         lines, found = run_harness(lua, 'plan_' + plan, os.path.join(MOD, 'AI', *fname.split('/')), body)
         recs, raw = records_of(lines)
         kinds = {}
@@ -747,7 +786,20 @@ def main():
               '%s: shipped threads ran to their ends (%s)' % (plan, [ln for ln in lines if ln.startswith('RESULT')]))
         d = [(r[3], q2lua_reader.kv(r[4])) for r in recs]
         blocks = [x for k, x in d if k == 'PBLOCK']
-        if has_target:
+        fnear = [x for k, x in d if k == 'FNEAR']
+        cc = 'IMPERIAL_COMMAND_CENTER#1501@EMPIRE'
+        if mode == 'burn':
+            check([(x.get('fn_src'), x.get('fn_count'), x.get('fn_filter'), x.get('fn_ret'), x.get('fn_any'))
+                   for x in fnear] == [('MainForce', '1', 'InBase', cc, None)],
+                  '%s: FNEAR names the source, its count and the result %s' % (plan, fnear))
+        if mode == 'burn_nil':
+            check([(x.get('fn_filter'), x.get('fn_ret'), x.get('fn_any'), x.get('fn_foe'), x.get('fn_args'))
+                   for x in fnear] == [('InBase', 'nil', cc, cc, '4'), (None, 'nil', cc, cc, '3')] and
+                  all(x.get('fn_count') == '1' for x in fnear),
+                  '%s: FNEAR nil twice, the probe reads find the CC %s' % (plan, fnear))
+        if mode in ('load', 'produce', 'burn_nil'):
+            pass
+        elif has_target:
             check(all(x.get('target') == 'E_Ground_Barracks' and x.get('tgt') == 'E_GROUND_BARRACKS#1502'
                       for k, x in d if k != 'LOAD'), '%s: target / tgt on every record %s' % (plan, recs[1][4]))
             check(any(x.get('tf') == 'MainForce' and x.get('count') == '1' for x in blocks),

@@ -113,3 +113,58 @@ battle ends at 22920; retail never loses the Command Center in 36000 frames. The
 "InBase")`, then Attack_Move loops on the nearest structure). The retail Lua probe has no land plan records, so where retail's
 attack stops (TACTICAL_COMBAT 2.8 [L], backlog b0004) needs a retail land-plan probe; open in skai t14. AI-vs-AI foc-land at
 30000 ticks: seeds 1-6 all end (21439 / 29833 / 18993 / 21933 / 24310 / 28372).
+
+## 6. Retail land-plan probe (skai t14, 2026-11-12)
+
+Run `20261112-095520-skirmish-vanilla-lua` (`run_skirmish_land_attack.cmd`, Claude driving with Gabriel's go-ahead; same
+lobby as §1: Utapau Heights, idle human Empire, Rebel Medium AI): 36000 frames, the trace's `ticks_reached` end. The kit's
+plan hooks covered the four land attack plans (`make_plan_hooks.py`: BurnUnitsLand, DestroyStructure, DestroyTurbolaser,
+DestroyLandUnit, with `tgt=` / `near=` fields); 91 plan scripts loaded, 0 probe errors. Read with throw-away scripts over
+`trace.q2t` and `lua_records.txt`; no binary read.
+
+**Human base losses.** Turbolaser towers 10987 and 16475, Heavy Vehicle Factory 19782, Communications Array 20220, Barracks
+21081, Base Shield 21931, Power Generator 23626, Light Vehicle Factory 27096, **Command Center 32213**. The Research
+Facility (750 HP all run) and the reinforcement point survive, so 0x13 never holds and the battle does not end. In the §1
+run the CC lived and the Research Facility died (21349): which structure survives varies, the no-end result does not.
+
+**Destroy_Structure** (191 records): single-unit task forces (one REBEL_TROOPER_TEAM or T2B_TANK, `count=1`) against each
+base structure, the Research Facility most (17 starts), then the CC (11), Base Shield (9), Power Generator (8). Each run:
+PSTART, PBLOCK k=1 (Produce_Force, ret true), then PEXIT about 12-14 s later with `MainForce:0`: the unit dies on the way,
+no Attack_Move block ever returns.
+
+**Burn_Units_Land** (28 records, 13 runs). Run 1 at 459.8 s (frame ~13794): the shipped `Find_Nearest(MainForce, "InBase",
+PlayerObject, false)` gave nothing; the fallback `Find_Nearest(MainForce, PlayerObject, false)` gave the human's
+STORMTROOPER_TEAM 161351 (444 from the CC); three 20 s Attack_Move blocks (482 / 502 / 522 s, 20 / 24 / 26 units, ret nil);
+the thread was killed when the goal released the plan (run 2 starts at 578 s with `prev=none`). Runs 2-13 (578-1180 s):
+PSTART, then PDONE 37 s later (Sleep 1 + 1 + 5 + 30) with no PBLOCK and no `near=`: both Find_Nearest calls found nothing,
+although the CC (InBase, UNIT_AI) lived until 32213. `count=0` at PDONE is not evidence of an empty task force (the plan
+calls Release_Forces before its last Sleep).
+
+**Rebel army.** From ~13800 the army stands 200-600 from the human structures; the T2Bs nearest a structure sit at 209-221
+from it (their Land_FOW_Reveal_Range is 220), troopers at 237+. Composition at 13800: 15 REBEL_TROOPER_TEAM (71 squads),
+10 T2B_TANK, 4 MPTL, 3 spotters, 2 infiltrators.
+
+**Port at the same point** (§5 run, `r2_utapau`): BURNUNITSLAND from 11494 every ~550-600 frames; plan 79 (11555) sends 22
+units at the Base Shield, plan 117 (14000) 18 units at the Research Facility (dies 14574, the port's first structure
+loss after the towers). The port's army stands 60-110 from the structures. Its composition differs from frame ~2300:
+
+| | Retail | Port |
+|---|---|---|
+| First Mineral Processor (UC appears) | 1909 (both retail runs) | 1492 |
+| Credits at 1400 | 5570 | 5570 |
+| ~2300 purchase | 2295: -4520 (Kyle Katarn, 2 light tank brigades, an infantry squad, RL_Combat_Armor_L1; §2) | 2326: -2499 Tech_Upgrade_Emergency (RC_Level_Two_Tech_Upgrade, done 4127), 2494: -699 Purchase_Early_Land_Upgrades |
+| Tech 2 done | 9295 | 4127 |
+| Heroes | Kyle Katarn 3355 (Moldy Crow) | none (Land_Heroes from 12814, each run "ended failure") |
+| Field at 13800 | 15 trooper teams, 10 T2B, 4 MPTL | 6 trooper teams, 8 infiltrators, 3 snowspeeders, 2 MPTL, 2 Plex teams (from 5492), a bacta tank |
+
+Skirmish_Upgrade_Tech (AI_EQUATIONS_EXPANSIONGENERIC_LANDSKIRMISH) needs a built Mineral Processor, so the port's earlier
+processor (1492 + 750 build frames = 2242) lets Tech_Upgrade_Emergency win at 2327, the moment retail spends on units. Why
+retail's Build_Econ_Structure starts 435 frames after the pad capture (1474 -> 1909; the port 103) is not in these records:
+the run had no hooks on the build plans.
+
+**Open (run 2 of the kit, prepared 2026-11-12):** `make_plan_hooks.py` now also hooks Build_Econ_Structure,
+Tactical_Multiplayer_Build_Land_Units_Generic, Tactical_Multiplayer_Build_Infantry_Emergency, Tech_Upgrade_Emergency,
+Purchase_Early_Land_Upgrades, Purchase_Land_Upgrades_Generic, Land_Heroes, Droids, Secure_Contestable and Land_Scout_Area,
+and records every BurnUnitsLand Find_Nearest call (FNEAR: the task force's count at the call, the result, and when it is nil
+the same call without a player and with the Empire's player): it tells an empty task force (no position) from the Rebel's
+fog. Same `run_skirmish_land_attack.cmd`; selftest `selftest.cmd` (SELFTEST_LUA covers FNEAR on both paths).

@@ -48,8 +48,23 @@ PLANS = [
     ('LandMode/DestroyStructure', 'Destroy_Structure', ['MainForce', 'GuardForce']),
     ('LandMode/DestroyTurbolaser', 'Destroy_Turbolaser', ['MainForce', 'GuardForce']),
     ('LandMode/DestroyLandUnit', 'Destroy_Land_Unit', ['MainForce', 'GuardForce']),
+    # skai t14 run 2 (docs/re/SKAI_T06_LAND_RUNS.md 6): the land economy, build, upgrade and hero plans, for when retail
+    # starts its first Mineral Processor (1909 against the port's 1492), what it buys at 2295 (Katarn and two light tank
+    # brigades) and when Tech_Upgrade_Emergency runs (tech 2 done 9295, port 4127).
+    ('LandMode/BuildEconStructure', 'Build_Econ_Structure', ['MainForce']),
+    ('LandMode/TacticalMultiplayerBuildLandUnitsGeneric', 'Tactical_Multiplayer_Build_Land_Units_Generic', ['ReserveForce']),
+    ('LandMode/BuildInfantryEmergency', 'Tactical_Multiplayer_Build_Infantry_Emergency', ['ReserveForce']),
+    ('LandMode/TechUpgradeEmergency', 'Tech_Upgrade_Emergency', ['ReserveForce']),
+    ('LandMode/PurchaseEarlyLandUpgrades', 'Purchase_Early_Land_Upgrades', ['ReserveForce']),
+    ('LandMode/PurchaseLandUpgradesGeneric', 'Purchase_Land_Upgrades_Generic', ['ReserveForce']),
+    ('LandMode/LandHeroes', 'Land_Heroes', ['MainForce']),
+    ('LandMode/Droids', 'Droids', ['MainForce']),
+    ('LandMode/SecureBuildPad', 'Secure_Contestable', ['MainForce', 'EscortForce']),
+    ('LandMode/LandScout', 'Land_Scout_Area', ['MainForce']),
 ]
 LAND_PREFIX = 'LandMode/'
+# Plans whose Find_Nearest calls are recorded (FNEAR).
+FNEAR_PLANS = ('LandMode/BurnUnitsLand',)
 
 BLOCK = r'''-- Q2 reference traces (tools/probe_mod/q2_traces): AI plan probe (q2f t09, rewritten in q2f t08 2026-11-08, extended
 -- 2026-11-08 with target, stage, force count, Conquer_Opponent and Crush), appended by make_plan_hooks.py to an unchanged
@@ -67,6 +82,12 @@ BLOCK = r'''-- Q2 reference traces (tools/probe_mod/q2_traces): AI plan probe (q
 --   PDONE   the thread function returned
 --   PEXIT   the plan called ScriptExit (wrapped only where PGBase defines it)
 --   PFAIL   the shipped <force>_Production_Failed handler was called (wrapped only where the script defines it)
+--   FNEAR   a Find_Nearest call returned (BurnUnitsLand only): fn_src = the task force passed (? = not one of the
+--           plan's), fn_count = its Get_Force_Count at the call, fn_filter, fn_ret = the result as type#id@owner or nil.
+--           When it is nil and the source is a task force, two more reads with the same source: fn_any = the call
+--           without the player (no fog test, any owner: nil means the task force has no position), fn_foe = with the
+--           other faction's own player and true (its own objects, under its own fog: set while fn_ret is nil means the
+--           plan player's fog or relation test dropped them)
 --   ERR     a probe error (each distinct one once); the shipped code still runs
 -- Every record carries time, frame, plan, faction, target (Target.Get_Type().Get_Name(): Target is the goal's planet as
 -- a game object wrapper; none = the goal has no target), tf (the task force), n, the goal's budget
@@ -365,7 +386,69 @@ if Q2P_Exit == nil and ScriptExit ~= nil then
 		return Q2P_Exit()
 	end
 end
-@FAILS@'''
+@FAILS@@FNEAR@'''
+
+# BurnUnitsLand: Find_Nearest (a binding, it does not yield) is called first, outside any pcall, then recorded. The extra
+# reads use the shipped call's argument shapes (task force source, string filter, a PlayerWrapper and a bool), so no read
+# can take a binding's script-error path; Find_Player of a faction name that exists.
+FNEAR = r'''
+function Q2P_NearStr(o)
+	if o == nil then
+		return "nil"
+	end
+	return Q2P_ObjId(o) .. "@" .. Q2P_Str(function() return o.Get_Owner().Get_Faction_Name() end)
+end
+
+function Q2P_Foe()
+	local mine = Q2P_Str(function() return PlayerObject.Get_Faction_Name() end)
+	if mine == "REBEL" then
+		return Find_Player("Empire")
+	elseif mine == "EMPIRE" then
+		return Find_Player("Rebel")
+	end
+	return nil
+end
+
+function Q2P_Near(a, r)
+	local src = a[1]
+	local tf = Q2P_ForceName(src)
+	local filter = a[2]
+	local s = " fn_src=" .. tf .. " fn_args=" .. table.getn(a)
+	if tf ~= "?" then
+		s = s .. " fn_count=" .. Q2P_Str(function() return src.Get_Force_Count() end)
+	end
+	if type(filter) == "string" then
+		s = s .. " fn_filter=" .. filter
+	else
+		filter = nil
+	end
+	s = s .. " fn_ret=" .. Q2P_NearStr(r)
+	if r == nil and tf ~= "?" then
+		local foe = Q2P_Foe()
+		if filter ~= nil then
+			s = s .. " fn_any=" .. Q2P_NearStr(Q2P_FN(src, filter))
+			if foe ~= nil then
+				s = s .. " fn_foe=" .. Q2P_NearStr(Q2P_FN(src, filter, foe, true))
+			end
+		else
+			s = s .. " fn_any=" .. Q2P_NearStr(Q2P_FN(src))
+			if foe ~= nil then
+				s = s .. " fn_foe=" .. Q2P_NearStr(Q2P_FN(src, foe, true))
+			end
+		end
+	end
+	Q2P_Safe("FNEAR", Q2P_CurTF(), s)
+end
+
+if Q2P_FN == nil and Find_Nearest ~= nil then
+	Q2P_FN = Find_Nearest
+	function Find_Nearest(...)
+		local r = Q2P_FN(unpack(arg))
+		Q2P_Try("FNEAR", Q2P_Near, arg, r)
+		return r
+	end
+end
+'''
 
 TARGET_GALACTIC = r'''function Q2P_Target()
 	if Target == nil then
@@ -476,6 +559,7 @@ def block(name, plan, tfs, text):
             ('@FAILS@', ''.join(FAIL.replace('@TF@', tf) for tf in tfs
                                 if re.search(r'(?m)^function %s_Production_Failed\(' % tf, text))),
             ('@TARGET_BODY@', TARGET_LAND if name.startswith(LAND_PREFIX) else TARGET_GALACTIC),
+            ('@FNEAR@', FNEAR if name in FNEAR_PLANS else ''),
             ('@UPPER@', name.upper().replace('/', chr(92))), ('@PLAN@', plan), ('@TFS@', ','.join(tfs)),
             ('@ONE@', tfs[0] if len(tfs) == 1 else '')):
         out = out.replace(key, val)

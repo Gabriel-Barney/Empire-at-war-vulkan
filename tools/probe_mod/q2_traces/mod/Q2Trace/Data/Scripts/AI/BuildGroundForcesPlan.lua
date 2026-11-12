@@ -85,6 +85,12 @@ end
 --   PDONE   the thread function returned
 --   PEXIT   the plan called ScriptExit (wrapped only where PGBase defines it)
 --   PFAIL   the shipped <force>_Production_Failed handler was called (wrapped only where the script defines it)
+--   FNEAR   a Find_Nearest call returned (BurnUnitsLand only): fn_src = the task force passed (? = not one of the
+--           plan's), fn_count = its Get_Force_Count at the call, fn_filter, fn_ret = the result as type#id@owner or nil.
+--           When it is nil and the source is a task force, two more reads with the same source: fn_any = the call
+--           without the player (no fog test, any owner: nil means the task force has no position), fn_foe = with the
+--           other faction's own player and true (its own objects, under its own fog: set while fn_ret is nil means the
+--           plan player's fog or relation test dropped them)
 --   ERR     a probe error (each distinct one once); the shipped code still runs
 -- Every record carries time, frame, plan, faction, target (Target.Get_Type().Get_Name(): Target is the goal's planet as
 -- a game object wrapper; none = the goal has no target), tf (the task force), n, the goal's budget
