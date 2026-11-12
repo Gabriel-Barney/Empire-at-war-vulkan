@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <span>
 #include <utility>
@@ -1617,6 +1618,289 @@ void test_t26_walk_transition() {
     }
 }
 
+// ---------------------------------------------------------------- bkm2 t03 (b0045): corner cap and brake-ahead in the system
+// MOVEMENT §3.5.2 B.4 / B.5 on a real order path (the land pathfinder's, through the corner pass D at the plan), observed
+// through the public views only. An L-shaped wall (cells x >= 30, y <= 59) bends the path from below the wall's corner to
+// the right of it (the planned path has several short bends at the corner). The expected corner speeds v_k = f_k x vmax
+// come from the public pure corner_fractions over the planned path (point 0 = the unit's position, its yaw at the plan)
+// with the system's inputs (MOVEMENT §3.5.2 D): for a unit vmax = its max speed, a = its decel, seg = max(2, radius);
+// for a squad container (FIGHTER_FLYING §7.7 item 7) vmax = the team speed, a = the team rate 0x5ab540 (here every
+// member's decel; the speeds are equal), seg = max(2, half the joint box's larger extent); the static line test is
+// line_passable over the grid (the corridor test has no static object to meet). Waypoint k is passed when the unit
+// crosses its line (bisector normal, C.5). Every frame of the walk is checked against the controller's own rules, run on
+// the start-of-frame state b with the waypoint index of that frame (B.8: v moves toward T by at most a down and acc up, so
+// a T at or below a value x leaves v in [b.v - a, max(x, b.v - a)]):
+//   (B.5) brake-ahead: v_n = f_k x vmax below b.v and D (along the segment to line k, C.9) <= (b.v^2 - v_n^2) / (2a) in
+//         double -> x = v_n (counted as brake-ahead frames);
+//   (B.4) corner cap: a frame that crosses no line, whose turn used the whole budget R (the facing ends more than R - 0.001
+//         off its start), with no earlier frame of the same index that left turn over (turn done) and f_(k-1) < 1 ->
+//         x = f_(k-1) x vmax (counted as corner-cap frames).
+// The run is deterministic; its crossing frames and the number of rule frames are also checked as measured.
+struct CornerCross {
+    uint32_t k = 0, frame = 0;
+    float v = 0.0f, vk = 0.0f;
+};
+struct CornerRun {
+    bool planned = false, arrived = false;
+    size_t points = 0;
+    std::vector<float> f;  // the expected fractions, per path point
+    float vmax = 0.0f, vmax_seen = 0.0f;
+    std::vector<CornerCross> cross;
+    uint32_t capped_frames = 0, cap_violations = 0, brake_frames = 0, brake_violations = 0;
+    float cap_vmax = -3.0e38f;  // the largest v - v_cap over the capped frames
+};
+
+void corner_wall(MovementSystem& sys) {
+    for (int32_t y = 0; y <= 59; ++y)
+        for (int32_t x = 30; x < 100; ++x) sys.grid().set_base(x, y, kPassImpassable);
+    sys.rebuild_regions_if_dirty();
+}
+
+CornerRun run_corner(bool squad) {
+    CornerRun r;
+    MovementConfig cfg;
+    cfg.constants.land_speed_multiplier = 1.0f;  // R = Rate_Of_Turn, vmax = Max_Speed
+    MovementSystem sys{cfg};
+    land_system(sys);
+    corner_wall(sys);
+    const V2 at = cell_center(25, 10), goal = cell_center(80, 65);
+    const float acc = 0.05f, rate = 1.0f;
+    ObjectId mover = 1;
+    if (!squad) {
+        UnitDesc d = tank(1, at);
+        d.yaw_deg = 90.0f;  // facing the first leg (+y)
+        d.max_speed = d.alt_max_speed = 3.0f;
+        d.turn_rate = d.alt_turn_rate = rate;
+        d.stopped_turn_rate = 0.0f;
+        d.accel = d.decel = acc;
+        d.collision_class = kUccVehicle;
+        CHECK(sys.add_unit(d));
+    } else {
+        mover = 100;
+        UnitDesc cd = tank(100, at);
+        cd.type_name = "BKM2_TEAM";
+        cd.team_container = true;
+        cd.yaw_deg = 90.0f;
+        cd.max_speed = cd.alt_max_speed = 3.0f;
+        cd.turn_rate = cd.alt_turn_rate = rate;
+        cd.stopped_turn_rate = 0.0f;
+        CHECK(sys.add_unit(cd));
+        const V2 rel[4] = {{8.0f, 8.0f}, {8.0f, -8.0f}, {-8.0f, 8.0f}, {-8.0f, -8.0f}};
+        std::vector<ObjectId> ids;
+        std::vector<V2> slots;
+        for (ObjectId id = 1; id <= 4; ++id) {
+            UnitDesc d = tank(id, at + rel[id - 1]);
+            d.type_name = "BKM2_TROOPER";
+            d.yaw_deg = 90.0f;
+            d.max_speed = d.alt_max_speed = 3.0f;
+            d.accel = d.decel = acc;
+            d.radius = 3.0f;
+            CHECK(sys.add_unit(d));
+            CHECK(sys.set_team_member_shape(id, 3.0f, 3.0f, 3.0f, 3.0f));
+            ids.push_back(id);
+            slots.push_back(rel[id - 1]);
+        }
+        CHECK(sys.set_land_team(100, ids, slots));
+        CHECK(sys.set_team(100, 100, 1.0f, 3.0f));
+        for (ObjectId id : ids) CHECK(sys.set_team(id, 100, 1.0f, 3.0f));
+    }
+    SimRng rng(squad ? 2622u : 2621u);
+    order(sys, rng, {1}, goal, 1);  // (a squad: through its member 1)
+    std::vector<V2> path, nrm;
+    uint32_t k = 1;          // the next waypoint line to cross
+    bool turn_left = false;  // an earlier frame of the current index left turn budget over (turn done)
+    for (uint32_t f = 1; f < 3000; ++f) {
+        const UnitView b = sys.view(mover);
+        sys.tick(f, rng);
+        const UnitView v = sys.view(mover);
+        if (!r.planned && !sys.land_path(mover).empty()) {
+            r.planned = true;
+            const std::span<const V2> lp = sys.land_path(mover);
+            path.assign(lp.begin(), lp.end());
+            r.points = path.size();
+            CornerPassIn in;
+            in.yaw0 = b.yaw;  // the plan runs before the walk of its tick
+            in.rate = rate;
+            float hx = 0.0f, hy = 0.0f;
+            in.vmax = squad && v.team_speed < 3.0e38f ? v.team_speed : 3.0f;
+            in.decel = acc;  // a unit: its decel; a squad: team_rate = each member's decel x eff / Max_Speed = acc
+            in.seg = squad && sys.team_joint_box(100, hx, hy) ? std::max(2.0f, 0.5f * std::max(hx, hy)) : 6.0f;  // else max(2, radius 6)
+            struct Ctx {
+                const MovementSystem* s;
+                uint32_t mask;
+            } ctx{&sys, sys.mask_of(mover)};
+            in.ctx = &ctx;
+            in.line_ok = [](const void* c, V2 p0, V2 p1) {
+                const Ctx& x = *static_cast<const Ctx*>(c);
+                return line_passable(x.s->grid(), p0, p1, x.mask);
+            };
+            std::vector<V2> poly = path;
+            poly[0] = b.pos;
+            r.f = corner_fractions(poly, in);
+            r.vmax = in.vmax;
+            nrm.assign(path.size(), V2{});
+            for (size_t i = 1; i < path.size(); ++i)
+                nrm[i] = i + 1 < path.size()
+                             ? normalize_retail(normalize_retail(path[i] - path[i - 1]) + normalize_retail(path[i + 1] - path[i]))
+                             : normalize_retail(path[i] - path[i - 1]);
+            for (size_t i = 0; i < poly.size(); ++i)
+                std::printf("    path %zu (%.3f, %.3f) f %.6f\n", i, static_cast<double>(poly[i].x), static_cast<double>(poly[i].y),
+                            static_cast<double>(i < r.f.size() ? r.f[i] : -1.0f));
+        }
+        r.vmax_seen = std::max(r.vmax_seen, v.speed);
+        if (r.planned && r.f.size() == path.size() && k + 1 < path.size()) {
+            const float dy = std::fabs(wrap_deg(v.yaw - b.yaw));
+            const uint32_t k0 = k;
+            while (k + 1 < path.size() && dot(v.pos - path[k], nrm[k]) >= -0.001f) {
+                r.cross.push_back({k, f, v.speed, r.f[k] * r.vmax});
+                ++k;
+            }
+            // The controller of this frame ran on the start-of-frame state (b) with index k0 - 1: B.8 moves v toward T by
+            // at most a down (no "at once" flag here) and acc up, so a T at or below v_x gives v in [v - a, max(v_x, v - a)].
+            const float lo = b.speed - acc - 1e-5f;
+            // B.5: v_n = f_k0 x vmax below v and D (along d to line(k0), C.9) <= (v^2 - v_n^2) / (2a) in double -> T <= v_n
+            const float vn = r.f[k0] * r.vmax;
+            if (vn < b.speed) {
+                const float dd = line_distance_along(b.pos, normalize_retail(path[k0] - path[k0 - 1]), path[k0], nrm[k0]);
+                const double bd = (static_cast<double>(b.speed) * b.speed - static_cast<double>(vn) * vn) / (2.0 * static_cast<double>(acc));
+                if (static_cast<double>(dd) <= bd) {
+                    ++r.brake_frames;
+                    if (v.speed < lo || v.speed > std::max(vn, b.speed - acc) + 1e-5f) ++r.brake_violations;
+                }
+            }
+            // B.4: a frame (no line crossed in it) whose turn used the whole budget R had the facing not within R of the
+            // wanted yaw; with no earlier frame of index k0 - 1 leaving turn over (turn-done clear): T <= f_(k0-1) x vmax
+            if (k == k0 && k0 >= 2 && r.f[k0 - 1] < 1.0f && !turn_left && dy >= rate - 1e-3f) {
+                ++r.capped_frames;
+                const float vc = r.f[k0 - 1] * r.vmax;
+                if (v.speed < lo || v.speed > std::max(vc, b.speed - acc) + 1e-5f) ++r.cap_violations;
+                r.cap_vmax = std::max(r.cap_vmax, v.speed - vc);
+            }
+            // the index step clears the turn-done byte (C.5); in a frame with no step, turn left over at its end means turn
+            // done (C.6). (In a crossing frame the net yaw change mixes the turns before and after the step, so it tells
+            // nothing about the new index's byte.)
+            if (k != k0) turn_left = false;
+            else if (dy < rate - 1e-3f) turn_left = true;
+            if (std::getenv("BKM2_DEBUG") && k0 >= 2)
+                std::printf("      f %u k %u v %.6f -> %.6f yaw %.4f dy %.4f\n", f, k0, static_cast<double>(b.speed),
+                            static_cast<double>(v.speed), static_cast<double>(v.yaw), static_cast<double>(dy));
+        }
+        if (v.arrived && !v.has_goal) {
+            r.arrived = true;
+            break;
+        }
+    }
+    return r;
+}
+
+void test_bkm2_corner_system() {
+    ::alamo::test::section("bkm2_corner_system");
+    for (const bool squad : {false, true}) {
+        const CornerRun r = run_corner(squad);
+        std::printf("bkm2 t03 corner (%s): %zu path points, vmax %.3f (seen %.4f); brake-ahead frames %u (%u off the rule), corner-cap "
+                    "frames %u (%u off the rule, largest v - v_cap %.6f); arrived %d\n",
+                    squad ? "squad container" : "unit", r.points, static_cast<double>(r.vmax), static_cast<double>(r.vmax_seen),
+                    r.brake_frames, r.brake_violations, r.capped_frames, r.cap_violations, static_cast<double>(r.cap_vmax),
+                    r.arrived ? 1 : 0);
+        uint32_t slowed = 0;
+        for (const CornerCross& c : r.cross) {
+            std::printf("    crossed waypoint %u at frame %u with v %.6f (f %.6f, v_k %.6f)\n", c.k, c.frame, static_cast<double>(c.v),
+                        static_cast<double>(r.f[c.k]), static_cast<double>(c.vk));
+            slowed += r.f[c.k] < 1.0f ? 1u : 0u;
+        }
+        CHECK(r.planned && r.arrived && r.points >= 3 && r.f.size() == r.points);
+        CHECK(r.vmax_seen == r.vmax && slowed >= 1);  // full speed on the first leg; at least one slowed corner
+        CHECK(r.brake_frames >= 20 && r.brake_violations == 0);  // B.5
+        CHECK(r.capped_frames >= 20 && r.cap_violations == 0);   // B.4
+        // as measured (MSVC and clang): the frames of the five line crossings and the rule frames counted
+        const uint32_t want[2][5] = {{243, 405, 442, 468, 512}, {252, 416, 449, 475, 520}};
+        CHECK(r.points == 7 && r.cross.size() == 5 && r.brake_frames == (squad ? 48u : 49u) && r.capped_frames == (squad ? 61u : 60u));
+        for (size_t i = 0; i < r.cross.size() && i < 5; ++i) CHECK(r.cross[i].frame == want[squad ? 1 : 0][i]);
+    }
+}
+
+// ---------------------------------------------------------------- bkm2 t04 (b0046): a goal just behind a moving unit
+// MOVEMENT §3.5.2 A / G (CloseEnoughAngleForMoveStart 180: a goal behind a moving unit is "aligned", the path starts at
+// once and the unit turns on the move), B.5 / C.11 (the rest is shorter than the brake length: End Move), §3.5.1 item 1
+// (0x15: within 5 of the last line along its segment arrives, else restart from state 0 at speed 0). Infantry speed and
+// turn from Underworld_Merc (Max_Speed 1.0, Max_Rate_Of_Turn 20, OverrideAcceleration / Deceleration 0.07; no stopped
+// rate), the default LandSpeedMultiplier 1.56. The unit walks +x at full speed; a goal 10 / 15 / 20 behind it is ordered.
+// It must arrive within a bounded number of frames - each 0x15 restart from speed 0 is a fresh start from standing (the
+// start rule turns it in place only when the facing is more than CE off, so with CE 180 it walks straight off again).
+struct BehindRun {
+    bool arrived = false;
+    uint32_t frames = 0, restarts = 0, coasts = 0;
+    V2 end, goal;
+    float turned = 0.0f;
+};
+
+BehindRun run_behind(float back) {
+    BehindRun r;
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys);
+    UnitDesc d = tank(1, cell_center(20, 50));
+    d.type_name = "BKM2_MERC";
+    d.max_speed = d.alt_max_speed = 1.0f;
+    d.turn_rate = d.alt_turn_rate = 20.0f;
+    d.stopped_turn_rate = 0.0f;
+    d.accel = d.decel = 0.07f;
+    d.close_enough_angle = 180.0f;
+    d.collision_class = kUccInfantry;
+    d.radius = 3.0f;
+    CHECK(sys.add_unit(d));
+    SimRng rng(2646);
+    order(sys, rng, {1}, cell_center(20, 50) + V2{800.0f, 0.0f}, 1);
+    uint32_t f = 1;
+    for (; f < 600 && !(sys.view(1).speed >= sys.view(1).max_speed && sys.view(1).pos.x > cell_center(20, 50).x + 100.0f); ++f)
+        sys.tick(f, rng);
+    CHECK(sys.view(1).speed == sys.view(1).max_speed && sys.view(1).has_goal);
+    r.goal = sys.view(1).pos - V2{back, 0.0f};
+    const uint32_t r0 = sys.stats().walk_restarts, c0 = sys.stats().walk_coasts;
+    order(sys, rng, {1}, r.goal, f);
+    const uint32_t start = f;
+    for (; f < start + 3000; ++f) {
+        const float y0 = sys.view(1).yaw;
+        sys.tick(f, rng);
+        r.turned += std::fabs(wrap_deg(sys.view(1).yaw - y0));
+        if (sys.view(1).arrived && !sys.view(1).has_goal) {
+            r.arrived = true;
+            ++f;
+            break;
+        }
+    }
+    r.frames = f - start;
+    r.end = sys.view(1).pos;
+    r.restarts = sys.stats().walk_restarts - r0;
+    r.coasts = sys.stats().walk_coasts - c0;
+    return r;
+}
+
+void test_bkm2_goal_behind() {
+    ::alamo::test::section("bkm2_goal_behind");
+    // measured (MSVC and clang): frames to arrival, 0x15 restarts, the end point relative to the goal (along the order's
+    // direction -x, across +y)
+    struct Want {
+        float back;
+        uint32_t frames, restarts;
+        float along, across;
+    };
+    const Want want[3] = {
+        {10.0f, 31, 1, 1.162964f, 4.239380f}, {15.0f, 23, 0, 0.330139f, 3.501343f}, {20.0f, 26, 0, -0.016907f, 3.001099f}};
+    for (const Want& w : want) {
+        const BehindRun r = run_behind(w.back);
+        const float along = r.goal.x - r.end.x, across = r.end.y - r.goal.y;
+        std::printf("bkm2 t04 goal %.0f behind: arrived %d after %u frames at (%.6f, %.6f), %.6f past the goal along -x, %.6f across, "
+                    "0x15 restarts %u, coast steps %u, turned %.2f deg in all\n",
+                    static_cast<double>(w.back), r.arrived ? 1 : 0, r.frames, static_cast<double>(r.end.x), static_cast<double>(r.end.y),
+                    static_cast<double>(along), static_cast<double>(across), r.restarts, r.coasts, static_cast<double>(r.turned));
+        // bounded: it turns once round (about 194 degrees in all, no loop) and arrives; the end lies in 0x15's window along
+        // the order's direction, [5 before the goal's line, the coast v^2 / (2a) = 1.56^2 / 0.14 past it]
+        CHECK(r.arrived && r.frames < 60 && r.turned < 200.0f);
+        CHECK(along >= -5.0f && along <= 1.56f * 1.56f / 0.14f);
+        CHECK(r.frames == w.frames && r.restarts == w.restarts && std::fabs(along - w.along) < 1e-3f && std::fabs(across - w.across) < 1e-3f);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1639,5 +1923,7 @@ int main() {
     test_t26_container_step();  // s78n t26.5
     test_t26_formation_side_step();  // s78n t26 closing review
     test_t26_walk_transition();      // s78n t26 closing review
+    test_bkm2_corner_system();       // bkm2 t03 (b0045)
+    test_bkm2_goal_behind();         // bkm2 t04 (b0046)
     return ::alamo::test::report("alamo_tactical_movement_t26_tests");
 }

@@ -347,6 +347,19 @@ if(_alamo_sim)
       set_tests_properties(alamo_headless_skirmish_ai_foc_land_end_seed${_seed} PROPERTIES TIMEOUT 1800)
       alamo_label_slow(alamo_headless_skirmish_ai_foc_land_end_seed${_seed})
     endforeach()
+    # bkm2 t05 (b0047): FoC land skirmish Empire against Underworld (both AI), so the land movement runs with Empire walkers
+    # and Underworld droids. Measured 2026-11-12 (MSVC, 4 workers, 30000 ticks, map _MP_LAND_UTAPAU), seeds 1-9: seed 2 ends
+    # at 22488 (Underworld wins; AT_ST / AT_AA walkers fielded) and seed 4 at 27941 (Underworld wins; Destroyer droids
+    # fielded), both with 0 Lua errors; seeds 5 / 6 / 7 / 9 end but log AI_PLAN_EXPANSIONGENERIC_BUILDMDUITEM's "Parameter 1
+    # is not a valid destination for TaskForce MainForce" (refused by --fail-on-lua-errors), seeds 1 / 3 / 8 do not end and
+    # log it too. No seed fields both walkers and droids. About 4 - 8 minutes each (slow).
+    foreach(_seed 2 4)
+      add_test(NAME alamo_headless_skirmish_ai_foc_land_empire_underworld_seed${_seed}
+               COMMAND alamo_headless --skirmish-ai foc-land --ai Empire,Underworld --ticks 30000 --workers 4 --quiet
+                       --expect-battle-end --fail-on-lua-errors --seed ${_seed})
+      set_tests_properties(alamo_headless_skirmish_ai_foc_land_empire_underworld_seed${_seed} PROPERTIES TIMEOUT 1800)
+      alamo_label_slow(alamo_headless_skirmish_ai_foc_land_empire_underworld_seed${_seed})
+    endforeach()
     # The campaign-rules land invasion (foc-land-campaign; before skai this was foc-land) must END with a winner before the frame
     # limit. a1g (2026-11-02): after the free-store reservations (§28) and the land Reinforce drop layout (§30.7, TACTICAL_GAPS
     # §4.2.1) no seed 1-12 ended before the 14400-frame cap. a1h t01: with the M1 WeaponBehavior fix, passive / superseded guard
