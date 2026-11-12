@@ -108,6 +108,11 @@ struct FactionRules {
     ForceSide force_alignment = ForceSide::Neutral;  // Force_Alignment (+0x110)
     std::array<float, 2> corruption_time_mult{1.0f, 1.0f};   // Corruption_Galactic_Production_Time_Multipliers
     std::array<float, 2> corruption_price_mult{1.0f, 1.0f};  // Corruption_Galactic_Production_Price_Multipliers
+    // a2m r2: Automatic_Planetary_Corruption_Upgrade_Type (faction +0x3068): the upgrade type a planet corrupted by this
+    // faction gets, index = corruption type 0..7 (list order); 0xFFFFFFFF = none / unresolved. Resolved by
+    // load_galactic_rules; the names are kept as written in `automatic_corruption_upgrade_names`.
+    std::vector<std::string> automatic_corruption_upgrade_names;
+    std::vector<uint32_t> automatic_corruption_upgrades;
     int32_t base_population_capacity = 0;  // Base_Population_Capacity (+0x2EE8), not in shipped XML; default 0 [H] (A2GAL 2.2)
     int32_t displayed_tech_level_adjustment = 0;  // P4 sim: Displayed_Tech_Level_Adjustment (+0x2FB0; FoC Rebel +1)
     // REMAINING_GAPS 6.3 base-level info fallback: faction +0x20ac <= the base level -> the level is shown [M: field meaning

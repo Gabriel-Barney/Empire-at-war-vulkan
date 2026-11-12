@@ -396,6 +396,28 @@ fighter picks over its runs), so some spawnability rule of AI_GALACTIC_2 §1.4 (
 or the +0xF60 / +0xF80 counts) vetoes them and is not yet specified. Also open: the port's Underworld runs the same goal
 at Shola / Nal Hutta after tick 8400 in 4 of 12 seeds; retail's Underworld never does before 13501.
 
+**2026-11-12 (a2m t01, round 2): galactic auto-resolve pays the Bounty_On_Faction bounty** (marked "a2m r2" in
+`engine/galactic/src/conflicts.cpp` `pay_auto_resolve_bounty`; rule and amounts `docs/re/A2M_R2_UW_BOUNTY_TRACE.md` §1 [H]
+for the two traced battles, 310 at 7162 and 585 at 7497). Data: `Bounty_On_Faction_Ability` (`Bounty_Percentage_Amount`,
+`Stacking_Category`, `Target_Faction_Names`, `Apply_To_All_Allies`) is parsed into `SpecialRules::bounty` /
+`TypeSpecial::bounty`, the faction's `Automatic_Planetary_Corruption_Upgrade_Type` into
+`FactionRules::automatic_corruption_upgrades` (index = corruption type), and each type's bounty (`Override_Bounty_SP`, else
+the first `Default_Bounty_By_Category_SP` entry its CategoryMask contains; `engine/galactic/bounty.hpp`, moved from
+apps/game `battle_summary`, which now shows the same values) into `ConflictTypeInfo::bounty`. [port] choices, not traced:
+(1) **activation**: a planet whose completed corruption is type c and whose corrupting player is P carries P's faction
+upgrade `Automatic_Planetary_Corruption_Upgrade_Type[c]`, and that upgrade's bounty abilities belong to P while the
+corruption lasts (vanilla: the Underworld's Racketeering planets, every Underworld planet from the start, GE 4.2 ->
+`Underworld_Racketeering_Salvage_Effect` 1.0 vs Empire / Rebel / Hutts / Pirates); [M] which object holds the ability in
+retail. (2) **who is paid**: the two battle sides only, for the other side's objects (the killer), once per battle with
+`add_credits(P, sum, notify 0)` (A2K_T10 Q3), defender first; float sum in combatant order then cargo order.
+(3) **stacking**: per `Stacking_Category` the largest percentage, summed over categories. (4) **objects**: every
+combatant or cargo object the auto-resolve destroys, starbases and ground structures included [M: the traces only show
+units]; a squadron / company holder counts its `Squadron_Units` / `Company_Units` members (holder 0); a carried company
+(space cargo, or a land attacker coming down from orbit) adds its `Company_Transport_Unit`'s bounty (7497: four
+Gallofree transports, 50 each); objects removed by a capture or by the post-battle write-back pay nothing.
+(5) `Apply_To_All_Allies` is parsed but not applied (no alliances in the galactic campaigns). Not modelled (follow-up):
+the tactical `UL_Bounty_Upgrade` (1.2) and `NalHutta_Planetary_Advantage` `NalHutta_Bounty` (0.15 vs the Underworld).
+
 **2026-11-09 (a2m t05 / t01): the t04 answers** (`docs/re/A2M_T04_RE_ANSWERS.md`; marked "a2m t05" in `engine/ai/src`).
 FreeStore Setup A: reservation, health (hull fraction alone, clamped [0, 1]: no galactic hardpoint health [M]), then the
 stage key, whose planet is needed only with a target and a visible unit; a unit in a moving fleet takes the move's final

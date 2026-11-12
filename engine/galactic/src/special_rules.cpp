@@ -232,6 +232,34 @@ SpecialAbilityDef parse_ability(const objects::ObjectTypeDatabase& raw, objects:
     return a;
 }
 
+// a2m r2: one Bounty_On_Faction_Ability element (BountyAbilityDef). Target names resolve through the loaded factions.
+BountyAbilityDef parse_bounty_ability(const objects::ObjectTypeDatabase& raw, objects::FieldIndex f, const GalacticRules& rules) {
+    const objects::FieldColumns& fc = raw.fields();
+    BountyAbilityDef a;
+    for (uint32_t i = 0; i < fc.attr_count[f]; ++i) {
+        const objects::XmlAttr& at = raw.attributes()[fc.attr_begin[f] + i];
+        if (ascii_iequals(at.name, "Name")) a.name = std::string(ascii_trim(at.value));
+    }
+    for (objects::FieldIndex g = f + 1; g < fc.size() && fc.depth[g] > fc.depth[f]; ++g) {
+        if (fc.parent[g] != f) continue;
+        const std::string_view tag = raw.tag_name(g);
+        const std::string_view v = ascii_trim(fc.text[g]);
+        if (v.empty()) continue;
+        if (ascii_iequals(tag, "Bounty_Percentage_Amount")) a.percentage = to_f(v);
+        else if (ascii_iequals(tag, "Stacking_Category")) a.stacking_category = static_cast<int32_t>(to_f(v));
+        else if (ascii_iequals(tag, "Apply_To_All_Allies")) a.apply_to_all_allies = objects::parse_type_bool(v);
+        else if (ascii_iequals(tag, "Target_Faction_Names")) {
+            a.target_factions.clear();
+            for (std::string_view n : objects::split_type_list(v)) {
+                const uint32_t fi = rules.find_faction(n);
+                if (fi != kNoIndex && std::find(a.target_factions.begin(), a.target_factions.end(), fi) == a.target_factions.end())
+                    a.target_factions.push_back(fi);
+            }
+        }
+    }
+    return a;
+}
+
 // The applicable set of a production ability (0x48d070 inputs): Applicable_Unit_Categories (GameObjectCategoryType mask,
 // "All" = every bit), Applicable_Unit_Types and Excluded_Unit_Types (resolved type names; unknown names are dropped).
 void parse_production_targets(const objects::GameObjectTypes& types, objects::FieldIndex f, SpecialAbilityDef& a,
@@ -377,7 +405,7 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
     const objects::ObjectTypeDatabase& raw = types.raw();
     const size_t n = types.size();
     s.types.assign(n, TypeSpecial{});
-    std::map<objects::FieldIndex, uint32_t> parsed, parsed_production;  // lookup only
+    std::map<objects::FieldIndex, uint32_t> parsed, parsed_production, parsed_bounty;  // lookup only
     for (objects::TypeIndex t = 0; t < n; ++t) {
         TypeSpecial& ts = s.types[t];
         for (objects::FieldIndex f : types.get_sub_objects(t, "Abilities")) {
@@ -392,6 +420,15 @@ void load_special_rules(const FileProvider& provider, const data::GameDatabase& 
                 const objects::FieldColumns& fc = raw.fields();
                 for (objects::FieldIndex c = f + 1; c < fc.size() && fc.depth[c] > fc.depth[f]; ++c)
                     if (fc.parent[c] == f && ascii_iequals(raw.tag_name(c), "Detection_Chance")) ts.detection_chance = to_f(fc.text[c]);
+            }
+            if (ascii_iequals(tag, "Bounty_On_Faction_Ability")) {  // a2m r2
+                auto bit = parsed_bounty.find(f);
+                if (bit == parsed_bounty.end()) {
+                    bit = parsed_bounty.emplace(f, static_cast<uint32_t>(s.bounty.size())).first;
+                    s.bounty.push_back(parse_bounty_ability(raw, f, out));
+                }
+                ts.bounty.push_back(bit->second);
+                continue;
             }
             const SpecialAbilityClass cls = class_of(tag);
             if (cls == SpecialAbilityClass::Other) continue;

@@ -800,8 +800,14 @@ it sets the auto-resolve retreat instead) and AI task forces (0x5fdd50).
 
 ### 3.5 Credits, loot, heroes
 
-- No credit reward is paid by the battle code itself. A planet captured through the ownership change
-  pays the capture bonus of GALACTIC_ECONOMY §4.2 (step 6). [M]
+- A planet captured through the ownership change pays the capture bonus of GALACTIC_ECONOMY §4.2 (step 6). [M]
+- **Corrected 2026-11-12 (a2m r2):** the earlier line "no credit reward is paid by the battle code itself" is wrong for
+  auto-resolve. Retail HotM traces show the Underworld paid the bounty of every enemy object destroyed in its galactic
+  auto-resolve battles, winner or loser (310 at frame 7162, 585 at 7497, exact per-object sums;
+  `A2M_R2_UW_BOUNTY_TRACE.md` §1 [H for the amounts]). The bounty comes from a `Bounty_On_Faction_Ability`
+  (`Underworld_Racketeering_Salvage_Effect` on the Underworld's Racketeering corruption upgrade), not from the battle
+  code; objects removed by an ownership change pay nothing [M]. The call site from the kill recording (§4.4, 0x60da50)
+  to the bounty function 0x392600 is not traced. Port: `docs/PHASE4.md` "a2m r2".
 - Heroes are ordinary units for survival; auto-resolve picks hero-carrying combatants first (§4.4) and
   the result text adds `TEXT_AR_HERO_LOSS` per dead named hero. Overrun is blocked by a hero (§1.6).
 - Survivor health write-back from tactical to galactic objects was not located (open item 1).

@@ -25,6 +25,7 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/conflicts.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "foc_data.hpp"
@@ -1245,6 +1246,44 @@ void test_foc() {
         CHECK(i.uncommon_price_multiplier == 5.5f && i.tech_level >= 1 && i.tech_level <= 5 && !i.ability_crcs.empty());
     }
     CHECK(s.items.size() == 10 && emp == 5 && reb == 5 && mn == 1000 && mx == 4800);
+    {  // a2m r2: the Underworld's Racketeering upgrade carries the salvage bounty; conflict-rule bounty values of the traced
+       // battles (docs/re/A2M_R2_UW_BOUNTY_TRACE.md §1).
+        const uint32_t uw = rules.find_faction("Underworld");
+        const uint32_t up = rules.find_type("Underworld_Racketeering_Corruption_Upgrade");
+        CHECK(uw != kNoIndex && up != kNoIndex);
+        if (uw != kNoIndex && up != kNoIndex) {
+            const std::vector<uint32_t>& ups = rules.factions[uw].automatic_corruption_upgrades;
+            CHECK(ups.size() == 8 && ups[kCorruptionRacketeering] == up && ups[0] == rules.find_type("Generic_Intimidation_Corruption_Upgrade"));
+            const std::vector<uint32_t>& b = s.type(up).bounty;
+            CHECK(b.size() == 1);
+            if (b.size() == 1) {
+                const BountyAbilityDef& d = s.bounty[b[0]];
+                CHECK(d.name == "Underworld_Racketeering_Salvage_Effect" && d.percentage == 1.0f && d.stacking_category == 1 &&
+                      !d.apply_to_all_allies);
+                CHECK(d.target_factions == (std::vector<uint32_t>{rules.find_faction("Empire"), rules.find_faction("Rebel"),
+                                                                  rules.find_faction("Hutts"), rules.find_faction("Pirates")}));
+            }
+        }
+        {  // the tactical UL_Bounty_Upgrade: 1.2; "Hutt" names no faction and is dropped
+            const std::vector<uint32_t>& ub = s.type(rules.find_type("UL_Bounty_Upgrade")).bounty;
+            CHECK(ub.size() == 1 && s.bounty[ub.empty() ? 0 : ub[0]].percentage == 1.2f &&
+                  s.bounty[ub.empty() ? 0 : ub[0]].target_factions.size() == 4);
+        }
+        ConflictRules cr;
+        CHECK(load_conflict_rules(*provider, db, types, rules, cr, &diag));
+        // By the typed view's name resolution (the index objects and Company_Transport_Unit use).
+        const auto bounty = [&](const char* n) { return cr.type(static_cast<uint32_t>(types.resolve_name(n))).bounty; };
+        CHECK(bounty("Marauder_Missile_Cruiser") == 50 && bounty("Corellian_Corvette") == 50 && bounty("X-Wing") == 15 &&
+              bounty("Y-Wing") == 15);
+        CHECK(bounty("Gallofree_Transport") == 50 && bounty("Squad_Plex_Soldier") == 5 && bounty("Squad_Rebel_Trooper") == 5 &&
+              bounty("T2B_Tank") == 50);
+        const uint32_t inf = rules.find_type("Rebel_Infantry_Squad");
+        CHECK(inf != kNoIndex && rules.types[inf].company_transport == rules.find_type("Gallofree_Transport"));
+        int64_t members = 0;
+        if (inf != kNoIndex)
+            for (const auto& [mt, n] : cr.type(inf).members) members += static_cast<int64_t>(cr.type(mt).bounty) * n;
+        CHECK(members == 15 * 5);  // 7497: 15 Rebel trooper squads
+    }
     CHECK(s.items[0].name == "Buzz_Droid_Tech" && s.items[0].ability_crcs[0] == special_name_crc("Buzz_Droids_Viper") &&
           s.find_item(special_name_crc("Buzz_Droid_Tech")) == 0);
     // Hero abilities (P4 1.2 vanilla users).

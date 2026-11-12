@@ -12,6 +12,7 @@
 
 #include "alamo/game/battle_summary.hpp"
 #include "alamo/game/game_data.hpp"
+#include "alamo/objects/type_fields.hpp"
 #include "alamo/test/support.hpp"
 
 using namespace alamo;
@@ -89,7 +90,8 @@ void test_data(const char* foc) {
         if (b > 0) ++positive;
         if (!data.types.get_string(t, "Override_Bounty_SP").empty()) {
             ++with_override;
-            CHECK(b == std::max<int64_t>(0, data.types.get_int(t, "Override_Bounty_SP")));
+            // a2m r2: the value as written (the typed view's get_int reads 0 for this field).
+            CHECK(b == std::max<int64_t>(0, static_cast<int64_t>(objects::c_atof(data.types.get_string(t, "Override_Bounty_SP")))));
         }
     }
     CHECK(positive > 100 && with_override >= 1 && max_bounty >= 500);

@@ -5,7 +5,8 @@
 //   3. the space force split (Â§2.3) hand-computed;
 //   4. conflict flow on a synthetic galaxy: AI vs AI auto-resolve on fleet arrival, human Fight with a
 //      tactical host (finish_battle write-back + retreat), human Pending choice (galaxy paused until
-//      choose()), land invasion, determinism (two runs give the same conflict + galactic digests).
+//      choose()), land invasion, determinism (two runs give the same conflict + galactic digests);
+//   5. a2m r2: the auto-resolve bounty of Bounty_On_Faction abilities from corruption upgrades.
 #include <algorithm>
 #include <cstdio>
 #include <memory>
@@ -273,7 +274,7 @@ void test_auto_resolve_rules() {
 }
 
 // ---- 3. force split -----------------------------------------------------------------------------------------------
-enum TypeId : uint32_t { tPlanetA, tPlanetB, tPlanetC, tSB1, tSB2, tFrigate, tFighters, tInfantry, tBarracks, tCorvette, tDeathStar, tTypeCount };
+enum TypeId : uint32_t { tPlanetA, tPlanetB, tPlanetC, tSB1, tSB2, tFrigate, tFighters, tInfantry, tBarracks, tCorvette, tDeathStar, tUpgrade, tTypeCount };
 enum Row : PlanetIndex { rA = 0, rB = 1, rC = 2 };
 enum PlayerId : int32_t { pEmpire = 0, pUnder = 1, pNeutral = 2 };
 
@@ -522,6 +523,84 @@ void test_cargo_losses() {
     // Loser cargo k = 3: m = round(2/3 x 3) = 2 survive, 1 dies in the transport roll and is recorded.
     CHECK(dead_cargo == 1);
     CHECK(e.attacker_losses == dead_att && e.defender_losses == dead_def);
+}
+
+// a2m r2 (docs/re/A2M_R2_UW_BOUNTY_TRACE.md §1): a space auto-resolve pays the Underworld the bounty of every destroyed
+// Empire object while the Underworld holds a Racketeering planet whose faction upgrade carries a Bounty_On_Faction ability
+// against the Empire. Holders count their members (the holder's own bounty is not used), carried cargo adds its company
+// transport, the Empire (no ability) gets nothing, and without the corruption nobody is paid. The battle itself (RNG,
+// losses) is the same with and without the bounty, so a twin world without it gives the expected credit difference.
+void test_auto_resolve_bounty() {
+    const std::vector<StartingForce> forces = {{pEmpire, rB, tCorvette}, {pEmpire, rB, tFighters}, {pEmpire, rB, tInfantry},
+                                               {pEmpire, rB, tInfantry}, {pUnder, rC, tFrigate}, {pUnder, rC, tFrigate},
+                                               {pUnder, rC, tFrigate}, {pUnder, rC, tFrigate}};
+    struct Run {
+        float under = 0.0f, empire = 0.0f;
+        int64_t expected = 0;  // bounty of the dead Empire objects (from the records taken before the battle)
+        uint32_t dead = 0;
+        uint64_t log_digest = 0;
+    };
+    // mode 0: no ability; 1: ability + Racketeering planet; 2: ability but the planet is not corrupted.
+    auto run = [&forces](int mode) {
+        World w(forces, false);
+        BountyAbilityDef salvage;
+        salvage.name = "Salvage";
+        salvage.percentage = 1.0f;
+        salvage.stacking_category = 1;
+        salvage.target_factions = {0};  // Empire
+        BountyAbilityDef weaker = salvage;  // same stacking category: the larger percentage counts, no stacking
+        weaker.name = "Weaker";
+        weaker.percentage = 0.5f;
+        if (mode != 0) {
+            w.rules.special.bounty = {salvage, weaker};
+            w.rules.special.types.resize(tTypeCount);
+            w.rules.special.types[tUpgrade].bounty = {0, 1};
+            w.rules.factions[1].automatic_corruption_upgrades = {kNoIndex, kNoIndex, kNoIndex, tUpgrade};
+        }
+        w.rules.types[tInfantry].company_transport = tUpgrade;
+        w.crules.types[tUpgrade].bounty = 40;     // the "transport"
+        w.crules.types[tCorvette].bounty = 50;
+        w.crules.types[tFighters].bounty = 999;   // holder: never paid itself
+        w.crules.types[tInfantry].bounty = 5;
+        if (mode == 1) w.sim.set_corruption(rC, kCorruptionRacketeering, pUnder);
+        // Empire infantry into orbit of B (cargo of the space battle).
+        std::vector<objects::ObjectHandle> ground;
+        for (objects::ObjectHandle h : w.sim.planets()[rB].surface)
+            if (w.store.alive(h) && w.store.owner(h) == pEmpire) ground.push_back(h);
+        CHECK(ground.size() == 2);
+        if (!ground.empty()) CHECK(w.sim.launch_units(pEmpire, rB, ground) == commands::RejectReason::None);
+        std::vector<objects::ObjectHandle> emp;
+        std::vector<int64_t> value;
+        for (uint32_t f : w.sim.fleets_at(rB, pEmpire))
+            for (objects::ObjectHandle h : w.sim.fleets()[f].contents) {
+                emp.push_back(h);
+                const uint32_t t = static_cast<uint32_t>(w.store.type(h));
+                value.push_back(t == tCorvette ? 50 : t == tFighters ? 2 * 50 : t == tInfantry ? 5 + 40 : 0);
+            }
+        CHECK(emp.size() == 4);
+        const float u0 = w.sim.players()[pUnder].account.credits, e0 = w.sim.players()[pEmpire].account.credits;
+        w.arrive_at_b();
+        Run r;
+        CHECK(w.cm->log().size() == 1);
+        for (size_t i = 0; i < emp.size(); ++i)
+            if (!w.store.alive(emp[i])) {
+                r.expected += value[i];
+                ++r.dead;
+            }
+        r.under = w.sim.players()[pUnder].account.credits - u0;
+        r.empire = w.sim.players()[pEmpire].account.credits - e0;
+        StateHasher h;
+        w.cm->hash(h);
+        r.log_digest = h.digest();
+        return r;
+    };
+    const Run plain = run(0), paid = run(1), clean = run(2);
+    CHECK(plain.log_digest == paid.log_digest && plain.dead == paid.dead && plain.dead > 0);  // same battle
+    CHECK(paid.expected > 0);
+    CHECK(paid.under - plain.under == static_cast<float>(paid.expected));
+    CHECK(paid.empire == plain.empire);
+    CHECK(clean.under == plain.under);
+    std::printf("auto-resolve bounty: %u Empire objects dead, Underworld +%.1f\n", paid.dead, static_cast<double>(paid.under - plain.under));
 }
 
 // q6 t18 (AI_GALACTIC_TOKENS §9.12, BT §1.6): the overrun side strengths 0x2ab880, float. Space: the side's orbit combat
@@ -1342,6 +1421,7 @@ int main() {
     test_story_block_not_frozen();
     test_p4_set_retreating();  // P4 sim
     test_cargo_losses();       // BT §4.4 loss records for carried units
+    test_auto_resolve_bounty();  // a2m r2
     test_p4_resolve_battle();  // P4 sim
     std::printf("oi transitions\n");
     test_oi_transitions();  // OI galactic

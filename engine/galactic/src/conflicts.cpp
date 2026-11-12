@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/galactic/bounty.hpp"
 #include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
@@ -128,9 +129,11 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
 
     // Per type.
     out.types.assign(types.size(), ConflictTypeInfo{});
+    const BountyTable bounty_table = load_bounty_table(g, types);  // a2m r2
     for (objects::TypeIndex t = 0; t < types.size(); ++t) {
         ConflictTypeInfo& i = out.types[t];
         i.categories = types.get_mask(t, "CategoryMask");
+        i.bounty = static_cast<int32_t>(type_bounty(bounty_table, types, t));
         i.population = types.columns().population_value[t];
         if (!types.get_string(t, "Space_Override_Population_Value").empty())
             i.space_population_override = types.get_int(t, "Space_Override_Population_Value");
@@ -763,6 +766,7 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
         for (size_t i = 0; i < ar_objects_.size() && i < r.survives.size(); ++i)
             if (sim_->store().exists(ar_objects_[i]))
                 on_survival_roll(ar_in_.combatants[i].owner, static_cast<uint32_t>(sim_->store().type(ar_objects_[i])), r.survives[i] != 0);
+    pay_auto_resolve_bounty(head);  // a2m r2, before the objects are removed
     // Destroyed combatants, starbase level.
     for (size_t i = 0; i < ar_objects_.size(); ++i) {
         const ObjectHandle h = ar_objects_[i];
@@ -802,6 +806,86 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
     log_.push_back(std::move(e));
     release_pause();
     pop_head(head.kind);
+}
+
+// a2m r2: auto-resolve bounty (docs/re/A2M_R2_UW_BOUNTY_TRACE.md §1 [H for the amounts and the recipient in the traced
+// battles]; the activation rule is [port], docs/PHASE4.md "a2m r2"). The abilities come from corruption upgrades: a planet
+// with a completed corruption of type c held by player P carries P's faction Automatic_Planetary_Corruption_Upgrade_Type[c]
+// and that upgrade type's Bounty_On_Faction_Ability entries belong to P (vanilla: the Underworld's Racketeering planets ->
+// Underworld_Racketeering_Salvage_Effect 1.0 vs Empire / Rebel / Hutts / Pirates). A battle side P receives, for every
+// destroyed object of the other side whose faction a P ability targets, Bounty_Percentage_Amount x the object's bounty:
+// per Stacking_Category the largest percentage, summed over categories [port]. Object bounty: a squadron / company holder
+// counts its Squadron_Units / Company_Units members (the holder itself 0); a carried company (orbit cargo, or a land
+// attacker coming down from orbit) adds its Company_Transport_Unit's bounty; any other object its own bounty (bounty.hpp).
+// Summed in float in combatant order, then cargo order; one add_credits per side, notify 0 (A2K_T10 Q3), defender first.
+void ConflictManager::pay_auto_resolve_bounty(const ConflictInfo& head) {
+    const GalacticRules& gr = sim_->rules();
+    if (gr.special.bounty.empty()) return;
+    const auto& players = sim_->players();
+    const auto faction_of = [&](int32_t p) -> uint32_t {
+        return p >= 0 && static_cast<size_t>(p) < players.size() ? players[static_cast<size_t>(p)].faction : kNoIndex;
+    };
+    // Active abilities of the two sides: (player, ability index), first-seen planet order.
+    std::vector<std::pair<int32_t, uint32_t>> active;
+    for (const PlanetState& p : sim_->planets()) {
+        if (p.corruption < 0 || (p.corrupting_player != head.attacker && p.corrupting_player != head.defender)) continue;
+        const uint32_t f = faction_of(p.corrupting_player);
+        if (f >= gr.factions.size()) continue;
+        const std::vector<uint32_t>& ups = gr.factions[f].automatic_corruption_upgrades;
+        const size_t c = static_cast<size_t>(p.corruption);
+        if (c >= ups.size() || ups[c] == kNoIndex) continue;
+        for (uint32_t a : gr.special.type(ups[c]).bounty) {
+            const std::pair<int32_t, uint32_t> e{p.corrupting_player, a};
+            if (std::find(active.begin(), active.end(), e) == active.end()) active.push_back(e);
+        }
+    }
+    if (active.empty()) return;
+    // Percentage of `receiver` for an object of faction `victim`.
+    const auto percentage = [&](int32_t receiver, uint32_t victim) {
+        std::vector<std::pair<int32_t, float>> best;  // (stacking category, largest percentage)
+        for (const auto& [pl, a] : active) {
+            if (pl != receiver || a >= gr.special.bounty.size()) continue;
+            const BountyAbilityDef& d = gr.special.bounty[a];
+            if (std::find(d.target_factions.begin(), d.target_factions.end(), victim) == d.target_factions.end()) continue;
+            auto it = std::find_if(best.begin(), best.end(), [&d](const std::pair<int32_t, float>& b) { return b.first == d.stacking_category; });
+            if (it == best.end()) best.emplace_back(d.stacking_category, d.percentage);
+            else it->second = std::max(it->second, d.percentage);
+        }
+        float sum = 0.0f;
+        for (const auto& b : best) sum += b.second;
+        return sum;
+    };
+    const auto object_bounty = [&](uint32_t t, bool carried) {
+        const ConflictTypeInfo& ct = rules_->type(t);
+        int64_t b = 0;
+        if (ct.members.empty()) b = ct.bounty;
+        else
+            for (const auto& [mt, n] : ct.members) b += static_cast<int64_t>(rules_->type(mt).bounty) * n;
+        if (carried && t < gr.types.size() && gr.types[t].company_transport != kNoIndex)
+            b += rules_->type(gr.types[t].company_transport).bounty;
+        return b;
+    };
+    const AutoResolveResult& r = last_ar_;
+    const bool space = head.kind == ConflictKind::Space;
+    for (const int32_t receiver : {head.defender, head.attacker}) {
+        if (receiver == kNoPlayer || head.defender == head.attacker) continue;
+        float total = 0.0f;
+        const auto add = [&](ObjectHandle h, int32_t owner, bool carried) {
+            if (owner == receiver || !sim_->store().exists(h)) return;
+            const float pct = percentage(receiver, faction_of(owner));
+            if (pct <= 0.0f) return;
+            total += pct * static_cast<float>(object_bounty(static_cast<uint32_t>(sim_->store().type(h)), carried));
+        };
+        for (size_t i = 0; i < ar_objects_.size() && i < r.survives.size(); ++i)
+            if (!r.survives[i]) {
+                const ArCombatant& c = ar_in_.combatants[i];
+                // Land: the attacker's units are the companies coming down from orbit (auto_setup); structures never carry.
+                add(ar_objects_[i], c.owner, !space && c.owner == head.attacker && c.starbase.empty());
+            }
+        for (size_t i = 0; i < ar_cargo_.size() && i < r.cargo_survives.size(); ++i)
+            if (!r.cargo_survives[i]) add(ar_cargo_[i], ar_in_.cargo[i].owner, true);
+        if (total > 0.0f) sim_->add_credits(receiver, total, false);
+    }
 }
 
 // ---- tactical battle ----
