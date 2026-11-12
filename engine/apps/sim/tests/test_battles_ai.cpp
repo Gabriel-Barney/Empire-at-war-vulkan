@@ -436,7 +436,8 @@ void test_battle_ai_station_level(bool skirmish) {
 
 // t48: the battle mode reaches the perception (Game.IsCampaignGame, IsDefender, the start markers) and so do both land BaseLevel
 // inputs: campaign = the conflict planet's structures, skirmish = each player's DUMMY_GROUND_STRUCTURE objects.
-void test_battle_ai_land_mode(bool skirmish) {
+// ccpgu t03: Game.IsLandControlGame is set only in a land skirmish with the control-point win condition (game type 4).
+void test_battle_ai_land_mode(bool skirmish, bool control_points = false) {
     auto d = make_data(false, false, true);
     jobs::JobSystem js(jobs::JobSystemConfig{0});
     SimConfig cfg;
@@ -453,6 +454,7 @@ void test_battle_ai_land_mode(bool skirmish) {
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
     opt.battle.max_frames = 600;
     opt.battle.skirmish = skirmish;
+    opt.battle.control_point_domination = control_points;
     CampaignBattles battles(host, d->crules, *d->catalog,
                             [](const std::string& name, terrain::MapData& m) {
                                 if (name != "S10_Land_B") return false;
@@ -489,6 +491,7 @@ void test_battle_ai_land_mode(bool skirmish) {
         std::vector<ai::tactical::TacticalAiObject> facts;
         ai.fill(w, facts);
         CHECK(w.campaign == !skirmish);  // t50: a land skirmish runs the skirmish rules too (it has its skirmish base now)
+        CHECK(w.land_control == (skirmish && control_points));  // ccpgu t03
         CHECK(w.conflict_ground_structures == 1);  // set in both modes; the token picks by mode
         int own = 0, other = 0;
         for (const ai::tactical::PerceptionObject& o : w.objects)
@@ -5192,6 +5195,8 @@ int main(int argc, char** argv) {
     test_battle_ai_station_level(true);
     test_battle_ai_land_mode(false);
     test_battle_ai_land_mode(true);
+    test_battle_ai_land_mode(true, true);
+    test_battle_ai_land_mode(false, true);
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
     std::printf("q6: an attack ordered on a TEAM container (AI host and human order; nearest member, order ends with the container)\n");

@@ -451,8 +451,23 @@ Sources: 0x344710 case 0x15, 0x360d90 (arm), 0x3639d0 (tactical tick), 0x3611f0 
   Control Points row on a land map; alamo_headless `--skirmish-ai foc-land|skirmish --control-points`) registers only
   {0x15, player} (skirmish slots; [port] attacker and defender in alamo_game's hop battle), arms / disarms on each completed
   capture event, counts down per battle tick in the victory check and tests 0x15 at <= 0 (`tactical_battle_victory.cpp`);
-  the timer is in the battle hash (while armed) and the battle save (state version 9). The announcer lines are not played
-  [port]; `TacticalBattle::control_point_timer()` exposes the timer for the host.
+  the timer is in the battle hash (while armed) and the battle save (state version 9). `TacticalBattle::control_point_timer()` /
+  `control_point_leader()` expose the timer for the host.
+- Port status (ccpgu, 2026-11-12): alamo_game plays the announcer (`GameAudioHost::control_point_line`, called from
+  `battle_tick`): the leader's relation to the local player picks `_Owned_` (the local player leads), `_Ally_Owned_` (relation
+  0) or `_Enemy_Owned_` (relation 1); a line plays on the tick the timer reaches 1800 / 900 / 450 / 150 frames and on an arm
+  or re-arm at that value (the shipped 900-frame timer gives the 30 s line at arming, then 15 s and 5 s); a Neutral observer
+  hears nothing. Test `alamo_game_audio_host_tests`.
+- AI in a type-4 game (ccpgu t03, 2026-11-12): `Game.IsLandControlGame` (AI_GALACTIC_TOKENS 0x6e2060: GameModeManager +0x20 ==
+  4) was never set in the port, so the skirmish AI ignored the points. [port] it is true in a land skirmish with
+  `control_point_domination` (`BattleAi::fill`). The shipped data has no other type-4 rule: `May_Lose_Land_Control_Game` (=
+  owns no Reinforcement_Point and IsLandControlGame) doubles `Should_Secure_Victory_Control_Point` (goal
+  Secure_Victory_Control_Point, plan SecureVictoryControlPoint.lua: Produce_Force infantry + vehicle / hero escort, Move_To,
+  Guard_Target), forces `Should_Build_Infantry_Emergency` and blocks unit / structure builds, tech and early upgrades and
+  bunker garrisons until a point is held. Port run `alamo_headless --skirmish-ai foc-land --map _MP_LAND_ENDOR
+  --control-points --ticks 12000`: 0 SecureVictoryControlPoint plans before the fix; after it both AIs start them (first at
+  frame 499; 29 ended, 5 in success) and each holds one or two of the five Reinforcement_Points through the run. Test
+  `test_battle_ai_land_mode` (alamo_sim_battles_ai_tests).
 
 ## 5. Income streams (item 4)
 
@@ -574,6 +589,15 @@ drops or vehicles count apart), and does retail pre-empt those plans for an atta
 `tools/probe_mod/q2_traces/run_skirmish_land_attack.cmd` (Utapau, idle Empire vs Rebel Medium, 36000 ticks), read with
 `analysis/land_attack.py`. Port run to compare: `alamo_headless --skirmish-ai skirmish --map _MP_LAND_UTAPAU --human EMPIRE
 --ticks 36000`.
+
+skai t07-t11 (2026-11-12) port status: §2.6 pre-built pads = every active pad whose type keeps the default
+Respects_Skirmish_Pre_Build_Bases_Option (only the five generic `<FACTION>_BUILD_PAD`s set it false) starts built with the
+owner's first UC type of its faction row ([port] proxy for the map-saved pre-placed type, vf13 not decoded); Utapau gets 10
+structures per slot, as retail's frame 0. Land start companies stand on the last TEAM_tt spawn marker in map order. The
+skirmish AI pays pad builds (Tactical_Build_Cost_Multiplayer) when it starts one; campaign land battles keep the free AI
+pad builds of L1_S4 §3.6 [port]. Build_Limit_Current_Per_Player: 0 refuses, > 0 refuses at live + queued >= limit
+(STRATEGIC_GAPS 23). A survivor company (Destruction_Survivors) spawns its Company_Units. Imperial Command Center self repair
+and E_Magnetically_Sealed_Structure (Initially_Enabled No) were already as retail.
 
 Answered by the retail runs of 2026-11-08 (skai t06): `SKAI_T06_LAND_RUNS.md` (retail does not take the base in 36000 frames:
 the Command Center survives; pre-built base of 9 structures per slot; default forces on the last TEAM_tt spawn marker; the AI

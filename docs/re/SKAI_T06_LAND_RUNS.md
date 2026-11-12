@@ -102,3 +102,14 @@ run because of item 1.
   13 companies + droids on the field with curve 9, and what stops the pool drops after frame 15232.
 - [RE] SKIRMISH_SETUP §3: correct the PAYG reading of 0x289050 (the AI pays at enqueue, in one step).
 - [RE] L1_S4 §4.2: an empty owned pad returns to Neutral 150 frames after the owner's last unit leaves; check the port's timing.
+
+## 5. Port result after the follow-ups (skai t07-t11, 2026-11-12)
+
+Items 1-5 of §4 are in the port (`SKIRMISH_SETUP.md` §10, "skai t07-t11"); item 6 needed no change (the Command Center self
+repair, 2 % every 2.5 s, and the sealed structure, off until its upgrade, were already as retail). Port Utapau run with an
+idle human Empire: the first base structure falls at 13475 (retail 13107), but the Command Center then dies at 19321 and the
+battle ends at 22920; retail never loses the Command Center in 36000 frames. The port's Rebel army damages the CC at about
+2.6 HP per frame (retail about 0.7, under the 56 HP / 75 frames repair) through BurnUnitsLand (`Find_Nearest(MainForce,
+"InBase")`, then Attack_Move loops on the nearest structure). The retail Lua probe has no land plan records, so where retail's
+attack stops (TACTICAL_COMBAT 2.8 [L], backlog b0004) needs a retail land-plan probe; open in skai t14. AI-vs-AI foc-land at
+30000 ticks: seeds 1-6 all end (21439 / 29833 / 18993 / 21933 / 24310 / 28372).
