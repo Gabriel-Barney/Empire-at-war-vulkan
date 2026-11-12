@@ -541,6 +541,16 @@ void GalacticSim::fiscal_cycle() {
 // ---- ownership ----------------------------------------------------------------------------------------------
 
 int32_t GalacticSim::derive_owner(PlanetIndex planet) const {
+    const int32_t o = physical_owner(planet);
+    if (o != kNoPlayer) return o;
+    const PlanetState& p = planets_[planet];
+    if (valid_player(p.leaning)) return p.leaning;  // 6. political leaning [L: updated on capture]
+    return neutral_player_;                         // 7.
+}
+
+// Steps 1-5 of GE 4.1 (0x3f3830): the owner from a physical source, kNoPlayer when none (bkg2 b0125: the clamp floor of the
+// target political control is 1 only with such an owner).
+int32_t GalacticSim::physical_owner(PlanetIndex planet) const {
     // GE 4.1 precedence [M].
     const PlanetState& p = planets_[planet];
     for (ObjectHandle s : p.structures)  // 1. ground base (level = structure count [M])
@@ -555,22 +565,98 @@ int32_t GalacticSim::derive_owner(PlanetIndex planet) const {
     if (!surface_accessible(planet))
         for (uint32_t f : p.orbit)
             if (fleets_[f].alive && !fleets_[f].moving) return fleets_[f].owner;
-    if (valid_player(p.leaning)) return p.leaning;  // 6. political leaning [L: updated on capture]
-    return neutral_player_;                         // 7.
+    return kNoPlayer;
 }
 
+// bkg2 b0125 (BKG1_RE_ANSWERS 9: 0x3f3830 / 0x3f6af0 / 0x3f6df0) [H]: the target is the planet's breakdown map reduced as
+// "the largest entry of each group, summed over the groups", clamped to [lo, hi] and then to [0, 5]:
+//   group 0 leaning: the planet type's Political_Control v (0..5), -v when the owner's faction is not Political_Faction;
+//   group 1 presence: the ground-base level, ground troops (1 when a non-hidden unit is on the surface), the starbase
+//     level, the orbital claim (1 when the owner came from orbit), capital ships min(s, 1) for s >= 0, where s is the
+//     Political_Control of the units in orbit, + for the owner's and - for anyone else's;
+//   group 2 enemy fleets: -1 when s <= -1;
+//   groups 5..12: one per ground structure, then orbital structure (the starbase), with Political_Control != 0 (8 at most);
+//   group 13 trade routes: Political_Control_Gain of each route whose neighbour is held by the owner or an ally with
+//     control > 0, when both controls are >= 1.
+// lo = 1 with a physical owner (GE 4.1 steps 1-5), else 0; hi = the owner faction's Planet_Max_Political_Control_For_Faction
+// (5 when absent or below lo). FoC data sets every Political_Control and route gain to 0 and lists no maximum, so an owned
+// planet gets max(1, ground-base level, starbase level, troops). [port] The residual-influence entry (0 / 1, its owner
+// rule) is not modelled (the owner falls back to the leaning, see derive_owner).
+int32_t GalacticSim::target_political_control(PlanetIndex planet, int32_t derived) const {
+    const PlanetState& p = planets_[planet];
+    const TypeInfo* pt = p.type < rules_->types.size() ? &rules_->types[p.type] : nullptr;
+    const int32_t physical = physical_owner(planet);
+    // group 1 presence
+    int32_t presence = ground_base_level(planet);
+    bool troops = false;
+    for (ObjectHandle u : p.surface) troops = troops || (store_->alive(u) && !hidden(u));
+    if (troops) presence = std::max(presence, 1);
+    if (p.starbase_level > 0) presence = std::max(presence, p.starbase_level);
+    const bool owned_on_ground = ground_base_level(planet) > 0 || troops || p.starbase_level > 0;
+    bool from_ground = owned_on_ground;
+    for (uint32_t q = 0; q < 2 && !from_ground; ++q) from_ground = !p.queue[q].empty();
+    if (!from_ground && physical != kNoPlayer) presence = std::max(presence, 1);  // ORBITAL_CONTROL
+    int32_t s = 0;
+    for (uint32_t f : p.orbit) {
+        if (!fleets_[f].alive) continue;
+        for (ObjectHandle u : fleets_[f].contents) {
+            if (!store_->alive(u)) continue;
+            const uint32_t ut = static_cast<uint32_t>(store_->type(u));
+            const int32_t pc = ut < rules_->types.size() ? rules_->types[ut].political_control : 0;
+            s += store_->owner(u) == derived ? pc : -pc;
+        }
+    }
+    int32_t sum = 0;
+    if (s >= 0) presence = std::max(presence, std::min(s, 1));  // CAPITAL_SHIPS
+    // group 0 leaning
+    if (pt) {
+        const int32_t v = std::clamp(pt->political_control, 0, 5);
+        if (v > 0) {
+            const bool owner_known = valid_player(derived) && derived != neutral_player_;
+            sum += owner_known && players_[static_cast<size_t>(derived)].faction != pt->political_faction ? -v : v;
+        }
+    }
+    sum += presence;
+    if (s <= -1) sum += -1;  // group 2 ENEMY_FLEETS
+    // groups 5..12 structures
+    int32_t groups = 0;
+    std::vector<ObjectHandle> structs = p.structures;
+    if (p.starbase) structs.push_back(p.starbase);
+    for (ObjectHandle o : structs) {
+        if (groups >= 8 || !store_->alive(o)) continue;
+        const uint32_t ot = static_cast<uint32_t>(store_->type(o));
+        const int32_t pc = ot < rules_->types.size() ? rules_->types[ot].political_control : 0;
+        if (pc == 0) continue;
+        sum += pc;
+        ++groups;
+    }
+    // group 13 trade routes
+    for (uint32_t r : p.links) {
+        const PlanetIndex nb = map_.routes.point_a[r] == planet ? map_.routes.point_b[r] : map_.routes.point_a[r];
+        if (!valid_planet(nb)) continue;
+        const PlanetState& n = planets_[nb];
+        const Relation rel = valid_player(derived) && valid_player(n.owner) ? relation(derived, n.owner) : Relation::Enemy;
+        if ((rel == Relation::Self || rel == Relation::Ally) && n.control > 0.0f && n.control >= 1.0f && p.control >= 1.0f)
+            sum += static_cast<int32_t>(map_.routes.political_control_gain[r]);
+    }
+    const int32_t lo = physical != kNoPlayer ? 1 : 0;
+    int32_t hi = 5;
+    if (physical != kNoPlayer && valid_player(physical) && pt) {
+        const uint32_t fi = players_[static_cast<size_t>(physical)].faction;
+        for (const auto& [f, m] : pt->max_political_control)
+            if (f == fi) {
+                hi = m;
+                break;
+            }
+        if (hi < lo) hi = 5;
+    }
+    return std::clamp(std::clamp(sum, lo, hi), 0, 5);
+}
 void GalacticSim::apply_ownership(PlanetIndex planet, int32_t derived) {
     PlanetState& p = planets_[planet];
     const EconomyConstants& c = rules_->constants;
-    // Target control [L]: 1.0 + Political_Control_Gain of routes to same-owner planets with control >= 1
-    // (vanilla gains are 0), clamped to [0, 5] (hard-coded 5 [M]).
-    float target = 1.0f;
-    for (uint32_t r : p.links) {
-        const PlanetIndex nb = map_.routes.point_a[r] == planet ? map_.routes.point_b[r] : map_.routes.point_a[r];
-        if (valid_planet(nb) && planets_[nb].owner == derived && planets_[nb].control >= 1.0f && p.control >= 1.0f)
-            target += map_.routes.political_control_gain[r];
-    }
-    p.target_control = std::clamp(target, 0.0f, 5.0f);
+    // bkg2 b0125: the breakdown target (target_political_control), passed on as float(target) (0x3fe529) [H].
+    p.target_control = static_cast<float>(target_political_control(planet, derived));
     if (!p.initialised) {
         p.initialised = true;
         p.owner = derived;

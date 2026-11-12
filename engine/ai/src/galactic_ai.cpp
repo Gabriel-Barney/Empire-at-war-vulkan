@@ -1464,6 +1464,16 @@ void GalacticAiWorld::Impl::claim_units(int32_t player) {
             // admits the new object to the free store (PRODUCTION_FINISHED); only a task with a destination goes on to
             // PRODUCTION_END -> Add_Force.
             if (tit != tfs.end() && tit->second.stage >= 0) {
+                // bkg2 b0121 (BKG1_RE_ANSWERS 10, GROUND_UNIT_PRODUCTION 0x648120) [H path; M re-admit]: a landed ground unit
+                // whose destination is not its build planet fails the task (PRODUCTION_FAILED -> Production_Failed) when
+                // the build planet is blockaded (0x3fa370); the money is spent and the unit goes to the free store.
+                const gal::TypeInfo* uti = type_info(type);
+                if (on_surface(u) && uti && ground_kind(uti->kind) && static_cast<int32_t>(at) != tit->second.stage &&
+                    sim.ai_blockaded(at)) {
+                    fail_build(*match, "blockaded");
+                    free_store_admitted(player, u);
+                    continue;
+                }
                 tf_join(tit->second, u);  // PRODUCTION_END -> JOIN_TASK_FORCE
                 tit->second.had_units = true;
                 continue;

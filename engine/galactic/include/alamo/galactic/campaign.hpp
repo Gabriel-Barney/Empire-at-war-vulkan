@@ -602,6 +602,9 @@ public:
     int32_t ground_base_level(PlanetIndex planet) const;
     int32_t planets_owned(int32_t player) const;
     int32_t derive_owner(PlanetIndex planet) const;  // GE 4.1 precedence (pure)
+    int32_t physical_owner(PlanetIndex planet) const;  // GE 4.1 steps 1-5 only; kNoPlayer when none (bkg2 b0125)
+    // Target political control (bkg2 b0125, BKG1_RE_ANSWERS 9; 0x3f3830 / 0x3f6af0 / 0x3f6df0) [H] for the derived owner.
+    int32_t target_political_control(PlanetIndex planet, int32_t derived) const;
     bool corrupted(PlanetIndex planet) const { return planets_[planet].corruption != kCorruptionNone; }
     float build_time_for(int32_t player, PlanetIndex planet, uint32_t type) const;
     int32_t build_cost_for(int32_t player, PlanetIndex planet, uint32_t type) const;
