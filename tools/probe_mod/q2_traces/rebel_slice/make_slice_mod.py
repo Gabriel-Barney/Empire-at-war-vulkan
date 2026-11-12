@@ -21,6 +21,8 @@ from memory; the plan records give the plan, its target and the credits / tech l
 Records (Q2L1|P|<sid>|<seq>|<KIND>|<text>|END, the q2 kit's format, so q2lua_reader.py collects them; plan=Advance_Tech_Rebel):
   LOAD     once per pooled script instance
   PSTART   thread start: n (run number in the instance), prev (end of the previous run; none = killed by a release)
+  PCAND    a2m r2 (t14.4): one per planet of FindPlanet.Get_All_Planets() before the shipped FindTarget: i, planet,
+           owner, slice = EvaluatePerception("Is_Good_Slice_Target", PlayerObject, planet)
   PTARGET  before block 1: target (planet type of Target.Get_Game_Object()), owner (its faction), blk (type of the status)
   PPROD / PMOVE / PLAND / PLANDX   after blocks 1 / 2 / 3 / 4: ret, dt (seconds blocked); PLANDPRE before block 3
   PDONE / PEXIT / PFAIL            thread returned / ScriptExit / TechForce_Production_Failed
@@ -230,11 +232,34 @@ function Q2S_Fail(args)
 	Q2S_Record("PFAIL", s .. " target=" .. Q2S_Target())
 end
 
+-- a2m r2 (docs/re/A2M_T08_T10_T14_RE.md t14.4): before the shipped FindTarget runs, one PCAND record per planet of
+-- FindPlanet.Get_All_Planets() (list order): its type, owner faction and EvaluatePerception("Is_Good_Slice_Target",
+-- PlayerObject, planet), the perception FindTarget scores. Read-only: the equation has no random token, and these are
+-- the bindings PathBonusForDistantTargets.lua calls. A planet the pick never lands on with slice > 0 points to a
+-- filter in front of the weighted pick (Applies / TargetPlayerID); slice = 0 shows the perception excludes it.
+function Q2S_Cands()
+	local ok, list = pcall(function() return FindPlanet.Get_All_Planets() end)
+	if not ok or type(list) ~= "table" then
+		Q2S_Record("PCAND", " i=0 planet=? err=" .. Q2S_Str(function() return list end))
+		return
+	end
+	local i = 0
+	for _, planet in pairs(list) do
+		i = i + 1
+		local p = planet
+		Q2S_Record("PCAND", " i=" .. i ..
+			" planet=" .. Q2S_Str(function() return p.Get_Type().Get_Name() end) ..
+			" owner=" .. Q2S_Str(function() return p.Get_Owner().Get_Faction_Name() end) ..
+			" slice=" .. Q2S_Str(function() return EvaluatePerception("Is_Good_Slice_Target", PlayerObject, p) end))
+	end
+end
+
 -- The thread wrap is redone each time this chunk runs, around the function the shipped part above just defined; Flush_G
 -- keeps functions, so it stays across releases.
 Q2S_Thread = TechForce_Thread
 function TechForce_Thread(...)
 	Q2S_Try("PSTART", Q2S_Begin)
+	Q2S_Try("PCAND", Q2S_Cands)
 	local r = { Q2S_Thread(unpack(arg)) }
 	Q2S_Try("PDONE", Q2S_Done)
 	return unpack(r)

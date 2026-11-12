@@ -73,14 +73,16 @@ def plan_runs(recs):
         if kind == 'PSTART':
             r = {'sid': sid, 'n': d.get('n'), 'player': d.get('player'), 'start': num(d.get('f')), 'prev': d.get('prev'),
                  'cr0': d.get('cr'), 'tech0': d.get('tech'), 'target': None, 'owner': None, 'blocks': {}, 'end': None,
-                 'end_f': None, 'land_pre': None, 'land': None}
+                 'end_f': None, 'land_pre': None, 'land': None, 'cands': []}
             runs.append(r)
             cur[sid] = r
             continue
         r = cur.get(sid)
         if r is None or d.get('n') != r['n']:
             continue
-        if kind == 'PTARGET':
+        if kind == 'PCAND':
+            r['cands'].append((d.get('planet', '?'), d.get('owner', '?'), d.get('slice', '?')))
+        elif kind == 'PTARGET':
             r['target'], r['owner'] = d.get('target'), d.get('owner')
         elif kind == 'PLANDPRE':
             r['land_pre'] = d
@@ -331,6 +333,30 @@ def report(run_dir, trace_dir=None, fac='REBEL'):
                                 '%d run(s), %d landed, %d sliced -> %s' % (
                                     maw[0], maw[1], maw[2],
                                     'never slices' if maw[2] == 0 and maw[3] == 0 else 'SLICED')))
+    L.append('')
+    L.append('== 4. FindTarget candidates (a2m r2, t14.4: PCAND = Is_Good_Slice_Target per planet before the pick) ==')
+    seen_runs = [r for r in runs if r['cands']]
+    if not seen_runs:
+        L.append('  none recorded (a hook built before a2m r2)')
+    picks = {}
+    for i, r in enumerate(runs):
+        if not r['cands']:
+            continue
+        L.append('  run %-3d target %-12s | %s' % (i + 1, tgt_key(r['target'])[:12] or '-', ' '.join(
+            '%s:%s=%s' % (tgt_key(pl), (ow or '?')[:3], sc) for pl, ow, sc in r['cands'])))
+        picks[tgt_key(r['target'])] = picks.get(tgt_key(r['target']), 0) + 1
+    if seen_runs:
+        enemy = {}
+        for r in seen_runs:
+            for pl, ow, sc in r['cands']:
+                v = num(sc)
+                if (ow or '').upper() not in (fac.upper(), 'NEUTRAL', 'PIRATES', '?') and v is not None and v > 0:
+                    enemy[tgt_key(pl)] = enemy.get(tgt_key(pl), 0) + 1
+        L.append('  enemy planets scoring > 0 (picks / runs): %s' % (', '.join(
+            '%s %d/%d' % (k, picks.get(k, 0), n) for k, n in sorted(enemy.items())) or 'none'))
+        never = sorted(k for k in enemy if picks.get(k, 0) == 0)
+        L.append('  scoring > 0 but never picked: %s (each non-best candidate has 0.9/(n-1) per run, '
+                 'A2M_T08_T10_T14_RE t14.3)' % (', '.join(never) or 'none'))
     with open(os.path.join(run_dir, 'slice_plans.tsv'), 'w', newline='\n') as f:
         f.write('\t'.join(['run', 'sid', 'n', 'start', 'target', 'owner', 'landpre_f', 'land_f', 'cr_landpre',
                            'cr_land', 'tech_landpre', 'tech_land', 'count_land', 'end', 'end_f', 'sliced_type', 'price',

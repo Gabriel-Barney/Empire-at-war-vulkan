@@ -91,6 +91,14 @@ local function block(done, result, on_done)
 		end, Result = function() return result end }
 end
 local function engine_setup(f0, planet_name, owner)
+	-- engine bindings (set again per run, as FindTarget: a release flushes the script's globals)
+	FindPlanet = { Get_All_Planets = function()
+		return { planet("Yavin", "REBEL"), planet("Corellia", "EMPIRE"), planet("Shola", "UNDERWORLD") } end }
+	EvaluatePerception = function(eq, pl, p)
+		if eq ~= "Is_Good_Slice_Target" then return nil end
+		if p.Get_Type().Get_Name() == "CORELLIA" then return 0 end
+		return 1
+	end
 	PlayerObject = A2_PLAYERS.REBEL
 	Budget = { Get_Spendable_Resources = function() return 0 end, Get_Unallocated_Resources = function() return 0 end }
 	FindTarget = function(tf, eq, kind, v)
@@ -225,6 +233,11 @@ def lua_tests(lua, out, z):
     check('lua: run 3: PFAIL then PEXIT (production failure) after the second release',
           ('PFAIL', '3') in kinds and ('PEXIT', '3') in kinds and 'args=2 DROIDS_TEAM' in txt.get(('PFAIL', '3'), ''),
           str(kinds[-6:]))
+    pc = [r[5] for r in recs if r[4] == 'PCAND']
+    check('lua: PCAND (a2m r2 t14.4): 3 planets per run in list order, owner and Is_Good_Slice_Target, before PTARGET',
+          len(pc) == 9 and 'i=1 planet=YAVIN owner=REBEL slice=1' in pc[0] and
+          'i=2 planet=CORELLIA owner=EMPIRE slice=0' in pc[1] and 'i=3 planet=SHOLA owner=UNDERWORLD slice=1' in pc[2]
+          and [r[4] for r in recs].index('PCAND') < [r[4] for r in recs].index('PTARGET'), str(pc[:3]))
     check('lua: canary called once, no ERR record', o.count('CANARYCALL Mods\\Q2RebelSlice\\Q2RebelSlice_Canary_Plan.txt')
           == 1 and not any(r[4] == 'ERR' for r in recs), str([r[5] for r in recs if r[4] == 'ERR']))
     hits = [(0, ln.encode('ascii')) for ln in o.splitlines() if ln.startswith('Q2L1|')]
@@ -320,6 +333,10 @@ def watcher_and_report_tests(out, parsed):
     check('report: the initial unlocked entry is listed as not from a plan run; slice_plans.tsv one row per run',
           '(no plan run landing at that frame' in text and
           len(open(os.path.join(out, 'slice_plans.tsv')).read().splitlines()) == 4, text[-900:])
+    check('report: section 4 lists the PCAND candidates per run and the enemy planets scoring > 0 (a2m r2 t14.4)',
+          'run 1   target SHOLA        | YAVIN:REB=1 CORELLIA:EMP=0 SHOLA:UND=1' in text and
+          'enemy planets scoring > 0 (picks / runs): SHOLA 1/3' in text and 'never picked: none' in text,
+          text[text.find('== 4.'):][:700])
     # Raw bytes of the real run 20261108-212955 (FoC 1.121): DynamicVector {data, i32 count, i32 capacity}.
     real = bytes.fromhex('b00076d3710100000b00000014000000d8592bb2f77f0000')
     check('decode_raw: the retail unlocked list is a DynamicVector (count 11, capacity 20)',
