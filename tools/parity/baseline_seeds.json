@@ -1,5 +1,5 @@
 {
- "commit": "8dc08f15",
+ "commit": "c3c01834",
  "mode": "distribution",
  "scenarios": {
   "geonosis_skirmish": {
@@ -89,7 +89,7 @@
     "ai.build_mix[Underworld]": "PASS",
     "ai.first_build_tick[Rebel]": "PASS",
     "ai.first_build_tick[Underworld]": "PASS",
-    "ai.first_departure_tick[Empire]": "FAIL",
+    "ai.first_departure_tick[Empire]": "N/A",
     "ai.first_departure_tick[Rebel]": "PASS",
     "ai.first_departure_tick[Underworld]": "PASS",
     "ai.fleet_departures[Empire]": "PASS",
@@ -102,7 +102,7 @@
     "build.ticks[CRUSADER_GUNSHIP@FELUCIA]": "PASS",
     "build.ticks[DESTROYER_DROID_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[INTERCEPTOR4_FRIGATE@THE_MAW]": "PASS",
-    "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "FAIL",
+    "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@KAMINO]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@MONCALIMARI]": "PASS",
     "build.ticks[REBEL_GROUND_MINING_FACILITY@NABOO]": "PASS",
@@ -133,7 +133,7 @@
     "econ.credits_at_4500[Underworld]": "PASS",
     "econ.credits_at_9000[Empire]": "PASS",
     "econ.credits_at_9000[Rebel]": "PASS",
-    "econ.credits_at_9000[Underworld]": "PASS",
+    "econ.credits_at_9000[Underworld]": "FAIL",
     "econ.cycle_tick[10]": "PASS",
     "econ.cycle_tick[1]": "PASS",
     "econ.cycle_tick[2]": "PASS",
@@ -149,15 +149,14 @@
     "econ.income_cycle1[Underworld]": "FAIL",
     "econ.income_mean[Empire]": "PASS",
     "econ.income_mean[Rebel]": "PASS",
-    "econ.income_mean[Underworld]": "FAIL",
+    "econ.income_mean[Underworld]": "PASS",
     "outcome.captures[Empire]": "PASS",
     "outcome.captures[Rebel]": "PASS",
     "outcome.captures[Underworld]": "PASS",
     "outcome.owner_changes": "PASS",
     "outcome.planets_final[Empire]": "PASS",
-    "outcome.planets_final[Rebel]": "FAIL",
-    "outcome.planets_final[Underworld]": "FAIL",
-    "travel.hop_ticks[Empire:TATOOINE->CORELLIA]": "PASS",
+    "outcome.planets_final[Rebel]": "PASS",
+    "outcome.planets_final[Underworld]": "PASS",
     "travel.hop_ticks[Rebel:CORELLIA->KUAT]": "PASS",
     "travel.hop_ticks[Rebel:CORELLIA->TATOOINE]": "PASS",
     "travel.hop_ticks[Rebel:FELUCIA->KASHYYYK]": "PASS",
@@ -178,24 +177,24 @@
     "travel.hop_ticks[Rebel:SHOLA->NALHUTTA]": "PASS",
     "travel.hop_ticks[Rebel:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Rebel:TATOOINE->CORELLIA]": "PASS",
-    "travel.hop_ticks[Rebel:TATOOINE->NABOO]": "PASS",
     "travel.hop_ticks[Rebel:YAVIN->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->KUAT]": "PASS",
     "travel.hop_ticks[Underworld:CORELLIA->TATOOINE]": "FAIL",
     "travel.hop_ticks[Underworld:KAMINO->MONCALIMARI]": "PASS",
-    "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "FAIL",
+    "travel.hop_ticks[Underworld:KASHYYYK->KUAT]": "PASS",
     "travel.hop_ticks[Underworld:KASHYYYK->THE_MAW]": "FAIL",
-    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "FAIL",
+    "travel.hop_ticks[Underworld:KUAT->CORELLIA]": "PASS",
     "travel.hop_ticks[Underworld:KUAT->KASHYYYK]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->KAMINO]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->SHOLA]": "PASS",
     "travel.hop_ticks[Underworld:MONCALIMARI->YAVIN]": "PASS",
     "travel.hop_ticks[Underworld:NABOO->SHOLA]": "PASS",
-    "travel.hop_ticks[Underworld:NABOO->TATOOINE]": "FAIL",
+    "travel.hop_ticks[Underworld:NABOO->TATOOINE]": "PASS",
     "travel.hop_ticks[Underworld:NALHUTTA->KASHYYYK]": "FAIL",
-    "travel.hop_ticks[Underworld:NALHUTTA->SHOLA]": "FAIL",
+    "travel.hop_ticks[Underworld:NALHUTTA->SHOLA]": "PASS",
     "travel.hop_ticks[Underworld:SHOLA->MONCALIMARI]": "PASS",
-    "travel.hop_ticks[Underworld:SHOLA->NABOO]": "FAIL",
+    "travel.hop_ticks[Underworld:SHOLA->NABOO]": "PASS",
+    "travel.hop_ticks[Underworld:SHOLA->NALHUTTA]": "FAIL",
     "travel.hop_ticks[Underworld:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:TATOOINE->CORELLIA]": "PASS",
     "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "PASS",
@@ -207,12 +206,12 @@
    },
    "summary": {
     "AI choices": {
-     "FAIL": 3,
+     "FAIL": 2,
+     "N/A": 1,
      "PASS": 14
     },
     "battle outcomes": {
-     "FAIL": 2,
-     "PASS": 5
+     "PASS": 7
     },
     "diagnostic": {
      "INFO": 1
@@ -222,8 +221,8 @@
      "PASS": 22
     },
     "timing": {
-     "FAIL": 15,
-     "PASS": 58
+     "FAIL": 10,
+     "PASS": 62
     }
    }
   }

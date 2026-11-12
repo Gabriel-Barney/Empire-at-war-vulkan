@@ -461,6 +461,22 @@ unchanged (7/12 at 5853..7923, the same ticks), total FAIL 18 -> 19 (`travel.hop
 record); the remaining inputs (Underworld starbase power at Shola, production cancel with refund) are shared rules of the Underworld
 lane (A2M_R2_RE_B §3.4 items 2 and 3). No golden moved.
 
+**2026-11-12 (a2m t03): plan task forces start with no members; plain Produce_Force() gives claimed units back**
+(`docs/re/A2M_T03_PRODUCE_FORCE_CLAIMS.md` [H]; marked "a2m t03" in `engine/ai/src`). The plan instantiation gives each
+task force one wanted entry (TF +0x60) per PotentialPlan selection, free or to be produced, and no members: the selected
+units stay on the free store, reserved by the PP. Produce_Force makes one build task per entry; a claimed unit goes to
+the task force only with a destination (AssembleForce / SynchronizedAssemble), while plain `Produce_Force()` re-admits
+it unreserved (On_Unit_Added runs) and drops it from the PP, and a produced unit goes to the free store.
+Are_All_Units_On_Free_Store reads the whole PP (no selection to produce). A removed member erases the first TF +0x60 entry
+of its type (t10.3), now that the list holds every selection. Effect: Conquer_Pirate no longer keeps 17 Rebel units while
+its Y-wings are built, so Conquer_To_Reconnect finds them (retail run b0133: Conquer_To_Reconnect at 6925, Shola at 7498),
+and a Conquer_To_Reconnect whose GroundForce must produce no longer hangs with its SpaceForce at Shola. HotM Empire-human,
+12 seeds, against dev 1ae6a418: Rebel Shola captures 8/12 -> 11/12, mean tick 7497 (retail 7498), median 7527 (seed 8 is the
+Naboo-mine branch at 5967, seed 2 a random greedy reject at 6926); every credits_at and build_count metric PASS; total FAIL
+14 (0 regressions against baseline_seeds.json, 9 improved). Test hook `GalacticAiWorld::take_selection_units` for the synthetic
+plans that read members without assembling. Goldens: ai_galactic_synthetic_crc, ai_underworld_crc,
+galactic_ai_hotm(_human)_golden, game_smoke_campaign.crc, galactic_late bench v9; both parity baselines re-recorded.
+
 **2026-11-12 (a2m t01 / t03, round 4 integration): stagger off and accept-time queue slots together.** The two round-4
 rules below merged without a code conflict; no rule was added in the merge. HotM Empire-human, 12 seeds, against dev
 79f83684 (Underworld lane alone / Rebel lane alone in brackets): total FAIL 23 -> 21 (19 / 21); every exit credit and

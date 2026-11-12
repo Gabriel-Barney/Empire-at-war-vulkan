@@ -181,3 +181,25 @@ take its reserved units: the old reservation is already back and the re-solve sk
   produces or fails was not read.
 - Order of the BT FSM update relative to the free-store service within a frame (decides whether the hand-back is the
   same or the next frame) not read [M: next update].
+
+## Retail run b0133 and port result (2026-11-12)
+
+Retail run `tools/probe_mod/q2_traces/out/20261112-044952-galactic-vanilla-lua` (b0133; `run_lua_probe.cmd`, HotM,
+idle human Empire, 13501 ticks; Lua plan records `P PSTART / PSTAGE / PBLOCK / PDONE / PEXIT`):
+- Shola changes owner Underworld -> Rebel at tick 7498, the same tick as the three earlier reader-2 references (the
+  synced RNG starts from 0, so every retail run is one sample until timing diverges). The 9898 of the reader-1 run
+  (20261027, 577 missed ticks) is the only other value.
+- Rebel Conquer_Pirate @Shola starts at 5518; Y-wings are queued at 5565 / 5968 / 6371; no PDONE / PEXIT: the plan was
+  released while its thread was blocked on Produce_Force.
+- Conquer_To_Reconnect @Shola starts at 6925 (t 230.8): PSTART of both task forces with count 0, then SynchronizedAssemble
+  fills SpaceForce (11 units: corvette, X-wings, Rogue Squadron, Home One, gunboat, Sundered Heart, ...) and GroundForce
+  (11 units) from the free store, goal cost 0. This is the Q1 / Q3 behaviour above: the task forces start with no
+  members and the units Conquer_Pirate had selected were back on the free store.
+
+Port (a2m t03, `engine/ai/src`, "a2m t03"): Port rule 1-3 implemented (instantiation without members, one build task per
+selection, null-destination hand-back and produced units to the free store, PP-wide Are_All_Units_On_Free_Store); the
+member-removal erase of the first TF +0x60 entry (A2M_T08_T10_T14_RE t10.3) is applied to the now complete entry list.
+HotM Empire-human, 12 seeds: Rebel Shola captures 8/12 (5964, 5967, 5970, 6033, 7479, 7536, 8019, 9042) -> 11/12
+(5967, 7458, 7458, 7464, 7467, 7527, 7533, 7536, 7557, 8130, 8367; mean 7497, retail 7498). Seed 8 is the Naboo-mine
+branch (the 50/50 sabotage draw leaves the mine, Conquer_Pirate starts at about 2850); seed 2 rejects
+Conquer_To_Reconnect at 6926 on the greedy accept's random draw (RANDOM_REJECT) and captures nothing before 13500.
