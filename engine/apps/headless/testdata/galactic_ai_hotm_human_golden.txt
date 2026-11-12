@@ -1,25 +1,25 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 36000 human Rebel
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 0: 36000 ticks (17877.8 ms), galactic frame 36000, decisions 871, orders 299 (rejected 0), conflicts 48, battles 0, planet owner changes 1, running plans 6, Lua errors 0, human p0: 12 commands, pipeline applied 313 rejected 1, planets: 0=3/11308 1=4/3452 2=0/0 3=0/0 4=0/0 5=0/0 6=5/3 7=0/0, final CRC afd26bf364fd153e
-# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 9 conflicts 4 crc 413101b2144526db
-# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 12 crc 06bbcc876aa0c76c
-# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 3 conflicts 12 crc 6e08583dec3ce9ba
-# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 4 conflicts 12 crc 5a6cb015bac39bf6
-# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 12 crc 9f7018bc50d42db9
-# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 5 conflicts 17 crc abc764c3d1903efd
-# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 21 crc bc825d01c629fd51
-# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 22 crc 8ef8a884fc7f06e9
-# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 22 crc 44465eb2124749a9
-# t=600s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 7 conflicts 23 crc a15f05e9d800d1cb
-# t=660s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 7 conflicts 25 crc 5332617daf94b11a
-# t=720s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 8 conflicts 31 crc 9d4f39b46026559b
-# t=780s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 34 crc 7c8d38abd469c033
-# t=840s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 34 crc 560eac18deba3d30
-# t=900s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 34 crc a06cf1728326d473
-# t=960s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 34 crc 80c2303e7dd2fdef
-# t=1020s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 42 crc df33c8b2ae96ffad
-# t=1080s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 47 crc 7aa08d6460b964e6
-# t=1140s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 48 crc 5c0ed72b40110cc9
-# t=1200s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 48 crc afd26bf364fd153e
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 0: 36000 ticks (10988.9 ms), galactic frame 36000, decisions 859, orders 287 (rejected 0), conflicts 48, battles 0, planet owner changes 1, running plans 6, Lua errors 0, human p0: 12 commands, pipeline applied 301 rejected 1, planets: 0=3/11308 1=4/3452 2=0/0 3=0/0 4=0/0 5=0/0 6=5/3 7=0/0, final CRC a4defe12b8b1235e
+# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 9 conflicts 4 crc 4f7247b9cb41f4c2
+# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 12 crc ca994e2ab285f6cd
+# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 3 conflicts 12 crc d64d32888c5a1532
+# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 4 conflicts 12 crc 15cb62ae18413e39
+# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 12 crc 7e25b4f623296fcc
+# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 5 conflicts 17 crc 311ad3ed4324f995
+# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 21 crc 01d8dca873fcdfbb
+# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 22 crc 0bd5e5b828105e18
+# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 22 crc 49a020afd62e87e5
+# t=600s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 7 conflicts 23 crc 99846fa5caf7574a
+# t=660s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 7 conflicts 25 crc 6d872051670e2513
+# t=720s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 8 conflicts 31 crc 88240163a911f128
+# t=780s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 34 crc 7f743a21c68193fd
+# t=840s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 34 crc 2c39b7e28e6160dd
+# t=900s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 34 crc 9c166e453187f871
+# t=960s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 34 crc 990dc8715373e025
+# t=1020s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 42 crc 6930f9478e090232
+# t=1080s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 47 crc a1436f06f4469ca7
+# t=1140s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 5 conflicts 48 crc 2d9730da83036749
+# t=1200s planets 0=3 1=4 2=0 3=0 4=0 5=0 6=5 7=0 plans 6 conflicts 48 crc a4defe12b8b1235e
 1 p1 opponent 0
 1 p1 templates Basic_Empire_Default
 1 p2 opponent 0
@@ -328,18 +328,7 @@
 9673 p6 order move fleet 179 -> The_Maw
 9673 p6 order move fleet 180 -> The_Maw
 9673 p6 order move fleet 76 -> The_Maw
-9673 p6 order merge 86 at The_Maw
-9673 p6 order merge 84 at The_Maw
-9673 p6 order merge 85 at The_Maw
-9730 p6 order merge 90 at The_Maw
 9748 p1 plan 48 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-9814 p6 order merge 87 at The_Maw
-9814 p6 order merge 86 at The_Maw
-9814 p6 order merge 84 at The_Maw
-9814 p6 order merge 151 at The_Maw
-9814 p6 order merge 85 at The_Maw
-9814 p6 order merge 90 at The_Maw
-9862 p6 order merge 120 at The_Maw
 9862 p6 order merge 77 at The_Maw
 9862 p6 order merge 87 at The_Maw
 9862 p6 order merge 86 at The_Maw
@@ -347,8 +336,9 @@
 9862 p6 order merge 151 at The_Maw
 9862 p6 order merge 85 at The_Maw
 9862 p6 order merge 90 at The_Maw
+9862 p6 order merge 78 at The_Maw
 9868 p6 tf MainForce move to Yavin
-9868 p6 order move fleet 76 -> Yavin
+9868 p6 order move fleet 174 -> Yavin
 9906 p6 plan 53 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
 9907 p6 build task 87 Underworld_Saboteur_Team for MainForce
 9907 p6 order move fleet 137 -> The_Maw
@@ -477,9 +467,9 @@
 13504 p1 build task 112 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
 13557 p1 plan 73 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
 13638 p6 plan 74 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-13638 p6 plan 75 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(8+1) net 1400 gross 11630 eta 16.0
+13638 p6 plan 75 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(8+1) net 1400 gross 15230 eta 16.0
 13639 p6 build task 113 U_Ground_Droid_Works for BaseForce at NalHutta
-13639 p6 build task 114 Interceptor4_Frigate for SpaceForce
+13639 p6 build task 114 Kedalbe_Battleship for SpaceForce
 13639 p6 build task 115 Crusader_Gunship for SpaceForce
 13639 p6 build task 116 Crusader_Gunship for SpaceForce
 13639 p6 build task 117 Crusader_Gunship for SpaceForce
@@ -516,9 +506,9 @@
 14950 p6 plan 75 CONQUEROPPONENTPLAN ended success
 15109 p6 plan 80 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended success
 15222 p6 plan 81 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-15222 p6 plan 82 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(9+1) net 450 gross 12080 eta 8.0
+15222 p6 plan 82 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(9+1) net 450 gross 15680 eta 8.0
 15223 p6 build task 134 U_Ground_Droid_Works for BaseForce at NalHutta
-15223 p6 build task 135 Interceptor4_Frigate for SpaceForce
+15223 p6 build task 135 Kedalbe_Battleship for SpaceForce
 15223 p6 build task 136 Crusader_Gunship for SpaceForce
 15223 p6 build task 137 Crusader_Gunship for SpaceForce
 15223 p6 build task 138 Crusader_Gunship for SpaceForce
@@ -537,10 +527,10 @@
 15514 p1 plan 78 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
 15517 p6 plan 82 CONQUEROPPONENTPLAN ended success
 15554 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
-15718 p6 plan 83 CRUSHPLAN for Conquer_Opponent @Yavin MainForce(15+0) net 0 gross 13480 eta 0.0
+15718 p6 plan 83 CRUSHPLAN for Conquer_Opponent @Yavin MainForce(13+0) net 0 gross 14280 eta 0.0
 15718 p6 plan 83 CRUSHPLAN ended failure
-16020 p6 plan 84 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(10+0) net 0 gross 12080 eta 0.0
-16021 p6 build task 149 Interceptor4_Frigate for SpaceForce
+16020 p6 plan 84 CONQUEROPPONENTPLAN for Conquer_Opponent @Yavin SpaceForce(4+0) GroundForce(10+0) net 0 gross 15680 eta 0.0
+16021 p6 build task 149 Kedalbe_Battleship for SpaceForce
 16021 p6 build task 150 Crusader_Gunship for SpaceForce
 16021 p6 build task 151 Crusader_Gunship for SpaceForce
 16021 p6 build task 152 Crusader_Gunship for SpaceForce
@@ -554,7 +544,7 @@
 16021 p6 build task 160 Underworld_Disruptor_Merc_Squad for GroundForce
 16021 p6 build task 161 Underworld_Merc_Squad for GroundForce
 16021 p6 build task 162 Underworld_Merc_Squad for GroundForce
-16021 p6 order split 86 at Yavin
+16021 p6 order split 87 at Yavin
 16021 p6 order split 120 at Yavin
 16021 p6 order split 151 at Yavin
 16021 p6 order split 85 at Yavin
@@ -581,13 +571,11 @@
 16021 p6 order form 95 into fleet 205
 16024 p6 order move fleet 205 -> The_Maw
 16024 p6 order move fleet 206 -> The_Maw
-16069 p6 order merge 151 at The_Maw
-16069 p6 order merge 85 at The_Maw
-16075 p6 order merge 120 at The_Maw
-16075 p6 order merge 151 at The_Maw
-16075 p6 order merge 85 at The_Maw
-16081 p6 tf SpaceForce move to Yavin
-16081 p6 order move fleet 201 -> Yavin
+16117 p6 order merge 120 at The_Maw
+16117 p6 order merge 151 at The_Maw
+16117 p6 order merge 85 at The_Maw
+16123 p6 tf SpaceForce move to Yavin
+16123 p6 order move fleet 201 -> Yavin
 16213 p6 order merge 81 at The_Maw
 16213 p6 order merge 155 at The_Maw
 16213 p6 order merge 168 at The_Maw
@@ -918,7 +906,7 @@ conflict tick 2880 gframe 2879 space Yavin Underworld vs Rebel: dropped
 conflict tick 3211 gframe 3210 space Kashyyyk Underworld vs Empire: dropped
 conflict tick 9079 gframe 9078 space Shola Rebel vs Underworld: auto-resolved, winner Underworld, loser Rebel, retreat -, losses att 2 def 3, draws 9
 conflict tick 9680 gframe 9679 space Naboo Underworld vs Rebel: dropped
-conflict tick 9962 gframe 9961 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat -, losses att 1 def 1, draws 11
+conflict tick 9962 gframe 9961 space Yavin Underworld vs Rebel: auto-resolved, winner Underworld, loser Rebel, retreat -, losses att 2 def 1, draws 11
 conflict tick 10216 gframe 10215 space MonCalimari Underworld vs Rebel: dropped
 conflict tick 10625 gframe 10624 space Naboo Underworld vs Rebel: dropped
 conflict tick 11458 gframe 11457 space MonCalimari Underworld vs Rebel: dropped

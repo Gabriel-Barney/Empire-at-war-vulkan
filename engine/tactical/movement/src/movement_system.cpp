@@ -826,6 +826,10 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
     const bool queued = (order.flags & kMoveFlagQueue) != 0;
     const bool position_order =
         !(order.flags & kMoveFlagSkipValidation) && !order.skip_destination_check && !attack && !queued;  // s78n t25.2: + attack
+    // bkm3 t01 (b0076, MOVEMENT §4.2 step 2 "Destination"): an attack order's point P (the target's goal point C, 0x583150)
+    // is validated per seed as well - its result is used only for position goals, but a failure still ends the pass: this
+    // formation and every later one get no move. Not for a re-plan (no composition pass) or a queued order.
+    const bool validate_only = attack && !replan && !(order.flags & kMoveFlagSkipValidation) && !queued;
     bool zone_failed = false;
     std::vector<uint32_t> no_move;  // indices into idx: the units of the formations the failed validation left out
     if (replan) {
@@ -877,13 +881,14 @@ void MovementSystem::move_land(const MoveOrder& order, const std::vector<uint32_
         for (const std::vector<uint32_t>& f : split_into_formations(mem, bucket, k, compatible, speed_ratio, reach)) {
             V2 centre = order.destination;
             bool fresh = false;
-            if (position_order && !zone_failed) {
+            if ((position_order || validate_only) && !zone_failed) {
                 const Unit& seed = units_[idx[f[0]]];
                 if (!is_air(seed) && grid_.passable_world(seed.m.pos, seed.lp.mask)) {
                     V2 v;
-                    if (!zone_validate(regions_, order.destination, seed.m.pos, seed.lp.mask, v)) {
+                    const V2 p = validate_only ? order.attack.c : order.destination;
+                    if (!zone_validate(regions_, p, seed.m.pos, seed.lp.mask, v)) {
                         zone_failed = true;
-                    } else if (!(v == order.destination)) {
+                    } else if (position_order && !(v == order.destination)) {
                         centre = v;
                         fresh = true;
                     }
@@ -1964,6 +1969,7 @@ bool MovementSystem::deploy_immobile(const Unit& x) {
 bool MovementSystem::deploy_branch(Unit& u) {
     if (u.deploy != LocoState::WalkDeployed || u.m.state != LocoState::WalkStopped) return false;
     u.m.speed = 0.0f;
+    u.m.started = true;  // bkm3 review: path +0x6d := 1 (an unstarted order path would otherwise cycle 0x12 <-> 0x16 forever)
     u.walk_deployed = true;
     u.m.state = LocoState::WalkStartMove;
     return true;
@@ -2807,6 +2813,7 @@ void MovementSystem::cut_finished(Unit& u, uint32_t frame) {
                 u.arrived = true;
                 u.exit_host = -1;
                 land_arrival_turn(u);
+                arrival_turn_rest(u);
             }
             brake_to_stop(u, frame);
             return;
@@ -2821,6 +2828,7 @@ void MovementSystem::cut_finished(Unit& u, uint32_t frame) {
     u.around.clear();
     u.path_change = frame;
     land_arrival_turn(u);
+    arrival_turn_rest(u);
     brake_to_stop(u, frame);
 }
 
@@ -3866,6 +3874,7 @@ bool MovementSystem::mvm_early_pop(CollisionObject& c, const Unit& m, Unit& s, u
         s.arrived = true;
         s.exit_host = -1;
         land_arrival_turn(s);
+        arrival_turn_rest(s);
         brake_to_stop(s, frame);
     }
     return true;
@@ -5230,6 +5239,13 @@ void MovementSystem::land_arrival_turn(Unit& u) const {
     u.aturn = LocoState::WalkStartTurn;
 }
 
+// bkm3 review (MOVEMENT §3.5.1 item 1 / step 4): an early arrival (the cut 0x684100, the MvM early pop) that starts the
+// arrival turn turns from rest - retail coasts in End Move to 0x15 first, whose entry zeroes the speed (+0xec), so 0x10
+// runs at Stopped_Rate_Of_Turn; the port starts the turn at once, so the speed is zeroed here as the popped arrival does.
+void MovementSystem::arrival_turn_rest(Unit& u) {
+    if (u.aturn != LocoState::None && !u.d.team_container) u.m.speed = 0.0f;
+}
+
 void MovementSystem::arrival_reset(Unit& u) {
     if (u.aturn != LocoState::None) u.aturn_end_pending = true;  // a running turn dropped: reported next tick
     u.turning = false;
@@ -5350,7 +5366,9 @@ void MovementSystem::arrival_turn_frame(Unit& u, uint32_t frame) const {
             }
             case LocoState::WalkTurning: {  // 0x10
                 u.m.state = LocoState::WalkTurning;
-                const float r = u.aturn_rate > 0.0f ? u.aturn_rate : s;
+                // bkm3 t03 (b0052 item 1, §3.5.1 step 4): pack +0xe8 when > 0; else Stopped_Rate_Of_Turn only at speed
+                // <= 0, else R (a start turn entered moving: the stale v after an undeploy)
+                const float r = u.aturn_rate > 0.0f ? u.aturn_rate : (u.m.speed > 0.0f ? u.lp.turn_rate : s);
                 const float e0 = wrap_deg(u.turn_to - u.m.yaw);
                 const float ae0 = std::fabs(e0);
                 u.m.yaw = turn_toward(u.m.yaw, u.turn_to, r);  // 0x61e730: lands exactly when |e| <= r

@@ -1,6 +1,7 @@
 #include "alamo/galactic/galactic_rules.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <memory>
 
 #include "alamo/data/game_database.hpp"
@@ -382,6 +383,25 @@ std::vector<TypeInfo> extract_type_info(const objects::GameObjectTypes& types, c
                 : types.get_bool(t, "Planet_Surface_Accessible");
         i.the_force = parse_force_side(types.get_string(t, "The_Force"));
         i.force_strength = types.get_float(t, "Force_Strength");
+        i.political_control = types.get_int(t, "Political_Control");  // bkg2 b0125
+        if (const std::string_view pf = ascii_trim(types.get_string(t, "Political_Faction")); !pf.empty())
+            for (size_t f = 0; f < factions.size(); ++f)
+                if (ascii_iequals(factions[f].name, pf)) {
+                    i.political_faction = static_cast<uint32_t>(f);
+                    break;
+                }
+        {  // list code 0x3c: one (<faction name>, <int>) pair per occurrence, appended
+            const std::span<const std::string_view> mx = types.get_list(t, "Planet_Max_Political_Control_For_Faction");
+            for (size_t k = 0; k + 1 < mx.size(); k += 2)
+                for (size_t f = 0; f < factions.size(); ++f)
+                    if (ascii_iequals(factions[f].name, ascii_trim(mx[k]))) {
+                        int32_t v = 0;
+                        const std::string_view s = ascii_trim(mx[k + 1]);
+                        std::from_chars(s.data(), s.data() + s.size(), v);
+                        i.max_political_control.emplace_back(static_cast<uint32_t>(f), v);
+                        break;
+                    }
+        }
         // A2 galactic (AI_GALACTIC_3 §3, §6).
         i.population = types.columns().population_value[t];
         i.population_capacity = types.get_int(t, "Additional_Population_Capacity");

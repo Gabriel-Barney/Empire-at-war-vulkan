@@ -2747,6 +2747,31 @@ void test_foc_hotm_build_cost(const FocData& d) {
     CHECK(s.build_cost_for(E, cor, broadside) == 1800);
 }
 
+// bkg2 b0125 (BKG1_RE_ANSWERS 9.5): the target political control of the Underworld HotM start, max(1, ground-base
+// level, starbase level, troops) per planet with FoC data (every Political_Control 0). Table [M]: the starting structures
+// count as the ground base and the starbase level is the type's Base_Level.
+void test_foc_hotm_political_target(const FocData& d) {
+    std::printf("  FoC HotM target political control (bkg2 b0125)\n");
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, d.types, &ids);
+    SimRng rng(1u);
+    GalacticSim s(d.rules, store, rng);
+    CHECK(s.start(build_campaign_setup(d.db, d.rules, "Sandbox_Heart_Of_The_Maw_Underworld")));
+    s.update();
+    const struct {
+        const char* name;
+        float want;
+    } rows[] = {{"Kuat", 3.0f}, {"MonCalimari", 3.0f}, {"The_Maw", 3.0f}, {"Naboo", 2.0f}, {"Kashyyyk", 1.0f}, {"Yavin", 1.0f}};
+    for (const auto& r : rows) {
+        const PlanetIndex p = s.map().planets.find(r.name);
+        CHECK(p != kInvalidPlanet);
+        if (p == kInvalidPlanet) continue;
+        std::printf("    %s: target %.0f (want %.0f), owner %d\n", r.name, static_cast<double>(s.planets()[p].target_control),
+                    static_cast<double>(r.want), s.planets()[p].owner);
+        CHECK(s.planets()[p].target_control == r.want);
+    }
+}
+
 void test_foc_hotm_rebel_income(const FocData& d) {
     std::printf("  FoC HotM Rebel entry: Empire income at the first payment (a2j t03)\n");
     objects::IdCounter ids;
@@ -2921,6 +2946,7 @@ void test_foc_campaign() {
     test_foc_player_fleet_moves(d);
     test_foc_corellia_kuat_hop(d);  // G1
     test_foc_hotm_rebel_income(d);  // a2j t03
+    test_foc_hotm_political_target(d);  // bkg2 b0125
     test_foc_hotm_build_cost(d);    // a2k t01
     const int32_t days = 10;
     RunResult base;

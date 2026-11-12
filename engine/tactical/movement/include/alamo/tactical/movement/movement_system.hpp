@@ -1345,6 +1345,7 @@ private:
     float turn_clip_speed(const Unit& u) const;  // 0x3736a0
     float stopped_rate(const Unit& u) const;     // 0x374310 at speed 0: Stopped_Rate_Of_Turn, else R
     static void arrival_reset(Unit& u);
+    static void arrival_turn_rest(Unit& u);  // bkm3 review: an early arrival turns from rest (speed 0)
     // s78n t26.2 / t26.4 (MOVEMENT §3.5.2 A, §5.4.1 "How Walk combines"): the wanted yaw of a start turn in place - the
     // wanted direction 0x61d570 of the top path (segment direction + lane term + collision vector, walk_wanted_dir with
     // the walk's extras `x`); false: nothing left to walk.

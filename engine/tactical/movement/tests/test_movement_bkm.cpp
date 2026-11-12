@@ -426,6 +426,54 @@ void test_secondary_facing() {
     CHECK(ya == yb && !ya.empty() && ya.back() == 90.0f);
 }
 
+
+// bkm3 t01 (b0076, MOVEMENT §4.2 step 2 "Destination"): the composition pass validates an attack order's point (the target's
+// goal point C) against each formation seed's zone with 0x50f480 as it does a position order's; the result is used only
+// for position goals, but a failure ends the pass - that formation and every later one of the order get no move. Unit 1
+// stands in a sealed pen (cells 3..9) more than 30 cells from the target at cell (52, 52), so its validation fails; unit 2
+// stands in the open. Whichever formation the pass meets first decides: the pen first -> neither moves; the open unit first
+// -> it moves and the pen's unit gets no move. Before bkm3 the attack order skipped the validation and the open unit always
+// moved.
+void test_attack_validation_failure() {
+    ::alamo::test::section("bkm3_attack_validation");
+    MovementSystem sys{MovementConfig{}};
+    land_system(sys, 60);
+    for (int32_t k = 3; k <= 9; ++k) {
+        sys.grid().set_base(k, 3, kPassImpassable);
+        sys.grid().set_base(k, 9, kPassImpassable);
+        sys.grid().set_base(3, k, kPassImpassable);
+        sys.grid().set_base(9, k, kPassImpassable);
+    }
+    CHECK(sys.add_unit(vehicle(1, cell_center(6, 6))));
+    CHECK(sys.add_unit(vehicle(2, cell_center(40, 10))));
+    // Seed 11 is chosen so the pass meets the pen's formation first (the last CHECK depends on it); with a seed that puts
+    // the open unit first, that unit moves and only the pen's unit fails.
+    SimRng rng(11);
+    MoveOrder o;
+    o.units = {1, 2};
+    const V2 c = cell_center(52, 52);
+    o.destination = c;
+    o.attack.target = 99;
+    o.attack.c = c;
+    o.attack.g = c;
+    o.attack.t_hx = o.attack.t_hy = 10.0f;
+    for (const ObjectId id : {ObjectId{1}, ObjectId{2}}) {
+        LandAttackUnit e;
+        e.id = id;
+        e.range = e.engage = 100.0f;
+        o.attack.units.push_back(e);
+    }
+    sys.move(o, rng, 1);
+    const V2 p2 = sys.view(2).pos;
+    for (uint32_t f = 1; f < 300; ++f) sys.tick(f, rng);
+    const UnitView a = sys.view(1), b = sys.view(2);
+    const float moved2 = distance(b.pos, p2);
+    std::printf("bkm3 attack validation: pen unit failed %d has_goal %d; open unit failed %d has_goal %d moved %.1f\n",
+                a.failed ? 1 : 0, a.has_goal ? 1 : 0, b.failed ? 1 : 0, b.has_goal ? 1 : 0, static_cast<double>(moved2));
+    CHECK(a.failed && !a.has_goal);
+    CHECK(b.failed && !b.has_goal && moved2 < 1.0f);  // the pen's formation comes first: the open unit gets no move either
+}
+
 }  // namespace
 
 int main() {
@@ -437,5 +485,6 @@ int main() {
     test_member_stop();           // bkm1 t02 (b0096)
     test_stored_z_rest();         // bkm1 t06 (b0051)
     test_secondary_facing();      // bkm1 t08 (b0050)
+    test_attack_validation_failure();  // bkm3 t01 (b0076)
     return ::alamo::test::report("alamo_tactical_movement_bkm_tests");
 }
