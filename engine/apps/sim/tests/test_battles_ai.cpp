@@ -4725,6 +4725,10 @@ void test_land_move_to_object() {
 // recruits both). The third squad's troopers get +140 % fire range (600 instead of 250), so it can hit long before the
 // others. While it can hit and the seed is still well out of its own range (> 280) with every squad walking, no 30-frame
 // check may land-stop (the formation walks on together); the window is longer than one check interval.
+// bkm2 t08 (b0048): the target is revealed for player 0 (else the hidden term stops nothing at all), and a frame counts
+// when every squad was walking at its start (a land stop in the frame ends "walking" in that same frame, so the old
+// end-of-frame test could not see the stop it is about). Run on the pre-fix per-mover check (the grouping by atk_form
+// disabled) it fails: the long-range squad's own block land-stops it (1 stop, the window cut short).
 struct LandAttackFormationStopRun {
     bool ordered = false, one_form = false, ended = false;
     uint32_t window = 0, stops_in_window = 0;
@@ -4741,6 +4745,7 @@ LandAttackFormationStopRun run_land_attack_formation_stop(const Data& d) {
     if (!s.gs) return out;
     int stage = 0;
     uint32_t stage_frame = 0, stops0 = 0;
+    bool was_walking = false;  // every squad walking at the start of the frame
     objects::ObjectId sq[3] = {objects::kNoObjectId, objects::kNoObjectId, objects::kNoObjectId};
     std::vector<objects::ObjectId> mem[3];
     objects::ObjectId target = objects::kNoObjectId;
@@ -4755,6 +4760,10 @@ LandAttackFormationStopRun run_land_attack_formation_stop(const Data& d) {
         auto& cs = const_cast<tc::CombatSystem&>(b->combat());
         const mv::MovementSystem& ms = b->movement();
         if (stage == 0) {
+            // bkm2 t08 (b0048): the test data has no reveal source, so without this the target is hidden for player 0 and
+            // the hidden term (FIGHTER_FLYING §4.11 C 1 / C 4, s78n t26 review round 3) suppresses every land stop - the
+            // check then passed on the per-mover stop too. The scenario is about a visible target.
+            if (b->fog()) b->fog()->reveal_all(0);
             std::map<uint32_t, std::vector<objects::ObjectId>> teams;
             for (size_t i = 0; i < cs.unit_count(); ++i) {
                 const auto id = cs.unit_id_at(i);
@@ -4811,11 +4820,12 @@ LandAttackFormationStopRun run_land_attack_formation_stop(const Data& d) {
             const float d0 = std::sqrt((v0.pos.x - tp.x) * (v0.pos.x - tp.x) + (v0.pos.y - tp.y) * (v0.pos.y - tp.y));
             const bool far_hit = cs.can_hit(mem[2].front(), target) == tc::CanHit::Yes;
             const bool walking = ms.view(sq[0]).has_goal && ms.view(sq[1]).has_goal && ms.view(sq[2]).has_goal;
-            if (far_hit && walking && d0 > 280.0f) {
+            if (far_hit && was_walking && d0 > 280.0f) {
                 ++out.window;
                 out.stops_in_window += stops - stops0;
             }
             stops0 = stops;
+            was_walking = walking;
             if (!walking && d0 <= 280.0f) {
                 out.ended = true;
                 stage = 9;
