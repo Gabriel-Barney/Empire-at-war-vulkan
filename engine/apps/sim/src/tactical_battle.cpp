@@ -1559,7 +1559,7 @@ void TacticalBattle::issue_orders(TacticalMode& mode, SimRng& rng) {
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
         if (commanded_by_player(store.owner(u.h))) continue;  // integration fixes: human units take commands only
-        if (!standin_owner(store.owner(u.h))) continue;       // bkt1 t07 (b0084): third parties idle
+        if (!space_ && !standin_owner(store.owner(u.h))) continue;  // bkt1 t07 (b0084): land third parties idle
         const Vec3 up = store.position(u.h);
         const Unit* best = nullptr;
         float best_d2 = 0.0f;
@@ -1648,6 +1648,7 @@ void TacticalBattle::drop_locked(std::vector<objects::ObjectId>& ids) const {
 // ---- integration fixes: human order API (rules of BattleAi::execute_order) -----------------------------------------
 
 bool TacticalBattle::standin_owner(int32_t player) const {
+    if (req_.info.attacker < 0 && req_.info.defender < 0) return player >= 0;  // a battle built without sides: everyone
     return player >= 0 && (player == req_.info.attacker || player == req_.info.defender);
 }
 
@@ -1971,6 +1972,18 @@ objects::ObjectId TacticalBattle::attack_lead(objects::ObjectId mover) {
     return objects::kNoObjectId;
 }
 
+bool TacticalBattle::pending_ability_ranges(objects::ObjectId unit, float& min_range, float& max_range, objects::ObjectId& on) const {
+    // the unit's pending targeted ability, else its squad container's (AbilitySystem keeps a squad's on the container)
+    on = objects::kNoObjectId;
+    if (!abilities_) return false;
+    for (const objects::ObjectId id : {unit, attack_mover(unit)})
+        if (abilities_->pending_ranges(id, min_range, max_range)) {
+            on = abilities_->pending_target(id);
+            return true;
+        }
+    return false;
+}
+
 Vec3 TacticalBattle::attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target,
                                        Vec3 tp, size_t movers) {
     // bkt1 t01 (b0068; 0x40e260, BKT1_ATTACK_RE §1.2 [H], TACTICAL_COMBAT §2.8; the AI's Attack_Move staging and stage
@@ -1984,19 +1997,26 @@ Vec3 TacticalBattle::attack_stage_goal(const TacticalMode& mode, std::span<const
     //     (r = M's hard footprint radius; maxStep 5 when r = 0), 20 rings, n = trunc(2 pi R / r) + 1 samples (at least
     //     4 after ring 0), counter-clockwise from the T -> M direction; the first sample >= d from G (3-D, the sample at
     //     M's z), inside the map extents and in M's zone for M's own movement class wins. None: G stays at T's point.
+    // (the gate: slot 46 with the ability's Activation_Min_Range when M's pending ability is on T, else the type's)
     objects::ObjectId m = objects::kNoObjectId;
-    float mn = 0.0f;
+    float mn = 0.0f, gate = 0.0f;
     for (const objects::ObjectId id : ids) {
         if (!combat_->has_unit(id)) continue;
-        float v = combat_->min_attack_distance(id);
+        const float tmin = combat_->min_attack_distance(id);
+        float v = tmin, g = tmin;
         float amin = 0.0f, amax = 0.0f;
-        if (abilities_ && abilities_->pending_ranges(id, amin, amax) && amin > 0.0f) v = amin;
+        objects::ObjectId on = objects::kNoObjectId;
+        if (pending_ability_ranges(id, amin, amax, on) && amin > 0.0f) {
+            v = std::max(v, amin);
+            if (on == target) g = amin;
+        }
         if (v > mn) {
             mn = v;
+            gate = g;
             m = id;
         }
     }
-    if (m == objects::kNoObjectId || !combat_->inside_min_range(m, target)) return tp;
+    if (m == objects::kNoObjectId || !combat_->inside_min_range_of(m, target, gate)) return tp;
     const Unit* mu = unit_by_id(m);
     if (!mu) return tp;
     const objects::GameObjectTypes& types = catalog_->types();
@@ -2032,7 +2052,7 @@ Vec3 TacticalBattle::attack_stage_goal(const TacticalMode& mode, std::span<const
             if (d > dist3(q, tp)) continue;
             if (q.x < box.min.x || q.x > box.max.x || q.y < box.min.y || q.y > box.max.y) continue;
             if (!movement_ || !mv::zone_connected(movement_->regions(), mask, {mp.x, mp.y}, {q.x, q.y})) continue;
-            return {q.x, q.y, tp.z};
+            return q;  // the sample at M's z
         }
         R += step;
         step = std::min(step + 0.8f, max_step);
@@ -2105,7 +2125,8 @@ TacticalBattle::AttackPlan TacticalBattle::land_attack_order(TacticalMode& mode,
             // Activation_Max_Range > 0 gives min(range, that range) - no extent, no guard cap; else + min(hx, hy) of the
             // target's extents ([port] land blocks name no hard point: the hard-point radius term is not reached)
             float amin = 0.0f, amax = 0.0f;
-            if (abilities_ && abilities_->pending_ranges(lead, amin, amax) && amax > 0.0f) {
+            objects::ObjectId on = objects::kNoObjectId;
+            if (pending_ability_ranges(lead, amin, amax, on) && amax > 0.0f) {
                 e.engage = std::min(e.range, amax);
             } else {
                 e.engage = e.range + std::min(thx, thy);

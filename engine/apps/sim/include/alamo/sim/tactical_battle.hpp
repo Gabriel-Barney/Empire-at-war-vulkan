@@ -525,7 +525,8 @@ public:
     // bkt1 t07 (b0084) [port]: the stand-in orders (issue_orders, BattleAi::standin_orders: an attack on the nearest enemy
     // anywhere on the map, for the sides without a tactical AI - in vanilla the headless 'human' participant) drive only
     // the battle's attacker and defender. A third party (a story / hostile / native owner, Participant::third or a Lua
-    // spawn) has no AI in retail either: its units idle and fire at what their own targeting acquires in range.
+    // spawn) has no AI in retail either: its units idle and fire at what their own targeting acquires in range. Land only
+    // for now: a space skirmish puts its extra slot players outside attacker / defender (backlog entry from bkt1).
     bool standin_owner(int32_t player) const;
     // OI follow-up t03 (A1_READINGS §28.9): movement locked (0x39ad40) = the abilities' share of the obj +0x3a8 counter,
     // or a share a Lua bridge reports (Lock_Current_Orders, a running Divert). The lock never changes speed: a group move
@@ -1650,9 +1651,9 @@ private:
         float gx = 0.0f, gy = 0.0f;                       // recorded goal: the target's position at the last plan
     };
     std::vector<AttackBlock> attack_blocks_;
-    // bkt1 t05 (b0075): AttackBlock::flags host-only bit - a unit Attack_Move on a non-hostile attackable object (kind 3 with
+    // bkt1 t05 (b0075): AttackBlock::flags host-only bit (0x40) - a unit Attack_Move on a non-hostile attackable object (kind 3 with
     // flag 0x01, no Order_Attack, no lock: BKT1_ATTACK_RE §3 [H]); masked off the movement order's flags.
-    static constexpr uint8_t kAttackBlockNoLock = 0x80;
+    static constexpr uint8_t kAttackBlockNoLock = 0x40;  // (0x40: no movement flag uses it in the port)
     objects::ObjectId attack_mover(objects::ObjectId unit) const;  // the squad container `unit` steers to, else `unit`
     // Stage A's c (0x40edd0): CombatSystem::can_hit of `unit`, for a steering squad member from its container's position
     // (s78n t20 review: TeamTargeting's origin, TACTICAL_COMBAT §5.4.4 item 2.1; the combat system's team positions are
@@ -1690,6 +1691,8 @@ private:
     // Targeting_Min_Attack_Distance is inside that min range of T: then min + 0.2 x (base range - min) from T toward it.
     Vec3 attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp,
                            size_t movers);  // movers: the formation's mover count (the crush case needs one)
+    // bkt1 t01: the pending targeted ability's activation ranges of `unit` or its squad container, and its target
+    bool pending_ability_ranges(objects::ObjectId unit, float& min_range, float& max_range, objects::ObjectId& on) const;
     // s78n t25.3: the unit that answers for mover `mover` (0x40edd0 tests a team container through its first member): a
     // land squad container's first live member in team slot order, else the mover; kNoObjectId when none.
     objects::ObjectId attack_lead(objects::ObjectId mover);
@@ -1827,8 +1830,9 @@ private:
 #endif
     // --- fog of war (owner: fog agent; tactical_battle_fog.cpp) ---
     void fog_begin(TacticalMode& mode, uint32_t players);  // setup(): before the start forces deploy
-    // FOWF t01: the mode's map extents (vf +0x1f8; FOG_OF_WAR §1.2 [H], AI_TACTICAL_PERCEPTION §4.1): the fog box and the
-    // AI threat grid / perception map box. Land = the whole terrain [0, 20 W] x [0, 20 H]; space = the playable box.
+    // FOWF t01: the mode's map extents (vf +0x1f8; FOG_OF_WAR §1.2 [H]): land = the whole terrain [0, 20 W] x [0, 20 H],
+    // space = the playable box. Used by the staging search's map test (bkt1 t01); the fog box and the AI threat grid
+    // still use bounds() (bkt1 t08 moved back: foc-land seed 7 slows from 23121 to 42347 frames with both switched).
     tactical::Aabb map_extents(const TacticalMode& mode) const;
     void fog_after_deploy(TacticalMode& mode);              // setup(): dense mask, battle scale
     void fog_decay();                                       // tick(): step 4, before movement

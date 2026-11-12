@@ -4364,7 +4364,8 @@ struct LandGuardRun {
     bool moved = false, replanned = false, same_slot = false, near_goal2 = false, arrived2 = false;
     float rho = 0.0f, theta = 0.0f, goal_d = 0.0f, goal_d2 = 0.0f, end_d = 0.0f;
     uint32_t replan_frames = 0;
-    bool own_attack_move = false;  // bkt1 t05
+    bool own_attack_move = false, block_kept = false;  // bkt1 t05
+    size_t blocks0 = 0;
 };
 
 LandGuardRun run_land_guard(const Data& d) {
@@ -4547,6 +4548,13 @@ LandGuardRun run_land_guard(const Data& d) {
                         v.has_goal ? 1 : 0, static_cast<int>(v.atk_target), static_cast<int>(tgt), no_lock ? 1 : 0,
                         static_cast<double>(gd(v.goal)));
             out.own_attack_move = ok && v.has_goal && v.atk_target == tgt && no_lock && gd(v.goal) < 300.0f;
+            out.blocks0 = b->attack_blocks();
+            stage = 6;
+            stage_frame = b->frame();
+            continue;
+        }
+        if (stage == 6 && b->frame() >= stage_frame + 45) {  // through the block's first 30-frame check: kept (no lock)
+            out.block_kept = out.blocks0 > 0 && b->attack_blocks() == out.blocks0;
             stage = 9;
         }
     }
@@ -4565,7 +4573,7 @@ void test_land_guard() {
     CHECK(r.ordered && r.slotted && r.near_goal && r.arrived);
     CHECK(r.moved && r.replanned && r.replan_frames <= 31 && r.same_slot && r.near_goal2 && r.arrived2);
     std::printf("  own Attack_Move on the friendly squad: attack block, no lock %d\n", r.own_attack_move ? 1 : 0);
-    CHECK(r.own_attack_move);  // bkt1 t05
+    CHECK(r.own_attack_move && r.block_kept);  // bkt1 t05
 }
 
 // s78n t26 review round 2 (LUA_API "Move_To / Attack_Move / Guard_Target - Move_Internal 0x57da90" [H]: for Move_To,

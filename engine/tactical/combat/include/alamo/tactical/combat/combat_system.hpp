@@ -1154,6 +1154,7 @@ public:
     // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids. s78n t02:
     // slot 46 in full (TACTICAL_COMBAT §5.4.4 item 1, min_range_hit).
     bool inside_min_range(ObjectId attacker, ObjectId target) const;
+    bool inside_min_range_of(ObjectId attacker, ObjectId target, float r) const;  // bkt1 t01: slot 46 with min range r
     // s78n t20 (FIGHTER_FLYING §4.11 E "c" per member, 0x40edd0; the same three tests as the fire trim 0x410e90,
     // MOVEMENT §4.3.2 item 7): can `attacker` hit `target` from where it stands / from `from`? Outside max range (slot
     // 43), inside min range (slot 46), then on land a blocked line of fire (0x3b5ad0: the two points on opposite sides

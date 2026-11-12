@@ -462,6 +462,12 @@ bool CombatSystem::inside_min_range(ObjectId attacker, ObjectId target) const {
     if (!a || !t) return false;
     return min_range_hit(*t, a->pos, desc_of(*a).min_attack_distance);  // s78n t02: slot 46, not slot 43's E
 }
+bool CombatSystem::inside_min_range_of(ObjectId attacker, ObjectId target, float r) const {
+    const Unit* a = unit(attacker);
+    const Unit* t = unit(target);
+    if (!a || !t) return false;
+    return min_range_hit(*t, a->pos, r);
+}
 bool CombatSystem::min_range_geometry_of(ObjectId target, Vec3 from, float& D, float& E) const {
     D = 0.0f;
     E = 0.0f;

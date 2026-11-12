@@ -88,8 +88,7 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     cfg.pp_latency = setup.pp_latency;
     allow_reinforcement_fraction_ = setup.constants.allow_reinforcement_percentage;  // A2 tactical (§3.2)
     use_reinforcement_points_ = setup.constants.use_reinforcement_points;           // a1g t04 follow-up (land drops)
-    // FOWF t01: the threat grid uses the mode's map extents, the fog's box (land: the whole terrain; AI_TACTICAL_PERCEPTION §4.1)
-    const tactical::Aabb bb = b_->map_extents(mode);
+    const tactical::Aabb& bb = mode.bounds();
     cfg.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
 #ifdef ALAMO_AI_TACTICAL_HAVE_TERRAIN
     if (!b_->space_) zones_ = at::hint_zones_from_map(b_->map_);
@@ -404,7 +403,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         // Static parts (types indexed by objects::TypeIndex, players, relations, map, hard points).
         w.mode = b_->space_ ? at::TacticalMode::Space : at::TacticalMode::Land;
         w.campaign = !b_->cfg_.skirmish;  // as TacticalAiConfig::campaign above
-        const tactical::Aabb bb = b_->map_extents(*mode_);  // FOWF t01: the map extents (as cfg.map)
+        const tactical::Aabb& bb = mode_->bounds();
         w.map = {bb.min.x, bb.min.y, bb.max.x, bb.max.y};
         // S10 land outcome: the campaign start markers behind IsFriendly / IsEnemyStartLocation (AI_TACTICAL_PERCEPTION
         // §3: Defending Forces / Attacker Entry Position by the "is defender" side). Before, the list stayed empty, every
@@ -979,7 +978,7 @@ bool BattleAi::guard_follow_due(ObjectFollow& f, const Vec3& tp, bool moved, Vec
         }
         const float dx = L.x - goal.x, dy = L.y - goal.y;
         if (dx * dx + dy * dy >= 40.0f * 40.0f) return true;
-            for (const objects::ObjectId m : movers) {
+        for (const objects::ObjectId m : movers) {
             std::vector<objects::ObjectId> us;
             if (b_->movement_->is_land_team_container(m)) {
                 for (const auto& [mid, slot] : b_->movement_->land_team_slots(m)) {
@@ -996,7 +995,6 @@ bool BattleAi::guard_follow_due(ObjectFollow& f, const Vec3& tp, bool moved, Vec
                 }
         }
         b_->movement_->clear_attack_block(movers);
-        ++guard_position_drops_;
         f.units.clear();
         return false;
     }
@@ -1254,7 +1252,12 @@ cmd::RejectReason BattleAi::execute_order(uint8_t player, const cmd::EventData& 
                     // the land attack move on the object itself - kind 3 with flag 0x01, the exact goal, slots, staging and
                     // the fire trim as for an enemy, no lock (the attack block below, kAttackBlockNoLock)
                     point_goal = !b_->space_ && (le32(b, 20) & at::kTfAttackMoveIssueAttack) != 0;
-                    nonhostile_block = !b_->space_ && !point_goal;
+                    // (not on the caller itself or its container: BKT1_ATTACK_RE §3.1, those stay a move to the point)
+                    bool self = false;
+                    for (const objects::ObjectId id : group.units)
+                        self = self || id == tu->id || b_->attack_mover(id) == tu->id || b_->attack_mover(id) == b_->attack_mover(tu->id);
+                    nonhostile_block = !b_->space_ && !point_goal && !self;
+                    if (self) point_goal = !b_->space_;
                 } else if (order == lua::LuaOrder::AttackMove && attackable) {
                     // refixf t06 (TACTICAL_COMBAT §2.8): an Attack_Move on an object. A: a task-force order (arg bit, header)
                     // issues Order_Attack (ordered 1) to every unit now; a refusing unit is dropped from the move, none left
@@ -1843,7 +1846,7 @@ void BattleAi::standin_orders() {
     for (const TacticalBattle::Unit& u : b_->units_) {
         if (!u.alive || u.retreated || !u.movable || controls(st.owner(u.h))) continue;
         if (b_->commanded_by_player(st.owner(u.h))) continue;  // integration fixes: human units take commands only
-        if (!b_->standin_owner(st.owner(u.h))) continue;       // bkt1 t07 (b0084): third parties idle
+        if (!b_->space_ && !b_->standin_owner(st.owner(u.h))) continue;  // bkt1 t07 (b0084): land third parties idle
         const Vec3 up = st.position(u.h);
         const TacticalBattle::Unit* best = nullptr;
         float best_d2 = 0.0f;
