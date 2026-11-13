@@ -422,15 +422,15 @@ void test_lod() {
         CHECK(near_eq(p.color[1].x, 237.0f / 255.0f) && near_eq(p.color[8].y, 129.0f / 255.0f));                         // Red, Eight
         CHECK(near_eq(render::owner_team_color(9, p).x, p.color[0].x) && render::owner_team_color(7, p).w == 1.0f);
     }
-    // Galactic camera (B.8): horizontal FOV atan(0.5) at every aspect, near 10, far 10000.
+    // Galactic camera (B.8): horizontal FOV atan(0.5) at 4:3, near 10, far 10000; [port: Gabriel] Hor+ above 4:3 - the
+    // vertical FOV stays 4:3's at 16:9 and 32:9.
     {
         render::OrbitCamera gc;
         gc.fov_x = 1.0f;
-        for (const float a : {4.0f / 3.0f, 16.0f / 9.0f}) {
-            const uint32_t w = a > 1.5f ? 1600u : 1200u;
+        const float fy43 = render::fov_y_from_horizontal(std::atan(0.5f), 4.0f / 3.0f);
+        for (const uint32_t w : {1200u, 1600u, 3200u}) {
             const render::ViewMatrices gv = render::make_galactic_view(gc, w, 900);
-            const float fy = render::fov_y_from_horizontal(std::atan(0.5f), static_cast<float>(w) / 900.0f);
-            CHECK(near_eq(gv.proj.m[1][1], 1.0f / std::tan(0.5f * fy)));  // vertical scale from the fixed horizontal FOV
+            CHECK(near_eq(gv.proj.m[1][1], 1.0f / std::tan(0.5f * fy43)));  // vertical scale = 4:3's at every aspect
             CHECK(near_eq(gv.proj.m[0][0] * static_cast<float>(w) / 900.0f, gv.proj.m[1][1]));
             const float zn = gv.proj.m[2][3] / gv.proj.m[2][2], zf = gv.proj.m[2][3] / (gv.proj.m[2][2] + 1.0f);
             CHECK(std::fabs(zn - 10.0f) < 1e-2f && std::fabs(zf - 10000.0f) < 5.0f);

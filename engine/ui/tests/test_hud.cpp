@@ -118,7 +118,17 @@ void test_canvas() {
     const HudCanvas d = HudCanvas::make(800, 600);
     CHECK(near(d.width, 1024) && near(d.height, 768) && near(d.units_per_pixel_x, 1.28f) && d.text_wrap_factor() == 0.95f);
     CHECK(a.text_wrap_factor() == 1.0f);
-    for (const HudCanvas* cv : {&a, &b, &c, &d}) {
+    CHECK(a.font_height() == 768 && b.font_height() == 1080 && c.font_height() == 1024);  // no UI scale: the screen height
+    // [port: Gabriel] DPI-style UI scale: 100 % at 3840 x 2160 is one unit per pixel (text sized for 2160 / (2160 / 768));
+    // 200 % halves it; 300 % would be smaller than the fitted canvas, so the fitted one (the original size) is used.
+    const HudCanvas e = HudCanvas::make(3840, 2160, 1.0f), f = HudCanvas::make(3840, 2160, 2.0f), g = HudCanvas::make(3840, 2160, 3.0f);
+    CHECK(near(e.width, 3840) && near(e.height, 2160) && near(e.units_per_pixel_y, 1) && e.font_height() == 768);
+    CHECK(near(f.width, 1920) && near(f.height, 1080) && near(f.units_per_pixel_x, 0.5f) && f.font_height() == 1536);
+    const HudCanvas fit = HudCanvas::make(3840, 2160);
+    CHECK(g.width == fit.width && g.height == fit.height && g.font_height() == 2160 && g.ui_scale == 3.0f);
+    const HudCanvas h = HudCanvas::make(1024, 768, 1.0f);  // the base size: 100 % is the original
+    CHECK(h.width == a.width && h.height == a.height && h.font_height() == 768);
+    for (const HudCanvas* cv : {&a, &b, &c, &d, &e, &f}) {
         // Corners and round trips.
         const Vec2f tl = cv->pixel_to_canvas(0, 0), br = cv->pixel_to_canvas(static_cast<float>(cv->screen_width),
                                                                              static_cast<float>(cv->screen_height));

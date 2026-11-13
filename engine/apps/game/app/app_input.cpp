@@ -1035,7 +1035,7 @@ void App::move_ack(const ui::MoveAck& a) {
 ui::CameraTuning App::option_tuning(ui::CameraTuning t) const {
     if (!live_input()) return t;  // smoke / replay runs: the defaults (machine and profile independent)
     t.scroll_speed_option = ui::scroll_speed_option_from_slider(gameplay_.scroll_speed);  // IDC_SCROLL_SPEED_SLIDER
-    t.windowed = windowed_;  // UI5 t01: Options > Video > Windowed (edge scrolling, P1_CAMERA_INPUT)
+    t.windowed = windowed();  // UI5 t01: Options > Video > Windowed (edge scrolling, P1_CAMERA_INPUT)
     t.absolute_scrolling = gameplay_.absolute_scroll;
     t.right_button_scroll = gameplay_.right_button_scroll;
     t.both_buttons_rotate = gameplay_.both_buttons_rotate;
@@ -1148,8 +1148,8 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
             case K::ApplyVideo: {  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
                 ++video_applies_;
                 hardware_mouse_ = a.video.hardware_mouse;
-                const bool window_changed = a.video.windowed != windowed_;  // UI5 t01
-                windowed_ = a.video.windowed;
+                const bool window_changed = a.video.window_mode != window_mode_;  // UI5 t01
+                window_mode_ = a.video.window_mode;
                 vsync_mode_ = a.video.vsync_mode;
                 set_present_mode(!a.video.vsync ? rhi::PresentMode::Immediate
                                  : vsync_mode_ == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo);
@@ -1159,15 +1159,20 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                     const DisplayMode m = shown_modes_[static_cast<size_t>(a.video.resolution)];
                     if (window_changed || m.width != win_.width() || m.height != win_.height() || (m.hz && m.hz != refresh_hz_)) {
                         std::string line;
-                        apply_display_mode(win_.native_handle(), m, &line, windowed_);
+                        apply_display_mode(win_.native_handle(), m, &line, window_mode_);
                         std::printf("video: %s\n", line.c_str());
                     }
                 } else if (window_changed) {
                     std::string line;
-                    apply_display_mode(win_.native_handle(), DisplayMode{win_.width(), win_.height(), refresh_hz_}, &line, windowed_);
+                    apply_display_mode(win_.native_handle(), DisplayMode{win_.width(), win_.height(), refresh_hz_}, &line, window_mode_);
                     std::printf("video: %s\n", line.c_str());
                 }
                 if (window_changed) apply_camera_tuning();
+                if (const int32_t s = std::clamp(a.video.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax); live_input() && s != ui_scale_) {
+                    ui_scale_ = s;  // [port: Gabriel] UI Scale: the canvas is rebuilt now (the window size may not change)
+                    resize_ui();
+                    std::printf("video: UI scale %d %%\n", ui_scale_);
+                }
                 update_display_rate(true);
                 // t12: tried now, stored on the Yes answer of "keep these settings?" (or as the old mode on No / timeout).
                 if (update_video_profile(video_profile_, a.video, shown_modes_)) {

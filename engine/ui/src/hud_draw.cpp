@@ -422,8 +422,8 @@ void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f c, Vec2f size, Rgba8 back
 }
 
 void resize_canvas(HudCanvas& canvas, FontCache* fonts, uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts && next.screen_height != canvas.screen_height) fonts->clear();
+    const HudCanvas next = HudCanvas::make(width, height, canvas.ui_scale);  // the UI scale is kept
+    if (fonts && next.font_height() != canvas.font_height()) fonts->clear();
     canvas = next;
 }
 

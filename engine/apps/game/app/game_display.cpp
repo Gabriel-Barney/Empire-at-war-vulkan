@@ -132,7 +132,23 @@ std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes,
     return out.empty() ? modes : out;
 }
 
-bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, bool windowed) {
+const char* window_mode_name(ui::WindowMode m) {
+    switch (m) {
+        case ui::WindowMode::Fullscreen: return "fullscreen";
+        case ui::WindowMode::Borderless: return "borderless";
+        case ui::WindowMode::Windowed: break;
+    }
+    return "windowed";
+}
+
+std::optional<ui::WindowMode> parse_window_mode(std::string_view s) {
+    for (const ui::WindowMode m : {ui::WindowMode::Fullscreen, ui::WindowMode::Borderless, ui::WindowMode::Windowed})
+        if (s == window_mode_name(m)) return m;
+    return std::nullopt;
+}
+
+bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, ui::WindowMode mode) {
+    const bool windowed = mode == ui::WindowMode::Windowed, borderless = mode == ui::WindowMode::Borderless;
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || m.width == 0 || m.height == 0) return false;
     const std::wstring dev = monitor_device(hwnd);
@@ -155,11 +171,18 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, bool
         want.dmPelsWidth = reg.dmPelsWidth;
         want.dmPelsHeight = reg.dmPelsHeight;
         want.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
-        if (!fits || !windowed) {  // UI5 t01: full screen always takes the mode's resolution
+        if (mode == ui::WindowMode::Fullscreen || (windowed && !fits)) {  // UI5 t01: full screen always takes the mode's resolution
             want.dmPelsWidth = m.width;
             want.dmPelsHeight = m.height;
         }
         if (m.hz) want.dmDisplayFrequency = m.hz;
+        // Borderless: the rate only when the monitor offers it at the desktop resolution (a mode picked at another size may
+        // carry a rate that size alone has); otherwise the desktop's own rate.
+        if (borderless && m.hz && (m.width != reg.dmPelsWidth || m.height != reg.dmPelsHeight)) {
+            DEVMODEW probe = want;
+            if (ChangeDisplaySettingsExW(dev.c_str(), &probe, nullptr, CDS_FULLSCREEN | CDS_TEST, nullptr) != DISP_CHANGE_SUCCESSFUL)
+                want.dmDisplayFrequency = reg.dmDisplayFrequency;
+        }
         const bool differs = want.dmPelsWidth != cur.dmPelsWidth || want.dmPelsHeight != cur.dmPelsHeight ||
                              want.dmDisplayFrequency != cur.dmDisplayFrequency;
         if (differs) {
@@ -181,8 +204,17 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, bool
             what = "display unchanged (" + std::to_string(cur.dmDisplayFrequency) + " Hz)";
         }
     }
-    const bool ok = set_window_client_size(hwnd, m.width, m.height, !windowed);
-    if (log) *log = std::string(windowed ? "window " : "full screen ") + std::to_string(m.width) + "x" + std::to_string(m.height) +
+    uint32_t cw = m.width, ch = m.height;
+    if (borderless) {  // the whole monitor, at whatever resolution it is on now
+        MONITORINFO now{};
+        now.cbSize = sizeof now;
+        if (GetMonitorInfoW(MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST), &now)) {
+            cw = static_cast<uint32_t>(now.rcMonitor.right - now.rcMonitor.left);
+            ch = static_cast<uint32_t>(now.rcMonitor.bottom - now.rcMonitor.top);
+        }
+    }
+    const bool ok = set_window_client_size(hwnd, cw, ch, !windowed);
+    if (log) *log = std::string(window_mode_name(mode)) + " " + std::to_string(cw) + "x" + std::to_string(ch) +
                     (ok ? " applied" : " refused") + (what.empty() ? "" : ", " + what);
     return ok;
 }
@@ -375,8 +407,9 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.vsync_mode = v.vsync_mode;
     p.frame_cap = v.frame_cap;
     p.hardware_mouse = v.hardware_mouse;
-    p.windowed = v.windowed;
+    p.window_mode = v.window_mode;
     p.widescreen = v.widescreen;
+    p.ui_scale = std::clamp(v.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     p.detail = v.detail;
     p.anti_alias = v.anti_alias;
     p.gamma = v.gamma;
@@ -413,8 +446,13 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     p.mode = {static_cast<uint32_t>(std::max(0, w)), static_cast<uint32_t>(std::max(0, h)), static_cast<uint32_t>(std::max(0, hz))};
     flag("vsync", p.vsync);
     flag("hardware_mouse", p.hardware_mouse);
-    flag("windowed", p.windowed);
+    if (auto it = kv.find("windowed"); it != kv.end())  // a profile from before the display mode list
+        p.window_mode = it->second == "1" || it->second == "true" || it->second == "on" ? ui::WindowMode::Windowed : ui::WindowMode::Fullscreen;
+    if (auto it = kv.find("window_mode"); it != kv.end())
+        if (const std::optional<ui::WindowMode> wm = parse_window_mode(it->second)) p.window_mode = *wm;
     flag("widescreen", p.widescreen);
+    num("ui_scale", p.ui_scale);
+    p.ui_scale = std::clamp(p.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     if (auto it = kv.find("vsync_mode"); it != kv.end()) p.vsync_mode = it->second == "mailbox" ? ui::VsyncMode::Mailbox : ui::VsyncMode::Fifo;
     for (const ProfileInt& e : kProfileInts) num(e.key, p.*e.field);
     for (const ProfileAdvInt& e : kProfileAdvInts) num(e.key, p.advanced.*e.field);
@@ -435,7 +473,7 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     f << "width=" << p.mode.width << "\nheight=" << p.mode.height << "\nrefresh_hz=" << p.mode.hz << "\n";
     f << "vsync=" << (p.vsync ? 1 : 0) << "\nvsync_mode=" << (p.vsync_mode == ui::VsyncMode::Mailbox ? "mailbox" : "fifo") << "\n";
     f << "hardware_mouse=" << (p.hardware_mouse ? 1 : 0) << "\n";
-    f << "windowed=" << (p.windowed ? 1 : 0) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\n";
+    f << "window_mode=" << window_mode_name(p.window_mode) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\nui_scale=" << p.ui_scale << "\n";
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
     for (const ProfileAdvBool& e : kProfileAdvBools) f << e.key << "=" << (p.advanced.*e.field ? 1 : 0) << "\n";

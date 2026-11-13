@@ -328,6 +328,9 @@ public:
     // Tables must outlive the HUD. `text` may be null (keys shown as text).
     void init(const ComponentTable& table, const TextureAtlas& atlas, FontCache& fonts, const TextDatabase* text = nullptr);
     void resize(uint32_t width, uint32_t height);
+    // [port: Gabriel] DPI-style UI scale (hud_canvas.hpp; 1 = 100 %, 0 = the original fitted canvas): takes effect on the
+    // next resize().
+    void set_ui_scale(float s) { canvas_.ui_scale = s > 0.0f ? s : 0.0f; }
     const HudCanvas& canvas() const { return canvas_; }
     HudLayout& layout() { return layout_; }
     const HudLayout& layout() const { return layout_; }

@@ -433,7 +433,12 @@ public:
     bool tactical_fov_set_ = false;     // the player changed the tactical FOV (else TacticalCameras.xml's applies)
     std::vector<DisplayMode> display_modes_;  // the display's modes (primary display, game_display.hpp)
     std::vector<DisplayMode> shown_modes_;    // UI5 t01: the video options' resolution list (video_list_modes; Widescreen)
-    bool windowed_ = true;                    // UI5 t01: Options > Video > Windowed (false: full screen)
+    ui::WindowMode window_mode_ = ui::WindowMode::Windowed;  // UI5 t01 / [port: Gabriel] Options > Video > Display Mode
+    bool windowed() const { return window_mode_ == ui::WindowMode::Windowed; }
+    // [port: Gabriel] Options > Video > UI Scale in percent (live play: the profile's, 100 at first start); 0 in scripted /
+    // smoke / benchmark runs, which keep the original fitted UI so their captures do not depend on the window size.
+    int32_t ui_scale_ = 0;
+    void resize_ui();  // the GUI, both HUDs and the side panels to the window size at ui_scale_
     uint64_t video_applies_ = 0;
     bool menu_dialog_open() const;  // the in-game menu or one of its option / save / load / quit dialogs is open
     uint32_t reinforce_unit_ = 0;       // reinforcement chosen on the pad, waiting for its drop point (0 = none)

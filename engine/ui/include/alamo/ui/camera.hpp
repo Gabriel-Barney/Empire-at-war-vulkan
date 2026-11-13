@@ -93,6 +93,10 @@ struct CameraParams {
 
 // Hor+ rule of the tactical camera (RENDER.md §3.4); same formula as render::tactical_fov_x.
 float tactical_fov_x(float fov_degrees, float aspect);
+// [port: Gabriel 2026-11-13] Hor+ for the galactic camera (the original keeps B.8's horizontal FOV at every aspect): the
+// horizontal FOV `fov_x_4_3` (radians) holds at 4:3 and narrower; a wider aspect keeps 4:3's vertical FOV,
+// 2 atan(tan(fov_x_4_3 / 2) x aspect x 3/4), with no upper aspect limit (ultrawide included).
+float galactic_fov_x(float fov_x_4_3, float aspect);
 inline constexpr float kGalacticFovX = 0.46364761f;  // atan(0.5) (SPACE_AND_OPEN B.8)
 inline constexpr float kGalacticNear = 10.0f, kGalacticFar = 10000.0f;
 
