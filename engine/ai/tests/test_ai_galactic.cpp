@@ -822,6 +822,16 @@ static void test_definitions_and_templates() {
     const uint32_t cq = d.find_goal("conquer_planet");
     CHECK(cq == 1 && d.goals[cq].application == (app::Enemy | app::Neutral) && d.goals[cq].time_limit == 240.0f);
     CHECK(d.goals[cq].reachability == Reachability::EnemyDestination && d.goals[cq].is_like.size() == 1);
+    {  // bkg3 (BKG3_RE_ANSWERS Q4): the like-set is reflexive and symmetric (the listed type gets the lister too)
+        const uint32_t bs = d.find_goal("Build_Space_Forces");
+        CHECK(bs != kAiNone);
+        if (bs != kAiNone) {
+            CHECK(d.goals[cq].like(cq) && d.goals[cq].like(bs) && d.goals[bs].like(cq) && d.goals[bs].like(bs));
+            CHECK(d.goals[cq].like_set.size() == 2 && d.goals[bs].like_set.size() == 2 && d.goals[bs].is_like.empty());
+            for (uint32_t t = 0; t < d.goals.size(); ++t)
+                if (t != cq && t != bs) CHECK(d.goals[t].like_set.size() == 1 && !d.goals[t].like(cq));
+        }
+    }
     CHECK(d.goals[3].mode == AiMode::Land && d.goals[2].reachability == Reachability::FriendlyOnly);
     CHECK(d.find_set("synset") && d.find_set("SynSet")->entries.size() == 4);
     CHECK(d.find_set("SynSet")->entries[2].function == "Needs_Starbase_Upgrade");

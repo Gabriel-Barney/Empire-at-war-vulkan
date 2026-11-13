@@ -56,7 +56,7 @@ CATEGORY = {"travel": "timing", "build": "timing", "econ": "income", "ai": "AI c
 # contents apart), construction stand-ins, squadron containers and starbase-upgrade objects.
 NOT_UNIT = ("PROJ_", "_MARKER", "BACKDROP", "ASTEROID", "NEBULA", "STARS_", "STAR_BACKDROP", "SPACE_JUNK", "DEATH_CLONE",
             "_PAD", "CONTAINER", "_UPGRADE", "MERCHANT_DOCK", "EXPLOSION", "DAMAGE_SPACE", "DAMAGE_LAND", "PARTICLE",
-            "_DUD")  # bkg3: Large_Dud / Huge_Dud are PARTICLE types (Particles.xml), not units
+            "_DUD", "PROJECTILE_")  # bkg3: Large_Dud / Huge_Dud and Projectile_Shield_Absorb_* are particle types, not units
 
 
 # ---- small helpers ---------------------------------------------------------------------------------------------------

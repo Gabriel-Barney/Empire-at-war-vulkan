@@ -2561,6 +2561,7 @@ std::unique_ptr<PlayerAi> GalacticAiWorld::Impl::make_player(int32_t player, con
     gcfg.extra_goals_per_category = type->goal_set_extension_size;  // AIPlayerType +0xE8 (0x721b60) [H]
     gcfg.nominal_allowed_time = true;  // A2f t09: AllowedTime = 0x6c0450(PP) x tolerance (A2F_RE_READS §1.4 item 2) [H]
     gcfg.retail_cadence = true;        // a2m r2 (A2M_R2_RE_A §2.1): seeded first quota, slice ends at the quota
+    gcfg.like_sets = true;             // bkg3 (BKG3_RE_ANSWERS Q4): Is_Like like-sets in the active tests
     p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
     p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, p.ctx.opponent, eq, -1, out); });
     if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)

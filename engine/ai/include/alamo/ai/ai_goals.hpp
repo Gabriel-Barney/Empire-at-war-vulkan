@@ -190,6 +190,12 @@ struct GoalSystemConfig {
     // takes floor(E / q) + 1 frames). Off (the tactical AI, not re-checked): first quota = the cap term, a slice scans on
     // to the next counted candidate.
     bool retail_cadence = false;
+    // bkg3 (BKG3_RE_ANSWERS Q4, 0x721a50 / 0x6b83c0) [H], set by the galactic AI: 'the goal is already active' (slot 9, and
+    // Resolve's kept-or-active test) holds when a goal on the same target has a type whose like-set (GoalTypeDef::like_set)
+    // contains the candidate's type, not only for the exact (type, target); the greedy lastOld rule accepts the goal first
+    // and needs the same target. Retail uses the same lookup in land and space; [port] off there until the tactical lanes
+    // re-record their goldens (exact (type, target) test, lastOld stop before the accept).
+    bool like_sets = false;
 };
 
 class GoalSystem {
@@ -224,6 +230,8 @@ public:
     void purge(int32_t keep_running);
     Goal* find_active_by_running(int32_t running);
     Goal* find_active(uint32_t goal_type, int32_t target);
+    // bkg3: 0x721a50 on the active set: a goal on `target` (any category) whose type's like-set holds `goal_type`.
+    bool active_like(uint32_t goal_type, int32_t target) const;
     // Block list +0x2a0 (AI_GALACTIC_2 §5.1) [H]: TaskForce.Block_Goal_Proposal clears the proposed set and
     // appends the plan's goal (key = goal serial); Unblock removes every occurrence. While non-empty nothing
     // is proposed or activated.

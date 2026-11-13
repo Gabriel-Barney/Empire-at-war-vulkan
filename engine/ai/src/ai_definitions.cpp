@@ -275,6 +275,19 @@ void AiDefinitions::link() {
             else g.exclusions.push_back(i);
         }
     }
+    // bkg3 (BKG3_RE_ANSWERS Q4, 0x6b7fa0) [H]: like-set = self, each listed type, and self in each listed type's set.
+    for (GoalTypeDef& g : goals) g.like_set.clear();
+    for (uint32_t t = 0; t < goals.size(); ++t) {
+        goals[t].like_set.push_back(t);
+        for (const uint32_t x : goals[t].is_like) {
+            goals[t].like_set.push_back(x);
+            goals[x].like_set.push_back(t);
+        }
+    }
+    for (GoalTypeDef& g : goals) {
+        std::sort(g.like_set.begin(), g.like_set.end());
+        g.like_set.erase(std::unique(g.like_set.begin(), g.like_set.end()), g.like_set.end());
+    }
 }
 
 void AiDefinitions::add_function_set(std::string_view set_name, std::string_view xml, const std::string& file) {

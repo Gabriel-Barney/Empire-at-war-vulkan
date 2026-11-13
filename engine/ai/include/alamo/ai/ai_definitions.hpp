@@ -8,6 +8,7 @@
 // inside one element: the last write wins [L]; repeated list tags append [port: not checked, Â§1.4].
 // Duplicate element names across files: the first definition wins (later ones are reported) [port].
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -35,6 +36,10 @@ struct GoalTypeDef {
     float time_limit = -1.0f;          // Time_Limit s (+0x30), -1 = none
     float build_time_delay_tolerance = 1.0f;  // (+0x34)
     std::vector<uint32_t> is_like;     // Is_Like (+0x38), goal type indices
+    // bkg3 (BKG3_RE_ANSWERS Q4, 0x6b7fa0) [H]: the resolved like-set (+0x50), sorted: the type itself, every type it lists
+    // and every type that lists it (symmetric, not transitive). Built by link().
+    std::vector<uint32_t> like_set;
+    bool like(uint32_t other) const { return std::binary_search(like_set.begin(), like_set.end(), other); }
     std::vector<uint32_t> exclusions;  // Global_Exclusions (+0x90)
     std::vector<std::string> is_like_names, exclusion_names;  // as written (resolved by link())
     float tracking_duration = 0.0f;    // (+0xa8)
