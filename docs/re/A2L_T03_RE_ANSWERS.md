@@ -296,6 +296,8 @@ Port, engine/ai/src/galactic_ai.cpp:
 - **Build destination** (`create_build_tasks`, galactic_build.cpp l.69-70): `b.dest = stage` when valid, else the
   selection's source. With a null `Produce_Force` destination, retail's BT +0x98 is null. Which planet builds the
   unit is chosen without +0x98 [M]; the port's `source` fallback is the closest match.
+  **Settled 2026-11-13 (`BKG3_RE_ANSWERS.md` Q7.1, retail run):** such a task is offered to every planet with no
+  path test and no travel term; the port no longer uses the source planet (magic plans excepted).
 
 So two changes are needed together. Replacing only the `nearest_owned` fallback changes which plans exit in
 `AssembleForce`, but plain `Produce_Force()` still gathers everywhere. Any retail-faithful version of either change

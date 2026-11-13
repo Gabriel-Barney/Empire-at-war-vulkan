@@ -68,7 +68,12 @@ void GalacticAiWorld::Impl::create_build_tasks(TaskForceRec& tf) {
         b.queue = ti && ti->build_cost > 0 && sim.queue_kind(type) == gal::kGroundQueue ? 0 : 1;  // A2 galactic: queue_kind
         const PlanetIndex stage = tf.stage >= 0 ? static_cast<PlanetIndex>(tf.stage) : kInvalidPlanet;
         const PlanetIndex source = i < tf.wanted_source.size() ? tf.wanted_source[i] : kInvalidPlanet;
-        b.dest = valid_planet(stage) ? stage : source;
+        // bkg3 t03 (retail run 20261113-053156, BKG3_RE_ANSWERS Q7; settles A2L_T03 Q5.3) [H behaviour]: a task made by
+        // Produce_Force() with no destination has a null BT +0x98, so the market runs no path test and adds no travel
+        // term for it: every planet that can build the type bids. Build_Ground_Forces' tank buster and infantry are
+        // built at Naboo (idle ground queue) while Kamino and MonCalimari build their mines. The selection's source
+        // planet (PP+0x180) stays the spawn place of a magic plan only.
+        b.dest = valid_planet(stage) ? stage : (def.magic_plan ? source : kInvalidPlanet);
         builds.emplace(b.id, b);
         BuildTask& t = builds[b.id];
         tf.builds.push_back(t.id);

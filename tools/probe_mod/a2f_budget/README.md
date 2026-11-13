@@ -550,3 +550,7 @@ records: `SCO` Should_Conquer_Opponent_Planet, `FAA` First_Attack_Allowed, `UGS`
 Conquer_Opponent plan before frame 39000 (Q2 run 20261108-204711) and holds 2462 credits at 9000. The `DS` records at
 6900..9000 say whether retail's desire is zero (and which factor), and the Underworld's `SM` / `SH` records give its
 Offensive budget in the same window. The other modes of the kit are unchanged.
+
+**Run 2026-11-13** (`out\20261113-053156`, last frame 9469, exit 0): results in `docs/re/BKG3_RE_ANSWERS.md` Q7. The
+Rebel's third mine goal is accepted at 97 and released twice before the mine starts at 807; the Underworld's
+`SCO` for Tatooine is 24.07 from frame 6900 with an Offensive pool of 1488 at the Commit of 6841.

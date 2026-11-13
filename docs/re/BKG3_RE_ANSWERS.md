@@ -657,3 +657,82 @@ question is whether retail can resolve Offensive first at its Commit near 97.
   Infrastructure pool A and of the proposals drawn at the second Commit would settle it.
 - The node order of the `AIGoalCategoryType` map (tie order).
 - Whether starting a production item raises 0x3a51e0 → 0xE for the owner (early refresh of planet `HasStructure`).
+
+---
+
+## Q7. Retail run with a human Empire (2026-11-13): what decides t03 and t04
+
+Run `tools/probe_mod/a2f_budget/out/20261113-053156` (`run_a2f_empire.cmd`, README section 11; Heart of the Maw as
+Empire, Medium, hands off, last frame 9469, kit exit 0). Measurements are [H]; the readings of them are tagged.
+
+### Q7.1 The Rebel's Naboo mine (t03)
+
+| frame | retail | 
+|---|---|
+| 0..55 | Rebel wOFF 7.533, wINFRA 19.910 in every sample: the port's values. Infrastructure is resolved first, as Q6 says |
+| 55 | `BuildEconomicStructurePlan` starts twice (MonCalimari, Kamino); mines begin at 89 and 98 |
+| 97 | a third `BuildEconomicStructurePlan` starts (unalloc 500). **The mine goal is accepted at this Commit**, so the time stop of Q5 does not reject it here |
+| 109 / 140 / 156 | Corellian_Gunboat at Naboo (space), Rebel_Light_Tank_Brigade at Yavin, **Rebel_Tank_Buster_Squad at Naboo** |
+| before 520 | the plan of 97 is gone with no end record (released by the goal system; the next start of the same script says prev=none) |
+| 520 | the plan starts again; 559 Rebel_Infantry_Squad begins at Naboo (the tank buster ended at 517) |
+| before 733 | released again |
+| 733 | third start; the infantry ends at 800; **the mine begins at Naboo at 807**, ends 1492, plan exit 1498 |
+
+Reading:
+- `BuildEconomicStructurePlan` sleeps 1 s before `AssembleForce`; `BuildGroundForcesPlan` calls `Produce_Force()` at
+  once and with no destination. The ground tasks therefore exist about 30 frames before the mine's task [H scripts].
+- The tank buster is built at Naboo, the one Rebel planet with barracks and an idle ground queue (Kamino and
+  MonCalimari are building mines and refuse a funded task, Q5.4; Yavin has no barracks). **A task made by
+  `Produce_Force()` without a destination is offered to every planet: no path test and no travel term** [H behaviour].
+  This settles `A2L_T03_RE_ANSWERS.md` Q5.3 / open item 3 (BT +0x98 null): the planet is the lowest bidder, not the
+  selection's source planet PP+0x180.
+- Naboo claims one task per market run (Q5.3), the tank buster first because it is older on the pending list. The mine
+  is claimed behind it; at the next Commit (196) the kept mine goal is re-solved with Naboo's ground queue above
+  4.8 s, so ETA > AllowedTime (28.8 s) and it is released. The same happens once more behind the infantry. The time
+  stop of Q5 is the mechanism, but at the **later** Commits, not at 97 [M: the Commit frames are taken from the plan
+  starts 55 / 97 / 196 / 307 / 520 / 733].
+
+Port before the change: the ground tasks had `dest` = the selection's source planet (Kamino, MonCalimari), Naboo
+failed the delivery path test for them and never bid, so the mine was alone at Naboo and started at 164; the tank
+buster started at Kamino at 870. Port after the change (`create_build_tasks`: no stage → no destination, except the
+spawn place of a magic plan), seed 0: tank buster at Naboo 133, mine plan released at 197, restarted 522, infantry at
+Naboo 536, released 621, restarted 736, mine at Naboo 784, done 1474. The remaining 23 frames against retail (156 /
+559 / 807) are the phase of Naboo's ground queue, which is drawn from the synced generator at galaxy build (tier 3).
+
+12 seeds (`tools/parity`, `--seeds 12`): `econ.income_cycle1[Rebel]` 814.7 in every seed → 634.2 in 10 seeds (retail
+634.2), `[Underworld]` 2240 → 2150 in 10 seeds (retail 2150); both PASS. `outcome.planets_final[Empire]` 3.75 → 4.0
+(the Empire lost Tatooine in 3 seeds, retail never).
+
+### Q7.2 The Underworld and Conquer_Opponent @Tatooine (t04)
+
+- Channel D, Underworld > Tatooine: `Is_Good_Invasion_Target` 8.25 (0..90), 8.86 (120..360), 9.26 (390..600), 19.256
+  from 900 on. `First_Attack_Allowed` is 0 up to 6600 and **1 from 6900**; `Should_Perform_Unrestricted_Grab_Space` is
+  0 throughout; **`Should_Conquer_Opponent_Planet` is 0 up to 6600 and 24.07 from 6900** (= 1.25 × 19.256). So retail's
+  desire is not zero: no factor of the equation differs from the port's.
+- Budget at the Commit of 6841 (the first after the attack age): credits 2442.0, **Offensive pool 1487.8**,
+  Infrastructure 954.2. Production: Underworld_Saboteur_Team at Felucia 6884, **Crusader_Gunship at Felucia 6886
+  (1400)**; Offensive pool 236 at 7039. A second Crusader_Gunship at 8219 after the next payments.
+- In the Q2 reference runs every Underworld `Build_Space_Forces` start but the first has unalloc 1400 (one
+  Crusader_Gunship), and the Underworld starts no Crush / Conquer_Opponent plan in 54000 frames. The port's
+  Conquer_Opponent @Tatooine proposals cost 1600 (ConquerOpponentPlan) or 1720 (CrushPlan) net.
+- Reading [M]: at 6841 the goal passes its desire test in retail too, but the Offensive pool (1488) funds only the
+  1400-credit `Build_Space_Forces`; whether Conquer_Opponent starts is the fund test 0x6129c0 on that pool, not a
+  perception factor. Nothing to port.
+- Retail's three reader-2 reference runs are one trajectory: their production starts are identical frame for frame
+  after removing the start offset (62 / 55 / 1023). This run follows it up to about frame 1500 and then differs (first
+  difference: Rebel_Tank_Buster_Squad instead of Rebel_Infantry_Squad at Kamino at 1524). The retail "distribution"
+  of `scenarios.json` is therefore two samples, not four.
+
+Port, 12 seeds after the Q7.1 change: the Underworld starts Conquer_Opponent @Tatooine in 3 seeds (was 4), first at
+6989 / 8221 / 9591, and takes no Empire planet. `outcome.planets_final` is Rebel 5 / Underworld 3 (retail's outcome)
+in 6 seeds and Rebel 4 / Underworld 4 in the other 6: the Rebel does not take Shola (seeds 0, 2, 4, 9) or loses it
+again to an Underworld Conquer_Pirate @Shola (seeds 7, 10). Before the change the Rebel also held Shola in 6 of 12
+seeds; that count did not move. It is the outcome of the Rebel's Conquer_Pirate / Conquer_To_Reconnect attack on
+Shola, graded against a retail side with one outcome.
+
+### Open
+
+- Why the Rebel fails to take or hold Shola in half of the port's seeds (retail: taken near 7500 in both
+  trajectories). Filed in the backlog from bkg3.
+- More retail trajectories for `hotm_galactic`: a run with a different kit perturbs the draw sequence enough to give
+  a new sample (this run); the references need such runs up to tick 13501.
