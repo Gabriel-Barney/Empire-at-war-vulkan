@@ -27,7 +27,7 @@ The claude.ai page https://claude.ai/artifact/56dGptBoT3JcDH4rHZ6BjT is retired:
 | Collection | Document id | Fields |
 |---|---|---|
 | `meta` | `page` | `eyebrow`, `title`, `lede`, `build` (last verified build line), `updated` |
-| `meta` | `backlog` | The backlog's settings: `cats` (category id → `label`, `parent`, `order`, `desc`, `node`: the flowchart box its entries belong to), `rules` (ordered category filters), `sevs` (severity meanings), and the limits `cap`, `wip`, `inbox_days`. See "Backlog and group exit tests" |
+| `meta` | `backlog` | The backlog's settings: `cats` (category id → `label`, `parent`, `order`, `desc`, `node`: the flowchart box its entries belong to), `rules` (ordered category filters), `sevs` (severity meanings), the limits `cap`, `wip`, `inbox_days`, and `keep_followups` (the stage ids whose groups keep their follow-ups as tasks: `["st6"]`, Stage 6 · Parity and mods). See "Backlog and group exit tests" |
 | `backlog` | `b0001`… | One finding that is not part of an open group: `t` (text), `cat` (category id), `node` (flowchart box, and so the stage, the work belongs to), `sev` (`S1`/`S2`/`S3`), `kind`, `s` (`open`/`promoted`/`dropped`), `from` (group it was found in), `task`, `ref`, `g` (only Gabriel can do it), `added`, `by`, and when closed `promoted` (`group/task`) or `why` |
 | `lanes` | short id (`st1`…) | One stage of the plan: `title`, `goal` (what the stage is for), `exit` ("done when" condition), `order`. Stages run in `order`, top to bottom in both the plan and the flowchart |
 | `nodes` | box id (`N1`, `MOVE`…) | `label`, `sub`, `lane`, `status`, `shape` (`box`/`pill`), `order`, `to` (map of target box id → `solid` "do before" or `dash` "feeds into") |
@@ -86,7 +86,8 @@ A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5
 - Leftovers of a finished group (Gabriel, 2026-11-10, replaces the 2026-10-29 follow-up-group rule): they go to the backlog, not
   into a new `…f` group. `close-group` does it in one step (see below). A new group comes from the backlog only when someone
   picks entries on purpose (`backlog promote --new`), and it needs its own exit test, `eta` and (recommended) `preset`; say in
-  its `why` which preset was chosen and the reason in a few words.
+  its `why` which preset was chosen and the reason in a few words. Exception: a Stage 6 group keeps its follow-ups as its own
+  tasks ("Follow-ups stay in Stage 6 groups" below).
 - Flowchart: `update` `nodes/<ID>` `{"status":"done"}` recolours a box; `{"to":{"OTHER":"solid"}}` adds an arrow;
   `{"to":{"OTHER":{"__delete__":true}}}` removes one. New box: `set` `nodes/<ID>` with `label, sub, lane, status, shape, order, to`.
   New stage: `set` `lanes/<id>` with `title, goal, exit, order`.
@@ -114,7 +115,8 @@ leave the group.
   seeds", not "the leftovers"). The task list is only a plan for passing it and may change; when the test passes the group is
   done, even with tasks left. For parity work the test is a tier-2 metric or a tier-1 spec check (`docs/DECISIONS.md`, "Parity
   tiers"); a difference that is tier 3, or inside the tolerance, is not a reason to keep a group open.
-- **Cap.** A group holds at most `cap` open tasks (default 8, `meta/backlog`; finished tasks do not count). Above it, split the
+- **Cap.** A group holds at most `cap` open tasks (default 8, `meta/backlog`; finished tasks do not count; a Stage 6 group has no cap,
+  see "Follow-ups stay in Stage 6 groups"). Above it, split the
   group (a new group with its own exit test) or move findings to the backlog; `trim-group <group> --by S --move t04:S2,t05 --drop t08
   --why "..."` takes tasks out of an open group without closing it (a group another session has claimed needs `--force`). RE and probe tasks name their stop condition (seeds, traces, the questions to answer).
 - **Triage of a finding** (probe, RE pass, review, test failure), decided when it is found:
@@ -122,7 +124,7 @@ leave the group.
   | Bucket | When | What happens |
   |---|---|---|
   | Fix now | it breaks this group's exit test, or it is a crash, hang, save corruption or a tier-1 difference a player or modder sees | a task of the group (`backlog promote --to`, or a plain task) |
-  | Backlog | real, but not blocking | `backlog add ... --from <group>`: one entry, a severity, a category |
+  | Backlog | real, but not blocking | `backlog add ... --from <group>`: one entry, a severity, a category. From a Stage 6 group the same command adds a task of that group instead (below) |
   | Drop | tier 3, inside tolerance, a guess nobody relies on | not recorded, or `backlog drop --why` |
 
 - **Backlog.** Its own collection (`backlog`), so it never shows as an open group or in "Start here". Severity: `S1` crash, hang,
@@ -146,7 +148,24 @@ leave the group.
   [--drop t05,t06 --why "..."]` checks nothing itself (the exit test is the lane's evidence) and, in one commit: moves every open
   task to the backlog (filed by the rules, `--sev` default S2, Gabriel-only tasks flagged) or drops the named ones, sets the group
   `done` (preset and claim cleared, `closed` recorded), sets its box `done` when it was the box's last open group, and adds a
-  log line. It replaces the "follow-up group" step.
+  log line. It replaces the "follow-up group" step. A Stage 6 group is closed differently (next point).
+- **Follow-ups stay in Stage 6 groups** (Gabriel, 2026-11-12, to help development there). Stage 6 · Parity and mods (lane `st6`:
+  boxes MODC, Q4, Q5, Q6 and any box added to it later; `meta/backlog` `keep_followups` lists the stages this applies to) is the
+  exception to the backlog rule. A follow-up of a Stage 6 group (a finding that does not block its exit test, or a task still open
+  when the test passes) becomes a new task of the group it came from, in that group's box, so the next session on the box finds it
+  there:
+  - `backlog add "<text>" --by S --from <group> [--sev S1|S2|S3] [--tier 1|2] [--ref PATH] [--g]` does it: it adds the group's next
+    `tNN` with that severity, tier and Gabriel flag (`--ref` is appended to the text) instead of a backlog entry. A finding for a group
+    that is already `done` reopens it (status `partly`, and its box when that is `done` too); the group's `closed` record stays as history.
+  - The cap does not apply to these groups: `lint`, the page's "Over cap" badge and `backlog promote --to` skip it.
+  - Closing: the group is done when its exit test passes **and** no task is open. Finish each follow-up or drop it
+    (`close-group <group> ... --drop t21,t22 --why "..."`). `close-group` refuses a Stage 6 group that still has an open task that is
+    not tier 3 (`--force` sends those to the backlog as elsewhere). `trim-group --move` is refused for them too; `--drop` works.
+  - Unchanged: a tier-3 finding is still dropped or filed in the backlog as S3 (`--tier 3` keeps it there; current focus), and the
+    triage still decides whether a finding is worth recording at all. A finding that is not Stage 6 work (for example a movement bug
+    a mod test happens to show) can still be filed in its own box's backlog by naming the box: `--node <box>`.
+  - Open backlog entries filed from Stage 6 groups before 2026-11-12 (b0014-b0017 from modc; b0018 is tier 3 and stays) are left in
+    the backlog until someone promotes them back (`backlog promote <ids> --to <group>`).
 - **Parity tier** (2026-11-10). A task or backlog entry that is a difference from retail carries `tier` (`1`, `2` or `3`, as in
   `docs/DECISIONS.md`, "Parity tiers"); work that is not about matching retail (tools, UI of the port, Gabriel's runs) has none. The
   tier says how the difference is judged and what it is worth: **1** exact, spec and unit test, a difference is a bug (S1 when a

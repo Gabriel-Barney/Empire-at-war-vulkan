@@ -31,6 +31,9 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    tier-1 difference, so it becomes a task; otherwise `python roadmap-store\roadmap_store.py backlog add "<text>" --by <session>
    --from <group> [--sev S1|S2|S3] [--tier 1|2|3]` (a rule files it into a category; tier 3 means drop it unless a tier-2 metric fails) or drop it. Current focus (Gabriel, 2026-11-10): do only tier 1 and tier 2
    tasks; a tier-3 task of your group is skipped, not started (`docs/DECISIONS.md`, "Current focus"). Never grow the group past its cap (8 tasks).
+   **Stage 6 · Parity and mods (boxes MODC, Q4, Q5, Q6) keeps its follow-ups** (Gabriel, 2026-11-12): the same `backlog add ... --from
+   <group>` adds the finding as a new task of your group instead of a backlog entry (tier 3 still goes to the backlog), and these
+   groups have no cap (`docs/ROADMAP_PROTOCOL.md`, "Follow-ups stay in Stage 6 groups").
 6. **Build in your own tree** (one tree per worktree; never share `build-msvc` or another lane's tree). From PowerShell:
    `& .\build_agent.cmd --% msvc wt "core;<modules and their dependencies>"` gives `build-wt-msvc` (`wt` is the default tree and may be left out) and runs the fast tier
    (`ctest -LE slow`); pass a regex as 4th argument for specific tests (slow ones included) or `all`. Never put `>` after `--%`,
@@ -61,7 +64,9 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    set `nodes/<ID>` `{"status":"done"}` too. When the group's `exit` test passes with tasks still open, close it with
    `python roadmap-store\roadmap_store.py close-group <group> --by <session> --passed "<evidence>"`: the open tasks go to the backlog
    (rules file them into categories; `--drop tNN --why "..."` for ones not worth keeping), the group and, when last, its box are set
-   done, one log line is written. No follow-up group: leftovers are backlog entries until Gabriel promotes them. Add one `log` line
+   done, one log line is written. No follow-up group: leftovers are backlog entries until Gabriel promotes them. A Stage 6 group
+   is the exception: it keeps its follow-ups, so close it only when no task is open (finish each, or `--drop tNN --why "..."`;
+   `close-group` refuses otherwise), and leave it open with its tasks when they are still wanted. Add one `log` line
    for anything else you write. Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/`); status is tracked only on the roadmap.
    The roadmap lives only in `roadmap-store/` (PR #89, 2026-11-06): nothing about it is committed to this repository.
    Check that `sync` prints `in sync with origin/main`.

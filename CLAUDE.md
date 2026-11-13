@@ -62,6 +62,11 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
    <group> --by <session> --passed "<evidence>"`: its open tasks move to the backlog and the group (and its box) is set done.
    Backlog entries become work only when Gabriel picks them (`backlog promote`). `roadmap_store.py lint` shows what is wrong; rules:
    `docs/ROADMAP_PROTOCOL.md`, "Backlog and group exit tests".
+   **Exception: Stage 6 · Parity and mods keeps its follow-ups** (Gabriel, 2026-11-12, boxes MODC, Q4, Q5, Q6): a follow-up of a
+   Stage 6 group becomes a new task of the group it came from, not a backlog entry (`backlog add ... --from <group>` adds it there
+   and reopens the group and its box if they are done; no task cap). Such a group closes only when its exit test passes and no task
+   is open (finish or `--drop` each one). Tier-3 findings still go to the backlog. Rules: `docs/ROADMAP_PROTOCOL.md`, "Follow-ups
+   stay in Stage 6 groups".
    **Current focus (Gabriel, 2026-11-10, until he lifts it): parity tier 1 and tier 2 work only.** Tasks and backlog entries carry a `tier`; tier-3
    work (internals, draw order, performance, save format) is paused: do not start it, drop it or file it as S3 (`backlog add ... --tier 3`).
    Crashes, hangs and save corruption are still fixed. Record: `docs/DECISIONS.md` ("Current focus"), `docs/ROADMAP_PROTOCOL.md` ("Parity tier").

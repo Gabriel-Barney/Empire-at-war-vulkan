@@ -15,7 +15,10 @@ Finish roadmap group `$ARGUMENTS` in this worktree. Work through the checklist a
    `python roadmap-store\roadmap_store.py close-group <id> --by <session> --passed "<evidence>"` (open tasks go to the backlog and
    are filed into categories; `--drop tNN --why "..."` for ones not worth keeping; it sets the group and, when last, its box done).
    If the exit test has not passed, say so and leave the group open. Findings from this work that are not in the group go in with
-   `roadmap_store.py backlog add "<text>" --by <session> --from <id>`. Then `roadmap_store.py lint`. One `log` line.
+   `roadmap_store.py backlog add "<text>" --by <session> --from <id>`. **Stage 6 · Parity and mods (boxes MODC, Q4, Q5, Q6) keeps
+   its follow-ups** (Gabriel, 2026-11-12): there that command adds each finding as a new task of the group (tier 3 still goes to the
+   backlog), and the group is closed only when no task is open: finish or `--drop` each (`close-group` refuses otherwise); if some
+   are still wanted, leave the group open with them. Then `roadmap_store.py lint`. One `log` line.
    (Shapes: `docs/ROADMAP_PROTOCOL.md`.)
 3. **Sync.** `python roadmap-store\roadmap_store.py sync` should print `in sync with origin/main`. The roadmap lives only in
    `roadmap-store\` since 2026-11-06 (PR #89): nothing about it is committed to this repository.
