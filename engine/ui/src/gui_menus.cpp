@@ -1111,7 +1111,7 @@ void FrontEnd::fill_video(GuiDialog& d) {
     d.set_items("IDC_PORT_UI_SCALE", std::move(scales), static_cast<int32_t>(ui_scale_row(v.ui_scale)));
     // [port: Gabriel 2026-11-13] the shipped "V-sync enabled" check is gone: the V-Sync Mode list's Off row turns it off.
     d.show("IDC_VSYNC_ENABLED", false);
-    d.set_checked("IDC_WIDESCREEN", v.widescreen);
+    d.show("IDC_WIDESCREEN", false);  // [port: Gabriel 2026-11-13] the option is gone: every display mode is listed, the HUD follows the window shape
     d.show("IDC_HARDWARE_MOUSE", false);  // [port: Gabriel 2026-11-13] the option is gone: the game always draws its own cursor
     // [port: Gabriel] Display / Graphics split: this dialog is Display. Anti-Aliasing and Detail Level (and the Advanced and
     // Auto Detect buttons) belong to Graphics: their rows are hidden and the rows under them move up into the space.
@@ -1734,7 +1734,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             else if (x && x->selected == kFrameCapRowDisplay) v.frame_cap = kFrameCapDisplay;
             else if (const GuiControl* sl = d->get("IDC_PORT_FRAME_CAP_SLIDER"); x && x->selected == kFrameCapRowCustom && sl)
                 v.frame_cap = sl->value;
-            chk("IDC_WIDESCREEN", v.widescreen);
             val("IDC_GAMMA_SLIDER", v.gamma);
             // t12: a different resolution / refresh rate asks "keep these settings?" first (the Yes answer stores it).
             const bool confirm = v.resolution >= 0 && v.resolution != previous_resolution && !res_confirm_;

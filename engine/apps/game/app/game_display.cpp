@@ -124,14 +124,6 @@ void set_clipboard_text(std::u32string_view text) {
     CloseClipboard();
 }
 
-std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes, bool widescreen) {
-    if (widescreen) return modes;
-    std::vector<DisplayMode> out;
-    for (const DisplayMode& m : modes)
-        if (static_cast<uint64_t>(m.width) * 3u <= static_cast<uint64_t>(m.height) * 4u) out.push_back(m);
-    return out.empty() ? modes : out;
-}
-
 const char* window_mode_name(ui::WindowMode m) {
     switch (m) {
         case ui::WindowMode::Fullscreen: return "fullscreen";
@@ -374,7 +366,6 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.vsync_mode = v.vsync_mode;
     p.frame_cap = v.frame_cap;
     p.window_mode = v.window_mode;
-    p.widescreen = v.widescreen;
     p.ui_scale = std::clamp(v.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     p.detail = v.detail;
     p.anti_alias = v.anti_alias;
@@ -415,7 +406,6 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
         p.window_mode = it->second == "1" || it->second == "true" || it->second == "on" ? ui::WindowMode::Windowed : ui::WindowMode::Fullscreen;
     if (auto it = kv.find("window_mode"); it != kv.end())
         if (const std::optional<ui::WindowMode> wm = parse_window_mode(it->second)) p.window_mode = *wm;
-    flag("widescreen", p.widescreen);
     num("ui_scale", p.ui_scale);
     p.ui_scale = std::clamp(p.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     if (auto it = kv.find("vsync_mode"); it != kv.end()) p.vsync_mode = it->second == "mailbox" ? ui::VsyncMode::Mailbox : ui::VsyncMode::Fifo;
@@ -445,7 +435,7 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     f << "# alamo_game video options (written by the Video / Advanced video dialogs)\n";
     f << "width=" << p.mode.width << "\nheight=" << p.mode.height << "\nrefresh_hz=" << p.mode.hz << "\n";
     f << "vsync=" << (p.vsync ? 1 : 0) << "\nvsync_mode=" << (p.vsync_mode == ui::VsyncMode::Mailbox ? "mailbox" : "fifo") << "\n";
-    f << "window_mode=" << window_mode_name(p.window_mode) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\nui_scale=" << p.ui_scale << "\n";
+    f << "window_mode=" << window_mode_name(p.window_mode) << "\nui_scale=" << p.ui_scale << "\n";
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
     f << "aa_mode=" << aa_mode_name(p.anti_alias) << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
