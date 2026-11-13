@@ -37,6 +37,11 @@ struct ContextDesc {
     bool presentation = false;   // VK_KHR_surface (+ win32) and VK_KHR_swapchain; graphics queue must present
     bool use_transfer_queue = true;  // use a dedicated transfer family when present
     int device_index = -1;           // -1: automatic (env ALAMO_VK_DEVICE overrides)
+    // [port] FSR upscaling (render/src/fsr.cpp): also enable every optional feature the device supports in the core
+    // 1.0-1.3 feature structs (except robustBufferAccess / robustImageAccess) and, when present, VK_KHR_cooperative_matrix,
+    // VK_KHR_shader_bfloat16 and VK_EXT_shader_float8 with their features - what AMD's FSR 4 ML upscaler may use
+    // (fp16 / int8 / dot product / wave matrix). Rendering itself never relies on them. DeviceCaps::upscaler_features.
+    bool upscaler_features = false;
 };
 
 struct Queue {
@@ -84,6 +89,9 @@ struct DeviceCaps {
     float timestamp_period_ns = 1.0f;   // ns per timestamp tick
     uint32_t timestamp_valid_bits = 0;  // graphics queue family; 0 = no timestamps
     bool host_query_reset = false;
+    bool upscaler_features = false;      // ContextDesc::upscaler_features took effect
+    bool cooperative_matrix = false;     // VK_KHR_cooperative_matrix enabled (with upscaler_features)
+    bool shader_float8 = false;          // VK_EXT_shader_float8 enabled (with upscaler_features)
     uint8_t pipeline_cache_uuid[VK_UUID_SIZE] = {};
 };
 
@@ -117,7 +125,18 @@ public:
     bool validation_enabled() const { return validation_; }
     uint32_t validation_errors() const { return errors_.load(); }
     uint32_t validation_warnings() const { return warnings_.load(); }
-    void reset_validation_counts() { errors_ = 0; warnings_ = 0; }
+    // [port] FSR: messages raised on this thread while a ThirdPartyValidation scope is open - inside a closed third-party
+    // runtime's own Vulkan calls (AMD's FSR DLL: its ML shaders use SPIR-V the pinned layer cannot judge) - are counted
+    // here instead of in errors / warnings, and the first few are logged. Our own calls never run inside such a scope.
+    uint32_t validation_third_party() const { return third_party_.load(); }
+    void reset_validation_counts() { errors_ = 0; warnings_ = 0; third_party_ = 0; }
+    class ThirdPartyValidation {
+    public:
+        ThirdPartyValidation();
+        ~ThirdPartyValidation();
+        ThirdPartyValidation(const ThirdPartyValidation&) = delete;
+        ThirdPartyValidation& operator=(const ThirdPartyValidation&) = delete;
+    };
 
     // Optimal-tiling (or linear) format feature check.
     bool format_supported(VkFormat format, VkFormatFeatureFlags features, bool optimal = true) const;
@@ -157,7 +176,7 @@ private:
     bool presentation_ = false;
     bool validation_ = false;
     bool debug_utils_ = false;
-    std::atomic<uint32_t> errors_{0}, warnings_{0};
+    std::atomic<uint32_t> errors_{0}, warnings_{0}, third_party_{0};
     std::vector<std::string> instance_extensions_;
 
     std::mutex immediate_mutex_;

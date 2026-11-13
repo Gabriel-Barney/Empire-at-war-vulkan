@@ -55,6 +55,13 @@ bool App::render_frame() {
     apply_aa_options(gview_.ropt, video_profile_.anti_alias);  // the Anti-Aliasing list (t11)
     bview_.ropt.taa = gview_.ropt.taa;
     bview_.ropt.taa_weight = gview_.ropt.taa_weight;
+    bview_.ropt.upscaler = gview_.ropt.upscaler;  // [port] FSR rows of the same list
+    bview_.ropt.upscale_quality = gview_.ropt.upscale_quality;
+    {
+        const float ms = fsr_last_s_ >= 0.0 && now_s_ >= fsr_last_s_ ? static_cast<float>((now_s_ - fsr_last_s_) * 1000.0) : 0.0f;
+        fsr_last_s_ = now_s_;
+        gview_.ropt.frame_ms = bview_.ropt.frame_ms = std::min(ms, 100.0f);  // FSR's frame time (0: the renderer's 16.6 ms)
+    }
     bview_.ropt.ambient_occlusion = adv_video_.ambient_occlusion;  // land battles only (render skips space / galactic)
     // The original's detail options on top of each view's own frame options (copies: the views keep theirs).
     render::RecordOptions gro = gview_.ropt, bro = bview_.ropt;

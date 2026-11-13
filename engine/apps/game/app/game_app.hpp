@@ -296,6 +296,7 @@ public:
     uint64_t last_submit_frame_ = 0;
     uint64_t frames_ = 0;
     double now_s_ = 0.0;
+    double fsr_last_s_ = -1.0;  // [port] FSR: now_s_ of the last frame (RecordOptions::frame_ms)
     float dt_ = 0.0f;
     uint32_t last_tick_ms_ = 0;
     uint32_t prev_tick_ms_ = 0;  // the tick before last_tick_ms_ (render interpolation period)

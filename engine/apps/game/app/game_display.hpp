@@ -3,10 +3,12 @@
 // <windows.h> stays in this one translation unit.
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "alamo/render/upscale.hpp"
 #include "alamo/ui/gui_menus.hpp"
 #include "alamo/ui/hotkeys.hpp"
 
@@ -124,6 +126,10 @@ float particle_detail(int32_t slider);
 float environment_fade_scale(int32_t slider);
 float gamma_value(int32_t slider);
 bool taa_active(int32_t strength);
+// [port: Gabriel 2026-11-13] The FSR rows of the Anti-aliasing list (ui::kAntiAliasChoices, stored 110 .. 150): the quality
+// mode, nullopt for the TAA rows. apply_aa_options then also sets RecordOptions::upscaler / upscale_quality, with TAA at
+// Medium strength as the renderer's fallback.
+std::optional<render::UpscaleQuality> fsr_quality(int32_t strength);
 void apply_aa_options(render::RecordOptions& o, int32_t strength);
 // The overall Detail Level (IDD_VIDEO_OPTIONS_DIALOG: Low / Medium / High / Ultra, ui::kQualityPresets) as a preset [M]: a
 // quality level picked there (VideoSettings::detail_picked) sets the seven advanced detail options (particle, mesh, texture,

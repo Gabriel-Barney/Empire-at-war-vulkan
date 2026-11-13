@@ -55,6 +55,7 @@
 #include "alamo/render/lighting.hpp"
 #include "alamo/render/lod.hpp"
 #include "alamo/render/pipelines.hpp"
+#include "alamo/render/upscale.hpp"
 #include "alamo/rhi/rendertarget.hpp"
 #include "alamo/rhi/rhi.hpp"
 
@@ -284,6 +285,16 @@ struct RecordOptions {
     // Renderer::discard_taa_frame() before the next render() - the benchmark's fixed-frames mode draws an unsettled frame
     // again and must not let it into the history. The frame itself is drawn exactly as without the flag.
     bool taa_provisional = false;
+    // [port: Gabriel 2026-11-13] FSR upscaling (upscale.hpp): Upscaler::Fsr draws the frame at the quality mode's render
+    // size with FSR's jitter and reconstructs the caller's (display) size with AMD FSR 4.1 / 3.1; it replaces TAA for the
+    // frame (`taa` is then ignored) and reuses its object-motion bookkeeping. When FSR cannot run (no runtime, no
+    // support, a failed dispatch) the frame is drawn at full size with TAA instead; DrawStats::fsr says which happened.
+    // fsr_sharpness: FSR's own RCAS sharpening 0..1 (0 = off). frame_ms: time since the last frame (0: 16.6). "fsr" GPU
+    // timer scope.
+    Upscaler upscaler = Upscaler::None;
+    UpscaleQuality upscale_quality = UpscaleQuality::Quality;
+    float fsr_sharpness = kFsrDefaultSharpness;
+    float frame_ms = 0.0f;
     // [port] The video options' Shader / Water detail on top of the frame graph (RENDER.md 1.5, 6; both default to the
     // maximum = nothing changes). Shader detail 0..3: 0 is the fixed-function path - no shadow volumes, no soft shadows (the
     // StencilDarken variant, TERRAIN_WATER_POST.md 4.3) - and it caps Water detail: < 3 -> 1, < 1 -> 0. Water detail 0..2:
@@ -341,6 +352,7 @@ class WorldRenderer;  // world.hpp: terrain + water of a land map
 class SsaoPass;       // ssao.hpp: [port] screen-space ambient occlusion
 class TaaPass;        // src/taa.hpp: [port] temporal anti-aliasing
 class GammaPass;      // src/gamma.hpp: [port] output gamma
+class FsrPass;        // src/fsr.hpp: [port] FSR upscaling
 struct WorldBindStats;
 
 struct DrawStats {
@@ -369,6 +381,9 @@ struct DrawStats {
     // [port] TAA (RecordOptions::taa): the resolve ran; this frame restarted the history (current frame only).
     bool taa = false, taa_reset = false;
     uint32_t taa_movers = 0;  // draws of the TAA velocity pass (keyed instances that moved since the last frame)
+    // [port] FSR (RecordOptions::upscaler): the frame was drawn at render_width x render_height and upscaled by FSR.
+    bool fsr = false;
+    uint32_t render_width = 0, render_height = 0;  // the scene's size this frame (the caller's size without FSR)
 };
 
 // ---- R4 scene hook (engine/render/particles): render-owned effects drawn inside the frame graph's buckets.
@@ -493,6 +508,11 @@ public:
     // keep_taa_frame(): that frame stands (drops what discard would restore).
     bool discard_taa_frame();
     void keep_taa_frame();
+    // [port] FSR (RecordOptions::upscaler): loads the runtime on first call; true when FSR frames can be drawn here
+    // (the context itself is created by the first FSR frame and can still fail - DrawStats::fsr). upscaler_status():
+    // the provider in use ("FSR 4.1.2" style, once a frame created the context) or why FSR is off.
+    bool fsr_supported();
+    std::string upscaler_status() const;
     // Laser projectiles (lasers.hpp, PROJECTILE_NEBULA_DRAW.md 1): init_lasers loads W_Laser_Pill.tga /
     // p_particle_master.tga through `textures` and Engine\PrimAdditive; set_lasers gives the frame's lasers (copied),
     // drawn by render() in the Transparent bucket after its mesh items (and the hook's transparent draws) with the frame's
@@ -711,7 +731,10 @@ private:
     Targets tg_;
     std::unique_ptr<SsaoPass> ssao_;  // [port] created on first use (RecordOptions::ambient_occlusion)
     std::unique_ptr<TaaPass> taa_;    // [port] created on first use (RecordOptions::taa)
-    ViewMatrices taa_begin(const ViewMatrices& view, const RecordOptions& opts);  // taa.cpp: jittered camera (or `view`)
+    // taa.cpp: jittered camera (or `view`); fsr_phases > 0: FSR's jitter sequence of that length (FSR frame).
+    ViewMatrices taa_begin(const ViewMatrices& view, const RecordOptions& opts, uint32_t fsr_phases = 0);
+    std::unique_ptr<FsrPass> fsr_;   // [port] created on first use (RecordOptions::upscaler)
+    bool fsr_begin(VkExtent2D display, const RecordOptions& opts, VkExtent2D& render);  // fsr hooks in taa.cpp
     VkFormat ds_format_ = VK_FORMAT_UNDEFINED;        // scene depth-stencil (D32FS8 here)
     uint8_t rp_scene_ = 0, rp_external_ = 0, rp_post_ = 0;
     bool external_ = false;                           // draw(): caller's attachment formats

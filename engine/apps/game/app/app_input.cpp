@@ -1176,8 +1176,12 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                         adv_video_ = detail_preset(adv_video_, video_profile_.detail);
                         video_profile_.advanced = adv_video_;
                     }
-                    std::printf("video: anti-aliasing %s (strength %d), detail level %d\n", taa_active(video_profile_.anti_alias) ? "TAA" : "off",
+                    std::printf("video: anti-aliasing %s (strength %d), detail level %d\n",
+                                fsr_quality(video_profile_.anti_alias) ? "FSR" : taa_active(video_profile_.anti_alias) ? "TAA" : "off",
                                 video_profile_.anti_alias, video_profile_.detail);
+                    if (fsr_quality(video_profile_.anti_alias))
+                        std::printf("video: FSR %s\n", gpu_.renderer.fsr_supported() ? gpu_.renderer.upscaler_status().c_str()
+                                                                                         : ("unavailable, TAA instead: " + gpu_.renderer.upscaler_status()).c_str());
                     save_video_options();
                 }
                 break;

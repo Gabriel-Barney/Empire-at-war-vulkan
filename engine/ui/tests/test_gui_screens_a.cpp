@@ -604,6 +604,9 @@ void test_advanced_video_port() {
     CHECK(quality_level(mix) == kQualityCustom);
     CHECK(level_index(kAntiAliasChoices, 0) == 0 && level_index(kAntiAliasChoices, 1) == 1 && level_index(kAntiAliasChoices, 46) == 1 &&
           level_index(kAntiAliasChoices, kAntiAliasDefaultSlider) == 2 && level_index(kAntiAliasChoices, 81) == 2 && level_index(kAntiAliasChoices, 100) == 3);
+    // [port] The FSR rows after the TAA ones: their own stored values, in order.
+    CHECK(std::size(kAntiAliasChoices) == 9 && kAntiAliasChoices[4].value == kAntiAliasFsrFirst);
+    for (size_t i = 4; i < std::size(kAntiAliasChoices); ++i) CHECK(level_index(kAntiAliasChoices, kAntiAliasChoices[i].value) == i);
 }
 
 }  // namespace test_gui_screens_t

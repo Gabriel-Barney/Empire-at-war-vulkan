@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 #include "alamo/core/log.hpp"
@@ -42,7 +43,32 @@ VkDebugUtilsMessengerCreateInfoEXT messenger_info(Context* ctx) {
     return ci;
 }
 
+thread_local int t_third_party_depth = 0;  // open Context::ThirdPartyValidation scopes on this thread
+
 }  // namespace
+
+Context::ThirdPartyValidation::ThirdPartyValidation() { ++t_third_party_depth; }
+Context::ThirdPartyValidation::~ThirdPartyValidation() { --t_third_party_depth; }
+
+// [port] FSR: optional extension feature structs for ContextDesc::upscaler_features, handled generically (sType, pNext,
+// then only VkBool32 members; `bools` of them). Raw values so the pinned Vulkan-Headers need not know the newer
+// extensions (VK_EXT_shader_float8 / VK_KHR_shader_bfloat16 came after header 296).
+struct ExtFeatureSpec {
+    const char* name;
+    VkStructureType stype;
+    uint32_t bools;
+};
+constexpr ExtFeatureSpec kUpscalerExt[] = {
+    {"VK_KHR_cooperative_matrix", static_cast<VkStructureType>(1000506000), 2},  // cooperativeMatrix, ...RobustBufferAccess
+    {"VK_KHR_shader_bfloat16", static_cast<VkStructureType>(1000141000), 3},     // type, dot product, cooperative matrix
+    {"VK_EXT_shader_float8", static_cast<VkStructureType>(1000567000), 2},       // shaderFloat8, ...CooperativeMatrix
+};
+constexpr uint32_t kUpscalerExtCount = static_cast<uint32_t>(std::size(kUpscalerExt));
+struct ExtFeatures {
+    VkStructureType sType;
+    void* pNext;
+    VkBool32 b[8];
+};
 
 struct Context::Support {
     VkPhysicalDeviceFeatures2 f2{};
@@ -50,6 +76,7 @@ struct Context::Support {
     VkPhysicalDeviceVulkan12Features f12{};
     VkPhysicalDeviceVulkan13Features f13{};
     std::vector<VkExtensionProperties> extensions;
+    ExtFeatures ext[kUpscalerExtCount]{};  // queried only for extensions the device lists (else sType 0)
 
     void query(const InstanceFns& vki, VkPhysicalDevice pd) {
         f2 = {};
@@ -63,12 +90,28 @@ struct Context::Support {
         f2.pNext = &f11;
         f11.pNext = &f12;
         f12.pNext = &f13;
-        vki.vkGetPhysicalDeviceFeatures2(pd, &f2);
         uint32_t n = 0;
         vki.vkEnumerateDeviceExtensionProperties(pd, nullptr, &n, nullptr);
         extensions.resize(n);
         vki.vkEnumerateDeviceExtensionProperties(pd, nullptr, &n, extensions.data());
         extensions.resize(n);
+        void** tail = &f13.pNext;
+        for (uint32_t i = 0; i < kUpscalerExtCount; ++i) {
+            ext[i] = {};
+            if (!has_extension(extensions, kUpscalerExt[i].name)) continue;
+            ext[i].sType = kUpscalerExt[i].stype;
+            *tail = &ext[i];
+            tail = &ext[i].pNext;
+        }
+        vki.vkGetPhysicalDeviceFeatures2(pd, &f2);
+        f13.pNext = nullptr;  // the copies below must not carry this chain
+        for (ExtFeatures& e : ext) e.pNext = nullptr;
+    }
+    bool ext_supported(uint32_t i) const {
+        if (ext[i].sType == 0) return false;
+        for (uint32_t k = 0; k < kUpscalerExt[i].bools; ++k)
+            if (ext[i].b[k]) return true;
+        return false;
     }
     // Empty string = OK, else the first missing requirement.
     const char* missing_requirement() const {
@@ -143,6 +186,10 @@ void Context::on_debug_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity, 
     // they are logged but not counted.
     if (!(types & (VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT))) {
         log::debugf("vk", "%s", message);
+        return;
+    }
+    if (t_third_party_depth > 0) {  // inside a third-party runtime's own calls (ThirdPartyValidation)
+        if (++third_party_ <= 3) log::infof("vk", "third-party runtime: %s", message);
         return;
     }
     if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
@@ -409,6 +456,37 @@ bool Context::create_device(const ContextDesc& desc) {
     if (desc.presentation) exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     if (has_extension(s.extensions, "VK_KHR_portability_subset")) exts.push_back("VK_KHR_portability_subset");
 
+    // [port] FSR (ContextDesc::upscaler_features): every supported core feature (enabling a supported feature is always
+    // valid) except the robustness ones, which only cost time, plus the extension features the ML upscaler may use.
+    ExtFeatures ext[kUpscalerExtCount]{};
+    if (desc.upscaler_features) {
+        f2.features = a;
+        f2.features.robustBufferAccess = VK_FALSE;
+        auto copy_bools = [](auto& dst, const auto& src) {  // keep dst's sType / pNext, take src's VkBool32 members
+            void* next = dst.pNext;
+            const VkStructureType st = dst.sType;
+            dst = src;
+            dst.sType = st;
+            dst.pNext = next;
+        };
+        copy_bools(f11, s.f11);
+        copy_bools(f12, s.f12);
+        copy_bools(f13, s.f13);
+        f13.robustImageAccess = VK_FALSE;
+        void** tail = &f13.pNext;
+        for (uint32_t i = 0; i < kUpscalerExtCount; ++i) {
+            if (!s.ext_supported(i)) continue;
+            // The pinned validation layer (SDK 1.3.296) does not know the structs added after header 296 and reports them as
+            // invalid pNext entries; with validation on, those two extensions stay off (the runtime then uses another model).
+            if (validation_ && i > 0) continue;
+            ext[i] = s.ext[i];
+            ext[i].pNext = nullptr;
+            *tail = &ext[i];
+            tail = &ext[i].pNext;
+            exts.push_back(kUpscalerExt[i].name);
+        }
+    }
+
     auto ci = vk_struct<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
     ci.pNext = &f2;
     ci.queueCreateInfoCount = static_cast<uint32_t>(qci.size());
@@ -432,6 +510,9 @@ bool Context::create_device(const ContextDesc& desc) {
     caps_.shader_draw_parameters = s.f11.shaderDrawParameters == VK_TRUE;
     caps_.sampler_mirror_clamp_to_edge = s.f12.samplerMirrorClampToEdge == VK_TRUE;
     caps_.host_query_reset = s.f12.hostQueryReset == VK_TRUE;
+    caps_.upscaler_features = desc.upscaler_features;
+    caps_.cooperative_matrix = desc.upscaler_features && s.ext_supported(0);
+    caps_.shader_float8 = desc.upscaler_features && s.ext_supported(2) && !validation_;
     {
         uint32_t qn = 0;
         vki_.vkGetPhysicalDeviceQueueFamilyProperties(physical_, &qn, nullptr);

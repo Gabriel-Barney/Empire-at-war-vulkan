@@ -44,6 +44,7 @@ bool App::init() {
     rhi::ContextDesc cd;
     cd.app_name = "alamo_game";
     cd.presentation = true;
+    cd.upscaler_features = true;  // [port] FSR upscaling (the Anti-aliasing list's FSR rows): the ML upscaler's device features
     cd.validation = strict ? rhi::Validation::Required : rhi::Validation::IfAvailable;
     if (!ctx_.init(cd)) {
         std::fprintf(stderr, "no suitable Vulkan 1.3 device%s\n", strict ? " (or the validation layer failed to load)" : "");

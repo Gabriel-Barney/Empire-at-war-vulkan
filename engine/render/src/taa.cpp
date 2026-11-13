@@ -10,8 +10,11 @@
 #include <vector>
 
 #include "alamo/core/log.hpp"
+#include "alamo/render/upscale.hpp"
 #include "render_internal.hpp"
+#include "fsr.hpp"
 #include "taa_ps_depth.h"
+#include "taa_ps_motion.h"
 #include "taa_ps_resolve.h"
 #include "taa_ps_sharpen.h"
 #include "taa_vel_ps.h"
@@ -161,6 +164,8 @@ static_assert(sizeof(VelocityPush) == 80);
 constexpr VkFormat kVelocityFormat = VK_FORMAT_R32G32B32A32_SFLOAT;  // previous uv, previous NDC depth, valid
 
 constexpr VkFormat kHistoryFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr VkFormat kFsrMotionFormat = VK_FORMAT_R32G32_SFLOAT;  // [port] FSR motion vectors (the RHI has no RG16F)
+constexpr VkFormat kFsrDepthFormat = VK_FORMAT_R32_SFLOAT;      // [port] FSR depth copy
 constexpr VkFormat kDepthHistoryFormat = VK_FORMAT_R32_SFLOAT;  // linear view distance, written by the DEPTH pass
 constexpr VkShaderStageFlags kPushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;  // VS declares the block too
 
@@ -189,11 +194,14 @@ bool TaaPass::init(rhi::Context& ctx, rhi::Allocator& alloc, VkDescriptorSetLayo
     if (fn.vkCreateDescriptorSetLayout(ctx.device(), &ci, nullptr, &set_resolve_) != VK_SUCCESS) return false;
     ci.bindingCount = 1;
     if (fn.vkCreateDescriptorSetLayout(ctx.device(), &ci, nullptr, &set_sharpen_) != VK_SUCCESS) return false;
+    ci.bindingCount = 2;  // [port] FSR motion pass: scene depth, velocity
+    if (fn.vkCreateDescriptorSetLayout(ctx.device(), &ci, nullptr, &set_motion_) != VK_SUCCESS) return false;
     layout_resolve_ = rhi::create_pipeline_layout(ctx, {&set_resolve_, 1}, sizeof(Push), kPushStages);
     layout_sharpen_ = rhi::create_pipeline_layout(ctx, {&set_sharpen_, 1}, sizeof(Push), kPushStages);
+    layout_motion_ = rhi::create_pipeline_layout(ctx, {&set_motion_, 1}, sizeof(Push), kPushStages);
     layout_velocity_ = hot_set0_ ? rhi::create_pipeline_layout(ctx, {&hot_set0_, 1}, sizeof(VelocityPush), VK_SHADER_STAGE_VERTEX_BIT)
                                  : VK_NULL_HANDLE;
-    if (!layout_resolve_ || !layout_sharpen_ || !layout_velocity_) {
+    if (!layout_resolve_ || !layout_sharpen_ || !layout_velocity_ || !layout_motion_) {
         log::errorf("render", "TAA pipeline layouts could not be created");
         return false;
     }
@@ -203,7 +211,7 @@ bool TaaPass::init(rhi::Context& ctx, rhi::Allocator& alloc, VkDescriptorSetLayo
 
 void TaaPass::destroy_pipelines() {
     if (!ctx_) return;
-    for (VkPipeline* p : {&resolve_, &sharpen_, &depth_, &velocity_pipe_[0], &velocity_pipe_[1]}) {
+    for (VkPipeline* p : {&resolve_, &sharpen_, &depth_, &motion_pipe_, &velocity_pipe_[0], &velocity_pipe_[1]}) {
         if (*p) ctx_->vkd().vkDestroyPipeline(ctx_->device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -215,17 +223,19 @@ void TaaPass::shutdown() {
     if (!ctx_) return;
     destroy_pipelines();
     const rhi::DeviceFns& fn = ctx_->vkd();
-    for (VkPipelineLayout* l : {&layout_resolve_, &layout_sharpen_, &layout_velocity_}) {
+    for (VkPipelineLayout* l : {&layout_resolve_, &layout_sharpen_, &layout_velocity_, &layout_motion_}) {
         if (*l) fn.vkDestroyPipelineLayout(ctx_->device(), *l, nullptr);
         *l = VK_NULL_HANDLE;
     }
-    for (VkDescriptorSetLayout* s : {&set_resolve_, &set_sharpen_}) {
+    for (VkDescriptorSetLayout* s : {&set_resolve_, &set_sharpen_, &set_motion_}) {
         if (*s) fn.vkDestroyDescriptorSetLayout(ctx_->device(), *s, nullptr);
         *s = VK_NULL_HANDLE;
     }
     for (rhi::RenderTarget& t : history_) t.shutdown();
     for (rhi::RenderTarget& t : depth_history_) t.shutdown();
     velocity_.shutdown();
+    fsr_motion_.shutdown();
+    fsr_depth_.shutdown();
     cache_.shutdown(false);
     samplers_.shutdown();
     ctx_ = nullptr;
@@ -363,8 +373,17 @@ ViewMatrices TaaPass::begin_frame(const ViewMatrices& view, bool provisional) {
         undo_.last_movers = last_movers_;
     }
     float jx = 0, jy = 0;
-    taa_jitter_pixels(frame_++, jx, jy);
-    const ViewMatrices j = jitter_view(view, jx, jy);
+    ViewMatrices j;
+    if (fsr_phases_ > 0) {  // [port] FSR: its sequence; pixel space y down, render()'s NDC y up
+        upscale_jitter_pixels(frame_++, fsr_phases_, jx, jy);
+        fsr_jx_ = jx;
+        fsr_jy_ = jy;
+        j = jitter_view(view, jx, -jy);
+    } else {
+        taa_jitter_pixels(frame_++, jx, jy);
+        fsr_jx_ = fsr_jy_ = 0.0f;
+        j = jitter_view(view, jx, jy);
+    }
     cam_ = taa_camera(view);
     jittered_vp_ = j.view_proj;
     reset_now_ = !history_valid_ || !taa_history_usable(prev_, cam_);
@@ -585,10 +604,153 @@ bool TaaPass::resolve(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget&
     return true;
 }
 
+// ------------------------------------------------------------------------------------------- [port] FSR inputs
+
+bool TaaPass::ensure_fsr_targets(VkExtent2D ext) {
+    auto same = [&](const rhi::RenderTarget& t) {
+        return t.has_color() && t.extent().width == ext.width && t.extent().height == ext.height;
+    };
+    if (same(fsr_motion_) && same(fsr_depth_) && same(velocity_)) return true;
+    if (fsr_motion_.has_color() || velocity_.has_color()) ctx_->wait_idle();  // resize: old images may be in flight
+    struct Spec {
+        rhi::RenderTarget* t;
+        VkFormat f;
+        const char* name;
+    };
+    const Spec specs[3] = {{&fsr_motion_, kFsrMotionFormat, "render.fsr_motion"},
+                           {&fsr_depth_, kFsrDepthFormat, "render.fsr_depth"},
+                           {&velocity_, kVelocityFormat, "render.taa_velocity"}};
+    for (const Spec& sp : specs) {
+        sp.t->shutdown();
+        rhi::RenderTargetDesc d;
+        d.color = rhi::from_vk(sp.f);
+        d.name = sp.name;
+        if (!sp.t->init(*alloc_, d, ext)) {
+            log::errorf("render", "FSR input target %s (%ux%u) could not be created", sp.name, ext.width, ext.height);
+            fsr_motion_.shutdown();
+            fsr_depth_.shutdown();
+            velocity_.shutdown();
+            return false;
+        }
+    }
+    // The TAA history (other mode) no longer pairs with velocity_: a later TAA frame recreates it (ensure_history).
+    for (rhi::RenderTarget& t : history_) t.shutdown();
+    for (rhi::RenderTarget& t : depth_history_) t.shutdown();
+    history_valid_ = false;  // resize: the previous camera no longer matches
+    ++history_generation_;
+    return true;
+}
+
+bool TaaPass::ensure_motion_pipeline() {
+    if (motion_pipe_) return true;
+    const std::vector<uint32_t> vs = rhi::spirv_from_bytes({g_taa_vs, sizeof(g_taa_vs)});
+    const std::vector<uint32_t> ps = rhi::spirv_from_bytes({g_taa_ps_motion, sizeof(g_taa_ps_motion)});
+    const VkFormat formats[2] = {kFsrMotionFormat, kFsrDepthFormat};
+    rhi::GraphicsPipelineDesc d;
+    d.vs_spirv = vs;
+    d.fs_spirv = ps;
+    d.vs_entry = "VSMain";
+    d.fs_entry = "PSMotion";
+    d.raster.cull = VK_CULL_MODE_NONE;
+    d.color_formats = {formats, 2};
+    d.layout = layout_motion_;
+    d.name = "render.fsr_motion";
+    motion_pipe_ = cache_.create_graphics(d);
+    if (!motion_pipe_) log::errorf("render", "FSR motion-vector pipeline could not be created");
+    return motion_pipe_ != VK_NULL_HANDLE;
+}
+
+bool TaaPass::fsr_inputs(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget& scene, VkDescriptorSet hot_set0) {
+    history_valid_ = false;  // set again below once this frame's camera is the previous one
+    if (!scene.has_color() || !scene.has_depth()) return false;
+    const VkExtent2D ext = scene.extent();
+    if (!ensure_fsr_targets(ext) || !ensure_motion_pipeline()) return false;
+    Push pc{};
+    Mat4 inv;
+    if (!reset_now_ && inverse(jittered_vp_, inv)) {
+        const Mat4 r = prev_.view_proj * inv;
+        for (int i = 0; i < 4; ++i)
+            for (int k = 0; k < 4; ++k) pc.reproj[i][k] = r.m[i][k];
+    } else {
+        reset_now_ = true;
+    }
+    const float w = static_cast<float>(ext.width), h = static_cast<float>(ext.height);
+    pc.texel[0] = 1.0f / w;
+    pc.texel[1] = 1.0f / h;
+    pc.texel[2] = w;
+    pc.texel[3] = h;
+    // Jittered uv - un-jittered uv: the projection moved by (jx, -jy) pixels in y-up NDC = (jx, jy) pixels in y-down uv.
+    pc.params[0] = fsr_jx_ / w;
+    pc.params[1] = fsr_jy_ / h;
+    pc.params[2] = reset_now_ ? 1.0f : 0.0f;
+    const bool velocity = !reset_now_ && !movers_.empty() && hot_set0 && ensure_velocity_pipelines(scene.depth().vk_format());
+    pc.params[3] = velocity ? 1.0f : 0.0f;
+    last_movers_ = velocity ? static_cast<uint32_t>(movers_.size()) : 0u;
+
+    const rhi::DeviceFns& fn = ctx_->vkd();
+    scene.transition_depth(fn, cmd, rhi::ImageState::DepthRead);
+    if (velocity) record_velocity(fn, cmd, scene, hot_set0);
+    const VkSampler point = samplers_.get(rhi::SamplerKey::point_clamp());
+    const VkDescriptorSet ms = frame.descriptors(0).allocate(set_motion_);
+    if (!ms || !point) return false;
+    {
+        // Without movers the velocity slot is never read (Params.w 0); the scene depth stands in for it.
+        const VkDescriptorImageInfo ii[2] = {
+            {point, scene.depth().view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+            {point, velocity ? velocity_.color().view : scene.depth().view,
+             velocity ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+        VkWriteDescriptorSet wr[2];
+        for (uint32_t i = 0; i < 2; ++i) {
+            wr[i] = rhi::vk_struct<VkWriteDescriptorSet>(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET);
+            wr[i].dstSet = ms;
+            wr[i].dstBinding = i;
+            wr[i].descriptorCount = 1;
+            wr[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wr[i].pImageInfo = &ii[i];
+        }
+        fn.vkUpdateDescriptorSets(ctx_->device(), 2, wr, 0, nullptr);
+    }
+    fsr_motion_.transition_color(fn, cmd, rhi::ImageState::ColorAttachment);
+    fsr_depth_.transition_color(fn, cmd, rhi::ImageState::ColorAttachment);
+    VkRenderingAttachmentInfo ca[2];
+    rhi::RenderTarget* outs[2] = {&fsr_motion_, &fsr_depth_};
+    for (int i = 0; i < 2; ++i) {
+        ca[i] = rhi::vk_struct<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+        const rhi::Image& im = outs[i]->color();
+        ca[i].imageView = im.attachment_view ? im.attachment_view : im.view;
+        ca[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ca[i].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  // every pixel is written
+        ca[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    auto ri = rhi::vk_struct<VkRenderingInfo>(VK_STRUCTURE_TYPE_RENDERING_INFO);
+    ri.renderArea = {{0, 0}, ext};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 2;
+    ri.pColorAttachments = ca;
+    fn.vkCmdBeginRendering(cmd, &ri);
+    VkViewport vp{};
+    vp.width = w;
+    vp.height = h;
+    vp.maxDepth = 1.0f;
+    fn.vkCmdSetViewport(cmd, 0, 1, &vp);
+    const VkRect2D sc{{0, 0}, ext};
+    fn.vkCmdSetScissor(cmd, 0, 1, &sc);
+    fn.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, motion_pipe_);
+    fn.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_motion_, 0, 1, &ms, 0, nullptr);
+    fn.vkCmdPushConstants(cmd, layout_motion_, kPushStages, 0, sizeof pc, &pc);
+    fn.vkCmdDraw(cmd, 3, 1, 0, 0);
+    fn.vkCmdEndRendering(cmd);
+    fsr_motion_.transition_color(fn, cmd, rhi::ImageState::ShaderRead);
+    fsr_depth_.transition_color(fn, cmd, rhi::ImageState::ShaderRead);
+    prev_ = cam_;
+    history_valid_ = true;
+    return true;
+}
+
 // ------------------------------------------------------------------------------------------- Renderer hooks
 
-ViewMatrices Renderer::taa_begin(const ViewMatrices& view, const RecordOptions& opts) {
-    if (!opts.taa) {
+ViewMatrices Renderer::taa_begin(const ViewMatrices& view, const RecordOptions& opts, uint32_t fsr_phases) {
+    if (!opts.taa && fsr_phases == 0) {
         if (taa_) taa_->reset();  // the history is stale once a frame went without it (mode switch)
         return view;
     }
@@ -600,8 +762,28 @@ ViewMatrices Renderer::taa_begin(const ViewMatrices& view, const RecordOptions& 
             return view;
         }
     }
+    taa_->set_fsr_jitter(fsr_phases);  // a change of mode or of the render / display ratio restarts the history
     return taa_->begin_frame(view, opts.taa_provisional);
 }
+
+// [port] FSR (fsr.hpp): true when this frame is drawn at `render` and upscaled; false leaves `render` = `display`.
+bool Renderer::fsr_begin(VkExtent2D display, const RecordOptions& opts, VkExtent2D& render) {
+    render = display;
+    if (opts.upscaler != Upscaler::Fsr || display.width == 0 || display.height == 0) return false;
+    if (!fsr_supported() || !fsr_->prepare(display)) return false;
+    upscale_render_size(display.width, display.height, opts.upscale_quality, render.width, render.height);
+    return true;
+}
+
+bool Renderer::fsr_supported() {
+    if (!fsr_) {
+        fsr_ = std::make_unique<FsrPass>();
+        fsr_->init(*ctx_, *alloc_);  // logs why when it cannot
+    }
+    return fsr_->available();
+}
+
+std::string Renderer::upscaler_status() const { return fsr_ ? fsr_->status() : std::string("FSR not loaded yet"); }
 
 void Renderer::reset_taa_history() {
     if (taa_) taa_->reset();

@@ -22,6 +22,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
+#include "fsr.hpp"  // [port] FSR upscaling
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
@@ -572,9 +573,18 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     const auto t0 = clock::now();
     if (ring_) collect_released();  // after begin_frame: retire released bindless slots + their images
     latch_anisotropy(frame);
-    if (!ensure_targets(target.extent)) return false;
+    // [port] FSR (fsr.cpp): the scene and its post chain at the quality mode's render size, upscaled at the end.
+    VkExtent2D scene_ext = target.extent;
+    const bool fsr_on = fsr_begin(target.extent, opts, scene_ext);
+    if (!ensure_targets(scene_ext)) return false;
+    ViewMatrices view_scene = view_in;
+    if (fsr_on) {  // same projection; the pixel size (jitter, translated half-pixel offset, viewport) is the render size
+        view_scene.width = scene_ext.width;
+        view_scene.height = scene_ext.height;
+    }
     // [port] TAA (taa.cpp): every scene draw of the frame uses the sub-pixel jittered camera; without TAA `view_in` itself.
-    const ViewMatrices taa_view = taa_begin(view_in, opts);
+    const ViewMatrices taa_view =
+        taa_begin(view_scene, opts, fsr_on ? upscale_jitter_phases(scene_ext.width, target.extent.width) : 0u);
     const ViewMatrices& view = taa_view;
     if (world_ && mode == DrawMode::Lit) {
         world_frame_constants();  // clouds before any build of this frame
@@ -965,8 +975,9 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
         st.bloom = ok;
         if (!ok) ++st.post_pending;
     }
-    if (opts.taa && taa_) {  // [port] TAA resolve + sharpen at the end of the post chain (taa.cpp)
-        const uint32_t taa_scope = gt ? gt->begin_scope(primary, "taa") : 0u;
+    bool fsr_out = false;  // [port] FSR: the frame's image is fsr_->output() (display size)
+    if ((opts.taa || fsr_on) && taa_) {  // [port] TAA resolve + sharpen / FSR at the end of the post chain (taa.cpp, fsr.cpp)
+        const uint32_t taa_scope = gt ? gt->begin_scope(primary, fsr_on ? "fsr" : "taa") : 0u;
         // Object motion: the opaque draws of keyed instances (Instance::motion_id) that moved since the last TAA frame.
         // Alpha-tested / fading passes are left out (their cut-outs would write vectors over what shows through).
         std::vector<TaaMover>& movers = taa_->movers();
@@ -1004,10 +1015,17 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
             }
         }
         taa_->commit_motion(instances);
-        st.taa = taa_->resolve(frame, primary, scene, opts.taa_sharpen, opts.taa_weight >= 0.0f ? opts.taa_weight : kTaaCurrentWeight,
-                               b.set0);
+        if (fsr_on) {
+            fsr_out = taa_->fsr_inputs(frame, primary, scene, b.set0) &&
+                      fsr_->dispatch(primary, scene, *taa_, opts.fsr_sharpness, opts.frame_ms, taa_->history_reset());
+            st.fsr = fsr_out;
+            st.taa_reset = fsr_out && taa_->history_reset();
+        } else {
+            st.taa = taa_->resolve(frame, primary, scene, opts.taa_sharpen,
+                                   opts.taa_weight >= 0.0f ? opts.taa_weight : kTaaCurrentWeight, b.set0);
+            st.taa_reset = st.taa && taa_->history_reset();
+        }
         st.taa_movers = taa_->last_movers();
-        st.taa_reset = st.taa && taa_->history_reset();
         if (gt) gt->end_scope(primary, taa_scope);
     }
     if (gt) gt->end_scope(primary, post_scope);
@@ -1019,8 +1037,19 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     dst.format = desc_.color_format;
     dst.before = rhi::ImageState::Undefined;
     dst.after = target.color_after;
-    rhi::cmd_stretch_rect(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), dst, VK_FILTER_NEAREST);
-    scene.set_color_state(rhi::ImageState::ColorAttachment);
+    if (fsr_out) {  // [port] FSR output (display size, General) -> the caller's image; the scene keeps its state
+        rhi::RenderTarget& up = fsr_->output();
+        rhi::cmd_stretch_rect(fn, primary, copy_of(up, rhi::ImageState::General), dst, VK_FILTER_NEAREST);
+        up.set_color_state(rhi::ImageState::General);
+    } else {
+        // Without FSR the sizes match (point copy); a failed FSR frame is stretched up from its render size.
+        const bool same = scene.extent().width == target.extent.width && scene.extent().height == target.extent.height;
+        rhi::cmd_stretch_rect(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), dst,
+                              same ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+        scene.set_color_state(rhi::ImageState::ColorAttachment);
+    }
+    st.render_width = scene.extent().width;
+    st.render_height = scene.extent().height;
     const auto t2 = clock::now();
     if (stats) *stats = st;
     if (timing) {

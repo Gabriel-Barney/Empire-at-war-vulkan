@@ -235,7 +235,19 @@ void detail_mappings() {
     game::apply_aa_options(o, ui::kAntiAliasDefaultSlider);
     CHECK(o.taa && std::fabs(o.taa_weight - 0.1f) < 0.002f);  // Medium = the tuned default weight
     game::apply_aa_options(o, 0);
-    CHECK(!o.taa && o.taa_weight < 0.0f);
+    CHECK(!o.taa && o.taa_weight < 0.0f && o.upscaler == render::Upscaler::None);
+    // [port] The list's FSR rows: one quality mode each, TAA at Medium as the fallback; back to a TAA row drops FSR.
+    CHECK(!game::fsr_quality(0) && !game::fsr_quality(100) && game::fsr_quality(110) == render::UpscaleQuality::NativeAA);
+    CHECK(game::fsr_quality(120) == render::UpscaleQuality::Quality && game::fsr_quality(130) == render::UpscaleQuality::Balanced);
+    CHECK(game::fsr_quality(140) == render::UpscaleQuality::Performance && game::fsr_quality(150) == render::UpscaleQuality::UltraPerformance);
+    CHECK(game::fsr_quality(999) == render::UpscaleQuality::UltraPerformance && game::fsr_quality(101) == render::UpscaleQuality::NativeAA);
+    for (size_t i = 0; i < std::size(ui::kAntiAliasChoices); ++i)
+        CHECK(game::fsr_quality(ui::kAntiAliasChoices[i].value).has_value() == (i >= 4));
+    game::apply_aa_options(o, 140);
+    CHECK(o.upscaler == render::Upscaler::Fsr && o.upscale_quality == render::UpscaleQuality::Performance);
+    CHECK(o.taa && std::fabs(o.taa_weight - 0.1f) < 0.002f);
+    game::apply_aa_options(o, 30);
+    CHECK(o.upscaler == render::Upscaler::None && o.taa);
     // Anti-aliasing is one value in the profile: the Video dialog's list sets it, and a profile written when the Advanced dialog
     // had its own box ("anti_aliasing=taa") still turns it on.
     {

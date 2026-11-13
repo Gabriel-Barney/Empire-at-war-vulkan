@@ -130,8 +130,14 @@ struct LevelChoice {
 // 0.04 as it rises (game_display.hpp apply_aa_options): more history means smoother edges and more softness in motion.
 // Medium is the tuned default (current-frame weight 0.1) [inferred: the original has no anti-aliasing option].
 inline constexpr int32_t kAntiAliasDefaultSlider = 63;  // Medium: what an old profile's "anti_aliasing=taa" with strength 0 becomes
+// [port: Gabriel 2026-11-13] FSR upscaling rows after the TAA ones: stored values 110 .. 150 (above every TAA strength), one
+// per FSR quality mode, (value - kAntiAliasFsrFirst) / 10 = render::UpscaleQuality (game_display.hpp apply_aa_options).
+// Where FSR cannot run the frame falls back to TAA at Medium strength.
+inline constexpr int32_t kAntiAliasFsrFirst = 110;
 inline constexpr LevelChoice kAntiAliasChoices[] = {
-    {0, 0, U"Off"}, {30, 1, U"Low - light smoothing"}, {kAntiAliasDefaultSlider, 47, U"Medium - balanced"}, {100, 82, U"High - smoothest, softer in motion"}};
+    {0, 0, U"Off"}, {30, 1, U"Low - light smoothing"}, {kAntiAliasDefaultSlider, 47, U"Medium - balanced"}, {100, 82, U"High - smoothest, softer in motion"},
+    {110, 101, U"FSR - native resolution"}, {120, 115, U"FSR Quality - 1.5x upscale"}, {130, 125, U"FSR Balanced - 1.7x upscale"},
+    {140, 135, U"FSR Performance - 2x upscale"}, {150, 145, U"FSR Ultra Performance - 3x upscale"}};
 // The seven detail options. Four levels where the renderer has four steps (Shader) or a continuous scale (Particle, Mesh,
 // Environment); three where it has three (Texture: top mips skipped 2 / 1 / 0, Water: reflection targets 0 / 1 / 2);
 // Shadow is on or off (any value above 0 draws shadows). Each list ends at the value the old slider's Max stood for.

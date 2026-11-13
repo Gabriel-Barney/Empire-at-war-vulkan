@@ -564,11 +564,22 @@ float gamma_value(int32_t slider) { return std::exp2((static_cast<float>(slider_
 
 bool taa_active(int32_t strength) { return strength > 0; }
 
+std::optional<render::UpscaleQuality> fsr_quality(int32_t strength) {
+    if (strength < ui::kAntiAliasFsrFirst - 9) return std::nullopt;  // the TAA rows (stored values up to 100)
+    const int32_t q = std::clamp((strength - ui::kAntiAliasFsrFirst + 5) / 10, 0, static_cast<int32_t>(render::kUpscaleQualityCount) - 1);
+    return static_cast<render::UpscaleQuality>(q);
+}
+
 void apply_aa_options(render::RecordOptions& o, int32_t strength) {
     o.taa = taa_active(strength);
+    // [port: Gabriel 2026-11-13] An FSR row: FSR upscaling, with TAA at Medium strength as the fallback where FSR cannot run.
+    const std::optional<render::UpscaleQuality> fsr = fsr_quality(strength);
+    o.upscaler = fsr ? render::Upscaler::Fsr : render::Upscaler::None;
+    if (fsr) o.upscale_quality = *fsr;
+    const int32_t taa_strength = fsr ? ui::kAntiAliasDefaultSlider : strength;
     // Off keeps the renderer's tuned default weight for a later switch-on. On: the share of the current frame falls with the
     // strength (more history = smoother edges, a little more softness / ghosting).
-    o.taa_weight = o.taa ? 0.2f - 0.16f * static_cast<float>(slider_clamp(strength)) / 100.0f : -1.0f;
+    o.taa_weight = o.taa ? 0.2f - 0.16f * static_cast<float>(slider_clamp(taa_strength)) / 100.0f : -1.0f;
 }
 
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail) {
