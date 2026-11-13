@@ -224,7 +224,31 @@ bool App::init() {
         for (const SaveEntry& e : list_saves(saves_dir_)) {
             ui::SaveGameInfo i;
             i.name = e.name;
-            i.label = ui::utf8_to_utf32(e.readable ? save_label(e.meta) : e.name + "  -  (unreadable: " + e.error + ")");
+            if (!e.readable) {  // top level, so the player can still delete it
+                i.label = ui::utf8_to_utf32(e.name + "  -  (unreadable: " + e.error + ")");
+                v.push_back(std::move(i));
+                continue;
+            }
+            // [port: Gabriel 2026-11-13] the tree (save_games.hpp TREE): campaign / skirmish map > faction > playthrough.
+            const SaveMeta& m = e.meta;
+            const bool skirmish = m.kind == "skirmish";
+            const galactic::FactionRules* fr = nullptr;
+            for (const galactic::FactionRules& f : data_.rules.factions)
+                if (ascii_iequals(f.name, m.faction)) fr = &f;
+            i.icon = !m.faction_icon.empty() ? m.faction_icon : fr ? fr->icon : std::string();
+            i.label = ui::utf8_to_utf32(save_row_label(m));
+            const std::string what = m.title.empty() ? m.campaign : m.title;
+            i.groups.push_back({m.kind + ":" + m.campaign, ui::utf8_to_utf32(skirmish ? "Skirmish: " + what : what)});
+            std::u32string faction = ui::utf8_to_utf32(m.faction.empty() ? std::string("(no faction)") : m.faction);
+            if (fr && !fr->text_id.empty() && ui_.gui.text_db() && ui_.gui.text_db()->find(fr->text_id))
+                faction = ui_.gui.caption_text(fr->text_id);
+            i.groups.push_back({m.faction, std::move(faction), i.icon});
+            if (!skirmish) {
+                const std::string started = format_local_time(m.playthrough_started);
+                i.groups.push_back({m.playthrough, ui::utf8_to_utf32(m.playthrough.empty() ? std::string("Earlier saves")
+                                                                     : started.empty()  ? std::string("Game")
+                                                                                        : "Game started " + started)});
+            }
             v.push_back(std::move(i));
         }
         return v;

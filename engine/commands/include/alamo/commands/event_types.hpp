@@ -101,6 +101,11 @@ enum FleetOp : uint8_t {
     kFleetMoveNew = 6, kFleetMoveNewFlag = 7, kFleetSlot = 8
 };
 
+// [port: Gabriel 2026-11-13] Fleet cohesion: PortExtension subtype with one data byte (0 loose, 1 tight) setting the
+// issuing player's cohesion in the running tactical battle (sim::TacticalBattle::set_fleet_cohesion; GameSession's port
+// hook applies it). Shared by the game host and the UI hotkey. Not in retail.
+inline constexpr uint16_t kPortFleetCohesionSubtype = 0x4643;  // "FC"
+
 enum class FieldKind : uint8_t { Bits, Id, Player, Quant, List, CountedIds, Str, WStr, Opaque };
 
 struct FieldDef {

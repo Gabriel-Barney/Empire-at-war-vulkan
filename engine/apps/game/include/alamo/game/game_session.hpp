@@ -229,6 +229,12 @@ public:
     // Withdraw's enable rule is local_in_head_conflict.
     bool withdraw();
     bool auto_resolve_battle();
+    // [port: Gabriel 2026-11-13] Fleet cohesion (sim::TacticalBattle::set_fleet_cohesion): the local player's preference,
+    // sent as a command (commands::kPortFleetCohesionSubtype) to the running battle and again to every later battle
+    // while it differs there (after_tick), so it lasts across battles. Not saved [port]: a new session starts loose.
+    bool set_fleet_cohesion(bool tight);
+    bool toggle_fleet_cohesion() { return set_fleet_cohesion(!fleet_cohesion_); }
+    bool fleet_cohesion() const { return fleet_cohesion_; }
     const PortEventStats& port_stats() const { return port_stats_; }
     // L1/S4 wave 1: a local UI notification for the story (story_ui.hpp) as a command; GameSession::port_event hands it
     // to StorySession::notify_ui with the issuing player at the command phase. False without a story session or when
@@ -304,6 +310,13 @@ public:
     bool save(SaveFile& out, const SaveMeta& meta, std::string* err = nullptr);
     // The description fields of this session now (name and wall-clock time from the caller; title = the campaign name).
     SaveMeta save_meta(std::string name, int64_t saved_at) const;
+    // [port: Gabriel] the playthrough this session's saves belong to (SaveMeta::playthrough / playthrough_started): the
+    // host sets a new one for a new game; load_game sets the loaded save's.
+    void set_playthrough(std::string id, int64_t started) {
+        playthrough_ = std::move(id);
+        playthrough_started_ = started;
+    }
+    const std::string& playthrough() const { return playthrough_; }
     // The SessionSpec a save was written with (false + *err: no session chunk, not an alamo_game save, bad options).
     // Tests' in-memory skirmish maps (skirmish_map_data) are not saved: the caller sets them again.
     static bool spec_from_save(const SaveFile& save, SessionSpec& out, std::string* err = nullptr);
@@ -341,6 +354,8 @@ private:
     bool replay_ = false, invaded_ = false;
     bool paused_ = false, pause_pending_ = false;
     uint64_t pause_events_ = 0;
+    bool fleet_cohesion_ = false;       // [port] fleet cohesion preference of the local player
+    bool fleet_cohesion_sent_ = false;  // a cohesion command is in flight (cleared when port_event applies it)
     bool choice_sent_ = false;  // a battle choice is in flight for the pending conflict
     bool banner_sent_ = false;  // story t13: the linked banner's Begin is in flight (cleared once the banner is down)
     PortEventStats port_stats_;
@@ -368,6 +383,8 @@ private:
     // N1 / t09 save / load.
     bool loading_ = false;  // start() runs for start_from_save (no skirmish opening order)
     bool loaded_ = false;
+    std::string playthrough_;           // [port: Gabriel] presentation only, never read by the sim
+    int64_t playthrough_started_ = 0;
     commands::SavePoint load_point_;
     sim::LoadReport load_report_;
     std::vector<std::string> ai_types_;  // per player: the galactic AI type ("" = none), for the descriptor

@@ -285,6 +285,8 @@ std::vector<FactionRules> load_factions(const FileProvider& provider, std::vecto
             r.text_id = std::string(ascii_trim(n.child_text("Text_ID")));
             r.tech_tree_dialog = std::string(ascii_trim(n.child_text("Tech_Tree_Dialog_Name")));
             r.tech_level_icon = std::string(ascii_trim(n.child_text("Tech_Level_Icon_Name")));
+            r.icon = std::string(ascii_trim(n.child_text("Icon_Name")));
+            if (r.icon.empty()) r.icon = std::string(ascii_trim(n.child_text("Alternate_Icon_Name")));
             r.land_selection_blob = std::string(ascii_trim(n.child_text("Land_Mode_Selection_Blob_Material_Name")));
             r.space_selection_blob = std::string(ascii_trim(n.child_text("Space_Mode_Selection_Blob_Material_Name")));
             r.hyperspace_speed_factor = atof_or(n.child_text("Hyperspace_Speed_Factor"), r.hyperspace_speed_factor);

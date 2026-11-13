@@ -263,6 +263,7 @@ struct TacticalHudFrame {
     // [port: Gabriel, original screenshot] planet panel above the radar: Text_Planet_tactical (battle planet name),
     // Text_Tactical_Tech ("Tech: 3", TEXT_TECH), Text_Planetary_Pop ("13/20"; Text_Pop_Cap without it); empty / < 0 = blank.
     std::u32string planet_name;
+    std::u32string cohesion_text;  // [port: Gabriel 2026-11-13] fleet cohesion line above the planet name ("" = none)
     int32_t tech = -1, pop = -1, pop_cap = -1;
     // FIXPASS_GALACTIC §4.2 bottom-left advisor frame (i_main_skirmish = i_tactical_controls.alo bones: Movie_tactical
     // (50, 288), b_droid_help_tactical (19, 255), Text_tactical_help (65, 309), Text_Planet_tactical (179, 239); the

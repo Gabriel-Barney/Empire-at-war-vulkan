@@ -959,12 +959,112 @@ void FrontEnd::set_mod_report(std::string_view id, std::vector<std::u32string> l
         if (GuiDialog* d = gui_->find(kPortModsDialog)) show_mod_report(*d);
 }
 
+namespace {
+constexpr char kSaveKeySep = '\x1f';  // before each level of a group key path
+}  // namespace
+
 void FrontEnd::fill_saves(GuiDialog& d) {
     saves_ = p_.saves ? p_.saves() : std::vector<SaveGameInfo>{};
-    std::vector<std::u32string> items;
-    for (const SaveGameInfo& s : saves_) items.push_back(s.label.empty() ? ascii32(s.name) : s.label);
-    d.set_items("IDC_SAVE_GAME_LIST", std::move(items), -1);
+    if (!saves_.empty()) {  // [port: Gabriel] the newest save's groups open
+        std::string path;
+        for (const SaveGroupLevel& g : saves_.front().groups) {
+            path += kSaveKeySep;
+            path += g.key;
+            if (std::find(saves_open_.begin(), saves_open_.end(), path) == saves_open_.end()) saves_open_.push_back(path);
+        }
+    }
+    build_save_rows(d, -1, 0);
     d.show("IDC_CHECK_RECORDINGS", false);  // replays are not saved games [port]
+}
+
+void FrontEnd::build_save_rows(GuiDialog& d, int32_t selected, int32_t top) {
+    // The tree in provider order (newest first): a group sits where its first save is.
+    struct Node {
+        std::string path;
+        const SaveGroupLevel* level = nullptr;
+        uint32_t count = 0;
+        std::vector<std::pair<int32_t, int32_t>> kids;  // {node, -1} or {-1, save}
+    };
+    std::vector<Node> nodes(1);
+    for (size_t si = 0; si < saves_.size(); ++si) {
+        size_t cur = 0;
+        ++nodes[0].count;
+        for (const SaveGroupLevel& g : saves_[si].groups) {
+            const std::string path = nodes[cur].path + kSaveKeySep + g.key;
+            size_t next = 0;
+            for (const auto& k : nodes[cur].kids)
+                if (k.first >= 0 && nodes[static_cast<size_t>(k.first)].path == path) next = static_cast<size_t>(k.first);
+            if (next == 0) {
+                next = nodes.size();
+                nodes[cur].kids.emplace_back(static_cast<int32_t>(next), -1);
+                Node n;
+                n.path = path;
+                n.level = &g;
+                nodes.push_back(std::move(n));
+            }
+            cur = next;
+            ++nodes[cur].count;
+        }
+        nodes[cur].kids.emplace_back(-1, static_cast<int32_t>(si));
+    }
+    save_rows_.clear();
+    std::vector<std::u32string> items;
+    std::vector<std::string> icons;
+    std::vector<uint8_t> indent;
+    auto emit = [&](auto& self, size_t n, uint8_t depth) -> void {
+        for (const auto& k : nodes[n].kids) {
+            if (k.second >= 0) {
+                const SaveGameInfo& s = saves_[static_cast<size_t>(k.second)];
+                save_rows_.push_back({k.second, {}});
+                items.push_back(s.label.empty() ? ascii32(s.name) : s.label);
+                icons.push_back(s.icon);
+                indent.push_back(depth);
+                continue;
+            }
+            const Node& g = nodes[static_cast<size_t>(k.first)];
+            const bool open = std::find(saves_open_.begin(), saves_open_.end(), g.path) != saves_open_.end();
+            save_rows_.push_back({-1, g.path});
+            items.push_back((open ? std::u32string(U"[-] ") : std::u32string(U"[+] ")) + g.level->label + U"  (" +
+                            ascii32(std::to_string(g.count)) + U")");
+            icons.push_back(g.level->icon);
+            indent.push_back(depth);
+            if (open) self(self, static_cast<size_t>(k.first), static_cast<uint8_t>(std::min(depth + 1, 255)));
+        }
+    };
+    emit(emit, 0, 0);
+    d.set_items("IDC_SAVE_GAME_LIST", std::move(items), selected);
+    if (GuiControl* c = d.get("IDC_SAVE_GAME_LIST")) {
+        c->item_icons = std::move(icons);
+        c->item_indent = std::move(indent);
+    }
+    if (top > 0 && gui_) gui_->scroll_list_to(d, "IDC_SAVE_GAME_LIST", top);
+}
+
+int32_t FrontEnd::row_save(int32_t row) const {
+    if (row < 0 || static_cast<size_t>(row) >= save_rows_.size()) return -1;
+    const int32_t s = save_rows_[static_cast<size_t>(row)].save;
+    return s >= 0 && static_cast<size_t>(s) < saves_.size() ? s : -1;
+}
+
+int32_t FrontEnd::selected_save(const GuiDialog& d) const {
+    const GuiControl* l = d.get("IDC_SAVE_GAME_LIST");
+    return l ? row_save(l->selected) : -1;
+}
+
+bool FrontEnd::toggle_save_group(GuiDialog& d, int32_t row) {
+    if (row < 0 || static_cast<size_t>(row) >= save_rows_.size() || save_rows_[static_cast<size_t>(row)].save >= 0) return false;
+    const std::string path = save_rows_[static_cast<size_t>(row)].group;
+    if (std::find(saves_open_.begin(), saves_open_.end(), path) != saves_open_.end()) {
+        // closing a group closes the groups inside it too
+        std::erase_if(saves_open_, [&path](const std::string& o) {
+            return o.compare(0, path.size(), path) == 0 && (o.size() == path.size() || o[path.size()] == kSaveKeySep);
+        });
+    } else {
+        saves_open_.push_back(path);
+    }
+    const GuiControl* l = d.get("IDC_SAVE_GAME_LIST");
+    build_save_rows(d, row, l ? l->top : 0);
+    return true;
 }
 
 void FrontEnd::refresh_saves() {
@@ -1419,15 +1519,19 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
         MenuAction a = act(MenuAction::Kind::PreviewAudio);
         a.audio = read_audio(*d);
         out.push_back(std::move(a));
-    } else if (ascii_iequals(n, kSave) && e.control == "IDC_SAVE_GAME_LIST" && e.value >= 0 &&
-               static_cast<size_t>(e.value) < saves_.size()) {
+    } else if ((ascii_iequals(n, kSave) || ascii_iequals(n, kLoad)) && e.control == "IDC_SAVE_GAME_LIST" &&
+               e.kind == GuiEvent::Kind::RowClicked) {
+        toggle_save_group(*d, e.value);  // [port: Gabriel] a group row opens / closes
+    } else if (ascii_iequals(n, kSave) && e.control == "IDC_SAVE_GAME_LIST" && e.kind == GuiEvent::Kind::SelectionChanged) {
         // N1 / t09: the save's name (the file), not its label.
-        if (!save_blocked_) d->set_text("IDC_SAVE_GAME_NAME_EDIT", ascii32(saves_[static_cast<size_t>(e.value)].name));
-    } else if (ascii_iequals(n, kLoad) && e.kind == GuiEvent::Kind::DoubleClicked && e.value >= 0 &&
-               static_cast<size_t>(e.value) < saves_.size()) {
-        MenuAction a = act(MenuAction::Kind::LoadGame);
-        a.save = saves_[static_cast<size_t>(e.value)].name;
-        out.push_back(std::move(a));
+        if (const int32_t si = row_save(e.value); si >= 0 && !save_blocked_)
+            d->set_text("IDC_SAVE_GAME_NAME_EDIT", ascii32(saves_[static_cast<size_t>(si)].name));
+    } else if (ascii_iequals(n, kLoad) && e.kind == GuiEvent::Kind::DoubleClicked && e.control == "IDC_SAVE_GAME_LIST") {
+        if (const int32_t si = row_save(e.value); si >= 0) {
+            MenuAction a = act(MenuAction::Kind::LoadGame);
+            a.save = saves_[static_cast<size_t>(si)].name;
+            out.push_back(std::move(a));
+        }
     } else if (is_port_controls(n) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port: Gabriel] FOV value labels
         if (e.control == "IDC_PORT_GALACTIC_FOV_SLIDER") d->set_text("IDC_PORT_GALACTIC_FOV_VALUE", fov_text(static_cast<float>(e.value)));
         if (e.control == "IDC_PORT_TACTICAL_FOV_SLIDER") d->set_text("IDC_PORT_TACTICAL_FOV_VALUE", fov_text(static_cast<float>(e.value)));
@@ -1750,9 +1854,8 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 pop();
             }
         } else if (is("IDC_DELETE_GAME_BUTTON")) {
-            const GuiControl* l = d->get("IDC_SAVE_GAME_LIST");
-            if (l && l->selected >= 0 && static_cast<size_t>(l->selected) < saves_.size()) {  // N1 / t09: confirm first
-                confirm_save_ = saves_[static_cast<size_t>(l->selected)].name;
+            if (const int32_t si = selected_save(*d); si >= 0) {  // N1 / t09: confirm first
+                confirm_save_ = saves_[static_cast<size_t>(si)].name;
                 quit_action_ = "delete";
                 push(kQuit);
             }
@@ -1761,8 +1864,10 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         if (is("IDC_LOAD_CANCEL_BUTTON")) pop();
         else if (is("IDC_LOAD_GAME_BUTTON") || is("IDC_DELETE_GAME_BUTTON")) {
             const GuiControl* l = d->get("IDC_SAVE_GAME_LIST");
-            if (l && l->selected >= 0 && static_cast<size_t>(l->selected) < saves_.size()) {
-                const std::string& name = saves_[static_cast<size_t>(l->selected)].name;
+            if (l && is("IDC_LOAD_GAME_BUTTON") && toggle_save_group(*d, l->selected)) {
+                // [port: Gabriel] Load on a group row opens / closes it
+            } else if (const int32_t si = selected_save(*d); si >= 0) {
+                const std::string& name = saves_[static_cast<size_t>(si)].name;
                 if (is("IDC_DELETE_GAME_BUTTON")) {  // N1 / t09: confirm first
                     confirm_save_ = name;
                     quit_action_ = "delete";
@@ -1879,6 +1984,9 @@ void FrontEnd::update(std::span<const GuiEvent> events, const InputFrame& raw, s
             case GuiEvent::Kind::SelectionChanged:
             case GuiEvent::Kind::DoubleClicked:
             case GuiEvent::Kind::ValueChanged: on_change(e, out); break;
+            case GuiEvent::Kind::RowClicked:  // [port: Gabriel] only the saved games tree uses row clicks
+                if (ascii_iequals(e.dialog, kSave) || ascii_iequals(e.dialog, kLoad)) on_change(e, out);
+                break;
             case GuiEvent::Kind::Submitted:
                 if (ascii_iequals(e.dialog, kSave)) {
                     GuiEvent b = e;

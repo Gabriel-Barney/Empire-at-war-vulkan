@@ -227,6 +227,12 @@ struct MoveOrder {
     // no destination check and no single-member shortcut (as skip_destination_check), the attack slots 0x438c10 at a new
     // order and the attack plan (item 6 stop, slot leg, fire trim) per formation. Space ignores it.
     LandAttack attack;
+    // [port: Gabriel 2026-11-13, fleet cohesion] Not in retail (retail moves every space ship with a role as its own
+    // formation at its own speed, MOVEMENT §4.6.4). Space only: true caps every non-fighter ship of the order at the
+    // order's slowest non-fighter max speed (Unit cohesion speed), so the fleet keeps its spacing while it flies. False
+    // (every AI / Lua / script move, and a player with loose cohesion) is retail behaviour. Land ignores it (land group
+    // moves already share the slowest member's speed).
+    bool cohesion_tight = false;
 };
 // Movement flag bits (P1_DOUBLE_CLICK_MOVE.md §3.3; corrects MOVEMENT.md §6.1: 0x01 is attack-move, 0x02 guard-move).
 // UI moves send 0x04 | modifiers (0x84 for a double-click); AI / Lua moves send 0.
@@ -272,6 +278,7 @@ struct UnitView {
     uint32_t start_frame = 0;     // OI tactical: frame the current order starts moving (stagger / queue delay)
     V2 jiggle;                    // OI tactical: formation jiggle offset
     float formation_speed = 3.0e38f;     // land: slowest member's max speed of its formation (3e38 = alone)
+    float cohesion_speed = 3.0e38f;      // [port] space fleet cohesion cap of the current move (3e38 = none; MoveOrder::cohesion_tight)
     // s78k t03: land team locomotor cap of the last tick (set_team; 3e38 = none): the team's minimum raw Max_Speed x the
     // mode multiplier x the container's speed factor
     float team_speed = 3.0e38f;
@@ -1048,6 +1055,7 @@ private:
         bool forced = false;             // s78k t01: land flag-0x20 move: straight 2-point path, no passability (saved)
         uint32_t start_frame = 0;
         float formation_speed = 3.0e38f;
+        float cohesion_speed = 3.0e38f;  // [port] fleet cohesion: the space plan speed cap of this move (saved, version 32)
         int32_t large_hover_index = -1;  // P1 double-click: formation +0x22c (not hashed; no modelled consumer)
         int32_t check_countdown = 0;
         // s78n t18 (0x509ea0): the lowest speed this tick's collision records answer the unit (3e38: none) and the "at

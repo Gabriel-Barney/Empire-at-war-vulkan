@@ -453,6 +453,11 @@ bool App::start_session(const SessionSpec& spec) {
 // The presentation side of a session that just started or was loaded (session_ is set).
 void App::session_started(const std::vector<std::string>& diag) {
     const SessionSpec& spec = session_->spec();
+    // [port: Gabriel] a new game (or a save from before playthroughs) starts a playthrough its saves are grouped under.
+    if (session_->playthrough().empty()) {
+        const int64_t now = unix_now();
+        session_->set_playthrough(new_playthrough_id(now), now);
+    }
     apply_gameplay_options();  // ui1 t02: the session start reset the game speed indices (MAIN_LOOP.md §1.5)
     holo_.reset();
     story_cursor_ = 0;

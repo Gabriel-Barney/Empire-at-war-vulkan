@@ -22,6 +22,10 @@
 //                                   on IDC_USER_TEXT_STRING_1) before SaveGame / DeleteSave; a save_blocker reason
 //                                   disables Save and the edit and shows the reason in it. The host re-lists with
 //                                   refresh_saves() after deleting.
+//                                   [port: Gabriel 2026-11-13] the list is a tree: SaveGameInfo::groups nests each save in
+//                                   groups (rows "[+] label  (count)", indented one row height per level, the group's icon);
+//                                   a mouse click on a group row (Load on a selected one) opens / closes it, the newest
+//                                   save's groups open each time the dialog fills. Save rows show SaveGameInfo::icon.
 //
 // [port] choices: campaign menu rules (build_campaign_menu); faction button A / B = the set's first two factions in data
 // order (hidden when absent); difficulty 0 easy / 1 normal / 2 hard (slider 0..2, radios); IDC_MAIN_MENU_PLAY_DEMO
@@ -265,9 +269,18 @@ struct GameOptionsSetup {
     bool set = false;  // Accept was pressed: the game uses these (else the campaign's own values)
     friend bool operator==(const GameOptionsSetup&, const GameOptionsSetup&) = default;
 };
+// [port: Gabriel] one level of the saved games tree (SaveGameInfo::groups, outermost first). Saves with the same keys up to
+// a level share that level's group; its row shows the first such save's label and icon.
+struct SaveGroupLevel {
+    std::string key;       // the group among its siblings
+    std::u32string label;  // group row text
+    std::string icon{};    // group row icon texture ("" = none)
+};
 struct SaveGameInfo {
     std::string name;      // save identifier (host)
     std::u32string label;  // list text
+    std::string icon{};    // [port: Gabriel] row icon texture (the save's faction; "" = none)
+    std::vector<SaveGroupLevel> groups{};  // [port: Gabriel] the groups the save is listed in (empty = top level)
 };
 struct SkirmishMapInfo {
     std::string map;       // map file / id (what StartSkirmish carries)
@@ -484,6 +497,18 @@ private:
     void apply_keys(std::vector<MenuAction>& out);
     void refill_keys();
     std::vector<SaveGameInfo> saves_;
+    // [port: Gabriel] the saved games tree: one entry per list row, a save (index into saves_) or a group (save = -1, its
+    // key path); the open groups' key paths (kept across refills).
+    struct SaveRow {
+        int32_t save = -1;
+        std::string group;
+    };
+    std::vector<SaveRow> save_rows_;
+    std::vector<std::string> saves_open_;
+    void build_save_rows(GuiDialog& d, int32_t selected, int32_t top);
+    int32_t row_save(int32_t row) const;               // a list row's save (index into saves_), -1 for a group / no row
+    int32_t selected_save(const GuiDialog& d) const;  // the selected row's save (index into saves_), -1 for none / a group
+    bool toggle_save_group(GuiDialog& d, int32_t row);  // a group row: open / close it (false: not a group row)
     std::vector<SkirmishMapInfo> maps_;
     std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
     bool custom_tab_ = false;        // skirmish list: Custom tab active
