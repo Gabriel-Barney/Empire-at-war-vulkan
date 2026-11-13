@@ -1,6 +1,7 @@
 """Packs a test build zip for Gabriel: alamo_game + alamo_mod_check (with the DXC, FFmpeg and FSR runtime DLLs) from a
 Release build tree, the launchers in
-tools/testbuild/launchers (Play.cmd for Forces of Corruption, Play_Mod.cmd for any installed mod),
+tools/testbuild/launchers (Play.cmd for Forces of Corruption, Play_Mod.cmd for any installed mod), Play.exe (Play.cmd
+without a console window, built by build_msvc.cmd),
 tools/testbuild/CHANGES.txt and THIRD_PARTY_NOTICES.txt (the license of every third-party component in the zip, read
 from toolchain/, plus where to get the exact FFmpeg source and build options the LGPL asks for).
 
@@ -27,7 +28,7 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 HERE = ROOT / "tools" / "testbuild"
-BINARIES = ["alamo_game.exe", "alamo_mod_check.exe", "avcodec-62.dll", "avformat-62.dll", "avutil-60.dll",
+BINARIES = ["Play.exe", "alamo_game.exe", "alamo_mod_check.exe", "avcodec-62.dll", "avformat-62.dll", "avutil-60.dll",
             "dxcompiler.dll", "dxil.dll", "amd_fidelityfx_loader_vk.dll", "amd_fidelityfx_upscaler_vk.dll",
             "COPYING.LGPLv2.1"]
 LAUNCHERS = ["Play.cmd", "Play_Mod.cmd", "find_game.cmd", "launcher.ps1"]

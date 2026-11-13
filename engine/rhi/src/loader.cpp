@@ -130,6 +130,8 @@ bool Loader::load_device(const InstanceFns& inst, VkDevice device, DeviceFns& ou
 #define X(name) out.name = reinterpret_cast<PFN_##name>(gdpa(device, #name));
     ALAMO_VK_DEVICE_OPT_FUNCS(X)
 #undef X
+    out.vkAcquireFullScreenExclusiveModeEXT = gdpa(device, "vkAcquireFullScreenExclusiveModeEXT");
+    out.vkReleaseFullScreenExclusiveModeEXT = gdpa(device, "vkReleaseFullScreenExclusiveModeEXT");
     return ok;
 }
 

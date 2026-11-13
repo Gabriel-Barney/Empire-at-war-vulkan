@@ -37,6 +37,36 @@ void App::set_present_mode(rhi::PresentMode m) {
     std::printf("video: present mode %s\n", pm == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : pm == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo");
 }
 
+void App::apply_display(const DisplayMode& m) {
+    std::string line;
+    apply_display_mode(win_.native_handle(), m, &line, window_mode_);
+    applied_mode_ = m;
+    std::printf("video: %s\n", line.c_str());
+    sync_exclusive_fullscreen();
+}
+
+void App::sync_exclusive_fullscreen() {
+    const bool want = window_mode_ == ui::WindowMode::Fullscreen;
+    sc_.set_exclusive_fullscreen(want);
+    if (want == sc_.exclusive() || win_.minimized()) return;  // a minimized window gets it on its restore's recreate
+    gpu_.ring.wait_idle();
+    sc_.recreate(win_.width(), win_.height());
+    if (want) std::printf("video: exclusive full screen %s\n", sc_.exclusive() ? "on" : ctx_.caps().full_screen_exclusive ? "refused" : "not offered by the driver");
+}
+
+void App::on_activation_changed() {
+    if (window_mode_ != ui::WindowMode::Fullscreen || !live_input()) return;
+    if (!win_.app_active()) {
+        minimize_window(win_.native_handle());
+        restore_display_mode();
+        std::printf("video: full screen left (another application is active)\n");
+    } else if (applied_mode_.width && applied_mode_.height) {
+        restore_window(win_.native_handle());
+        apply_display(applied_mode_);
+        update_display_rate(true);
+    }
+}
+
 // [port: Gabriel] render interpolation between the last two sim snapshots (InterpMode::Smooth), so motion stays smooth
 // at any refresh rate / frame rate above the tick rate: alpha = time since the last tick over the last tick interval
 // (clamped to 1..2 pacing periods). Smoke and hidden runs draw the current snapshot (alpha 1, the original behaviour).
