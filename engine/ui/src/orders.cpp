@@ -120,9 +120,29 @@ void OrderTranslator::tactical(const InputState& in, const OrderContext& ctx) {
             } else {
                 emit_select({hit->id});
             }
+        } else if (alternate_ && !sel_.empty()) {
+            // ui1 t02 [port] alternate scheme (P1_DOUBLE_CLICK_MOVE §1.2: ground orders on the left button): a left click
+            // that does not hit an own selectable object is the order click; the release of a double press is swallowed.
+            if (!lb.in_double_press) {
+                if (!((in.alt() && !in.ctrl()) || toggle_waypoint_)) waypoint_mode_ = false;
+                right_release(in, ctx);
+            }
         } else if (!hit && !in.shift()) {  // P1_CAMERA_INPUT.md §5: a plain click on nothing submits Select{} [port: Shift]
             emit_select({});
         }
+    }
+    if (alternate_) {
+        if (!((in.alt() && !in.ctrl()) || toggle_waypoint_)) waypoint_mode_ = false;
+        if (sel_.empty()) return;
+        if (lb.double_press) {
+            // The double click of the order button acts at the press (action 2 in the alternate table), unless the press
+            // is on an own selectable object (that double click selects every one of its type on the release).
+            const auto hit = pick_world(all, ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_, ctx.pick_tests);
+            if (!(hit && is_selectable(ctx, hit->id))) right_double(in, ctx);
+        } else if (rb.click && !rb.in_double_press) {
+            emit_select({});  // [port] a right click clears the selection (the alternate table's right actions 3..5 are not recovered)
+        }
+        return;
     }
 
     // Waypoint mode lasts while Alt (without Ctrl) or the waypoint toggle is held (spec §2.1 step 3).
@@ -211,7 +231,7 @@ void OrderTranslator::right_double(const InputState& in, const OrderContext& ctx
 
 // `0x3b360`: one move order at pixel (px, py), its flags and its acknowledgement (spec §2).
 void OrderTranslator::ground_move(const InputState& in, const OrderContext& ctx, int32_t px, int32_t py, bool dbl) {
-    const ButtonState& rb = in.button(Button::Right);
+    const ButtonState& rb = in.button(alternate_ ? Button::Left : Button::Right);  // ui1 t02: the order button
     // Facing variant: a press anchor and a Chebyshev drag > MinimumDragDistance. A double click never has an anchor.
     const int32_t ddx = rb.drag.x1 - rb.drag.x0, ddy = rb.drag.y1 - rb.drag.y0;
     const int32_t cheb = std::max(ddx < 0 ? -ddx : ddx, ddy < 0 ? -ddy : ddy);

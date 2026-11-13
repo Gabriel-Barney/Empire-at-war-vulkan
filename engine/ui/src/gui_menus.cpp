@@ -387,6 +387,23 @@ int32_t keyboard_edit_slot(std::string_view control_id) {
     return -1;
 }
 
+std::u32string hotkey_action_label(uint16_t slot) {
+    if (slot >= kHotkeySlots) return {};
+    std::string_view n = hotkey_slots()[slot].name;
+    if (n.starts_with("Ability_")) n.remove_prefix(8);
+    if (n.starts_with("FoC")) n.remove_prefix(3);
+    std::u32string out;
+    for (size_t i = 0; i < n.size(); ++i) {
+        const char c = n[i];
+        const char p = i > 0 ? n[i - 1] : ' ';
+        const bool upper = c >= 'A' && c <= 'Z', digit = c >= '0' && c <= '9';
+        const bool p_lower = p >= 'a' && p <= 'z', p_digit = p >= '0' && p <= '9';
+        if (i > 0 && ((upper && (p_lower || p_digit)) || (digit && !p_digit))) out.push_back(U' ');
+        out.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
+    }
+    return out;
+}
+
 std::u32string hotkey_label(const HotkeyBinding& b) {
     if (b.key < 0) return {};
     std::string s;
@@ -1012,6 +1029,7 @@ void FrontEnd::fill_keyboard(GuiDialog& d) {
         if (c.type != GuiGadgetType::EditBox) continue;
         const int32_t slot = keyboard_edit_slot(c.id());
         c.read_only = true;
+        c.key_capture = slot >= 0;
         c.text = slot >= 0 ? hotkey_label(keys_work_.binding(static_cast<uint16_t>(slot))) : std::u32string();
         if (slot < 0) c.enabled = false;
     }
@@ -1083,8 +1101,11 @@ void FrontEnd::setup(GuiDialog& d) {
         }
     } else if (ascii_iequals(n, kQuit)) {
         const bool overwrite = quit_action_ == "overwrite", del = quit_action_ == "delete";
+        const bool rebind = quit_action_ == "rebind", keys = quit_action_ == "keys";
         d.set_text("IDC_CAPTION", overwrite ? text_or("TEXT_SAVE_CONFIRM", U"Overwrite Save Game?")
                                   : del     ? text_or("TEXT_DELETE_CONFIRM", U"Delete saved game?")
+                                  : rebind  ? gui_->port_text(U"Key already in use")
+                                  : keys    ? gui_->port_text(U"Apply the changed key settings?")
                                             : text("TEXT_BUTTON_QUIT_GAME"));
         d.set_text("IDC_DIALOG_BOX_BUTTON_LEFT", text("TEXT_BUTTON_YES"));
         d.set_text("IDC_DIALOG_BOX_BUTTON_RIGHT", text("TEXT_BUTTON_NO"));
@@ -1092,6 +1113,13 @@ void FrontEnd::setup(GuiDialog& d) {
         if (overwrite || del) {  // N1 / t09: the save the question is about
             d.set_text("IDC_USER_TEXT_STRING_1", ascii32(confirm_save_));
             d.show("IDC_USER_TEXT_STRING_1", true);
+        }
+        if (rebind && rebind_other_ >= 0) {  // UI5 t05 [port]: which action holds the key, and what Yes does
+            d.set_text("IDC_USER_TEXT_STRING_1", hotkey_label(rebind_key_) + U": " +
+                                                     gui_->port_text(hotkey_action_label(static_cast<uint16_t>(rebind_other_))));
+            d.set_text("IDC_USER_TEXT_STRING_2", gui_->port_text(U"Assign it here? That action is left without a key."));
+            d.show("IDC_USER_TEXT_STRING_1", true);
+            d.show("IDC_USER_TEXT_STRING_2", true);
         }
     } else if (ascii_iequals(n, kPause)) {
         d.enable("IDC_SAVE_GAME", in_game_);
@@ -1174,6 +1202,15 @@ void FrontEnd::on_cancel(const GuiEvent& e, std::vector<MenuAction>& out) {
     if (ascii_iequals(n, kCampaignSelect) || ascii_iequals(n, kCustomStaging) || ascii_iequals(n, kSkirmish) || ascii_iequals(n, kTutorial)) {
         go(kSingle);
         return;
+    }
+    if (keyboard_page(n) >= 0 && keys_dirty_) {  // UI5 t05: as Back
+        quit_action_ = "keys";
+        push(kQuit);
+        return;
+    }
+    if (ascii_iequals(n, kQuit) && (quit_action_ == "rebind" || quit_action_ == "keys")) {  // Esc = keep editing
+        quit_action_.clear();
+        rebind_slot_ = rebind_other_ = -1;
     }
     if (ascii_iequals(n, kAudio)) {
         out.push_back(act(MenuAction::Kind::PreviewAudio));
@@ -1455,13 +1492,15 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         }
     } else if (keyboard_page(n) >= 0 && d) {
         if (is("IDC_APPLY")) {
-            if (p_.hotkeys) *p_.hotkeys = keys_work_;
-            if (p_.hotkeys && p_.bindings) p_.hotkeys->apply_to_bindings(*p_.bindings);
-            keys_dirty_ = false;
-            out.push_back(act(MenuAction::Kind::KeybindingsChanged));
+            apply_keys(out);
             pop();
-        } else if (is("IDC_OK")) {  // Back: discard unapplied edits
-            pop();
+        } else if (is("IDC_OK")) {  // Back: UI5 t05 [port] unapplied edits ask Apply? (Yes applies, No discards)
+            if (keys_dirty_) {
+                quit_action_ = "keys";
+                push(kQuit);
+            } else {
+                pop();
+            }
         } else if (is("IDC_RESTORE_DEFAULTS")) {
             keys_work_.reset_defaults();
             keys_dirty_ = true;
@@ -1492,7 +1531,8 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         } else if (is("IDC_DEFAULTS_BUTTON")) {
             const HotkeyTable defaults;
             for (const char* s : {"Pause", "CameraYawLeft", "CameraYawRight", "CameraPitchUp", "CameraPitchDown", "CameraRollLeft",
-                                  "CameraRollRight", "ScrollUp", "ScrollDown", "ScrollLeft", "ScrollRight"}) {
+                                  "CameraRollRight", "ScrollUp", "ScrollDown", "ScrollLeft", "ScrollRight", "CameraZoomIn",
+                                  "CameraZoomOut"}) {
                 const auto slot = static_cast<uint16_t>(hotkey_slot(s));
                 keys_work_.bind(slot, defaults.binding(slot));
             }
@@ -1556,7 +1596,27 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         if (is("IDC_DIALOG_BOX_BUTTON_LEFT")) end_resolution_confirm(true, out);
         else if (is("IDC_DIALOG_BOX_BUTTON_RIGHT")) end_resolution_confirm(false, out);
     } else if (ascii_iequals(n, kQuit)) {
-        if (is("IDC_DIALOG_BOX_BUTTON_LEFT")) {
+        if (is("IDC_DIALOG_BOX_BUTTON_LEFT") && (quit_action_ == "rebind" || quit_action_ == "keys")) {
+            pop();
+            if (quit_action_ == "rebind" && rebind_slot_ >= 0) {
+                keys_work_.bind(static_cast<uint16_t>(rebind_slot_), rebind_key_);
+                keys_dirty_ = true;
+                refill_keys();
+            } else if (quit_action_ == "keys") {
+                apply_keys(out);
+                pop();  // the keyboard page
+            }
+            quit_action_.clear();
+            rebind_slot_ = rebind_other_ = -1;
+        } else if (is("IDC_DIALOG_BOX_BUTTON_RIGHT") && (quit_action_ == "rebind" || quit_action_ == "keys")) {
+            pop();
+            if (quit_action_ == "keys") {  // discard
+                keys_dirty_ = false;
+                pop();
+            }
+            quit_action_.clear();
+            rebind_slot_ = rebind_other_ = -1;
+        } else if (is("IDC_DIALOG_BOX_BUTTON_LEFT")) {
             pop();
             if (quit_action_ == "overwrite" || quit_action_ == "delete") {  // N1 / t09: the confirmed save request
                 MenuAction a = act(quit_action_ == "overwrite" ? MenuAction::Kind::SaveGame : MenuAction::Kind::DeleteSave);
@@ -1571,6 +1631,17 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             pop();
         }
     }
+}
+
+void FrontEnd::apply_keys(std::vector<MenuAction>& out) {
+    if (p_.hotkeys) *p_.hotkeys = keys_work_;
+    if (p_.hotkeys && p_.bindings) p_.hotkeys->apply_to_bindings(*p_.bindings);
+    keys_dirty_ = false;
+    out.push_back(act(MenuAction::Kind::KeybindingsChanged));
+}
+
+void FrontEnd::refill_keys() {
+    if (GuiDialog* d = gui_->top(); d && (keyboard_page(d->name()) >= 0 || is_port_controls(d->name()))) fill_keyboard(*d);
 }
 
 void FrontEnd::update(std::span<const GuiEvent> events, const InputFrame& raw, std::vector<MenuAction>& out) {
@@ -1591,8 +1662,10 @@ void FrontEnd::update(std::span<const GuiEvent> events, const InputFrame& raw, s
         const int32_t slot = c.type == GuiGadgetType::EditBox ? keyboard_edit_slot(c.id()) : -1;
         if (slot >= 0) {
             for (uint32_t k = 1; k < 256; ++k) {
-                if (!raw.keys_pressed.test(k) || k == vk::kTab || k == vk::kEscape || k == vk::kShift || k == vk::kControl ||
-                    k == vk::kAlt || (k >= 0xA0 && k <= 0xA5))
+                // UI5 t05 [port]: Tab is a key here (MissionHolocron's default); Esc stays the dialog's Cancel (§4.2: in
+                // battle Esc closes the in-game panel before the hotkey dispatch, so it could never fire a binding).
+                if (!raw.keys_pressed.test(k) || k == vk::kEscape || k == vk::kShift || k == vk::kControl || k == vk::kAlt ||
+                    (k >= 0xA0 && k <= 0xA5))
                     continue;
                 HotkeyBinding b;
                 b.key = static_cast<int32_t>(k);
@@ -1600,6 +1673,15 @@ void FrontEnd::update(std::span<const GuiEvent> events, const InputFrame& raw, s
                         : raw.keys_down.test(vk::kAlt)   ? HotkeyMod::Alt
                         : raw.keys_down.test(vk::kShift) ? HotkeyMod::Shift
                                                          : HotkeyMod::None;
+                if ((k == vk::kBack || k == vk::kDelete) && b.mod == HotkeyMod::None) b = HotkeyBinding{};  // [port] clears
+                if (const std::vector<uint16_t> cf = keys_work_.conflicts(static_cast<uint16_t>(slot), b); !cf.empty()) {
+                    rebind_slot_ = slot;  // [port] ask before taking the key from the other action
+                    rebind_other_ = cf.front();
+                    rebind_key_ = b;
+                    quit_action_ = "rebind";
+                    push(kQuit);
+                    break;
+                }
                 keys_work_.bind(static_cast<uint16_t>(slot), b);
                 keys_dirty_ = true;
                 fill_keyboard(*d);

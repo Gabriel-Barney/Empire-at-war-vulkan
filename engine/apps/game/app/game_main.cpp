@@ -164,6 +164,7 @@ bool App::init() {
     };
     mp.camera_settings = [this] { return camera_; };
     mp.gameplay = [this] { return gameplay_; };
+    mp.audio = [this] { return audio_opts_; };  // ui1 t02
     // Video options: the primary display's modes (the current window size selected, else the largest mode under it); the
     // window is always windowed [port: no exclusive full screen]; v-sync = a FIFO or Mailbox present mode (the port's
     // V-sync mode combo picks which; off = Immediate), plus the port's frame rate cap and display line.
@@ -251,8 +252,10 @@ bool App::init() {
     if (live_input()) input_ = ui::InputState(ui::system_input_config());
     if (!audio_.init(data_, opt_.audio, opt_.seed ^ 0xA0D10u, &err)) std::fprintf(stderr, "audio: %s (continuing without)\n", err.c_str());
     ui_.gui.set_sfx_hook([this](std::string_view ev, int32_t) { audio_.ui(ev); });
+    if (live_input()) ui_.gui.set_clipboard([] { return clipboard_text(); }, [](std::u32string_view t) { set_clipboard_text(t); });
     ui_.galactic_hud.set_sfx_hook([this](std::string_view ev, int32_t) { audio_.ui(ev); });
     ui_.tactical_hud.set_sfx_hook([this](std::string_view ev, int32_t) { audio_.ui(ev); });
+    load_game_options();  // ui1 t02: audio, gameplay, camera and key bindings from the last run (live play)
     faction_colors_ = render::load_faction_colors(*data_.files);
     gview_.init(gpu_, data_, faction_colors_, render::load_route_line_style(*data_.files));
     apply_camera_tuning();
@@ -370,6 +373,8 @@ int App::run() {
                     choices_, auto_resolves_, story_dialogs_, ency_shown_, retry_boxes_, reinforce_drops_, holo_.samples());
         std::printf("reveal: %" PRIu64 " planet-revealed sfx, %" PRIu64 " moves to unrevealed planets dropped\n", reveal_sfx_,
                     hidden_moves_dropped_);
+        std::printf("build pads: %" PRIu64 " refused clicks (greyed pads)\n", build_refusals_);  // ui4 t02
+        std::printf("announcer: %" PRIu64 " galactic announcements\n", announcements_);       // ui4 t08
         std::printf("hud feeds: %" PRIu64 " reticle frames, %" PRIu64 " reticle orders, %" PRIu64 " Lua GUI calls, %zu galactic heroes, "
                     "reticle table %zu, buy bar hidden %" PRIu64 " frames (builder behind the camera)\n",
                     reticle_frames_, reticle_orders_, gui_calls_applied_, galactic_heroes_.size(), reticles_.size(), buy_bar_behind_camera_);

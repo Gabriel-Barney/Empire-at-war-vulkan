@@ -444,12 +444,20 @@ bool App::start_session(const SessionSpec& spec) {
     }
     loaded_save_.clear();
     session_started(diag);
+    credits_capped_ = false;
+    // ui4 t08 [port]: a new campaign (not a load, a skirmish or the attract demo) plays the faction's
+    // SFXEvent_GUI_Start_Campaign once it has started.
+    if (spec.kind == SessionKind::Campaign && !spec.attract && galaxy()) {
+        audio_.faction_sfx("SFXEvent_GUI_Start_Campaign");
+        ++announcements_;
+    }
     return true;
 }
 
 // The presentation side of a session that just started or was loaded (session_ is set).
 void App::session_started(const std::vector<std::string>& diag) {
     const SessionSpec& spec = session_->spec();
+    apply_gameplay_options();  // ui1 t02: the session start reset the game speed indices (MAIN_LOOP.md §1.5)
     holo_.reset();
     story_cursor_ = 0;
     story_ui_.reset();  // L1/S4 wave 1: a new session's UI state
@@ -530,6 +538,7 @@ void App::begin_battle() {
     ++battles_seen_;
     reinforce_unit_ = 0;  // no drop point pending from an earlier battle
     bombing_targeting_ = false;  // nor a bombing-run pick
+    autofire_seen_.clear();  // ui1 t02: the default autofire is sent for this battle's objects
     bombing_blob_.reset();
     targeting_.cancel();  // nor a targeted ability
     reinforce_blob_.reset();  // ui3: nor a drop preview / beacon pick; tether and interface keys reset per battle [port]

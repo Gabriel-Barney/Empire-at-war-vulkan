@@ -195,6 +195,26 @@ void HotkeyTable::bind(uint16_t slot, HotkeyBinding b) {
     }
 }
 
+std::vector<uint16_t> HotkeyTable::conflicts(uint16_t slot, HotkeyBinding b) const {
+    std::vector<uint16_t> out;
+    if (slot >= kHotkeySlots || b.key < 0) return out;
+    std::vector<std::pair<uint16_t, HotkeyBinding>> writes{{slot, b}};
+    if (slot < 10) {  // the derived slots bind() writes with it
+        const HotkeyMod mods[3] = {HotkeyMod::Ctrl, HotkeyMod::Shift, HotkeyMod::Alt};
+        const uint16_t bases[3] = {hk::kAssignBase, hk::kAddBase, hk::kThirdBase};
+        for (int k = 0; k < 3; ++k) writes.push_back({static_cast<uint16_t>(bases[k] + slot), HotkeyBinding{b.key, mods[k]}});
+    }
+    for (uint16_t o = 0; o < kHotkeySlots; ++o) {
+        bool written = false, clash = false;
+        for (const auto& w : writes) {
+            written = written || w.first == o;
+            clash = clash || slots_[o] == w.second;
+        }
+        if (clash && !written) out.push_back(o);
+    }
+    return out;
+}
+
 void HotkeyTable::save(HotkeyProfile& out) const {
     out["KeySettingsCount"] = kHotkeySlots;
     char name[64];

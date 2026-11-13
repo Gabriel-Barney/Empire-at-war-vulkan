@@ -85,8 +85,8 @@ void App::special_feedback() {
                 break;
             case K::SabotageVigilance:  // TEXT_SABOTAGE_FAILURE_VIGILANCE to the saboteur's owner, _PREVENTED_ to the planet's
                 if (local || e.other_player == local_player()) {
-                    const char* id = local ? "TEXT_SABOTAGE_FAILURE_VIGILANCE" : "TEXT_SABOTAGE_PREVENTED_VIGILANCE";
-                    std::printf("message: %s%s\n", id, ui_.text.find(id) ? "" : " (no text)");  // [port] no message log UI
+                    // ui4 t05 [port]: the message callback (P4 §2.3) as a white screen-text line, as the holocron message.
+                    galactic_message(local ? "TEXT_SABOTAGE_FAILURE_VIGILANCE" : "TEXT_SABOTAGE_PREVENTED_VIGILANCE");
                     ++special_msgs_;
                 }
                 break;
@@ -110,9 +110,15 @@ void App::special_feedback() {
                                                     : nullptr;  // 2 lost effort: no message [port: none identified]
                     std::printf("slice: %s %s%s%s\n", type_name(e.type), e.value == 0 ? "unlocked" : e.value == 2 ? "lost effort" : "failed",
                                 id ? ", message " : "", id ? id : "");
-                    if (id) ++special_msgs_;
+                    if (id) {
+                        galactic_message(id);  // ui4 t05 [port]: screen-text line
+                        ++special_msgs_;
+                    }
                     if (local && e.value == 0) {
                         audio_.faction_sfx("SFXEvent_Slice_Success");
+                        ++special_sfx_;
+                    } else if (local) {  // ui4 t05 [port]: every failed outcome (captured, lost effort, cheated, vigilance)
+                        audio_.faction_sfx("SFXEvent_Slice_Failure");
                         ++special_sfx_;
                     }
                 }
@@ -120,6 +126,35 @@ void App::special_feedback() {
             default: break;
         }
     }
+}
+// ui4 t08: Factions.xml announcer events of the local player - the galactic event ones (game::galactic_announcement) and
+// [port] SFXEvent_Max_Credits_Limit_Reached when the credits reach the account cap (rising edge).
+void App::announcer_feedback() {
+    const galactic::GalacticSim* g = galaxy();
+    if (!session_ || !g) return;
+    const int32_t me = local_player();
+    for (const galactic::GalacticEvent& e : session_->take_announce_events())
+        if (const char* tag = galactic_announcement(*g, e, me)) {
+            audio_.faction_sfx(tag);
+            ++announcements_;
+        }
+    if (me >= 0 && static_cast<size_t>(me) < g->players().size()) {
+        const auto& acc = g->players()[static_cast<size_t>(me)].account;
+        const bool capped = acc.cap >= 0.0f && acc.credits >= acc.cap;
+        if (capped && !credits_capped_) {
+            audio_.faction_sfx("SFXEvent_Max_Credits_Limit_Reached");
+            ++announcements_;
+        }
+        credits_capped_ = capped;
+    }
+}
+
+// ui4 t05 [port]: a galactic message (the original's message callback 0x140b313c0, P4_SIM_SYSTEMS §2.3) shown as a white
+// screen-text line (GALACTIC_DIALOGS §2: the holocron message uses that line), text from the MasterTextFile (the id when
+// missing).
+void App::galactic_message(std::string_view id) {
+    const std::u16string* t = ui_.text.find(id);
+    screen_line(t ? ui::utf16_to_utf32(*t) : ui::utf8_to_utf32(id), ui::Rgba8{255, 255, 255, 255});
 }
 // --- end P4 host ---
 
@@ -130,6 +165,7 @@ void App::post_tick() {
         ++reveal_sfx_;
     }
     special_feedback();  // P4 host
+    announcer_feedback();  // ui4 t08
     if (session_->in_battle()) {
         if (!bview_.active()) {
             begin_battle();
@@ -364,6 +400,27 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                     submit(commands::ev::production(static_cast<uint16_t>(a.value), a.unit, true,
                                                     static_cast<uint8_t>(a.ids[0]), static_cast<uint8_t>(a.ids[1])));
                 break;
+            case ui::HudAction::Kind::BuildRefused: {  // ui4 t02: a greyed galactic build pad: GUI negative feedback, no command
+                // ui4 t08 [port]: the announcer instead when the reason has one - the population cap
+                // (SFXEvent_Strategic_Pop_Cap_Reached), or a space-tab item at a planet with enemy ships in orbit
+                // (SFXEvent_Build_Impossible_Location_Blockaded: "enemy ships in orbit so can't build space station").
+                const galactic::GalacticSim* g = galaxy();
+                const PlanetIndex pi = g ? planet_index(*g, selected_planet_) : kInvalidPlanet;
+                const bool space = g && a.unit < g->rules().types.size() &&
+                                   (g->queue_kind(a.unit) == galactic::kSpaceQueue || galactic::is_star_base_type(g->rules().types[a.unit]) ||
+                                    galactic::is_orbital_structure_type(g->rules().types[a.unit]));
+                if (a.value == static_cast<int32_t>(ui::HudBuildOption::Block::PopCap)) {
+                    audio_.faction_sfx("SFXEvent_Strategic_Pop_Cap_Reached");
+                    ++announcements_;
+                } else if (space && pi != kInvalidPlanet && g->blockaded(pi, local_player())) {
+                    audio_.faction_sfx("SFXEvent_Build_Impossible_Location_Blockaded");
+                    ++announcements_;
+                } else {
+                    audio_.negative_feedback();
+                }
+                ++build_refusals_;
+                break;
+            }
             case ui::HudAction::Kind::HeroSelect:  // FIXPASS_GALACTIC §2.3 tactical single click: replace the selection
                 if (a.unit && screen_ == Screen::Battle) submit(commands::ev::select({a.unit}));
                 break;
@@ -606,9 +663,11 @@ void App::galactic_input() {
             static_cast<size_t>(e.component) < ui_.components.size() &&
             ui_.galactic_hud.buttons().visual(static_cast<uint32_t>(e.component)) != ui::ButtonVisual::Disabled)
             story_ui_.click_gui(ui_.components[static_cast<size_t>(e.component)].name);
-    // The galactic shell panels (the hero panel is tactical: input in the tactical update below). Only SlicePanel reads the wheel.
+    // The galactic shell panels and the hero roster (ui4 t01, FIXPASS_GALACTIC §2.2: a good slot's click focuses the hero's
+    // planet, a double click zooms; hover gives Mouse_Over_SFX, the tooltip and the encyclopedia pop-up). Only SlicePanel
+    // reads the wheel.
     for (ui::HudPanel* p : panels())
-        if (p != &hero_panel_ && p->open()) p->update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts, input_.wheel());
+        if (p->open()) p->update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts, input_.wheel());
     for (const ui::HotkeyEvent& e : hk) {
         // FIXPASS_GALACTIC §4.2 (capture C2): the advisor key (Numpad -) opens the Droid Log, as the dome and "?" do.
         if (e.slot == ui::hk::kHolocron || e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);
@@ -877,6 +936,7 @@ void App::battle_input() {
                 story_ui_.click_gui(ui_.components[static_cast<size_t>(e.component)].name);
     if (hero_panel_.open()) hero_panel_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts);
     handle_hud_actions(acts);
+    queue_default_autofire(cmds);  // ui1 t02: IDC_ABILITIES_DEFAULT_TO_AUTOFIRE
     voice.resize(cmds.size(), 1);
     route_commands(cmds, voice);
 }
@@ -1002,11 +1062,18 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 gview_.camera().set_fov_deg(camera_.galactic_fov_deg);
                 bview_.camera().set_fov_override(tactical_fov_set_ ? camera_.tactical_fov_deg : 0.0f);
                 sync_control_bindings(ui_.hotkeys, camera_, ui_.bindings);  // OI host: hotkeys + queue modifier
+                save_game_options();  // ui1 t02
+                break;
+            case K::KeybindingsChanged:  // ui1 t02: the keyboard dialogs edited ui_.hotkeys; bindings follow, kept between runs
+                sync_control_bindings(ui_.hotkeys, camera_, ui_.bindings);
+                save_game_options();
                 break;
             case K::ApplyGameplay:  // HUD_GAPS §2.2: IDC_DELAY_TOOLTIPS -> Long_Encyclopedia_Delay
                 gameplay_ = a.gameplay;
                 apply_tooltip_config();
                 apply_camera_tuning();  // P1_CAMERA_INPUT.md §3.1 mouse / scroll options
+                apply_gameplay_options();  // ui1 t02: alternate mouse, game speeds
+                save_game_options();
                 break;
             case K::SaveGame: save_game_as(a.save); break;          // N1 / t09
             case K::LoadGame: load_saved_game(a.save); break;
@@ -1021,8 +1088,12 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
             case K::ExitGame: screen_ = Screen::Quit; break;
             case K::CheckMod: check_mod(a.mod); break;    // modc t08
             case K::LaunchMod: launch_mod(a.mod); break;
-            case K::PreviewAudio:
-            case K::ApplyAudio: audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music); break;
+            case K::PreviewAudio: audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music); break;
+            case K::ApplyAudio:  // ui1 t02: the dialog opens with these and they are kept between runs
+                audio_opts_ = a.audio;
+                audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music);
+                save_game_options();
+                break;
             case K::ApplyVideo:  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
                 ++video_applies_;
                 hardware_mouse_ = a.video.hardware_mouse;

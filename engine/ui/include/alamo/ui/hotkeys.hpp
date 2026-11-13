@@ -97,6 +97,9 @@ public:
     // Binds `slot` (removing the same key + modifier from every other slot); slots 0..9 also rebind their derived
     // slots. key -1 unbinds.
     void bind(uint16_t slot, HotkeyBinding b);
+    // UI5 t05: the other slots bind(slot, b) would unbind (the same key + modifier, also for the derived slots of 0..9),
+    // ascending; empty for key -1.
+    std::vector<uint16_t> conflicts(uint16_t slot, HotkeyBinding b) const;
     // Profile I/O: save writes all 153 slots; load reads min(KeySettingsCount, 153) slots (missing entries keep
     // the current binding, out-of-range modifiers -> none). False if KeySettingsCount is absent.
     void save(HotkeyProfile& out) const;

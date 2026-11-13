@@ -16,8 +16,8 @@
 //     over a fleet pad, DROP / CANT_DROP over a planet); drag-select box -> DRAG_SELECT_MODE; targeting modes (ability
 //     by target kind and validity, special weapon, beacon, reinforcement point, bombing run, tactical build / sell,
 //     waypoint, guard, barrage, repair, garrison, attack-move, move-only, attack-only); then the hovered object: enemy
-//     with a selection -> ATTACK (ATTACK_OUT_OF_RANGE / CANT_ATTACK), own selectable -> SELECT, friendly garrisonable
-//     -> GARRISON_IN; ground with a selection -> MOVE / CANT_MOVE; else NORMAL.
+//     with a selection -> ATTACK (ATTACK_OUT_OF_RANGE / CANT_ATTACK), a garrisonable own / friendly / neutral object with
+//     a selection -> GARRISON_IN (ui1 t01), own selectable -> SELECT; ground with a selection -> MOVE / CANT_MOVE; else NORMAL.
 #pragma once
 #include <cstdint>
 #include <functional>

@@ -138,6 +138,9 @@ struct HudAction {
                                 // value = type_index, shift: host -> Production {type_index, location = builder}
         TacticalCancel,         // tqueueNN left click: unit = location, value = type_index, ids = {queue, index}: host ->
                                 // Production {type_index, location, cancel = 1, queue, index}
+        // ui4 t02, appended 2026-11-13: a left click on a greyed galactic build pad (GalacticBuildOption::block != None):
+        // value = the Block, name = the pad component; the host plays the GUI negative feedback, no command is sent.
+        BuildRefused,
     };
     Kind kind = Kind::Button;
     int32_t component = -1;

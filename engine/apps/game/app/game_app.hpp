@@ -350,8 +350,16 @@ public:
     // hovered object (the pop-up keeps drawing its shown_object() while fading out after the hover is lost).
     ui::TooltipConfig ency_cfg_;
     std::vector<std::pair<uint32_t, objects::TypeIndex>> ency_types_;
-    // Gameplay options (IDD gameplay dialog) [port: kept for the session, no profile file].
+    // Gameplay options (IDD gameplay dialog). ui1 t02: kept between runs with the audio volumes, camera settings and key
+    // bindings in game_options.txt (game_display.hpp OptionsProfile; live play only, app_options.cpp).
     ui::GameplaySettings gameplay_;
+    ui::AudioVolumes audio_opts_;
+    std::string options_path_;
+    std::vector<uint32_t> autofire_seen_;  // ui1 t02: local objects already given their default autofire (sorted)
+    void load_game_options();
+    void save_game_options();
+    void apply_gameplay_options();  // alternate mouse, game speeds
+    void queue_default_autofire(std::vector<commands::EventData>& cmds);
     bool map_shell_open_ = false;  // HUD_GAPS §4.2: map_shell shown (advanced planet map)
     bool planet_map_open_ = false;  // GALACTIC_DIALOGS §4: the FoC planet map (organiser's advanced_planetary button)
     ui::HeroPanel hero_panel_;
@@ -522,6 +530,8 @@ public:
     void open_battle_prompt(const galactic::GalacticSim& g, const galactic::ConflictInfo& c);
     void open_linked_banner(const galactic::GalacticSim& g, const sim::CampaignBattles::LinkedRecord& r);  // story t13
     std::string representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter = false) const;
+    void planet_status(const galactic::GalacticSim& g, PlanetIndex row, ui::GalacticPlanetInfo& out) const;  // ui4 t03
+    bool hero_filter_ = false;  // ui4 t03: b_filters3 on (GalacticHud::filter_bits, last build)
     void answer_battle_prompt(bool auto_resolve);
     void auto_resolve_result(const galactic::GalacticSim& g, const galactic::ConflictLogEntry& e);
     void add_holocron_chapter(const StoryDialogMeta& meta, size_t lines);
@@ -560,6 +570,11 @@ public:
     uint32_t panel_preview_ = 0;
     uint32_t preview_planet_ = 0;
     uint64_t special_sfx_ = 0, special_msgs_ = 0, activations_ = 0;
+    void galactic_message(std::string_view id);  // ui4 t05: a message-callback text as a white screen-text line
+    void announcer_feedback();                   // ui4 t08
+    uint64_t announcements_ = 0;                 // ui4 t08: announcer events played
+    bool credits_capped_ = false;                // ui4 t08: the credits were at the cap last tick
+    uint64_t build_refusals_ = 0;  // ui4 t02: clicks on greyed galactic build pads (negative feedback)
     bool activate_special_here(uint32_t hero_id);
     std::vector<objects::ObjectHandle> special_units(const galactic::GalacticSim& g, PlanetIndex pi) const;
     // OI host: main-menu attract demo (attract_mode.hpp), audio flags, fast forward.
@@ -618,6 +633,7 @@ public:
     void show_auto_resolve_end(const galactic::ConflictLogEntry& e);  // ui ask 10: the battle-end screen after an auto-resolve
     void build_panels(std::vector<ui::HudDrawList>& lists);
     void update_cursor(ui::HudDrawList& dl);
+    void fill_cursor_hover(ui::CursorContext& c);  // ui1 t01: hovered object -> cursor context (battle)
     void update_radar();
 
     // ---- BM2a benchmark mode (app_benchmark.cpp, benchmark.hpp) ----

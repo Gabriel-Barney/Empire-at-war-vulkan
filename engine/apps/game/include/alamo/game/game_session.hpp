@@ -251,6 +251,9 @@ public:
     // presentation (SFX / messages). Collected right before T9 (the T2..T8 events), from every later batch the story
     // drains inside T9 (events raised by Lua / story rewards there, StorySession::set_drain_tap) and after each tick.
     std::vector<galactic::GalacticEvent> take_special_events();
+    // ui4 t08: the galactic events the announcer reacts to (PlanetOwnerChanged, CorruptionChanged, FleetDeparted), since
+    // the last call (presentation only).
+    std::vector<galactic::GalacticEvent> take_announce_events();
     const SpecialStats& special_stats() const { return special_stats_; }
     // OI host: the Lua presentation's cinematic rate lock (lua::PresentationState::cinematic_rate_lock: cinematic camera
     // or cinematic mode of the story VMs), read right after T9 of every tick (SimHost::set_after_story_hook): it pins
@@ -348,6 +351,7 @@ private:
     uint64_t rate_lock_ticks_ = 0;
     size_t events_seen_ = 0;  // GalacticSim::events() already tapped
     std::vector<galactic::GalacticEvent> special_events_;
+    std::vector<galactic::GalacticEvent> announce_events_;  // ui4 t08
     SpecialDialog dialog_;
     bool dialog_open_ = false;
     SpecialStats special_stats_;

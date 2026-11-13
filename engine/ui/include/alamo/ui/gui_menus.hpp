@@ -339,6 +339,9 @@ struct MenuProviders {
 int32_t keyboard_edit_slot(std::string_view control_id);
 // "Ctrl+A", "F12", "Numpad -", "" for unbound.
 std::u32string hotkey_label(const HotkeyBinding& b);
+// UI5 t05 [port]: an English name for a hotkey slot (its hotkeys.cpp name with "Ability_" / "FoC" dropped and spaces
+// between words: "Ability_SpreadOut" -> "Spread Out", "Taunt1" -> "Taunt 1"), for the "already in use" question.
+std::u32string hotkey_action_label(uint16_t slot);
 
 class FrontEnd {
 public:
@@ -432,6 +435,11 @@ private:
     AudioVolumes audio_before_;
     HotkeyTable keys_work_;  // keyboard dialogs edit a copy; Accept writes it back
     bool keys_dirty_ = false;
+    // UI5 t05: a key the capture field took that another slot already uses waits for the "already in use" answer.
+    int32_t rebind_slot_ = -1, rebind_other_ = -1;
+    HotkeyBinding rebind_key_{};
+    void apply_keys(std::vector<MenuAction>& out);
+    void refill_keys();
     std::vector<SaveGameInfo> saves_;
     std::vector<SkirmishMapInfo> maps_;
     std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
@@ -442,7 +450,7 @@ private:
     std::string last_map_[2];
     std::vector<Rgba8> colour_palette_;   // the host palette read when the skirmish dialog opened
     int32_t slot_colour_[8] = {0, 1, 2, 3, 4, 5, 6, 7};  // colour index of each skirmish slot (default = the slot index)
-    std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_)
+    std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_); UI5 t05: "rebind" / "keys"
     std::string confirm_save_;  // the save an overwrite / delete confirmation is about
     bool save_blocked_ = false; // the open Save dialog's save_blocker refused
     int32_t vsync_on_row_ = 1;  // U9: the V-sync combo row that re-checking IDC_VSYNC_ENABLED returns to

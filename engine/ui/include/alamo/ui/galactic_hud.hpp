@@ -109,7 +109,22 @@ struct GalacticPlanetInfo {
     bool fogged = false;
     std::string garrison_icon;
     std::vector<GalacticPlanetStack> stacks;
+    // ui4 t03 (GALAXY_MAP_PRESENTATION §1.1 / §1.2; [port] choices in docs/PHASE4.md "ui4 t03"). Filter-gated: the planet
+    // type's Encyclopedia_Weather_Icon on g_weather and Planet_Ability_Icon on g_planet_ability (b_filters2, "" = none);
+    // credit_level 0..10 on g_credit_bar (b_filters0 with the value text, < 0 none). Status row after g_conflict / g_hero:
+    // g_build (the local player builds here), g_smuggled (an income siphon is active here), g_corruption_icon (corrupted),
+    // g_enemy_hero (an enemy hero is seen here: Icon_Alternate 0 i_icon_hero, 1 i_icon_empire_hero; < 0 none).
+    // g_corruption_text: the corruption transition line (TEXT_CORRUPTION_PERCENT / _REMOVE_PERCENT), "" none.
+    std::string weather_icon, ability_icon;
+    int32_t credit_level = -1;
+    bool building = false, smuggled = false, corrupted = false;
+    int32_t enemy_hero = -1;
+    std::u32string corruption_text;
 };
+// ui4 t03: the galactic map filters (GALAXY_MAP_PRESENTATION §1.1, HUD +0x21c4 bits 0x3cd120): b_filters0 credit value,
+// b_filters1 base level (ground / space level pips), b_filters2 ability / weather, b_filters3 hero (the fleet button's
+// representative icon prefers the hero). Toggles, all off at start.
+inline constexpr uint32_t kFilterCredit = 1, kFilterBaseLevel = 2, kFilterAbilityWeather = 4, kFilterHero = 8;
 // GalacticFleetSlot::type of a unit the host did not classify: it is never merged into a stack.
 inline constexpr uint32_t kNoSlotType = 0xFFFFFFFFu;
 struct GalacticFleetSlot {
@@ -145,6 +160,12 @@ struct GalacticBuildOption {
     // GALACTIC_DIALOGS §5.1: the build tab the option belongs to (space = true -> blue pad i_button_pad_empire, Blank
     // index 1; ground -> amber i_button_pad_rebel, index 0). Host: true for space units / starbases.
     bool space = false;
+    // ui4 t02: why the pad is greyed (GalacticSim::can_enqueue at the planet). != None -> disabled; the b_Create_NN
+    // Tooltip_Text entry follows the reason (0 TEXT_PRODUCTION_QUEUE_FULL, 1 _POP_CAP_REACHED, 2 _INSUFFICIENT_FUNDS; other
+    // reasons: no tooltip) and a left click plays the GUI negative feedback (HudAction::BuildRefused) instead of sending
+    // a Production command the sim would refuse. Host: also set enabled = (block == None).
+    HudBuildOption::Block block = HudBuildOption::Block::None;
+    uint32_t queued = 0;  // the local player's entries of this type in the planet's queues (Text_Offset2 line, > 0 shown)
 };
 // HudObjective: tactical_hud.hpp.
 // One g_special_ability row (CommandBarComponents: TextButton beside the planet, "x = offset to right of planet, y =
@@ -324,6 +345,7 @@ struct GalacticHudStats {
              land_slots = 0, objectives = 0, hit_boxes = 0, ability_rows = 0, radar_blips = 0;
     uint32_t garrison_icons = 0, stack_icons = 0;  // planet icons (OI 2026-10-28)
     uint32_t planet_rings = 0, planet_values = 0;  // g_planet_ring, g_planet_value
+    uint32_t level_pips = 0, weather_icons = 0, ability_icons = 0, credit_bars = 0, corruption_texts = 0;  // ui4 t03
     bool tooltip = false;
     bool radar_view = false;  // camera footprint drawn on the minimap
     bool radar_backdrop = false;  // opaque radar rectangle drawn under the shells (build_radar)
@@ -356,6 +378,9 @@ public:
     void build(const GalacticHudFrame& frame);
     const HudDrawList& draw_list() const { return dl_; }
     const GalacticHudStats& stats() const { return stats_; }
+    // ui4 t03: the filter bits (kFilter*) of the b_filters0..3 toggles now on (the host feeds the hero bit back into the
+    // fleet buttons' representative icon).
+    uint32_t filter_bits() const;
     int32_t hit_test(int32_t px, int32_t py) const;
     const std::vector<HudHitBox>& hit_boxes() const { return hits_; }
     // Shell visibility the last build wants (i_main_organize, pending_battle_shell, story_pending_battle_shell); the host
@@ -419,6 +444,10 @@ private:
     // Component ids.
     int32_t name_ = -1, value_ = -1, control_ = -1, ground_ = -1, space_ = -1, conflict_ = -1, hero_ = -1, smuggler_ = -1,
             bounty_ = -1, ring_ = -1, credit_filter_ = -1;
+    // ui4 t03: b_filters0..3 and the extra planet-label components.
+    int32_t filters_[4] = {-1, -1, -1, -1};
+    int32_t build_icon_ = -1, smuggled_ = -1, corruption_icon_ = -1, corruption_text_ = -1, enemy_hero_ = -1, weather_ = -1,
+            ability_ = -1, credit_bar_ = -1;
     int32_t credits_ = -1, pop_ = -1, day_ = -1, planet_text_ = -1, income_ = -1, tech_ = -1, planet_info_ = -1;
     int32_t day_credits_ = -1, radar_ = -1, radar_blip_ = -1, radar_view_ = -1, movie_ = -1;
     int32_t planet_fleet_ = -1, planet_land_ = -1;

@@ -967,4 +967,74 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   a non-hostile attackable unit is a land attack block with the host-only flag `kAttackBlockNoLock`; an object that is not
   a combat unit (story markers) still gets the plain move and follow. **t06** the line of fire's end G takes the order's C
   height. **t07** the land stand-in orders drive the battle's attacker and defender only; third parties idle (space: backlog).
+- 🟡 **PARTLY DONE** · UI1 (2026-11-13, UI gaps in the test build; specs `docs/re/UI.md`, `HUD_GAPS.md`, `GAME_SCORING.md`,
+  `GALACTIC_DIALOGS.md`): [port] choices (marked "ui1 tNN" in code). **t01 cursor** (UI.md §3.1 gives the 53 pointers,
+  not the rules): the battle hover comes from the order translator's world pick: own (SELECT), an enemy of the local
+  player (ATTACK), other owned objects friendly, unowned neutral. With a selection: CANT_ATTACK when no selected unit
+  can hit the target at all (combat `can_hit` = NoTarget), ATTACK_OUT_OF_RANGE when every attacker is immobile and out
+  of range (a mobile unit walks into range), GARRISON_IN over an own / friendly / neutral object a selected unit may
+  enter (Can_Garrison), CANT_MOVE when no selected land unit can stand on the ground cell under the cursor. Camera
+  middle-drag pan / rotate (tactical) and the galactic map drag show MAP_SCROLLING / MAP_ROTATING.
+  **t02 options**: audio volumes / subtitles, the gameplay dialog, the camera settings and the key bindings are kept in
+  `%LOCALAPPDATA%\alamo\game_options.txt` (game_display.hpp `OptionsProfile`; live play only), written on Audio /
+  Gameplay / Camera Accept and on KeybindingsChanged. Game speed sliders map to the speed table index round(v / 25)
+  and go straight to the pacing (retail sends GameOptions 39; pacing is wall-clock only) at every session start and
+  Apply. Abilities default to autofire: once per frame the host sends SetAbilityAutofire (58) per ability type for the
+  local player's new objects with a Supports_Autofire ability (retail per object at spawn). Alternate mouse controls:
+  a left click on an own selectable object selects, any other left click with a selection is the order (no facing
+  drag), a left double press off own units is the double-click order, a right click clears the selection (the
+  alternate table's actions are not recovered: backlog b0235). Ask before auto-resolve and simplified faction colours
+  are saved but have no rule yet (backlog b0233 / b0234).
+- 🟡 **PARTLY DONE** · UI5 (2026-11-13, front-end widgets and options; spec `docs/re/UI.md` §3-§5): [port] choices (marked
+  "UI5" / [port] in `engine/ui/src/gui_dialog.cpp`). **t03** the closed combo field is the skin's
+  `Combo_Box_Popdown_Button` height (25 units, UI.md §3.7.1; 15 when the art is missing) and the hit test uses the same;
+  an open drop-down shows `combo_rows` rows from `top`, opens scrolled to the selection, scrolls with the wheel (3 rows a
+  notch) and its own scroll bar; list / drop-down scroll bars: column width = `Scroll_Up_Button` art width (12 without),
+  arrow height from the art's aspect, `_Mouse_Over` / `_Pressed` arrow art, thumb drag, track paging, arrow / track
+  auto-repeat 0.4 s then every 0.05 s (Win32 pattern; GuiStyle), Home / End select the first / last row. **t04** edit
+  boxes follow the Win32 single-line edit: ES_AUTOHSCROLL scrolls (no narrowing), without it typing stops at the field
+  width; click = nearest character boundary, drag / Shift+click / Shift+arrows select, Ctrl+Left / Right by word,
+  Ctrl+A / C / X / V and Ctrl+Insert / Shift+Delete / Shift+Insert; the clipboard is a manager-private string unless the
+  host sets `GuiManager::set_clipboard`; key-capture fields (read_only) keep the one-line narrowing and draw no caret.
+  **t05** key-capture fields (`GuiControl::key_capture`): unmodified Delete / Backspace clear the binding, Tab is bindable
+  (MissionHolocron's default; focus stays), Esc stays the dialog's Cancel (UI.md §4.2: in battle Esc closes the in-game
+  panel before the hotkey dispatch, so an Esc binding could never fire); a key another slot holds (`HotkeyTable::conflicts`,
+  derived group slots included) asks "Key already in use" (`<key>: <action>`, action = the slot name spaced, "Ability_" /
+  "FoC" dropped) in IDD_DIALOG_BOX_QUIT_CONFIRM, Yes moves it (the §4.3 rule), No keeps both; Back or Esc with unapplied
+  edits asks "Apply the changed key settings?" (Yes applies, No discards); Camera and Controls Defaults also resets
+  CameraZoomIn / ZoomOut. Retail capture behaviour is an RE gap (backlog, kind re).
+- ⬜ **OPEN** · ui4 t01 / t02 / t03 (2026-11-13, galactic HUD; specs `docs/re/FIXPASS_GALACTIC.md` §2, `docs/re/A2K_T01_BUILD_COST_RE.md` §1,
+  `docs/re/GALACTIC_DIALOGS.md` §5.1, `docs/re/GALAXY_MAP_PRESENTATION.md` §1.1 / §1.2, `docs/re/GALACTIC_REVEAL_CORRUPTION.md` §4.6):
+  **t01** the galactic input loop now hands the routed input to the hero roster too (it was skipped as "tactical"), so a good slot's
+  click focuses the hero's planet, a double click zooms, and hover gives Mouse_Over_SFX, the tooltip and the encyclopedia pop-up.
+  **t02** build pads price with `GalacticSim::build_cost_for` (`game::galactic_build_options`, hud_feeds) and are greyed by
+  `can_enqueue`'s reason (`galactic_build_block`): queue full, population cap, funds take Tooltip_Text entries 0 / 1 / 2 as the
+  tactical pads do; any other refusal is greyed with no tooltip [port]. A left click on a greyed pad is `HudAction::BuildRefused`
+  (GUI negative feedback, no command) [port: the original's refusal sound is the task's reading]. The pad's Text_Offset2 line
+  (Text_Color2) is the local player's queued count of the type at the planet, shown when > 0 [port, GALACTIC_DIALOGS §5.1 L]. The
+  cost text is red when the block is Funds (or the pad is disabled without a reason), else green. **t03** filters: `GalacticHud::filter_bits`
+  (b_filters0..3 = bits 1 / 2 / 4 / 8). b_filters0 credit: value text (as before) and g_credit_bar, level = round(10 × value /
+  the highest value on the map) [port], at its Default_Offset below the value text. b_filters1 base level: the g_ground_level /
+  g_space_level pips now need it [port: GALAXY_MAP_PRESENTATION §1.2 says the pips need a filter bit; the base-level button is
+  taken, its tooltip being TEXT_TOOLTIP_BASE_LEVEL_FILTER]. b_filters2: g_weather = the planet type's Encyclopedia_Weather_Icon,
+  g_planet_ability = its Planet_Ability_Icon, at the components' Offsets, not on fogged planets [port]. b_filters3: the fleet /
+  land buttons' representative icon prefers the hero (§1.4), fed back to the host one frame late. Status row (after the medals,
+  [port] order): g_build = a local queue entry at the planet; g_smuggled = an income siphon runs there and the local player is
+  the siphoner or the owner; g_corruption_icon = corrupted, seen by the owner or with the PoliticalControl info gate [port];
+  g_enemy_hero = a seen enemy hero on the surface or in orbit (alternate 1 i_icon_empire_hero for the Empire, else 0).
+  g_corruption_text = while a corruption transition runs, (int)(fraction × 100) put into TEXT_CORRUPTION_PERCENT /
+  _REMOVE_PERCENT (its %d / %s field, else appended with '%') [M: the text's field]. Not done (no spec): Text_Land_Fleet's
+  content, planet_bonus, Text_adv_help (planet map, t04) - RE gap filed on the backlog.
+- ⬜ **OPEN** · ui4 t05 / t08 (2026-11-13, galactic messages and announcer; specs `docs/re/P4_SIM_SYSTEMS.md` §2.3, `docs/re/GALACTIC_DIALOGS.md` §2,
+  `docs/re/GALACTIC_REVEAL_CORRUPTION.md` §4.4): **t05** the slice outcome and sabotage vigilance texts go through
+  `App::galactic_message` = a white screen-text line (the message callback 0x140b313c0 as the holocron message's line) [port];
+  every failed slice outcome of the local slicer plays SFXEvent_Slice_Failure [port]. The Droid Log battle entries use
+  `game::conflict_log_line` ("Battle of <planet> (space|land): A vs B - W victorious / R retreated / called off (auto-resolved)",
+  display names) instead of the debug text [port: no text ids traced]. **t08** `GameSession::take_announce_events` (PlanetOwnerChanged,
+  CorruptionChanged, FleetDeparted) -> `game::galactic_announcement`: gained / lost control (XML comments), corrupted / corruption
+  removed for the local owner or corrupter [H], enemy fleet approaching = a hostile, not all-stealthed fleet departing towards a
+  local planet [port]. [port] triggers in the host: pop cap and blockaded (space item, enemy in orbit) on a refused pad click instead
+  of the negative sound; Max_Credits_Limit_Reached when the credits reach the account cap (rising edge); Land_Invasion_Commencing
+  when the land battle prompt opens with the local player attacking; GUI_Start_Campaign when a new campaign starts. RE gap on the
+  backlog.
 - ⬜ **OPEN** · ui3 t01 - t05 / t07 (2026-11-13, UIART "Tactical HUD controls"; specs `docs/re/HUD_GAPS.md` §2.1 / §5.1, `docs/re/BATTLE_TRANSITIONS.md` §3.4, `docs/re/TACTICAL_GAPS.md` §4.2.1, `docs/re/GALACTIC_DIALOGS.md` §3.1, `docs/re/UI.md` §4.3; code `engine/apps/game/app/app_tactical_keys.cpp`, marked "ui3 tNN"). The hotkey dispatch 0x63f00 is not traced per slot (backlog `--kind re`), so these are [port] choices, checked against the retail tooltip texts where they say what a control does. **Order buttons / keys (t01):** `c_button00` and the Attack key arm `MoveToggle::Attack` (the next right click attacks the object under the cursor when it is not the local player's, else attack-moves; TEXT_TOOLTIP_ATTACK_01 "Attack targeted object"); `c_button02` and the Move key arm `MoveToggle::Move` (the next right click is a ground move even over an enemy; TEXT_TOOLTIP_MOVE_01 "ignoring all enemies"); both one-shot, cleared by the next order, and a key acts only while its button is enabled; `c_button04` = StopMovement (as the Stop key). Select Like = the own units of the selected types on screen; Next / Previous Unit = the own movable units (one per squadron, `TacticalBattle::icon_links`) in id order after / before the last one picked, selected and centred; Reinforce (R) = the first callable pad entry's drop pick (again: cancel); Place Beacon (B) = as `b_special_weapon2`; Camera Tether = the camera follows the selection's centre until pressed again; Movie Mode (Space, TEXT_MOVIE_MODE "BATTLECAM") and Toggle Interface (I) hide the HUD; Mission Holocron (Tab) in a battle toggles the objectives box; Quick Save / Load (F6 / F5) = the save slot "QuickSave"; Screenshot (F12) = a PNG of the next frame in `Screenshots\` beside the saves folder; Cinematic View, the taunts, chat, give credits and the player list do nothing (multiplayer or not traced). **Ability keys (t02):** `hotkey_ability_name` maps slots 24-65, 90-122 and DeploySquad (66) to the FoC ability type by meaning (two slots of one meaning share a type; SystemControl and DestroyPlanet have no FoC type); the key acts as a left click on the first ability button of that type (`TacticalHud::activate_ability`). The keyboard dialogs' edit boxes were already in the retail slot order (the edit-name string table 0x8063d0..0x807310, stride 0x20, lists them in slot order; test `alamo_ui_hud_ui3_tests`). **Buttons (t03):** `b_retreat` enabled when the request would start a retreat (`TacticalBattle::retreat_block` = 0), its Build_Texture_Name dial shows the retreat-allowed countdown, then the running retreat; `b_reinforcement` enabled when a pad entry can be called, Selected while a drop point is picked; `b_special_weapon2` / `b_beacon_t` (TEXT_PLACE_BEACON) place the `Default_Beacon_Placement` radar event at the next world click, at most once per GameConstants `BeaconPlaceDelay`; `b_camera_t` = Movie Mode; `b_droid_help_tactical` opens the Droid Log. **Reinforcements (t04):** a pad entry is available when `reinforce_block` = None (the unit cap, retreat, hyperspace hold and campaign refusals of `order_reinforce`); `reinforcement_counter` = the number of pad entries, `r_pop_text` = used / cap (space; hidden without a cap); the drop pick shows the faction's `Reinforcements_Shadow_Blob_Material_Name` blob over the drop formation box, green when `reinforce_point_ok` (the human preview 0x345c0 tests) passes, red otherwise; a click on an invalid point plays the GUI negative SFX and keeps the pick; Esc ends a reinforcement / bombing-run / beacon pick without opening the pause menu. **Battle end (t05):** the winner comes from `CampaignBattles::last_battle_end` (presentation, not saved); title TEXT_WIN_BATTLE / TEXT_LOST_BATTLE; battle time = the battle's frames / 30; salvage, loss values and efficiency by the auto-resolve screen's rules (`battle_summary.hpp`) over the battle's dead units; lost named heroes' icons (5 per side); "Invade System" after a won campaign space battle when an own stopped fleet there carries a ground unit and the planet is accessible and not the player's (the click sends Invade for that planet, then continues). **Tooltips (t07):** an ability button shows TEXT_TOOLTIP_ABILITY_<type>_NAME / _DESCRIPTION; a buyable Build_NN shows the type's Text_ID; land mode takes Tooltip_Text entry 1 when there is one (HUD_GAPS §2.1); the skirmish objective is TEXT_TACTICAL_PRIMARY_SPACE_ATTACK / _LAND_ATTACK; missing texts show as the text database gives them (no English stand-ins).
