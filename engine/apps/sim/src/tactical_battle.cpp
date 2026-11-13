@@ -2675,6 +2675,38 @@ std::vector<TacticalBattle::Reserve> TacticalBattle::reserves(int32_t player) co
     return out;
 }
 
+cmd::RejectReason TacticalBattle::reinforce_block(int32_t player, objects::ObjectId galactic_id) const {
+    using R = cmd::RejectReason;
+    for (const Participant& p : parts_) {
+        if (p.galactic_id != galactic_id || p.owner != player || !p.reserve || p.deployed) continue;
+        if (finished_ || !movement_ || retreat_side_ == static_cast<int32_t>(p.side) || arrival_held()) return R::NotAllowed;
+        if (space_) {
+            const uint32_t f = galaxy_->players()[static_cast<size_t>(player)].faction;
+            float used = 0.0f;
+            std::vector<uint8_t> counted(parts_.size(), 0);
+            for (const Unit& u : units_)
+                if (u.alive && !u.retreated && parts_[u.participant].owner == player && !counted[u.participant]) {
+                    counted[u.participant] = 1;
+                    used += parts_[u.participant].pop;
+                }
+            if (used + p.pop > rules_->faction(f).space_unit_cap) return R::QueueFull;
+        } else if (!cfg_.skirmish) {
+            const objects::GameObjectTypes& types = catalog_->types();
+            if (p.type < types.size() && types.get_bool(p.type, "Stay_In_Transport_During_Ground_Battle")) return R::NotAllowed;
+            if (galaxy_->planet_restricts(req_.info.planet, p.type)) return R::NotAllowed;
+        }
+        return R::None;
+    }
+    return R::InvalidUnit;
+}
+
+bool TacticalBattle::reinforce_point_ok(const TacticalMode& mode, int32_t player, objects::ObjectId galactic_id, float x,
+                                        float y) const {
+    if (!std::isfinite(x) || !std::isfinite(y)) return false;
+    if (space_) return fog_reinforce_point_ok(player, x, y);
+    return land_drop_valid(mode, player, galactic_id, x, y, true, catalog_->use_reinforcement_points());
+}
+
 cmd::RejectReason TacticalBattle::order_reinforce(TacticalMode& mode, uint8_t player, objects::ObjectId galactic_id, float x, float y,
                                                   SimRng& rng) {
     using R = cmd::RejectReason;
@@ -3456,7 +3488,7 @@ bool TacticalBattle::space_member_spots(TacticalMode& mode, const Participant& p
 }
 
 // ---- land drop validity (header; TACTICAL_GAPS §4.2.1 tests 1-4, §4.2.2 items 2-4) ----
-bool TacticalBattle::land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
+bool TacticalBattle::land_drop_valid(const TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
                                      bool use_reinforcement_points) const {
     if (space_ || !movement_) return true;  // land only
     if (!std::isfinite(x) || !std::isfinite(y)) return false;
@@ -3786,6 +3818,31 @@ bool TacticalBattle::request_retreat(int32_t player) {
     for (const Unit& u : units_)
         if (u.side == side && u.alive) combat_->set_flag(u.id, tc::kUnitRetreating, true);
     return true;
+}
+
+int32_t TacticalBattle::retreat_block(int32_t player) const {
+    const bool side = player == req_.info.defender || player == req_.info.attacker;
+    if (!side || finished_ || vm_declared_) return 1;
+    if (frame_ < retreat_allowed_frame_) return 2;
+    if (retreat_side_ >= 0) return 5;
+    if (retreat_prevented(player)) return 6;
+    return 0;
+}
+
+float TacticalBattle::retreat_allowed_progress() const {
+    if (retreat_allowed_frame_ == 0 || frame_ >= retreat_allowed_frame_) return 1.0f;
+    return static_cast<float>(frame_) / static_cast<float>(retreat_allowed_frame_);
+}
+
+float TacticalBattle::retreat_countdown_progress() const {
+    if (retreat_side_ < 0 || retreat_complete_) return -1.0f;
+    const int32_t player = side_player(static_cast<uint8_t>(retreat_side_));
+    const uint32_t f = player >= 0 && static_cast<size_t>(player) < galaxy_->players().size()
+                           ? galaxy_->players()[static_cast<size_t>(player)].faction
+                           : galactic::kNoIndex;
+    const float total = (space_ ? rules_->faction(f).space_retreat_countdown : rules_->faction(f).land_retreat_countdown) * 30.0f;
+    if (!(total > 0.0f) || frame_ >= retreat_done_frame_) return 1.0f;
+    return std::clamp(1.0f - static_cast<float>(retreat_done_frame_ - frame_) / total, 0.0f, 1.0f);
 }
 
 void TacticalBattle::retreat_policy() {

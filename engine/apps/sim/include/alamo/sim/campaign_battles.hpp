@@ -150,6 +150,16 @@ public:
     const std::vector<std::string>& log() const { return log_; }  // one summary per tactical battle / refusal
     // Playtest QA D1 / V1: TacticalBattle::unit_losses() of the last tactical battle that ended (presentation, not saved).
     std::span<const TacticalBattle::RemovalRecord> last_battle_losses() const { return last_losses_; }
+    // ui3 t05: the last tactical battle that ended (presentation, not saved): the winner after an auto-resolve from
+    // tactical, its length in frames (30 per second), space / land, the planet and the two sides.
+    struct LastBattleEnd {
+        bool valid = false;
+        int32_t winner = -1, attacker = -1, defender = -1;
+        uint32_t frames = 0;
+        bool space = true;
+        uint32_t planet = 0xFFFFFFFFu;
+    };
+    const LastBattleEnd& last_battle_end() const { return last_end_; }
     uint32_t battles_fought() const { return fought_; }
     // S10-int: Change_Owner of an object of the running battle (store, trees, combat / abilities, side). Hosts set
     // lua::ObjectBridge::change_owner of their tactical story VMs to this (story_session owner). False when no
@@ -312,6 +322,7 @@ private:
     terrain::MapData pending_map_;
     std::vector<std::string> log_;
     std::vector<TacticalBattle::RemovalRecord> last_losses_;
+    LastBattleEnd last_end_;  // ui3 t05 (presentation)
     uint32_t fought_ = 0;
     // AI_GALACTIC_TOKENS §9.4: the pad persistence records live on the planets (GalacticSim::built_objects, galactic save);
     // each campaign battle gets its planet's list. Hashed in "battle.state" (planets with records only).

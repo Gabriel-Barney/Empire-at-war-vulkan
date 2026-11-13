@@ -1200,6 +1200,21 @@ const char* kGalacticXml = R"(<?xml version="1.0"?>
     <Font_Point_Size>7</Font_Point_Size><Text_Outline>True</Text_Outline><No_Shell>True</No_Shell><Left_Justified>True</Left_Justified>
     <Offset>30 0</Offset></CommandBarComponent>
   <CommandBarComponent Name="b_filters0"><Type>Button</Type><Toggle>True</Toggle></CommandBarComponent>
+  <CommandBarComponent Name="b_filters1"><Type>Button</Type><Toggle>True</Toggle></CommandBarComponent>
+  <CommandBarComponent Name="b_filters2"><Type>Button</Type><Toggle>True</Toggle></CommandBarComponent>
+  <CommandBarComponent Name="b_filters3"><Type>Button</Type><Toggle>True</Toggle></CommandBarComponent>
+  <CommandBarComponent Name="g_ground_level"><Type>Bar</Type><Bar_Texture_Name>i_pip0.tga i_pip1.tga i_pip2.tga</Bar_Texture_Name>
+    <No_Shell>True</No_Shell><Default_Offset>0 -20</Default_Offset></CommandBarComponent>
+  <CommandBarComponent Name="g_weather"><Type>Button</Type><No_Shell>True</No_Shell><Color>255 255 255 255</Color><Offset>-20 -31</Offset></CommandBarComponent>
+  <CommandBarComponent Name="g_planet_ability"><Type>Button</Type><No_Shell>True</No_Shell><Color>255 255 255 255</Color><Offset>0 -34</Offset></CommandBarComponent>
+  <CommandBarComponent Name="g_build"><Type>Button</Type><Icon_Texture_Name>i_icon_build.tga</Icon_Texture_Name><No_Shell>True</No_Shell></CommandBarComponent>
+  <CommandBarComponent Name="g_corruption_icon"><Type>Button</Type><Icon_Texture_Name>i_icon_corrupted.tga</Icon_Texture_Name><No_Shell>True</No_Shell></CommandBarComponent>
+  <CommandBarComponent Name="g_enemy_hero"><Type>Button</Type><Icon_ALternate_Texture_Name>i_icon_hero.tga i_icon_empire_hero.tga</Icon_ALternate_Texture_Name>
+    <No_Shell>True</No_Shell></CommandBarComponent>
+  <CommandBarComponent Name="g_corruption_text"><Type>TextButton</Type><No_Shell>True</No_Shell><Font_Name>EmpireAtWar-Medium</Font_Name>
+    <Font_Point_Size>6</Font_Point_Size><Text_Color>255 242 0 255</Text_Color><Offset>30 15</Offset><Left_Justified>True</Left_Justified></CommandBarComponent>
+  <CommandBarComponent Name="g_credit_bar"><Type>Bar</Type><Bar_Texture_Name>cb0.tga cb1.tga cb2.tga</Bar_Texture_Name><Max_Bar_Level>2</Max_Bar_Level>
+    <No_Shell>True</No_Shell><Default_Offset>0 8</Default_Offset></CommandBarComponent>
   <CommandBarComponent Name="g_planet_value"><Type>TextButton</Type><Font_Name>EmpireAtWar-Medium</Font_Name>
     <Font_Point_Size>6</Font_Point_Size><Text_Color>255 255 255 180</Text_Color><No_Shell>True</No_Shell>
     <Left_Justified>True</Left_Justified><Offset>30 -11</Offset></CommandBarComponent>
@@ -1606,6 +1621,9 @@ void test_galactic_hud() {
     atlas.add({"i_bar_fight_red.tga", 120, 0, 6, 10, true});
     atlas.add({"i_bar_fight_blue.tga", 126, 0, 6, 10, true});
     atlas.add({"i_bar_fight_flash.tga", 132, 0, 6, 10, true});
+    for (const char* n : {"i_pip0.tga", "i_pip1.tga", "i_pip2.tga", "i_pa_weather_rain.tga", "i_pa_galactic_production_boost.tga",
+                          "i_icon_build.tga", "i_icon_corrupted.tga", "i_icon_hero.tga", "cb0.tga", "cb1.tga", "cb2.tga"})
+        atlas.add({n, 200, 200, 12, 12, true});
     auto raster = make_box_rasterizer();
     FontCache fonts(*raster);
     GalacticHud hud;
@@ -1693,6 +1711,36 @@ void test_galactic_hud() {
             hud.buttons().state(static_cast<uint32_t>(filter)).selected = false;
             hud.build(f);
         }
+    }
+    // ui4 t03: the filters gate the base-level pips (b_filters1), the weather / ability icons (b_filters2) and the credit bar
+    // (b_filters0); filter_bits reports the toggles; the status icons and the corruption line need no filter.
+    {
+        std::vector<GalacticPlanetInfo> fp = planets;
+        for (GalacticPlanetInfo& p : fp) {
+            p.ground_level = 1;
+            p.weather_icon = "i_pa_weather_rain.tga";
+            p.ability_icon = "i_pa_galactic_production_boost.tga";
+            p.credits = 40;
+            p.credit_level = 2;
+        }
+        fp[0].building = fp[0].corrupted = true;
+        fp[0].enemy_hero = 1;
+        fp[0].corruption_text = U"Corrupting: 40%";
+        GalacticHudFrame ff = f;
+        ff.planets = fp;
+        hud.build(ff);
+        const uint32_t icons_off = hud.stats().label_icons;
+        CHECK(hud.filter_bits() == 0 && hud.stats().level_pips == 0 && hud.stats().weather_icons == 0 && hud.stats().ability_icons == 0 &&
+              hud.stats().credit_bars == 0 && hud.stats().corruption_texts == 1);
+        hud.build(f);
+        CHECK(icons_off == hud.stats().label_icons + 3);  // g_build, g_corruption_icon, g_enemy_hero on planet 0
+        const char* names[4] = {"b_filters0", "b_filters1", "b_filters2", "b_filters3"};
+        for (const char* n : names) hud.buttons().state(static_cast<uint32_t>(table.find(n))).selected = true;
+        hud.build(ff);
+        CHECK(hud.filter_bits() == (kFilterCredit | kFilterBaseLevel | kFilterAbilityWeather | kFilterHero));
+        CHECK(hud.stats().level_pips == 2 && hud.stats().weather_icons == 2 && hud.stats().ability_icons == 2 && hud.stats().credit_bars == 2);
+        for (const char* n : names) hud.buttons().state(static_cast<uint32_t>(table.find(n))).selected = false;
+        hud.build(f);
     }
     // [port: Gabriel, original screenshot] resource texts: "Day: 1" (TEXT_CYCLES), "Tech: 3" (TEXT_TECH), credits and income
     // with thousands separators; minimap blips for the visible planets and the camera footprint.
@@ -1945,6 +1993,40 @@ void test_galactic_hud() {
         const ComponentPlacement& c2 = hud.layout().placement(static_cast<uint32_t>(table.find("b_Create_02")));
         CHECK(c0.center.x == c1.center.x && c0.center.y > c1.center.y && std::fabs(c2.center.x - c0.center.x - 54.0f) < 1e-3f &&
               c2.center.y == c0.center.y);
+    }
+    // ui4 t02: a blocked option (can_enqueue's reason) is greyed, its Tooltip_Text entry follows the reason, a left click
+    // is BuildRefused (negative feedback) with no command; the queued count is the Text_Offset2 line.
+    GalacticHudFrame f5 = f;
+    f5.providers.build_options = [](uint32_t, std::vector<GalacticBuildOption>& out) {
+        GalacticBuildOption o;
+        o.icon = "i_button_units.tga";
+        const HudBuildOption::Block blocks[3] = {HudBuildOption::Block::QueueFull, HudBuildOption::Block::PopCap,
+                                                 HudBuildOption::Block::None};
+        for (uint16_t k = 0; k < 3; ++k) {
+            o.type_index = static_cast<uint16_t>(60 + k);
+            o.block = blocks[k];
+            o.enabled = o.block == HudBuildOption::Block::None;
+            o.queued = k == 2 ? 2u : 0u;
+            out.push_back(o);
+        }
+    };
+    hud.build(f5);
+    CHECK(hud.stats().build_buttons == 3);
+    {
+        const char* pads[3] = {"b_Create_00", "b_Create_01", "b_Create_02"};
+        const int32_t tips[3] = {0, 1, -1};
+        for (int k = 0; k < 3; ++k) {
+            const ButtonRuntime& r = hud.buttons().state(static_cast<uint32_t>(table.find(pads[k])));
+            CHECK(r.disabled == (k < 2) && r.tooltip_index == tips[k] && r.text2 == (k == 2 ? U"2" : U""));
+        }
+        cmds.clear();
+        acts.clear();
+        for (const char* p : pads) click_component(p, cmds, acts);
+        CHECK(cmds.size() == 1 && cmds[0] == commands::ev::production(62, 101));
+        CHECK(acts.size() == 2);
+        for (size_t k = 0; k < acts.size() && k < 2; ++k)
+            CHECK(acts[k].kind == HudAction::Kind::BuildRefused && acts[k].unit == 60u + k && acts[k].name == pads[k] &&
+                  acts[k].value == static_cast<int32_t>(k + 1));
     }
 }
 
