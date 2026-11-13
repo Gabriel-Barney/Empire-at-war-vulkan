@@ -195,7 +195,7 @@ struct Options {
     // S4 story
     bool story = false;
     bool scoring = false;  // q6 t06: --scoring
-    bool object_scripts = false;  // q6: --object-scripts
+    bool object_scripts = true;  // q6: --skirmish-ai, off with --no-object-scripts (q6 t23)
     bool control_points = false;  // ccpgt t02: --control-points
     std::string story_out, story_golden;
     // S10 battle transitions (battle_run.hpp): --battles auto|fight|fight-all
@@ -664,8 +664,8 @@ int usage() {
                  "       alamo_headless --economy | --story (--game DIR | --data DIR) [--campaign NAME] [--ticks N] [--workers W]\n"
                  "                      [--seed S] [--check-workers] [--story-out FILE] [--story-golden FILE] [--crc-out FILE]\n"
                  "                      [--scoring] (run the GameScoring script at the session start, as the game does)\n"
-                 "                      [--object-scripts] (game-object Lua scripts, docs/re/OBJECT_SCRIPTS.md; --skirmish-ai:\n"
-                 "                      also runs the GameScoring script)\n"
+                 "                      [--no-object-scripts] (--skirmish-ai: game-object Lua scripts and the GameScoring\n"
+                 "                      script run by default, as the game does; this turns both off. OBJECT_SCRIPTS.md)\n"
                  "       alamo_headless --economy --battles auto|fight|fight-all [--aggressor FRAMES] [--battle-retreat R]\n"
                  "                      [--battle-max-frames N] (+ the --economy options)\n"
                  "       alamo_headless --save-session synthetic|hotm|galactic|skirmish [--campaign NAME] --save-at T FILE [--ticks K]\n"
@@ -898,7 +898,8 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--economy") opt.economy = true;
         else if (a == "--story") opt.story = true;
         else if (a == "--scoring") opt.scoring = true;  // q6 t06
-        else if (a == "--object-scripts") opt.object_scripts = true;  // q6
+        else if (a == "--object-scripts") opt.object_scripts = true;  // q6 (the default since q6 t23)
+        else if (a == "--no-object-scripts") opt.object_scripts = false;  // q6 t23
         else if (a == "--control-points") opt.control_points = true;  // ccpgt t02
         else if (a == "--story-out") opt.story_out = next();
         else if (a == "--story-golden") opt.story_golden = next();

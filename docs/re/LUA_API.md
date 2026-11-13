@@ -1719,7 +1719,7 @@ valid.
   - Each call is an "unknown faction" error and returns nil, so the comparisons are false. The script ends at the end
     of its pass.
 
-Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
+Both are object scripts (run in every game session since q6 t23, 2026-11-13; before that only with a mod layer).
 
 ### Port notes
 

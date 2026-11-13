@@ -755,20 +755,20 @@ Every function in the table is registered in the port's bind files (§5).
 
 ---
 
-## 9. Port status (q6 t03, 2026-11-03; q6 t12, t19, 2026-11-04)
+## 9. Port status (q6 t03, 2026-11-03; q6 t12, t19, 2026-11-04; q6 t23, 2026-11-13)
 
 Implemented in `engine/apps/sim` (`object_scripts.hpp` / `.cpp`, `ObjectScriptHost`, owned by `SimHost`), with hooks in
 `engine/objects` (`ObjectStore::on_created`) and `engine/lua` (proximity events, `ObjectBridge::spawn_unit`,
 `LuaVmOptions::upper_type_names`). Tests: `alamo_sim_tests` (`object_script_test`), `alamo_lua_objects_tests`
 (proximity).
 
-**Opt-in, off by default.** `SimConfig::object_scripts` (false), `alamo_headless --object-scripts`. With the switch off
-nothing attaches and no RNG is drawn, so every existing golden and CRC stream is unchanged.
-**[port interim rule, kept by Gabriel 2026-11-04]** `alamo_game` (`GameSession`) turns the switch on only when a mod layer is loaded (`MODPATH`,
-the VFS has mod directories), and in the main-menu attract demo (**modc t18**, 2026-11-06: a map's `DEMO_CONTROLLER` runs
-the shipped `Demo_Attract_Controller.lua`; the demo is never saved, recorded or compared with a golden, so no stream
-moves). Vanilla FoC games keep the old streams until the object-script service is checked against the original by an
-in-game probe; then the rule goes and the switch is always on.
+**On in every game session (q6 t23, 2026-11-13).** `SimConfig::object_scripts` stays false by default for bare hosts
+(unit tests, `alamo_headless` modes that do not host them); `alamo_game` (`GameSession`) turns it on whenever the game's
+files are loaded (vanilla, a mod layer, the attract demo), and `alamo_headless --skirmish-ai` runs them (with the
+GameScoring script) by default, `--no-object-scripts` turns both off. The 2026-11-04 `[port interim rule]` (on only with a
+mod layer, so vanilla streams stayed put) is replaced: the q6 t15 retail probe (`Q6_T15_RETAIL_RUN.md` row 2b) showed
+vanilla objects run their `Lua_Script` (49 of 54 instances pumped, land and space), and row 2a confirmed the first-pump
+draw bound. The vanilla goldens moved with this change.
 
 Port choices (`[port]`, each also commented in the code):
 
