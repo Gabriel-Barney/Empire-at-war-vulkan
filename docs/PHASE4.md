@@ -967,6 +967,24 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   a non-hostile attackable unit is a land attack block with the host-only flag `kAttackBlockNoLock`; an object that is not
   a combat unit (story markers) still gets the plain move and follow. **t06** the line of fire's end G takes the order's C
   height. **t07** the land stand-in orders drive the battle's attacker and defender only; third parties idle (space: backlog).
+- 🟡 **PARTLY DONE** · UI1 (2026-11-13, UI gaps in the test build; specs `docs/re/UI.md`, `HUD_GAPS.md`, `GAME_SCORING.md`,
+  `GALACTIC_DIALOGS.md`): [port] choices (marked "ui1 tNN" in code). **t01 cursor** (UI.md §3.1 gives the 53 pointers,
+  not the rules): the battle hover comes from the order translator's world pick: own (SELECT), an enemy of the local
+  player (ATTACK), other owned objects friendly, unowned neutral. With a selection: CANT_ATTACK when no selected unit
+  can hit the target at all (combat `can_hit` = NoTarget), ATTACK_OUT_OF_RANGE when every attacker is immobile and out
+  of range (a mobile unit walks into range), GARRISON_IN over an own / friendly / neutral object a selected unit may
+  enter (Can_Garrison), CANT_MOVE when no selected land unit can stand on the ground cell under the cursor. Camera
+  middle-drag pan / rotate (tactical) and the galactic map drag show MAP_SCROLLING / MAP_ROTATING.
+  **t02 options**: audio volumes / subtitles, the gameplay dialog, the camera settings and the key bindings are kept in
+  `%LOCALAPPDATA%\alamo\game_options.txt` (game_display.hpp `OptionsProfile`; live play only), written on Audio /
+  Gameplay / Camera Accept and on KeybindingsChanged. Game speed sliders map to the speed table index round(v / 25)
+  and go straight to the pacing (retail sends GameOptions 39; pacing is wall-clock only) at every session start and
+  Apply. Abilities default to autofire: once per frame the host sends SetAbilityAutofire (58) per ability type for the
+  local player's new objects with a Supports_Autofire ability (retail per object at spawn). Alternate mouse controls:
+  a left click on an own selectable object selects, any other left click with a selection is the order (no facing
+  drag), a left double press off own units is the double-click order, a right click clears the selection (the
+  alternate table's actions are not recovered: backlog b0235). Ask before auto-resolve and simplified faction colours
+  are saved but have no rule yet (backlog b0233 / b0234).
 - 🟡 **PARTLY DONE** · UI5 (2026-11-13, front-end widgets and options; spec `docs/re/UI.md` §3-§5): [port] choices (marked
   "UI5" / [port] in `engine/ui/src/gui_dialog.cpp`). **t03** the closed combo field is the skin's
   `Combo_Box_Popdown_Button` height (25 units, UI.md §3.7.1; 15 when the art is missing) and the hit test uses the same;

@@ -336,6 +336,43 @@ void auto_detect() {
     CHECK(p.advanced == mid.advanced && p.anti_alias == mid.anti_alias && p.detail == ui::kQualityPresets[2]);
     CHECK(!p.vsync && p.gamma == 61 && p.mode.width == 1920);
 }
+// ui1 t02: the options file round trip and the game speed index.
+void options_round_trip() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "alamo_game_display_tests";
+    std::filesystem::create_directories(dir);
+    const std::string path = (dir / "game_options.txt").string();
+    game::OptionsProfile p;
+    p.audio.master = 0.25f;
+    p.audio.music = 0.0f;
+    p.audio.subtitles = false;
+    p.gameplay.game_speed = 75;
+    p.gameplay.strategic_speed = 0;
+    p.gameplay.alternate_mouse = true;
+    p.gameplay.abilities_autofire = true;
+    p.gameplay.ask_autoresolve = false;
+    p.gameplay.difficulty = 2;
+    p.camera.tactical_fov_deg = 70.0f;
+    p.camera.queue_mods = 2;
+    p.tactical_fov_set = true;
+    ui::HotkeyTable t;
+    ui::HotkeyBinding b = t.binding(20);
+    b.key = 'Q';
+    t.bind(20, b);
+    t.save(p.keys);
+    CHECK(game::save_options_profile(path, p));
+    game::OptionsProfile q;
+    CHECK(game::load_options_profile(path, q));
+    CHECK(std::fabs(q.audio.master - 0.25f) < 1e-4f && q.audio.music == 0.0f && q.audio.sfx == 1.0f && !q.audio.subtitles);
+    CHECK(q.gameplay.game_speed == 75 && q.gameplay.strategic_speed == 0 && q.gameplay.alternate_mouse &&
+          q.gameplay.abilities_autofire && !q.gameplay.ask_autoresolve && q.gameplay.difficulty == 2 && q.gameplay.absolute_scroll);
+    CHECK(std::fabs(q.camera.tactical_fov_deg - 70.0f) < 1e-3f && q.camera.queue_mods == 2 && q.tactical_fov_set);
+    CHECK(q.keys == p.keys);
+    ui::HotkeyTable u;
+    CHECK(u.load(q.keys) && u.binding(20).key == 'Q');
+    CHECK(!game::load_options_profile((dir / "missing_options.txt").string(), q));
+    CHECK(game::game_speed_index(0) == 0 && game::game_speed_index(50) == 2 && game::game_speed_index(100) == 4 &&
+          game::game_speed_index(62) == 2 && game::game_speed_index(63) == 3 && game::game_speed_index(-5) == 0);
+}
 }  // namespace
 
 int main() {
@@ -347,6 +384,7 @@ int main() {
     detail_options();
     detail_mappings();
     auto_detect();
+    options_round_trip();
     std::printf(g_fail ? "alamo_game_display_tests: %d FAILED\n" : "alamo_game_display_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
 }

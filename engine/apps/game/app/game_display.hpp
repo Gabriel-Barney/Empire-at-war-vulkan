@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "alamo/ui/gui_menus.hpp"
+#include "alamo/ui/hotkeys.hpp"
 
 namespace alamo::render {
 struct RecordOptions;
@@ -48,6 +49,24 @@ void restore_display_mode();
 // holds no text or cannot be opened.
 std::u32string clipboard_text();
 void set_clipboard_text(std::u32string_view text);
+
+// ui1 t02 [port] The other options kept between runs (the original keeps them in its registry profile with the video
+// options): audio volumes and subtitles (IDD_AUDIO_OPTIONS_DIALOG), the gameplay dialog's values, the port's camera
+// settings (FOVs, queue modifier; tactical_fov_set = the player moved the tactical FOV) and the key bindings (the
+// HotkeyTable profile: KeySettingsCount + one entry per slot, written under "key." names). A key = value text file,
+// %LOCALAPPDATA%/alamo/game_options.txt. Missing keys keep `p`'s values; load is false when the file cannot be read.
+struct OptionsProfile {
+    ui::AudioVolumes audio;
+    ui::GameplaySettings gameplay;
+    ui::CameraSettings camera;
+    bool tactical_fov_set = false;
+    ui::HotkeyProfile keys;  // empty: the bindings were never stored
+};
+std::string default_options_profile_path();  // "" when %LOCALAPPDATA% is unset
+bool load_options_profile(const std::string& path, OptionsProfile& p);
+bool save_options_profile(const std::string& path, const OptionsProfile& p);
+// ui1 t02 (MAIN_LOOP.md 1.5): the game speed sliders (0..100, default 50) as speed table indices 0..4 (default 2).
+uint32_t game_speed_index(int32_t slider);
 
 // [port] The video options kept between runs (the original keeps them in its registry profile, MAIN_LOOP.md §2 step 9;
 // the port writes a key = value text file, %LOCALAPPDATA%/alamo/video_options.txt). `mode` 0 x 0 = not stored.
