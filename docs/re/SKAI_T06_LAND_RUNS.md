@@ -168,3 +168,75 @@ Purchase_Early_Land_Upgrades, Purchase_Land_Upgrades_Generic, Land_Heroes, Droid
 and records every BurnUnitsLand Find_Nearest call (FNEAR: the task force's count at the call, the result, and when it is nil
 the same call without a player and with the Empire's player): it tells an empty task force (no position) from the Rebel's
 fog. Same `run_skirmish_land_attack.cmd`; selftest `selftest.cmd` (SELFTEST_LUA covers FNEAR on both paths).
+
+## 7. Why the port diverged before the attack (skai t12, 2026-11-12)
+
+Read from the run 1 trace of §6 (`trace.q2t`, `lua_records.txt`; throw-away scripts, no binary read) against port runs
+`alamo_headless --skirmish-ai foc-land --map _MP_LAND_UTAPAU --human Empire --seed 3379407547 --ticks 36000` (the retail
+run's seed 0xc96daabb; draw order is the port's own, so only the timeline is compared).
+
+**Goal pass length [H, trace].** Retail starts plans in batches 14-14.5 s apart (`lua_records.txt`, PSTART times of
+Destroy_Structure / Burn_Units_Land), its first purchase is at frame 382, and the four later Mineral Processors start
+363-616 frames after their pad changes owner (1470 -> 1909, 5240 -> 5854, 8128 -> 8713, 8755 -> 9118): a build waits for
+the next goal commit, and a proposal pass takes about 390-430 frames. That is the quota of AI_GALACTIC §1.3 with the
+whole PlayerList: the trace header gives `players=7`, one of them human, so the cap is (int)(20 / 6 + 0.5) = 3
+evaluations per frame. The port divided by the battle's own players (4, cap 7): first commit at 168, pad capture to
+build 103 frames.
+
+**Goals per category [H, trace].** At the first commit retail's six trooper teams leave in three groups: 161385 and
+161368 north (two Land_Scout_Area plans, category Tactical_Targeted), 161369 east to the outpost pad and 161387 to the
+nearest mineral pad at 401-410 (two Secure_Contestable plans, category Map_Control), and their escorts 161367 and
+161386 at 521-522. Two new goals per category is the Commit limit of AI_GALACTIC §1.6 step 5 with the AIPlayerType's
+GoalSetExtensionSize (default 2); the port's tactical goal system kept its config default 1 and started one of each.
+
+**TacticalBuiltStructureCount counts a structure under construction [H, trace].** The 2295 purchase is
+Tactical_Multiplayer_Build_Land_Units_Generic (Katarn_Team, 2 Rebel_Light_Tank_Brigade, Rebel_Infantry_Squad) plus
+Purchase_Early_Land_Upgrades (RL_Combat_Armor_L1): both need `Is_Initial_Skirmish_State_Established`, so
+`Num_Refineries > 0`, 386 frames after the first UC_Rebel_Mineral_Processor appears (1909) and 364 before the finished
+Rebel_Mineral_Processor replaces it (2659). Each goal has one function source (BasicLandGoalSet), so nothing else can
+have made them fire. This settles the under-construction question of AI_TACTICAL §12 item 11.
+
+Port after these three changes (dev, 2026-11-12):
+
+| | Retail (run 1) | Port before | Port after |
+|---|---|---|---|
+| First commit / Droids_Team bought | 382 | 168 | 389 |
+| Teams leaving at the first commit | 4 at 401-410, 2 escorts at 521 | 2, 1 escort | 4 at 401-405, escorts 527 |
+| Nearest mineral pad changes owner | 1470 | 1389 | 1469 |
+| First Mineral Processor starts / done | 1909 / 2659 | 1492 / 2242 | 1936 / 2686 |
+| Outpost pad changes owner | 3338 | 14665 (§3) | 3389 |
+| Early upgrade RL_Combat_Armor_L1 | 2295 | 2494 | 2333 |
+| Purchase beside it | Katarn, 2 light tank brigades, infantry | tech 2 (2326) | tech 2 (2333) |
+| Tech 2 bought | 7494 (2498 credits; done 9270) | 2326 | 2333 |
+| Battle | no end in 36000 | Rebel wins 20207 | Rebel wins 18727 |
+
+**Still different: what the force sums and Find_Nearest see [M, trace; waits for run 2's FNEAR records].** Three
+observations point at one rule, "an object with DUMMY_GROUND_STRUCTURE (the base structures: Command Center, Barracks,
+factories, Research Facility, turbolaser towers...) is not in the perception grid's per-player object list", although
+those types list UNIT_AI:
+- `Skirmish_Upgrade_Tech` is 0 at 2295: tech 2 (2500) was affordable with 5300 credits and the unit plan ran instead,
+  which needs `1 - Skirmish_Upgrade_Tech`. Its refinery count is the same token as `Num_Refineries` (true), the force
+  ratio is near 1 either way, so `Variable_Self.FriendlyForceUnnormalized > 400` was false: the Rebels had 290 of units
+  (6 trooper teams 180, droids 110) and 2100 of base structures (Barracks 300, two factories 600 + 600, two towers 300).
+  Tech 2 is bought at 7494, the first commit with 2500 credits after the units passed 400 (540 at 3600); no unit is
+  bought in between (the unit goal is off while the tech goal waits for credits).
+- Units are bought again at 11620 (3697 credits) with tech 2 done (9270): the tech 3 term needs
+  `FriendlyForceUnnormalized > 3000`; units + all structures were 3791 at 11400, units + the structures built on pads
+  during the battle 1691. Tech 3 (3996) follows at 13352, when units + pad-built structures reach 3187.
+- §6: BurnUnitsLand's `Find_Nearest(MainForce, "InBase", PlayerObject, false)` finds nothing while the human's Command
+  Center stands, and its fallback finds a stormtrooper team. Find_Nearest walks the same per-player UNIT_AI list.
+
+Port experiment with that rule (not on dev): at 2333 it buys RL_Combat_Armor_L1, Katarn_Team and a
+Rebel_Light_Tank_Brigade (tech 2 "cannot afford"), tech 2 at 5924, tech 3 at 14018, and the idle-human Utapau run does
+not end in 36000 ticks (the Command Center falls at 20074; Light Vehicle Factory, Base Shield and Power Generator
+stand). But AI against AI stalls: foc-land seeds 1-6 do not end in 30000 ticks, because the enemy force that normalises
+`EnemyUnitConcentrationNBTD` drops by the base structures too, so Clear_Infantry (100 x concentration) wins the first
+commit for the Empire AI and takes all four start teams into the Rebel base; it never captures a mineral pad. Whether
+retail does the same is not known (no retail AI-against-AI land run exists). The rule is held back until run 2 confirms
+the Find_Nearest part (FNEAR with `fn_ret=nil` and `fn_any=nil` while the Command Center lives and `fn_count > 0`).
+
+**Kit for a run 3:** `make_plan_hooks.py` adds to every land plan's PSTART record the values of six shipped equations
+read with `EvaluatePerception(name, PlayerObject)` (the land goal system evaluates all of them for this player every
+pass; none has a target or a `#` draw): `nsf` Non_Structure_Force_Unnormalized, `ut` Skirmish_Upgrade_Tech, `init`
+Is_Initial_Skirmish_State_Established, `nr` Num_Refineries, `sav` Is_Saving_For_Refineries_Land, `burn`
+Should_Burn_Units_Land. `ut` flipping while `nsf` passes 400 settles the first observation.
