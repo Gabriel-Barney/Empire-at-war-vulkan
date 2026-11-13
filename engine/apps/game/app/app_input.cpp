@@ -1188,8 +1188,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                         adv_video_ = detail_preset(adv_video_, video_profile_.detail);
                         video_profile_.advanced = adv_video_;
                     }
-                    std::printf("video: anti-aliasing %s (strength %d), detail level %d\n", taa_active(video_profile_.anti_alias) ? "TAA" : "off",
-                                video_profile_.anti_alias, video_profile_.detail);
+                    std::printf("video: anti-aliasing %s, detail level %d\n", aa_mode_name(video_profile_.anti_alias), video_profile_.detail);
                     save_video_options();
                 }
                 break;
@@ -1220,9 +1219,10 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 apply_auto_video(video_profile_, choice);
                 adv_video_ = video_profile_.advanced;
                 gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
-                std::printf("video: auto detect (%s, %llu MiB): %s detail, anti-aliasing strength %d, anisotropy %dx, ambient occlusion %s\n",
+                std::printf("video: auto detect (%s, %llu MiB): %s detail, anti-aliasing %s, anisotropy %dx, ambient occlusion %s\n",
                             caps.name.c_str(), static_cast<unsigned long long>(caps.device_local_bytes >> 20),
-                            kQualityNames[choice.quality], video_profile_.anti_alias, adv_video_.anisotropy, adv_video_.ambient_occlusion ? "on" : "off");
+                            kQualityNames[choice.quality], aa_mode_name(video_profile_.anti_alias), adv_video_.anisotropy,
+                            adv_video_.ambient_occlusion ? "on" : "off");
                 save_video_options();
                 ui_.front.refresh_video_dialogs();
                 break;

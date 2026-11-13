@@ -491,7 +491,7 @@ void test_advanced_video_port() {
     cur.anisotropy = 8;
     cur.mesh = 55;
     VideoSettings applied;
-    applied.anti_alias = 40;  // an older profile's slider position: inside Low's range
+    applied.anti_alias = kAaMsaa4;
     applied.detail = advanced_detail_level(cur);
     p.advanced_video = [&] { return cur; };
     p.video = [&] { return applied; };
@@ -502,15 +502,19 @@ void test_advanced_video_port() {
     GuiDialog* video = fe.top() == "IDD_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(video != nullptr);
     if (!video) return;
-    // Video: one anti-aliasing list (an old strength of 40 reads as Low), and the quality the options make (mesh 55 is High's range).
+    // Video: one anti-aliasing list of modes ([port: Gabriel 2026-11-13] Off, SMAA, TAA, MSAA 2x / 4x / 8x), and the quality
+    // the options make (mesh 55 is High's range).
     GuiControl* aa = video->get("IDC_PORT_ANTI_ALIASING");
     GuiControl* quality = video->get("IDC_PORT_DETAIL_LEVEL");
-    CHECK(aa->selected == 1 && aa->items.size() == 4 && quality->selected == static_cast<int32_t>(kQualityCustom));
+    CHECK(aa->selected == 4 && aa->items.size() == 6 && quality->selected == static_cast<int32_t>(kQualityCustom));
     click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 40 && acts.back().video.detail == applied.detail && !acts.back().video.detail_picked);  // untouched lists change nothing
-    video->set_selected("IDC_PORT_ANTI_ALIASING", 3);
+    CHECK(acts.back().video.anti_alias == kAaMsaa4 && acts.back().video.detail == applied.detail && !acts.back().video.detail_picked);  // untouched lists change nothing
+    video->set_selected("IDC_PORT_ANTI_ALIASING", 1);
     click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 100 && !acts.back().video.detail_picked);
+    CHECK(acts.back().video.anti_alias == kAaSmaa && !acts.back().video.detail_picked);
+    video->set_selected("IDC_PORT_ANTI_ALIASING", 2);
+    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.back().video.anti_alias == kAaTaa);
     video->set_selected("IDC_PORT_ANTI_ALIASING", 0);
     click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(acts.back().video.anti_alias == 0);
@@ -586,7 +590,7 @@ void test_advanced_video_port() {
     set_advanced_detail(cur, kQualityPresets[1]);
     cur.anisotropy = 4;
     cur.ambient_occlusion = true;
-    applied.anti_alias = kAntiAliasChoices[1].value;
+    applied.anti_alias = kAaSmaa;
     applied.detail = kQualityPresets[1];
     fe.refresh_video_dialogs();
     CHECK(video->get("IDC_PORT_DETAIL_LEVEL")->selected == 1 && video->get("IDC_PORT_ANTI_ALIASING")->selected == 1 &&
@@ -616,8 +620,9 @@ void test_advanced_video_port() {
     AdvancedVideoSettings mix;
     mix.water = 0;
     CHECK(quality_level(mix) == kQualityCustom);
-    CHECK(level_index(kAntiAliasChoices, 0) == 0 && level_index(kAntiAliasChoices, 1) == 1 && level_index(kAntiAliasChoices, 46) == 1 &&
-          level_index(kAntiAliasChoices, kAntiAliasDefaultSlider) == 2 && level_index(kAntiAliasChoices, 81) == 2 && level_index(kAntiAliasChoices, 100) == 3);
+    for (size_t i = 0; i < std::size(kAntiAliasChoices); ++i) CHECK(level_index(kAntiAliasChoices, kAntiAliasChoices[i].value) == i);
+    CHECK(kAntiAliasChoices[0].value == kAaOff && kAntiAliasChoices[1].value == kAaSmaa && kAntiAliasChoices[2].value == kAaTaa &&
+          kAntiAliasChoices[5].value == kAaMsaa8);
 }
 
 }  // namespace test_gui_screens_t

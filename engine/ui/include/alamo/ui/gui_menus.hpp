@@ -99,6 +99,8 @@ inline constexpr size_t kWindowModeCount = 3;
 // The game starts at 100 % whatever the Windows display scale is (the process is per-monitor DPI aware).
 inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500};
 inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
+// [port: Gabriel 2026-11-13] Anti-aliasing modes (VideoSettings::anti_alias; the list kAntiAliasChoices below).
+inline constexpr int32_t kAaOff = 0, kAaSmaa = 1, kAaTaa = 2, kAaMsaa2 = 3, kAaMsaa4 = 4, kAaMsaa8 = 5;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
     int32_t resolution = -1;
@@ -109,7 +111,8 @@ struct VideoSettings {
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
     int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP: one of kFrameCapChoices
     std::u32string display_info;             // [port: Gabriel] IDC_PORT_DISPLAY_INFO ("160 Hz, Mailbox"); empty = blank
-    int32_t detail = 100, anti_alias = 0, gamma = 50;  // 0..100: Detail / Anti-aliasing are picked from lists (kQualityPresets, kAntiAliasChoices), Gamma is a slider
+    int32_t detail = 100, gamma = 50;  // 0..100: Detail is picked from a list (kQualityPresets), Gamma is a slider
+    int32_t anti_alias = kAaOff;       // [port: Gabriel] the Anti-aliasing list's mode (kAntiAliasChoices: kAaOff .. kAaMsaa8)
     // Set on the ApplyVideo where the player picked a quality level (Low .. Ultra) the options did not already have: `detail`
     // is then that level's value and the host sets the seven advanced detail options to it (detail_preset). Left false when
     // the list still says what the options say, or says Custom, so a hand-made mix is never overwritten by an Apply.
@@ -142,12 +145,13 @@ struct LevelChoice {
     int32_t from;
     const char32_t* label;
 };
-// Anti-aliasing (temporal, TAA): the stored value is the strength, 0 = off; the share of the current frame falls from 0.2 to
-// 0.04 as it rises (game_display.hpp apply_aa_options): more history means smoother edges and more softness in motion.
-// Medium is the tuned default (current-frame weight 0.1) [inferred: the original has no anti-aliasing option].
-inline constexpr int32_t kAntiAliasDefaultSlider = 63;  // Medium: what an old profile's "anti_aliasing=taa" with strength 0 becomes
-inline constexpr LevelChoice kAntiAliasChoices[] = {
-    {0, 0, U"Off"}, {30, 1, U"Low - light smoothing"}, {kAntiAliasDefaultSlider, 47, U"Medium - balanced"}, {100, 82, U"High - smoothest, softer in motion"}};
+// [port: Gabriel 2026-11-13] Anti-aliasing: one list, one choice - Off, SMAA, TAA, MSAA 2x / 4x / 8x - each at one fixed
+// quality (game_display.hpp apply_aa_options; the original has no anti-aliasing option). The stored value is the mode below
+// (VideoSettings::anti_alias, profile key "aa_mode"). An MSAA count the device cannot do is drawn with the largest one it can
+// (render::Renderer::msaa_samples), so the list is the same on every device.
+inline constexpr LevelChoice kAntiAliasChoices[] = {{kAaOff, kAaOff, U"Off"},       {kAaSmaa, kAaSmaa, U"SMAA"},
+                                                    {kAaTaa, kAaTaa, U"TAA"},       {kAaMsaa2, kAaMsaa2, U"MSAA 2x"},
+                                                    {kAaMsaa4, kAaMsaa4, U"MSAA 4x"}, {kAaMsaa8, kAaMsaa8, U"MSAA 8x"}};
 // The seven detail options. Four levels where the renderer has four steps (Shader) or a continuous scale (Particle, Mesh,
 // Environment); three where it has three (Texture: top mips skipped 2 / 1 / 0, Water: reflection targets 0 / 1 / 2);
 // Shadow is on or off (any value above 0 draws shadows). Each list ends at the value the old slider's Max stood for.

@@ -94,15 +94,18 @@ struct VideoProfile {
     int32_t ui_scale = 100;  // [port: Gabriel] Options > Video > UI Scale, percent (kUiScaleMin .. kUiScaleMax; key "ui_scale")
     ui::VsyncMode vsync_mode = ui::VsyncMode::Fifo;
     int32_t frame_cap = 0;
-    int32_t detail = 100, anti_alias = 0, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100 (anti_alias: TAA strength, 0 = off)
+    int32_t detail = 100, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100
+    int32_t anti_alias = ui::kAaOff;   // [port: Gabriel] the Anti-aliasing list's mode (ui::kAntiAliasChoices; key "aa_mode")
     ui::AdvancedVideoSettings advanced;
 };
 // Copies an applied ApplyVideo's settings into the stored profile; false (profile untouched) while `v.unconfirmed` - a
 // resolution change waiting on the "keep these settings?" dialog (ui::VideoSettings::unconfirmed): the Yes answer, or the
 // revert to the previous mode on No / timeout, comes as a later ApplyVideo with unconfirmed false and stores then. `modes`
 // is the list the resolution index refers to.
-// Anti-aliasing is the one value p.anti_alias (the Video dialog's list); a profile file from before it was also an Advanced
-// dialog box (key "anti_aliasing=taa") loads as Medium strength when its own strength was 0.
+// Anti-aliasing is the one value p.anti_alias, a mode of the Video dialog's list (ui::kAntiAliasChoices), stored as
+// "aa_mode=off|smaa|taa|msaa2|msaa4|msaa8" (aa_mode_name). [port: Gabriel 2026-11-13] Older profiles still load: their
+// "anti_alias" was the TAA strength 0..100 (above 0 = TAA, 0 = Off) and before that an Advanced dialog box
+// "anti_aliasing=taa" also meant TAA; "aa_mode", when present, wins.
 bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std::vector<DisplayMode>& modes);
 // t43: the stored Detail value is the level of the seven advanced options (ui::advanced_detail_level); applied with them and
 // to a profile saved before the two agreed.
@@ -126,19 +129,26 @@ void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSetti
 //   particle_detail(slider)     ParticleWorld::set_detail: slider / 100 (ANIM_PARTICLES B.4: the option is 0..1)
 //   environment_fade_scale(slider)  Object_Fade_Begin / End scale for the battle camera: 0.6 + 0.4 * slider / 100
 //   gamma_value(slider)         Options > Video > Gamma, default 50 = 1.0 (identity), 2^((slider - 50) / 50): 0.5 .. 2; > 1 brightens
-//   taa_active(strength)        the Anti-aliasing strength is above 0 (the list's Low / Medium / High: 30 / 63 / 100)
-//   apply_aa_options(o, strength)  RecordOptions::taa / taa_weight: strength 1..100 lerps the current-frame weight 0.2 -> 0.04
-//                                  (smoother, more history; Medium = 0.1, the tuned default); off leaves the weight unset
+//   taa_active(mode)            the Anti-aliasing mode is TAA
+//   aa_msaa_samples(mode)       MSAA samples of the mode: 2 / 4 / 8 for MSAA 2x / 4x / 8x, else 1
+//   apply_aa_options(o, mode)   [port: Gabriel 2026-11-13] exactly one of RecordOptions::smaa / taa / msaa > 1 (none for Off),
+//                               each at its one quality: taa_weight / taa_sharpen stay the renderer defaults; an MSAA count the
+//                               device lacks is lowered by the renderer (Renderer::msaa_samples)
 int shader_level(int32_t slider);
 int water_level(int32_t slider);
 uint32_t texture_reduction(int32_t slider);
 float particle_detail(int32_t slider);
 float environment_fade_scale(int32_t slider);
 float gamma_value(int32_t slider);
-bool taa_active(int32_t strength);
+bool taa_active(int32_t mode);
+uint32_t aa_msaa_samples(int32_t mode);
+// Profile name of an Anti-aliasing mode ("off", "smaa", "taa", "msaa2", "msaa4", "msaa8"; unknown modes: "off") and back
+// (nullopt for an unknown name).
+const char* aa_mode_name(int32_t mode);
+std::optional<int32_t> parse_aa_mode(std::string_view name);
 // [port: Gabriel] Advanced video > Render Scale percent -> RecordOptions::render_scale (share of the window's pixels; 100 = 1).
 float render_scale_value(int32_t percent);
-void apply_aa_options(render::RecordOptions& o, int32_t strength);
+void apply_aa_options(render::RecordOptions& o, int32_t mode);
 // The overall Detail Level (IDD_VIDEO_OPTIONS_DIALOG: Low / Medium / High / Ultra, ui::kQualityPresets) as a preset [M]: a
 // quality level picked there (VideoSettings::detail_picked) sets the seven advanced detail options (particle, mesh, texture,
 // water, shader, shadow, environment) to its value; the checks (soft shadows, heat, bloom), anti-aliasing and anisotropy are
@@ -157,11 +167,11 @@ struct GpuClass {
 };
 struct AutoVideoChoice {
     size_t quality = 0;             // index into ui::kQualityPresets
-    int32_t anti_alias = 0;         // strength, one of ui::kAntiAliasChoices
+    int32_t anti_alias = ui::kAaOff;  // mode, one of ui::kAntiAliasChoices
     ui::AdvancedVideoSettings advanced;  // the seven options at the quality level, plus the checks, AO and anisotropy
 };
 AutoVideoChoice recommend_video(const GpuClass& gpu);
-// Stores the choice in the profile: the advanced options, the Anti-aliasing strength and the Detail value (sync_detail).
+// Stores the choice in the profile: the advanced options, the Anti-aliasing mode and the Detail value (sync_detail).
 void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c);
 // Per-monitor DPI awareness (v2) for the process, so window sizes, the client area and the display modes are all physical
 // pixels; without it a scaled display (150 %) stretches the window and a mode the size of the display no longer fits.

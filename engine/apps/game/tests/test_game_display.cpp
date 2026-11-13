@@ -135,7 +135,7 @@ void profile_round_trip() {
     p.widescreen = false;
     p.detail = 40;
     p.gamma = 70;
-    p.anti_alias = 63;
+    p.anti_alias = ui::kAaMsaa4;
     p.advanced.ambient_occlusion = true;
     p.advanced.anisotropy = 8;
     p.advanced.mesh = 25;
@@ -146,7 +146,7 @@ void profile_round_trip() {
     CHECK(game::load_video_profile(path, q));
     CHECK(q.mode == p.mode);
     CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay && q.hardware_mouse);
-    CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == 63);
+    CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == ui::kAaMsaa4);
     CHECK(q.advanced == p.advanced);
     CHECK(q.window_mode == ui::WindowMode::Borderless && !q.widescreen && q.ui_scale == 175);
     {  // UI5 t01: Widescreen off lists modes no wider than 4:3; all when none is
@@ -172,7 +172,7 @@ void profile_round_trip() {
     }
     game::VideoProfile r;
     CHECK(game::load_video_profile(path, r));
-    CHECK(r.anti_alias == ui::kAntiAliasDefaultSlider && r.advanced.anisotropy == 16);
+    CHECK(r.anti_alias == ui::kAaTaa && r.advanced.anisotropy == 16);
     CHECK(r.advanced.render_scale == 25);  // clamped to render::kRenderScaleMin
     CHECK(game::render_scale_value(75) == 0.75f && game::render_scale_value(100) == 1.0f && game::render_scale_value(0) == 0.25f);
     CHECK(r.mode.width == 0 && r.vsync && !r.advanced.ambient_occlusion && r.advanced.bloom);
@@ -246,23 +246,37 @@ void detail_mappings() {
     CHECK(game::particle_detail(100) == 1.0f && game::particle_detail(0) == 0.0f && game::particle_detail(250) == 1.0f);
     CHECK(game::environment_fade_scale(100) == 1.0f && std::fabs(game::environment_fade_scale(0) - 0.6f) < 1e-6f);
     CHECK(game::gamma_value(50) == 1.0f && game::gamma_value(100) == 2.0f && game::gamma_value(0) == 0.5f);
-    CHECK(!game::taa_active(0) && game::taa_active(1));  // any strength above 0 switches the resolve on
-    render::RecordOptions o;
-    game::apply_aa_options(o, 100);
-    CHECK(o.taa && std::fabs(o.taa_weight - 0.04f) < 1e-6f);
-    game::apply_aa_options(o, ui::kAntiAliasDefaultSlider);
-    CHECK(o.taa && std::fabs(o.taa_weight - 0.1f) < 0.002f);  // Medium = the tuned default weight
-    game::apply_aa_options(o, 0);
-    CHECK(!o.taa && o.taa_weight < 0.0f);
-    // Anti-aliasing is one value in the profile: the Video dialog's list sets it, and a profile written when the Advanced dialog
-    // had its own box ("anti_aliasing=taa") still turns it on.
+    // [port: Gabriel 2026-11-13] One list, one mode: exactly one of SMAA / TAA / MSAA (or none), each at its one quality.
+    {
+        struct Want {
+            int32_t mode;
+            bool smaa, taa;
+            uint32_t msaa;
+        };
+        const Want wants[] = {{ui::kAaOff, false, false, 1},  {ui::kAaSmaa, true, false, 1},   {ui::kAaTaa, false, true, 1},
+                              {ui::kAaMsaa2, false, false, 2}, {ui::kAaMsaa4, false, false, 4}, {ui::kAaMsaa8, false, false, 8}};
+        CHECK(std::size(wants) == std::size(ui::kAntiAliasChoices));
+        for (size_t i = 0; i < std::size(wants); ++i) {
+            const Want& w = wants[i];
+            CHECK(ui::kAntiAliasChoices[i].value == w.mode && ui::level_index(ui::kAntiAliasChoices, w.mode) == i);
+            render::RecordOptions o;
+            o.taa_weight = 0.3f;  // a stale weight is reset to the renderer default
+            game::apply_aa_options(o, w.mode);
+            CHECK(o.smaa == w.smaa && o.taa == w.taa && o.msaa == w.msaa && o.taa_weight < 0.0f);
+            CHECK(game::taa_active(w.mode) == w.taa && game::aa_msaa_samples(w.mode) == w.msaa);
+            CHECK(game::parse_aa_mode(game::aa_mode_name(w.mode)) == w.mode);
+        }
+        CHECK(!game::parse_aa_mode("high") && std::string(game::aa_mode_name(99)) == "off");
+    }
+    // The Video dialog's list sets the profile; older profiles still load: the TAA strength ("anti_alias" above 0 = TAA) and
+    // the Advanced dialog's box ("anti_aliasing=taa"); "aa_mode" wins.
     {
         game::VideoProfile aa;
         ui::VideoSettings vs;
-        vs.anti_alias = 40;
-        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == 40 && game::taa_active(aa.anti_alias));
-        vs.anti_alias = 0;
-        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == 0 && !game::taa_active(aa.anti_alias));
+        vs.anti_alias = ui::kAaSmaa;
+        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == ui::kAaSmaa);
+        vs.anti_alias = ui::kAaOff;
+        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == ui::kAaOff);
         const std::filesystem::path dir = std::filesystem::temp_directory_path() / "alamo_game_display_aa";
         std::filesystem::create_directories(dir);
         const std::string path = (dir / "video_options.txt").string();
@@ -275,10 +289,13 @@ void detail_mappings() {
             CHECK(game::load_video_profile(path, r));
             return r.anti_alias;
         };
-        CHECK(load("anti_aliasing=taa\nanti_alias=0\n") == ui::kAntiAliasDefaultSlider);  // old file: box on, slider 0
-        CHECK(load("anti_aliasing=off\nanti_alias=30\n") == 30);                           // old file: box off, slider above 0
-        CHECK(load("anti_aliasing=taa\nanti_alias=20\n") == 20);                           // strength kept
-        CHECK(load("anti_alias=0\n") == 0);
+        CHECK(load("anti_aliasing=taa\nanti_alias=0\n") == ui::kAaTaa);   // old file: box on, slider 0
+        CHECK(load("anti_aliasing=off\nanti_alias=30\n") == ui::kAaTaa);  // old file: box off, slider above 0
+        CHECK(load("anti_alias=100\n") == ui::kAaTaa);                     // old file: High strength
+        CHECK(load("anti_alias=0\n") == ui::kAaOff);
+        CHECK(load("anti_alias=63\naa_mode=msaa8\n") == ui::kAaMsaa8);     // the new key wins
+        CHECK(load("aa_mode=smaa\n") == ui::kAaSmaa);
+        CHECK(load("aa_mode=ultra\n") == ui::kAaOff);                      // unknown name: the default stays
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
     }
@@ -295,7 +312,6 @@ void detail_mappings() {
             game::apply_detail_options(r, s);
             return r.shadows ? 1 : 0;
         });
-        for (const ui::LevelChoice& c : ui::kAntiAliasChoices) CHECK(game::taa_active(c.value) == (c.value > 0));
         // The four quality levels are four different looks.
         std::array<int, 4> shader{}, tex{};
         for (size_t i = 0; i < 4; ++i) {
@@ -339,15 +355,17 @@ void auto_detect() {
     };
     using game::GpuKind;
     const game::AutoVideoChoice big = game::recommend_video(gpu(GpuKind::Discrete, 12, 16.0f));
-    CHECK(big.quality == 3 && big.advanced.anisotropy == 16 && big.advanced.ambient_occlusion && big.anti_alias == ui::kAntiAliasChoices[3].value);
+    CHECK(big.quality == 3 && big.advanced.anisotropy == 16 && big.advanced.ambient_occlusion && big.anti_alias == ui::kAaTaa);
     CHECK(ui::quality_level(big.advanced) == 3);
     const game::AutoVideoChoice mid = game::recommend_video(gpu(GpuKind::Discrete, 4, 16.0f));
-    CHECK(mid.quality == 2 && mid.advanced.anisotropy == 8 && !mid.advanced.ambient_occlusion && ui::quality_level(mid.advanced) == 2);
+    CHECK(mid.quality == 2 && mid.advanced.anisotropy == 8 && !mid.advanced.ambient_occlusion && ui::quality_level(mid.advanced) == 2 &&
+          mid.anti_alias == ui::kAaTaa);
     const game::AutoVideoChoice small = game::recommend_video(gpu(GpuKind::Discrete, 2, 16.0f));
-    CHECK(small.quality == 1 && small.advanced.anisotropy == 4 && !small.advanced.soft_shadows && ui::quality_level(small.advanced) == 1);
+    CHECK(small.quality == 1 && small.advanced.anisotropy == 4 && !small.advanced.soft_shadows && ui::quality_level(small.advanced) == 1 &&
+          small.anti_alias == ui::kAaTaa);
     CHECK(game::recommend_video(gpu(GpuKind::Integrated, 8, 16.0f)).quality == 1);
     const game::AutoVideoChoice weak = game::recommend_video(gpu(GpuKind::Integrated, 1, 16.0f));
-    CHECK(weak.quality == 0 && weak.anti_alias == 0 && weak.advanced.anisotropy == 2 && ui::quality_level(weak.advanced) == 0);
+    CHECK(weak.quality == 0 && weak.anti_alias == ui::kAaOff && weak.advanced.anisotropy == 2 && ui::quality_level(weak.advanced) == 0);
     const game::AutoVideoChoice soft = game::recommend_video(gpu(GpuKind::Other, 16, 1.0f));
     CHECK(soft.quality == 0 && soft.advanced.anisotropy == 0 && !soft.advanced.ambient_occlusion);
     // Filtering never exceeds the device's limit, and is off without the feature.
@@ -362,7 +380,7 @@ void auto_detect() {
                 for (int32_t c : ui::kAnisotropyChoices) listed = listed || c == v;
                 CHECK(listed);
             }
-    // Stored in the profile: the options, the anti-aliasing strength and the Detail value; mode, v-sync and gamma stay.
+    // Stored in the profile: the options, the anti-aliasing mode and the Detail value; mode, v-sync and gamma stay.
     game::VideoProfile p;
     p.vsync = false;
     p.gamma = 61;

@@ -306,8 +306,8 @@ public:
     FrameLimiter limiter_;
     uint32_t refresh_hz_ = 0;
     uint64_t refresh_checked_frame_ = 0;
-    // [port: Gabriel] advanced video: ambient occlusion and anisotropic filtering (anti-aliasing, TAA, is the profile's
-    // anti_alias strength). The detail levels and the soft shadow / heat / bloom checks reach the renderer in apply_detail_options (game_display.hpp, t10 / t11). world_view_: the last
+    // [port: Gabriel] advanced video: ambient occlusion and anisotropic filtering (anti-aliasing is the profile's anti_alias
+    // mode: Off / SMAA / TAA / MSAA 2x / 4x / 8x). The detail levels and the soft shadow / heat / bloom checks reach the renderer in apply_detail_options (game_display.hpp, t10 / t11). world_view_: the last
     // frame's world (0 none, 1 galactic, 2 battle); a change restarts the TAA history.
     ui::AdvancedVideoSettings adv_video_;
     int world_view_ = 0;

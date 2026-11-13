@@ -63,9 +63,11 @@ bool App::render_frame() {
     const int world_view = galactic ? 1 : battle_view ? 2 : 0;
     if (world_view != world_view_) gpu_.renderer.reset_taa_history();
     world_view_ = world_view;
-    apply_aa_options(gview_.ropt, video_profile_.anti_alias);  // the Anti-Aliasing list (t11)
+    apply_aa_options(gview_.ropt, video_profile_.anti_alias);  // the Anti-Aliasing list (t11; one mode since 2026-11-13)
     bview_.ropt.taa = gview_.ropt.taa;
     bview_.ropt.taa_weight = gview_.ropt.taa_weight;
+    bview_.ropt.smaa = gview_.ropt.smaa;
+    bview_.ropt.msaa = gview_.ropt.msaa;
     bview_.ropt.ambient_occlusion = adv_video_.ambient_occlusion;  // land battles only (render skips space / galactic)
     // The original's detail options on top of each view's own frame options (copies: the views keep theirs).
     render::RecordOptions gro = gview_.ropt, bro = bview_.ropt;
