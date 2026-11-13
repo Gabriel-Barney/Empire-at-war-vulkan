@@ -21,6 +21,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
+#include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
@@ -323,7 +324,8 @@ bool Renderer::init(rhi::Context& ctx, rhi::Allocator& alloc, rhi::Uploader& up,
     rp_external_ = render_pass_id(desc.color_format, desc.depth_format);
     rp_scene_ = ds_format_ != VK_FORMAT_UNDEFINED ? render_pass_id(desc.color_format, ds_format_) : rp_external_;
     rp_post_ = render_pass_id(desc.color_format, VK_FORMAT_UNDEFINED);
-    render_pass_ = rp_scene_;
+    render_pass_ = rp_main_ = rp_world_ = rp_scene_;
+    msaa_ = 1;
 
     if (!hot_.init(ctx, desc.texture_capacity)) return false;
     layout_ = hot_.create_pipeline_layout(rhi::kHotPushBytes);
@@ -437,6 +439,7 @@ void Renderer::shutdown() {
     bc_.reset();  // memo: pipeline / program handles of this device
     for (auto& b : built_) b.reset();
     ssao_.reset();  // [port] SSAO pipelines + targets
+    smaa_.reset();  // [port] SMAA pipelines + targets + lookup textures
     taa_.reset();   // [port] TAA pipelines + history
     gamma_.reset();  // [port] gamma pipeline + scratch image
     psos_.shutdown(true);
@@ -467,6 +470,7 @@ void Renderer::shutdown() {
     tg_.distortion.shutdown();
     tg_.bloom_a.shutdown();
     tg_.bloom_b.shutdown();
+    tg_.scene_ms.shutdown();
     tg_.ready = false;
     for (auto& f : fx_post_) f.reset();
     {
@@ -512,7 +516,13 @@ bool Renderer::set_color_format(VkFormat format) {
     rp_external_ = render_pass_id(desc_.color_format, desc_.depth_format);
     rp_scene_ = ds_format_ != VK_FORMAT_UNDEFINED ? render_pass_id(desc_.color_format, ds_format_) : rp_external_;
     rp_post_ = render_pass_id(desc_.color_format, VK_FORMAT_UNDEFINED);
-    render_pass_ = rp_scene_;  // lit keys follow automatically
+    // Lit keys follow automatically. [port] MSAA: the main scene class follows the format with the same sample count.
+    const uint8_t rp_ms = msaa_ > 1 ? render_pass_id(desc_.color_format, ds_format_, msaa_) : uint8_t{0};
+    if (!rp_ms) msaa_ = 1;
+    rp_main_ = rp_ms ? rp_ms : rp_scene_;
+    rp_world_ = rp_scene_;
+    render_pass_ = rp_main_;
+    tg_.scene_ms.shutdown();
     if (tg_.ready) {
         tg_.scene.shutdown();
         tg_.scene_tex.shutdown();
@@ -526,7 +536,7 @@ bool Renderer::set_color_format(VkFormat format) {
 }
 
 void Renderer::destroy_unlit_pipelines() {
-    for (auto* set : {&unlit_, &unlit_int_})
+    for (auto* set : {&unlit_, &unlit_int_, &unlit_ms_})
         for (auto& row : *set)
             for (VkPipeline& p : row) {
                 if (p) ctx_->vkd().vkDestroyPipeline(ctx_->device(), p, nullptr);
@@ -538,12 +548,14 @@ bool Renderer::create_unlit_pipelines() {
     const std::vector<uint32_t> vs[2] = {rhi::spirv_from_bytes({g_unlit_vs, sizeof(g_unlit_vs)}),
                                          rhi::spirv_from_bytes({g_unlit_vs_skin, sizeof(g_unlit_vs_skin)})};
     const std::vector<uint32_t> ps = rhi::spirv_from_bytes({g_unlit_ps, sizeof(g_unlit_ps)});
-    for (int set = 0; set < 2; ++set)
+    for (int set = 0; set < 3; ++set)
     for (int skinned = 0; skinned < 2; ++skinned) {
+        if (set == 2 && msaa_ <= 1) break;  // [port] MSAA: set 2 only with a multisampled main scene
         VertexInputDesc vin;
         const materials::VertexLayout l = skinned ? materials::VertexLayout::RSkinNU2 : materials::VertexLayout::NU2;
         if (!build_vertex_input(l, spirv_input_locations(vs[skinned]), vin)) return false;
-        // set 0: the caller's formats (draw()); set 1: the frame graph's scene depth-stencil (render()).
+        // set 0: the caller's formats (draw()); set 1: the frame graph's scene depth-stencil (render()); set 2: the same with
+        // msaa_ samples (the multisampled main scene).
         const VkFormat depth = set == 0 || ds_format_ == VK_FORMAT_UNDEFINED ? desc_.depth_format : ds_format_;
         const rhi::FormatInfo& dfi = rhi::format_info(rhi::from_vk(depth));
         for (int b = 0; b < 3; ++b) {
@@ -575,14 +587,45 @@ bool Renderer::create_unlit_pipelines() {
             d.color_formats = {&desc_.color_format, 1};
             d.depth_format = depth;
             d.stencil_format = dfi.stencil ? depth : VK_FORMAT_UNDEFINED;
+            d.samples = set == 2 ? static_cast<VkSampleCountFlagBits>(msaa_) : VK_SAMPLE_COUNT_1_BIT;
             d.layout = layout_;
             d.name = "render.unlit";
-            VkPipeline& slot = set == 0 ? unlit_[skinned][b] : unlit_int_[skinned][b];
+            VkPipeline& slot = set == 0 ? unlit_[skinned][b] : set == 1 ? unlit_int_[skinned][b] : unlit_ms_[skinned][b];
             slot = unlit_cache_.create_graphics(d);
             if (!slot) return false;
         }
     }
     return true;
+}
+
+uint32_t Renderer::msaa_samples(uint32_t requested) const {
+    if (!ctx_ || ds_format_ == VK_FORMAT_UNDEFINED) return 1;  // no frame-graph depth-stencil: nothing to multisample
+    const VkSampleCountFlags ok = ctx_->caps().framebuffer_samples;
+    for (const uint32_t s : {8u, 4u, 2u})  // VkSampleCountFlagBits values are the counts
+        if (s <= requested && (ok & s) != 0 && render_pass_id(desc_.color_format, ds_format_, s) != 0) return s;
+    return 1;
+}
+
+bool Renderer::set_msaa(uint32_t samples) {
+    if (samples == msaa_) return true;
+    ctx_->wait_idle();  // the old scene_ms target and unlit_ms_ pipelines may be used by frames in flight
+    tg_.scene_ms.shutdown();
+    destroy_unlit_pipelines();
+    const uint8_t rp = samples > 1 ? render_pass_id(desc_.color_format, ds_format_, samples) : uint8_t{0};
+    msaa_ = rp ? samples : 1u;
+    rp_main_ = rp ? rp : rp_scene_;
+    render_pass_ = rp_main_;
+    if (!create_unlit_pipelines()) {
+        log::errorf("render", "MSAA %ux: unlit pipelines could not be created", samples);
+        if (msaa_ > 1) {  // back to one sample
+            destroy_unlit_pipelines();
+            msaa_ = 1;
+            rp_main_ = render_pass_ = rp_scene_;
+            create_unlit_pipelines();
+        }
+        return false;
+    }
+    return msaa_ == samples;
 }
 
 // ---------------------------------------------------------------------------------------- upload

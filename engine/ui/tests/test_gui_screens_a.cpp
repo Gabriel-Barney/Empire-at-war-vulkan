@@ -503,7 +503,7 @@ END
     VideoSettings applied;
     applied.resolutions = {U"1280 x 720", U"1920 x 1080"};
     applied.resolution = 1;
-    applied.anti_alias = 40;  // an older profile's slider position: inside Low's range
+    applied.anti_alias = kAaMsaa4;
     applied.detail = advanced_detail_level(cur);
     p.advanced_video = [&] { return cur; };
     p.video = [&] { return applied; };
@@ -521,24 +521,29 @@ END
         e.value = row;
         fe.update(std::vector<GuiEvent>{e}, InputFrame{}, acts);
     };
-    // One anti-aliasing list (an old strength of 40 reads as Low), and the quality the options make (mesh 55 is High's range).
+    // One anti-aliasing list of modes ([port: Gabriel 2026-11-13] Off, SMAA, TAA, MSAA 2x / 4x / 8x), and the quality the
+    // options make (mesh 55 is High's range).
     GuiControl* aa = d->get("IDC_PORT_ANTI_ALIASING");
     GuiControl* quality = d->get("IDC_PORT_DETAIL_LEVEL");
-    CHECK(aa->selected == 1 && aa->items.size() == 4 && quality->selected == static_cast<int32_t>(kQualityCustom) &&
+    CHECK(aa->selected == 4 && aa->items.size() == 6 && quality->selected == static_cast<int32_t>(kQualityCustom) &&
           quality->items.size() == kQualityCount + 1 && quality->items.back() == U"Custom" && aa->ui_font && quality->ui_font);
     // Untouched anti-aliasing sends nothing for it; a moved list sends an ApplyVideo with the display settings in force.
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyAdvancedVideo);
     acts.clear();
-    aa->selected = 3;
+    aa->selected = 1;
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.size() == 2 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.anti_alias == 100 && acts[0].video.resolution == 1 &&
+    CHECK(acts.size() == 2 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.anti_alias == kAaSmaa && acts[0].video.resolution == 1 &&
           !acts[0].video.detail_picked && !acts[0].video.unconfirmed && acts[1].kind == MenuAction::Kind::ApplyAdvancedVideo && !fe.resolution_confirm_open());
-    applied.anti_alias = 100;  // the host stored it
+    applied.anti_alias = kAaSmaa;  // the host stored it
+    aa->selected = 2;
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts[acts.size() - 2].kind == MenuAction::Kind::ApplyVideo && acts[acts.size() - 2].video.anti_alias == kAaTaa);
+    applied.anti_alias = kAaTaa;
     aa->selected = 0;
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts[acts.size() - 2].kind == MenuAction::Kind::ApplyVideo && acts[acts.size() - 2].video.anti_alias == 0);
-    applied.anti_alias = 0;
+    CHECK(acts[acts.size() - 2].kind == MenuAction::Kind::ApplyVideo && acts[acts.size() - 2].video.anti_alias == kAaOff);
+    applied.anti_alias = kAaOff;
     // A list per option on the level the stored value is in, the shipped sliders hidden, anisotropy and AO as before.
     const struct {
         const char* id;
@@ -608,8 +613,9 @@ END
     AdvancedVideoSettings mix;
     mix.water = 0;
     CHECK(quality_level(mix) == kQualityCustom);
-    CHECK(level_index(kAntiAliasChoices, 0) == 0 && level_index(kAntiAliasChoices, 1) == 1 && level_index(kAntiAliasChoices, 46) == 1 &&
-          level_index(kAntiAliasChoices, kAntiAliasDefaultSlider) == 2 && level_index(kAntiAliasChoices, 81) == 2 && level_index(kAntiAliasChoices, 100) == 3);
+    for (size_t i = 0; i < std::size(kAntiAliasChoices); ++i) CHECK(level_index(kAntiAliasChoices, kAntiAliasChoices[i].value) == i);
+    CHECK(kAntiAliasChoices[0].value == kAaOff && kAntiAliasChoices[1].value == kAaSmaa && kAntiAliasChoices[2].value == kAaTaa &&
+          kAntiAliasChoices[5].value == kAaMsaa8);
 }
 
 }  // namespace test_gui_screens_t

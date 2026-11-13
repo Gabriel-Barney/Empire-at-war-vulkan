@@ -535,7 +535,7 @@ void Renderer::world_draw_terrain(rhi::Frame& frame, VkCommandBuffer cmd, const 
     PostSpec ps;
     ps.fx = w.terrain_fx_;
     ps.pass = w.terrain_pass_;
-    ps.render_pass = rp_scene_;
+    ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
     ps.width = width;
     ps.height = height;
     ps.view = &view;
@@ -675,7 +675,7 @@ void Renderer::world_draw_water(rhi::Frame& frame, VkCommandBuffer cmd, const Vi
     PostSpec ps;
     ps.fx = w.water_fx_;
     ps.pass = w.water_pass_;
-    ps.render_pass = rp_scene_;
+    ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
     ps.width = width;
     ps.height = height;
     ps.view = &view;

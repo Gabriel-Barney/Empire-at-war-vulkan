@@ -90,6 +90,7 @@ bool RenderTarget::create() {
         id.height = extent_.height;
         id.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | desc_.extra_color_usage;
+        id.samples = desc_.samples;
         id.name = desc_.name;
         if (!alloc_->create_image(id, color_)) return false;
     }
@@ -100,6 +101,7 @@ bool RenderTarget::create() {
         id.height = extent_.height;
         id.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         if (desc_.sample_depth) id.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        id.samples = desc_.samples;
         id.name = desc_.name;
         if (!alloc_->create_image(id, depth_)) {
             destroy_images();

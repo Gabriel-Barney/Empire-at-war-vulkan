@@ -253,39 +253,68 @@ constexpr VkFormat kColorFormats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8
                                       VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
                                       VK_FORMAT_R16G16B16A16_SFLOAT};
 // Ids are persisted in the pipeline-cache key file: 1 + colour * 4 + depth; colour-only passes (post,
-// no depth attachment) use 128 + colour.
+// no depth attachment) use 128 + colour. [port] MSAA: sample class s (0 = 1 sample, 1 = 2, 2 = 4, 3 = 8) adds
+// s * 24 to a depth id (1..96) and s * 6 to a colour-only id (128..151); s = 0 keeps the old ids.
 constexpr VkFormat kDepthFormats[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT,
                                       VK_FORMAT_D16_UNORM};
 constexpr uint8_t kColorOnlyBase = 128;
+constexpr size_t kDepthIds = std::size(kColorFormats) * std::size(kDepthFormats);  // 24
+constexpr size_t kSampleClasses = 4;
+static_assert(1 + kSampleClasses * kDepthIds <= kColorOnlyBase, "render pass ids overlap");
+static_assert(kColorOnlyBase + kSampleClasses * std::size(kColorFormats) <= 256, "render pass ids overflow");
+int sample_class(uint32_t samples) {
+    switch (samples) {
+        case 1: return 0;
+        case 2: return 1;
+        case 4: return 2;
+        case 8: return 3;
+        default: return -1;
+    }
+}
 }  // namespace
 
-uint8_t render_pass_id(VkFormat color, VkFormat depth) {
+uint8_t render_pass_id(VkFormat color, VkFormat depth, uint32_t samples) {
+    const int sc = sample_class(samples);
+    if (sc < 0) return 0;
+    const size_t s = static_cast<size_t>(sc);
     if (depth == VK_FORMAT_UNDEFINED) {
         for (size_t c = 0; c < std::size(kColorFormats); ++c)
-            if (kColorFormats[c] == color) return static_cast<uint8_t>(kColorOnlyBase + c);
+            if (kColorFormats[c] == color) return static_cast<uint8_t>(kColorOnlyBase + s * std::size(kColorFormats) + c);
         return 0;
     }
     for (size_t c = 0; c < std::size(kColorFormats); ++c)
         for (size_t d = 0; d < std::size(kDepthFormats); ++d)
             if (kColorFormats[c] == color && kDepthFormats[d] == depth)
-                return static_cast<uint8_t>(1 + c * std::size(kDepthFormats) + d);
+                return static_cast<uint8_t>(1 + s * kDepthIds + c * std::size(kDepthFormats) + d);
     return 0;
 }
 
-bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth) {
+bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth, VkSampleCountFlagBits& samples) {
+    static constexpr VkSampleCountFlagBits kSamples[kSampleClasses] = {VK_SAMPLE_COUNT_1_BIT, VK_SAMPLE_COUNT_2_BIT,
+                                                                       VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_8_BIT};
     if (id == 0) return false;
     if (id >= kColorOnlyBase) {
-        if (static_cast<size_t>(id - kColorOnlyBase) >= std::size(kColorFormats)) return false;
-        color = kColorFormats[id - kColorOnlyBase];
+        const size_t i = static_cast<size_t>(id - kColorOnlyBase);
+        const size_t s = i / std::size(kColorFormats), c = i % std::size(kColorFormats);
+        if (s >= kSampleClasses) return false;
+        color = kColorFormats[c];
         depth = VK_FORMAT_UNDEFINED;
+        samples = kSamples[s];
         return true;
     }
     const size_t i = static_cast<size_t>(id - 1);
-    const size_t c = i / std::size(kDepthFormats), d = i % std::size(kDepthFormats);
-    if (c >= std::size(kColorFormats)) return false;
+    const size_t s = i / kDepthIds, r = i % kDepthIds;
+    if (s >= kSampleClasses) return false;
+    const size_t c = r / std::size(kDepthFormats), d = r % std::size(kDepthFormats);
     color = kColorFormats[c];
     depth = kDepthFormats[d];
+    samples = kSamples[s];
     return true;
+}
+
+bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth) {
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    return render_pass_formats(id, color, depth, samples);
 }
 
 const materials::ShaderBlob* shader_blob_by_id(uint32_t id) {
@@ -339,7 +368,8 @@ bool pipeline_desc_from_key(const materials::PsoKey& k, VkPipelineLayout layout,
     if (!vs || vs->stage != materials::ShaderStage::Vertex) return fail("unknown vertex program id");
     if (k.ps_id && (!ps || ps->stage != materials::ShaderStage::Pixel)) return fail("unknown pixel program id");
     VkFormat depth = VK_FORMAT_UNDEFINED;
-    if (!render_pass_formats(k.render_pass, b.color, depth)) return fail("unknown render pass id");
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    if (!render_pass_formats(k.render_pass, b.color, depth, samples)) return fail("unknown render pass id");
     b.vs.assign(vs->spirv.begin(), vs->spirv.end());
     if (ps) b.fs.assign(ps->spirv.begin(), ps->spirv.end());
     b.vs_entry = vs->entry_point;
@@ -380,6 +410,7 @@ bool pipeline_desc_from_key(const materials::PsoKey& k, VkPipelineLayout layout,
     d.blend.alpha_op = static_cast<VkBlendOp>(k.alpha_op);
     d.blend.write_mask = static_cast<VkColorComponentFlags>(k.color_write_mask & 0xF);
     d.color_formats = {&b.color, 1};
+    d.samples = samples;
     d.depth_format = depth;
     const rhi::FormatInfo& dfi = rhi::format_info(rhi::from_vk(depth));
     d.stencil_format = dfi.stencil ? depth : VK_FORMAT_UNDEFINED;
@@ -397,7 +428,8 @@ bool pipeline_desc_from_translated(const materials::PsoKey& k, const materials::
     if (!(k.flags & materials::kPsoTranslated)) return fail("not a translated key");
     if (tp.vs.spirv.empty() || tp.ps.spirv.empty()) return fail("translated program without SPIR-V");
     VkFormat depth = VK_FORMAT_UNDEFINED;
-    if (!render_pass_formats(k.render_pass, b.color, depth)) return fail("unknown render pass id");
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    if (!render_pass_formats(k.render_pass, b.color, depth, samples)) return fail("unknown render pass id");
     b.vs = tp.vs.spirv;
     b.fs = tp.ps.spirv;
     b.vs_entry = tp.vs.entry;
@@ -456,6 +488,7 @@ bool pipeline_desc_from_translated(const materials::PsoKey& k, const materials::
     d.blend.alpha_op = static_cast<VkBlendOp>(k.alpha_op);
     d.blend.write_mask = static_cast<VkColorComponentFlags>(k.color_write_mask & 0xF);
     d.color_formats = {&b.color, 1};
+    d.samples = samples;
     d.depth_format = depth;
     const rhi::FormatInfo& dfi = rhi::format_info(rhi::from_vk(depth));
     d.stencil_format = dfi.stencil ? depth : VK_FORMAT_UNDEFINED;

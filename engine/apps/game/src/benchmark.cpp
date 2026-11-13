@@ -23,6 +23,10 @@ const char* bench_mode_name(BenchMode m) {
 
 namespace {
 
+// Anti-aliasing modes of the Video dialog's list (ui::kAaOff / ui::kAaTaa in gui_menus.hpp; this library may build without
+// the ui module, app_benchmark.cpp checks they agree).
+constexpr int32_t kAaOff = 0, kAaTaa = 2;
+
 constexpr BenchPreset make_preset(std::string_view name, std::string_view description, uint32_t w, uint32_t h, int32_t detail,
                                   int32_t aa, int32_t aniso, bool effects, bool ao) {
     BenchPreset p;
@@ -41,12 +45,12 @@ constexpr BenchPreset make_preset(std::string_view name, std::string_view descri
 // [port] BM2a: the four quality levels of the Video dialog at 720p / 1080p, plus a small one for quick checks. V-sync off,
 // no frame cap, null audio everywhere.
 constexpr std::array<BenchPreset, 5> kPresets = {
-    make_preset("bm-low", "1280x720, Low detail (0), no TAA, no soft shadows / heat / bloom", 1280, 720, 0, 0, 0, false, false),
-    make_preset("bm-medium", "1920x1080, Medium detail (40), no TAA, effects on", 1920, 1080, 40, 0, 4, true, false),
-    make_preset("bm-high", "1920x1080, High detail (75), TAA Medium, effects on", 1920, 1080, 75, 63, 8, true, false),
-    make_preset("bm-ultra", "1920x1080, Ultra detail (100), TAA Medium, effects and ambient occlusion on, 16x anisotropy", 1920, 1080,
-                100, 63, 16, true, true),
-    make_preset("bm-smoke", "640x360, High detail (75), no TAA: quick test runs", 640, 360, 75, 0, 0, true, false),
+    make_preset("bm-low", "1280x720, Low detail (0), no TAA, no soft shadows / heat / bloom", 1280, 720, 0, kAaOff, 0, false, false),
+    make_preset("bm-medium", "1920x1080, Medium detail (40), no TAA, effects on", 1920, 1080, 40, kAaOff, 4, true, false),
+    make_preset("bm-high", "1920x1080, High detail (75), TAA, effects on", 1920, 1080, 75, kAaTaa, 8, true, false),
+    make_preset("bm-ultra", "1920x1080, Ultra detail (100), TAA, effects and ambient occlusion on, 16x anisotropy", 1920, 1080,
+                100, kAaTaa, 16, true, true),
+    make_preset("bm-smoke", "640x360, High detail (75), no TAA: quick test runs", 640, 360, 75, kAaOff, 0, true, false),
 };
 
 bool parse_u64(const std::string& s, uint64_t& out) {

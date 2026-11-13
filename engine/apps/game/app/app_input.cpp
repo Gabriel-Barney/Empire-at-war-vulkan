@@ -1196,8 +1196,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                         adv_video_ = detail_preset(adv_video_, video_profile_.detail);
                         video_profile_.advanced = adv_video_;
                     }
-                    std::printf("video: anti-aliasing %s (strength %d), detail level %d\n", taa_active(video_profile_.anti_alias) ? "TAA" : "off",
-                                video_profile_.anti_alias, video_profile_.detail);
+                    std::printf("video: anti-aliasing %s, detail level %d\n", aa_mode_name(video_profile_.anti_alias), video_profile_.detail);
                     save_video_options();
                 }
                 break;

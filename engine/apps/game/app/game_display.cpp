@@ -344,8 +344,9 @@ struct ProfileAdvBool {
     const char* key;
     bool ui::AdvancedVideoSettings::*field;
 };
+// [port: Gabriel 2026-11-13] "anti_alias" (the old TAA strength) is not written any more; anti-aliasing is "aa_mode".
 constexpr ProfileInt kProfileInts[] = {{"frame_cap", &VideoProfile::frame_cap}, {"detail", &VideoProfile::detail},
-                                       {"anti_alias", &VideoProfile::anti_alias}, {"gamma", &VideoProfile::gamma}};
+                                       {"gamma", &VideoProfile::gamma}};
 constexpr ProfileAdvInt kProfileAdvInts[] = {
     {"particle_detail", &ui::AdvancedVideoSettings::particle}, {"mesh_detail", &ui::AdvancedVideoSettings::mesh},
     {"texture_detail", &ui::AdvancedVideoSettings::texture},   {"water_detail", &ui::AdvancedVideoSettings::water},
@@ -414,9 +415,16 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     for (const ProfileAdvInt& e : kProfileAdvInts) num(e.key, p.advanced.*e.field);
     for (const ProfileAdvBool& e : kProfileAdvBools) flag(e.key, p.advanced.*e.field);
     p.advanced.render_scale = std::clamp(p.advanced.render_scale, static_cast<int32_t>(render::kRenderScaleMin * 100.0f), 100);
-    // A profile from before anti-aliasing was one setting also has "anti_aliasing=taa|off" (the Advanced dialog's box) next to the
-    // strength (the Video dialog's slider): either one on meant TAA. A box on over strength 0 is Medium, the old default.
-    if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa" && p.anti_alias <= 0) p.anti_alias = ui::kAntiAliasDefaultSlider;
+    // Anti-aliasing [port: Gabriel 2026-11-13]: "aa_mode" (aa_mode_name). Older profiles: "anti_alias" was the TAA strength
+    // 0..100 (above 0 = TAA, 0 = Off), and before that also "anti_aliasing=taa|off" (the Advanced dialog's box): either one on
+    // meant TAA. "aa_mode" wins when present; an unknown name keeps the value.
+    int32_t strength = -1;
+    num("anti_alias", strength);
+    if (strength >= 0) p.anti_alias = strength > 0 ? ui::kAaTaa : ui::kAaOff;
+    if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa") p.anti_alias = ui::kAaTaa;
+    if (auto it = kv.find("aa_mode"); it != kv.end())
+        if (const std::optional<int32_t> m = parse_aa_mode(it->second)) p.anti_alias = *m;
+    if (p.anti_alias < ui::kAaOff || p.anti_alias > ui::kAaMsaa8) p.anti_alias = ui::kAaOff;
     return true;
 }
 
@@ -431,6 +439,7 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     f << "vsync=" << (p.vsync ? 1 : 0) << "\nvsync_mode=" << (p.vsync_mode == ui::VsyncMode::Mailbox ? "mailbox" : "fifo") << "\n";
     f << "window_mode=" << window_mode_name(p.window_mode) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\nui_scale=" << p.ui_scale << "\n";
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
+    f << "aa_mode=" << aa_mode_name(p.anti_alias) << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
     for (const ProfileAdvBool& e : kProfileAdvBools) f << e.key << "=" << (p.advanced.*e.field ? 1 : 0) << "\n";
     return static_cast<bool>(f);
@@ -558,13 +567,38 @@ float particle_detail(int32_t slider) { return static_cast<float>(slider_clamp(s
 float environment_fade_scale(int32_t slider) { return 0.6f + 0.4f * static_cast<float>(slider_clamp(slider)) / 100.0f; }
 float gamma_value(int32_t slider) { return std::exp2((static_cast<float>(slider_clamp(slider)) - 50.0f) / 50.0f); }
 
-bool taa_active(int32_t strength) { return strength > 0; }
+bool taa_active(int32_t mode) { return mode == ui::kAaTaa; }
 
-void apply_aa_options(render::RecordOptions& o, int32_t strength) {
-    o.taa = taa_active(strength);
-    // Off keeps the renderer's tuned default weight for a later switch-on. On: the share of the current frame falls with the
-    // strength (more history = smoother edges, a little more softness / ghosting).
-    o.taa_weight = o.taa ? 0.2f - 0.16f * static_cast<float>(slider_clamp(strength)) / 100.0f : -1.0f;
+uint32_t aa_msaa_samples(int32_t mode) {
+    switch (mode) {
+        case ui::kAaMsaa2: return 2;
+        case ui::kAaMsaa4: return 4;
+        case ui::kAaMsaa8: return 8;
+        default: return 1;
+    }
+}
+
+namespace {
+constexpr const char* kAaModeNames[] = {"off", "smaa", "taa", "msaa2", "msaa4", "msaa8"};  // by mode, ui::kAaOff .. kAaMsaa8
+static_assert(std::size(kAaModeNames) == std::size(ui::kAntiAliasChoices));
+}  // namespace
+
+const char* aa_mode_name(int32_t mode) {
+    return mode >= 0 && static_cast<size_t>(mode) < std::size(kAaModeNames) ? kAaModeNames[static_cast<size_t>(mode)] : kAaModeNames[0];
+}
+
+std::optional<int32_t> parse_aa_mode(std::string_view name) {
+    for (size_t i = 0; i < std::size(kAaModeNames); ++i)
+        if (name == kAaModeNames[i]) return static_cast<int32_t>(i);
+    return std::nullopt;
+}
+
+void apply_aa_options(render::RecordOptions& o, int32_t mode) {
+    // [port: Gabriel 2026-11-13] One mode, one quality each: TAA keeps the renderer's tuned weight and sharpen.
+    o.taa = taa_active(mode);
+    o.smaa = mode == ui::kAaSmaa;
+    o.msaa = aa_msaa_samples(mode);
+    o.taa_weight = -1.0f;
 }
 
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail) {

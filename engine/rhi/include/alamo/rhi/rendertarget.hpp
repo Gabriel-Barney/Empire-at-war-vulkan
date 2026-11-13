@@ -36,6 +36,7 @@ struct RenderTargetDesc {
     uint32_t width = 0, height = 0;    // absolute size when both non-zero ...
     float scale = 1.0f;                // ... else (int)(reference * scale), at least 1
     bool sample_depth = false;         // add SAMPLED usage to the depth image
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;  // > 1: multisampled colour and depth (resolved by the caller)
     VkImageUsageFlags extra_color_usage = 0;
     const char* name = nullptr;
 };

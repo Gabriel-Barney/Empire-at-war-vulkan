@@ -284,6 +284,16 @@ struct RecordOptions {
     // Renderer::discard_taa_frame() before the next render() - the benchmark's fixed-frames mode draws an unsettled frame
     // again and must not let it into the history. The frame itself is drawn exactly as without the flag.
     bool taa_provisional = false;
+    // [port] SMAA 1x (src/smaa.hpp; the original has none): after the post chain (after the TAA resolve when both are
+    // on), luma edge detection, blending weights and neighbourhood blending of the scene colour at one fixed quality
+    // (the reference HIGH preset). "smaa" GPU timer scope.
+    bool smaa = false;
+    // [port] MSAA: samples per pixel of the main scene (1 = off, 2, 4 or 8; clamped to what the device supports for the
+    // scene's colour + depth-stencil formats, Renderer::msaa_samples). The scene buckets, the world passes, lasers / beams
+    // and the scene hook draw into a multisampled colour + depth-stencil target that is resolved (colour average, depth
+    // sample 0) before the post chain; the soft-shadow blur and SSAO resolve it first where they read it. Water reflection /
+    // refraction and the sky cube stay single-sample. "msaa" GPU timer scope (the resolves).
+    uint32_t msaa = 1;
     // [port] The video options' Shader / Water detail on top of the frame graph (RENDER.md 1.5, 6; both default to the
     // maximum = nothing changes). Shader detail 0..3: 0 is the fixed-function path - no shadow volumes, no soft shadows (the
     // StencilDarken variant, TERRAIN_WATER_POST.md 4.3) - and it caps Water detail: < 3 -> 1, < 1 -> 0. Water detail 0..2:
@@ -349,6 +359,7 @@ struct PassTarget;
 struct EngineFrame;  // render_internal.hpp
 class WorldRenderer;  // world.hpp: terrain + water of a land map
 class SsaoPass;       // ssao.hpp: [port] screen-space ambient occlusion
+class SmaaPass;       // src/smaa.hpp: [port] SMAA 1x
 class TaaPass;        // src/taa.hpp: [port] temporal anti-aliasing
 class GammaPass;      // src/gamma.hpp: [port] output gamma
 struct WorldBindStats;
@@ -379,6 +390,8 @@ struct DrawStats {
     // [port] TAA (RecordOptions::taa): the resolve ran; this frame restarted the history (current frame only).
     bool taa = false, taa_reset = false;
     uint32_t taa_movers = 0;  // draws of the TAA velocity pass (keyed instances that moved since the last frame)
+    bool smaa = false;        // [port] SMAA (RecordOptions::smaa) ran
+    uint32_t msaa = 1;        // [port] samples the scene was drawn with (RecordOptions::msaa after the device clamp)
 };
 
 // ---- R4 scene hook (engine/render/particles): render-owned effects drawn inside the frame graph's buckets.
@@ -392,6 +405,7 @@ struct SceneHookPass {
     const ViewMatrices* view = nullptr;
     PhaseBucket bucket = PhaseBucket::Transparent;
     VkFormat color_format = VK_FORMAT_UNDEFINED, depth_format = VK_FORMAT_UNDEFINED, stencil_format = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;  // [port] MSAA: the scene target's sample count
     uint32_t width = 0, height = 0;
 };
 class SceneHook {
@@ -497,6 +511,9 @@ public:
     // restarts on resize, on a frame without TAA and on a camera jump (taa_history_usable); call this on cuts it can
     // miss (teleports to a similar view, a cinematic cut, a different scene drawn through the same Renderer).
     void reset_taa_history();
+    // [port] MSAA: the sample count render() uses for `requested` (1, 2, 4 or 8): the largest supported count not above
+    // it (the device's framebuffer colour / depth / stencil sample counts), 1 without a device.
+    uint32_t msaa_samples(uint32_t requested) const;
     // [port] BM2b: undo the TAA step of the last render() drawn with RecordOptions::taa_provisional, so the next frame
     // jitters, reprojects and sees object motion as if it had not been drawn. True when there was one to undo; false after
     // a render() without the flag or without TAA, a reset_taa_history(), keep_taa_frame() or a discard already done.
@@ -716,14 +733,23 @@ private:
     // Frame graph state.
     struct Targets {
         rhi::RenderTarget scene, scene_tex, distortion, bloom_a, bloom_b;
+        rhi::RenderTarget scene_ms;  // [port] MSAA scene colour + depth-stencil (msaa_ samples; empty when 1)
         bool ready = false;
     };
     Targets tg_;
     std::unique_ptr<SsaoPass> ssao_;  // [port] created on first use (RecordOptions::ambient_occlusion)
+    std::unique_ptr<SmaaPass> smaa_;  // [port] created on first use (RecordOptions::smaa)
     std::unique_ptr<TaaPass> taa_;    // [port] created on first use (RecordOptions::taa)
     ViewMatrices taa_begin(const ViewMatrices& view, const RecordOptions& opts);  // taa.cpp: jittered camera (or `view`)
     VkFormat ds_format_ = VK_FORMAT_UNDEFINED;        // scene depth-stencil (D32FS8 here)
     uint8_t rp_scene_ = 0, rp_external_ = 0, rp_post_ = 0;
+    // [port] MSAA: rp_main_ = the main scene's render pass (rp_scene_ with msaa_ samples; == rp_scene_ at 1 sample), the
+    // class render_pass_ holds outside the single-sample world prepass and draw(); rp_world_ = the class the world passes
+    // (terrain, decorations, water) build their pipelines for: rp_scene_ in the prepass, rp_main_ in the main scene.
+    uint8_t rp_main_ = 0, rp_world_ = 0;
+    uint32_t msaa_ = 1;
+    VkPipeline unlit_ms_[2][3] = {};  // unlit fallback for rp_main_ when msaa_ > 1
+    bool set_msaa(uint32_t samples);  // rp_main_ / unlit_ms_ / scene_ms for `samples` (GPU idle when it changes)
     bool external_ = false;                           // draw(): caller's attachment formats
     VkPipeline unlit_int_[2][3] = {};
     rhi::Buffer quad_vb_;                             // 6 FLOAT2 vertices at +-1.005 (TERRAIN_WATER_POST.md 4.2)

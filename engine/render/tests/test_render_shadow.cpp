@@ -219,6 +219,34 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
             } else {
                 std::printf("water detail: %s has no water, skipped\n", map);
             }
+            // [port] MSAA 4x: the stencil darken, the soft-shadow blur (its mid-scene resolve) and the water passes (single-sample
+            // reflection / refraction targets beside the multisampled scene) run, and the soft frame stays the 1x soft frame.
+            if (rr.msaa_samples(4) == 4) {
+                render::RecordOptions mo = ro;
+                mo.soft_shadows = true;
+                mo.msaa = 4;
+                for (int k = 0; k < 64; ++k) {  // until the multisampled pipelines exist
+                    CHECK(frame(g, rr, o, vm, scene.instances(), mo, st, clear, scene.sky()));
+                    if (k > 1 && st.post_pending == 0 && st.pending_pipeline == 0 && st.translation_pending == 0) break;
+                    rr.wait_translations();
+                    rr.pipelines().wait_idle();
+                }
+                CHECK(st.msaa == 4 && st.post_pending == 0 && st.darkened && st.soft_shadows);
+                CHECK(wst.water_patches == 0 || (wst.reflection && wst.refraction));
+                double mean_ms = 0, diff = 0;
+                for (size_t i = 0; i + 3 < bytes; i += 4) {
+                    mean_ms += luma(o.data() + i);
+                    diff += std::fabs(luma(o.data() + i) - luma(&img[2][i]));
+                }
+                mean_ms /= n;
+                diff /= n;
+                CHECK(save_png(src_dir + "/logs/render_shadow_soft_msaa4.png", std::vector<uint8_t>(o.data(), o.data() + bytes), W, H));
+                std::printf("MSAA 4x soft shadows: mean luma %.2f (1x %.2f), mean |1x - 4x| luma %.2f\n", mean_ms, mean[2], diff);
+                CHECK(std::fabs(mean_ms - mean[2]) < mean[2] * 0.02);
+                CHECK(diff < 3.0);
+                render::RecordOptions back = ro;
+                CHECK(frame(g, rr, o, vm, scene.instances(), back, st, clear, scene.sky()) && st.msaa == 1);
+            }
             CHECK(volumes[1] > 0);  // the camera sees shadow casters
             CHECK(mean[2] > mean[1] * 0.97);
             CHECK(static_cast<double>(soft_darker) / n < 0.015);

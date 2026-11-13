@@ -542,7 +542,7 @@ uint32_t Renderer::ff_geometry_draws(rhi::Frame& frame, VkCommandBuffer cmd, con
     for (size_t i = 0; i < n; ++i) {
         const FfGeoDraw& d = draws[i];
         materials::PsoKey key = d.pass->pso[0];
-        key.render_pass = rp_scene_;
+        key.render_pass = rp_world_;  // [port] MSAA: the pass being recorded
         key.vertex_layout = d.layout;
         const materials::Program prog = materials::ff_program(materials::ff_inputs_for_layout(d.layout));
         if (prog.vs) key.vs_id = prog.vs->id;
@@ -664,7 +664,7 @@ void Renderer::world_draw_decorations(rhi::Frame& frame, VkCommandBuffer cmd, co
         PostSpec ps;
         ps.fx = w.prim_fx_[m];
         ps.pass = pass;
-        ps.render_pass = rp_scene_;
+        ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
         ps.width = width;
         ps.height = height;
         ps.view = &dv;
@@ -698,7 +698,7 @@ void Renderer::world_draw_decorations(rhi::Frame& frame, VkCommandBuffer cmd, co
     PostSpec ps;
     ps.fx = w.fow_fx_;
     ps.pass = w.fow_pass_;
-    ps.render_pass = rp_scene_;
+    ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
     ps.width = width;
     ps.height = height;
     ps.view = &dv;
