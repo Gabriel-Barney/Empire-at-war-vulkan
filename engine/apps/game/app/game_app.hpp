@@ -138,7 +138,7 @@ struct Options {
     uint32_t battle_max_frames = 27000;
     bool fleet_groups = false;  // [port] --fleet-groups: fleet groups in tactical battles (docs/DECISIONS.md)
     rhi::PresentMode mode = rhi::PresentMode::Fifo;
-    int32_t frame_cap = 0;  // --frame-cap N|display (ui::kFrameCapChoices semantics: 0 none, -1 the display's refresh rate)
+    int32_t frame_cap = 0;  // --frame-cap N|display (0 none, -1 = ui::kFrameCapDisplay, the display's refresh rate)
     bool mode_set = false, frame_cap_set = false;  // --mailbox / --immediate / --frame-cap given: they win over the video options file
     // [port] --video-options FILE: the video options file to read (live play reads and writes the default one,
     // game_display.hpp default_video_profile_path; smoke / hidden runs read only this one and write none).
