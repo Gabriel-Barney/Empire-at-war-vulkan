@@ -196,6 +196,32 @@ def probe_equation_count():
     return len(COMMON_EQS) + len(bfb_equations()) + len(MAJOR_MOD) + len(PERC_MOD)
 
 
+# bkg3 t03 / t04 (run_a2f_empire.cmd, a2f_run.py --human-empire): with a human Empire the Underworld pair samples
+# Tatooine (a human planet the port's Underworld attacks with Conquer_Opponent from frame 6895, retail never before
+# 39000) and adds the three shipped equations of that goal's desire. Safe in retail for the reason given above: the
+# Underworld's goal system evaluates Should_Conquer_Opponent_Planet on every enemy planet each proposal pass
+# (BasicOffensiveGalacticSet), and the other two are its sub-functions.
+HUMAN_EMPIRE_PLANET = 'Tatooine'
+HUMAN_EMPIRE_SHIPPED = [
+    ('Should_Conquer_Opponent_Planet', 'SCO', True),
+    ('First_Attack_Allowed', 'FAA', False),
+    ('Should_Perform_Unrestricted_Grab_Space', 'UGS', True),
+]
+
+
+def set_human_empire():
+    """Switch this module's channel-D lists to the human-Empire run (idempotent). Call before building the mod."""
+    global PERC_KEYS, PERC_SHIPPED_NAMES
+    for i, p in enumerate(PERC_PAIRS):
+        if p[0] == 'UNDERWORLD':
+            PERC_PAIRS[i] = (p[0], p[1], HUMAN_EMPIRE_PLANET, p[3], p[4])
+    for e in HUMAN_EMPIRE_SHIPPED:
+        if e not in PERC_SHIPPED:
+            PERC_SHIPPED.append(e)
+    PERC_KEYS = [k for _n, k, _h in PERC_SHIPPED] + [k for _n, k, _b in PERC_MOD]
+    PERC_SHIPPED_NAMES = [n for n, _k, _h in PERC_SHIPPED]
+
+
 def perc_lua(fkey, use_mod_eq=True):
     """Lua text of the D channel's pair table for one faction key (read by a2fb_percept.lua)."""
     pair = [p for p in PERC_PAIRS if p[0] == fkey][0]
