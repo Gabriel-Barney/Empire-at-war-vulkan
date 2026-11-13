@@ -63,6 +63,10 @@ int main() {
     // render::tactical_fov_x and ui::tactical_fov_x agree
     for (float a : {1.25f, 4.0f / 3.0f, 16.0f / 10.0f, 16.0f / 9.0f, 2.4f})
         CHECK(std::fabs(render::tactical_fov_x(55.0f, a) - ui::tactical_fov_x(55.0f, a)) < 1e-6f);
+    // galactic Hor+ [port: Gabriel]: render::galactic_fov_x and ui::galactic_fov_x agree; 4:3 and narrower keep the FOV
+    for (float a : {1.25f, 4.0f / 3.0f, 16.0f / 10.0f, 16.0f / 9.0f, 2.4f, 32.0f / 9.0f})
+        CHECK(std::fabs(render::galactic_fov_x(ui::kGalacticFovX, a) - ui::galactic_fov_x(ui::kGalacticFovX, a)) < 1e-6f);
+    CHECK(ui::galactic_fov_x(ui::kGalacticFovX, 1.25f) == ui::kGalacticFovX && ui::galactic_fov_x(ui::kGalacticFovX, 2.4f) > ui::galactic_fov_x(ui::kGalacticFovX, 16.0f / 9.0f));
     // galactic: equal to render::make_galactic_view
     ui::GalacticCameraController g;
     const ui::CameraParams gp = g.params(16.0f / 9.0f);

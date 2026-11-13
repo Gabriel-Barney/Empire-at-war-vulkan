@@ -31,10 +31,20 @@ namespace alamo::ui {
 struct HudWaypointLine {
     std::vector<Vec3> points;  // unit position first, then the queued waypoints
     Rgba8 color{120, 255, 120, 200};
+    float step_px = 9.0f, dot_px = 3.0f;  // dot spacing / dot size in screen pixels
+    float end_px = 0.0f;                  // > 0: a square of this size on the last point (the destination)
 };
-// Returns the number of dots drawn.
+// Returns the number of dots drawn (end markers included).
 uint32_t add_waypoint_lines(HudDrawList& dl, const HudCanvas& canvas, const View& view, std::span<const HudWaypointLine> lines,
                             uint32_t layer = 0);
+
+// [port: Gabriel, 2026-11-13] unit path lines (CameraSettings::show_path_lines, the "Empire at War Remake" style): the
+// part of a unit's planned path still ahead of it. `path` = the sim's path points in order (travelled ones included);
+// the result is `unit`, then the points after the path segment nearest the unit, so the line starts at the unit and
+// follows the route to its end. An empty path gives unit -> `goal`. Heights are the caller's.
+std::vector<Vec3> remaining_route(Vec3 unit, std::span<const Vec3> path, Vec3 goal);
+inline constexpr Rgba8 kPathLineMove{90, 230, 255, 190}, kPathLineAttack{255, 110, 80, 200};
+inline constexpr float kPathLineStepPx = 4.0f, kPathLineDotPx = 2.0f, kPathLineEndPx = 7.0f;
 
 // [port: Gabriel] queued orders (docs/DECISIONS.md "Camera and controls": shift-queued orders). The host fills one
 // HudOrderQueue per unit from the sim's read-only queued_orders(unit) query (the current order first, then the queued

@@ -33,6 +33,7 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
     src/reveal.cpp     # GALACTIC_REVEAL_CORRUPTION: revealed bytes, pre-step, corruption transitions
     src/visibility.cpp # GALACTIC_REVEAL_CORRUPTION 2: planet visibility modifier lists, sources, fold
     src/fleet_slots.cpp  # Playtest 3 t07: authoritative fleet orbit slots (campaign.hpp FleetState::slot)
+    src/object_names.cpp  # [port: Gabriel 2026-11-13] fleet and ship names (campaign.hpp GalacticSim::rename)
     src/strategic.cpp  # OI galactic: STRATEGIC_GAPS speed M, company transports, buildability, stealth, victory claims
     src/special_rules.cpp    # P4 sim: special-system tables (special_data.hpp)
     src/special_systems.cpp  # P4 sim: hero trigger / respawn, black market, sabotage, hack, income abilities, corruption

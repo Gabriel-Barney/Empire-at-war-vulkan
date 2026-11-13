@@ -125,7 +125,7 @@ struct Env {
         hud.build(frame);
         return out;
     }
-    std::vector<HudAction> click(const std::string& name) {
+    std::vector<HudAction> click(const std::string& name, double now = 2.0) {
         const int32_t c = id(name);
         std::vector<commands::EventData> cmds;
         std::vector<HudAction> acts;
@@ -133,7 +133,7 @@ struct Env {
         r.hover_component = c;
         r.hud = {{HudPointerEvent::Kind::Press, Button::Left, c, 0, 0}, {HudPointerEvent::Kind::Release, Button::Left, c, 0, 0},
                  {HudPointerEvent::Kind::Click, Button::Left, c, 0, 0}};
-        hud.update_input(r, false, false, 2.0, cmds, &acts);
+        hud.update_input(r, false, false, now, cmds, &acts);
         CHECK(cmds.empty());
         return acts;
     }
@@ -327,8 +327,86 @@ void test_closed() {
 
 }  // namespace
 
+namespace {
+
+// [port: Gabriel, 2026-11-13] fleet / ship names: the header's and a unit pad's tooltip text; a named unit is not merged
+// into its type's stack; a double click on an own pad asks for a rename (HudAction::Rename), a foreign pad does not.
+void test_names() {
+    Env e;
+    GalacticFleet f = make_fleet(900, 1, false, 3);
+    for (GalacticFleetSlot& u : f.units) u.type = 7;  // one type: an unnamed fleet would be a single stack of 3
+    f.name = U"Home Fleet";
+    f.units[1].name = U"Avenger";
+    e.build({f}, true);
+    const auto state = [&](const std::string& n) { return e.hud.buttons().find_state(static_cast<uint32_t>(e.id(n))); };
+    CHECK(state("q2_fleet") && state("q2_fleet")->tooltip_text == U"Home Fleet");
+    CHECK(e.filled(1) == 2);  // the stack of the two unnamed units, then the named one on its own pad
+    CHECK(state(Env::pad_name(1, 0))->text == U"2" && state(Env::pad_name(1, 0))->tooltip_text.empty());
+    CHECK(state(Env::pad_name(1, 1))->text.empty() && state(Env::pad_name(1, 1))->tooltip_text == U"Avenger");
+    CHECK(e.icon(1, 1) == "i_900_1.tga");
+
+    const auto renames = [](const std::vector<HudAction>& acts) {
+        std::vector<HudAction> out;
+        for (const HudAction& a : acts)
+            if (a.kind == HudAction::Kind::Rename) out.push_back(a);
+        return out;
+    };
+    // A double click on the named unit's pad: one Rename for that unit (value 0), after the usual select.
+    CHECK(renames(e.click(Env::pad_name(1, 1), 3.0)).empty());
+    std::vector<HudAction> r = renames(e.click(Env::pad_name(1, 1), 3.3));
+    CHECK(r.size() == 1 && r[0].unit == 9002 && r[0].value == 0 && r[0].ids == std::vector<uint32_t>{900});
+    CHECK(renames(e.click(Env::pad_name(1, 1), 3.5)).empty());  // a third click starts over
+    // The header: the fleet (value 1). Too slow a second click is no double click.
+    CHECK(renames(e.click("q2_fleet", 5.0)).empty());
+    CHECK(renames(e.click("q2_fleet", 5.7)).empty());
+    r = renames(e.click("q2_fleet", 5.9));
+    CHECK(r.size() == 1 && r[0].unit == 900 && r[0].value == 1);
+    // Two different pads are no double click.
+    CHECK(renames(e.click(Env::pad_name(1, 0), 7.0)).empty());
+    CHECK(renames(e.click(Env::pad_name(1, 1), 7.1)).empty());
+
+    // A foreign fleet's pads are inert: no rename.
+    Env g;
+    GalacticFleet x = make_fleet(901, 0, true, 1);
+    x.name = U"Pirates";
+    g.build({x}, false);
+    CHECK(renames(g.click(Env::pad_name(0, 0), 1.0)).empty() && renames(g.click(Env::pad_name(0, 0), 1.1)).empty());
+}
+
+// [port] the rename prompt: typing, the 32-character cap, Backspace, Enter / Esc, UTF-8 out, drawing only while open.
+void test_rename_prompt() {
+    using R = RenamePrompt::Result;
+    RenamePrompt p;
+    CHECK(!p.active() && p.update(U"x", false, true, false) == R::None);
+    p.open(9002, false, "Avenger");
+    CHECK(p.active() && p.object() == 9002 && !p.fleet() && p.text() == U"Avenger");
+    CHECK(p.update(U"", true, false, false) == R::None && p.text() == U"Avenge");
+    CHECK(p.update(U"r É", false, false, false) == R::None && p.text() == U"Avenger É");
+    CHECK(p.utf8() == std::string("Avenger \xC3\x89"));
+    CHECK(p.update(U"\x01", false, false, false) == R::None && p.text() == U"Avenger É");  // controls dropped
+    CHECK(p.update(U"", false, true, false) == R::Submit && !p.active());
+    p.open(900, true, "");
+    CHECK(p.fleet() && p.text().empty());
+    CHECK(p.update(std::u32string(40, U'a'), false, false, false) == R::None && p.text().size() == commands::kMaxObjectNameChars);
+    CHECK(p.update(U"", false, false, true) == R::Cancel && !p.active());
+    // Drawn only while open.
+    std::unique_ptr<GlyphRasterizer> raster = make_box_rasterizer();
+    FontCache fonts{*raster};
+    HudCanvas canvas;
+    resize_canvas(canvas, &fonts, 1024, 768);
+    HudDrawList closed, open;
+    p.build(closed, fonts, canvas, 0.0);
+    p.open(900, true, "Home Fleet");
+    p.build(open, fonts, canvas, 0.0);
+    CHECK(closed.total() == 0 && open.total() > 0);
+}
+
+}  // namespace
+
 int main() {
     test_one_fleet();
+    test_names();
+    test_rename_prompt();
     test_slots_to_panes();
     test_slot0_merge();
     test_pane_overflow();

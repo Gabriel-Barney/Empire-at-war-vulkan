@@ -64,7 +64,6 @@ void App::bench_apply_video() {
     video_profile_ = v;
     adv_video_ = v.advanced;
     detail_options_ = true;
-    hardware_mouse_ = false;
     std::printf("benchmark: preset %s (%s)\n", std::string(p.name).c_str(), std::string(p.description).c_str());
 }
 

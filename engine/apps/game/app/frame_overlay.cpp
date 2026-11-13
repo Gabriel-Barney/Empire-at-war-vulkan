@@ -90,7 +90,7 @@ void FrameOverlay::read_ticks() {
 
 void FrameOverlay::build(ui::HudDrawList& dl, const ui::HudCanvas& c, ui::FontCache& fonts) const {
     ui::HudTextStyle st;
-    st.font = fonts.font("Arial", 7.5f, c.screen_height);
+    st.font = fonts.font("Arial", 7.5f, c.font_height());
     if (st.font < 0) return;
     st.color = {235, 235, 235, 255};
     st.outline = true;

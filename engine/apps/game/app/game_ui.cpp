@@ -110,7 +110,11 @@ void GameUi::set_faction(std::string_view faction, std::string_view good_side, s
     for (const ui::ShellSet::Shell& s : tactical_shells.shells()) tactical_shells.set_alt(s.component, shell_alt);
 }
 
-void GameUi::resize(uint32_t w, uint32_t h) {
+void GameUi::resize(uint32_t w, uint32_t h, int32_t ui_scale_pct) {
+    const float s = static_cast<float>(ui_scale_pct) / 100.0f;
+    gui.set_ui_scale(s);
+    galactic_hud.set_ui_scale(s);
+    tactical_hud.set_ui_scale(s);
     gui.resize(w, h);
     galactic_hud.resize(w, h);
     tactical_hud.resize(w, h);

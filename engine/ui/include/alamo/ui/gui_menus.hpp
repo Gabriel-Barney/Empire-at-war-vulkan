@@ -9,8 +9,9 @@
 //   DIALOG                          slider), Custom Campaign -> IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG (custom sets, faction
 //                                   combo, difficulty radios, advanced options), Skirmish -> IDD_SKIRMISH_STAGING_DIALOG
 //   IDD_MAIN_OPTIONS_DIALOG /       Audio (IDD_AUDIO_OPTIONS_DIALOG: 4 sliders = AudioBus Master / Sfx / Speech / Music),
-//   IDD_IN_GAME_OPTIONS_DIALOG      Video (IDD_VIDEO_OPTIONS_DIALOG -> Advanced: IDD_ADVANCED_VIDEO_OPTIONS_DIALOG ->
-//                                   ApplyAdvancedVideo; Auto detect -> AutoDetectVideo), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
+//   IDD_IN_GAME_OPTIONS_DIALOG      Display (the Video button: IDD_VIDEO_OPTIONS_DIALOG -> ApplyVideo), Graphics ([port:
+//                                   Gabriel] button: IDD_ADVANCED_VIDEO_OPTIONS_DIALOG -> ApplyAdvancedVideo, plus ApplyVideo
+//                                   when its Anti-Aliasing list changed; the shipped Auto Detect button is hidden), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
 //                                   key-capture edits bound to the P2 HotkeyTable, Accept syncs P1 Bindings), Gameplay
 //                                   (IDD_GAMEPLAY_OPTIONS_DIALOG)
 //   IDD_GAME_OPTIONS_DIALOG (pause) Save -> IDD_SAVE_GAME_DIALOG, Load -> IDD_LOAD_GAME_DIALOG, Options ->
@@ -88,10 +89,23 @@ inline constexpr size_t kVsyncModeCount = 2;
 // The cap holds with v-sync on too (e.g. 60 fps on a 144 Hz display with FIFO, or Mailbox capped at the refresh rate).
 inline constexpr int32_t kFrameCapDisplay = -1;
 inline constexpr int32_t kFrameCapChoices[] = {0, kFrameCapDisplay, 30, 60, 90, 120, 144, 165, 240};
+// [port: Gabriel 2026-11-13] IDC_PORT_WINDOW_MODE rows (in this order), replacing the shipped "Run in window" check
+// (IDC_WINDOWED_MODE, hidden): Fullscreen = the monitor takes the picked resolution and a frameless window covers it
+// [port: no exclusive Vulkan full screen]; Borderless = a frameless window over the monitor at the desktop's own resolution
+// (the picked resolution's refresh rate is still applied, its size is not); Windowed = a framed window of the picked size.
+enum class WindowMode : uint8_t { Fullscreen, Borderless, Windowed };
+inline constexpr size_t kWindowModeCount = 3;
+// [port: Gabriel 2026-11-13] IDC_PORT_UI_SCALE rows: DPI-style UI scale in percent (HudCanvas::make). 100 % = one canvas
+// unit per physical pixel; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
+// The game starts at 100 % whatever the Windows display scale is (the process is per-monitor DPI aware).
+inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500};
+inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
     int32_t resolution = -1;
-    bool windowed = false, vsync = true, widescreen = true, hardware_mouse = false;
+    WindowMode window_mode = WindowMode::Fullscreen;  // [port: Gabriel] IDC_PORT_WINDOW_MODE
+    int32_t ui_scale = 100;                           // [port: Gabriel] IDC_PORT_UI_SCALE, one of kUiScaleChoices
+    bool vsync = true, widescreen = true;
     VsyncMode vsync_mode = VsyncMode::Fifo;  // [port: Gabriel] IDC_PORT_VSYNC_MODE
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
     int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP: one of kFrameCapChoices
@@ -112,10 +126,13 @@ struct VideoSettings {
 // [port: Gabriel] t12: seconds the resolution-change confirmation waits before it reverts (the original's countdown,
 // TEXT_REVERTING_IN_X_SECONDS, is not in the recovered specs: 15 s as Windows' own display dialog [M] guess).
 inline constexpr double kResolutionConfirmSeconds = 15.0;
-// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (from IDD_VIDEO_OPTIONS_DIALOG's Advanced button): 7 detail options + 3 checks.
+// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (the Graphics page since the Display / Graphics split): 7 detail options + 3 checks.
 // [port: Gabriel] plus the port's ambient occlusion check (IDC_PORT_AMBIENT_OCCLUSION) and anisotropic filtering combo
-// (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is not here: it is one list in the Video dialog.
+// (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is VideoSettings::anti_alias (its list is on this page).
 inline constexpr int32_t kAnisotropyChoices[] = {0, 2, 4, 8, 16};  // 0 = off (the materials' own sampler state)
+// [port: Gabriel] Render Scale combo (IDC_PORT_RENDER_SCALE): percent of the window's pixels the 3D scene is drawn with
+// (render::RecordOptions::render_scale; 75 at 3840 x 2160 = 3326 x 1871). 100 = native. HUD and dialogs stay native.
+inline constexpr int32_t kRenderScaleChoices[] = {50, 60, 67, 75, 85, 100};
 
 // [port: Gabriel] Named levels for the options that were 0..100 sliders. The stored values stay 0..100 (the profile file and
 // the renderer's mappings in game_display.hpp are unchanged); a list shows the level a stored value falls in, and picking a
@@ -153,6 +170,7 @@ struct AdvancedVideoSettings {
     bool soft_shadows = true, heat_distortion = true, bloom = true;
     bool ambient_occlusion = false;
     int32_t anisotropy = 0;  // one of kAnisotropyChoices
+    int32_t render_scale = 100;  // percent of the window's pixels, one of kRenderScaleChoices (a stored other value is kept)
     friend bool operator==(const AdvancedVideoSettings&, const AdvancedVideoSettings&) = default;
 };
 // The overall quality levels of the Video dialog's Detail Level list: each one sets all seven detail options to its value
@@ -187,6 +205,10 @@ struct CameraSettings {
     float galactic_fov_deg = 26.565f;  // atan(0.5), the original
     float tactical_fov_deg = 55.0f;
     uint8_t queue_mods = kModShift;
+    // [port: Gabriel, 2026-11-13] IDC_PORT_SHOW_PATH_LINES: draw the planned route (the sim's path, unit to destination)
+    // of every moving unit of the local player, one line per squadron / company, in tactical battles (space and land), as in the "Empire at War Remake" mod. Off by default: the original
+    // only draws the line of a queued waypoint path (UI.md 1.5).
+    bool show_path_lines = false;
     friend bool operator==(const CameraSettings&, const CameraSettings&) = default;
 };
 inline constexpr float kGalacticFovMinDeg = 15.0f, kGalacticFovMaxDeg = 60.0f, kTacticalFovMinDeg = 30.0f,
@@ -204,12 +226,16 @@ inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
 // (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
 // (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
-// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use) under the Advanced button. Its Anti-Aliasing and Detail
-// Level sliders are replaced by two lists in their rows (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices; IDC_PORT_DETAIL_LEVEL:
-// Low / Medium / High / Ultra / Custom, see kQualityPresets); the shipped sliders and their end captions are hidden.
-// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG gets a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the
-// level lists above), the anisotropic filtering combo and the ambient occlusion check (AdvancedVideoSettings).
-// Add with DialogScript::extend after GUIDialogs.rc is loaded.
+// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use), the display mode list (IDC_PORT_WINDOW_MODE,
+// WindowMode) in place of the hidden IDC_WINDOWED_MODE check and the UI scale list (IDC_PORT_UI_SCALE, kUiScaleChoices).
+// Display / Graphics split (Gabriel, 2026-11-13): the options menus' Video button is Display and opens IDD_VIDEO_OPTIONS_DIALOG
+// with the display settings only (its Anti-Aliasing and Detail Level rows, Advanced and Auto Detect buttons are hidden, the
+// rows under them move up); a Graphics button the port adds under it (IDC_PORT_MAIN_OPTIONS_GRAPHICS /
+// IDC_PORT_IN_GAME_OPTIONS_GRAPHICS) opens IDD_ADVANCED_VIDEO_OPTIONS_DIALOG as the Graphics page. That page gets the
+// Detail Level list (IDC_PORT_DETAIL_LEVEL: Low / Medium / High / Ultra / Custom, a preset for the seven lists, see
+// kQualityPresets), a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the level lists above), the
+// Anti-Aliasing list (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices), the render scale and anisotropic filtering combos and the
+// ambient occlusion check (AdvancedVideoSettings). Add with DialogScript::extend after GUIDialogs.rc is loaded.
 extern const char* const kPortDialogExtensionsRc;
 
 // IDC_SCROLL_SPEED_SLIDER: the dialog slider runs 0..100; the original option is 0..3 with Defaults = 1.0
@@ -286,7 +312,6 @@ struct MenuAction {
         KeybindingsChanged,  // the HotkeyTable (and Bindings) were updated
         // P4 completion (2026-10-27), appended:
         ApplyAdvancedVideo,  // advanced
-        AutoDetectVideo,     // Auto detect on the video / advanced video dialogs
         ApplyCamera,         // [port: Gabriel] camera (FOVs, queue modifier); hotkeys changed too -> KeybindingsChanged
         // modc t08 (IDD_PORT_MODS_DIALOG), appended:
         CheckMod,   // mod: the picker row selected (ModPickerEntry::id; "" = the base game) wants its load report
@@ -368,10 +393,6 @@ public:
     void show_pause_menu();       // in-game menu (IDD_GAME_OPTIONS_DIALOG) over the HUD
     void close_pause_menu();
     bool pause_menu_open() const;
-    // [port] After the host answered MenuAction::Kind::AutoDetectVideo by changing its video options: the open Video dialog's
-    // Anti-Aliasing and Detail Level lists and the open Advanced dialog's lists, checks and anisotropy show the provider's
-    // values again. Everything else in those dialogs (resolution, v-sync, gamma, ...) keeps what the player has set.
-    void refresh_video_dialogs();
     void set_in_game(bool g) { in_game_ = g; }
     const CampaignMenu& campaigns() const { return menu_; }
 

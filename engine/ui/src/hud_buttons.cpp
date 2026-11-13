@@ -239,7 +239,7 @@ Vec2f HudButtons::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache* fo
     if (fonts && (!r.text.empty() || !r.text2.empty())) {
         HudTextStyle st;
         st.font = fonts->font(c.font_name.empty() ? std::string(kFallbackFontFace) : c.font_name,
-                              c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas.screen_height);
+                              c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas.font_height());
         st.color = with_alpha(r.text_color_set ? r.text_color : c.has_text_color ? c.text_color : Rgba8{}, blink);
         st.outline = c.text_outline;
         st.emboss = c.text_emboss;
@@ -308,7 +308,7 @@ void TooltipState::update(const HudButtons& buttons, const ComponentTable& table
     const int32_t h = buttons.hover();
     if (h < 0 || static_cast<size_t>(h) >= table.size()) return;
     const ButtonRuntime* r = buttons.find_state(static_cast<uint32_t>(h));
-    if (table[static_cast<size_t>(h)].tooltip_text.empty() && (!r || r->tooltip_key.empty())) return;
+    if (table[static_cast<size_t>(h)].tooltip_text.empty() && (!r || (r->tooltip_key.empty() && r->tooltip_text.empty()))) return;
     if (buttons.pressed() >= 0) return;  // no tooltip while a button is held
     if (now - buttons.hover_since() + 1e-9 < cfg.delay) return;
     component_ = h;
@@ -329,7 +329,9 @@ bool TooltipState::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache& f
                         const ComponentTable& table, const HudButtons& buttons, const TextDatabase* text, Vec2f cursor_px,
                         int32_t faction_alt, const TooltipConfig& cfg) const {
     const std::string k = key(buttons, table);
-    if (k.empty()) return false;
+    const ButtonRuntime* rt = component_ >= 0 ? buttons.find_state(static_cast<uint32_t>(component_)) : nullptr;
+    const std::u32string literal = rt ? rt->tooltip_text : std::u32string();  // [port] a player-given name
+    if (k.empty() && literal.empty()) return false;
     // ui3 t07: a runtime tooltip_key may list several keys separated by spaces (ability name + description): one line each.
     std::u32string body;
     size_t at = 0;
@@ -343,6 +345,10 @@ bool TooltipState::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache& f
         }
         at = e + 1;
     }
+    if (!literal.empty()) {
+        if (!body.empty()) body += U'\n';
+        body += literal;
+    }
     return draw_text(dl, atlas, fonts, canvas, table, body, cursor_px, faction_alt, cfg);
 }
 
@@ -355,7 +361,7 @@ bool TooltipState::draw_text(HudDrawList& dl, const TextureAtlas& atlas, FontCac
     const uint32_t layer = back ? static_cast<uint32_t>(back->base_layer) : 10u;
     HudTextStyle st;
     st.font = fonts.font(font_c && !font_c->font_name.empty() ? font_c->font_name : std::string("Arial"),
-                         font_c && font_c->font_point_size > 0 ? font_c->font_point_size : 7.0f, canvas.screen_height);
+                         font_c && font_c->font_point_size > 0 ? font_c->font_point_size : 7.0f, canvas.font_height());
     // [port] the tooltip text uses the frame's light colour: tooltip_left_text's Color is a dark blue meant for the
     // encyclopedia panel; white keeps it readable on i_tooltip_back.
     st.color = Rgba8{230, 230, 230, 255};
