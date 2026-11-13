@@ -680,7 +680,7 @@ void test_widgets_ui5() {
     // Combo: the closed field is the skin's 25-unit pop-down button height (UI.md §3.7.1), not 15.
     CHECK(std::fabs(env.gui.combo_field_height(*d, ci) - 25.0f) < 1e-3f && std::fabs((*d)[ci].field_height - 25.0f) < 1e-3f);
     std::vector<std::u32string> many;
-    for (int k = 0; k < 30; ++k) many.push_back(U"fps " + std::u32string(1, static_cast<char32_t>(U'A' + k)));
+    for (int k = 0; k < 30; ++k) many.push_back(U"fps " + std::u32string(1, U'A' + static_cast<char32_t>(k)));
     d->set_items("IDC_W_COMBO", many, 0);
     const GuiRect cr = d->control_rect(ci);
     const Vec2f field = env.at({cr.min.x + 20.0f, cr.max.y - 20.0f});  // inside the 25-unit field, below the old 15
@@ -741,7 +741,7 @@ void test_widgets_ui5() {
 
     // List: 50 rows, scroll column = the Scroll_Up_Button art width (16), not a fixed 12.
     std::vector<std::u32string> rowsv;
-    for (int k = 0; k < 50; ++k) rowsv.push_back(U"row " + std::u32string(1, static_cast<char32_t>(U'0' + k % 10)));
+    for (int k = 0; k < 50; ++k) rowsv.push_back(U"row " + std::u32string(1, U'0' + static_cast<char32_t>(k % 10)));
     d->set_items("IDC_W_LIST", rowsv);
     sb = env.gui.scroll_bar(*d, li);
     CHECK(sb.active && std::fabs(sb.col.width() - 16.0f) < 1e-3f && sb.max_top == 50 - sb.vis);
