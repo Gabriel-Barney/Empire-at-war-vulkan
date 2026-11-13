@@ -40,6 +40,17 @@ void border_point(float a, float& tx, float& ty) {
 }  // namespace
 
 uint32_t radial_wipe(const HudQuad& q, float fill, HudVertex (&out)[11]) {
+    if (q.has_corners) {  // [port] free quad: the given corners, always whole
+        out[0] = corner(q, 0, 0);
+        out[1] = corner(q, 1, 0);
+        out[2] = corner(q, 1, 1);
+        out[3] = corner(q, 0, 1);
+        for (size_t i = 0; i < 4; ++i) {
+            out[i].x = q.corners[i].x;
+            out[i].y = q.corners[i].y;
+        }
+        return 4;
+    }
     if (!(fill > 0.0f)) return 0;
     if (fill >= 100.0f) {
         out[0] = corner(q, 0, 0);
@@ -157,6 +168,11 @@ uint64_t HudDrawList::digest() const {
                 if (q.gradient) {
                     const uint32_t cb = pack_rgba(q.color_bottom);
                     h = fnv1a64(&cb, sizeof cb, h);
+                }
+                if (q.has_corners) {
+                    const float cs[8] = {q.corners[0].x, q.corners[0].y, q.corners[1].x, q.corners[1].y,
+                                         q.corners[2].x, q.corners[2].y, q.corners[3].x, q.corners[3].y};
+                    h = fnv1a64(cs, sizeof cs, h);
                 }
             }
         }

@@ -40,7 +40,7 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 
 ## Rules
 1. Zero warnings at MSVC `/W4 /permissive-` and clang `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`. Explicit narrowing casts; no shadowing.
-2. No third-party dependencies in `engine/` without asking Gabriel. Approved so far: Vulkan-Headers, DXC, VMA (Phase 3); Lua 5.0.2 (vendored, original semantics), miniaudio, FFmpeg's Bink decoder (2026-10-27); the reference SMAA (2026-11-13, `engine/render/third_party/smaa`); AMD FidelityFX SDK 2.4.0 Vulkan upscaler DLLs for FSR (2026-11-13); see `docs/DECISIONS.md`.
+2. No third-party dependencies in `engine/` without asking Gabriel. Approved so far: Vulkan-Headers, DXC, VMA (Phase 3); Lua 5.0.2 (vendored, original semantics), miniaudio, FFmpeg's Bink decoder (2026-10-27); the reference SMAA (2026-11-13, `engine/render/third_party/smaa`); AMD FidelityFX SDK 2.4.0 Vulkan upscaler DLLs for FSR (2026-11-13); Intel XeSS SDK 3.0.2 `libxess.dll` for XeSS (2026-11-13); see `docs/DECISIONS.md`.
 3. Determinism (saves, replays and parity checks rely on the per-tick CRC): results read by game logic
    must be bit-identical across thread counts, runs, and the MSVC and clang builds. Parallel jobs write per-index outputs; reductions
    run in index order; no FMA contraction (`/fp:precise`, `-ffp-contract=off`); no iteration over

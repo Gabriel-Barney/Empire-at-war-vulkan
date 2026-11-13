@@ -9,9 +9,13 @@
 // s x kUiScaleUnitPixels physical pixels (Gabriel 2026-11-13, third pass: 100 % = the original's size on a 1440p screen,
 // the same physical size on every resolution), so the canvas is the screen size / that - but never smaller than the
 // original's fitted canvas above (the layouts are made for at most 1024 x 768 units on screen; a scale whose canvas would
-// be smaller shows the original size). The canvas keeps the screen's aspect; text is sized for the screen height the canvas stands for (font_height(): screen height x
-// fitted height / canvas height), so text shrinks with the rest of the UI. ui_scale 0 (the default) is the original: the
-// fitted canvas.
+// be smaller shows the original size). The canvas keeps the screen's aspect; text is sized for the screen height the
+// canvas stands for (font_height(): screen height x fitted height / canvas height), so text shrinks with the rest of the
+// UI. Past the original size only the text keeps growing (Gabriel 2026-11-13, for big screens such as a TV): font_height()
+// is the screen height x the scale / the scale that reaches the fitted size (at least 100 %, so 100 % never enlarges text),
+// at most kUiScaleMaxTextGrowth; art and layout stay the
+// original size, so long text may wrap more or clip in tight boxes. ui_scale 0 (the default) is the original: the fitted
+// canvas.
 // [port] axis convention: canvas +X right, +Y UP (the ortho camera's convention, like world space); pixel
 // coordinates are top-left origin, +Y down (InputFrame / picking). Component offsets from
 // CommandBarComponents.xml (Offset, Text_Offset, ...) are read as canvas units with +Y DOWN (screen
@@ -26,6 +30,9 @@ inline constexpr float kHudBaseWidth = 1024.0f, kHudBaseHeight = 768.0f;
 // [port: Gabriel 2026-11-13] Pixels per canvas unit at UI scale 100 %: the original's fitted size on a 1440-pixel-high
 // screen (1440 / 768), so 150 % on a 3840 x 2160 screen is the original size.
 inline constexpr float kUiScaleUnitPixels = 1440.0f / 768.0f;
+// [port: Gabriel 2026-11-13] The largest text size a UI scale past the original size gives, as a share of the original's
+// (4 / 3: reached at 200 % on 3840 x 2160).
+inline constexpr float kUiScaleMaxTextGrowth = 4.0f / 3.0f;
 
 struct Vec2f {
     float x = 0, y = 0;
@@ -57,6 +64,7 @@ struct HudCanvas {
     float units_per_pixel_x = 1.0f, units_per_pixel_y = 1.0f;
     float ui_scale = 0.0f;           // what make() was given (0 = the original's fitted canvas)
     uint32_t text_height = 768;      // screen height the font sizes follow (font_pixel_height); screen_height at the fitted size
+                                     // (above it when a UI scale past the original size enlarges only the text)
     std::array<Vec2f, 4> corners{};  // canvas units: top-left, top-right, bottom-right, bottom-left
     std::array<HudOrthoCamera, kHudCameraCount> cameras{};
 

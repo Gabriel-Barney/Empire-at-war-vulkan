@@ -2200,6 +2200,24 @@ static void test_space() {
     turn[1].heading = 90.0f;
     turn[1].time = 10.0f;
     CHECK(std::fabs(eval_space_path(turn, 5.0f).heading - 45.0f) < 1e-4f);
+    // Path line samples: a turn in place adds nothing; a 90-degree curve is cut into 9 pieces (heading rule beats
+    // ceil(141 / 25) = 6) that leave the chord; the ends are the waypoints; empty in, empty out.
+    {
+        std::vector<SpaceWaypoint> curve(3);
+        curve[0].heading = 0.0f;
+        curve[1].heading = 0.0f;  // same position as [0]: a turn in place
+        curve[1].time = 2.0f;
+        curve[2].pos = {100.0f, 100.0f};
+        curve[2].heading = 90.0f;
+        curve[2].time = 17.0f;
+        curve[1].speed = curve[2].speed = 10.0f;
+        const std::vector<V2> s = sample_space_path(curve, 25.0f);
+        CHECK(s.size() == 10 && s.front() == V2{} && s.back() == curve[2].pos);
+        float off = 0.0f;
+        for (const V2 sp : s) off = std::max(off, std::fabs(sp.x - sp.y));
+        CHECK(off > 10.0f);
+        CHECK(sample_space_path({}, 25.0f).empty());
+    }
 }
 
 // OPT3 t12: SpaceOccupancy::build_index (query_segment visits only the entries near the query) answers every query as the

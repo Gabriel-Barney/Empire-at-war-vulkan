@@ -53,15 +53,20 @@ Context::ThirdPartyValidation::~ThirdPartyValidation() { --t_third_party_depth; 
 // [port] FSR: optional extension feature structs for ContextDesc::upscaler_features, handled generically (sType, pNext,
 // then only VkBool32 members; `bools` of them). Raw values so the pinned Vulkan-Headers need not know the newer
 // extensions (VK_EXT_shader_float8 / VK_KHR_shader_bfloat16 came after header 296).
+// `newer`: added after header 296, unknown to the pinned validation layer (kept off while validation is on).
+// [port] XeSS (render/src/xess.cpp) needs VK_EXT_mutable_descriptor_type (mutableDescriptorType) and the core
+// shaderStorageImageWriteWithoutFormat / shaderInt8 / shaderIntegerDotProduct features enabled above.
 struct ExtFeatureSpec {
     const char* name;
     VkStructureType stype;
     uint32_t bools;
+    bool newer;
 };
 constexpr ExtFeatureSpec kUpscalerExt[] = {
-    {"VK_KHR_cooperative_matrix", static_cast<VkStructureType>(1000506000), 2},  // cooperativeMatrix, ...RobustBufferAccess
-    {"VK_KHR_shader_bfloat16", static_cast<VkStructureType>(1000141000), 3},     // type, dot product, cooperative matrix
-    {"VK_EXT_shader_float8", static_cast<VkStructureType>(1000567000), 2},       // shaderFloat8, ...CooperativeMatrix
+    {"VK_KHR_cooperative_matrix", static_cast<VkStructureType>(1000506000), 2, false},  // cooperativeMatrix, ...RobustBufferAccess
+    {"VK_KHR_shader_bfloat16", static_cast<VkStructureType>(1000141000), 3, true},      // type, dot product, cooperative matrix
+    {"VK_EXT_shader_float8", static_cast<VkStructureType>(1000567000), 2, true},        // shaderFloat8, ...CooperativeMatrix
+    {"VK_EXT_mutable_descriptor_type", static_cast<VkStructureType>(1000351000), 1, false},  // mutableDescriptorType (XeSS)
 };
 constexpr uint32_t kUpscalerExtCount = static_cast<uint32_t>(std::size(kUpscalerExt));
 struct ExtFeatures {
@@ -486,7 +491,7 @@ bool Context::create_device(const ContextDesc& desc) {
             if (!s.ext_supported(i)) continue;
             // The pinned validation layer (SDK 1.3.296) does not know the structs added after header 296 and reports them as
             // invalid pNext entries; with validation on, those two extensions stay off (the runtime then uses another model).
-            if (validation_ && i > 0) continue;
+            if (validation_ && kUpscalerExt[i].newer) continue;
             ext[i] = s.ext[i];
             ext[i].pNext = nullptr;
             *tail = &ext[i];
@@ -506,6 +511,7 @@ bool Context::create_device(const ContextDesc& desc) {
         return false;
     }
     if (!Loader::load_device(vki_, device_, vkd_)) return false;
+    device_extensions_.assign(exts.begin(), exts.end());
 
     caps_.texture_bc = a.textureCompressionBC == VK_TRUE;
     caps_.sampler_anisotropy = a.samplerAnisotropy == VK_TRUE;
@@ -582,11 +588,18 @@ void Context::shutdown() {
     vkd_ = DeviceFns{};
     presentation_ = validation_ = debug_utils_ = false;
     instance_extensions_.clear();
+    device_extensions_.clear();
     loader_.close();
 }
 
 bool Context::instance_extension_enabled(const char* name) const {
     for (const std::string& e : instance_extensions_)
+        if (e == name) return true;
+    return false;
+}
+
+bool Context::device_extension_enabled(const char* name) const {
+    for (const std::string& e : device_extensions_)
         if (e == name) return true;
     return false;
 }

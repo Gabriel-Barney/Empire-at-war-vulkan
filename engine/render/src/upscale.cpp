@@ -1,4 +1,4 @@
-// alamo_render FSR upscaling, pure rules [port: Gabriel 2026-11-13] (alamo/render/upscale.hpp).
+// alamo_render FSR / XeSS upscaling, pure rules [port: Gabriel 2026-11-13] (alamo/render/upscale.hpp).
 #include "alamo/render/upscale.hpp"
 
 #include <algorithm>
@@ -6,7 +6,17 @@
 
 namespace alamo::render {
 
-float upscale_ratio(UpscaleQuality q) {
+float upscale_ratio(UpscaleQuality q, Upscaler u) {
+    if (u == Upscaler::Xess) {  // [port] XeSS 1.3+ fixed scaling (developer guide, "Fixed Input Resolution")
+        switch (q) {
+            case UpscaleQuality::NativeAA: return 1.0f;
+            case UpscaleQuality::Quality: return 1.7f;
+            case UpscaleQuality::Balanced: return 2.0f;
+            case UpscaleQuality::Performance: return 2.3f;
+            case UpscaleQuality::UltraPerformance: return 3.0f;
+        }
+        return 1.0f;
+    }
     switch (q) {
         case UpscaleQuality::NativeAA: return 1.0f;
         case UpscaleQuality::Quality: return 1.5f;
@@ -17,8 +27,9 @@ float upscale_ratio(UpscaleQuality q) {
     return 1.0f;
 }
 
-void upscale_render_size(uint32_t display_w, uint32_t display_h, UpscaleQuality q, uint32_t& render_w, uint32_t& render_h) {
-    const float r = upscale_ratio(q);
+void upscale_render_size(uint32_t display_w, uint32_t display_h, UpscaleQuality q, uint32_t& render_w, uint32_t& render_h,
+                         Upscaler u) {
+    const float r = upscale_ratio(q, u);
     render_w = std::max(1u, static_cast<uint32_t>(static_cast<float>(display_w) / r));
     render_h = std::max(1u, static_cast<uint32_t>(static_cast<float>(display_h) / r));
 }

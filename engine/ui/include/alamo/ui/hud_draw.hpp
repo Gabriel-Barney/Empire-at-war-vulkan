@@ -75,6 +75,11 @@ struct HudQuad {
     // P4: vertical gradient (GUIDialogs.xml font Top_Color / Bottom_Color): `color` at max.y, `color_bottom` at min.y.
     bool gradient = false;
     Rgba8 color_bottom{};
+    // [port] free quad (path line segments, hud_markers.hpp): the four corners in canvas units - top-left, top-right,
+    // bottom-right, bottom-left - replace min / max as the vertex positions (uv and colour as for min / max). Drawn as a
+    // plain quad: `fill` is ignored.
+    bool has_corners = false;
+    std::array<Vec2f, 4> corners{};
 };
 
 struct HudVertex {

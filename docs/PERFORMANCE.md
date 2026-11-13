@@ -117,6 +117,12 @@ was never a large cost (under 0.5% of tick time), so this removes spikes rather 
   Performance (640x360), against TAA's 0.07 ms; the scene itself **0.08 -> 0.05 / 0.04 ms**. A still camera settles to a
   frame-to-frame luma change of **0.24 / 0.22** (TAA 2.26); mean luma difference from the full-size TAA picture **5.6 / 7.0**.
   At this scene's cost FSR is a picture-quality option more than a speed-up; it pays at high output resolutions.
+- XeSS upscaling (2026-11-13, `alamo_render_xess_tests`, same scene and GPU, Intel runtime XeSS 2.0.2 on its DP4a path
+  (not an Arc GPU), validation on): the "xess" scope **0.60 / 0.58 ms** at Quality (render 753x424, 1.7x) and Performance
+  (557x314, 2.3x); the scene **0.07 / 0.05 ms**. A still camera settles to **0.45 / 0.36** (TAA 2.26, FSR 0.24); mean luma
+  difference from the TAA picture **6.2 / 7.5**. Edge energy (sharpness) **6.7 / 4.5** against FSR Quality's 9.5 and TAA's
+  11.6: on this AMD GPU XeSS is softer than FSR (larger ratio, no sharpening, DP4a model, LDR input). The three flipped
+  jitter signs were tried: each is softer still (edge energy 4.9-5.8) and does not settle (0.81-0.98).
 - Anti-aliasing list (2026-11-13, `alamo_render_taa_tests`, _MP_LAND_ENDOR 1280x720, RX 9070 XT, validation on): SMAA
   **0.06-0.12 ms**; MSAA (with SSAO) scene **0.23 -> 0.29 ms at 4x, 0.42 ms at 8x**, the resolve **0.03 ms (4x) / 0.06 ms
   (8x)**. Edge energy barely moves with MSAA (15.12 -> 15.09): it smooths geometric edges (the landing pad's rim) while the

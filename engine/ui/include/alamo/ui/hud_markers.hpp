@@ -4,7 +4,8 @@
 // the host (render particles, R4) by name.
 //
 //   * Waypoint lines [port]: the original draws WaypointLineSubClass in the 3D scene; here each segment of a
-//     unit's queued path is a row of 3 x 3 px dots every 9 px (layer 0), so it needs no rotated primitive.
+//     unit's queued path is a row of 3 x 3 px dots every 9 px (layer 0), so it needs no rotated primitive. The
+//     optional unit path lines (HudWaypointLine::width_px) are solid: one free quad (HudQuad::has_corners) per segment.
 //   * Move acknowledgement (GameConstants GUI_*_Command_Ack_Effect, GUI_Move_Acknowledge_Scale_Land 1.0 /
 //     _Space 5.0, GUI_*_Click_Radar_Event_Name): MoveAcks::add returns the particle effect + scale for the host and
 //     the radar event to ping; while it lives (0.6 s [port]) a shrinking ring of dots marks the point on screen.
@@ -33,8 +34,11 @@ struct HudWaypointLine {
     Rgba8 color{120, 255, 120, 200};
     float step_px = 9.0f, dot_px = 3.0f;  // dot spacing / dot size in screen pixels
     float end_px = 0.0f;                  // > 0: a square of this size on the last point (the destination)
+    // > 0: a solid line instead of dots, this many pixels wide at 1080 lines (scaled with the screen height, at least
+    // this wide), one free quad per segment (HudQuad::has_corners); step_px / dot_px are then unused.
+    float width_px = 0.0f;
 };
-// Returns the number of dots drawn (end markers included).
+// Returns the number of quads drawn (dots or solid segments, end markers included).
 uint32_t add_waypoint_lines(HudDrawList& dl, const HudCanvas& canvas, const View& view, std::span<const HudWaypointLine> lines,
                             uint32_t layer = 0);
 
@@ -43,8 +47,10 @@ uint32_t add_waypoint_lines(HudDrawList& dl, const HudCanvas& canvas, const View
 // the result is `unit`, then the points after the path segment nearest the unit, so the line starts at the unit and
 // follows the route to its end. An empty path gives unit -> `goal`. Heights are the caller's.
 std::vector<Vec3> remaining_route(Vec3 unit, std::span<const Vec3> path, Vec3 goal);
-inline constexpr Rgba8 kPathLineMove{90, 230, 255, 190}, kPathLineAttack{255, 110, 80, 200};
-inline constexpr float kPathLineStepPx = 4.0f, kPathLineDotPx = 2.0f, kPathLineEndPx = 7.0f;
+// [port: Gabriel, 2026-11-13, his EaW Remake screenshots] thin solid lines, pale green for a move (orange-red for an
+// attack [port]), no destination marker; space lines follow the flown curve (movement::sample_space_path).
+inline constexpr Rgba8 kPathLineMove{160, 215, 95, 190}, kPathLineAttack{255, 110, 80, 200};
+inline constexpr float kPathLineWidthPx = 1.0f;
 
 // [port: Gabriel] queued orders (docs/DECISIONS.md "Camera and controls": shift-queued orders). The host fills one
 // HudOrderQueue per unit from the sim's read-only queued_orders(unit) query (the current order first, then the queued

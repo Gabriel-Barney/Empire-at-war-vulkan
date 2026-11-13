@@ -46,15 +46,41 @@ uint32_t dotted(HudDrawList& dl, uint32_t layer, const HudCanvas& cv, float x0, 
 uint32_t add_waypoint_lines(HudDrawList& dl, const HudCanvas& canvas, const View& view, std::span<const HudWaypointLine> lines,
                             uint32_t layer) {
     uint32_t dots = 0;
+    const float line_scale = std::max(1.0f, static_cast<float>(canvas.screen_height) / 1080.0f);
     for (const HudWaypointLine& l : lines) {
-        float carry = 0.0f;
-        for (size_t i = 0; i + 1 < l.points.size(); ++i) {
-            float ax = 0, ay = 0, bx = 0, by = 0;
-            if (!project(view, l.points[i], ax, ay) || !project(view, l.points[i + 1], bx, by)) {
-                carry = 0.0f;
-                continue;
+        if (l.width_px > 0.0f) {  // solid: one free quad per projected segment
+            const float half = 0.5f * l.width_px * line_scale;
+            for (size_t i = 0; i + 1 < l.points.size(); ++i) {
+                float ax = 0, ay = 0, bx = 0, by = 0;
+                if (!project(view, l.points[i], ax, ay) || !project(view, l.points[i + 1], bx, by)) continue;
+                const float dx = bx - ax, dy = by - ay, len = std::sqrt(dx * dx + dy * dy);
+                if (!(len > 0.0f)) continue;
+                // Pixel-space normal (+Y down) turned so a left-to-right segment gives top-left, top-right,
+                // bottom-right, bottom-left (the plain quad's winding). Ends are not extended: segments of a sampled
+                // curve would overlap and double the alpha at every joint; the notch at a gentle bend is sub-pixel.
+                const float nx = dy / len * half, ny = -dx / len * half;
+                HudQuad q;
+                q.has_corners = true;
+                q.corners = {canvas.pixel_to_canvas(ax + nx, ay + ny), canvas.pixel_to_canvas(bx + nx, by + ny),
+                             canvas.pixel_to_canvas(bx - nx, by - ny), canvas.pixel_to_canvas(ax - nx, ay - ny)};
+                q.min = {std::min({q.corners[0].x, q.corners[1].x, q.corners[2].x, q.corners[3].x}),
+                         std::min({q.corners[0].y, q.corners[1].y, q.corners[2].y, q.corners[3].y})};
+                q.max = {std::max({q.corners[0].x, q.corners[1].x, q.corners[2].x, q.corners[3].x}),
+                         std::max({q.corners[0].y, q.corners[1].y, q.corners[2].y, q.corners[3].y})};
+                q.color = l.color;
+                dl.add(layer, HudList::Alpha, q);
+                ++dots;
             }
-            dots += dotted(dl, layer, canvas, ax, ay, bx, by, l.step_px, l.dot_px, l.color, carry);
+        } else {
+            float carry = 0.0f;
+            for (size_t i = 0; i + 1 < l.points.size(); ++i) {
+                float ax = 0, ay = 0, bx = 0, by = 0;
+                if (!project(view, l.points[i], ax, ay) || !project(view, l.points[i + 1], bx, by)) {
+                    carry = 0.0f;
+                    continue;
+                }
+                dots += dotted(dl, layer, canvas, ax, ay, bx, by, l.step_px, l.dot_px, l.color, carry);
+            }
         }
         float ex = 0, ey = 0;
         if (l.end_px > 0.0f && l.points.size() > 1 && project(view, l.points.back(), ex, ey)) {

@@ -1138,4 +1138,30 @@ SpacePose eval_space_path(std::span<const SpaceWaypoint> wps, float t) {
     return out;
 }
 
+std::vector<V2> sample_space_path(std::span<const SpaceWaypoint> wps, float step) {
+    std::vector<V2> out;
+    if (wps.empty()) return out;
+    out.push_back(wps.front().pos);
+    const float st = step > 0.0f ? step : 1.0f;
+    for (size_t i = 0; i + 1 < wps.size(); ++i) {
+        const SpaceWaypoint& a = wps[i];
+        const SpaceWaypoint& b = wps[i + 1];
+        if (a.pos == b.pos) continue;  // a turn in place
+        const float dur = b.time - a.time;
+        uint32_t pieces = 1;
+        if (dur > 0.0f) {
+            const float by_len = std::ceil(length(b.pos - a.pos) / st);
+            const float by_turn = std::ceil(std::fabs(wrap_deg(b.heading - a.heading)) / 10.0f);
+            pieces = static_cast<uint32_t>(std::clamp(std::max(by_len, by_turn), 1.0f, 32.0f));
+        }
+        for (uint32_t j = 1; j < pieces; ++j) {
+            const float t = a.time + dur * static_cast<float>(j) / static_cast<float>(pieces);
+            const V2 p = eval_space_path(wps, t).pos;
+            if (!(p == out.back())) out.push_back(p);
+        }
+        if (!(b.pos == out.back())) out.push_back(b.pos);
+    }
+    return out;
+}
+
 }  // namespace alamo::tactical::movement

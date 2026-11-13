@@ -766,8 +766,9 @@ void App::build_tactical_hud() {
     // covered the battle and read as laser fire); the original's waypoint line belongs to the Alt-queued path (UI.md 1.5).
     // [port: Gabriel, 2026-11-13] With Camera and Controls > Show Unit Path Lines on, every moving unit of the local
     // player, selected or not, gets a line along its planned path (land: the walked path at terrain height; space: the
-    // waypoint track at the unit's height; no path yet: straight to the goal), a destination square, then its queued
-    // move points. One line per squadron / company: only the unit standing for its marker (icon_links, unit == squad).
+    // flown curve of its waypoint track at the unit's height; no path yet: straight to the goal), then its queued move
+    // points: a thin solid line, no destination marker (Gabriel's EaW Remake screenshots, 2026-11-13). One line per
+    // squadron / company: only the unit standing for its marker (icon_links, unit == squad).
     waypoints_.clear();
     const bool path_lines = camera_.show_path_lines;
     const terrain::MapData* ground = !bview_.space() && bview_.scene() ? &bview_.scene()->map() : nullptr;
@@ -793,13 +794,13 @@ void App::build_tactical_hud() {
                 };
                 std::vector<ui::Vec3> path;
                 for (const tactical::movement::V2 p : b->movement().land_path(oid)) path.push_back(at(p.x, p.y));
+                // Space: the flown Hermite curve (turns included), sampled every 40 units / 10 degrees at most.
                 if (path.empty())
-                    for (const tactical::movement::SpaceWaypoint& wp : b->movement().space_path(oid)) path.push_back(at(wp.pos.x, wp.pos.y));
+                    for (const tactical::movement::V2 p : tactical::movement::sample_space_path(b->movement().space_path(oid), 40.0f))
+                        path.push_back(at(p.x, p.y));
                 l.points = ui::remaining_route(here, path, at(v.goal.x, v.goal.y));
                 l.color = v.atk_target >= 0 ? ui::kPathLineAttack : ui::kPathLineMove;
-                l.step_px = ui::kPathLineStepPx;
-                l.dot_px = ui::kPathLineDotPx;
-                l.end_px = ui::kPathLineEndPx;
+                l.width_px = ui::kPathLineWidthPx;
                 for (const sim::TacticalBattle::QueuedOrder& e : b->queued_orders(oid)) {
                     if (e.kind != sim::TacticalBattle::QueuedOrder::Kind::Move) continue;
                     const ui::Vec3 p = at(e.x, e.y);

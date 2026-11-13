@@ -1206,10 +1206,16 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                         adv_video_ = detail_preset(adv_video_, video_profile_.detail);
                         video_profile_.advanced = adv_video_;
                     }
-                    std::printf("video: anti-aliasing %s, detail level %d\n", aa_mode_name(video_profile_.anti_alias), video_profile_.detail);
-                    if (fsr_quality(video_profile_.anti_alias)) {  // [port] which FSR runs, or why TAA is drawn instead
+                    std::printf("video: anti-aliasing %s, upscaler %s (%s), detail level %d\n", aa_mode_name(video_profile_.anti_alias),
+                                upscaler_name(video_profile_.upscaler), upscale_quality_name(video_profile_.upscale_quality),
+                                video_profile_.detail);
+                    if (fsr_quality(video_profile_.upscaler, video_profile_.upscale_quality)) {  // [port] which FSR runs, or why TAA is drawn instead
                         const bool fsr_ok = gpu_.renderer.fsr_supported();
                         std::printf("video: FSR %s%s\n", fsr_ok ? "" : "unavailable, TAA instead: ", gpu_.renderer.upscaler_status().c_str());
+                    } else if (xess_quality(video_profile_.upscaler, video_profile_.upscale_quality)) {  // [port] the same for XeSS
+                        const bool xess_ok = gpu_.renderer.xess_supported();
+                        std::printf("video: XeSS %s%s\n", xess_ok ? "" : "unavailable, TAA instead: ",
+                                    gpu_.renderer.upscaler_status(render::Upscaler::Xess).c_str());
                     }
                     save_video_options();
                 }

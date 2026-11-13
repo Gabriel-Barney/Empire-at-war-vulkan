@@ -121,17 +121,23 @@ void test_canvas() {
     CHECK(a.font_height() == 768 && b.font_height() == 1080 && c.font_height() == 1024);  // no UI scale: the screen height
     // [port: Gabriel] DPI-style UI scale: 100 % is the original's size on a 1440p screen (1440 / 768 pixels per unit), so at
     // 3840 x 2160 the canvas is 1152 units high (text sized for 1440); 125 % gives 921.6 units (text for 1800); 150 % is exactly
-    // the fitted canvas and 300 % would be smaller than it, so the fitted one (the original size) is used.
+    // the fitted canvas; larger scales keep the fitted canvas (the original size).
     const HudCanvas e = HudCanvas::make(3840, 2160, 1.0f), f = HudCanvas::make(3840, 2160, 1.25f), g = HudCanvas::make(3840, 2160, 3.0f);
     CHECK(near(e.width, 3840.0f / kUiScaleUnitPixels, 1e-2f) && near(e.height, 1152) && near(e.units_per_pixel_y, 1152.0f / 2160.0f) &&
           e.font_height() == 1440);
     CHECK(near(f.width, 3840.0f / 1.25f / kUiScaleUnitPixels, 1e-2f) && near(f.height, 921.6f, 1e-2f) && f.font_height() == 1800);
     const HudCanvas fit = HudCanvas::make(3840, 2160), uhd15 = HudCanvas::make(3840, 2160, 1.5f);
-    CHECK(g.width == fit.width && g.height == fit.height && g.font_height() == 2160 && g.ui_scale == 3.0f);
     CHECK(uhd15.width == fit.width && uhd15.height == fit.height && uhd15.font_height() == 2160);
-    // 1080p and 1440p at 100 % are the original fitted size.
+    // Past the original size only the text grows: 175 % = 7 / 6 of the original's text, 200 % and up 4 / 3 (the cap).
+    const HudCanvas uhd175 = HudCanvas::make(3840, 2160, 1.75f), uhd2 = HudCanvas::make(3840, 2160, 2.0f);
+    CHECK(uhd175.width == fit.width && uhd175.height == fit.height && uhd175.font_height() == 2520);
+    CHECK(uhd2.width == fit.width && uhd2.height == fit.height && uhd2.font_height() == 2880);
+    CHECK(g.width == fit.width && g.height == fit.height && g.font_height() == 2880 && g.ui_scale == 3.0f);
+    // 1080p and 1440p at 100 % are the original fitted size and text; 1080p at 125 % has 1.25 x the text, at 150 % 4 / 3.
     const HudCanvas hd = HudCanvas::make(1920, 1080, 1.0f), qhd = HudCanvas::make(2560, 1440, 1.0f);
     CHECK(hd.width == b.width && hd.height == b.height && hd.font_height() == 1080);
+    const HudCanvas hd125 = HudCanvas::make(1920, 1080, 1.25f), hd15 = HudCanvas::make(1920, 1080, 1.5f);
+    CHECK(hd125.height == b.height && hd125.font_height() == 1350 && hd15.height == b.height && hd15.font_height() == 1440);
     CHECK(near(qhd.height, 768) && qhd.font_height() == 1440);
     const HudCanvas h = HudCanvas::make(1024, 768, 1.0f);  // the base size: 100 % is the original
     CHECK(h.width == a.width && h.height == a.height && h.font_height() == 768);

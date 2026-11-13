@@ -98,6 +98,7 @@ struct Options {
     bool taa = false;                            // [port] --taa: temporal anti-aliasing (RecordOptions::taa)
     float taa_sharpen = -1.0f;                   // --taa-sharpen S (0..1; < 0: RecordOptions default)
     int fsr = -1;                                // [port] --fsr Q: FSR upscaling, quality mode Q 0..4 (RecordOptions::upscaler)
+    int xess = -1;                               // [port] --xess Q: XeSS upscaling, the same preset numbers
     bool smaa = false;                           // [port] --smaa: SMAA 1x (RecordOptions::smaa)
     uint32_t msaa = 1;                           // [port] --msaa N: MSAA samples (RecordOptions::msaa; 1, 2, 4, 8)
     float time_scale = 1.0f;  // scene clock = wall time x scale (UV scrolling, FF expressions)
@@ -157,6 +158,7 @@ int usage() {
                  "       [--ao] [--ao-strength S] [--ao-radius R] [port] screen-space ambient occlusion (land maps)\n"
                  "       [--taa] [--taa-sharpen S] [port] temporal anti-aliasing (S 0..1, 0 = no sharpen)\n"
                  "       [--fsr Q] [port] FSR upscaling, Q = 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance\n"
+                 "       [--xess Q] [port] XeSS upscaling, Q as for --fsr (XeSS's presets: 1.0x, 1.7x, 2x, 2.3x, 3x)\n"
                  "       [--smaa] [port] SMAA 1x after the post chain (and after TAA)\n"
                  "       [--msaa N] [port] multisampled scene, N = 2, 4 or 8 (clamped to the device)\n"
                  "       [--aniso N] anisotropic filtering of world textures (0/1 off, 2, 4, 8, 16; default off)\n");
@@ -544,6 +546,7 @@ int main(int argc, char** argv) {
         else if (a == "--msaa") opt.msaa = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--taa-sharpen") opt.taa_sharpen = std::strtof(next().c_str(), nullptr);
         else if (a == "--fsr") opt.fsr = std::clamp(std::atoi(next().c_str()), 0, 4);
+        else if (a == "--xess") opt.xess = std::clamp(std::atoi(next().c_str()), 0, 4);
         else if (a == "--ao-strength") opt.ao_strength = std::strtof(next().c_str(), nullptr);
         else if (a == "--ao-radius") opt.ao_radius = std::strtof(next().c_str(), nullptr);
         else if (a == "--no-post") opt.no_post = true;
@@ -625,7 +628,7 @@ int main(int argc, char** argv) {
     rhi::ContextDesc cd;
     cd.app_name = "alamo_render";
     cd.presentation = true;
-    cd.upscaler_features = opt.fsr >= 0;  // [port] FSR's ML upscaler features
+    cd.upscaler_features = opt.fsr >= 0 || opt.xess >= 0;  // [port] FSR's ML upscaler / XeSS device features
     cd.validation = strict ? rhi::Validation::Required : rhi::Validation::IfAvailable;
     if (!ctx.init(cd)) {
         std::fprintf(stderr, "no suitable Vulkan 1.3 device%s\n", strict ? " (or the validation layer failed to load)" : "");
@@ -733,6 +736,11 @@ int main(int argc, char** argv) {
             if (opt.fsr >= 0) {  // [port] FSR (falls back to TAA where it cannot run)
                 ropt.upscaler = render::Upscaler::Fsr;
                 ropt.upscale_quality = static_cast<render::UpscaleQuality>(opt.fsr);
+                ropt.taa = true;
+            }
+            if (opt.xess >= 0) {  // [port] XeSS (falls back to TAA where it cannot run)
+                ropt.upscaler = render::Upscaler::Xess;
+                ropt.upscale_quality = static_cast<render::UpscaleQuality>(opt.xess);
                 ropt.taa = true;
             }
             ropt.gpu_timer = &gpu;  // render() sections (world / scene / post)

@@ -714,14 +714,42 @@ void test_markers() {
     line.points = {{0, 0, 0}, {200, 0, 0}, {200, 200, 0}};
     const uint32_t dots = add_waypoint_lines(dl, cv, v, std::span<const HudWaypointLine>(&line, 1));
     CHECK2(dots > 10 && dl.items(0, HudList::Alpha).size() == dots);
-    {  // path lines: denser dots and one destination square
+    {  // path lines: one solid free quad per segment, kPathLineWidthPx wide, drawn with the given corners
         HudDrawList dl2;
         HudWaypointLine pl = line;
-        pl.step_px = kPathLineStepPx;
-        pl.dot_px = kPathLineDotPx;
-        pl.end_px = kPathLineEndPx;
-        const uint32_t pdots = add_waypoint_lines(dl2, cv, v, std::span<const HudWaypointLine>(&pl, 1));
-        CHECK2(pdots > dots && dl2.items(0, HudList::Alpha).size() == pdots);
+        pl.width_px = kPathLineWidthPx * 4.0f;
+        const uint32_t segs = add_waypoint_lines(dl2, cv, v, std::span<const HudWaypointLine>(&pl, 1));
+        const auto qs = dl2.items(0, HudList::Alpha);
+        CHECK2(segs == 2 && qs.size() == 2 && qs[0].has_corners && qs[1].has_corners);
+        float ax = 0, ay = 0, bx = 0, by = 0;
+        CHECK2(project(v, line.points[0], ax, ay) && project(v, line.points[1], bx, by));
+        const Vec2f a = cv.pixel_to_canvas(ax, ay), b = cv.pixel_to_canvas(bx, by);
+        const auto& c = qs[0].corners;  // the corner pairs straddle the segment ends, 4 px apart (768 lines: scale 1)
+        CHECK2(near2(0.5f * (c[0].x + c[3].x), a.x, 0.01f) && near2(0.5f * (c[0].y + c[3].y), a.y, 0.01f));
+        CHECK2(near2(0.5f * (c[1].x + c[2].x), b.x, 0.01f) && near2(0.5f * (c[1].y + c[2].y), b.y, 0.01f));
+        const float wx = (c[0].x - c[3].x) / cv.units_per_pixel_x, wy = (c[0].y - c[3].y) / cv.units_per_pixel_y;
+        CHECK2(near2(std::sqrt(wx * wx + wy * wy), 4.0f, 0.01f));
+        std::vector<HudVertex> vb;
+        std::vector<uint32_t> ib;
+        std::vector<HudDrawList::Batch> bb;
+        dl2.build_geometry(0, HudList::Alpha, vb, ib, bb);
+        CHECK2(vb.size() == 8 && ib.size() == 12 && vb[2].x == c[2].x && vb[2].y == c[2].y);
+        // Same winding as a plain quad (top-left, top-right, bottom-right, bottom-left): the signed area agrees.
+        auto area = [](const HudVertex* q) {
+            float s = 0.0f;
+            for (int i = 0; i < 4; ++i) s += q[i].x * q[(i + 1) % 4].y - q[(i + 1) % 4].x * q[i].y;
+            return s;
+        };
+        HudDrawList plain;
+        HudQuad pq;
+        pq.min = {0, 0};
+        pq.max = {10, 10};
+        plain.add(0, HudList::Alpha, pq);
+        std::vector<HudVertex> pv;
+        std::vector<uint32_t> pi;
+        std::vector<HudDrawList::Batch> pb;
+        plain.build_geometry(0, HudList::Alpha, pv, pi, pb);
+        CHECK2(pv.size() == 4 && (area(vb.data()) > 0.0f) == (area(pv.data()) > 0.0f) && (area(vb.data() + 4) > 0.0f) == (area(pv.data()) > 0.0f));
     }
     {  // remaining_route: the line starts at the unit and skips the travelled path points
         const std::vector<Vec3> path = {{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {200, 100, 0}};
