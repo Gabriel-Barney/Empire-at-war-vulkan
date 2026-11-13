@@ -980,7 +980,7 @@ void FrontEnd::fill_video(GuiDialog& d) {
     d.set_items("IDC_PORT_UI_SCALE", std::move(scales), static_cast<int32_t>(ui_scale_row(v.ui_scale)));
     d.set_checked("IDC_VSYNC_ENABLED", v.vsync);
     d.set_checked("IDC_WIDESCREEN", v.widescreen);
-    d.set_checked("IDC_HARDWARE_MOUSE", v.hardware_mouse);
+    d.show("IDC_HARDWARE_MOUSE", false);  // [port: Gabriel 2026-11-13] the option is gone: the game always draws its own cursor
     // [port: Gabriel] Anti-Aliasing and Detail Level are lists of named levels in the sliders' rows; Gamma stays a slider.
     hide_slider(d, "IDC_ANTI_ALIAS_SLIDER");
     hide_slider(d, "IDC_DETAIL_LEVEL_SLIDER");
@@ -1581,7 +1581,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             if (const GuiControl* x = d->get("IDC_PORT_FRAME_CAP"); x && x->selected >= 0 && static_cast<size_t>(x->selected) < std::size(kFrameCapChoices))
                 v.frame_cap = kFrameCapChoices[static_cast<size_t>(x->selected)];
             chk("IDC_WIDESCREEN", v.widescreen);
-            chk("IDC_HARDWARE_MOUSE", v.hardware_mouse);
             val("IDC_GAMMA_SLIDER", v.gamma);
             // t12: a different resolution / refresh rate asks "keep these settings?" first (the Yes answer stores it).
             const bool confirm = v.resolution >= 0 && v.resolution != previous_resolution && !res_confirm_;

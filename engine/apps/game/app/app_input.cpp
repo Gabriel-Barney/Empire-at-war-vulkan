@@ -1154,7 +1154,6 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 break;
             case K::ApplyVideo: {  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
                 ++video_applies_;
-                hardware_mouse_ = a.video.hardware_mouse;
                 const bool window_changed = a.video.window_mode != window_mode_;  // UI5 t01
                 window_mode_ = a.video.window_mode;
                 vsync_mode_ = a.video.vsync_mode;

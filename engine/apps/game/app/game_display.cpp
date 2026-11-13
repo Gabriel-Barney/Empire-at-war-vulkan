@@ -317,49 +317,6 @@ void FrameLimiter::wait() {
     deadline_ns_ = target;
 }
 
-void* create_os_cursor(const uint8_t* bgra, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y) {
-    if (!bgra || width == 0 || height == 0 || width > 256 || height > 256) return nullptr;
-    BITMAPV5HEADER bi{};
-    bi.bV5Size = sizeof bi;
-    bi.bV5Width = static_cast<LONG>(width);
-    bi.bV5Height = -static_cast<LONG>(height);  // top-down
-    bi.bV5Planes = 1;
-    bi.bV5BitCount = 32;
-    bi.bV5Compression = BI_BITFIELDS;
-    bi.bV5RedMask = 0x00FF0000;
-    bi.bV5GreenMask = 0x0000FF00;
-    bi.bV5BlueMask = 0x000000FF;
-    bi.bV5AlphaMask = 0xFF000000;
-    void* bits = nullptr;
-    HDC dc = GetDC(nullptr);
-    HBITMAP color = CreateDIBSection(dc, reinterpret_cast<const BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
-    ReleaseDC(nullptr, dc);
-    if (!color || !bits) return nullptr;
-    std::memcpy(bits, bgra, static_cast<size_t>(width) * height * 4u);
-    HBITMAP mask = CreateBitmap(static_cast<int>(width), static_cast<int>(height), 1, 1, nullptr);
-    ICONINFO ii{};
-    ii.fIcon = FALSE;
-    ii.xHotspot = static_cast<DWORD>(std::clamp<int32_t>(hot_x, 0, static_cast<int32_t>(width) - 1));
-    ii.yHotspot = static_cast<DWORD>(std::clamp<int32_t>(hot_y, 0, static_cast<int32_t>(height) - 1));
-    ii.hbmMask = mask;
-    ii.hbmColor = color;
-    HICON cur = CreateIconIndirect(&ii);
-    DeleteObject(color);
-    if (mask) DeleteObject(mask);
-    return cur;
-}
-
-void set_os_cursor_image(void* hwnd, void* cursor) {
-    static void* last = nullptr;
-    static bool set = false;
-    if (set && cursor == last) return;
-    set = true;
-    last = cursor;
-    HCURSOR h = cursor ? static_cast<HCURSOR>(cursor) : LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
-    if (hwnd) SetClassLongPtrW(static_cast<HWND>(hwnd), GCLP_HCURSOR, reinterpret_cast<LONG_PTR>(h));
-    SetCursor(h);
-}
-
 void set_os_cursor_hidden(bool hidden) {
     static bool is_hidden = false;
     if (hidden == is_hidden) return;
@@ -407,7 +364,6 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.vsync = v.vsync;
     p.vsync_mode = v.vsync_mode;
     p.frame_cap = v.frame_cap;
-    p.hardware_mouse = v.hardware_mouse;
     p.window_mode = v.window_mode;
     p.widescreen = v.widescreen;
     p.ui_scale = std::clamp(v.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
@@ -446,7 +402,6 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     num("refresh_hz", hz);
     p.mode = {static_cast<uint32_t>(std::max(0, w)), static_cast<uint32_t>(std::max(0, h)), static_cast<uint32_t>(std::max(0, hz))};
     flag("vsync", p.vsync);
-    flag("hardware_mouse", p.hardware_mouse);
     if (auto it = kv.find("windowed"); it != kv.end())  // a profile from before the display mode list
         p.window_mode = it->second == "1" || it->second == "true" || it->second == "on" ? ui::WindowMode::Windowed : ui::WindowMode::Fullscreen;
     if (auto it = kv.find("window_mode"); it != kv.end())
@@ -474,7 +429,6 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     f << "# alamo_game video options (written by the Video / Advanced video dialogs)\n";
     f << "width=" << p.mode.width << "\nheight=" << p.mode.height << "\nrefresh_hz=" << p.mode.hz << "\n";
     f << "vsync=" << (p.vsync ? 1 : 0) << "\nvsync_mode=" << (p.vsync_mode == ui::VsyncMode::Mailbox ? "mailbox" : "fifo") << "\n";
-    f << "hardware_mouse=" << (p.hardware_mouse ? 1 : 0) << "\n";
     f << "window_mode=" << window_mode_name(p.window_mode) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\nui_scale=" << p.ui_scale << "\n";
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
