@@ -652,7 +652,24 @@ bool relaunch_self(const std::string& args, std::string* err) {
     STARTUPINFOW si{};
     si.cb = sizeof si;
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(exe.c_str(), wline.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    // Started without a console (Play.exe: CREATE_NO_WINDOW, output to alamo_game_log.txt): the restarted game keeps
+    // that, instead of a console program without a console getting a new console window, and writes on into the log.
+    const bool no_console = GetConsoleWindow() == nullptr;
+    DWORD flags = 0;
+    BOOL inherit = FALSE;
+    if (no_console) {
+        flags = CREATE_NO_WINDOW;
+        const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        const HANDLE errh = GetStdHandle(STD_ERROR_HANDLE);
+        if (out != nullptr && out != INVALID_HANDLE_VALUE) {
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdOutput = out;
+            si.hStdError = errh;
+            si.hStdInput = nullptr;
+            inherit = TRUE;
+        }
+    }
+    if (!CreateProcessW(exe.c_str(), wline.data(), nullptr, nullptr, inherit, flags, nullptr, nullptr, &si, &pi)) {
         if (err) *err = "CreateProcessW failed (error " + std::to_string(GetLastError()) + ")";
         return false;
     }

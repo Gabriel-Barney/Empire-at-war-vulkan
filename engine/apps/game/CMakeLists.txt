@@ -151,6 +151,22 @@ target_link_libraries(alamo_game_mod_picker_tests PRIVATE alamo_core alamo_game_
 add_test(NAME alamo_game_mod_picker_tests COMMAND alamo_game_mod_picker_tests ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture)
 set_tests_properties(alamo_game_mod_picker_tests PROPERTIES TIMEOUT 120)
 
+# Play.exe (alamo_play): the test build's double-click launcher, Play.cmd without a console window (launcher/). Finds the
+# game (game_path.txt, ALAMO_FOC_DATA, Steam, else a folder dialog), starts alamo_game.exe next to it, log to a file.
+# The test drives the game search and command line on a fake install in its own temp folder (%TEMP%\alamo_play_tests).
+if(WIN32)
+  add_library(alamo_play_launch STATIC launcher/play_launch.cpp)
+  target_include_directories(alamo_play_launch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/launcher)
+  target_link_libraries(alamo_play_launch PUBLIC alamo_engine_flags)
+  add_executable(alamo_play WIN32 launcher/play_main.cpp)
+  target_link_libraries(alamo_play PRIVATE alamo_play_launch alamo_vfs alamo_core shell32 ole32 user32)
+  set_target_properties(alamo_play PROPERTIES OUTPUT_NAME Play)
+  add_executable(alamo_play_tests tests/test_play_launch.cpp)
+  target_link_libraries(alamo_play_tests PRIVATE alamo_play_launch alamo_test_support)
+  add_test(NAME alamo_play_tests COMMAND alamo_play_tests)
+  set_tests_properties(alamo_play_tests PROPERTIES TIMEOUT 60)
+endif()
+
 # q6 t08: AI player types (Basic_AI / AI_Player_Control) and default skirmish forces for mod factions on synthetic data in its
 # own temp folder; with ALAMO_FOC_DATA also the shipped factions (they resolve as the port's hard-coded tables).
 add_executable(alamo_game_mod_faction_tests tests/test_mod_factions.cpp)
