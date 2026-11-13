@@ -133,6 +133,15 @@ void GalacticHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
     name_ = f("g_planet_name");
     value_ = f("g_planet_value");
     credit_filter_ = f("b_filters0");
+    for (int k = 0; k < 4; ++k) filters_[k] = find_fmt(table, "b_filters%d", k);
+    build_icon_ = f("g_build");
+    smuggled_ = f("g_smuggled");
+    corruption_icon_ = f("g_corruption_icon");
+    corruption_text_ = f("g_corruption_text");
+    enemy_hero_ = f("g_enemy_hero");
+    weather_ = f("g_weather");
+    ability_ = f("g_planet_ability");
+    credit_bar_ = f("g_credit_bar");
     control_ = f("g_political_control");
     ground_ = f("g_ground_level");
     space_ = f("g_space_level");
@@ -399,6 +408,14 @@ void GalacticHud::build_planet_stacks(const GalacticPlanetInfo& p, Vec2f at, uin
     }
 }
 
+uint32_t GalacticHud::filter_bits() const {
+    uint32_t bits = 0;
+    for (int k = 0; k < 4; ++k)
+        if (filters_[k] >= 0)
+            if (const ButtonRuntime* r = buttons_.find_state(static_cast<uint32_t>(filters_[k])); r && r->selected) bits |= 1u << k;
+    return bits;
+}
+
 void GalacticHud::build_labels(const GalacticHudFrame& f) {
     const float a = planet_label_alpha(f.zoom_state, f.zoom);
     const auto alpha = static_cast<uint8_t>(std::clamp(std::lround(a), 0L, 255L));
@@ -449,11 +466,38 @@ void GalacticHud::build_labels(const GalacticHudFrame& f) {
             }
         }
         build_planet_stacks(p, at, alpha, cursor);
+        const uint32_t filters = filter_bits();
         // §1.1 / §1.2: the credit filter b_filters0 (Toggle, off at start) shows it.
-        if (const CommandBarComponent* c = comp(value_); c && p.credits >= 0 && credit_filter_ >= 0 && buttons_.state(static_cast<uint32_t>(credit_filter_)).selected) {
+        if (const CommandBarComponent* c = comp(value_); c && p.credits >= 0 && (filters & kFilterCredit)) {
             const Vec2f o = up(c->offset);
             text_at(value_, num32(p.credits), {at.x + o.x, at.y + o.y}, 0, alpha);
             ++stats_.planet_values;
+        }
+        // ui4 t03 [port]: g_credit_bar with the credit filter, its Default_Offset (0, 8) below the value text, left edge on it.
+        if (const CommandBarComponent* c = comp(credit_bar_); c && p.credit_level >= 0 && (filters & kFilterCredit) && !c->bar_texture.empty()) {
+            const Vec2f vo = value_ >= 0 ? (*table_)[static_cast<size_t>(value_)].offset : Vec2f{30, -11};
+            const std::string* t = pick(c->bar_texture, std::clamp(p.credit_level, 0, std::max(0, c->max_bar_level)));
+            const AtlasEntry* e = t ? atlas_->find(*t) : nullptr;
+            const float w = e ? static_cast<float>(e->width) : 30.0f;
+            if (t && add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *t, {at.x + vo.x + 0.5f * w, at.y + vo.y - c->default_offset.y}, {}, 1.0f,
+                                    with_alpha(Rgba8{}, alpha)))
+                ++stats_.credit_bars;
+        }
+        // ui4 t03 [port]: b_filters2 shows the planet's weather (g_weather, Offset -20 -31) and ability (g_planet_ability,
+        // Offset 0 -34) icons below the planet; not on a fogged planet.
+        if ((filters & kFilterAbilityWeather) && !p.fogged)
+            for (auto [ci, tex, n] : {std::tuple{weather_, &p.weather_icon, &stats_.weather_icons}, std::tuple{ability_, &p.ability_icon, &stats_.ability_icons}}) {
+                const CommandBarComponent* c = comp(ci);
+                if (!c || tex->empty()) continue;
+                const Vec2f o = up(c->offset);
+                if (add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *tex, {at.x + o.x, at.y + o.y}, {}, c->scale, with_alpha(c->color, alpha), {16, 16}))
+                    ++*n;
+            }
+        // ui4 t03: g_corruption_text (yellow, left-justified, Offset 30 15 above the name) - the transition percentage.
+        if (const CommandBarComponent* c = comp(corruption_text_); c && !p.corruption_text.empty() && !p.fogged) {
+            const Vec2f o = up(c->offset);
+            text_at(corruption_text_, p.corruption_text, {at.x + o.x, at.y + o.y}, 0, alpha);
+            ++stats_.corruption_texts;
         }
         if (const CommandBarComponent* c = comp(control_); c && p.political_control >= 0.0f && !c->bar_overlay.empty()) {
             const auto n = static_cast<int32_t>(c->bar_overlay.size());
@@ -465,13 +509,16 @@ void GalacticHud::build_labels(const GalacticHudFrame& f) {
             add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *pick(c->bar_overlay, lvl), {at.x + o.x + 0.5f * w, at.y + o.y}, {}, 1.0f,
                            with_alpha(Rgba8{}, alpha));
         }
+        // ui4 t03 [port]: the ground / space level pips need the base-level filter b_filters1 (§1.2 "ground/space level pips
+        // need" a filter bit; b_filters1's tooltip is TEXT_TOOLTIP_BASE_LEVEL_FILTER).
         for (auto [ci, level] : {std::pair{ground_, p.groundbase_info ? p.ground_level : -1},
                                  std::pair{space_, p.starbase_info ? p.space_level : -1}}) {
             const CommandBarComponent* c = comp(ci);
-            if (!c || level < 0 || c->bar_texture.empty()) continue;
+            if (!c || level < 0 || c->bar_texture.empty() || !(filters & kFilterBaseLevel)) continue;
             const Vec2f o = up(c->default_offset);
             add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *pick(c->bar_texture, level), {at.x + o.x, at.y + o.y}, {}, 1.0f,
                            with_alpha(Rgba8{}, alpha));
+            ++stats_.level_pips;
         }
         // Status icons in a row from g_conflict's Offset.
         Vec2f pen = conflict_ >= 0 ? up(comp(conflict_)->offset) : Vec2f{30, -16};
@@ -493,6 +540,11 @@ void GalacticHud::build_labels(const GalacticHudFrame& f) {
         icon(hero_, p.hero_underworld && !p.fogged, 4);
         icon(smuggler_, p.smuggler, 0);
         icon(bounty_, p.bounty_hunter, 0);
+        // ui4 t03 [port: the row order after the original's groups is not traced].
+        icon(build_icon_, p.building && !p.fogged, 0);
+        icon(smuggled_, p.smuggled && !p.fogged, 0);
+        icon(corruption_icon_, p.corrupted && !p.fogged, 0);
+        icon(enemy_hero_, p.enemy_hero >= 0 && !p.fogged, std::max(0, p.enemy_hero));
     }
 }
 
@@ -635,8 +687,16 @@ void GalacticHud::build_bar(const GalacticHudFrame& f) {
         const int32_t ci = create_[slots_used++];
         ButtonRuntime& r = buttons_.state(static_cast<uint32_t>(ci));
         r.icon_override = o.icon;
-        r.disabled = !o.enabled || o.production_disabled;
-        r.text2.clear();
+        r.disabled = !o.enabled || o.production_disabled || o.block != HudBuildOption::Block::None;
+        // ui4 t02: the Tooltip_Text entry by block reason (as the tactical Build_NN pads); an enabled pad has none.
+        switch (o.block) {
+            case HudBuildOption::Block::QueueFull: r.tooltip_index = 0; break;
+            case HudBuildOption::Block::PopCap: r.tooltip_index = 1; break;
+            case HudBuildOption::Block::Funds: r.tooltip_index = 2; break;
+            default: r.tooltip_index = -1; break;
+        }
+        // GALACTIC_DIALOGS §5.1 second line (Text_Offset2 0 -20, Text_Color2 gold) = the queued count [L; port: > 0].
+        r.text2 = o.queued > 0 ? num32(static_cast<int32_t>(o.queued)) : std::u32string();
         r.alt = o.space ? 1 : 0;  // §5.1: amber i_button_pad_rebel = ground tab, blue i_button_pad_empire = space tab
         PadSlot s;
         s.option = o;
@@ -653,7 +713,10 @@ void GalacticHud::build_bar(const GalacticHudFrame& f) {
             HudTextStyle st;
             st.font = font_of(ci);
             if (st.font < 0) continue;
-            st.color = o.enabled && !o.production_disabled ? kCostAffordable : kCostUnaffordable;
+            // ui4 t02: the colour says affordable or not (Funds, or a host without a block reason that disabled it).
+            const bool unaffordable = o.production_disabled || o.block == HudBuildOption::Block::Funds ||
+                                      (!o.enabled && o.block == HudBuildOption::Block::None);
+            st.color = unaffordable ? kCostUnaffordable : kCostAffordable;
             st.outline = c.text_outline;
             st.align = TextAlign::Center;
             add_text(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, num32(o.cost), {mid.x, mid.y - 0.5f * box.y + 7.0f}, st);
@@ -1538,6 +1601,24 @@ void GalacticHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
     auto act = [&](HudAction a) {
         if (actions) actions->push_back(std::move(a));
     };
+    // ui4 t02: a left click on a greyed build pad (HudButtons drops clicks on disabled components) is refused here with
+    // the GUI negative feedback instead of a Production command the sim would refuse silently.
+    if (!dropped)
+        for (const HudPointerEvent& e : routed.hud) {
+            if (e.kind != HudPointerEvent::Kind::Click || e.button != Button::Left || e.component < 0) continue;
+            for (const PadSlot& s : pads_) {
+                if (s.component != e.component || s.is_queue || s.foreign || !s.select.empty()) continue;
+                if (s.option.enabled && !s.option.production_disabled && s.option.block == HudBuildOption::Block::None) break;
+                HudAction a;
+                a.kind = HudAction::Kind::BuildRefused;
+                a.component = e.component;
+                a.name = (*table_)[static_cast<size_t>(e.component)].name;
+                a.value = static_cast<int32_t>(s.option.block);
+                a.unit = s.option.type_index;
+                act(std::move(a));
+                break;
+            }
+        }
     for (const ButtonClick& k : clicks) {
         bool handled = false;
         for (const PadSlot& s : pads_) {
@@ -1556,7 +1637,8 @@ void GalacticHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
                 a.shift = k.shift;
                 a.ctrl = k.ctrl;
                 act(std::move(a));
-            } else if (k.button == Button::Left && s.option.enabled && !s.option.production_disabled && selected_id_ != 0) {
+            } else if (k.button == Button::Left && s.option.enabled && !s.option.production_disabled &&
+                       s.option.block == HudBuildOption::Block::None && selected_id_ != 0) {
                 out.push_back(commands::ev::production(s.option.type_index, selected_id_));
             } else if (k.button == Button::Right && selected_id_ != 0) {
                 out.push_back(commands::ev::production(s.option.type_index, selected_id_, true));  // [port] right click cancels

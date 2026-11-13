@@ -82,7 +82,8 @@ bool App::render_frame() {
         if (screen_ == Screen::Battle && !cinematic_hides_hud() && !linked_ui_.input_blocked())
             bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
         else bview_.set_selection_blobs({});  // load screen / attract demo: no selection
-        bview_.set_bombing_blob(screen_ == Screen::Battle && bombing_targeting_ ? bombing_blob_ : std::nullopt);
+        // cu9g t03 bombing-run blob; ui3 t04: the reinforcement drop preview takes the same slot (one pick at a time).
+        bview_.set_bombing_blob(screen_ != Screen::Battle ? std::nullopt : bombing_targeting_ ? bombing_blob_ : reinforce_blob_);
         const auto prep0 = Clock::now();
         bview_.prepare(gpu_, render_alpha());
         ft_.prepare += static_cast<float>(ms_since(prep0));
@@ -477,11 +478,12 @@ void App::frame() {
         full_movie_.stop(audio_);
     }
     if (!movie_key && session_ && !paused_ && (screen_ == Screen::Galactic || screen_ == Screen::Battle) && routed_.keys_to_world &&
-        input_.key_pressed(ui::vk::kEscape) && script_.empty() && !(screen_ == Screen::Battle && targeting_.active())) {
+        input_.key_pressed(ui::vk::kEscape) && script_.empty() &&
+        !(screen_ == Screen::Battle && (targeting_.active() || reinforce_unit_ != 0 || bombing_targeting_ || beacon_pick_))) {
         // bkc1 t01 (BKC1_RE_ANSWERS Q1): with the story's cinematic camera on, Esc goes to the plots' Story_Handle_Esc
         // and consumes the key (no pause menu); otherwise it opens the pause menu.
         if (!session_->story_esc()) {
-            paused_ = true;  // (Esc during a targeted-ability pick only cancels the pick: battle_input)
+            paused_ = true;  // (Esc during a targeted-ability / reinforcement / bombing-run / beacon pick only cancels the pick: battle_input)
             ui_.front.show_pause_menu();
         }
     }

@@ -410,6 +410,7 @@ public:
     bool fleet_drag_active_ = false;      // galactic HUD fleet drag of the last frame (drag / drop sounds)
     bool battle_end_open_ = false;        // battle-end screen shown: ticks held until Continue (presentation only)
     std::u32string battle_place_;         // the running battle's localized place (the battle-end screen's title line)
+    uint32_t invade_planet_ = 0;          // ui3 t05: planet object the battle-end "Invade System" button invades (0 = none)
     int32_t load_intro_frames_ = 0;       // QA t11: frames left before the blocking load runs (0 = none; presentation only)
     uint32_t load_intro_shown_ = 0;       // frames presented since the load screen opened
     uint64_t load_open_tick_ = 0;         // sim tick at which the load screen opened ahead of the tactical push
@@ -443,6 +444,27 @@ public:
     bool bombing_run_ready() const;  // 0x312570's `ready`: controls not locked and the local run available
     void bombing_toggle();           // 0x2e7950 (cancel = 0): start (Select_Target SFX) or cancel (Cancelled SFX)
     void bombing_end(bool cancel_sfx);
+    // ui3 t01 - t04 (app_tactical_keys.cpp): tactical hotkeys / command-bar buttons beyond the camera and move toggles.
+    void tactical_hotkeys(const std::vector<ui::HotkeyEvent>& hk, std::vector<commands::EventData>& cmds,
+                          std::vector<ui::HudAction>& acts);
+    void interface_hotkey(uint16_t slot);  // QuickSave / QuickLoad / Screenshot (galactic and tactical)
+    bool tactical_button(const ui::HudAction& a);  // true = handled (c_button00 / 02 / 04, b_reinforcement, beacon, ...)
+    void fill_command_buttons(ui::TacticalHudFrame& hf) const;  // b_retreat / b_reinforcement / beacon / movie mode state
+    bool reinforce_available(objects::ObjectId galactic_id) const;
+    bool begin_first_reinforcement();  // R / b_reinforcement: the first callable pad entry's drop pick (toggle)
+    bool cancel_picks();               // Esc: ends a reinforcement / bombing-run / beacon pick (true when one was on)
+    void select_cycle(int32_t step);   // NextUnit / PreviousUnit
+    void select_like();                // SelectLike
+    bool movie_mode_ = false;          // MovieMode key / b_camera_t [port]: the interface hidden
+    bool interface_hidden_ = false;    // ToggleInterface key (byte 0x140b3069b)
+    bool objectives_hidden_ = false;   // MissionHolocron key in a battle [port]
+    bool camera_tether_ = false;       // CameraTether key [port]: the camera follows the selection
+    bool beacon_pick_ = false;         // place-beacon pick (b_special_weapon2 / b_beacon_t / PlaceBeacon key)
+    double beacon_last_s_ = -1.0e30;   // wall time of the last beacon (BeaconPlaceDelay)
+    float beacon_delay_s_ = 5.0f;      // GameConstants BeaconPlaceDelay (ms) / 1000
+    uint32_t cycle_unit_ = 0;          // NextUnit / PreviousUnit: the unit selected last
+    std::optional<render::JamBlob> reinforce_blob_;  // ui3 t04: the drop-point preview blob (green valid / red invalid)
+    uint64_t reinforce_invalid_clicks_ = 0, beacons_placed_ = 0, hotkey_abilities_ = 0;
     // P1 move acknowledgement (P1_DOUBLE_CLICK_MOVE.md §2.3): GameConstants values by ui::AckEffect / ui::AckRadar index.
     std::array<std::string, 4> ack_fx_{};
     std::array<std::string, 3> ack_radar_{};
@@ -510,6 +532,8 @@ public:
     void open_battle_prompt(const galactic::GalacticSim& g, const galactic::ConflictInfo& c);
     void open_linked_banner(const galactic::GalacticSim& g, const sim::CampaignBattles::LinkedRecord& r);  // story t13
     std::string representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter = false) const;
+    void planet_status(const galactic::GalacticSim& g, PlanetIndex row, ui::GalacticPlanetInfo& out) const;  // ui4 t03
+    bool hero_filter_ = false;  // ui4 t03: b_filters3 on (GalacticHud::filter_bits, last build)
     void answer_battle_prompt(bool auto_resolve);
     void auto_resolve_result(const galactic::GalacticSim& g, const galactic::ConflictLogEntry& e);
     void add_holocron_chapter(const StoryDialogMeta& meta, size_t lines);
@@ -548,6 +572,11 @@ public:
     uint32_t panel_preview_ = 0;
     uint32_t preview_planet_ = 0;
     uint64_t special_sfx_ = 0, special_msgs_ = 0, activations_ = 0;
+    void galactic_message(std::string_view id);  // ui4 t05: a message-callback text as a white screen-text line
+    void announcer_feedback();                   // ui4 t08
+    uint64_t announcements_ = 0;                 // ui4 t08: announcer events played
+    bool credits_capped_ = false;                // ui4 t08: the credits were at the cap last tick
+    uint64_t build_refusals_ = 0;  // ui4 t02: clicks on greyed galactic build pads (negative feedback)
     bool activate_special_here(uint32_t hero_id);
     std::vector<objects::ObjectHandle> special_units(const galactic::GalacticSim& g, PlanetIndex pi) const;
     // OI host: main-menu attract demo (attract_mode.hpp), audio flags, fast forward.

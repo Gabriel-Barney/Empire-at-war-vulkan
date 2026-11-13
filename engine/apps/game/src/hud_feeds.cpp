@@ -221,5 +221,82 @@ int32_t ar_result_magnitude(bool win, uint32_t n_own, uint32_t n_other) {
     return a > 3u * b ? 0 : a > b ? 1 : 2;
 }
 
+ui::HudBuildOption::Block galactic_build_block(commands::RejectReason why) {
+    using B = ui::HudBuildOption::Block;
+    if (why == commands::RejectReason::None) return B::None;
+    if (why == commands::RejectReason::QueueFull) return B::QueueFull;
+    if (why == galactic::kRejectPopulationCap) return B::PopCap;
+    if (why == commands::RejectReason::CannotAfford) return B::Funds;
+    return B::Prerequisite;
+}
+
+std::vector<ui::GalacticBuildOption> galactic_build_options(const galactic::GalacticSim& g, int32_t player, PlanetIndex planet,
+                                                            const std::function<std::string(uint32_t type)>& icon) {
+    std::vector<ui::GalacticBuildOption> out;
+    if (planet >= g.planets().size() || player < 0 || static_cast<size_t>(player) >= g.players().size()) return out;
+    for (const uint32_t t : g.buildable(planet, player)) {
+        if (t >= g.rules().types.size() || t > 0xFFFFu) continue;
+        const galactic::TypeInfo& ti = g.rules().types[t];
+        ui::GalacticBuildOption o;
+        o.type_index = static_cast<uint16_t>(t);
+        o.icon = icon ? icon(t) : std::string();
+        o.cost = g.build_cost_for(player, planet, t);
+        o.block = galactic_build_block(g.can_enqueue(player, planet, t));
+        o.enabled = o.block == ui::HudBuildOption::Block::None;
+        for (uint32_t q = 0; q < 2; ++q)
+            for (const galactic::BuildEntry& b : g.queue_of(planet, q))
+                if (b.player == player && b.type == t) ++o.queued;
+        o.structure = galactic::is_ground_structure_type(ti) || galactic::is_orbital_structure_type(ti) || galactic::is_star_base_type(ti);
+        o.production_disabled = g.production_disabled(player, t);
+        // GALACTIC_DIALOGS §5.1: the space tab = space-queue units, starbases and orbital structures.
+        o.space = g.queue_kind(t) == galactic::kSpaceQueue || galactic::is_star_base_type(ti) || galactic::is_orbital_structure_type(ti);
+        out.push_back(std::move(o));
+    }
+    return out;
+}
+
+std::u32string conflict_log_line(const galactic::ConflictLogEntry& e, const std::function<std::u32string(PlanetIndex planet)>& planet_name,
+                                 const std::function<std::u32string(int32_t player)>& faction_name) {
+    auto who = [&](int32_t p) { return p >= 0 && faction_name ? faction_name(p) : std::u32string(U"?"); };
+    std::u32string s = U"Battle of " + (planet_name ? planet_name(e.planet) : std::u32string(U"?")) +
+                       (e.kind == galactic::ConflictKind::Space ? U" (space): " : U" (land): ") + who(e.attacker) + U" vs " + who(e.defender);
+    if (e.how == 0) return s + U" - called off";
+    if (e.retreating >= 0) s += U" - " + who(e.retreating) + U" retreated";
+    else if (e.winner >= 0) s += U" - " + who(e.winner) + U" victorious";
+    if (e.how == 1) s += U" (auto-resolved)";
+    return s;
+}
+
+const char* galactic_announcement(const galactic::GalacticSim& g, const galactic::GalacticEvent& e, int32_t me) {
+    using K = galactic::GalacticEventKind;
+    if (me < 0) return nullptr;
+    switch (e.kind) {
+        case K::PlanetOwnerChanged:
+            if (e.player == me && e.other_player != me) return "SFXEvent_Planet_Gained_Control";
+            if (e.other_player == me && e.player >= 0 && e.player != me) return "SFXEvent_Planet_Lost_Control";
+            return nullptr;
+        case K::CorruptionChanged: {
+            if (e.planet >= g.planets().size()) return nullptr;
+            if (e.player != me && g.planets()[e.planet].owner != me) return nullptr;
+            if (e.value >= 0 && e.value != e.other_player) return "SFXEvent_Planet_Corrupted";
+            if (e.value < 0 && e.other_player >= 0) return "SFXEvent_Corruption_Removed";
+            return nullptr;
+        }
+        case K::FleetDeparted: {
+            const PlanetIndex to = e.other_planet;
+            if (to >= g.planets().size() || g.planets()[to].owner != me || e.player < 0 || g.allied(me, e.player)) return nullptr;
+            if (e.fleet < g.fleets().size()) {
+                const galactic::FleetState& fl = g.fleets()[e.fleet];
+                bool all_hidden = !fl.contents.empty();
+                for (const objects::ObjectHandle m : fl.contents)
+                    if (g.store().alive(m)) all_hidden = all_hidden && g.hidden(m);
+                if (all_hidden) return nullptr;
+            }
+            return "SFXEvent_Enemy_Fleet_Approaching_Planet";
+        }
+        default: return nullptr;
+    }
+}
+
 }  // namespace alamo::game
 #endif

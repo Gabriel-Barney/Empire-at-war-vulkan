@@ -85,8 +85,8 @@ void App::special_feedback() {
                 break;
             case K::SabotageVigilance:  // TEXT_SABOTAGE_FAILURE_VIGILANCE to the saboteur's owner, _PREVENTED_ to the planet's
                 if (local || e.other_player == local_player()) {
-                    const char* id = local ? "TEXT_SABOTAGE_FAILURE_VIGILANCE" : "TEXT_SABOTAGE_PREVENTED_VIGILANCE";
-                    std::printf("message: %s%s\n", id, ui_.text.find(id) ? "" : " (no text)");  // [port] no message log UI
+                    // ui4 t05 [port]: the message callback (P4 §2.3) as a white screen-text line, as the holocron message.
+                    galactic_message(local ? "TEXT_SABOTAGE_FAILURE_VIGILANCE" : "TEXT_SABOTAGE_PREVENTED_VIGILANCE");
                     ++special_msgs_;
                 }
                 break;
@@ -110,9 +110,15 @@ void App::special_feedback() {
                                                     : nullptr;  // 2 lost effort: no message [port: none identified]
                     std::printf("slice: %s %s%s%s\n", type_name(e.type), e.value == 0 ? "unlocked" : e.value == 2 ? "lost effort" : "failed",
                                 id ? ", message " : "", id ? id : "");
-                    if (id) ++special_msgs_;
+                    if (id) {
+                        galactic_message(id);  // ui4 t05 [port]: screen-text line
+                        ++special_msgs_;
+                    }
                     if (local && e.value == 0) {
                         audio_.faction_sfx("SFXEvent_Slice_Success");
+                        ++special_sfx_;
+                    } else if (local) {  // ui4 t05 [port]: every failed outcome (captured, lost effort, cheated, vigilance)
+                        audio_.faction_sfx("SFXEvent_Slice_Failure");
                         ++special_sfx_;
                     }
                 }
@@ -120,6 +126,35 @@ void App::special_feedback() {
             default: break;
         }
     }
+}
+// ui4 t08: Factions.xml announcer events of the local player - the galactic event ones (game::galactic_announcement) and
+// [port] SFXEvent_Max_Credits_Limit_Reached when the credits reach the account cap (rising edge).
+void App::announcer_feedback() {
+    const galactic::GalacticSim* g = galaxy();
+    if (!session_ || !g) return;
+    const int32_t me = local_player();
+    for (const galactic::GalacticEvent& e : session_->take_announce_events())
+        if (const char* tag = galactic_announcement(*g, e, me)) {
+            audio_.faction_sfx(tag);
+            ++announcements_;
+        }
+    if (me >= 0 && static_cast<size_t>(me) < g->players().size()) {
+        const auto& acc = g->players()[static_cast<size_t>(me)].account;
+        const bool capped = acc.cap >= 0.0f && acc.credits >= acc.cap;
+        if (capped && !credits_capped_) {
+            audio_.faction_sfx("SFXEvent_Max_Credits_Limit_Reached");
+            ++announcements_;
+        }
+        credits_capped_ = capped;
+    }
+}
+
+// ui4 t05 [port]: a galactic message (the original's message callback 0x140b313c0, P4_SIM_SYSTEMS §2.3) shown as a white
+// screen-text line (GALACTIC_DIALOGS §2: the holocron message uses that line), text from the MasterTextFile (the id when
+// missing).
+void App::galactic_message(std::string_view id) {
+    const std::u16string* t = ui_.text.find(id);
+    screen_line(t ? ui::utf16_to_utf32(*t) : ui::utf8_to_utf32(id), ui::Rgba8{255, 255, 255, 255});
 }
 // --- end P4 host ---
 
@@ -130,6 +165,7 @@ void App::post_tick() {
         ++reveal_sfx_;
     }
     special_feedback();  // P4 host
+    announcer_feedback();  // ui4 t08
     if (session_->in_battle()) {
         if (!bview_.active()) {
             begin_battle();
@@ -339,14 +375,20 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                 break;
             }
             case ui::HudAction::Kind::BeginReinforcement:  // the drop point is the next left click in the world
+                if (!reinforce_available(static_cast<objects::ObjectId>(a.unit))) {  // ui3 t04: cap / retreat / locked
+                    audio_.negative_feedback();
+                    break;
+                }
                 reinforce_unit_ = a.unit;
                 targeting_.cancel();  // one modal pick at a time
                 bombing_end(false);
+                beacon_pick_ = false;
                 break;
             case ui::HudAction::Kind::BeginAbilityTargeting:  // the target is the next world click (TargetingController)
                 if (screen_ == Screen::Battle && targeting_.begin(a)) {
                     reinforce_unit_ = 0;
                     bombing_end(false);
+                    beacon_pick_ = false;
                 }
                 break;
             case ui::HudAction::Kind::TacticalBuy:  // Build_NN: Production {type_index, location = builder}
@@ -358,6 +400,27 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                     submit(commands::ev::production(static_cast<uint16_t>(a.value), a.unit, true,
                                                     static_cast<uint8_t>(a.ids[0]), static_cast<uint8_t>(a.ids[1])));
                 break;
+            case ui::HudAction::Kind::BuildRefused: {  // ui4 t02: a greyed galactic build pad: GUI negative feedback, no command
+                // ui4 t08 [port]: the announcer instead when the reason has one - the population cap
+                // (SFXEvent_Strategic_Pop_Cap_Reached), or a space-tab item at a planet with enemy ships in orbit
+                // (SFXEvent_Build_Impossible_Location_Blockaded: "enemy ships in orbit so can't build space station").
+                const galactic::GalacticSim* g = galaxy();
+                const PlanetIndex pi = g ? planet_index(*g, selected_planet_) : kInvalidPlanet;
+                const bool space = g && a.unit < g->rules().types.size() &&
+                                   (g->queue_kind(a.unit) == galactic::kSpaceQueue || galactic::is_star_base_type(g->rules().types[a.unit]) ||
+                                    galactic::is_orbital_structure_type(g->rules().types[a.unit]));
+                if (a.value == static_cast<int32_t>(ui::HudBuildOption::Block::PopCap)) {
+                    audio_.faction_sfx("SFXEvent_Strategic_Pop_Cap_Reached");
+                    ++announcements_;
+                } else if (space && pi != kInvalidPlanet && g->blockaded(pi, local_player())) {
+                    audio_.faction_sfx("SFXEvent_Build_Impossible_Location_Blockaded");
+                    ++announcements_;
+                } else {
+                    audio_.negative_feedback();
+                }
+                ++build_refusals_;
+                break;
+            }
             case ui::HudAction::Kind::HeroSelect:  // FIXPASS_GALACTIC §2.3 tactical single click: replace the selection
                 if (a.unit && screen_ == Screen::Battle) submit(commands::ev::select({a.unit}));
                 break;
@@ -422,6 +485,7 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                     }
                     break;
                 }
+                if (tactical_button(a)) break;  // ui3 t01 / t03: c_button00 / 02 / 04, b_reinforcement, beacon, movie mode, droid
                 // P1_DOUBLE_CLICK_MOVE.md §2.1: the attack-move / waypoint / guard order buttons (c_button01 / 03 / 05) arm the
                 // one-shot move toggles of the next move order.
                 if (screen_ == Screen::Battle && (ascii_iequals(a.name, "c_button01") || ascii_iequals(a.name, "c_button03") || ascii_iequals(a.name, "c_button05"))) {
@@ -599,12 +663,15 @@ void App::galactic_input() {
             static_cast<size_t>(e.component) < ui_.components.size() &&
             ui_.galactic_hud.buttons().visual(static_cast<uint32_t>(e.component)) != ui::ButtonVisual::Disabled)
             story_ui_.click_gui(ui_.components[static_cast<size_t>(e.component)].name);
-    // The galactic shell panels (the hero panel is tactical: input in the tactical update below). Only SlicePanel reads the wheel.
+    // The galactic shell panels and the hero roster (ui4 t01, FIXPASS_GALACTIC §2.2: a good slot's click focuses the hero's
+    // planet, a double click zooms; hover gives Mouse_Over_SFX, the tooltip and the encyclopedia pop-up). Only SlicePanel
+    // reads the wheel.
     for (ui::HudPanel* p : panels())
-        if (p != &hero_panel_ && p->open()) p->update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts, input_.wheel());
+        if (p->open()) p->update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts, input_.wheel());
     for (const ui::HotkeyEvent& e : hk) {
         // FIXPASS_GALACTIC §4.2 (capture C2): the advisor key (Numpad -) opens the Droid Log, as the dome and "?" do.
         if (e.slot == ui::hk::kHolocron || e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);
+        if (e.slot == ui::hk::kQuickSave || e.slot == ui::hk::kQuickLoad || e.slot == ui::hk::kScreenshot) interface_hotkey(e.slot);
     }
     handle_hud_actions(acts);
     route_commands(cmds);
@@ -648,19 +715,84 @@ void App::battle_input() {
     // Reinforcement drop (TacticalHud BeginReinforcement): the next world left click is the landing point (ground plane
     // z = 0, land: the terrain height there [port]); a right click cancels. The click is not an order.
     bool drop_click = false;
+    // ui3 t04: Esc ends a reinforcement / bombing-run / beacon pick (the pause menu does not open then: app_frame.cpp).
+    if (input_.key_pressed(ui::vk::kEscape) && routed_.keys_to_world) cancel_picks();
+    // An entry that cannot be called any more (cap reached, retreat, controls locked) ends its pick.
+    if (reinforce_unit_ != 0 && !reinforce_available(static_cast<objects::ObjectId>(reinforce_unit_))) reinforce_unit_ = 0;
+    reinforce_blob_.reset();
     if (reinforce_unit_ != 0 && !world_blocked) {
+        // ui3 t04 (TACTICAL_GAPS §4.2.1, the human preview 0x345c0): the drop point under the cursor (land: the terrain
+        // height there, re-intersected as in the bombing pick) and the validity of a human Reinforce there
+        // (TacticalBattle::reinforce_point_ok = the preview's tests: check radius, fog, movers block).
+        const tactical::Ray ray = ui::pixel_ray(ctx.view, input_.mouse_x(), input_.mouse_y());
+        ui::Vec3 p{};
+        bool have = ui::ray_plane_z(ray, 0.0f, p);
+        if (have && ctx.ground_height) {
+            float gh = ctx.ground_height(p.x, p.y);
+            for (int i = 0; i < 4 && have; ++i) {
+                have = ui::ray_plane_z(ray, gh, p);
+                if (have) gh = ctx.ground_height(p.x, p.y);
+            }
+            p.z = gh;
+        }
+        const sim::TacticalBattle* rb = battle();
+        const auto key = static_cast<objects::ObjectId>(reinforce_unit_);
+        const int32_t me_p = local_player();
+        const bool valid = have && rb && rb->reinforce_point_ok(*tm, me_p, key, p.x, p.y);
         // The release after a right double press is swallowed (P1_DOUBLE_CLICK_MOVE.md §1.1): it does not cancel.
         if (input_.button(ui::Button::Right).click && !input_.button(ui::Button::Right).in_double_press) {
             reinforce_unit_ = 0;
             drop_click = true;
         } else if (input_.button(ui::Button::Left).click) {
-            ui::Vec3 p{};
-            if (ui::ray_plane_z(ui::pixel_ray(ctx.view, input_.mouse_x(), input_.mouse_y()), 0.0f, p)) {
-                if (ctx.ground_height) p.z = ctx.ground_height(p.x, p.y);
+            drop_click = true;
+            if (valid) {
                 cmds.push_back(ui::reinforce_event(reinforce_unit_, {p.x, p.y, p.z}));
                 ++reinforce_drops_;
+                reinforce_unit_ = 0;
+            } else if (have) {  // [port] an invalid point: the GUI negative SFX, the pick stays on (as the bombing run)
+                audio_.negative_feedback();
+                ++reinforce_invalid_clicks_;
             }
-            reinforce_unit_ = 0;
+        }
+        // [port] land preview: the faction's Reinforcements_Shadow_Blob_Material_Name blob over the drop formation box, green
+        // valid / red invalid (space shows the reinforcement fog overlay instead).
+        const galactic::GalacticSim* g = galaxy();
+        if (reinforce_unit_ != 0 && have && rb && !bview_.space() && g && me_p >= 0 && static_cast<size_t>(me_p) < g->players().size()) {
+            const uint32_t fi = g->players()[static_cast<size_t>(me_p)].faction;
+            uint32_t type = 0;
+            for (const sim::TacticalBattle::Reserve& r : rb->reserves(me_p))
+                if (r.galactic_id == key) type = r.type;
+            const sim::LandDropLayout lay = sim::land_drop_layout(rb->land_drop_shape(type), p.x, p.y, rb->player_drop_yaw(me_p));
+            const std::string mat = fi < g->rules().factions.size()
+                                        ? std::string(ascii_trim(g->rules().factions[fi].xml_text("Reinforcements_Shadow_Blob_Material_Name")))
+                                        : std::string();
+            if (!mat.empty() && lay.ok) {
+                render::JamBlob blob;
+                blob.center = {p.x, p.y, p.z};
+                blob.half_size = std::max(lay.half_x, lay.half_y);
+                blob.material = mat;
+                blob.color[0] = valid ? 0.0f : 1.0f;
+                blob.color[1] = valid ? 1.0f : 0.0f;
+                blob.color[2] = 0.0f;
+                blob.color[3] = 1.0f;
+                reinforce_blob_ = std::move(blob);
+            }
+        }
+    }
+    // ui3 t03 [port]: the place-beacon pick - the next world left click puts the Default_Beacon_Placement radar event there
+    // (BeaconPlaceDelay between two beacons); a right click cancels.
+    if (beacon_pick_ && !world_blocked && !drop_click) {
+        if (input_.button(ui::Button::Right).click && !input_.button(ui::Button::Right).in_double_press) {
+            beacon_pick_ = false;
+            drop_click = true;
+        } else if (input_.button(ui::Button::Left).click) {
+            ui::Vec3 p{};
+            if (ui::ray_plane_z(ui::pixel_ray(ctx.view, input_.mouse_x(), input_.mouse_y()), 0.0f, p)) {
+                radar_events_.add(radar_settings_, "Default_Beacon_Placement", p.x, p.y);
+                beacon_last_s_ = now_s_;
+                ++beacons_placed_;
+            }
+            beacon_pick_ = false;
             drop_click = true;
         }
     }
@@ -780,6 +912,10 @@ void App::battle_input() {
         return centroid([&ids](const render::SnapshotObject& o) { return std::binary_search(ids.begin(), ids.end(), o.id); });
     };
     ui::apply_camera_hotkeys(hk, bview_.camera(), focus);
+    if (camera_tether_)  // ui3 t01 [port]: the CameraTether key keeps the camera on the selection's centre
+        if (const auto c = focus.selection()) bview_.camera().set_look_at(*c);
+    std::vector<ui::HudAction> acts;
+    tactical_hotkeys(hk, cmds, acts);
     // P1_DOUBLE_CLICK_MOVE.md §2.1: the attack-move (T), guard (G) and waypoint hotkeys arm the next move order's toggle.
     for (const ui::HotkeyEvent& e : hk) {
         if (e.slot == ui::hk::kAttackMove) orders_.arm_move_toggle(ui::MoveToggle::AttackMove);
@@ -788,7 +924,6 @@ void App::battle_input() {
         else if (e.slot == ui::hk::kSuperWeapon && !bview_.space() && bombing_run_ready()) bombing_toggle();  // 0x63f00 case 0x16 (land)
         else if (e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);  // capture C2 (no galaxy in a skirmish: nothing)
     }
-    std::vector<ui::HudAction> acts;
     ui_.tactical_hud.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
     // L1/S4 wave 1 (tactical): STORY_CLICK_GUI to the tactical plot set - the galactic rule (left click on a component that
     // is not disabled, name = its CommandBarComponents name: b_reinforcement, b_special_weapon, ...) on the tactical HUD.
@@ -827,6 +962,7 @@ void App::bombing_toggle() {
     if (!b) return;
     bombing_targeting_ = true;
     reinforce_unit_ = 0;  // one modal pick at a time
+    beacon_pick_ = false;
     targeting_.cancel();
     if (const objects::TypeIndex bt = b->bombing_run_bomber_type(local_player()); bt != objects::kNone)
         audio_.ui(data_.types.get_string(bt, "SFXEvent_Bomb_Run_Select_Target"));

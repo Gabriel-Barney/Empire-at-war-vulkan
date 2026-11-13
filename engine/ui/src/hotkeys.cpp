@@ -124,6 +124,48 @@ int32_t hotkey_slot(std::string_view name) {
     return -1;
 }
 
+std::string_view hotkey_ability_name(uint16_t slot) {
+    struct Row {
+        const char* slot;
+        const char* ability;
+    };
+    static constexpr Row kRows[] = {
+        {"Ability_Deploy", "DEPLOY"}, {"Ability_SpreadOut", "SPREAD_OUT"}, {"Ability_JetPack", "JET_PACK"},
+        {"Ability_StickyBomb", "STICKY_BOMB"}, {"Ability_UntargetedStickyBomb", "UNTARGETED_STICKY_BOMB"},
+        {"Ability_RocketAttack", "ROCKET_ATTACK"}, {"Ability_CableAttack", "CABLE_ATTACK"}, {"Ability_FowRevealPing", "FOW_REVEAL_PING"},
+        {"Ability_PowerToWeapons", "POWER_TO_WEAPONS"}, {"Ability_SelfDestruct", "SELF_DESTRUCT"},
+        {"Ability_DeployTroopers", "DEPLOY_TROOPERS"}, {"Ability_MaximumFirepower", "MAXIMUM_FIREPOWER"}, {"Ability_Sprint", "SPRINT"},
+        {"Ability_PlaceRemoteBomb", "PLACE_REMOTE_BOMB"}, {"Ability_DetonateRemoteBomb", "DETONATE_REMOTE_BOMB"},
+        {"Ability_FireLobbingSuperweapon", "FIRE_LOBBING_SUPERWEAPON"}, {"Ability_LaserDefense", "LASER_DEFENSE"},
+        {"Ability_StimPack", "STIM_PACK"}, {"Ability_SwapWeapons", "SWAP_WEAPONS"}, {"Ability_MinorDrainLife", "DRAIN_LIFE"},
+        {"Ability_ProximityMines", "PROXIMITY_MINES"}, {"Ability_Defend", "DEFEND"}, {"Ability_TractorBeam", "TRACTOR_BEAM"},
+        {"Ability_Interdict", "INTERDICT"}, {"Ability_Barrage", "BARRAGE"}, {"Ability_Hunt", "HUNT"}, {"Ability_Turbo", "TURBO"},
+        {"Ability_Lure", "LURE"}, {"Ability_MissileShield", "MISSILE_SHIELD"}, {"Ability_SpoilerLock", "SPOILER_LOCK"},
+        {"Ability_IonCannonShot", "ION_CANNON_SHOT"}, {"Ability_SensorJamming", "SENSOR_JAMMING"}, {"Ability_Stealth", "STEALTH"},
+        {"Ability_LeechShields", "LEECH_SHIELDS"}, {"Ability_BuzzDroids", "BUZZ_DROIDS"}, {"Ability_SuperLaser", "SUPER_LASER"},
+        {"Ability_ClusterBomb", "CLUSTER_BOMB"}, {"Ability_SpaceLaserDefense", "LASER_DEFENSE"},
+        {"Ability_SpaceSelfDestruct", "SELF_DESTRUCT"}, {"Ability_FullSalvo", "FULL_SALVO"}, {"DeploySquad", "DEPLOY_SQUAD"},
+        {"Ability_LuckyShot", "LUCKY_SHOT"}, {"Ability_ReplenishWingmen", "REPLENISH_WINGMEN"},
+        {"Ability_Telekinesis", "FORCE_TELEKINESIS"}, {"Ability_Whirlwind", "FORCE_WHIRLWIND"}, {"Ability_Lightning", "FORCE_LIGHTNING"},
+        {"Ability_AreaConvert", "AREA_EFFECT_CONVERT"}, {"Ability_TargetedInvulnerability", "TARGETED_INVULNERABILITY"},
+        {"Ability_CaptureVehicle", "CAPTURE_VEHICLE"}, {"Ability_EjectVehicleThief", "EJECT_VEHICLE_THIEF"},
+        {"Ability_EnergyWeapon", "ENERGY_WEAPON"}, {"Ability_HarmonicBomb", "HARMONIC_BOMB"}, {"Ability_WeakenEnemy", "WEAKEN_ENEMY"},
+        {"Ability_Invulnerability", "INVULNERABILITY"}, {"Ability_AreaStun", "AREA_EFFECT_STUN"},
+        {"Ability_TargetedHack", "TARGETED_HACK"}, {"Ability_TargetedRepair", "TARGETED_REPAIR"}, {"Ability_FlameThrower", "FLAME_THROWER"},
+        {"Ability_HomeOne", "CONCENTRATE_FIRE"}, {"Ability_SaberThrow", "SABER_THROW"}, {"Ability_ForceCloak", "FORCE_CLOAK"},
+        {"Ability_ForceConfuse", "FORCE_CONFUSE"}, {"Ability_ForceSight", "FORCE_SIGHT"}, {"Ability_Berserker", "BERSERKER"},
+        {"Ability_RadioactiveContaminate", "RADIOACTIVE_CONTAMINATE"}, {"Ability_Infection", "INFECTION"},
+        {"Ability_DrainLife", "DRAIN_LIFE"}, {"Ability_Summon", "SUMMON"}, {"Ability_Blast", "BLAST"},
+        {"Ability_ShieldFlare", "SHIELD_FLARE"}, {"Ability_Stun", "STUN"}, {"Ability_TacticalBribe", "TACTICAL_BRIBE"},
+        {"Ability_FoCFullSalvo", "FULL_SALVO"}, {"Ability_FoCSensorJamming", "SENSOR_JAMMING"},
+    };
+    if (slot >= kHotkeySlots) return {};
+    const std::string_view name = kSlots[slot].name;
+    for (const Row& r : kRows)
+        if (name == r.slot) return r.ability;
+    return {};
+}
+
 int8_t hotkey_group(uint16_t slot) {
     uint16_t n = 0xFFFF;
     if (slot < 10) n = slot;

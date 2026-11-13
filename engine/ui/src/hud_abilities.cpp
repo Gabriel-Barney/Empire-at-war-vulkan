@@ -95,6 +95,10 @@ void abilities_from_s9(const tactical::abilities::AbilitySystem& sys, const Sele
         a.targeted = k != TargetKind::None;
         a.target_kind = static_cast<uint8_t>(k);
         a.icon = alternate.empty() ? ability_icon(type) : std::move(alternate);
+        // ui3 t07 [port]: the MasterTextFile pair TEXT_TOOLTIP_ABILITY_<type>_NAME / _DESCRIPTION (the original's ability
+        // tooltip source is not traced; the FoC text has the pair for the ability type names). Two keys: two lines.
+        if (const std::string_view n = tactical::abilities::ability_type_info(type).name; !n.empty() && n != "NONE")
+            a.tooltip_key = "TEXT_TOOLTIP_ABILITY_" + std::string(n) + "_NAME TEXT_TOOLTIP_ABILITY_" + std::string(n) + "_DESCRIPTION";
         out.push_back(std::move(a));
     }
 }

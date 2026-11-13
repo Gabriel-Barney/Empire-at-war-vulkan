@@ -444,6 +444,13 @@ bool App::start_session(const SessionSpec& spec) {
     }
     loaded_save_.clear();
     session_started(diag);
+    credits_capped_ = false;
+    // ui4 t08 [port]: a new campaign (not a load, a skirmish or the attract demo) plays the faction's
+    // SFXEvent_GUI_Start_Campaign once it has started.
+    if (spec.kind == SessionKind::Campaign && !spec.attract && galaxy()) {
+        audio_.faction_sfx("SFXEvent_GUI_Start_Campaign");
+        ++announcements_;
+    }
     return true;
 }
 
@@ -534,6 +541,10 @@ void App::begin_battle() {
     autofire_seen_.clear();  // ui1 t02: the default autofire is sent for this battle's objects
     bombing_blob_.reset();
     targeting_.cancel();  // nor a targeted ability
+    reinforce_blob_.reset();  // ui3: nor a drop preview / beacon pick; tether and interface keys reset per battle [port]
+    beacon_pick_ = false;
+    camera_tether_ = false;
+    cycle_unit_ = 0;
     // L1/S4 wave 1: the battle's tactical plots (loaded by CampaignBattles at the tactical push) for STORY_MISSION_LOST;
     // battle-screen story notifications go to that plot set (story_ui_step / battle_input).
     const sim::StorySession* story = session_->host().story();

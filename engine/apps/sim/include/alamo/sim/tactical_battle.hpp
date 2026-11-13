@@ -602,9 +602,16 @@ public:
     // extents (drop_deployed_extents) while a Deploys type with a locomotor is deploying / deployed (a1i t05, 0x396850
     // rule 2; s78n t10: Walk state 0x18 / 0x19).
     // Unknown entry -> false. Space battles -> true.
-    bool land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
+    bool land_drop_valid(const TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
                          bool use_reinforcement_points) const;
     float player_drop_yaw(int32_t player) const { return drop_yaw(side_player(1) == player ? uint8_t{1} : uint8_t{0}); }
+    // ui3 t04 (presentation reads between ticks: the checks of order_reinforce, nothing changed). reinforce_block: None when
+    // `player`'s reserve `galactic_id` could be called now - else InvalidUnit (not an undeployed reserve of the player),
+    // NotAllowed (finished, its side retreating, the hyperspace hold, a campaign type that stays in its transport / the
+    // planet restricts), QueueFull (space unit cap). reinforce_point_ok: the drop point test of a human Reinforce at (x, y)
+    // (land: land_drop_valid with movers counted and Use_Reinforcement_Points; space: fog_reinforce_point_ok).
+    commands::RejectReason reinforce_block(int32_t player, objects::ObjectId galactic_id) const;
+    bool reinforce_point_ok(const TacticalMode& mode, int32_t player, objects::ObjectId galactic_id, float x, float y) const;
     // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): the facing the reinforcement creators give `player`'s new objects:
     // its side's entry-facing record (mode +0x288), +X when the record is zero or the player has no side.
     Vec3 player_drop_facing(int32_t player) const;
@@ -1142,6 +1149,14 @@ public:
     // cu8 t01: the ability check of the request (AbilitySystem::retreat_blocked, TACTICAL_GAPS §1.5); cu8f t07: in space
     // also while the player owns a live TACTICAL_SUPER_WEAPON battle unit (CU8F_T01_T02_T07_RE.md §3.2).
     bool retreat_prevented(int32_t player) const;
+    // ui3 t03 (BATTLE_TRANSITIONS §3.4 vf9 reasons, presentation read): 0 = request_retreat(player) would start a retreat;
+    // 1 not a participant / battle over; 2 the retreat-allowed countdown still runs; 5 a retreat already runs; 6 [port]
+    // prevented (retreat_prevented: interdict, Retreat_Prevention, a super weapon in space).
+    int32_t retreat_block(int32_t player) const;
+    // ui3 t03: 0..1 progress of the retreat-allowed countdown (1 = allowed) and of the running retreat countdown (-1 when
+    // none runs), for the b_retreat Build_Texture_Name dial.
+    float retreat_allowed_progress() const;
+    float retreat_countdown_progress() const;
     // --- OI host: the retreating player while a retreat countdown runs (-1 none / done). The mode's unit-response
     // "excluded set" (AUDIO.md §3.3, STRATEGIC_GAPS §7.4 [M]): that player's units give no unit responses. ---
     int32_t retreating_player() const {

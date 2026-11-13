@@ -1211,8 +1211,8 @@ void test_tactical_stage2() {
                acts[0].value == 33 && acts[0].ids == (std::vector<uint32_t>{0, 1}));
     }
     {  // Tactical buy buttons: Build_00 enabled (cost text2), Build_01 blocked by funds (disabled, tooltip index 2).
-        const HudBuildOption opts[2] = {{41, "i_button_hologram.tga", 1200, 0, HudBuildOption::Block::None},
-                                        {42, "i_button_hologram.tga", 3500, 2, HudBuildOption::Block::Funds}};
+        const HudBuildOption opts[2] = {{41, "i_button_hologram.tga", 1200, 0, HudBuildOption::Block::None, {}},
+                                        {42, "i_button_hologram.tga", 3500, 2, HudBuildOption::Block::Funds, {}}};
         TacticalHudFrame f3 = fr;
         f3.builder = 777;
         f3.build_options = opts;
@@ -1220,8 +1220,8 @@ void test_tactical_stage2() {
         CHECK2(hud.stats().build_options == 2);
         const ButtonRuntime* b0 = hud.buttons().find_state(static_cast<uint32_t>(t.find("Build_00")));
         const ButtonRuntime* b1 = hud.buttons().find_state(static_cast<uint32_t>(t.find("Build_01")));
-        CHECK2(b0 && b1 && b0->text2 == U"1200" && !b0->disabled && b0->tooltip_index == -1 && b1->disabled &&
-               b1->tooltip_index == 2 && b1->text == U"2");
+        CHECK2(b0 && b1 && b0->text2 == U"1200" && !b0->disabled && b0->tooltip_index == 0 && b0->tooltip_key.empty() &&
+               b1->disabled && b1->tooltip_index == 2 && b1->text == U"2" && b1->tooltip_key.empty());  // ui3 t07: index 0 + key
         auto buy_click = [&](const char* name, Button b) {
             const int32_t ci = t.find(name);
             Vec2f c{-1e9f, -1e9f};

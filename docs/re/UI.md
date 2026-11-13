@@ -544,7 +544,10 @@ dialog; consumed if any accepts. `0x1c3c40` = "a dialog has focus". [H]
 Profile entries `KeySettingsCount` (max 153), `KeySettingKeycode<n>` (Win32 VK, −1 = unbound),
 `KeySettingModifier<n>` (0 none, 1 Shift, 2 Ctrl, 3 Alt) (load 0x212e60, save 0x212d80, defaults
 0x211940). Binding a key removes it from every other slot; slots 0–9 drive three derived slots
-each. Labels come from the keyboard dialog's table (0x807330, stride 0x40), whose order matches
+each. The dialogs' edit boxes are named by the string table 0x8063d0..0x807310 (stride 0x20,
+`docs/re/ghidra/strings_xrefs.csv`), which lists `IDC_EDIT_GROUP_1_SELECT` .. `IDC_EDIT_SENSOR_JAM` in slot order:
+entry i is slot i (ui3 t02, 2026-11-13; e.g. `IDC_EDIT_DEPLOY_SQUADRON` = 66, `IDC_EDIT_LUCKY_SHOT` = 90).
+Labels come from the keyboard dialog's table (0x807330, stride 0x40), whose order matches
 the slots.
 
 | slot | action | default |

@@ -32,6 +32,11 @@ std::vector<uint32_t> capped(std::vector<uint32_t> ids, size_t n = 127) {
     if (ids.size() > n) ids.resize(n);
     return ids;
 }
+// ui3 t07: MasterTextFile text of `key` - a missing key shows as TextDatabase::text gives it, no text database the key
+// itself (as the tooltips), never an English stand-in.
+std::u32string text_or(const TextDatabase* text, const char* key) {
+    return text ? utf16_to_utf32(text->text(key)) : ascii32(key);
+}
 }  // namespace
 
 std::vector<SelectedGroup> group_selection(std::span<const HudUnit> units, size_t max_groups) {
@@ -159,6 +164,13 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
     shell_ = table.find("i_main_skirmish");
     retreat_ = table.find("b_retreat");
     special_weapon_ = table.find("b_special_weapon");
+    reinforce_button_ = table.find("b_reinforcement");
+    beacon_button_ = table.find("b_special_weapon2");
+    beacon_t_ = table.find("b_beacon_t");
+    camera_t_ = table.find("b_camera_t");
+    reinforce_counter_ = table.find("reinforcement_counter");
+    r_pop_icon_ = table.find("r_pop_icon");
+    r_pop_text_ = table.find("r_pop_text");
     for (int i = 0; i < 6; ++i) order_button_[i] = find_fmt(table, "c_button%02d", i);
     pause_ = table.find("b_play_pause_t");
     pause_g_ = table.find("b_play_pause");
@@ -233,6 +245,47 @@ void TacticalHud::on_pointer(std::span<const HudPointerEvent> events, std::vecto
     }
 }
 
+// An ability button's click: right = autofire toggle; left = targeting mode (targeted) or the mode toggle.
+void TacticalHud::ability_click(const AbilitySlot& a, const std::string& name, Button button, bool queued,
+                                std::vector<commands::EventData>& out, std::vector<HudAction>* actions) {
+    if (button == Button::Right) {
+        out.push_back(ability_autofire_event(a.users, a.ability.ability_type, !a.ability.autofire));
+    } else if (a.ability.targeted) {
+        HudAction h;
+        h.kind = HudAction::Kind::BeginAbilityTargeting;
+        h.component = a.component;
+        h.name = name;
+        h.ability_type = a.ability.ability_type;
+        h.value = a.ability.target_kind != 0 ? a.ability.target_kind : -1;  // TargetingController: -1 = by type
+        h.ids = a.users;
+        h.queued = queued;  // [port: Gabriel] queue modifier at the click (the host may apply its own binding)
+        if (actions) actions->push_back(std::move(h));
+    } else {
+        out.push_back(ability_mode_event(a.users, a.ability.ability_type, !a.ability.active));
+    }
+}
+
+bool TacticalHud::activate_ability(uint8_t ability_type, bool queued, std::vector<commands::EventData>& out,
+                                   std::vector<HudAction>* actions) const {
+    if (!table_ || ability_type == 0) return false;
+    for (const AbilitySlot& a : ability_slots_) {
+        if (a.ability.ability_type != ability_type) continue;
+        if (!a.ability.enabled || a.users.empty()) return false;
+        if (a.component >= 0)
+            if (const ButtonRuntime* r = buttons_.find_state(static_cast<uint32_t>(a.component)); r && (r->disabled || r->hidden)) return false;
+        ability_click(a, a.component >= 0 ? (*table_)[static_cast<uint32_t>(a.component)].name : std::string(), Button::Left,
+                      queued, out, actions);
+        return true;
+    }
+    return false;
+}
+
+bool TacticalHud::order_button_live(uint32_t button) const {
+    if (button >= 6 || order_button_[button] < 0) return false;
+    const ButtonRuntime* r = buttons_.find_state(static_cast<uint32_t>(order_button_[button]));
+    return !r || (!r->hidden && !r->disabled);
+}
+
 void TacticalHud::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now,
                                std::vector<commands::EventData>& out, std::vector<HudAction>* actions) {
     if (!table_) return;
@@ -285,22 +338,7 @@ void TacticalHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
         for (const AbilitySlot& a : ability_slots_) {
             if (a.component != k.component) continue;
             handled = true;
-            if (!a.ability.enabled) break;
-            if (k.button == Button::Right) {
-                out.push_back(ability_autofire_event(a.users, a.ability.ability_type, !a.ability.autofire));
-            } else if (a.ability.targeted) {
-                HudAction h;
-                h.kind = HudAction::Kind::BeginAbilityTargeting;
-                h.component = k.component;
-                h.name = c.name;
-                h.ability_type = a.ability.ability_type;
-                h.value = a.ability.target_kind != 0 ? a.ability.target_kind : -1;  // TargetingController: -1 = by type
-                h.ids = a.users;
-                h.queued = k.shift;  // [port: Gabriel] queue modifier at the click (the host may apply its own binding)
-                act(std::move(h));
-            } else {
-                out.push_back(ability_mode_event(a.users, a.ability.ability_type, !a.ability.active));
-            }
+            if (a.ability.enabled) ability_click(a, c.name, k.button, k.shift, out, actions);
             break;
         }
         if (handled) continue;
@@ -417,6 +455,10 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
     world_.build(wc, units, types, *atlas_, *fonts_, dl_, &blobs_, flytext);
     stats_.world = world_.stats();
     groups_ = group_selection(units);
+    // ui3 t07 (HUD_GAPS §2.1): Tooltip_Text entry 1 in tactical land mode when the component has a second entry, else
+    // entry 0; the groups that pick an entry by state (buy buttons, the bombing-run button) override it below.
+    for (uint32_t i = 0; i < table_->size(); ++i)
+        if ((*table_)[i].tooltip_text.size() > 1) buttons_.state(i).tooltip_index = frame.world.land ? 1 : 0;
     if (!frame.world.interface_hidden) {
         build_markers(frame, units);
         build_skeleton(frame);
@@ -432,7 +474,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
         };
         set_text(planet_text_, frame.planet_name);
         if (frame.tech >= 0) {
-            std::u32string t = text_ && text_->find("TEXT_TECH") ? utf16_to_utf32(*text_->find("TEXT_TECH")) : std::u32string(U"Tech:");
+            std::u32string t = text_or(text_, "TEXT_TECH");  // ui3 t07: no English stand-in
             char n[16];
             std::snprintf(n, sizeof n, " %d", frame.tech);
             set_text(tech_text_, t + ascii32(n));
@@ -449,6 +491,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
         }
         apply_order_buttons(frame.order_buttons);
         apply_bombing_run_button(frame.bombing_run);
+        apply_command_buttons(frame.command_buttons);
         build_buttons(frame);
         // C2 (FIXPASS_GALACTIC §4.2): the name's line is centred on the bone (250, 745 vs bone 252, 744). Drawn here because the
         // generic button text hangs a Max_Text_Width block below its anchor, half a line low (QA D12 on the galactic strip).
@@ -760,6 +803,7 @@ void TacticalHud::build_abilities(const TacticalHudFrame& f) {
         r.disabled = !s.ability.enabled;
         r.selected = s.ability.active;
         r.icon_override = s.ability.icon;
+        r.tooltip_key = s.ability.tooltip_key;  // ui3 t07: the ability's own text ("" = the component's Tooltip_Text)
         r.build_fill = s.ability.recharge < 1.0f ? std::clamp(s.ability.recharge, 0.0f, 1.0f) * 100.0f : -1.0f;
         r.overlay = s.ability.autofire;
         const CommandBarComponent& c = (*table_)[ci];
@@ -867,8 +911,10 @@ void TacticalHud::build_buy_buttons(const TacticalHudFrame& f) {
             case HudBuildOption::Block::QueueFull: r.tooltip_index = 0; break;
             case HudBuildOption::Block::PopCap: r.tooltip_index = 1; break;
             case HudBuildOption::Block::Funds: r.tooltip_index = 2; break;
+            case HudBuildOption::Block::None: r.tooltip_index = 0; break;  // ui3 t07: the type's own tooltip (tooltip_key)
             default: r.tooltip_index = -1; break;
         }
+        r.tooltip_key = o.block == HudBuildOption::Block::None ? o.tooltip_key : std::string();
         const CommandBarComponent& c = (*table_)[u];
         const Vec2f center{anchor.x + kBone[i].x, anchor.y + kBone[i].y};
         const uint32_t layer = static_cast<uint32_t>(std::clamp(std::max(c.base_layer, kShellLayerMin), 0, static_cast<int32_t>(kHudLayers) - 1));
@@ -943,6 +989,37 @@ void TacticalHud::apply_bombing_run_button(const HudBombingRunButton& s) {
     r.build_fill = s.dial < 0.0f ? -1.0f : std::clamp(s.dial, 0.0f, 1.0f) * 100.0f;
 }
 
+void TacticalHud::apply_command_buttons(const HudCommandButtons& s) {
+    if (!s.present) return;
+    auto set = [&](int32_t ci, bool enabled, bool selected) {
+        if (ci < 0) return;
+        ButtonRuntime& r = buttons_.state(static_cast<uint32_t>(ci));
+        r.hidden = r.script_visible == 0;
+        r.disabled = r.script_enabled >= 0 ? r.script_enabled == 0 : (s.controls_locked || !enabled);
+        r.selected = selected;
+    };
+    set(retreat_, s.retreat_enabled, false);
+    if (retreat_ >= 0)
+        buttons_.state(static_cast<uint32_t>(retreat_)).build_fill = s.retreat_dial < 0.0f ? -1.0f : std::clamp(s.retreat_dial, 0.0f, 1.0f) * 100.0f;
+    set(reinforce_button_, s.reinforce_enabled, s.reinforce_selected);
+    set(beacon_button_, s.beacon_enabled, s.beacon_selected);
+    set(beacon_t_, s.beacon_enabled, s.beacon_selected);
+    if (camera_t_ >= 0) buttons_.state(static_cast<uint32_t>(camera_t_)).selected = s.movie_mode;
+    auto text = [&](int32_t ci, bool shown, std::u32string t) {
+        if (ci < 0) return;
+        ButtonRuntime& r = buttons_.state(static_cast<uint32_t>(ci));
+        r.hidden = r.script_visible >= 0 ? r.script_visible == 0 : !shown;
+        r.text = std::move(t);
+    };
+    char n[32];
+    std::snprintf(n, sizeof n, "%u", s.reinforce_count);
+    text(reinforce_counter_, s.reinforce_count > 0, ascii32(n));
+    const bool pop = s.pop_used >= 0 && s.pop_cap >= 0;
+    if (pop) std::snprintf(n, sizeof n, "%d/%d", s.pop_used, s.pop_cap);
+    text(r_pop_text_, pop, pop ? ascii32(n) : std::u32string());
+    text(r_pop_icon_, pop, {});
+}
+
 void TacticalHud::build_buttons(const TacticalHudFrame& f) {
     for (uint32_t i = 0; i < table_->size(); ++i) {
         if (dynamic_[i]) continue;
@@ -975,12 +1052,6 @@ int32_t TacticalHud::font_of(int32_t component, float fallback_points) const {
 }
 
 namespace {
-std::u32string text_or(const TextDatabase* text, const char* key, const char32_t* fallback) {
-    if (text)
-        if (const std::u16string* v = text->find(key)) return utf16_to_utf32(*v);
-    return fallback;
-}
-
 // Upper-cases ASCII letters (the original draws the banner / header captions in capitals).
 std::u32string upper32(std::u32string s) {
     for (char32_t& c : s)
@@ -1008,13 +1079,13 @@ void TacticalHud::build_pause_banner(const TacticalHudFrame& f) {
     st.font = font_of(pause_text_, 9.0f);
     st.align = TextAlign::Center;
     st.color = Rgba8{214, 92, 26, 255};
-    add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, upper32(text_or(text_, "TEXT_GAME_PAUSED", U"Game Paused")), bar_c, st);
+    add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, upper32(text_or(text_, "TEXT_GAME_PAUSED")), bar_c, st);
     const CommandBarComponent* rc = resume_ >= 0 ? &(*table_)[static_cast<size_t>(resume_)] : nullptr;
     st.font = font_of(resume_, 9.0f);
     st.color = over ? Rgba8{255, 150, 140, 255} : (rc && rc->has_text_color ? rc->text_color : Rgba8{255, 64, 64, 255});
     st.emboss = rc ? rc->text_emboss : true;
     add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_,
-             upper32(text_or(text_, "TEXT_BUTTON_RESUME_GAME", U"Resume Game")), btn_c, st);
+             upper32(text_or(text_, "TEXT_BUTTON_RESUME_GAME")), btn_c, st);
     if (resume_ >= 0) hit(resume_, kLayer, btn_c, btn_sz);
     stats_.pause_banner = true;
 }
@@ -1023,7 +1094,7 @@ void TacticalHud::build_pause_banner(const TacticalHudFrame& f) {
 // inside the canvas, bottom 30 units above the canvas bottom; header + 1-unit rule + "n. text" lines wrapped to the
 // box (objective_text Size y = line spacing, objective_header_text Size y = header spacing).
 void TacticalHud::build_objectives(const TacticalHudFrame& f) {
-    if (f.objectives.empty()) return;
+    if (f.objectives.empty() || f.objectives_hidden) return;
     const CommandBarComponent* back = obj_back_ >= 0 ? &(*table_)[static_cast<size_t>(obj_back_)] : nullptr;
     const CommandBarComponent* hdr = obj_header_ >= 0 ? &(*table_)[static_cast<size_t>(obj_header_)] : nullptr;
     const CommandBarComponent* txt = obj_text_ >= 0 ? &(*table_)[static_cast<size_t>(obj_text_)] : nullptr;
@@ -1075,7 +1146,7 @@ void TacticalHud::build_objectives(const TacticalHudFrame& f) {
     hs.outline = hdr ? hdr->text_outline : true;
     hs.align = TextAlign::Left;
     std::u32string header = f.objectives_header;
-    if (header.empty()) header = text_or(text_, "TEXT_TEST_OBJECTIVE_HEADER", U"Mission Objectives");
+    if (header.empty()) header = text_or(text_, "TEXT_TEST_OBJECTIVE_HEADER");
     const float hy = top - pad_y - 0.5f * header_h;
     add_text(dl_, tl, HudList::Text, *fonts_, canvas_, upper32(std::move(header)), {left + pad_x, hy}, hs);
     {  // rule under the header

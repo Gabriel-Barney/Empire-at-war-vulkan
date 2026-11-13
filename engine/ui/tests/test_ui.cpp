@@ -1224,6 +1224,27 @@ void test_double_click_move() {
     s.click(Button::Right, 500, 200);
     o = run(land, mark);
     CHECK(o.size() == 1 && o[0].event.u("flags") == 0x06);
+    // ui3 t01: the attack button / key (MoveToggle::Attack) makes the next ground order an attack-move, once; the move
+    // button / key (MoveToggle::Move) a plain move; arming one clears the other.
+    ot.arm_move_toggle(MoveToggle::Attack);
+    CHECK(ot.move_toggle_armed(MoveToggle::Attack) && !ot.move_toggle_armed(MoveToggle::Move));
+    pause();
+    mark = s.frames.size();
+    s.click(Button::Right, 500, 200);
+    pause();
+    s.click(Button::Right, 500, 200);
+    o = run(land, mark);
+    CHECK(o.size() == 2 && o[0].event.u("flags") == 0x05 && o[1].event.u("flags") == 0x04);
+    CHECK(!ot.move_toggle_armed(MoveToggle::Attack));
+    ot.arm_move_toggle(MoveToggle::Attack);
+    ot.arm_move_toggle(MoveToggle::Move);
+    CHECK(ot.move_toggle_armed(MoveToggle::Move) && !ot.move_toggle_armed(MoveToggle::Attack));
+    pause();
+    mark = s.frames.size();
+    s.click(Button::Right, 500, 200);
+    o = run(land, mark);
+    CHECK(o.size() == 1 && o[0].event.type() == T::MoveToPosition && o[0].event.u("flags") == 0x04);
+    CHECK(!ot.move_toggle_armed(MoveToggle::Move));
 
     // 7. land drag: Chebyshev 3 px (Euclid 4.2 > 4) is still a click; 60 px -> MoveToPositionFacing at the anchor;
     //    a drag starting on a selected unit -> Facing (rotate only).

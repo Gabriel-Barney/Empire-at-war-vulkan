@@ -134,6 +134,14 @@ void App::handle_screen_actions(const std::vector<ui::ScreenAction>& acts) {
             case K::StorySummaryClosed:
                 story_summary_open_ = false;
                 break;
+            case K::LandInvade:  // ui3 t05: "Invade System" - the Invade command at the battle's planet, then as Continue
+                if (session_ && invade_planet_ != 0) {
+                    commands::EventData ev(commands::EventType::Invade);
+                    ev.set("planet", invade_planet_);
+                    submit(std::move(ev));
+                }
+                invade_planet_ = 0;
+                [[fallthrough]];
             case K::BattleEndContinue:
                 battle_end_open_ = false;
                 story_ui_.generic("battle_end_closed");  // L1/S4 wave 1: STORY.md 4.1 step 6, GENERIC "battle_end_closed"
@@ -188,14 +196,21 @@ void App::handle_screen_actions(const std::vector<ui::ScreenAction>& acts) {
 
 void App::show_battle_end(bool dialog) {
     ui::BattleEndInfo info;
-    const std::string log = session_ && session_->battles() && !session_->battles()->log().empty() ? session_->battles()->log().back() : std::string();
-    // [port] winner from the battle summary ("winner <faction>,").
-    std::string winner;
-    if (const size_t w = log.find("winner "); w != std::string::npos) {
-        const size_t e = log.find(',', w);
-        winner = log.substr(w + 7, e == std::string::npos ? std::string::npos : e - w - 7);
-        info.victory = ascii_iequals(winner, local_faction());
+    // ui3 t05 (GALACTIC_DIALOGS §3.1, the same IDD_BATTLE_END_DIALOG as after an auto-resolve): the winner is the ended
+    // battle's result (CampaignBattles::last_battle_end, after an auto-resolve from tactical too), not a log string.
+    const galactic::GalacticSim* g = galaxy();
+    const sim::CampaignBattles* cb = session_ ? session_->battles() : nullptr;
+    const sim::CampaignBattles::LastBattleEnd end = cb ? cb->last_battle_end() : sim::CampaignBattles::LastBattleEnd{};
+    const int32_t me = local_player();
+    std::string winner;  // the winner's faction name (the lost-battle music names it)
+    if (end.valid) {
+        info.victory = end.winner == me;
+        if (g && end.winner >= 0 && static_cast<size_t>(end.winner) < g->players().size()) {
+            const uint32_t f = g->players()[static_cast<size_t>(end.winner)].faction;
+            if (f < g->rules().factions.size()) winner = g->rules().factions[f].name;
+        }
     }
+    info.title = info.victory ? txt("TEXT_WIN_BATTLE", U"You have won the battle!") : txt("TEXT_LOST_BATTLE", U"You have lost the battle!");
     // L1/S4 wave 1 (SCRIPT_GAPS.md 4.2): the local player lost a battle that ran a tactical plot set -> STORY_MISSION_LOST
     // to the galactic story, name = that plots file (the shipped Param1 values) [inferred: the original's "monitor
     // MISSION_LOST name" source is not specified].
@@ -210,7 +225,51 @@ void App::show_battle_end(bool dialog) {
     const game::BattleKillCount kills = game::count_battle_kills(dead, local_player());  // t41: campaign score, final tick included
     tally_.kills += kills.kills;
     tally_.losses += kills.losses;
-    add_loss_rows(info, game::tally_battle_losses(dead), local_player());
+    // ui3 t05: the battle time (TEXT_BATTLE_TIME, the battle's frames / 30), salvage (the bounty of the units the local
+    // player's enemies lost: TEXT_SUMMARY_BOUNTY_COLLECTED), each side's lost credit value, the efficiency and the lost
+    // named heroes' portraits (5 per side), by the auto-resolve screen's rules (battle_summary.hpp); types costing 0 are
+    // not listed (§3.1).
+    const game::BountyTable bounty_table = game::load_bounty_table(data_.db.constants(), data_.types);
+    std::vector<game::ArUnitRecord> records;
+    game::BattleLosses lost;
+    for (const game::BattleLossRecord& d : dead) {
+        if (d.owner < 0) continue;
+        game::ArUnitRecord r;
+        r.owner = d.owner;
+        r.destroyed = true;
+        r.cost = d.type < data_.rules.types.size() ? static_cast<int64_t>(data_.rules.types[d.type].build_cost) : 0;
+        r.bounty = game::type_bounty(bounty_table, data_.types, static_cast<objects::TypeIndex>(d.type));
+        records.push_back(r);
+        if (g && is_named_hero(*g, d.type)) {
+            std::vector<std::string>& heroes = d.owner == me ? info.your_heroes : info.enemy_heroes;
+            const std::string icon = type_icon(d.type);
+            if (!icon.empty() && heroes.size() < 5 && std::find(heroes.begin(), heroes.end(), icon) == heroes.end()) heroes.push_back(icon);
+        }
+        if (r.cost > 0) ++lost[d.owner][d.type];
+    }
+    add_loss_rows(info, lost, me);
+    const game::ArSummary sum = game::summarize_auto_resolve(records, me, info.victory);
+    info.battle_seconds = end.valid ? static_cast<int64_t>(end.frames / 30u) : -1;
+    info.bounty = sum.bounty;
+    info.your_loss_value = sum.loss_value[0];
+    info.enemy_loss_value = sum.loss_value[1];
+    info.your_efficiency = sum.efficiency[0];
+    info.enemy_efficiency = sum.efficiency[1];
+    // §3.1 IDC_LAND_INVADE_BUTTON "Invade System": a won space battle with an invasion possible [port: a campaign, the
+    // planet not the local player's and accessible, and a stopped own fleet there carrying a ground unit - the
+    // GalacticSim::invade conditions; the click sends the Invade command for every such unit].
+    invade_planet_ = 0;
+    if (g && end.valid && end.space && info.victory && session_->spec().kind != SessionKind::Skirmish && end.planet < g->planets().size()) {
+        const auto pi = static_cast<PlanetIndex>(end.planet);
+        const galactic::PlanetState& ps = g->planets()[pi];
+        bool ground = false;
+        for (const uint32_t fi : g->fleets_at(pi, me))
+            if (!g->fleets()[fi].moving)
+                for (const objects::ObjectHandle h : g->fleets()[fi].contents)
+                    ground = ground || (g->store().alive(h) && g->rules().types[g->store().type(h)].kind == galactic::UnitKind::GroundUnit);
+        info.can_invade = ground && g->surface_accessible(pi) && g->store().owner(ps.object) != me;
+        if (info.can_invade) invade_planet_ = static_cast<uint32_t>(g->store().id(ps.object));
+    }
     info.can_save_replay = false;  // N1
     if (!dialog) return;  // story t13: a linked battle's skip - the story and score bookkeeping above, no screen, no music
     // Battle-end win / lose music, mode 16 (STRATEGIC_GAPS §7.4); a lost battle names the winner as the enemy faction.
@@ -465,6 +524,10 @@ void App::open_battle_prompt(const galactic::GalacticSim& g, const galactic::Con
                                   : txt("TEXT_TACTICAL_SPACE_BATTLE_IS_PENDING", U": SPACE BATTLE IMMINENT!"));
     prompt_.planet_name = planet_label(data_, ui_.text, g, c.planet);
     audio_.battle_pending(prompt_.land);
+    if (prompt_.land && c.attacker == me) {  // ui4 t08 [port]: the local player's land invasion begins (the battle prompt)
+        audio_.faction_sfx("SFXEvent_Land_Invasion_Commencing");
+        ++announcements_;
+    }
     choice_open_ = true;  // the banner (GalacticHudFrame::battle) until Begin / Auto-Resolve
     ++choices_;
     if (prompt_.story_pending) ++prompts_story_;

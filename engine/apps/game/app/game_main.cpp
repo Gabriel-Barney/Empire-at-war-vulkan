@@ -250,6 +250,7 @@ bool App::init() {
         // refixf t05: the in-game cinematic camera (TSW_PLANET_DESTROY.md §11.3)
         cine_.enabled = gc.get_bool("In_Game_Cinematics", true);
         cine_.letterbox_height = gc.get_float("Camera_FX_Manager_Letterbox_Height", 0.085f);
+        beacon_delay_s_ = gc.get_float("BeaconPlaceDelay", 5000.0f) / 1000.0f;  // ui3 t03: ms between two beacons
     }
     // The unsynced presentation generator (0x140a2ab18, seeded from the performance counter at boot); smoke runs fixed.
     cine_.rng.reseed(opt_.smoke.empty() && !bench_active() ? static_cast<uint64_t>(Clock::now().time_since_epoch().count()) : 0xf0f0f0f0u);
@@ -378,6 +379,8 @@ int App::run() {
                     choices_, auto_resolves_, story_dialogs_, ency_shown_, retry_boxes_, reinforce_drops_, holo_.samples());
         std::printf("reveal: %" PRIu64 " planet-revealed sfx, %" PRIu64 " moves to unrevealed planets dropped\n", reveal_sfx_,
                     hidden_moves_dropped_);
+        std::printf("build pads: %" PRIu64 " refused clicks (greyed pads)\n", build_refusals_);  // ui4 t02
+        std::printf("announcer: %" PRIu64 " galactic announcements\n", announcements_);       // ui4 t08
         std::printf("hud feeds: %" PRIu64 " reticle frames, %" PRIu64 " reticle orders, %" PRIu64 " Lua GUI calls, %zu galactic heroes, "
                     "reticle table %zu, buy bar hidden %" PRIu64 " frames (builder behind the camera)\n",
                     reticle_frames_, reticle_orders_, gui_calls_applied_, galactic_heroes_.size(), reticles_.size(), buy_bar_behind_camera_);

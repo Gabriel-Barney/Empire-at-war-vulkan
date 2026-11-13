@@ -87,6 +87,7 @@ struct HudBuildOption {
     int32_t cost = -1;          // credits (text2, gold, under the button); < 0 none
     uint32_t queued = 0;        // entries of this type in the builder's queue (text, > 1 shown)
     Block block = Block::None;  // != None: disabled
+    std::string tooltip_key;    // ui3 t07: the type's text (Text_ID) shown as the tooltip of a buyable option
 };
 struct HudReinforcement {
     uint32_t unit = 0;          // reinforcement-pool object (Reinforce event "unit")
@@ -137,6 +138,9 @@ struct HudAction {
                                 // value = type_index, shift: host -> Production {type_index, location = builder}
         TacticalCancel,         // tqueueNN left click: unit = location, value = type_index, ids = {queue, index}: host ->
                                 // Production {type_index, location, cancel = 1, queue, index}
+        // ui4 t02, appended 2026-11-13: a left click on a greyed galactic build pad (GalacticBuildOption::block != None):
+        // value = the Block, name = the pad component; the host plays the GUI negative feedback, no command is sent.
+        BuildRefused,
     };
     Kind kind = Kind::Button;
     int32_t component = -1;
@@ -198,6 +202,32 @@ struct HudBombingRunButton {
                                 // 1.0 draws nothing, as the ability buttons; HUD_GAPS §9.9 item 1 is a probe question)
 };
 
+// ui3 t03 / t04: the other command-bar buttons the land / space HUD update enables in the same pass as c_button00..05
+// (HUD_GAPS §5.1: "reinforcement availability, retreat allowed") and the reinforcement window's texts. `present` false
+// (no battle feed): the components keep their data state. Lua GUI_Component_Visibility / _Enable override (mods).
+struct HudCommandButtons {
+    bool present = false;
+    bool controls_locked = false;    // story LOCK_CONTROLS: all of them disabled
+    // b_retreat: enabled when the retreat request would be accepted (BATTLE_TRANSITIONS §3.4 vf9 reason 0). Its
+    // Build_Texture_Name dial [port]: the retreat-allowed countdown while it runs (0..1), then the running retreat's
+    // countdown; < 0 none.
+    bool retreat_enabled = false;
+    float retreat_dial = -1.0f;
+    // b_reinforcement: enabled when some reinforcement-pad entry can be called (reserve_available); selected look while a
+    // drop point is being picked.
+    bool reinforce_enabled = false;
+    bool reinforce_selected = false;
+    // b_special_weapon2 (TEXT_PLACE_BEACON) / b_beacon_t: enabled when no beacon was placed within BeaconPlaceDelay;
+    // selected while the beacon point is being picked.
+    bool beacon_enabled = false;
+    bool beacon_selected = false;
+    bool movie_mode = false;         // b_camera_t (TEXT_MOVIE_MODE) selected look
+    // ui3 t04: reinforcement_counter = number of pad entries (hidden at 0); r_pop_text = "used/cap" population (hidden
+    // when there is no cap: land); r_pop_icon shown with it.
+    uint32_t reinforce_count = 0;
+    int32_t pop_used = -1, pop_cap = -1;
+};
+
 struct TacticalHudFrame {
     WorldHudContext world;          // canvas is filled by TacticalHud
     // Radar mapping: world rectangle shown by the radar (the map's playable box).
@@ -256,6 +286,8 @@ struct TacticalHudFrame {
     std::span<const HudOrderQueue> order_queues;
     HudOrderButtons order_buttons;  // c_button00..05 enable state (HUD_GAPS §5)
     HudBombingRunButton bombing_run;  // b_special_weapon in land (HUD_GAPS §9)
+    HudCommandButtons command_buttons;  // ui3 t03 / t04: b_retreat, b_reinforcement, beacon, movie mode, reinforcement texts
+    bool objectives_hidden = false;     // ui3 t01 [port]: the Mission Holocron key (Tab) toggles the objectives box
     // [port: Gabriel, original screenshot] Game Paused banner (pause_shell: yellow TEXT_GAME_PAUSED bar at the top
     // centre, red TEXT_BUTTON_RESUME_GAME button under it - a click emits HudAction::ResumeGame) while `paused`.
     bool pause_banner = true;
@@ -319,6 +351,14 @@ public:
     // layout of the previous build() (what the player sees). `routed.world` gives the cursor for radar drags.
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
                       std::vector<HudAction>* actions = nullptr);
+    // ui3 t02: an ability hotkey = a left click on the first ability button (selection panel order) showing
+    // `ability_type`: the same command / BeginAbilityTargeting action as the click (`queued` = the queue modifier).
+    // False when no button shows it or it is disabled (nothing emitted). Uses the slots of the previous build().
+    bool activate_ability(uint8_t ability_type, bool queued, std::vector<commands::EventData>& out,
+                          std::vector<HudAction>* actions = nullptr) const;
+    // ui3 t01: c_button00..05 enabled after the previous build() (HUD_GAPS §5.1 rules, Lua overrides); false when the
+    // component is missing or hidden. The order hotkeys (Attack, Move, ...) act only while their button would.
+    bool order_button_live(uint32_t button) const;
     // Stage-1 entry point: left click on a selection portrait -> Select{that group's ids} (no state change).
     void on_pointer(std::span<const HudPointerEvent> events, std::vector<commands::EventData>& out) const;
 
@@ -333,7 +373,11 @@ private:
     void build_skeleton(const TacticalHudFrame& f);
     void build_markers(const TacticalHudFrame& f, std::span<const HudUnit> units);
     void apply_order_buttons(const HudOrderButtons& s);
+    struct AbilitySlot;
+    static void ability_click(const AbilitySlot& a, const std::string& name, Button button, bool queued,
+                              std::vector<commands::EventData>& out, std::vector<HudAction>* actions);
     void apply_bombing_run_button(const HudBombingRunButton& s);
+    void apply_command_buttons(const HudCommandButtons& s);
     void build_pause_banner(const TacticalHudFrame& f);
     void build_objectives(const TacticalHudFrame& f);
     int32_t font_of(int32_t component, float fallback_points) const;
@@ -384,6 +428,8 @@ private:
     int32_t radar_ = -1, radar_blip_ = -1, credits_ = -1, shell_ = -1, retreat_ = -1;
     int32_t order_button_[6] = {-1, -1, -1, -1, -1, -1};  // c_button00..05
     int32_t special_weapon_ = -1;                         // b_special_weapon (land: the bombing-run button)
+    int32_t reinforce_button_ = -1, beacon_button_ = -1, beacon_t_ = -1, camera_t_ = -1;  // ui3 t03
+    int32_t reinforce_counter_ = -1, r_pop_icon_ = -1, r_pop_text_ = -1;                 // ui3 t04
     int32_t planet_text_ = -1, tech_text_ = -1, pop_text_ = -1, movie_ = -1;
     int32_t pause_ = -1, pause_g_ = -1;  // [port: Gabriel] b_play_pause_t / b_play_pause
     bool paused_ = false;
