@@ -3,7 +3,10 @@ Alamo engine test build, 2026-11-13
 
 How to run
 ----------
-- Play.cmd       Forces of Corruption, no mod. Log: alamo_game_log.txt.
+- Play.exe       Double-click to play: Forces of Corruption, no mod, without a console window. Pick
+                 a mod in the game (main menu, Mods), or drop a mod folder onto Play.exe. Only an
+                 error shows a window, offering the log (alamo_game_log.txt).
+- Play.cmd       The same with a console window. Log: alamo_game_log.txt.
 - Play_Mod.cmd   Any mod. Double-click it for a menu of every mod installed on this PC:
                  Steam workshop items (subscribed mods) and folders in corruption\Mods.
                    type a number      play that mod (Enter alone plays your last pick again)
@@ -18,7 +21,7 @@ How to run
 - In the game: the main menu's Mods button lists the same mods, checks the one you select and
   restarts the game with it.
 
-Both launchers find the game through Steam on their own. If they cannot, they ask once for the
+The launchers find the game through Steam on their own. If they cannot, they ask once for the
 "corruption" folder and remember it in game_path.txt.
 
 Each mod gets its own folder under mod_runs (named after the mod: ws<workshop id> or local_<folder>)

@@ -4,6 +4,12 @@
 // On recreate the old semaphores are not destroyed right away (the presentation engine may still
 // wait on them after vkDeviceWaitIdle): they are retired until every new image has been acquired
 // once. A failed build leaves no swapchain (valid() false), never a partial one.
+//
+// [port] Exclusive full screen (SwapchainDesc::exclusive_fullscreen): when the device enabled VK_EXT_full_screen_exclusive
+// (DeviceCaps::full_screen_exclusive) and the surface supports it on the window's monitor, the swapchain is created
+// application-controlled and exclusive mode is acquired right after each build (the window must cover the monitor and be
+// in the foreground; otherwise it stays a normal swapchain until acquire_exclusive() succeeds). Losing it (alt-tab) is
+// reported as OutOfDate; the recreate that follows tries to acquire again. Without the extension it is a plain swapchain.
 #pragma once
 #include <cstdint>
 #include <vector>
@@ -27,6 +33,7 @@ struct SwapchainDesc {
     uint32_t width = 0, height = 0;  // used only when the surface does not dictate the extent
     PresentMode mode = PresentMode::Fifo;
     uint32_t min_images = 3;
+    bool exclusive_fullscreen = false;  // [port] see above
 };
 
 enum class SwapchainStatus : uint8_t { Ok, Suboptimal, OutOfDate, Minimized, Error };
@@ -44,6 +51,12 @@ public:
     // swapchain empty; acquire() then reports Minimized until a later recreate succeeds.
     bool recreate(uint32_t width, uint32_t height);
     void set_present_mode(PresentMode mode);  // applied on the next recreate
+    void set_exclusive_fullscreen(bool on);   // applied on the next recreate
+    // Acquires exclusive mode for the current swapchain when it was built for it and does not hold it (e.g. the window is
+    // back in the foreground). True when it is held afterwards.
+    bool acquire_exclusive();
+    // True while the current swapchain holds exclusive full-screen mode.
+    bool exclusive() const { return exclusive_held_; }
 
     // signal: binary semaphore signalled when the image is ready to be rendered. Suboptimal still
     // acquired the image and signals signal: render and present it (the submit waits on the
@@ -67,6 +80,8 @@ public:
 
 private:
     bool build(uint32_t width, uint32_t height);
+    bool exclusive_supported() const;  // the surface supports application-controlled exclusive mode on the window's monitor
+    void release_exclusive();
     void destroy_images();   // views destroyed, render-finished semaphores retired
     void destroy_retired();
 
@@ -77,6 +92,8 @@ private:
     VkFormat format_ = VK_FORMAT_UNDEFINED;
     VkExtent2D extent_{};
     VkPresentModeKHR present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
+    bool exclusive_built_ = false;  // the current swapchain was created application-controlled
+    bool exclusive_held_ = false;
     std::vector<VkPresentModeKHR> surface_modes_;  // the surface's present modes (last build)
     VkImageUsageFlags usage_ = 0;
     std::vector<VkImage> images_;

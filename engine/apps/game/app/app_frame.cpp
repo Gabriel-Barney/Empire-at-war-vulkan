@@ -384,6 +384,7 @@ void App::frame() {
     const double now = bench_active() ? bench_now() : script_.empty() ? ms_since(t0_) / 1000.0 : static_cast<double>(frames_) / 30.0;
     dt_ = static_cast<float>(std::clamp(now - now_s_, 0.0, 0.1));
     now_s_ = now;
+    if (win_.take_activation_changed()) on_activation_changed();  // [port] alt-tab out of / back into Fullscreen
     if (win_.take_resized() && win_.width() > 0 && win_.height() > 0) {
         gpu_.ring.wait_idle();
         sc_.recreate(win_.width(), win_.height());

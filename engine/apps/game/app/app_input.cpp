@@ -1187,15 +1187,10 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 if (a.video.resolution >= 0 && static_cast<size_t>(a.video.resolution) < display_modes_.size()) {
                     // The list item is a full mode: the window size and the monitor's refresh rate (game_display.hpp).
                     const DisplayMode m = display_modes_[static_cast<size_t>(a.video.resolution)];
-                    if (window_changed || m.width != win_.width() || m.height != win_.height() || (m.hz && m.hz != refresh_hz_)) {
-                        std::string line;
-                        apply_display_mode(win_.native_handle(), m, &line, window_mode_);
-                        std::printf("video: %s\n", line.c_str());
-                    }
+                    if (window_changed || m.width != win_.width() || m.height != win_.height() || (m.hz && m.hz != refresh_hz_))
+                        apply_display(m);
                 } else if (window_changed) {
-                    std::string line;
-                    apply_display_mode(win_.native_handle(), DisplayMode{win_.width(), win_.height(), refresh_hz_}, &line, window_mode_);
-                    std::printf("video: %s\n", line.c_str());
+                    apply_display(DisplayMode{win_.width(), win_.height(), refresh_hz_});
                 }
                 if (window_changed) apply_camera_tuning();
                 if (const int32_t s = std::clamp(a.video.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax); live_input() && s != ui_scale_) {

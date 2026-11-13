@@ -38,7 +38,7 @@ std::string display_mode_label(const DisplayMode& m);
 // rate of that size, else of the largest mode not bigger
 // than it, else -1.
 int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, uint32_t h, uint32_t hz = 0);
-// Applies a display mode from the video options [port: windowed / borderless, no exclusive full screen]: the window's
+// Applies a display mode from the video options [port: fullscreen / borderless / windowed]: the window's
 // monitor is switched to the mode's refresh rate (and, for a mode that does not fit the work area - the window then
 // covers the monitor borderless - to the mode's resolution) with a temporary ChangeDisplaySettingsEx (CDS_FULLSCREEN:
 // Windows restores the user's mode when the process ends; restore_display_mode() does it at once), then the window's
@@ -46,9 +46,9 @@ int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, ui
 // the rate alone. `log` gets one line describing what changed. False when the window resize failed.
 // UI5 t01 / [port: Gabriel 2026-11-13] `mode` (Options > Video > Display Mode):
 //   Windowed   - as above;
-//   Fullscreen - [port: frameless, no exclusive mode] the monitor always takes the mode's resolution and rate and the window
-//                covers it without a frame (a refused mode change leaves a frameless window of the mode's size centred on
-//                the monitor);
+//   Fullscreen - the monitor always takes the mode's resolution and rate and the window covers it without a frame (a
+//                refused mode change leaves a frameless window of the mode's size centred on the monitor); the host then
+//                takes exclusive Vulkan full screen when the driver offers it (App::sync_exclusive_fullscreen);
 //   Borderless - the monitor keeps (or gets back) the user's desktop resolution, takes the mode's refresh rate when it is
 //                offered at that resolution, and a frameless window covers the whole monitor (the mode's size is unused).
 bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr, ui::WindowMode mode = ui::WindowMode::Windowed);
@@ -57,6 +57,11 @@ const char* window_mode_name(ui::WindowMode m);
 std::optional<ui::WindowMode> parse_window_mode(std::string_view s);
 // Puts back the monitor mode apply_display_mode changed (no-op when it changed nothing).
 void restore_display_mode();
+// [port: Gabriel 2026-11-13] Exclusive full screen losing / regaining the foreground (alt-tab), as a D3D9 full-screen game
+// behaves: minimize_window() minimizes the window (the caller restores the desktop mode with restore_display_mode);
+// restore_window() shows a minimized window again (apply_display_mode then sets the full-screen mode once more).
+void minimize_window(void* hwnd);
+void restore_window(void* hwnd);
 // UI5 t04: the Windows clipboard as UTF-32 text for the dialog edit boxes (GuiManager::set_clipboard). Empty when it
 // holds no text or cannot be opened.
 std::u32string clipboard_text();
