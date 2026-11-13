@@ -129,7 +129,6 @@ void profile_round_trip() {
     p.vsync = false;
     p.vsync_mode = ui::VsyncMode::Mailbox;
     p.frame_cap = ui::kFrameCapDisplay;
-    p.hardware_mouse = true;
     p.window_mode = ui::WindowMode::Borderless;  // UI5 t01 / display mode list
     p.ui_scale = 175;
     p.widescreen = false;
@@ -145,7 +144,7 @@ void profile_round_trip() {
     game::VideoProfile q;
     CHECK(game::load_video_profile(path, q));
     CHECK(q.mode == p.mode);
-    CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay && q.hardware_mouse);
+    CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay);
     CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == 63);
     CHECK(q.advanced == p.advanced);
     CHECK(q.window_mode == ui::WindowMode::Borderless && !q.widescreen && q.ui_scale == 175);

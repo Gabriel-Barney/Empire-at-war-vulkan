@@ -37,7 +37,7 @@ What to try
   "render scale 75% (3326x1871 of 3840x2160)". Please check where the list sits in the dialog
   and how a scaled battle and galactic map look.
 - Menus and options (the biggest change since the last build): video options (Windowed off now
-  gives real full screen; Widescreen and Hardware Mouse), key rebinding (Delete / Backspace
+  gives real full screen; Widescreen), key rebinding (Delete / Backspace
   clears, conflict and "Apply?" prompts), gameplay options kept between runs, drop-down lists,
   scroll bars and text boxes (typing, selection, copy / paste).
 - The tactical HUD in land and space battles: order buttons and their hotkeys, retreat,
@@ -53,8 +53,8 @@ What to try
 Changes since test build 2026-11-12
 -----------------------------------
 - Render Scale option (Advanced video; see What to try). Added in the second 2026-11-13 build.
-- Options: Windowed off switches to full screen; Windowed, Widescreen and Hardware Mouse are kept
-  and applied (Hardware Mouse uses the game's own cursor art); gameplay and advanced options are
+- Options: Windowed off switches to full screen; Windowed and Widescreen are kept and applied;
+  the Hardware Mouse option is removed (the game always draws its own cursor); gameplay and advanced options are
   applied and saved; key rebinding works like the original (Tab bindable, zoom keys listed).
 - Dialog controls: combo boxes, list scroll bars (drag, auto-repeat, Home / End), edit boxes with
   caret, selection and the Windows clipboard.
