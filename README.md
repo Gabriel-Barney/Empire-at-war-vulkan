@@ -64,9 +64,11 @@ and written up as specs in [`docs/re/`](docs/re/) (about 145 documents) before a
    matching the original's internal hashes. Rules, data and Lua handling must match exactly; outcomes that depend on
    random draws must match the original's distribution over many seeds; internals such as the order of random draws
    are the port's own choice and are recorded as such.
-2. **Keep the mods alive, without special-casing any of them.** *Thrawn's Revenge* is the first and hardest test,
-   but compatibility is **mod-agnostic**: no engine code may depend on a mod's names or content. A mod works when it
-   uses the same data mechanisms (XML, Lua, asset formats) as the original, which the engine reads unchanged.
+2. **Near-full compatibility with Forces of Corruption mods, without special-casing any of them.** A mod that uses
+   the original's data mechanisms (XML, Lua, asset formats, shaders) should play in the port as it does in the
+   original: what works there works here, and only what the original also rejects may fail. *Thrawn's Revenge* is
+   the first and hardest test, but compatibility is **mod-agnostic**: no engine code may depend on a mod's names or
+   content. What "plays" means and the set of mods it is checked on are in `docs/MODS.md` §10.
 3. **Use the whole PC.** The original runs simulation and rendering on one thread over Direct3D 9. This port spreads
    work over every core, keeps big AI and script updates off single ticks, and drives the GPU through Vulkan.
 4. **Deterministic by design.** The same inputs give the same results on any number of threads, on any run, and on
@@ -310,7 +312,7 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 | Story campaigns end to end | Event system, linked tactical battles, victory handling and corruption missions in; map hints now load, so the Kessel mission script runs further; Kessel story parity checks remain |
 | Mod diagnostics (Q5) | Done |
 | Thrawn's Revenge (Q6) | **Plays**: the mod loads with no loader diagnostics, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. 2026-11-13: an event-driven galactic victory monitor (the mod's campaign menu holds and grants victory), base-game objects run their Lua scripts, and map hint names reach Lua. Left: two map-hint details and a final re-check after the parity check |
-| Mod platform (MODC) | **Mostly done** (24 of 34 tasks): the loading contract (`docs/MODS.md`), a lint against mod and faction names in engine code, the mod load report, a `STEAMMOD=` resolver, a mod picker in the game UI, shader model 3 translation, compiling mod `.fx` sources, and a synthetic fixture mod in the tests; a second workshop mod loads, starts a skirmish and runs a galactic-AI session. Left: Gabriel playing a second mod in game, the game's front end with other mods, shader model 3 leftovers, an automatic `.fx` prebuild, field-schema and load-report fixes, and picker polish |
+| Mod platform (MODC) | **In progress**; the goal was widened on 2026-11-13 to near-full compatibility with FoC mods, checked on a reference set of four mods (`docs/MODS.md` §10). Done so far: the loading contract (`docs/MODS.md`), a lint against mod and faction names in engine code, the mod load report, a `STEAMMOD=` resolver, a mod picker in the game UI, shader model 3 translation, compiling mod `.fx` sources, and a synthetic fixture mod in the tests; two non-TR workshop mods load, start skirmishes and run galactic-AI sessions headless. Left: the §10 checklist on every reference mod, Gabriel playing a second mod in game, the game's front end with other mods, shader model 3 leftovers, an automatic `.fx` prebuild, field-schema and load-report fixes, and picker polish |
 | Performance (OPT1-OPT3) | **Paused** (tier 3): p99 budget met everywhere; the first tick of a battle (setup) is still over 33.3 ms (group OPT3f, parked) |
 | Benchmark (side goal) | BM1-BM3 and their follow-ups done (scenarios, sim-only and rendered runs, stress scenes, reports); the in-game screen (BM4) is open |
 | First-person and captain's view (side goals) | Planned |
