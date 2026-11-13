@@ -137,7 +137,7 @@ struct GalacticFleetSlot {
     uint32_t type = kNoSlotType;
     // [port: Gabriel, 2026-11-13] the unit's player-given name (galactic GalacticSim::object_name; "" = none): shown as the
     // pad's tooltip; a named unit gets a pad of its own (never merged into a type stack).
-    std::u32string name;
+    std::u32string name{};
 };
 // One fleet in orbit at the selected planet, as the organiser sees it (UI.md §7.2). The HUD, not the host, decides which
 // of the three panes q1 / q2 / q3 it fills, from `slot`, `enemy` and the planet's GalacticPlanetInfo::orbit_local; the
@@ -148,7 +148,7 @@ struct GalacticFleet {
     std::vector<GalacticFleetSlot> units;
     int32_t slot = -1;                  // the fleet's own orbit slot 0..2 (galactic FleetState::slot); -1 = unknown, first free pane [port]
     bool enemy = false;                 // not the local player's (foreign or allied): drawn in pane 0, not draggable, clicks do nothing [port]
-    std::u32string name;                // [port: Gabriel] player-given fleet name ("" = none): the q{n}_fleet header's tooltip
+    std::u32string name{};              // [port: Gabriel] player-given fleet name ("" = none): the q{n}_fleet header's tooltip
 };
 struct GalacticBuildOption {
     uint16_t type_index = 0;
