@@ -11,6 +11,9 @@
 //     logs/render_taa_off.png, logs/render_taa_on.png (+ 4x crops), edge-energy and frame-to-frame shimmer numbers,
 //     GPU time of the resolve; BM2b: the keyed slide with a discarded provisional frame (other camera, objects further on)
 //     before every other step draws byte for byte what the plain slide draws.
+//   [port] SMAA 1x (RecordOptions::smaa) rides along: on the empty scene a flat frame stays flat (alone and after TAA);
+//     on Endor the last orbit view with SMAA -> logs/render_smaa_on.png (+ crops), smoother edges than TAA off, the same
+//     picture, GPU time of the "smaa" scope.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -152,7 +155,7 @@ struct Gpu : render::test::GpuCore {
 using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 struct GpuTimes {
-    double taa = -1, post = -1, scene = -1;
+    double taa = -1, post = -1, scene = -1, smaa = -1;
     double cpu_ms = 0;  // DrawTiming build + record
 };
 
@@ -196,6 +199,7 @@ bool frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices
             if (res.name == "taa") times->taa = res.ms;
             if (res.name == "post") times->post = res.ms;
             if (res.name == "scene") times->scene = res.ms;
+            if (res.name == "smaa") times->smaa = res.ms;
         }
     }
     return drawn;
@@ -364,6 +368,33 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
             CHECK(frame(g, rr, o, render::make_view(far_cam, W, H, render::MapScene::kNear, render::MapScene::kFar), scene.instances(), ro,
                         st, clear, scene.sky()));
             CHECK(st.taa && st.taa_reset);
+
+            // [port] SMAA 1x on the last orbit view, TAA off: smoother edges than the plain frame, the same picture.
+            {
+                render::RecordOptions so = ro;
+                so.taa = false;
+                so.smaa = true;
+                GpuTimes ts;
+                for (int k = 0; k < 3; ++k) {  // the first frame uploads the lookup textures; time a later one
+                    CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), so, st, clear, scene.sky(), &ts));
+                    CHECK(st.smaa && !st.taa);
+                }
+                const std::vector<uint8_t> smaa_img(o.data(), o.data() + bytes);
+                CHECK(save_png(src_dir + "/logs/render_smaa_on.png", smaa_img, W, H));
+                CHECK(save_crop(src_dir + "/logs/render_smaa_on_crop.png", smaa_img, W, 0, 0, 240, 135, 4));
+                CHECK(save_crop(src_dir + "/logs/render_smaa_on_crop2.png", smaa_img, W, 800, 380, 200, 140, 4));
+                const double e_smaa = edge_energy(smaa_img, W, H);
+                double smaa_diff = 0;
+                for (size_t i = 0; i + 3 < bytes; i += 4) smaa_diff += std::fabs(luma(&last[0][i]) - luma(&smaa_img[i]));
+                smaa_diff /= static_cast<double>(bytes / 4);
+                std::printf("land map SMAA: edge energy off %.3f / smaa %.3f, mean |off - smaa| luma %.2f, GPU smaa %.3f ms\n", e_off,
+                            e_smaa, smaa_diff, ts.smaa);
+                CHECK(e_smaa < e_off);    // smoother edges
+                CHECK(smaa_diff < 3.0);   // only edges change
+                so.taa = true;            // both: TAA restarts its history after the frames without it, SMAA after the resolve
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), so, st, clear, scene.sky()));
+                CHECK(st.smaa && st.taa && st.taa_reset);
+            }
 
             // Moving objects. The materials have no motion vectors, so the resolve has to tell a mover from the background
             // by depth. Fixed camera; the (up to 8) instances nearest the screen centre slide sideways ~3 px per frame for
@@ -570,6 +601,21 @@ int run_gpu(const std::string& src_dir) {
             render::RecordOptions ro;
             ro.taa = true;
             render::DrawStats st;
+            {  // [port] SMAA alone and after TAA: a flat frame has no edges and stays exactly flat
+                render::RecordOptions so;
+                so.smaa = true;
+                bool flat = true;
+                for (int k = 0; k < 2; ++k) {
+                    CHECK(frame(g, r, o, v, {}, so, st, clear) && st.smaa && !st.taa);
+                    for (size_t i = 0; i < static_cast<size_t>(o.w) * o.h; ++i) flat = flat && rgb_close_to(o.data() + i * 4, clear, 0);
+                }
+                so.taa = true;
+                CHECK(frame(g, r, o2, render::make_view(cam, 80, 40), {}, so, st, clear) && st.smaa && st.taa);  // other size
+                for (size_t i = 0; i < static_cast<size_t>(o2.w) * o2.h; ++i) flat = flat && rgb_close_to(o2.data() + i * 4, clear, 1);
+                CHECK(flat);
+                render::RecordOptions none;
+                CHECK(frame(g, r, o, v, {}, none, st, clear) && !st.smaa);
+            }
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && st.taa_reset);  // first frame: no history
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && !st.taa_reset);
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && !st.taa_reset);

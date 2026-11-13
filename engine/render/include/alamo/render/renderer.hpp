@@ -284,6 +284,10 @@ struct RecordOptions {
     // Renderer::discard_taa_frame() before the next render() - the benchmark's fixed-frames mode draws an unsettled frame
     // again and must not let it into the history. The frame itself is drawn exactly as without the flag.
     bool taa_provisional = false;
+    // [port] SMAA 1x (src/smaa.hpp; the original has none): after the post chain (after the TAA resolve when both are
+    // on), luma edge detection, blending weights and neighbourhood blending of the scene colour at one fixed quality
+    // (the reference HIGH preset). "smaa" GPU timer scope.
+    bool smaa = false;
     // [port] The video options' Shader / Water detail on top of the frame graph (RENDER.md 1.5, 6; both default to the
     // maximum = nothing changes). Shader detail 0..3: 0 is the fixed-function path - no shadow volumes, no soft shadows (the
     // StencilDarken variant, TERRAIN_WATER_POST.md 4.3) - and it caps Water detail: < 3 -> 1, < 1 -> 0. Water detail 0..2:
@@ -349,6 +353,7 @@ struct PassTarget;
 struct EngineFrame;  // render_internal.hpp
 class WorldRenderer;  // world.hpp: terrain + water of a land map
 class SsaoPass;       // ssao.hpp: [port] screen-space ambient occlusion
+class SmaaPass;       // src/smaa.hpp: [port] SMAA 1x
 class TaaPass;        // src/taa.hpp: [port] temporal anti-aliasing
 class GammaPass;      // src/gamma.hpp: [port] output gamma
 struct WorldBindStats;
@@ -379,6 +384,7 @@ struct DrawStats {
     // [port] TAA (RecordOptions::taa): the resolve ran; this frame restarted the history (current frame only).
     bool taa = false, taa_reset = false;
     uint32_t taa_movers = 0;  // draws of the TAA velocity pass (keyed instances that moved since the last frame)
+    bool smaa = false;        // [port] SMAA (RecordOptions::smaa) ran
 };
 
 // ---- R4 scene hook (engine/render/particles): render-owned effects drawn inside the frame graph's buckets.
@@ -720,6 +726,7 @@ private:
     };
     Targets tg_;
     std::unique_ptr<SsaoPass> ssao_;  // [port] created on first use (RecordOptions::ambient_occlusion)
+    std::unique_ptr<SmaaPass> smaa_;  // [port] created on first use (RecordOptions::smaa)
     std::unique_ptr<TaaPass> taa_;    // [port] created on first use (RecordOptions::taa)
     ViewMatrices taa_begin(const ViewMatrices& view, const RecordOptions& opts);  // taa.cpp: jittered camera (or `view`)
     VkFormat ds_format_ = VK_FORMAT_UNDEFINED;        // scene depth-stencil (D32FS8 here)

@@ -97,6 +97,7 @@ struct Options {
     float ao_strength = -1.0f, ao_radius = -1.0f;  // --ao-strength S / --ao-radius R (< 0: RecordOptions default)
     bool taa = false;                            // [port] --taa: temporal anti-aliasing (RecordOptions::taa)
     float taa_sharpen = -1.0f;                   // --taa-sharpen S (0..1; < 0: RecordOptions default)
+    bool smaa = false;                           // [port] --smaa: SMAA 1x (RecordOptions::smaa)
     float time_scale = 1.0f;  // scene clock = wall time x scale (UV scrolling, FF expressions)
     uint32_t fleet = 0, seed = 1;
     int32_t record_threads = -1;  // -1: worker count
@@ -534,6 +535,7 @@ int main(int argc, char** argv) {
         else if (a == "--soft-shadows") opt.soft_shadows = true;
         else if (a == "--ao") opt.ao = true;
         else if (a == "--taa") opt.taa = true;
+        else if (a == "--smaa") opt.smaa = true;
         else if (a == "--taa-sharpen") opt.taa_sharpen = std::strtof(next().c_str(), nullptr);
         else if (a == "--ao-strength") opt.ao_strength = std::strtof(next().c_str(), nullptr);
         else if (a == "--ao-radius") opt.ao_radius = std::strtof(next().c_str(), nullptr);
@@ -717,6 +719,7 @@ int main(int argc, char** argv) {
             if (opt.ao_strength >= 0.0f) ropt.ao_strength = opt.ao_strength;
             if (opt.ao_radius > 0.0f) ropt.ao_radius = opt.ao_radius;
             ropt.taa = opt.taa;
+            ropt.smaa = opt.smaa;
             if (opt.taa_sharpen >= 0.0f) ropt.taa_sharpen = opt.taa_sharpen;
             ropt.gpu_timer = &gpu;  // render() sections (world / scene / post)
             ok = depth.create(alloc, sc.extent().width, sc.extent().height) && renderer.init(ctx, alloc, up, rd);

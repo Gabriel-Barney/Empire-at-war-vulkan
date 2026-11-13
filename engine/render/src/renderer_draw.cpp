@@ -23,6 +23,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
+#include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 

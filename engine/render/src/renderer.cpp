@@ -21,6 +21,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
+#include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
@@ -437,6 +438,7 @@ void Renderer::shutdown() {
     bc_.reset();  // memo: pipeline / program handles of this device
     for (auto& b : built_) b.reset();
     ssao_.reset();  // [port] SSAO pipelines + targets
+    smaa_.reset();  // [port] SMAA pipelines + targets + lookup textures
     taa_.reset();   // [port] TAA pipelines + history
     gamma_.reset();  // [port] gamma pipeline + scratch image
     psos_.shutdown(true);

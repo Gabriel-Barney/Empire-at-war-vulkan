@@ -22,6 +22,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
+#include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
@@ -1025,6 +1026,15 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
         st.taa_movers = taa_->last_movers();
         st.taa_reset = st.taa && taa_->history_reset();
         if (gt) gt->end_scope(primary, taa_scope);
+    }
+    if (opts.smaa) {  // [port] SMAA 1x on the finished frame (smaa.hpp); SceneTexture is free again here
+        if (!smaa_) {
+            smaa_ = std::make_unique<SmaaPass>();
+            smaa_->init(*ctx_, *alloc_);  // a failure is logged once; record() then does nothing
+        }
+        const uint32_t smaa_scope = gt ? gt->begin_scope(primary, "smaa") : 0u;
+        st.smaa = smaa_->record(primary, scene, tg_.scene_tex);
+        if (gt) gt->end_scope(primary, smaa_scope);
     }
     if (gt) gt->end_scope(primary, post_scope);
     const auto tp1 = clock::now();
