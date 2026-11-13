@@ -291,7 +291,17 @@ struct RecordOptions {
     // samples its default textures). The port keeps the effects' best technique at every level; only these passes change.
     int shader_detail = 3;
     int water_detail = 2;
+    // [port: Gabriel] Render scale: the share of the output image's PIXELS the scene (world, post chain, TAA) is drawn
+    // with, clamped to kRenderScaleMin..1; 1 = native. Each side is scaled by sqrt(render_scale) (render_scale_extent),
+    // so 0.75 at 3840 x 2160 draws 3326 x 1871. The scene is then stretched to the output with a linear filter (native:
+    // the unchanged point copy). Whatever the caller draws on the output afterwards (HUD, dialogs) stays native.
+    float render_scale = 1.0f;
 };
+
+inline constexpr float kRenderScaleMin = 0.25f;
+// The scene size render() draws for an output of `out` at `scale` (see RecordOptions::render_scale): each side
+// round(side x sqrt(clamp(scale, kRenderScaleMin, 1))), at least 1. 1 (or anything above) returns `out` unchanged.
+VkExtent2D render_scale_extent(VkExtent2D out, float scale);
 
 struct DrawTiming {
     double build_ms = 0;   // cull + LOD + keys (parallel), sort, records, upload to the frame ring

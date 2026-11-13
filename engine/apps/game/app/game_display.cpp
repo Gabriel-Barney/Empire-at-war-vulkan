@@ -361,7 +361,8 @@ constexpr ProfileAdvInt kProfileAdvInts[] = {
     {"particle_detail", &ui::AdvancedVideoSettings::particle}, {"mesh_detail", &ui::AdvancedVideoSettings::mesh},
     {"texture_detail", &ui::AdvancedVideoSettings::texture},   {"water_detail", &ui::AdvancedVideoSettings::water},
     {"shader_detail", &ui::AdvancedVideoSettings::shader},     {"shadow_detail", &ui::AdvancedVideoSettings::shadow},
-    {"environment_detail", &ui::AdvancedVideoSettings::environment}, {"anisotropy", &ui::AdvancedVideoSettings::anisotropy}};
+    {"environment_detail", &ui::AdvancedVideoSettings::environment}, {"anisotropy", &ui::AdvancedVideoSettings::anisotropy},
+    {"render_scale", &ui::AdvancedVideoSettings::render_scale}};
 constexpr ProfileAdvBool kProfileAdvBools[] = {{"soft_shadows", &ui::AdvancedVideoSettings::soft_shadows},
                                                {"heat_distortion", &ui::AdvancedVideoSettings::heat_distortion},
                                                {"bloom", &ui::AdvancedVideoSettings::bloom},
@@ -419,6 +420,7 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     for (const ProfileInt& e : kProfileInts) num(e.key, p.*e.field);
     for (const ProfileAdvInt& e : kProfileAdvInts) num(e.key, p.advanced.*e.field);
     for (const ProfileAdvBool& e : kProfileAdvBools) flag(e.key, p.advanced.*e.field);
+    p.advanced.render_scale = std::clamp(p.advanced.render_scale, static_cast<int32_t>(render::kRenderScaleMin * 100.0f), 100);
     // A profile from before anti-aliasing was one setting also has "anti_aliasing=taa|off" (the Advanced dialog's box) next to the
     // strength (the Video dialog's slider): either one on meant TAA. A box on over strength 0 is Medium, the old default.
     if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa" && p.anti_alias <= 0) p.anti_alias = ui::kAntiAliasDefaultSlider;
@@ -575,6 +577,10 @@ ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int3
     ui::AdvancedVideoSettings r = s;
     ui::set_advanced_detail(r, slider_clamp(detail));
     return r;
+}
+
+float render_scale_value(int32_t percent) {
+    return std::max(render::kRenderScaleMin, static_cast<float>(std::clamp(percent, 0, 100)) / 100.0f);
 }
 
 void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSettings& s) {

@@ -124,6 +124,8 @@ float particle_detail(int32_t slider);
 float environment_fade_scale(int32_t slider);
 float gamma_value(int32_t slider);
 bool taa_active(int32_t strength);
+// [port: Gabriel] Advanced video > Render Scale percent -> RecordOptions::render_scale (share of the window's pixels; 100 = 1).
+float render_scale_value(int32_t percent);
 void apply_aa_options(render::RecordOptions& o, int32_t strength);
 // The overall Detail Level (IDD_VIDEO_OPTIONS_DIALOG: Low / Medium / High / Ultra, ui::kQualityPresets) as a preset [M]: a
 // quality level picked there (VideoSettings::detail_picked) sets the seven advanced detail options (particle, mesh, texture,

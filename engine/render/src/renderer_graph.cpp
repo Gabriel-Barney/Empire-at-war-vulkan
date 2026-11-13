@@ -30,6 +30,16 @@ using namespace detail;
 
 // ------------------------------------------------------------------------------------ frame graph
 
+VkExtent2D render_scale_extent(VkExtent2D out, float scale) {
+    if (!(scale < 1.0f)) return out;  // also NaN
+    const double k = std::sqrt(static_cast<double>(std::max(scale, kRenderScaleMin)));
+    auto side = [k](uint32_t s) {
+        const uint32_t v = static_cast<uint32_t>(std::llround(static_cast<double>(s) * k));
+        return std::clamp(v, 1u, std::max(s, 1u));
+    };
+    return {side(out.width), side(out.height)};
+}
+
 bool Renderer::ensure_targets(VkExtent2D ext) {
     if (tg_.ready && tg_.scene.extent().width == ext.width && tg_.scene.extent().height == ext.height) return true;
     if (tg_.ready) ctx_->wait_idle();  // old images may still be in use by frames in flight
@@ -572,9 +582,15 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     const auto t0 = clock::now();
     if (ring_) collect_released();  // after begin_frame: retire released bindless slots + their images
     latch_anisotropy(frame);
-    if (!ensure_targets(target.extent)) return false;
+    // [port: Gabriel] Render scale: the scene targets take the scaled size; the view's pixel size follows them (lasers,
+    // the D3D9 half-pixel offset, TAA jitter), its projection (aspect) stays the output's.
+    const VkExtent2D scene_ext = render_scale_extent(target.extent, opts.render_scale);
+    if (!ensure_targets(scene_ext)) return false;
+    ViewMatrices scaled_view = view_in;
+    scaled_view.width = scene_ext.width;
+    scaled_view.height = scene_ext.height;
     // [port] TAA (taa.cpp): every scene draw of the frame uses the sub-pixel jittered camera; without TAA `view_in` itself.
-    const ViewMatrices taa_view = taa_begin(view_in, opts);
+    const ViewMatrices taa_view = taa_begin(scaled_view, opts);
     const ViewMatrices& view = taa_view;
     if (world_ && mode == DrawMode::Lit) {
         world_frame_constants();  // clouds before any build of this frame
@@ -1012,14 +1028,15 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     }
     if (gt) gt->end_scope(primary, post_scope);
     const auto tp1 = clock::now();
-    // 6. Out to the caller's image (StretchRect, point filter).
+    // 6. Out to the caller's image (StretchRect, point filter; a render-scaled scene is stretched with a linear filter).
     rhi::CopyImage dst;
     dst.image = target.color;
     dst.extent = target.extent;
     dst.format = desc_.color_format;
     dst.before = rhi::ImageState::Undefined;
     dst.after = target.color_after;
-    rhi::cmd_stretch_rect(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), dst, VK_FILTER_NEAREST);
+    const bool native = W == target.extent.width && H == target.extent.height;
+    rhi::cmd_stretch_rect(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), dst, native ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
     scene.set_color_state(rhi::ImageState::ColorAttachment);
     const auto t2 = clock::now();
     if (stats) *stats = st;
