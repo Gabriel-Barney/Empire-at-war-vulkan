@@ -1,0 +1,189 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Command Center icon: a holotable projecting a galactic-conquest map.
+       Red and green faction worlds joined by a hyperspace lane, a wedge capital
+       ship in transit, all inside a gunmetal projector ring. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#141b2b"/>
+      <stop offset="1" stop-color="#06080e"/>
+    </linearGradient>
+    <radialGradient id="disc" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#1f5fa8"/>
+      <stop offset="0.55" stop-color="#0f2f5c"/>
+      <stop offset="1" stop-color="#050d1c"/>
+    </radialGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c9d1dd"/>
+      <stop offset="0.35" stop-color="#6d7889"/>
+      <stop offset="0.65" stop-color="#3a4252"/>
+      <stop offset="1" stop-color="#8a95a6"/>
+    </linearGradient>
+    <linearGradient id="metalInner" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#9aa5b6"/>
+      <stop offset="1" stop-color="#272d38"/>
+    </linearGradient>
+    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.3" stop-color="#d6f3ff"/>
+      <stop offset="1" stop-color="#5fc8ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.7" stop-color="#3fb4ff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#3fb4ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hull" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2f8ff"/>
+      <stop offset="1" stop-color="#9fc9ee"/>
+    </linearGradient>
+    <pattern id="scan" width="8" height="6" patternUnits="userSpaceOnUse">
+      <rect width="8" height="1.6" fill="#8fdcff" opacity="0.10"/>
+    </pattern>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+    <clipPath id="discClip"><circle cx="256" cy="256" r="168"/></clipPath>
+    <clipPath id="tile"><rect x="16" y="16" width="480" height="480" rx="108"/></clipPath>
+  </defs>
+
+  <!-- tile -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#bg)"/>
+  <g clip-path="url(#tile)" fill="#cfe6ff">
+    <circle cx="64" cy="82" r="1.8" opacity="0.8"/>
+    <circle cx="108" cy="48" r="1.2" opacity="0.6"/>
+    <circle cx="452" cy="70" r="2" opacity="0.8"/>
+    <circle cx="420" cy="38" r="1.2" opacity="0.5"/>
+    <circle cx="470" cy="128" r="1.3" opacity="0.6"/>
+    <circle cx="48" cy="430" r="1.5" opacity="0.6"/>
+    <circle cx="86" cy="470" r="1.1" opacity="0.5"/>
+    <circle cx="456" cy="446" r="1.8" opacity="0.7"/>
+    <circle cx="412" cy="478" r="1.1" opacity="0.5"/>
+    <circle cx="40" cy="250" r="1.1" opacity="0.5"/>
+    <circle cx="474" cy="300" r="1.2" opacity="0.5"/>
+  </g>
+  <rect x="17" y="17" width="478" height="478" rx="107" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+
+  <!-- projector glow behind the ring -->
+  <circle cx="256" cy="256" r="214" fill="url(#halo)"/>
+
+  <!-- gunmetal projector ring -->
+  <g filter="url(#shadow)">
+    <circle cx="256" cy="256" r="196" fill="url(#metal)"/>
+    <circle cx="256" cy="256" r="176" fill="url(#metalInner)"/>
+  </g>
+  <!-- ring panel notches -->
+  <g fill="#1a1f29">
+    <g id="notch"><rect x="250" y="58" width="12" height="20" rx="2"/></g>
+    <use href="#notch" transform="rotate(45 256 256)"/>
+    <use href="#notch" transform="rotate(90 256 256)"/>
+    <use href="#notch" transform="rotate(135 256 256)"/>
+    <use href="#notch" transform="rotate(180 256 256)"/>
+    <use href="#notch" transform="rotate(225 256 256)"/>
+    <use href="#notch" transform="rotate(270 256 256)"/>
+    <use href="#notch" transform="rotate(315 256 256)"/>
+  </g>
+  <!-- status lights between notches -->
+  <g fill="#7fd8ff" filter="url(#glow)">
+    <g id="led"><circle cx="256" cy="68" r="3.2"/></g>
+    <use href="#led" transform="rotate(22.5 256 256)"/>
+    <use href="#led" transform="rotate(67.5 256 256)"/>
+    <use href="#led" transform="rotate(112.5 256 256)"/>
+    <use href="#led" transform="rotate(157.5 256 256)"/>
+    <use href="#led" transform="rotate(202.5 256 256)"/>
+    <use href="#led" transform="rotate(247.5 256 256)"/>
+    <use href="#led" transform="rotate(292.5 256 256)"/>
+    <use href="#led" transform="rotate(337.5 256 256)"/>
+  </g>
+  <g fill="#ff5a4f" filter="url(#glow)">
+    <use href="#led" transform="rotate(-22.5 256 256)"/>
+  </g>
+
+  <!-- holo disc -->
+  <circle cx="256" cy="256" r="168" fill="url(#disc)"/>
+  <g clip-path="url(#discClip)">
+    <!-- tactical grid -->
+    <g fill="none" stroke="#6fd0ff" stroke-opacity="0.22" stroke-width="1.5">
+      <circle cx="256" cy="256" r="56"/>
+      <circle cx="256" cy="256" r="104"/>
+      <circle cx="256" cy="256" r="148"/>
+      <line x1="88" y1="256" x2="424" y2="256"/>
+      <line x1="256" y1="88" x2="256" y2="424"/>
+      <line x1="137" y1="137" x2="375" y2="375" stroke-opacity="0.1"/>
+      <line x1="375" y1="137" x2="137" y2="375" stroke-opacity="0.1"/>
+    </g>
+    <!-- tick marks on the outer grid ring -->
+    <g stroke="#9fe2ff" stroke-opacity="0.45" stroke-width="2">
+      <g id="tick"><line x1="256" y1="92" x2="256" y2="104"/></g>
+      <use href="#tick" transform="rotate(30 256 256)"/>
+      <use href="#tick" transform="rotate(60 256 256)"/>
+      <use href="#tick" transform="rotate(120 256 256)"/>
+      <use href="#tick" transform="rotate(150 256 256)"/>
+      <use href="#tick" transform="rotate(210 256 256)"/>
+      <use href="#tick" transform="rotate(240 256 256)"/>
+      <use href="#tick" transform="rotate(300 256 256)"/>
+      <use href="#tick" transform="rotate(330 256 256)"/>
+    </g>
+
+    <!-- spiral galaxy, tilted -->
+    <g transform="translate(256 256) rotate(-28) scale(1 0.74) translate(-256 -256)">
+      <g fill="none" stroke="#5fc8ff" stroke-linecap="round" filter="url(#soft)" opacity="0.75">
+        <path d="M266.0,256.0 L267.4,257.2 L269.0,258.7 L270.6,260.6 L271.9,262.8 L273.0,265.5 L273.8,268.4 L274.2,271.6 L274.1,275.1 L273.5,278.7 L272.4,282.4 L270.7,286.1 L268.5,289.8 L265.6,293.3 L262.2,296.6 L258.1,299.5 L253.6,302.1 L248.5,304.2 L243.0,305.8 L237.1,306.7 L230.9,306.9 L224.4,306.4 L217.8,305.1 L211.2,302.9 L204.5,300.0 L198.1,296.1 L191.9,291.4 L186.0,285.8 L180.7,279.4 L175.9,272.2 L171.9,264.3 L168.6,255.7 L166.2,246.6 L164.8,236.9 L164.4,226.9 L165.2,216.6 L167.1,206.2 L170.1,195.7 L174.5,185.4 L180.0,175.4 L186.7,165.7 L194.7,156.6 L203.7,148.2 L213.9,140.7 L225.0,134.1 L237.1,128.6 L250.0,124.3 L263.5,121.3 L277.6,119.7" stroke-width="22"/>
+        <path d="M246.0,256.0 L244.6,254.8 L243.0,253.3 L241.4,251.4 L240.1,249.2 L239.0,246.5 L238.2,243.6 L237.8,240.4 L237.9,236.9 L238.5,233.3 L239.6,229.6 L241.3,225.9 L243.5,222.2 L246.4,218.7 L249.8,215.4 L253.9,212.5 L258.4,209.9 L263.5,207.8 L269.0,206.2 L274.9,205.3 L281.1,205.1 L287.6,205.6 L294.2,206.9 L300.8,209.1 L307.5,212.0 L313.9,215.9 L320.1,220.6 L326.0,226.2 L331.3,232.6 L336.1,239.8 L340.1,247.7 L343.4,256.3 L345.8,265.4 L347.2,275.1 L347.6,285.1 L346.8,295.4 L344.9,305.8 L341.9,316.3 L337.5,326.6 L332.0,336.6 L325.3,346.3 L317.3,355.4 L308.3,363.8 L298.1,371.3 L287.0,377.9 L274.9,383.4 L262.0,387.7 L248.5,390.7 L234.4,392.3" stroke-width="22"/>
+      </g>
+      <g fill="none" stroke="#c9f0ff" stroke-linecap="round" opacity="0.9">
+        <path d="M266.0,256.0 L267.4,257.2 L269.0,258.7 L270.6,260.6 L271.9,262.8 L273.0,265.5 L273.8,268.4 L274.2,271.6 L274.1,275.1 L273.5,278.7 L272.4,282.4 L270.7,286.1 L268.5,289.8 L265.6,293.3 L262.2,296.6 L258.1,299.5 L253.6,302.1 L248.5,304.2 L243.0,305.8 L237.1,306.7 L230.9,306.9 L224.4,306.4 L217.8,305.1 L211.2,302.9 L204.5,300.0 L198.1,296.1 L191.9,291.4 L186.0,285.8 L180.7,279.4 L175.9,272.2 L171.9,264.3 L168.6,255.7 L166.2,246.6 L164.8,236.9 L164.4,226.9 L165.2,216.6 L167.1,206.2 L170.1,195.7 L174.5,185.4 L180.0,175.4 L186.7,165.7 L194.7,156.6 L203.7,148.2 L213.9,140.7 L225.0,134.1 L237.1,128.6 L250.0,124.3 L263.5,121.3 L277.6,119.7" stroke-width="4"/>
+        <path d="M246.0,256.0 L244.6,254.8 L243.0,253.3 L241.4,251.4 L240.1,249.2 L239.0,246.5 L238.2,243.6 L237.8,240.4 L237.9,236.9 L238.5,233.3 L239.6,229.6 L241.3,225.9 L243.5,222.2 L246.4,218.7 L249.8,215.4 L253.9,212.5 L258.4,209.9 L263.5,207.8 L269.0,206.2 L274.9,205.3 L281.1,205.1 L287.6,205.6 L294.2,206.9 L300.8,209.1 L307.5,212.0 L313.9,215.9 L320.1,220.6 L326.0,226.2 L331.3,232.6 L336.1,239.8 L340.1,247.7 L343.4,256.3 L345.8,265.4 L347.2,275.1 L347.6,285.1 L346.8,295.4 L344.9,305.8 L341.9,316.3 L337.5,326.6 L332.0,336.6 L325.3,346.3 L317.3,355.4 L308.3,363.8 L298.1,371.3 L287.0,377.9 L274.9,383.4 L262.0,387.7 L248.5,390.7 L234.4,392.3" stroke-width="4"/>
+      </g>
+      <g fill="#e6f8ff">
+        <circle cx="261" cy="304" r="2.2"/><circle cx="225" cy="300" r="1.8"/><circle cx="169" cy="275" r="2.6"/><circle cx="170" cy="223" r="1.8"/><circle cx="189" cy="153" r="2.2"/><circle cx="245" cy="131" r="1.6"/><circle cx="251" cy="208" r="2.2"/><circle cx="287" cy="212" r="1.8"/><circle cx="343" cy="237" r="2.6"/><circle cx="342" cy="289" r="1.8"/><circle cx="323" cy="359" r="2.2"/><circle cx="267" cy="381" r="1.6"/>
+      </g>
+    </g>
+    <circle cx="256" cy="256" r="40" fill="url(#core)"/>
+
+    <!-- scanlines -->
+    <rect x="88" y="88" width="336" height="336" fill="url(#scan)"/>
+  </g>
+
+  <!-- hyperspace lane between the two faction worlds -->
+  <path d="M150,334 Q176,166 362,168" fill="none" stroke="#ffd37a" stroke-width="10" stroke-opacity="0.25" filter="url(#soft)"/>
+  <path d="M150,334 Q176,166 362,168" fill="none" stroke="#ffe2a3" stroke-width="3.5" stroke-dasharray="10 8" stroke-linecap="round"/>
+  <path d="M362,168 Q392,262 336,344" fill="none" stroke="#9fe2ff" stroke-width="2.5" stroke-opacity="0.55" stroke-dasharray="4 8" stroke-linecap="round"/>
+
+  <!-- neutral world -->
+  <circle cx="336" cy="344" r="8" fill="#d8ecff" filter="url(#glow)"/>
+
+  <!-- red faction world -->
+  <circle cx="150" cy="334" r="22" fill="none" stroke="#ff5a4f" stroke-width="3" stroke-opacity="0.6"/>
+  <circle cx="150" cy="334" r="12" fill="#ff5a4f" filter="url(#glow)"/>
+  <circle cx="146" cy="330" r="4" fill="#ffd2cc"/>
+
+  <!-- green faction world -->
+  <circle cx="362" cy="168" r="22" fill="none" stroke="#3ee08e" stroke-width="3" stroke-opacity="0.6"/>
+  <circle cx="362" cy="168" r="12" fill="#3ee08e" filter="url(#glow)"/>
+  <circle cx="358" cy="164" r="4" fill="#d4ffe8"/>
+
+  <!-- wedge capital ship in transit along the lane -->
+  <g transform="translate(222 212) rotate(-36) scale(1.4)">
+    <g filter="url(#glow)" opacity="0.55">
+      <path d="M46,0 L-34,-24 L-26,0 L-34,24 Z" fill="#5fc8ff"/>
+    </g>
+    <path d="M46,0 L-34,-24 L-26,0 L-34,24 Z" fill="url(#hull)" stroke="#0b1a30" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M46,0 L-26,0" stroke="#6f93b8" stroke-width="2"/>
+    <path d="M40,0 L-30,-19" stroke="#c4defa" stroke-width="1.2" opacity="0.8"/>
+    <!-- bridge tower -->
+    <rect x="-24" y="-7" width="13" height="14" rx="2" fill="#dbeeff" stroke="#0b1a30" stroke-width="2"/>
+    <rect x="-28" y="-11" width="6" height="22" rx="1.5" fill="#b7d4f0" stroke="#0b1a30" stroke-width="1.8"/>
+    <!-- engine glow -->
+    <circle cx="-31" cy="-12" r="3.2" fill="#9fe8ff" filter="url(#glow)"/>
+    <circle cx="-31" cy="12" r="3.2" fill="#9fe8ff" filter="url(#glow)"/>
+  </g>
+
+  <!-- glass highlight on the disc -->
+  <path d="M120,186 A148,148 0 0 1 318,104" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="10" stroke-linecap="round"/>
+</svg>

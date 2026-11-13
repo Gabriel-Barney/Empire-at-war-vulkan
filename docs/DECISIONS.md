@@ -23,6 +23,13 @@ The one record of the project's binding decisions (Gabriel's calls on scope, pla
 - Cleaning up the existing merged `claude/*` branches is a separate step; deleting remote branches needs Gabriel's go-ahead.
 - Rules for agents: `CLAUDE.md`, "Rules" / "Branches"; remotes: `docs/BUILD.md`.
 
+## Command Center launcher (Gabriel, 2026-11-13)
+- **The Command Center launcher (Rust, egui) is part of this repository as `launcher/`**, imported from the stand-alone `E:\Projects\Command Center` folder (no git history there). It starts `alamo_game.exe` with profiles, mods, Workshop items, saves, graphics options and diagnostics.
+- It lives beside `engine/`, not in it: rule 2 (no third-party dependencies in `engine/` without asking) covers the engine only, and the launcher is a separate program that never links engine code. Its crates are pinned by `launcher/Cargo.lock` (direct: eframe / egui / egui-wgpu / wgpu, image, serde / serde_json, encoding_rs, sha2, trash, rfd, winreg, chrono, similar, dirs, steamworks, ureq with native-tls, windows, raw-window-handle). A new direct crate needs Gabriel's OK, like an engine dependency.
+- Toolchain (rule 5): Rust 1.100.0 via rustup-init 1.29.3 (pinned SHA-256) in `toolchain\rust`, set up by `toolchain\12_rust.cmd`; it links with the project-local MSVC. The old `.toolchain\` folder in Command Center is not used.
+- `steam_api64.dll` (Valve's Steamworks redistributable, from the `steamworks-sys` crate) sits next to the exe and is delay-loaded. Shipping the launcher in a test build needs it and a `THIRD_PARTY_NOTICES` entry; that packaging step is not done yet.
+- Build and test: `build_launcher.cmd` (`docs/BUILD.md`). It is not part of `build_msvc` / `build_clang` / `build_gate`, so the engine gates are unchanged.
+
 ## Decisions (Gabriel, 2026-10-27)
 
 These settle the roadmap's "Decisions waiting on you" list. They are binding for planning; change them only on Gabriel's word.

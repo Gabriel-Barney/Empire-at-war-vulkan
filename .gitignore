@@ -40,3 +40,6 @@ __pycache__/
 /tools/probe_mod/v2/OPTIONAL_*/
 /tools/probe_mod/probeE/Mods/
 /tools/probe_mod/probeE/OPTIONAL_*/
+
+# Command Center launcher build output (launcher\cargo.cmd)
+/launcher/target/
