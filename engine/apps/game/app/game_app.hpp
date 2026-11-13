@@ -472,6 +472,14 @@ public:
     bool cancel_picks();               // Esc: ends a reinforcement / bombing-run / beacon pick (true when one was on)
     void select_cycle(int32_t step);   // NextUnit / PreviousUnit
     void select_like();                // SelectLike
+    // [port: Gabriel, 2026-11-13] squadron wings (ui::HudWing): wing 0 = the local player's fighter squadrons, wing 1 =
+    // its bomber squadrons (a member type with Bomber in its CategoryMask). F2 / F3 or the wing buttons select one; a
+    // second press within 0.4 s centres the camera on it.
+    void fill_wings(ui::TacticalHudFrame& hf);
+    void select_wing(size_t wing, bool add, bool centre_only);
+    std::vector<ui::HudWing> wings_;
+    int32_t wing_last_ = -1;           // wing selected last and when (double press -> camera)
+    double wing_last_s_ = -1.0e30;
     bool movie_mode_ = false;          // MovieMode key / b_camera_t [port]: the interface hidden
     bool interface_hidden_ = false;    // ToggleInterface key (byte 0x140b3069b)
     bool objectives_hidden_ = false;   // MissionHolocron key in a battle [port]

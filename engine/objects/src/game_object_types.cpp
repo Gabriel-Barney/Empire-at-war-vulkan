@@ -1,6 +1,7 @@
 #include "alamo/objects/game_object_types.hpp"
 
 #include <algorithm>
+#include <cstdint>
 
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
@@ -621,6 +622,51 @@ void GameObjectTypes::derive(TypeIndex t) {
     }
 }
 
+void GameObjectTypes::resize_squadrons() {
+    // [port: Gabriel, 2026-11-13] Every fighter / bomber squadron has squadron_size_ members: a Squadron_Units list naming
+    // ONE member type whose CategoryMask has Fighter or Bomber and not SpaceHero is rewritten to that many copies, once,
+    // on the final state after every pass. Its prices (Build_Cost_Credits, Tactical_Build_Cost_Multiplayer /
+    // _Campaign, when > 0) and AI_Combat_Power (the members' sum after derive) are scaled by size / the list's count, so a
+    // TIE_Fighter_Squadron (4 members, 300) becomes 12 members for 900. Each type scales its own final values, so a
+    // variant overriding a price or inheriting the list is scaled once. Mixed lists (hero squadrons such as Red_Squadron,
+    // Rogue_Squadron_Space, Darth_Vader_TIE_Fighter_Squadron) keep their XML members and prices.
+    if (squadron_size_ == 0) return;
+    const Ids& I = ids();
+    const EnumConverter& cat = enums_.get(EnumId::GameObjectCategory);
+    const uint64_t fighter = static_cast<uint64_t>(cat.lookup("Fighter").value_or(0x1));
+    const uint64_t bomber = static_cast<uint64_t>(cat.lookup("Bomber").value_or(0x2));
+    const uint64_t hero = static_cast<uint64_t>(cat.lookup("SpaceHero").value_or(0x2000000));
+    const FieldId prices[] = {I.build_cost, find_type_field("Tactical_Build_Cost_Multiplayer"),
+                              find_type_field("Tactical_Build_Cost_Campaign")};
+    for (TypeIndex t = 0; t < state_.size(); ++t) {
+        const FieldValue* v = value(t, I.squadron_units);
+        if (v == nullptr || v->items.empty() || v->items.size() == squadron_size_) continue;
+        const std::string_view first = v->items.front();
+        bool one_type = true;
+        for (const std::string_view n : v->items) one_type = one_type && iequals(n, first);
+        if (!one_type) continue;
+        const TypeIndex m = resolve_name(first);
+        if (m == kNone) continue;
+        const uint64_t mask = effective(m, I.category_mask).mask;
+        if ((mask & (fighter | bomber)) == 0 || (mask & hero) != 0) continue;
+        const auto count = static_cast<int64_t>(v->items.size());
+        const auto size = static_cast<int64_t>(squadron_size_);
+        for (const FieldId f : prices) {
+            if (f == kNoField) continue;
+            const FieldValue* pv = value(t, f);
+            if (pv == nullptr || pv->i <= 0) continue;
+            const int64_t scaled = (static_cast<int64_t>(pv->i) * size + count / 2) / count;  // rounded
+            slot(state_[t], f).i = static_cast<int32_t>(std::min<int64_t>(scaled, INT32_MAX));
+        }
+        if (const FieldValue* pw = value(t, I.ai_power); pw != nullptr) {
+            const float power = pw->f * static_cast<float>(size) / static_cast<float>(count);
+            slot(state_[t], I.ai_power).f = power;
+        }
+        slot(state_[t], I.squadron_units).items.assign(squadron_size_, first);
+        ++stats_.squadrons_resized;
+    }
+}
+
 void GameObjectTypes::after_pass() {
     // Lazy references are resolved on read (resolve_name = first definition; all types exist after
     // pass 0), so only the derivations run here, on every type in index order.
@@ -697,7 +743,9 @@ void GameObjectTypes::load_registries(const FileProvider& provider) {
 
 bool GameObjectTypes::build(const ObjectTypeDatabase& raw, const FileProvider* provider,
                             std::vector<std::string>* diagnostics, AnimTypeLookup anim_types) {
+    const uint32_t squadron_size = squadron_size_;  // the port rule survives the reset
     *this = GameObjectTypes{};
+    squadron_size_ = squadron_size;
     raw_ = &raw;
     diag_ = diagnostics;
     anim_lookup_ = anim_types;
@@ -790,6 +838,7 @@ bool GameObjectTypes::build(const ObjectTypeDatabase& raw, const FileProvider* p
             ++stats_.resolved_later;
         }
     }
+    resize_squadrons();  // [port: Gabriel] fighter / bomber squadrons of squadron_size_, prices scaled
     const Ids& I = ids();
     for (TypeIndex t = 0; t < n; ++t) {
         if (!effective(t, I.company_units).items.empty()) ++stats_.companies;

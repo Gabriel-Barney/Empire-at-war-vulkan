@@ -314,6 +314,25 @@ void TacticalHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
         radar_drag_ = false;
     }
 
+    // [port: Gabriel] squadron wing buttons (build_wings): hover look, left click -> WingSelect.
+    wing_hover_ = routed.hover_component >= kWingHitBase &&
+                          routed.hover_component < kWingHitBase + static_cast<int32_t>(wing_ids_.size())
+                      ? routed.hover_component - kWingHitBase
+                      : -1;
+    for (const HudPointerEvent& e : routed.hud) {
+        if (e.kind != HudPointerEvent::Kind::Click || e.button != Button::Left || e.component < kWingHitBase) continue;
+        const auto w = static_cast<size_t>(e.component - kWingHitBase);
+        if (w >= wing_ids_.size() || wing_ids_[w].empty()) continue;
+        HudAction h;
+        h.kind = HudAction::Kind::WingSelect;
+        h.component = e.component;
+        h.value = static_cast<int32_t>(w);
+        h.ids = wing_ids_[w];
+        h.shift = shift;
+        h.ctrl = ctrl;
+        act(std::move(h));
+    }
+
     for (const ButtonClick& k : clicks) {
         const auto ci = static_cast<uint32_t>(k.component);
         const CommandBarComponent& c = (*table_)[ci];
@@ -442,6 +461,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
     dl_.clear();
     blobs_.clear();
     hits_.clear();
+    wing_ids_.clear();
     stats_ = {};
     if (!table_ || !atlas_ || !fonts_) return;
     faction_alt_ = frame.faction_alt;
@@ -527,6 +547,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
             }
         }
         build_objectives(frame);
+        build_wings(frame);
         build_pause_banner(frame);
         // UI.md §1.1 5h: the drag rectangle is queued with the main HUD pass (not while the interface is hidden).
         if (frame.drag_select) stats_.drag_box = add_drag_box(dl_, canvas_, frame.drag_rect) > 0;
@@ -1175,6 +1196,44 @@ void TacticalHud::build_objectives(const TacticalHudFrame& f) {
         }
         add_text(dl_, tl, HudList::Text, *fonts_, canvas_, l.text, {left + pad_x + 6.0f, y}, st);
         y -= line_h;
+    }
+}
+
+// [port: Gabriel, 2026-11-13] Squadron wing buttons (HudWing): a column at the left edge of the canvas, 40 units below
+// its middle, one 172 x 24 button per wing that has a squadron: "LABEL  n" (n = squadrons) and the key hint at the right.
+// Selected look while the whole wing is selected, brighter while hovered. Hit ids kWingHitBase + wing index.
+void TacticalHud::build_wings(const TacticalHudFrame& f) {
+    const int32_t font = font_of(obj_text_, 8.0f);
+    if (font < 0) return;
+    constexpr uint32_t kLayer = 4;
+    const Vec2f size{172.0f, 24.0f};
+    const float x = -0.5f * canvas_.width + 14.0f + 0.5f * size.x;
+    float y = 40.0f;
+    for (size_t w = 0; w < f.wings.size() && w < kMaxWings; ++w) {
+        const HudWing& wing = f.wings[w];
+        wing_ids_.push_back(wing.squadrons > 0 ? wing.ids : std::vector<uint32_t>{});
+        if (wing.squadrons == 0 || wing.ids.empty()) continue;
+        const bool over = wing_hover_ == static_cast<int32_t>(w);
+        const Rgba8 back = wing.selected ? Rgba8{30, 70, 120, 230} : over ? Rgba8{52, 58, 66, 230} : Rgba8{24, 28, 34, 210};
+        const Rgba8 edge = wing.selected ? Rgba8{120, 190, 255, 255} : Rgba8{96, 102, 110, 255};
+        const Vec2f c{x, y};
+        frame_rect(dl_, kLayer, c, size, back, edge);
+        HudTextStyle st;
+        st.font = font;
+        st.outline = true;
+        st.align = TextAlign::Left;
+        st.color = over || wing.selected ? Rgba8{255, 255, 255, 255} : Rgba8{214, 220, 228, 255};
+        char n[16];
+        std::snprintf(n, sizeof n, "  %u", wing.squadrons);
+        add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, wing.label + ascii32(n), {c.x - 0.5f * size.x + 8.0f, c.y}, st);
+        if (!wing.hotkey.empty()) {
+            st.align = TextAlign::Right;
+            st.color = Rgba8{150, 160, 172, 255};
+            add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, wing.hotkey, {c.x + 0.5f * size.x - 8.0f, c.y}, st);
+        }
+        hit(kWingHitBase + static_cast<int32_t>(w), kLayer, c, size);
+        ++stats_.wings;
+        y -= size.y + 6.0f;
     }
 }
 
