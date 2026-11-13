@@ -179,7 +179,6 @@ void test_advanced_video() {
           acts[0].advanced.bloom && acts[0].advanced.shader == 100);
     CHECK(acts[0].advanced.mesh == 55);  // a list left on its level keeps the stored value
     CHECK(fe.top() == "IDD_VIDEO_OPTIONS_DIALOG");
-    CHECK(std::string(menu_action_name(MenuAction::Kind::AutoDetectVideo)) == "AutoDetectVideo");
 }
 
 // ---- t12 (playtest 3): "keep these settings?" after a resolution change ------------------------------------------
@@ -485,6 +484,17 @@ void test_advanced_video_port() {
     CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
           rd->find("IDC_PORT_WATER_DETAIL") >= 0);
     CHECK(rd->find("IDC_PORT_ANTI_ALIASING") < 0);  // anti-aliasing is one list, in the Video dialog
+    // The shipped Auto Detect button (in both dialogs of the real GUIDialogs.rc), so the test can see it hidden.
+    CHECK(env.script.extend(R"RC(
+IDD_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
+BEGIN
+    PUSHBUTTON      "TEXT_AUTO_DETECT",IDC_AUTO_DETECT,41,300,60,14
+END
+IDD_ADVANCED_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
+BEGIN
+    PUSHBUTTON      "TEXT_AUTO_DETECT",IDC_AUTO_DETECT,41,300,60,14
+END
+)RC"));
     FrontEnd fe;
     MenuProviders p;
     AdvancedVideoSettings cur;
@@ -578,33 +588,13 @@ void test_advanced_video_port() {
     video->set_selected("IDC_PORT_DETAIL_LEVEL", 3);
     click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(!acts.back().video.detail_picked);
-    // Auto Detect (gfxf t02): the button only asks the host; refresh_video_dialogs shows what the host then set, in the Video
-    // dialog and in an open Advanced dialog, and leaves the rest of the Video dialog (here the gamma slider) as the player had it.
-    video->set_value("IDC_GAMMA_SLIDER", 77);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_AUTO_DETECT");
-    CHECK(acts.back().kind == MenuAction::Kind::AutoDetectVideo);
-    set_advanced_detail(cur, kQualityPresets[1]);
-    cur.anisotropy = 4;
-    cur.ambient_occlusion = true;
-    applied.anti_alias = kAntiAliasChoices[1].value;
-    applied.detail = kQualityPresets[1];
-    fe.refresh_video_dialogs();
-    CHECK(video->get("IDC_PORT_DETAIL_LEVEL")->selected == 1 && video->get("IDC_PORT_ANTI_ALIASING")->selected == 1 &&
-          video->get("IDC_GAMMA_SLIDER")->value == 77);
+    // The shipped Auto Detect button is hidden in the Video dialog and inside Advanced (removed 2026-11-13).
+    CHECK(video->get("IDC_AUTO_DETECT") != nullptr && !video->get("IDC_AUTO_DETECT")->visible);
     click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
     d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(d != nullptr);
     if (!d) return;
-    CHECK(d->get("IDC_PORT_MESH_DETAIL")->selected == 1 && d->get("IDC_PORT_ANISOTROPY")->selected == 2 && d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked);
-    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_AUTO_DETECT");  // the same button inside Advanced
-    CHECK(acts.back().kind == MenuAction::Kind::AutoDetectVideo);
-    set_advanced_detail(cur, kQualityPresets[3]);
-    cur.anisotropy = 16;
-    cur.ambient_occlusion = false;
-    applied.detail = kQualityPresets[3];
-    fe.refresh_video_dialogs();
-    CHECK(d->get("IDC_PORT_MESH_DETAIL")->selected == 3 && d->get("IDC_PORT_ANISOTROPY")->selected == 4 && !d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked &&
-          video->get("IDC_PORT_DETAIL_LEVEL")->selected == 3);
+    CHECK(d->get("IDC_AUTO_DETECT") != nullptr && !d->get("IDC_AUTO_DETECT")->visible);
     constexpr AdvancedVideoSettings all100;
     CHECK(advanced_detail_level(all100) == 100 && quality_level(all100) == 3);
     // The levels are consistent: each preset reads back as itself, a mix is Custom, and the anti-aliasing ranges are where they say.

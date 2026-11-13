@@ -10,7 +10,7 @@
 //                                   combo, difficulty radios, advanced options), Skirmish -> IDD_SKIRMISH_STAGING_DIALOG
 //   IDD_MAIN_OPTIONS_DIALOG /       Audio (IDD_AUDIO_OPTIONS_DIALOG: 4 sliders = AudioBus Master / Sfx / Speech / Music),
 //   IDD_IN_GAME_OPTIONS_DIALOG      Video (IDD_VIDEO_OPTIONS_DIALOG -> Advanced: IDD_ADVANCED_VIDEO_OPTIONS_DIALOG ->
-//                                   ApplyAdvancedVideo; Auto detect -> AutoDetectVideo), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
+//                                   ApplyAdvancedVideo; the shipped Auto Detect button is hidden), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
 //                                   key-capture edits bound to the P2 HotkeyTable, Accept syncs P1 Bindings), Gameplay
 //                                   (IDD_GAMEPLAY_OPTIONS_DIALOG)
 //   IDD_GAME_OPTIONS_DIALOG (pause) Save -> IDD_SAVE_GAME_DIALOG, Load -> IDD_LOAD_GAME_DIALOG, Options ->
@@ -309,7 +309,6 @@ struct MenuAction {
         KeybindingsChanged,  // the HotkeyTable (and Bindings) were updated
         // P4 completion (2026-10-27), appended:
         ApplyAdvancedVideo,  // advanced
-        AutoDetectVideo,     // Auto detect on the video / advanced video dialogs
         ApplyCamera,         // [port: Gabriel] camera (FOVs, queue modifier); hotkeys changed too -> KeybindingsChanged
         // modc t08 (IDD_PORT_MODS_DIALOG), appended:
         CheckMod,   // mod: the picker row selected (ModPickerEntry::id; "" = the base game) wants its load report
@@ -391,10 +390,6 @@ public:
     void show_pause_menu();       // in-game menu (IDD_GAME_OPTIONS_DIALOG) over the HUD
     void close_pause_menu();
     bool pause_menu_open() const;
-    // [port] After the host answered MenuAction::Kind::AutoDetectVideo by changing its video options: the open Video dialog's
-    // Anti-Aliasing and Detail Level lists and the open Advanced dialog's lists, checks and anisotropy show the provider's
-    // values again. Everything else in those dialogs (resolution, v-sync, gamma, ...) keeps what the player has set.
-    void refresh_video_dialogs();
     void set_in_game(bool g) { in_game_ = g; }
     const CampaignMenu& campaigns() const { return menu_; }
 

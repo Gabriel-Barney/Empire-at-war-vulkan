@@ -204,7 +204,6 @@ const char* menu_action_name(MenuAction::Kind k) {
         case MenuAction::Kind::ApplyGameplay: return "ApplyGameplay";
         case MenuAction::Kind::KeybindingsChanged: return "KeybindingsChanged";
         case MenuAction::Kind::ApplyAdvancedVideo: return "ApplyAdvancedVideo";
-        case MenuAction::Kind::AutoDetectVideo: return "AutoDetectVideo";
         case MenuAction::Kind::ApplyCamera: return "ApplyCamera";
         case MenuAction::Kind::CheckMod: return "CheckMod";
         case MenuAction::Kind::LaunchMod: return "LaunchMod";
@@ -972,6 +971,7 @@ void FrontEnd::fill_video(GuiDialog& d) {
     if (const GuiControl* l = d.get("IDC_RESOLUTION_LIST"); l && l->selected > 0) gui_->scroll_list_to(d, "IDC_RESOLUTION_LIST", l->selected - 3);
     // [port: Gabriel] the shipped "Run in window" check gives way to the display mode list in its row (WindowMode order).
     d.show("IDC_WINDOWED_MODE", false);
+    d.show("IDC_AUTO_DETECT", false);  // [port: Gabriel] the shipped Auto Detect button is removed (2026-11-13)
     d.set_items("IDC_PORT_WINDOW_MODE",
                 {gui_->port_text(U"Fullscreen"), gui_->port_text(U"Borderless fullscreen"), gui_->port_text(U"Windowed")},
                 static_cast<int32_t>(v.window_mode));
@@ -1021,16 +1021,8 @@ void FrontEnd::fill_video(GuiDialog& d) {
     }
 }
 
-void FrontEnd::refresh_video_dialogs() {
-    if (GuiDialog* vd = gui_->find(kVideo)) {
-        const VideoSettings v = p_.video ? p_.video() : VideoSettings{};
-        vd->set_selected("IDC_PORT_ANTI_ALIASING", static_cast<int32_t>(level_index(kAntiAliasChoices, v.anti_alias)));
-        vd->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(current_advanced(p_, v))));
-    }
-    if (GuiDialog* ad = gui_->find(kAdvancedVideo)) fill_advanced_video(*ad, current_advanced(p_, p_.video ? p_.video() : VideoSettings{}));
-}
-
 void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s) {
+    d.show("IDC_AUTO_DETECT", false);  // [port: Gabriel] the shipped Auto Detect button is removed (2026-11-13)
     for (const AdvLevel& l : kAdvLevels) {
         hide_slider(d, l.slider);
         d.set_items(l.combo, level_items(*gui_, l.choices), static_cast<int32_t>(level_index(l.choices, s.*l.field)));
@@ -1597,8 +1589,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             pop();
         } else if (is("IDC_ADVANCED")) {
             push(kAdvancedVideo);
-        } else if (is("IDC_AUTO_DETECT")) {
-            out.push_back(act(MenuAction::Kind::AutoDetectVideo));
         }
     } else if (ascii_iequals(n, kAdvancedVideo) && d) {
         if (is("IDC_OK") || is("IDC_APPLY")) {
@@ -1609,8 +1599,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             if (GuiDialog* vd = gui_->find(kVideo)) vd->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(a.advanced)));
             out.push_back(std::move(a));
             if (is("IDC_OK")) pop();
-        } else if (is("IDC_AUTO_DETECT")) {
-            out.push_back(act(MenuAction::Kind::AutoDetectVideo));
         } else if (is("IDC_CANCEL")) {
             pop();
         }

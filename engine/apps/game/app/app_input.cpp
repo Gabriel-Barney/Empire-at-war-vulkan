@@ -1206,27 +1206,6 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 save_video_options();
                 break;
             }
-            case K::AutoDetectVideo: {  // gfxf t02: a quality level from the GPU; the open dialogs show it
-                const rhi::DeviceCaps& caps = ctx_.caps();
-                GpuClass gpu;
-                gpu.kind = caps.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GpuKind::Discrete
-                           : caps.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GpuKind::Integrated
-                                                                                 : GpuKind::Other;
-                gpu.memory_bytes = caps.device_local_bytes;
-                gpu.sampler_anisotropy = caps.sampler_anisotropy;
-                gpu.max_anisotropy = caps.max_anisotropy;
-                static constexpr const char* kQualityNames[] = {"low", "medium", "high", "ultra"};
-                const AutoVideoChoice choice = recommend_video(gpu);
-                apply_auto_video(video_profile_, choice);
-                adv_video_ = video_profile_.advanced;
-                gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
-                std::printf("video: auto detect (%s, %llu MiB): %s detail, anti-aliasing strength %d, anisotropy %dx, ambient occlusion %s\n",
-                            caps.name.c_str(), static_cast<unsigned long long>(caps.device_local_bytes >> 20),
-                            kQualityNames[choice.quality], video_profile_.anti_alias, adv_video_.anisotropy, adv_video_.ambient_occlusion ? "on" : "off");
-                save_video_options();
-                ui_.front.refresh_video_dialogs();
-                break;
-            }
             default: break;
         }
     }
