@@ -33,10 +33,19 @@ HudCanvas HudCanvas::make(uint32_t screen_w, uint32_t screen_h, float ui_scale) 
     // UI scale: one canvas unit is ui_scale x kUiScaleUnitPixels pixels; the canvas is the screen / that when it is larger
     // than the fitted one (same aspect, so one factor).
     const double unit_px = static_cast<double>(c.ui_scale) * static_cast<double>(kUiScaleUnitPixels);
-    const double k = c.ui_scale > 0.0f ? std::max(1.0, sh / (unit_px * fh)) : 1.0;
+    const double raw = c.ui_scale > 0.0f ? sh / (unit_px * fh) : 1.0;
+    const double k = std::max(1.0, raw);
     c.width = static_cast<float>(fw * k);
     c.height = static_cast<float>(fh * k);
-    if (k > 1.0) c.text_height = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(sh / k)));
+    if (k > 1.0) {
+        c.text_height = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(sh / k)));
+    } else if (raw < 1.0) {
+        // Past the original size: the layout stays fitted, only the text grows, by the scale over the one that reaches the
+        // original size (100 % when a smaller one already does, so 100 % never enlarges text), at most kUiScaleMaxTextGrowth.
+        const double fit_scale = std::max(1.0, sh / (static_cast<double>(kUiScaleUnitPixels) * fh));
+        const double grow = std::min(static_cast<double>(c.ui_scale) / fit_scale, static_cast<double>(kUiScaleMaxTextGrowth));
+        if (grow > 1.0) c.text_height = static_cast<uint32_t>(std::lround(sh * grow));
+    }
     c.scale_x = c.width / kHudBaseWidth;
     c.scale_y = c.height / kHudBaseHeight;
     c.units_per_pixel_x = c.width / static_cast<float>(c.screen_width);
