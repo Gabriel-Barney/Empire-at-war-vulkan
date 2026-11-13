@@ -924,6 +924,13 @@ void CampaignBattles::hook(SimHost& host) {
         result.winner = cm_->resolve_battle(result);
         log_.push_back("auto-resolve from tactical: winner " + std::to_string(result.winner));
     }
+    last_end_.valid = true;  // ui3 t05: the battle-end screen's figures (presentation)
+    last_end_.winner = result.winner;
+    last_end_.attacker = battle_->request().info.attacker;
+    last_end_.defender = battle_->request().info.defender;
+    last_end_.frames = battle_->frame();
+    last_end_.space = battle_->request().info.kind == galactic::ConflictKind::Space;
+    last_end_.planet = battle_->request().info.planet;
     // --- end P4 sim ---
 #ifdef ALAMO_SIM_HAVE_STORY
     if (StorySession* s = host.story()) s->end_battle(result.winner, host.frame());  // L1/S4 wave 2a: VICTORY

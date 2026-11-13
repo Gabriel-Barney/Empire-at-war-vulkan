@@ -630,7 +630,8 @@ void App::build_tactical_hud() {
             hf.pop_cap = cap >= 0.0f ? static_cast<int32_t>(std::lround(cap)) : -1;
         }
     }
-    // ui pass 2: the mission objectives box - the story's objectives, else the skirmish win condition [port text].
+    // ui pass 2: the mission objectives box - the story's objectives, else the skirmish win condition: ui3 t07 the retail
+    // TEXT_TACTICAL_PRIMARY_SPACE_ATTACK / _LAND_ATTACK (the HUD numbers the lines itself).
     hud_objectives_.clear();
 #if defined(ALAMO_SIM_HAVE_STORY) && defined(ALAMO_UI_HAVE_LUA)
     if (const sim::StorySession* story = session_ ? session_->host().story() : nullptr)
@@ -638,7 +639,7 @@ void App::build_tactical_hud() {
 #endif
     if (hud_objectives_.empty() && session_ && session_->spec().kind == SessionKind::Skirmish) {
         ui::HudObjective o;
-        o.text = bview_.space() ? U"1. Destroy all enemy space forces to win." : U"1. Destroy all enemy land forces to win.";
+        o.text_key = bview_.space() ? "TEXT_TACTICAL_PRIMARY_SPACE_ATTACK" : "TEXT_TACTICAL_PRIMARY_LAND_ATTACK";
         hud_objectives_.push_back(std::move(o));
     }
     hf.objectives = hud_objectives_;
@@ -727,7 +728,7 @@ void App::build_tactical_hud() {
     // Reinforcement pad: the local player's undeployed reserves (TacticalBattle::reserves, const read between ticks).
     const GameSession* sess = session_.get();
     const std::vector<ui::HudTypeInfo>* htypes = &ui_.hud_types;
-    hf.providers.reinforcements = [sess, htypes](std::vector<ui::HudReinforcement>& out) {
+    hf.providers.reinforcements = [this, sess, htypes](std::vector<ui::HudReinforcement>& out) {
         const sim::TacticalBattle* b = sess ? sess->battle() : nullptr;
         if (!b) return;
         for (const sim::TacticalBattle::Reserve& r : b->reserves(sess->local_player())) {
@@ -735,6 +736,7 @@ void App::build_tactical_hud() {
             e.unit = static_cast<uint32_t>(r.galactic_id);
             e.icon = r.type < htypes->size() ? (*htypes)[r.type].icon_name : std::string();
             e.count = r.units;
+            e.available = reinforce_available(r.galactic_id);  // ui3 t04: the unit cap / retreat / hold gate of order_reinforce
             out.push_back(std::move(e));
         }
     };
@@ -767,6 +769,10 @@ void App::build_tactical_hud() {
                 e.cost = o.cost;
                 e.queued = o.queued;
                 e.block = static_cast<ui::HudBuildOption::Block>(o.block);
+                // ui3 t07: a buyable option's tooltip = the type's name text (Text_ID) [port: the original's unit tooltip
+                // also draws the price / icon rows of tooltip_price / tooltip_icon]
+                if (static_cast<size_t>(o.type) < data_.types.size())
+                    e.tooltip_key = std::string(ascii_trim(data_.types.get_string(static_cast<objects::TypeIndex>(o.type), "Text_ID")));
                 build_opts_.push_back(std::move(e));
             }
             break;
@@ -821,6 +827,7 @@ void App::build_tactical_hud() {
     if (const sim::TacticalBattle* tb = battle())
         hf.bombing_run = bombing_run_button(!bview_.space(), story_controls_locked(), tb->bombing_run_available(local_player()),
                                             tb->bombing_run_cooldown_fraction(local_player()));
+    fill_command_buttons(hf);  // ui3 t03 / t04: b_retreat / b_reinforcement / beacon / movie mode, reinforcement texts
     hud_units_ = units;
     // FIXPASS_GALACTIC §4.2: the advisor *_LOOP Bink in Movie_tactical (the HUD's own component), only while it plays.
     hf.advisor_page = advisor_loop_shown() ? static_cast<int32_t>(kAdvisorPage) : -1;

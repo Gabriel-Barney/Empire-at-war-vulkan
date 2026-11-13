@@ -108,7 +108,9 @@ int32_t keyboard_page(std::string_view dialog) {
 float to01(int32_t v) { return static_cast<float>(std::clamp(v, 0, 100)) / 100.0f; }
 int32_t to100(float v) { return static_cast<int32_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 100.0f)); }
 
-// [port] IDC_EDIT_* (keyboard dialogs) -> hotkey slot name (hotkeys.hpp). Ability rows matched by meaning (guesses).
+// IDC_EDIT_* (keyboard dialogs) -> hotkey slot name (hotkeys.hpp). ui3 t02: the order is the retail one - the edit-name
+// string table (0x8063d0 .. 0x807310, stride 0x20, UI.md §4.3) lists the boxes in slot order, entry i = slot i
+// (alamo_ui_hud_ui3_tests checks every entry).
 struct EditSlot {
     const char* edit;
     const char* slot;

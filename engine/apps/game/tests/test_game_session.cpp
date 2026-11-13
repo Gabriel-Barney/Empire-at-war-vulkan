@@ -380,6 +380,12 @@ bool live_run(const game::GameData& data, const game::SessionSpec& spec, command
     if (reserve != 0) {
         for (const uint32_t id : mine) CHECK(store.alive(store.find(static_cast<objects::ObjectId>(id))));  // the cap is full
         drop_point();
+        // ui3 t04: the HUD's read of the same gate (the pad entry is disabled while the cap is full); an unknown key is
+        // not a reserve.
+        if (const sim::TacticalBattle* bt = s.battle()) {
+            CHECK(bt->reinforce_block(s.local_player(), static_cast<objects::ObjectId>(reserve)) == commands::RejectReason::QueueFull);
+            CHECK(bt->reinforce_block(s.local_player(), static_cast<objects::ObjectId>(0x7FFFFFF0u)) == commands::RejectReason::InvalidUnit);
+        }
         const uint64_t rej0 = s.order_stats().rejected;
         CHECK(s.submit(commands::EventData(commands::EventType::Reinforce).set("unit", reserve).set_f("x", rx).set_f("y", ry)).ok());
         for (int i = 0; i < 3; ++i) s.tick();
@@ -652,8 +658,15 @@ bool battle_auto_resolve_run(const game::GameData& data, const game::SessionSpec
     }
     CHECK(s.in_battle());
     if (!s.in_battle()) return false;
+    // ui3 t03: the b_retreat state - reason 2 and a partial dial while the retreat-allowed countdown runs.
+    if (const sim::TacticalBattle* bt = s.battle()) {
+        CHECK(bt->retreat_block(s.local_player()) == 2 && bt->retreat_allowed_progress() < 1.0f && bt->retreat_countdown_progress() < 0.0f);
+        CHECK(bt->retreat_block(-5) == 1);
+    }
     // Past the retreat countdown (Space_Retreat_Allowed_Countdown_Seconds 5 = 150 frames): the gate lets it through.
     for (int i = 0; i < 200 && s.in_battle(); ++i, ++t) s.tick();
+    if (const sim::TacticalBattle* bt = s.battle())
+        CHECK(bt->retreat_allowed_progress() == 1.0f && (bt->retreat_block(s.local_player()) == 0 || bt->retreat_block(s.local_player()) == 6));
     CHECK(s.in_battle() && s.auto_resolve_battle());
     uint64_t waited = 0;
     while (waited < 10 && s.in_battle()) {

@@ -72,7 +72,11 @@ namespace move_flag {
 inline constexpr uint8_t kAttackMove = 0x01, kGuardMove = 0x02, kPlayerOrder = 0x04, kWaypoint = 0x08, kDoubleClick = 0x80;
 }
 // One-shot HUD toggles (attack-move / guard / waypoint buttons): armed until the next move order is sent.
-enum class MoveToggle : uint8_t { AttackMove, GuardMove, Waypoint };
+// ui3 t01 [port] (the 0x140b29fc1 / fc2 toggles of P1_DOUBLE_CLICK_MOVE.md §2.1 are not traced): Attack (c_button00, the
+// Attack hotkey) - the next right click on any object that is not the local player's attacks it, on the ground it is an
+// attack-move; Move (c_button02, the Move hotkey) - the next right click is a plain ground move at the cursor even over an
+// object (no attack, no move-to-object). Both clear with the next order, as the other toggles.
+enum class MoveToggle : uint8_t { AttackMove, GuardMove, Waypoint, Attack, Move };
 
 // Move acknowledgement (spec §2.3, `0x418b0`), one per ground move order the translator emits; the host spawns it.
 enum class AckEffect : uint8_t { Move, DoubleClickMove, AttackMove, GuardMove };
@@ -146,6 +150,8 @@ public:
     // Acknowledgements of this frame's move orders, in order (cleared by the call).
     std::vector<MoveAck> take_move_acks() { return std::exchange(acks_, {}); }
     void arm_move_toggle(MoveToggle t);
+    // ui3 t01: an armed toggle (tests, HUD look).
+    bool move_toggle_armed(MoveToggle t) const;
     bool waypoint_mode() const { return waypoint_mode_; }
     // Orders with their queued flags (clears pending()).
     std::vector<UiOrder> take_orders();
@@ -181,6 +187,7 @@ private:
     std::vector<MoveAck> acks_;
     bool waypoint_mode_ = false;  // GameModeManager +0xb4: an Alt run has started
     bool toggle_attack_ = false, toggle_guard_ = false, toggle_waypoint_ = false;
+    bool toggle_force_attack_ = false, toggle_force_move_ = false;  // ui3 t01: MoveToggle::Attack / Move
     bool queue_ = false;  // queue modifier held during this update
     std::vector<uint32_t> sel_;
     std::optional<uint32_t> planet_zoom_;

@@ -88,6 +88,11 @@ if(TARGET alamo_vfs)  # real-data shell check (MEG archives) when ALAMO_FOC_DATA
 endif()
 add_test(NAME alamo_ui_hud_tests COMMAND alamo_ui_hud_tests)
 set_tests_properties(alamo_ui_hud_tests PROPERTIES TIMEOUT 120)
+# ui3 (UIART "Tactical HUD controls"): ability hotkeys, keyboard edit-box order, command-bar button state, tooltips.
+add_executable(alamo_ui_hud_ui3_tests tests/test_hud_ui3.cpp)
+target_link_libraries(alamo_ui_hud_ui3_tests PRIVATE alamo_ui_hud alamo_data alamo_test_support)
+add_test(NAME alamo_ui_hud_ui3_tests COMMAND alamo_ui_hud_ui3_tests)
+set_tests_properties(alamo_ui_hud_ui3_tests PROPERTIES TIMEOUT 120)
 
 # P4: engine/lua -> UI adapters (GUI_* presentation events, story objectives); only when the lua module is configured.
 if(TARGET alamo_lua)

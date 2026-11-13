@@ -142,6 +142,14 @@ private:
     std::vector<uint16_t> fired_;
 };
 
+// ui3 t02: the tactical ability (ABILITIES_HARDPOINTS 2.1 type name, e.g. "SPREAD_OUT") an ability slot (24..65, 90..122)
+// or DeploySquad (66) fires; "" for other slots and for the two ability slots no FoC type matches (SystemControl,
+// DestroyPlanet). [port] matched by meaning: the keyboard dialog's edit-box names (UI.md §4.3) against the ability types the
+// FoC data uses; the original's slot -> ability lookup in the hotkey dispatch (0x63f00) is not traced. Slots of one
+// meaning share a type (SelfDestruct / SpaceSelfDestruct, LaserDefense / SpaceLaserDefense, FullSalvo / FoCFullSalvo,
+// SensorJamming / FoCSensorJamming, MinorDrainLife / DrainLife).
+std::string_view hotkey_ability_name(uint16_t slot);
+
 // Group number (0..9) of a group slot (0..9, 123..152), -1 otherwise.
 int8_t hotkey_group(uint16_t slot);
 

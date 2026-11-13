@@ -306,7 +306,9 @@ TooltipConfig tooltip_config_from(const data::XmlNode& root) {
 void TooltipState::update(const HudButtons& buttons, const ComponentTable& table, const TooltipConfig& cfg, double now) {
     component_ = -1;
     const int32_t h = buttons.hover();
-    if (h < 0 || static_cast<size_t>(h) >= table.size() || table[static_cast<size_t>(h)].tooltip_text.empty()) return;
+    if (h < 0 || static_cast<size_t>(h) >= table.size()) return;
+    const ButtonRuntime* r = buttons.find_state(static_cast<uint32_t>(h));
+    if (table[static_cast<size_t>(h)].tooltip_text.empty() && (!r || r->tooltip_key.empty())) return;
     if (buttons.pressed() >= 0) return;  // no tooltip while a button is held
     if (now - buttons.hover_since() + 1e-9 < cfg.delay) return;
     component_ = h;
@@ -315,10 +317,11 @@ void TooltipState::update(const HudButtons& buttons, const ComponentTable& table
 std::string TooltipState::key(const HudButtons& buttons, const ComponentTable& table) const {
     if (component_ < 0 || static_cast<size_t>(component_) >= table.size()) return {};
     const CommandBarComponent& c = table[static_cast<size_t>(component_)];
-    if (c.tooltip_text.empty()) return {};
     const ButtonRuntime* r = buttons.find_state(static_cast<uint32_t>(component_));
     const int32_t i = r ? r->tooltip_index : 0;
     if (i < 0) return {};
+    if (r && !r->tooltip_key.empty()) return r->tooltip_key;  // ui3 t07: ability / unit text
+    if (c.tooltip_text.empty()) return {};
     return *pick(c.tooltip_text, i);
 }
 
@@ -327,7 +330,19 @@ bool TooltipState::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache& f
                         int32_t faction_alt, const TooltipConfig& cfg) const {
     const std::string k = key(buttons, table);
     if (k.empty()) return false;
-    const std::u32string body = text ? utf16_to_utf32(text->text(k)) : ascii32(k);
+    // ui3 t07: a runtime tooltip_key may list several keys separated by spaces (ability name + description): one line each.
+    std::u32string body;
+    size_t at = 0;
+    while (at < k.size()) {
+        size_t e = k.find(' ', at);
+        if (e == std::string::npos) e = k.size();
+        if (e > at) {
+            const std::string one = k.substr(at, e - at);
+            if (!body.empty()) body += U'\n';
+            body += text ? utf16_to_utf32(text->text(one)) : ascii32(one);
+        }
+        at = e + 1;
+    }
     return draw_text(dl, atlas, fonts, canvas, table, body, cursor_px, faction_alt, cfg);
 }
 

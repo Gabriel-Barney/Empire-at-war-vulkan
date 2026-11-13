@@ -532,6 +532,10 @@ void App::begin_battle() {
     bombing_targeting_ = false;  // nor a bombing-run pick
     bombing_blob_.reset();
     targeting_.cancel();  // nor a targeted ability
+    reinforce_blob_.reset();  // ui3: nor a drop preview / beacon pick; tether and interface keys reset per battle [port]
+    beacon_pick_ = false;
+    camera_tether_ = false;
+    cycle_unit_ = 0;
     // L1/S4 wave 1: the battle's tactical plots (loaded by CampaignBattles at the tactical push) for STORY_MISSION_LOST;
     // battle-screen story notifications go to that plot set (story_ui_step / battle_input).
     const sim::StorySession* story = session_->host().story();
