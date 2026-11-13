@@ -92,6 +92,10 @@ private:
 
 struct GuiStyle {
     bool fallback_art = true;                 // flat stand-ins for missing frame / button / track textures
+    // [port] scroll bar arrow / track auto-repeat while the button is held: first repeat after scroll_repeat_delay,
+    // then every scroll_repeat_rate seconds (the Win32 scroll bar timer pattern).
+    double scroll_repeat_delay = 0.4, scroll_repeat_rate = 0.05;
+    Rgba8 edit_selection{80, 120, 200, 160};  // [port] edit box selected-text highlight
     Rgba8 fallback_background{18, 22, 30, 235};
     Rgba8 fallback_button{60, 66, 80, 255}, fallback_button_hot{90, 100, 125, 255}, fallback_button_down{40, 44, 55, 255};
     Rgba8 selection{255, 255, 255, 60};       // list selected-row highlight
@@ -132,6 +136,9 @@ struct GuiControl {
     bool open = false;                 // combo drop-down shown
     bool left_justified = false;       // combo: closed-field text starts at the left edge + inset instead of centred (UI.md §3.7.1)
     size_t caret = 0;                  // edit caret (code points)
+    size_t sel_anchor = 0;             // edit: other end of the selection (== caret: nothing selected)
+    size_t scroll_x = 0;               // edit: first code point drawn (ES_AUTOHSCROLL keeps the caret in view)
+    float field_height = 15.0f;        // combo: closed field height (canvas units; the skin's pop-down button height)
     size_t max_chars = 256;            // edit limit [port]
     bool read_only = false;            // edit: keys are not typed into it (key-capture fields)
     bool text_outline = false;         // [port] force an outline under the caption (readability over bright art)
@@ -280,6 +287,12 @@ public:
     // colour (40, 160, 255, 128) [port: Arial 8]. "" = none. Host: e.g. U"V 1.121 <build>".
     void set_version_text(std::u32string text) { version_text_ = std::move(text); }
     const TextDatabase* text_db() const { return text_; }
+    // Edit box clipboard (Ctrl+C / Ctrl+X / Ctrl+V, Ctrl+Insert / Shift+Delete / Shift+Insert). Unset: a clipboard
+    // private to the manager [port]; the game host wires the Windows clipboard.
+    void set_clipboard(std::function<std::u32string()> get, std::function<void(std::u32string_view)> set) {
+        clip_get_ = std::move(get);
+        clip_set_ = std::move(set);
+    }
     // Caption -> display text: the MasterTextFile entry for the key, else the caption as written [port].
     std::u32string caption_text(std::string_view caption) const;
     // [port] t47: English the port adds in code, on the same text path (TextDatabase::port_text).
@@ -333,7 +346,28 @@ public:
     // Font id for a control (GuiSkin lookup, point -> pixel rule of hud_canvas.hpp, Stretch_Factor).
     int32_t control_font(const GuiDialog& d, size_t i) const;
 
+    // Scroll bar of a list box, or of an open combo's drop-down list (canvas units). active = there are more rows than fit.
+    struct ScrollBar {
+        bool active = false;
+        GuiRect col, up, down, thumb;
+        float track_top = 0, track_len = 0;  // below the up arrow, downwards
+        int32_t max_top = 0, vis = 1;
+    };
+    ScrollBar scroll_bar(const GuiDialog& d, size_t i) const;
+    // Closed-field height of combo i: the skin's Combo_Box_Popdown_Button height (25 units, UI.md §3.7.1), else 15 [port].
+    float combo_field_height(const GuiDialog& d, size_t i) const;
+
 private:
+    enum class ScrollPart : uint8_t { None, Up, Down, PageUp, PageDown, Thumb };
+    ScrollPart scroll_part_at(const ScrollBar& sb, Vec2f p) const;
+    void scroll_press(GuiDialog& d, size_t i, ScrollPart part, double now);
+    void scroll_held(double now);
+    // Edit helpers.
+    GuiRect edit_text_rect(const GuiDialog& d, size_t i) const;
+    float edit_measure(const GuiDialog& d, size_t i, std::u32string_view t) const;
+    size_t edit_index_at(const GuiDialog& d, size_t i, float x) const;
+    void edit_keep_caret_visible(GuiDialog& d, size_t i) const;
+    bool edit_insert(GuiDialog& d, size_t i, std::u32string_view t) const;
     void place(GuiDialog& d) const;
     void click(GuiDialog& d, size_t i, std::vector<GuiEvent>& ev, bool keyboard);
     void move_focus(GuiDialog& d, int32_t dir);
@@ -341,6 +375,9 @@ private:
     void list_select(GuiDialog& d, size_t i, int32_t index, std::vector<GuiEvent>& ev);
     void slider_set(GuiDialog& d, size_t i, int32_t v, std::vector<GuiEvent>& ev);
     void scroll_list(GuiControl& c, size_t i, const GuiDialog& d, int32_t rows);
+    int32_t scroll_rows(const GuiDialog& d, size_t i) const;  // visible rows of a list / open combo list
+    float scroll_width(const GuiDialog& d, size_t i) const;  // scroll bar column width: Scroll_Up_Button art, else 12 [port]
+    void draw_scroll_bar(HudDrawList& dl, uint32_t layer, const GuiDialog& d, size_t i, const ScrollBar& sb) const;
     const GuiFontSpec& font_spec(const GuiDialog& d, size_t i) const;
     int32_t visible_rows(const GuiDialog& d, size_t i) const;
     float row_height(const GuiDialog& d, size_t i) const;
@@ -384,6 +421,13 @@ private:
     GuiDialog* press_dialog_ = nullptr;
     int32_t press_control_ = -1;
     bool slider_drag_ = false;
+    ScrollPart scroll_part_ = ScrollPart::None;  // scroll bar part held (press_dialog_ / press_control_)
+    double scroll_repeat_at_ = 0.0;
+    float scroll_grab_ = 0.0f;                   // thumb drag: cursor distance below the thumb's top edge
+    bool edit_drag_ = false;                     // edit: mouse selection while the button is held
+    std::function<std::u32string()> clip_get_;
+    std::function<void(std::u32string_view)> clip_set_;
+    std::u32string clipboard_;
     int32_t last_list_click_ = -1;
     int32_t last_list_row_ = -1;
     double last_list_time_ = -1e30;

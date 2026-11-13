@@ -967,3 +967,14 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   a non-hostile attackable unit is a land attack block with the host-only flag `kAttackBlockNoLock`; an object that is not
   a combat unit (story markers) still gets the plain move and follow. **t06** the line of fire's end G takes the order's C
   height. **t07** the land stand-in orders drive the battle's attacker and defender only; third parties idle (space: backlog).
+- 🟡 **PARTLY DONE** · UI5 (2026-11-13, front-end widgets and options; spec `docs/re/UI.md` §3-§5): [port] choices (marked
+  "UI5" / [port] in `engine/ui/src/gui_dialog.cpp`). **t03** the closed combo field is the skin's
+  `Combo_Box_Popdown_Button` height (25 units, UI.md §3.7.1; 15 when the art is missing) and the hit test uses the same;
+  an open drop-down shows `combo_rows` rows from `top`, opens scrolled to the selection, scrolls with the wheel (3 rows a
+  notch) and its own scroll bar; list / drop-down scroll bars: column width = `Scroll_Up_Button` art width (12 without),
+  arrow height from the art's aspect, `_Mouse_Over` / `_Pressed` arrow art, thumb drag, track paging, arrow / track
+  auto-repeat 0.4 s then every 0.05 s (Win32 pattern; GuiStyle), Home / End select the first / last row. **t04** edit
+  boxes follow the Win32 single-line edit: ES_AUTOHSCROLL scrolls (no narrowing), without it typing stops at the field
+  width; click = nearest character boundary, drag / Shift+click / Shift+arrows select, Ctrl+Left / Right by word,
+  Ctrl+A / C / X / V and Ctrl+Insert / Shift+Delete / Shift+Insert; the clipboard is a manager-private string unless the
+  host sets `GuiManager::set_clipboard`; key-capture fields (read_only) keep the one-line narrowing and draw no caret.
