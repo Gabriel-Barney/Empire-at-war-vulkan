@@ -150,8 +150,11 @@ Pointer choose_pointer(const CursorContext& c) {
             if (!c.selection) return Pointer::Normal;
             if (!c.can_attack) return Pointer::CantAttack;
             return c.in_range ? Pointer::Attack : Pointer::AttackOutOfRange;
-        case H::Own: return c.selectable ? Pointer::Select : Pointer::CantSelect;
+        case H::Own:
+            if (c.selection && c.garrisonable) return Pointer::GarrisonIn;  // ui1 t01: an own bunker / transport
+            return c.selectable ? Pointer::Select : Pointer::CantSelect;
         case H::Friendly:
+        case H::Neutral:  // ui1 t01: a neutral garrison structure (capture point) takes garrisons too
             if (c.selection && c.garrisonable) return Pointer::GarrisonIn;
             return Pointer::Normal;
         case H::Ground:

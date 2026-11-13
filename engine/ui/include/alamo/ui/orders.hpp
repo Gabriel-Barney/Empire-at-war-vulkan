@@ -8,7 +8,7 @@
 // HotkeyDispatcher's (hotkeys.hpp, the original 153-slot table).
 //
 // Mapping (tactical; [port] where the docs give no UI rule). Right button = the order button of the default mouse scheme
-// (IDC_ALTERNATE_MOUSE_CONTROLS, orders on the left button, is not implemented). Right-button orders follow
+// (IDC_ALTERNATE_MOUSE_CONTROLS: set_alternate_mouse, below). Right-button orders follow
 // P1_DOUBLE_CLICK_MOVE.md: the order is resolved at the RELEASE from the object under the cursor there; a press that is a
 // Win32 double click (ButtonState::double_press) acts at the press and its release is swallowed.
 //   left click on a selectable object      Select{id}            (shift: toggle id in the mirror -> Select{list})
@@ -146,6 +146,13 @@ public:
     // Acknowledgements of this frame's move orders, in order (cleared by the call).
     std::vector<MoveAck> take_move_acks() { return std::exchange(acks_, {}); }
     void arm_move_toggle(MoveToggle t);
+    // ui1 t02: IDC_ALTERNATE_MOUSE_CONTROLS (P1_DOUBLE_CLICK_MOVE §1.2, ground orders on the left button). Tactical only
+    // [port: the alternate table's actions 0..8 are not recovered]: a left click on an own selectable object selects as
+    // in the default scheme (shift toggle, double click = same type); any other left click with a selection is the
+    // order click (attack / move to object / ground move, no facing drag - a left drag is the selection box); a left
+    // double press off own units is the double-click order at the press; a right click clears the selection.
+    void set_alternate_mouse(bool on) { alternate_ = on; }
+    bool alternate_mouse() const { return alternate_; }
     bool waypoint_mode() const { return waypoint_mode_; }
     // Orders with their queued flags (clears pending()).
     std::vector<UiOrder> take_orders();
@@ -182,6 +189,7 @@ private:
     bool waypoint_mode_ = false;  // GameModeManager +0xb4: an Alt run has started
     bool toggle_attack_ = false, toggle_guard_ = false, toggle_waypoint_ = false;
     bool queue_ = false;  // queue modifier held during this update
+    bool alternate_ = false;  // ui1 t02: IDC_ALTERNATE_MOUSE_CONTROLS
     std::vector<uint32_t> sel_;
     std::optional<uint32_t> planet_zoom_;
     bool planet_deselect_ = false;

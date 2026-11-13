@@ -860,6 +860,7 @@ void App::battle_input() {
                 story_ui_.click_gui(ui_.components[static_cast<size_t>(e.component)].name);
     if (hero_panel_.open()) hero_panel_.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts);
     handle_hud_actions(acts);
+    queue_default_autofire(cmds);  // ui1 t02: IDC_ABILITIES_DEFAULT_TO_AUTOFIRE
     voice.resize(cmds.size(), 1);
     route_commands(cmds, voice);
 }
@@ -984,11 +985,18 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 gview_.camera().set_fov_deg(camera_.galactic_fov_deg);
                 bview_.camera().set_fov_override(tactical_fov_set_ ? camera_.tactical_fov_deg : 0.0f);
                 sync_control_bindings(ui_.hotkeys, camera_, ui_.bindings);  // OI host: hotkeys + queue modifier
+                save_game_options();  // ui1 t02
+                break;
+            case K::KeybindingsChanged:  // ui1 t02: the keyboard dialogs edited ui_.hotkeys; bindings follow, kept between runs
+                sync_control_bindings(ui_.hotkeys, camera_, ui_.bindings);
+                save_game_options();
                 break;
             case K::ApplyGameplay:  // HUD_GAPS §2.2: IDC_DELAY_TOOLTIPS -> Long_Encyclopedia_Delay
                 gameplay_ = a.gameplay;
                 apply_tooltip_config();
                 apply_camera_tuning();  // P1_CAMERA_INPUT.md §3.1 mouse / scroll options
+                apply_gameplay_options();  // ui1 t02: alternate mouse, game speeds
+                save_game_options();
                 break;
             case K::SaveGame: save_game_as(a.save); break;          // N1 / t09
             case K::LoadGame: load_saved_game(a.save); break;
@@ -1003,8 +1011,12 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
             case K::ExitGame: screen_ = Screen::Quit; break;
             case K::CheckMod: check_mod(a.mod); break;    // modc t08
             case K::LaunchMod: launch_mod(a.mod); break;
-            case K::PreviewAudio:
-            case K::ApplyAudio: audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music); break;
+            case K::PreviewAudio: audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music); break;
+            case K::ApplyAudio:  // ui1 t02: the dialog opens with these and they are kept between runs
+                audio_opts_ = a.audio;
+                audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music);
+                save_game_options();
+                break;
             case K::ApplyVideo:  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
                 ++video_applies_;
                 hardware_mouse_ = a.video.hardware_mouse;

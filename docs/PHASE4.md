@@ -967,6 +967,42 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   a non-hostile attackable unit is a land attack block with the host-only flag `kAttackBlockNoLock`; an object that is not
   a combat unit (story markers) still gets the plain move and follow. **t06** the line of fire's end G takes the order's C
   height. **t07** the land stand-in orders drive the battle's attacker and defender only; third parties idle (space: backlog).
+- 🟡 **PARTLY DONE** · UI1 (2026-11-13, UI gaps in the test build; specs `docs/re/UI.md`, `HUD_GAPS.md`, `GAME_SCORING.md`,
+  `GALACTIC_DIALOGS.md`): [port] choices (marked "ui1 tNN" in code). **t01 cursor** (UI.md §3.1 gives the 53 pointers,
+  not the rules): the battle hover comes from the order translator's world pick: own (SELECT), an enemy of the local
+  player (ATTACK), other owned objects friendly, unowned neutral. With a selection: CANT_ATTACK when no selected unit
+  can hit the target at all (combat `can_hit` = NoTarget), ATTACK_OUT_OF_RANGE when every attacker is immobile and out
+  of range (a mobile unit walks into range), GARRISON_IN over an own / friendly / neutral object a selected unit may
+  enter (Can_Garrison), CANT_MOVE when no selected land unit can stand on the ground cell under the cursor. Camera
+  middle-drag pan / rotate (tactical) and the galactic map drag show MAP_SCROLLING / MAP_ROTATING.
+  **t02 options**: audio volumes / subtitles, the gameplay dialog, the camera settings and the key bindings are kept in
+  `%LOCALAPPDATA%\alamo\game_options.txt` (game_display.hpp `OptionsProfile`; live play only), written on Audio /
+  Gameplay / Camera Accept and on KeybindingsChanged. Game speed sliders map to the speed table index round(v / 25)
+  and go straight to the pacing (retail sends GameOptions 39; pacing is wall-clock only) at every session start and
+  Apply. Abilities default to autofire: once per frame the host sends SetAbilityAutofire (58) per ability type for the
+  local player's new objects with a Supports_Autofire ability (retail per object at spawn). Alternate mouse controls:
+  a left click on an own selectable object selects, any other left click with a selection is the order (no facing
+  drag), a left double press off own units is the double-click order, a right click clears the selection (the
+  alternate table's actions are not recovered: backlog b0235). Ask before auto-resolve and simplified faction colours
+  are saved but have no rule yet (backlog b0233 / b0234).
+- 🟡 **PARTLY DONE** · UI5 (2026-11-13, front-end widgets and options; spec `docs/re/UI.md` §3-§5): [port] choices (marked
+  "UI5" / [port] in `engine/ui/src/gui_dialog.cpp`). **t03** the closed combo field is the skin's
+  `Combo_Box_Popdown_Button` height (25 units, UI.md §3.7.1; 15 when the art is missing) and the hit test uses the same;
+  an open drop-down shows `combo_rows` rows from `top`, opens scrolled to the selection, scrolls with the wheel (3 rows a
+  notch) and its own scroll bar; list / drop-down scroll bars: column width = `Scroll_Up_Button` art width (12 without),
+  arrow height from the art's aspect, `_Mouse_Over` / `_Pressed` arrow art, thumb drag, track paging, arrow / track
+  auto-repeat 0.4 s then every 0.05 s (Win32 pattern; GuiStyle), Home / End select the first / last row. **t04** edit
+  boxes follow the Win32 single-line edit: ES_AUTOHSCROLL scrolls (no narrowing), without it typing stops at the field
+  width; click = nearest character boundary, drag / Shift+click / Shift+arrows select, Ctrl+Left / Right by word,
+  Ctrl+A / C / X / V and Ctrl+Insert / Shift+Delete / Shift+Insert; the clipboard is a manager-private string unless the
+  host sets `GuiManager::set_clipboard`; key-capture fields (read_only) keep the one-line narrowing and draw no caret.
+  **t05** key-capture fields (`GuiControl::key_capture`): unmodified Delete / Backspace clear the binding, Tab is bindable
+  (MissionHolocron's default; focus stays), Esc stays the dialog's Cancel (UI.md §4.2: in battle Esc closes the in-game
+  panel before the hotkey dispatch, so an Esc binding could never fire); a key another slot holds (`HotkeyTable::conflicts`,
+  derived group slots included) asks "Key already in use" (`<key>: <action>`, action = the slot name spaced, "Ability_" /
+  "FoC" dropped) in IDD_DIALOG_BOX_QUIT_CONFIRM, Yes moves it (the §4.3 rule), No keeps both; Back or Esc with unapplied
+  edits asks "Apply the changed key settings?" (Yes applies, No discards); Camera and Controls Defaults also resets
+  CameraZoomIn / ZoomOut. Retail capture behaviour is an RE gap (backlog, kind re).
 - ⬜ **OPEN** · ui4 t01 / t02 / t03 (2026-11-13, galactic HUD; specs `docs/re/FIXPASS_GALACTIC.md` §2, `docs/re/A2K_T01_BUILD_COST_RE.md` §1,
   `docs/re/GALACTIC_DIALOGS.md` §5.1, `docs/re/GALAXY_MAP_PRESENTATION.md` §1.1 / §1.2, `docs/re/GALACTIC_REVEAL_CORRUPTION.md` §4.6):
   **t01** the galactic input loop now hands the routed input to the hero roster too (it was skipped as "tactical"), so a good slot's

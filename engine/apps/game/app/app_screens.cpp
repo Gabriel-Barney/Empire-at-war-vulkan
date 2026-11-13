@@ -755,6 +755,78 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
     if (ency_.build(dl, canvas, e, layout, ui_.faction_alt()).x > 0.0f) ++ency_shown_;
 }
 
+// ui1 t01 (docs/re/UI.md §3.1 gives the pointer set, not the rules; [port] docs/PHASE4.md "UI1 cursor"): the object under the
+// cursor (the order translator's world pick) sets the hover kind - own (SELECT), enemy of the local player (ATTACK),
+// other owned objects friendly, unowned neutral - and, with a selection: can_attack = a selected unit can hit the
+// target at all (combat can_hit is not NoTarget), in_range = one of those can hit it from where it stands or can move
+// (a mobile unit walks into range), garrisonable = a selected unit may enter it (Can_Garrison), passable = the ground
+// point under the cursor is passable for a selected land unit (any; space: always).
+void App::fill_cursor_hover(ui::CursorContext& c) {
+    using H = ui::CursorContext::Hover;
+    const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;
+    const sim::TacticalBattle* tb = battle();
+    if (!tm || !tb) return;
+    const uint32_t w = targets_.width, h = targets_.height;
+    const ui::View v = ui::make_view(bview_.camera_params(w, h), w, h);
+    const tactical::Ray ray = ui::pixel_ray(v, input_.mouse_x(), input_.mouse_y());
+    tactical::QueryContext qc;
+    const auto hit = ui::pick_world(tm->trees().all(), v, ray, tactical::kSkipDead, qc, world_pick_tests());
+    const auto& cb = tb->combat();
+    const std::vector<uint32_t>& sel = orders_.selection();
+    if (!hit) {
+        c.hover = H::Ground;
+        if (!c.selection || bview_.space()) return;
+        // The ground point: the ray against the terrain (fixed-point refine from z = 0, as the order translator does).
+        const terrain::MapData* m = bview_.scene() ? &bview_.scene()->map() : nullptr;
+        if (!m) return;
+        float z = 0.0f;
+        tactical::Vec3 p{};
+        for (int i = 0; i < 4; ++i) {
+            if (!ui::ray_plane_z(ray, z, p)) return;
+            z = m->terrain.sample_height(p.x, p.y);
+        }
+        const auto& mv = tb->movement();
+        bool any_land = false;
+        for (const uint32_t u : sel) {
+            const auto id = static_cast<objects::ObjectId>(u);
+            if (!mv.has_unit(id)) continue;
+            any_land = true;
+            if (mv.grid().passable_world({p.x, p.y}, mv.mask_of(id))) return;  // passable stays true
+        }
+        c.passable = !any_land;
+        return;
+    }
+    const auto target = static_cast<tactical::combat::ObjectId>(hit->id);
+    const int32_t owner = cb.owner(target);
+    const int32_t me = local_player();
+    if (owner == me) c.hover = H::Own;
+    else if (owner >= 0 && cb.is_enemy(me, owner)) c.hover = H::Enemy;
+    else if (owner >= 0) c.hover = H::Friendly;
+    else c.hover = H::Neutral;
+    if (!c.selection) return;
+    if (c.hover == H::Enemy) {
+        bool attack = false, range = false;
+        for (const uint32_t u : sel) {
+            const auto uid = static_cast<tactical::combat::ObjectId>(u);
+            if (cb.owner(uid) != me) continue;
+            const tactical::combat::CanHit r = cb.can_hit(uid, target);
+            if (r == tactical::combat::CanHit::NoTarget) continue;
+            attack = true;
+            if (r == tactical::combat::CanHit::Yes || r == tactical::combat::CanHit::LineBlocked ||
+                tb->movement().has_unit(static_cast<objects::ObjectId>(u)))
+                range = true;
+        }
+        c.can_attack = attack;
+        c.in_range = range;
+    } else {
+        for (const uint32_t u : sel)
+            if (u != hit->id && tb->can_garrison(static_cast<objects::ObjectId>(u), static_cast<objects::ObjectId>(hit->id))) {
+                c.garrisonable = true;
+                break;
+            }
+    }
+}
+
 void App::update_cursor(ui::HudDrawList& dl) {
     // ui ask 1: one cursor - the OS arrow is hidden over the window while the game draws its own.
     if (cinematic_hides_cursor()) {  // refixf t05: cinematic mode on hides the cursor (0x262490(..., 0))
@@ -770,6 +842,7 @@ void App::update_cursor(ui::HudDrawList& dl) {
     c.drag_selecting = input_.button(ui::Button::Left).dragging && screen_ == Screen::Battle;
     c.selection = !orders_.selection().empty();
     if (screen_ == Screen::Galactic) {
+        c.scrolling = gview_.camera().dragging();  // ui1 t01: POINTER_MAP_SCROLLING_MODE while the map is dragged
         const ui::GalacticDrag& d = ui_.galactic_hud.drag();
         c.fleet_drag = d.active;
         c.drop_on_fleet = d.over_fleet;
@@ -779,7 +852,11 @@ void App::update_cursor(ui::HudDrawList& dl) {
             !session_->move_target_revealed(hud_planet_ids_[static_cast<size_t>(d.over_planet)]))
             c.drop_valid = false;  // GRC 1.1: an unrevealed planet is no drop target
     } else if (screen_ == Screen::Battle) {
-        c.hover = c.selection ? ui::CursorContext::Hover::Ground : ui::CursorContext::Hover::None;
+        c.rotating = bview_.camera().drag() == ui::TacticalCameraController::Drag::Rotate;
+        c.scrolling = bview_.camera().drag() == ui::TacticalCameraController::Drag::Pan;
+        // ui1 t01: the hovered object decides the plain cursor (ATTACK / out of range / CANT_ATTACK, SELECT, GARRISON_IN,
+        // MOVE / CANT_MOVE). [port] rules (docs/PHASE4.md "UI1 cursor"): see fill_cursor_hover.
+        if (!c.over_ui && bview_.active()) fill_cursor_hover(c);
         // A running pick: the targeted-ability cursor (valid on a hit object / any ground point) or the landing-point one.
         if (!c.over_ui && bview_.active()) {
             const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;

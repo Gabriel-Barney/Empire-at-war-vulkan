@@ -186,6 +186,17 @@ BEGIN
     LTEXT           "TEXT_SAVELOAD_LOADING_MSG",IDC_STATIC_LOADING,457,616,445,14
 END
 
+IDD_TEST_WIDGETS DIALOGEX 0, 0, 400, 300
+STYLE DS_SETFONT | WS_POPUP
+CAPTION "Widgets"
+FONT 8, "Arial", 400, 0, 0x0
+BEGIN
+    COMBOBOX        IDC_W_COMBO,10,10,150,70,CBS_DROPDOWNLIST | WS_TABSTOP
+    LISTBOX         IDC_W_LIST,10,100,200,100,WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_W_EDIT,220,10,60,16,ES_AUTOHSCROLL
+    EDITTEXT        IDC_W_EDIT_FIXED,220,40,60,16
+END
+
 IDD_TEST_CONTROLS DIALOGEX 0, 0, 400, 300
 STYLE DS_SETFONT | WS_POPUP
 CAPTION "Quote ""test"""
@@ -257,6 +268,13 @@ const char* kSkinXml = R"(<?xml version="1.0" encoding="utf-8"?>
     <IDC_MENU_CREDITS>
       <Button_Right>i_button_credits.tga</Button_Right>
     </IDC_MENU_CREDITS>
+    <IDD_TEST_WIDGETS>
+      <Combo_Box_Popdown_Button>i_test_combo_button.tga</Combo_Box_Popdown_Button>
+      <Scroll_Up_Button>i_test_scroll_up.tga</Scroll_Up_Button>
+      <Scroll_Down_Button>i_test_scroll_down.tga</Scroll_Down_Button>
+      <Scroll_Down_Button_Mouse_Over>i_test_scroll_down_mouse_over.tga</Scroll_Down_Button_Mouse_Over>
+      <Scroll_Down_Button_Pressed>i_test_scroll_down_pressed.tga</Scroll_Down_Button_Pressed>
+    </IDD_TEST_WIDGETS>
   </Textures>
   <Fonts>
     <Default>
@@ -287,6 +305,11 @@ TextureAtlas gui_atlas() {
     a.add({"i_dialogue_button_large_right.tga", 48, 0, 8, 32, true});
     a.add({"i_dialogue_button_large_middle_mouse_over.tga", 56, 0, 8, 32, true});
     a.add({"i_dialogue_check_on.tga", 64, 0, 12, 12, true});
+    a.add({"i_test_combo_button.tga", 80, 0, 22, 25, true});
+    a.add({"i_test_scroll_up.tga", 104, 0, 16, 16, true});
+    a.add({"i_test_scroll_down.tga", 120, 0, 16, 16, true});
+    a.add({"i_test_scroll_down_mouse_over.tga", 136, 0, 16, 16, true});
+    a.add({"i_test_scroll_down_pressed.tga", 152, 0, 16, 16, true});
     return a;
 }
 
@@ -339,6 +362,9 @@ struct Env {
             f.keys_down.set(k);
         }
         if (shift) f.keys_down.set(vk::kShift);
+        if (ctrl) f.keys_down.set(vk::kControl);
+        f.wheel = wheel;
+        wheel = 0.0f;
         RouteHooks hooks;
         gui.install(hooks);
         RoutedInput ri;
@@ -360,6 +386,10 @@ struct Env {
         return ev;
     }
     InputFrame last;
+    bool ctrl = false;    // Ctrl held in the next frames
+    float wheel = 0.0f;   // wheel notches of the next frame
+    Vec2f at(Vec2f canvas) const { return gui.canvas().canvas_to_pixel(canvas.x, canvas.y); }
+    static Vec2f mid(const GuiRect& r) { return {0.5f * (r.min.x + r.max.x), 0.5f * (r.min.y + r.max.y)}; }
 };
 
 bool has_event(const std::vector<GuiEvent>& ev, GuiEvent::Kind k, std::string_view control, int32_t value = -999) {
@@ -371,7 +401,7 @@ bool has_event(const std::vector<GuiEvent>& ev, GuiEvent::Kind k, std::string_vi
 void test_parse() {
     Env env;
     const DialogScript& s = env.script;
-    CHECK(s.dialogs().size() == 10);
+    CHECK(s.dialogs().size() == 11);
     CHECK(s.warnings.empty());
     for (const std::string& w : s.warnings) std::printf("  warning: %s\n", w.c_str());
     const RcDialog* mm = s.find("IDD_MAIN_MENU_DIALOG");
@@ -637,6 +667,192 @@ void test_routing_and_controls() {
     CHECK(gradient);
 }
 
+// UI5 t03 / t04: combo field height and drop-down scrolling, list scroll bar (arrows with art and auto-repeat, thumb
+// drag, track paging, Home / End), edit boxes (ES_AUTOHSCROLL scrolling, caret placement, selection, clipboard).
+void test_widgets_ui5() {
+    Env env;
+    GuiDialog* d = env.gui.open("IDD_TEST_WIDGETS");
+    CHECK(d != nullptr);
+    if (!d) return;
+    const auto ci = static_cast<size_t>(d->find("IDC_W_COMBO"));
+    const auto li = static_cast<size_t>(d->find("IDC_W_LIST"));
+    env.frame({1000, 700}, false);
+    // Combo: the closed field is the skin's 25-unit pop-down button height (UI.md §3.7.1), not 15.
+    CHECK(std::fabs(env.gui.combo_field_height(*d, ci) - 25.0f) < 1e-3f && std::fabs((*d)[ci].field_height - 25.0f) < 1e-3f);
+    std::vector<std::u32string> many;
+    for (int k = 0; k < 30; ++k) many.push_back(U"fps " + std::u32string(1, static_cast<char32_t>(U'A' + k)));
+    d->set_items("IDC_W_COMBO", many, 0);
+    const GuiRect cr = d->control_rect(ci);
+    const Vec2f field = env.at({cr.min.x + 20.0f, cr.max.y - 20.0f});  // inside the 25-unit field, below the old 15
+    env.frame(field, false);
+    env.frame(field, true);
+    env.frame(field, false);
+    CHECK((*d)[ci].open);
+    GuiManager::ScrollBar sb = env.gui.scroll_bar(*d, ci);
+    const int32_t rows = env.gui.combo_rows(*d, ci);
+    CHECK(sb.active && rows < 30 && sb.vis == rows && sb.max_top == 30 - rows && (*d)[ci].top == 0);
+    // Wheel over the drop-down scrolls it (3 rows a notch), still open.
+    env.frame(env.at({Env::mid(sb.col).x - 30.0f, Env::mid(sb.col).y}), false);
+    env.wheel = -1.0f;
+    env.frame(env.at({Env::mid(sb.col).x - 30.0f, Env::mid(sb.col).y}), false);
+    CHECK((*d)[ci].top == std::min(3, sb.max_top) && (*d)[ci].open);
+    // Down arrow: one row on the press, auto-repeat after the delay while held; the drop-down stays open.
+    sb = env.gui.scroll_bar(*d, ci);
+    const int32_t t0 = (*d)[ci].top;
+    env.frame(env.at(Env::mid(sb.down)), false);
+    env.frame(env.at(Env::mid(sb.down)), true);
+    CHECK((*d)[ci].top == t0 + 1 && (*d)[ci].open);
+    for (int k = 0; k < 6; ++k) env.frame(env.at(Env::mid(sb.down)), true);  // 0.30 s: below the 0.4 s delay
+    CHECK((*d)[ci].top == t0 + 1);
+    for (int k = 0; k < 6; ++k) env.frame(env.at(Env::mid(sb.down)), true);
+    CHECK((*d)[ci].top > t0 + 2);
+    env.frame(env.at(Env::mid(sb.down)), false);
+    CHECK((*d)[ci].open);
+    // Thumb drag to the top.
+    sb = env.gui.scroll_bar(*d, ci);
+    env.frame(env.at(Env::mid(sb.thumb)), false);
+    env.frame(env.at(Env::mid(sb.thumb)), true);
+    env.frame(env.at({Env::mid(sb.thumb).x, sb.up.min.y + 50.0f}), true);
+    CHECK((*d)[ci].top == 0);
+    env.frame(env.at({Env::mid(sb.thumb).x, sb.up.min.y + 50.0f}), false);
+    // A row of the scrolled list: scroll by 5 with the wheel, click the second visible row -> item top + 1.
+    env.wheel = -2.0f;
+    env.frame(env.at({Env::mid(sb.col).x - 30.0f, Env::mid(sb.col).y}), false);
+    const int32_t top = (*d)[ci].top;
+    CHECK(top == std::min(6, sb.max_top));
+    {
+        const float rh = static_cast<float>(env.fonts.metrics(env.gui.control_font(*d, ci)).line_height) * env.gui.canvas().units_per_pixel_y;
+        const Vec2f row = env.at({cr.min.x + 10.0f, cr.max.y - 25.0f - 2.0f - 1.5f * rh});
+        env.frame(row, false);
+        std::vector<GuiEvent> ev = env.frame(row, true);
+        env.frame(row, false);
+        CHECK(has_event(ev, GuiEvent::Kind::SelectionChanged, "IDC_W_COMBO", top + 1) && !(*d)[ci].open);
+    }
+    // Opening again scrolls to the selection; End / Home keys.
+    env.frame(field, true);
+    env.frame(field, false);
+    CHECK((*d)[ci].open && (*d)[ci].top == std::min(top + 1, sb.max_top));
+    env.frame(field, false, {vk::kEnd});
+    CHECK((*d)[ci].selected == 29 && (*d)[ci].top == sb.max_top);
+    env.frame(field, false, {vk::kHome});
+    CHECK((*d)[ci].selected == 0 && (*d)[ci].top == 0);
+    env.frame(field, false, {vk::kEscape});
+    CHECK(!(*d)[ci].open);
+
+    // List: 50 rows, scroll column = the Scroll_Up_Button art width (16), not a fixed 12.
+    std::vector<std::u32string> rowsv;
+    for (int k = 0; k < 50; ++k) rowsv.push_back(U"row " + std::u32string(1, static_cast<char32_t>(U'0' + k % 10)));
+    d->set_items("IDC_W_LIST", rowsv);
+    sb = env.gui.scroll_bar(*d, li);
+    CHECK(sb.active && std::fabs(sb.col.width() - 16.0f) < 1e-3f && sb.max_top == 50 - sb.vis);
+    // Arrow art: mouse-over under the cursor, pressed while held.
+    auto has_tex = [&](const char* tex, uint32_t layer) {
+        const AtlasEntry* e = env.atlas.find(tex);
+        HudDrawList dl;
+        env.gui.build(dl, env.now);
+        for (const HudQuad& q : dl.items(layer, HudList::Alpha))
+            if (e && q.page == kHudPageAtlas && std::fabs(q.uv0.x - static_cast<float>(e->x) / 256.0f) < 1e-4f) return true;
+        return false;
+    };
+    env.frame(env.at(Env::mid(sb.down)), false);
+    CHECK(has_tex("i_test_scroll_down_mouse_over.tga", 0) && !has_tex("i_test_scroll_down_pressed.tga", 0));
+    env.frame(env.at(Env::mid(sb.down)), true);
+    CHECK((*d)[li].top == 1 && has_tex("i_test_scroll_down_pressed.tga", 0));
+    for (int k = 0; k < 14; ++k) env.frame(env.at(Env::mid(sb.down)), true);  // 0.7 s held: repeats
+    CHECK((*d)[li].top > 3);
+    env.frame(env.at(Env::mid(sb.down)), false);
+    env.frame({1000, 700}, false);
+    CHECK(has_tex("i_test_scroll_down.tga", 0) && !has_tex("i_test_scroll_down_mouse_over.tga", 0));
+    // Thumb drag to the bottom, then back to the top; the list does not select a row meanwhile.
+    sb = env.gui.scroll_bar(*d, li);
+    env.frame(env.at(Env::mid(sb.thumb)), false);
+    env.frame(env.at(Env::mid(sb.thumb)), true);
+    env.frame(env.at({Env::mid(sb.thumb).x, sb.down.max.y - 1.0f}), true);
+    CHECK((*d)[li].top == sb.max_top && (*d)[li].selected == -1);
+    env.frame(env.at({Env::mid(sb.thumb).x, sb.up.min.y + 200.0f}), true);
+    CHECK((*d)[li].top == 0);
+    env.frame(env.at({Env::mid(sb.thumb).x, sb.up.min.y + 200.0f}), false);
+    // Track below the thumb: one page.
+    sb = env.gui.scroll_bar(*d, li);
+    env.frame(env.at({Env::mid(sb.col).x, sb.down.max.y + 2.0f}), true);
+    env.frame(env.at({Env::mid(sb.col).x, sb.down.max.y + 2.0f}), false);
+    CHECK((*d)[li].top == sb.vis && (*d)[li].selected == -1);
+    // Home / End on the focused list.
+    d->focus("IDC_W_LIST");
+    env.frame({1000, 700}, false, {vk::kEnd});
+    CHECK((*d)[li].selected == 49 && (*d)[li].top == sb.max_top);
+    env.frame({1000, 700}, false, {vk::kHome});
+    CHECK((*d)[li].selected == 0 && (*d)[li].top == 0);
+
+    // Edit with ES_AUTOHSCROLL: long text scrolls (not squeezed), the caret stays in view.
+    const auto ei = static_cast<size_t>(d->find("IDC_W_EDIT"));
+    const std::u32string longt = U"abcdefghijklmnopqrstuvwxyz0123456789";
+    env.click(*d, "IDC_W_EDIT");
+    env.frame({0, 0}, false, {}, false, longt);
+    CHECK((*d)[ei].text == longt && (*d)[ei].caret == longt.size() && (*d)[ei].scroll_x > 0);
+    env.frame({0, 0}, false, {vk::kHome});
+    CHECK((*d)[ei].caret == 0 && (*d)[ei].scroll_x == 0);
+    // A click puts the caret near the cursor, not at the end.
+    const GuiRect er = d->control_rect(ei);
+    env.frame(env.at({er.min.x + 6.0f, Env::mid(er).y}), false);
+    env.frame(env.at({er.min.x + 6.0f, Env::mid(er).y}), true);
+    env.frame(env.at({er.min.x + 6.0f, Env::mid(er).y}), false);
+    CHECK((*d)[ei].caret <= 1);
+    env.frame(env.at({Env::mid(er).x, Env::mid(er).y}), true);
+    env.frame(env.at({Env::mid(er).x, Env::mid(er).y}), false);
+    const size_t mid_caret = (*d)[ei].caret;
+    CHECK(mid_caret > 1 && mid_caret < longt.size());
+    // Drag selects from the press point.
+    env.frame(env.at({er.min.x + 6.0f, Env::mid(er).y}), true);
+    env.frame(env.at({er.max.x - 4.0f, Env::mid(er).y}), true);
+    env.frame(env.at({er.max.x - 4.0f, Env::mid(er).y}), false);
+    CHECK((*d)[ei].sel_anchor <= 1 && (*d)[ei].caret > (*d)[ei].sel_anchor + 1);
+    // Typing replaces the selection.
+    std::vector<GuiEvent> ev = env.frame({0, 0}, false, {}, false, U"Z");
+    const size_t removed = (*d)[ei].caret;  // caret after "Z"
+    CHECK(has_event(ev, GuiEvent::Kind::TextChanged, "IDC_W_EDIT") && (*d)[ei].text.size() < longt.size() && removed >= 1 &&
+          (*d)[ei].text[removed - 1] == U'Z');
+    // Shift+Home selects to the start, Backspace deletes the selection.
+    env.frame({0, 0}, false, {vk::kHome}, true);
+    CHECK((*d)[ei].caret == 0 && (*d)[ei].sel_anchor == removed);
+    env.frame({0, 0}, false, {vk::kBack});
+    CHECK((*d)[ei].text == longt.substr(longt.size() - ((*d)[ei].text.size())) && (*d)[ei].text.front() != U'Z' && (*d)[ei].caret == 0);
+    // Clipboard (manager-private): Ctrl+A, Ctrl+C, End, Ctrl+V doubles the text; Ctrl+X empties it.
+    d->set_text("IDC_W_EDIT", U"abc");
+    env.ctrl = true;
+    env.frame({0, 0}, false, {vk::key('a')});
+    env.frame({0, 0}, false, {vk::key('c')});
+    env.ctrl = false;
+    env.frame({0, 0}, false, {vk::kEnd});
+    env.ctrl = true;
+    env.frame({0, 0}, false, {vk::key('v')});
+    CHECK((*d)[ei].text == U"abcabc");  // no 'v' typed by the VK fallback while Ctrl is down
+    env.frame({0, 0}, false, {vk::key('a')});
+    env.frame({0, 0}, false, {vk::key('x')});
+    env.ctrl = false;
+    CHECK((*d)[ei].text.empty());
+    // Host clipboard hooks.
+    std::u32string host = U"from host";
+    env.gui.set_clipboard([&] { return host; }, [&](std::u32string_view t) { host = std::u32string(t); });
+    env.frame({0, 0}, false, {vk::kInsert}, true);  // Shift+Insert pastes
+    CHECK((*d)[ei].text == U"from host");
+    env.frame({0, 0}, false, {vk::kHome}, true);  // select all backwards
+    env.ctrl = true;
+    env.frame({0, 0}, false, {vk::kInsert});  // Ctrl+Insert copies
+    env.ctrl = false;
+    CHECK(host == U"from host");
+    // Without ES_AUTOHSCROLL typing stops at the field width.
+    env.click(*d, "IDC_W_EDIT_FIXED");
+    env.frame({0, 0}, false, {}, false, longt);
+    const GuiControl& fx = (*d)[static_cast<size_t>(d->find("IDC_W_EDIT_FIXED"))];
+    CHECK(!fx.text.empty() && fx.text.size() < longt.size() && fx.scroll_x == 0 && longt.starts_with(fx.text));
+    // Drawing stays deterministic with the scrolled / selected states.
+    HudDrawList a, b;
+    env.gui.build(a, env.now);
+    env.gui.build(b, env.now);
+    CHECK(a.digest() == b.digest());
+}
+
 void test_menus() {
     Env env;
     CampaignMenu menu;
@@ -818,10 +1034,16 @@ void test_menus() {
     CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text == U"H" &&
           kb->get("IDC_EDIT_GROUP_1_SELECT")->text == U"1");
     step(env.click(*kb, "IDC_EDIT_STOP"));
-    step(env.frame({0, 0}, false, {vk::key('x')}));
-    CHECK(kb->get("IDC_EDIT_STOP")->text == U"X" && keys.binding(hk::kStop).key == 'H');  // not applied yet
-    step(env.frame({0, 0}, false, {vk::kControl, vk::key('q')}));  // Ctrl+Q (select like's key) moves here
-    CHECK(kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");
+    step(env.frame({0, 0}, false, {vk::key('j')}));  // a free key: taken at once
+    CHECK(kb->get("IDC_EDIT_STOP")->text == U"J" && keys.binding(hk::kStop).key == 'H');  // not applied yet
+    step(env.frame({0, 0}, false, {vk::kControl, vk::key('q')}));  // Ctrl+Q is select like's key: UI5 t05 asks first
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM" && kb->get("IDC_EDIT_STOP")->text == U"J");
+    {
+        GuiDialog* qb = env.gui.top();
+        CHECK(qb->get("IDC_USER_TEXT_STRING_1")->text == U"Ctrl+Q: Select Like" && qb->get("IDC_USER_TEXT_STRING_1")->visible);
+        step(env.click(*qb, "IDC_DIALOG_BOX_BUTTON_LEFT"));  // Yes: the key moves here
+    }
+    CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");
     acts.clear();
     step(env.click(*kb, "IDC_APPLY"));
     CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::KeybindingsChanged);
@@ -832,6 +1054,57 @@ void test_menus() {
           keyboard_edit_slot("IDC_EDIT_SCROLL_UP") == hk::kScrollUp && keyboard_edit_slot("IDC_EDIT_IP") == -1);
     CHECK(hotkey_label({0x7B, HotkeyMod::None}) == U"F12" && hotkey_label({0x6D, HotkeyMod::None}) == U"Numpad -" &&
           hotkey_label({'1', HotkeyMod::Shift}) == U"Shift+1");
+
+    // UI5 t05: clear with Delete / Backspace, Tab is a key (focus stays), a conflict can be refused, Back / Esc with
+    // unapplied edits ask Apply? (No discards, Yes applies).
+    CHECK(hotkey_action_label(hk::kSelectLike) == U"Select Like" &&
+          hotkey_action_label(static_cast<uint16_t>(hotkey_slot("Ability_SpreadOut"))) == U"Spread Out" &&
+          hotkey_action_label(static_cast<uint16_t>(hotkey_slot("Taunt1"))) == U"Taunt 1");
+    {
+        HotkeyTable t;
+        const auto holo = static_cast<uint16_t>(hotkey_slot("MissionHolocron"));
+        CHECK(t.conflicts(hk::kStop, {vk::kTab, HotkeyMod::None}) == std::vector<uint16_t>{holo});
+        CHECK(t.conflicts(hk::kStop, {'J', HotkeyMod::None}).empty() && t.conflicts(hk::kStop, HotkeyBinding{}).empty());
+        CHECK(t.conflicts(0, {'2', HotkeyMod::None}).size() == 4);  // group 2's recall key and its three derived keys
+    }
+    auto open_keys = [&] {
+        std::vector<GuiEvent> e(1);
+        e[0].kind = GuiEvent::Kind::Clicked;
+        e[0].dialog = "IDD_IN_GAME_OPTIONS_DIALOG";
+        e[0].control = "IDC_IN_GAME_OPTIONS_KEYBOARD";
+        step(e);
+        GuiDialog* k = env.gui.top();
+        step(env.click(*k, "IDC_EDIT_STOP"));
+        return k;
+    };
+    kb = open_keys();
+    CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");
+    step(env.frame({0, 0}, false, {vk::kDelete}));
+    CHECK(kb->get("IDC_EDIT_STOP")->text.empty() && keys.binding(hk::kStop).key == 'Q');
+    step(env.frame({0, 0}, false, {vk::kTab}));  // Tab: MissionHolocron's key -> asks; focus stays on the field
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM");
+    step(env.click(*env.gui.top(), "IDC_DIALOG_BOX_BUTTON_RIGHT"));  // No: nothing changes
+    CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text.empty() &&
+          kb->focus_index() == kb->find("IDC_EDIT_STOP"));
+    acts.clear();
+    step(env.click(*kb, "IDC_OK"));  // Back with an unapplied edit: Apply?
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM" && acts.empty());
+    step(env.click(*env.gui.top(), "IDC_DIALOG_BOX_BUTTON_RIGHT"));  // No: discarded, the page closes
+    CHECK(fe.top() != "IDD_KEYBOARD_OPTIONS_DIALOG" && fe.top() != "IDD_DIALOG_BOX_QUIT_CONFIRM" && acts.empty() &&
+          keys.binding(hk::kStop).key == 'Q');
+    kb = open_keys();
+    CHECK(kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");  // the discarded edit is gone
+    step(env.frame({0, 0}, false, {vk::kBack}));
+    CHECK(kb->get("IDC_EDIT_STOP")->text.empty());
+    step(env.frame({0, 0}, false, {vk::kEscape}));  // Esc with an unapplied edit asks too
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM");
+    step(env.click(*env.gui.top(), "IDC_DIALOG_BOX_BUTTON_LEFT"));  // Yes: applied, the page closes
+    CHECK(fe.top() != "IDD_KEYBOARD_OPTIONS_DIALOG" && !acts.empty() && acts.back().kind == MenuAction::Kind::KeybindingsChanged &&
+          keys.binding(hk::kStop).key == -1);
+    // Back without edits closes at once.
+    kb = open_keys();
+    step(env.click(*kb, "IDC_OK"));
+    CHECK(fe.top() != "IDD_KEYBOARD_OPTIONS_DIALOG" && fe.top() != "IDD_DIALOG_BOX_QUIT_CONFIRM");
 }
 
 void test_load_screen() {
@@ -1945,6 +2218,7 @@ int main() {
     test_parse();
     test_placement();
     test_routing_and_controls();
+    test_widgets_ui5();
     test_menus();
     test_load_screen();
     test_galactic_hud();
