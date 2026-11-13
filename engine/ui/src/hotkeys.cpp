@@ -118,9 +118,9 @@ constexpr HotkeySlotInfo kSlots[kHotkeySlots] = {
     // speed); the host acts on the event (GameSession::toggle_fleet_cohesion).
     {"FleetCohesion", HK::Interface, {K('O'), N}},
     // 163..165 [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): N new group, U ungroup,
-    // J lock / unlock (G, L and O are Guard, Waypoint and FleetCohesion).
+    // Y lock / unlock (G, L and O are Guard, Waypoint and FleetCohesion; Ctrl+Y is Select All).
     {"FleetGroupCreate", HK::Order, {K('N'), N}}, {"FleetGroupUngroup", HK::Order, {K('U'), N}},
-    {"FleetGroupLock", HK::Order, {K('J'), N}},
+    {"FleetGroupLock", HK::Order, {K('Y'), N}},
 };
 
 }  // namespace
