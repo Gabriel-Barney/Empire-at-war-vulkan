@@ -100,7 +100,10 @@ const char* kTemplates = R"(<AITemplates>
              <Goal_Category>Tactical_Untargeted</Goal_Category></Plans></Turn_On>
   </Syn_Space>
 </AITemplates>)";
+// skai t12: GoalSetExtensionSize 1 keeps these scenarios at one new goal per category and commit (they were written
+// with the goal system's config default 1; the tactical AI now takes the tag from the AIPlayerType, default 2).
 const char* kPlayer = R"(<AIPlayerType><Name>%s</Name>
+  <GoalSetExtensionSize>1</GoalSetExtensionSize>
   <SpaceFreeStoreScript>SynTacticalFreeStore</SpaceFreeStoreScript>
   <GoalProposalFunctionSets>SynSpaceSet</GoalProposalFunctionSets>
   <Templates><Space>Syn_Space</Space></Templates>
