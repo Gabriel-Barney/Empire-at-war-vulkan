@@ -164,9 +164,11 @@ void test_advanced_video() {
     cur.bloom = false;
     p.advanced_video = [&] { return cur; };
     fe.init(env.gui, {}, p);
-    env.gui.open("IDD_VIDEO_OPTIONS_DIALOG");
+    // [port: Gabriel] Display / Graphics split: the options menu's Graphics button opens it; the Video button is Display.
+    const GuiDialog* options = env.gui.open("IDD_MAIN_OPTIONS_DIALOG");
+    CHECK(options && options->get("IDC_PORT_MAIN_OPTIONS_GRAPHICS")->text == U"Graphics");
     std::vector<MenuAction> acts;
-    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED")}, InputFrame{}, acts);
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS")}, InputFrame{}, acts);
     CHECK(fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
     GuiDialog* d = env.gui.top();
     CHECK(d && d->get("IDC_PORT_PARTICLE_DETAIL")->selected == 1 && d->get("IDC_PORT_MESH_DETAIL")->selected == 2 && !d->get("IDC_BLOOM")->checked);
@@ -178,7 +180,7 @@ void test_advanced_video() {
     CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyAdvancedVideo && acts[0].advanced.particle == kLevels4[2].value &&
           acts[0].advanced.bloom && acts[0].advanced.shader == 100);
     CHECK(acts[0].advanced.mesh == 55);  // a list left on its level keeps the stored value
-    CHECK(fe.top() == "IDD_VIDEO_OPTIONS_DIALOG");
+    CHECK(fe.top() == "IDD_MAIN_OPTIONS_DIALOG");
 }
 
 // ---- t12 (playtest 3): "keep these settings?" after a resolution change ------------------------------------------
@@ -327,17 +329,18 @@ END
     CHECK(d->get("IDC_PORT_VSYNC_MODE_TEXT")->text == pseudo(U"V-Sync Mode") && d->get("IDC_PORT_FRAME_CAP_TEXT")->text == pseudo(U"Frame Rate Cap"));
     CHECK(d->get("IDC_PORT_VSYNC_MODE")->items[1] == pseudo(U"Standard (FIFO)") && d->get("IDC_PORT_FRAME_CAP")->items[1] == pseudo(U"Display refresh rate"));
     CHECK(d->get("IDC_PORT_DISPLAY_INFO")->text == pseudo(U"160 Hz"));
-    CHECK(d->get("IDC_PORT_ANTI_ALIASING")->items[1] == pseudo(kAntiAliasChoices[1].label) && d->get("IDC_PORT_DETAIL_LEVEL")->items[0] == pseudo(U"Low"));
-    // The sliders of those two rows and the captions at their ends are gone; the rows' titles stay (and Gamma is untouched).
-    CHECK(!d->get("IDC_ANTI_ALIAS_SLIDER")->visible && !d->get("IDC_DETAIL_LEVEL_SLIDER")->visible && !d->get("IDC_ANTI_ALIAS_OFF_STATIC")->visible);
-    CHECK(d->get("IDC_GAMMA_SLIDER")->visible && d->get("IDC_ANTI_ALIAS_STATIC")->visible);
-    size_t titles = 0, ends = 0;
+    // [port: Gabriel] Display / Graphics split: the Anti-Aliasing and Detail Level rows (titles, sliders, end captions) and the
+    // Advanced button are gone from Display; Gamma and the rows under it move up into Anti-Aliasing's place.
+    CHECK(!d->get("IDC_ANTI_ALIAS_SLIDER")->visible && !d->get("IDC_DETAIL_LEVEL_SLIDER")->visible && !d->get("IDC_ANTI_ALIAS_OFF_STATIC")->visible &&
+          !d->get("IDC_ANTI_ALIAS_STATIC")->visible && !d->get("IDC_ADVANCED")->visible);
+    CHECK(d->get("IDC_GAMMA_SLIDER")->visible && d->get("IDC_GAMMA_SLIDER")->offset.y == 51.0f && d->get("IDC_VSYNC_ENABLED")->offset.y == 51.0f &&
+          d->get("IDC_RESOLUTION_LIST")->offset.y == 0.0f && d->get("IDC_OK")->offset.y == 0.0f);
+    size_t shown = 0;
     for (size_t i = 0; i < d->size(); ++i) {
         const GuiControl& c = (*d)[i];
-        if (c.type != GuiGadgetType::Text || !c.def || c.def->y != 271) continue;
-        if (c.visible) ++(c.def->x == 41 ? titles : ends);
+        if (c.def && c.def->y >= 240 && c.def->y < 290 && c.visible) ++shown;
     }
-    CHECK(titles == 1 && ends == 0);
+    CHECK(shown == 0);
 }
 
 // ---- [port: Gabriel] V-sync mode combo and display line added to the video dialog ----------------------------------
@@ -346,7 +349,7 @@ void test_video_vsync_mode() {
     const size_t before = env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 10 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
           rd->w == 570 && rd->has_style("DS_CENTER"));  // the shipped header is kept
     FrontEnd fe;
     MenuProviders p;
@@ -382,12 +385,11 @@ void test_video_vsync_mode() {
     d->set_selected("IDC_PORT_VSYNC_MODE", 1);
     changed(GuiEvent::Kind::SelectionChanged, "IDC_PORT_VSYNC_MODE", 1);
     CHECK(d->get("IDC_VSYNC_ENABLED")->checked && acts.empty());
-    // U8: the value beside the Gamma slider follows it. Anti-Aliasing and Detail Level are lists of named levels now (Off, Ultra).
+    // U8: the value beside the Gamma slider follows it. Anti-Aliasing and Detail Level are on the Graphics page now.
     CHECK(d->get("IDC_PORT_GAMMA_VALUE")->text == U"50");
     changed(GuiEvent::Kind::ValueChanged, "IDC_GAMMA_SLIDER", 80);
     CHECK(d->get("IDC_PORT_GAMMA_VALUE")->text == U"80");
-    CHECK(d->get("IDC_PORT_ANTI_ALIASING")->items.size() == std::size(kAntiAliasChoices) && d->get("IDC_PORT_ANTI_ALIASING")->selected == 0 &&
-          d->get("IDC_PORT_DETAIL_LEVEL")->items.size() == kQualityCount + 1 && d->get("IDC_PORT_DETAIL_LEVEL")->selected == 3);
+    CHECK(d->get("IDC_PORT_ANTI_ALIASING") == nullptr && d->get("IDC_PORT_DETAIL_LEVEL") == nullptr);
     // [port: Gabriel] Display Mode (Fullscreen / Borderless fullscreen / Windowed) and UI Scale (100 .. 500 %) lists.
     CHECK(d->get("IDC_PORT_WINDOW_MODE")->items.size() == kWindowModeCount && d->get("IDC_PORT_WINDOW_MODE")->selected == 0 &&
           d->get("IDC_PORT_WINDOW_MODE")->items[1] == U"Borderless fullscreen");
@@ -445,8 +447,8 @@ void test_options_polish() {
     CHECK(v->get("IDC_PORT_VSYNC_MODE")->ui_font && v->get("IDC_PORT_FRAME_CAP")->ui_font);
     CHECK(env.gui.control_font(*v, static_cast<size_t>(v->find("IDC_PORT_VSYNC_MODE"))) ==
           env.gui.control_font(*v, static_cast<size_t>(v->find("IDC_PORT_VSYNC_MODE_TEXT"))));
-    // Advanced: check rows run up to the combo column, captions clear of their combos, Title Case.
-    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED")}, InputFrame{}, acts);
+    // Graphics: check rows run up to the combo column, captions clear of their combos, Title Case.
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS")}, InputFrame{}, acts);
     GuiDialog* a = env.gui.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
     CHECK(a != nullptr);
     if (!a) return;
@@ -456,9 +458,9 @@ void test_options_polish() {
         if (k >= 0) CHECK(std::fabs(a->control_rect(static_cast<size_t>(k)).width() - 215.0f) < 0.01f);
     }
     CHECK(a->get("IDC_PORT_AMBIENT_OCCLUSION")->text == U"Ambient Occlusion");
-    CHECK(a->get("IDC_PORT_PARTICLE_DETAIL")->ui_font && a->get("IDC_PORT_ANISOTROPY")->ui_font && v->get("IDC_PORT_ANTI_ALIASING")->ui_font &&
-          v->get("IDC_PORT_DETAIL_LEVEL")->ui_font);
-    for (const auto& [caption, combo] : {std::pair{"IDC_PORT_ANISOTROPY_TEXT", "IDC_PORT_ANISOTROPY"}}) {
+    CHECK(a->get("IDC_PORT_PARTICLE_DETAIL")->ui_font && a->get("IDC_PORT_ANISOTROPY")->ui_font && a->get("IDC_PORT_ANTI_ALIASING")->ui_font &&
+          a->get("IDC_PORT_DETAIL_LEVEL")->ui_font);
+    for (const auto& [caption, combo] : {std::pair{"IDC_PORT_ANISOTROPY_TEXT", "IDC_PORT_ANISOTROPY"}, std::pair{"IDC_PORT_RENDER_SCALE_TEXT", "IDC_PORT_RENDER_SCALE"}}) {
         const GuiRect cap = a->control_rect(static_cast<size_t>(a->find(caption)));
         const GuiRect box = a->control_rect(static_cast<size_t>(a->find(combo)));
         CHECK(cap.min.y >= box.max.y && cap.height() == 18.0f);
@@ -475,21 +477,19 @@ void test_options_polish() {
           column("IDC_EDIT_PORT_PAUSE").min.x == column("IDC_EDIT_PORT_SCROLL_UP").min.x);
 }
 
-// ---- [port: Gabriel] quality lists, anisotropic filtering combo and ambient occlusion check (video + advanced video) -----
+// ---- [port: Gabriel] Graphics page: quality preset, the seven lists, anti-aliasing, anisotropy, render scale, AO ----------
 void test_advanced_video_port() {
     Env env;
     const size_t before = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
-          rd->find("IDC_PORT_WATER_DETAIL") >= 0);
-    CHECK(rd->find("IDC_PORT_ANTI_ALIASING") < 0);  // anti-aliasing is one list, in the Video dialog
-    // The shipped Auto Detect button (in both dialogs of the real GUIDialogs.rc), so the test can see it hidden.
+    CHECK(rd && rd->controls.size() == before + 16 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
+          rd->find("IDC_PORT_WATER_DETAIL") >= 0 && rd->find("IDC_PORT_ANTI_ALIASING") >= 0 && rd->find("IDC_PORT_DETAIL_LEVEL") >= 0);
+    // Display / Graphics split: anti-aliasing and the detail level are on the Graphics page only.
+    CHECK(env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->find("IDC_PORT_ANTI_ALIASING") < 0 &&
+          env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->find("IDC_PORT_DETAIL_LEVEL") < 0);
+    // The shipped Auto Detect button (in the real GUIDialogs.rc), so the test can see it hidden.
     CHECK(env.script.extend(R"RC(
-IDD_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
-BEGIN
-    PUSHBUTTON      "TEXT_AUTO_DETECT",IDC_AUTO_DETECT,41,300,60,14
-END
 IDD_ADVANCED_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
 BEGIN
     PUSHBUTTON      "TEXT_AUTO_DETECT",IDC_AUTO_DETECT,41,300,60,14
@@ -501,6 +501,8 @@ END
     cur.anisotropy = 8;
     cur.mesh = 55;
     VideoSettings applied;
+    applied.resolutions = {U"1280 x 720", U"1920 x 1080"};
+    applied.resolution = 1;
     applied.anti_alias = 40;  // an older profile's slider position: inside Low's range
     applied.detail = advanced_detail_level(cur);
     p.advanced_video = [&] { return cur; };
@@ -508,27 +510,36 @@ END
     fe.init(env.gui, {}, p);
     std::vector<MenuAction> acts;
     const auto click = [&](const char* dialog, const char* id) { fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, dialog, id)}, InputFrame{}, acts); };
-    click("IDD_MAIN_OPTIONS_DIALOG", "IDC_MAIN_OPTIONS_VIDEO");
-    GuiDialog* video = fe.top() == "IDD_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
-    CHECK(video != nullptr);
-    if (!video) return;
-    // Video: one anti-aliasing list (an old strength of 40 reads as Low), and the quality the options make (mesh 55 is High's range).
-    GuiControl* aa = video->get("IDC_PORT_ANTI_ALIASING");
-    GuiControl* quality = video->get("IDC_PORT_DETAIL_LEVEL");
-    CHECK(aa->selected == 1 && aa->items.size() == 4 && quality->selected == static_cast<int32_t>(kQualityCustom));
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 40 && acts.back().video.detail == applied.detail && !acts.back().video.detail_picked);  // untouched lists change nothing
-    video->set_selected("IDC_PORT_ANTI_ALIASING", 3);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 100 && !acts.back().video.detail_picked);
-    video->set_selected("IDC_PORT_ANTI_ALIASING", 0);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 0);
-    // Advanced: a list per option on the level the stored value is in, the shipped sliders hidden, anisotropy and AO as before.
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
+    env.gui.open("IDD_MAIN_OPTIONS_DIALOG");
+    click("IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS");
     GuiDialog* d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(d != nullptr);
     if (!d) return;
+    const auto changed = [&](const char* id, int32_t row) {
+        d->set_selected(id, row);
+        GuiEvent e = event(GuiEvent::Kind::SelectionChanged, "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", id);
+        e.value = row;
+        fe.update(std::vector<GuiEvent>{e}, InputFrame{}, acts);
+    };
+    // One anti-aliasing list (an old strength of 40 reads as Low), and the quality the options make (mesh 55 is High's range).
+    GuiControl* aa = d->get("IDC_PORT_ANTI_ALIASING");
+    GuiControl* quality = d->get("IDC_PORT_DETAIL_LEVEL");
+    CHECK(aa->selected == 1 && aa->items.size() == 4 && quality->selected == static_cast<int32_t>(kQualityCustom) &&
+          quality->items.size() == kQualityCount + 1 && quality->items.back() == U"Custom" && aa->ui_font && quality->ui_font);
+    // Untouched anti-aliasing sends nothing for it; a moved list sends an ApplyVideo with the display settings in force.
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyAdvancedVideo);
+    acts.clear();
+    aa->selected = 3;
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 2 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.anti_alias == 100 && acts[0].video.resolution == 1 &&
+          !acts[0].video.detail_picked && !acts[0].video.unconfirmed && acts[1].kind == MenuAction::Kind::ApplyAdvancedVideo && !fe.resolution_confirm_open());
+    applied.anti_alias = 100;  // the host stored it
+    aa->selected = 0;
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts[acts.size() - 2].kind == MenuAction::Kind::ApplyVideo && acts[acts.size() - 2].video.anti_alias == 0);
+    applied.anti_alias = 0;
+    // A list per option on the level the stored value is in, the shipped sliders hidden, anisotropy and AO as before.
     const struct {
         const char* id;
         size_t items;
@@ -549,11 +560,12 @@ END
     d->set_selected("IDC_PORT_ANISOTROPY", 4);
     d->set_selected("IDC_PORT_RENDER_SCALE", 3);
     d->set_checked("IDC_PORT_AMBIENT_OCCLUSION", true);
+    acts.clear();
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().kind == MenuAction::Kind::ApplyAdvancedVideo && acts.back().advanced.particle == 0 && acts.back().advanced.mesh == 55 &&
-          acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion && acts.back().advanced.bloom &&
-          acts.back().advanced.render_scale == 75);
-    // t43: Apply in Advanced moves the Detail Level list underneath to the level the seven make (Low amid Ultra: Custom) ...
+    CHECK(acts.size() == 1 && acts.back().kind == MenuAction::Kind::ApplyAdvancedVideo && acts.back().advanced.particle == 0 &&
+          acts.back().advanced.mesh == 55 && acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion &&
+          acts.back().advanced.bloom && acts.back().advanced.render_scale == 75);
+    // t43: Apply moves Detail Level to the level the seven make (Low amid Ultra: Custom) ...
     CHECK(quality->selected == static_cast<int32_t>(kQualityCustom));
     for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",
                            "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL"})
@@ -565,32 +577,22 @@ END
     d->set_selected("IDC_PORT_SHADOW_DETAIL", 0);  // everything on its first row: the Low preset
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(quality->selected == 0);
-    // ... and a quality picked in Video, not yet applied, opens Advanced as its preset.
-    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_CANCEL");
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", 1);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
-    d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
-    CHECK(d != nullptr);
-    if (!d) return;
-    for (const auto& e : std::initializer_list<std::pair<const char*, int32_t>>{{"IDC_PORT_PARTICLE_DETAIL", 1}, {"IDC_PORT_TEXTURE_DETAIL", 1}, {"IDC_PORT_WATER_DETAIL", 1},
-                                                                                  {"IDC_PORT_SHADER_DETAIL", 1}, {"IDC_PORT_SHADOW_DETAIL", 1}})
+    // ... picking a level sets the seven to its preset at once, a change in one of them moves Detail Level, Custom changes nothing.
+    changed("IDC_PORT_DETAIL_LEVEL", 1);
+    for (const auto& e : std::initializer_list<std::pair<const char*, int32_t>>{{"IDC_PORT_PARTICLE_DETAIL", 1}, {"IDC_PORT_MESH_DETAIL", 1}, {"IDC_PORT_TEXTURE_DETAIL", 1},
+                                                                                  {"IDC_PORT_WATER_DETAIL", 1}, {"IDC_PORT_SHADER_DETAIL", 1}, {"IDC_PORT_SHADOW_DETAIL", 1}})
         CHECK(d->get(e.first)->selected == e.second);
+    changed("IDC_PORT_MESH_DETAIL", 3);
+    CHECK(quality->selected == static_cast<int32_t>(kQualityCustom));
+    changed("IDC_PORT_MESH_DETAIL", 1);
+    CHECK(quality->selected == 1);
+    changed("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(kQualityCustom));
+    CHECK(d->get("IDC_PORT_PARTICLE_DETAIL")->selected == 1 && d->get("IDC_PORT_MESH_DETAIL")->selected == 1);
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_OK");
-    CHECK(acts.back().advanced.particle == kLevels4[1].value && acts.back().advanced.water == kLevels3[1].value && acts.back().advanced.mesh == kLevels4[1].value);
-    // Video Apply: a level picked that differs from what the options make asks for the preset; Custom and the level in force do not.
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", 2);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().kind == MenuAction::Kind::ApplyVideo && acts.back().video.detail_picked && acts.back().video.detail == kQualityPresets[2]);
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(kQualityCustom));
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(!acts.back().video.detail_picked && acts.back().video.detail == applied.detail);
-    set_advanced_detail(cur, 100);  // the options now sit on the Ultra row: picking Ultra is no change
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", 3);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(!acts.back().video.detail_picked);
-    // The shipped Auto Detect button is hidden in the Video dialog and inside Advanced (removed 2026-11-13).
-    CHECK(video->get("IDC_AUTO_DETECT") != nullptr && !video->get("IDC_AUTO_DETECT")->visible);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
+    CHECK(acts.back().advanced.particle == kLevels4[1].value && acts.back().advanced.water == kLevels3[1].value &&
+          acts.back().advanced.mesh == kLevels4[1].value && fe.top() == "IDD_MAIN_OPTIONS_DIALOG");
+    // The shipped Auto Detect button is hidden on the Graphics page (removed 2026-11-13).
+    click("IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS");
     d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(d != nullptr);
     if (!d) return;
