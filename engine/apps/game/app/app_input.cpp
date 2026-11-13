@@ -969,6 +969,7 @@ void App::battle_input() {
         else if (e.slot == ui::hk::kSuperWeapon && !bview_.space() && bombing_run_ready()) bombing_toggle();  // 0x63f00 case 0x16 (land)
         else if (e.slot == ui::hk::kSuperWeapon && bview_.space()) space_weapon_toggle();  // ui1 t04: 0x63f00 case 0x16 (space)
         else if (e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);  // capture C2 (no galaxy in a skirmish: nothing)
+        else if (e.slot == ui::hk::kFleetCohesion && bview_.space()) session_->toggle_fleet_cohesion();  // [port] fleet cohesion
     }
     ui_.tactical_hud.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
     // L1/S4 wave 1 (tactical): STORY_CLICK_GUI to the tactical plot set - the galactic rule (left click on a component that
@@ -1154,7 +1155,6 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 break;
             case K::ApplyVideo: {  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
                 ++video_applies_;
-                hardware_mouse_ = a.video.hardware_mouse;
                 const bool window_changed = a.video.window_mode != window_mode_;  // UI5 t01
                 window_mode_ = a.video.window_mode;
                 vsync_mode_ = a.video.vsync_mode;
@@ -1203,28 +1203,6 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 video_profile_.advanced = adv_video_;
                 sync_detail(video_profile_);  // t43: the Detail value follows
                 save_video_options();
-                break;
-            }
-            case K::AutoDetectVideo: {  // gfxf t02: a quality level from the GPU; the open dialogs show it
-                const rhi::DeviceCaps& caps = ctx_.caps();
-                GpuClass gpu;
-                gpu.kind = caps.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GpuKind::Discrete
-                           : caps.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GpuKind::Integrated
-                                                                                 : GpuKind::Other;
-                gpu.memory_bytes = caps.device_local_bytes;
-                gpu.sampler_anisotropy = caps.sampler_anisotropy;
-                gpu.max_anisotropy = caps.max_anisotropy;
-                static constexpr const char* kQualityNames[] = {"low", "medium", "high", "ultra"};
-                const AutoVideoChoice choice = recommend_video(gpu);
-                apply_auto_video(video_profile_, choice);
-                adv_video_ = video_profile_.advanced;
-                gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
-                std::printf("video: auto detect (%s, %llu MiB): %s detail, anti-aliasing %s, anisotropy %dx, ambient occlusion %s\n",
-                            caps.name.c_str(), static_cast<unsigned long long>(caps.device_local_bytes >> 20),
-                            kQualityNames[choice.quality], aa_mode_name(video_profile_.anti_alias), adv_video_.anisotropy,
-                            adv_video_.ambient_occlusion ? "on" : "off");
-                save_video_options();
-                ui_.front.refresh_video_dialogs();
                 break;
             }
             default: break;

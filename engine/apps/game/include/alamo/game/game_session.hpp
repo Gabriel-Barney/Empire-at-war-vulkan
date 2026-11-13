@@ -229,6 +229,12 @@ public:
     // Withdraw's enable rule is local_in_head_conflict.
     bool withdraw();
     bool auto_resolve_battle();
+    // [port: Gabriel 2026-11-13] Fleet cohesion (sim::TacticalBattle::set_fleet_cohesion): the local player's preference,
+    // sent as a command (commands::kPortFleetCohesionSubtype) to the running battle and again to every later battle
+    // while it differs there (after_tick), so it lasts across battles. Not saved [port]: a new session starts loose.
+    bool set_fleet_cohesion(bool tight);
+    bool toggle_fleet_cohesion() { return set_fleet_cohesion(!fleet_cohesion_); }
+    bool fleet_cohesion() const { return fleet_cohesion_; }
     const PortEventStats& port_stats() const { return port_stats_; }
     // L1/S4 wave 1: a local UI notification for the story (story_ui.hpp) as a command; GameSession::port_event hands it
     // to StorySession::notify_ui with the issuing player at the command phase. False without a story session or when
@@ -341,6 +347,8 @@ private:
     bool replay_ = false, invaded_ = false;
     bool paused_ = false, pause_pending_ = false;
     uint64_t pause_events_ = 0;
+    bool fleet_cohesion_ = false;       // [port] fleet cohesion preference of the local player
+    bool fleet_cohesion_sent_ = false;  // a cohesion command is in flight (cleared when port_event applies it)
     bool choice_sent_ = false;  // a battle choice is in flight for the pending conflict
     bool banner_sent_ = false;  // story t13: the linked banner's Begin is in flight (cleared once the banner is down)
     PortEventStats port_stats_;

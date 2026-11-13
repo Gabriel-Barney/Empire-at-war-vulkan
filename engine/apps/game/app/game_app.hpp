@@ -340,8 +340,7 @@ public:
     ui::CursorTable cursor_table_;
     ui::MouseCursor cursor_;
     bool cursor_ok_ = false;
-    bool hardware_mouse_ = false;
-    std::vector<ui::HudObjective> hud_objectives_;  // tactical objectives box (built per frame)  // video options IDC_HARDWARE_MOUSE: the OS arrow instead of the drawn cursor
+    std::vector<ui::HudObjective> hud_objectives_;  // tactical objectives box (built per frame)
     ui::RadarSettings radar_settings_;
     ui::RadarImage radar_;
     ui::RadarEvents radar_events_;
@@ -654,10 +653,6 @@ public:
     ui::CreditsRoll credits_;            // ui1 t03: the front end's credits roll (ShowCredits)
     uint32_t tooltip_trigger_fleet_ = 0;  // ui1 t03: the fleet / land stack whose fleet_tooltip / land_tooltip fired last
     void show_credits();
-    // UI5 t02: with Hardware Mouse on, the current pointer's frame becomes the Windows cursor (same art, hot spot and
-    // context cursors as the drawn one); off: the arrow class cursor (the drawn cursor hides it).
-    void sync_os_cursor();
-    std::map<std::string, void*> hw_cursors_;  // frame texture -> HCURSOR (null: could not be made; the arrow is used)
     void fill_cursor_hover(ui::CursorContext& c);  // ui1 t01: hovered object -> cursor context (battle)
     void update_radar();
 

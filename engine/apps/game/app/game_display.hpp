@@ -86,7 +86,7 @@ uint32_t game_speed_index(int32_t slider);
 // the port writes a key = value text file, %LOCALAPPDATA%/alamo/video_options.txt). `mode` 0 x 0 = not stored.
 struct VideoProfile {
     DisplayMode mode;
-    bool vsync = true, hardware_mouse = false;
+    bool vsync = true;
     // UI5 t01 / [port: Gabriel 2026-11-13]: the port starts windowed unless the profile says otherwise. Key "window_mode"
     // (window_mode_name); a profile from before it has "windowed=0|1" (0 = Fullscreen).
     ui::WindowMode window_mode = ui::WindowMode::Windowed;
@@ -154,25 +154,6 @@ void apply_aa_options(render::RecordOptions& o, int32_t mode);
 // water, shader, shadow, environment) to its value; the checks (soft shadows, heat, bloom), anti-aliasing and anisotropy are
 // left as they are.
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail);
-// Auto Detect (the Video and Advanced dialogs' Auto Detect button, ui::MenuAction::Kind::AutoDetectVideo) [port: the original's
-// detection is not recovered; the choice below is a documented guess from the GPU class and its video memory]. Discrete GPUs
-// get Medium under 3 GiB, High under 6 GiB and Ultra from there; an integrated GPU Medium with 2 GiB or more of memory it can
-// use, else Low; anything else (software or virtual) Low. Resolution, v-sync, frame cap and gamma are left alone.
-enum class GpuKind : uint8_t { Other, Integrated, Discrete };
-struct GpuClass {
-    GpuKind kind = GpuKind::Other;
-    uint64_t memory_bytes = 0;      // largest device-local heap
-    bool sampler_anisotropy = false;
-    float max_anisotropy = 1.0f;    // the device's limit; the recommended filtering never exceeds it
-};
-struct AutoVideoChoice {
-    size_t quality = 0;             // index into ui::kQualityPresets
-    int32_t anti_alias = ui::kAaOff;  // mode, one of ui::kAntiAliasChoices
-    ui::AdvancedVideoSettings advanced;  // the seven options at the quality level, plus the checks, AO and anisotropy
-};
-AutoVideoChoice recommend_video(const GpuClass& gpu);
-// Stores the choice in the profile: the advanced options, the Anti-aliasing mode and the Detail value (sync_detail).
-void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c);
 // Per-monitor DPI awareness (v2) for the process, so window sizes, the client area and the display modes are all physical
 // pixels; without it a scaled display (150 %) stretches the window and a mode the size of the display no longer fits.
 // Call before the first window. No-op off Windows or when the call is refused.
@@ -206,13 +187,8 @@ private:
     void* timer_ = nullptr;  // HANDLE
 };
 // Hides / shows the OS arrow over this thread's windows (ShowCursor, kept balanced: only state changes call it). The
-// host hides it while the game draws its own cursor (no hardware mouse).
+// host hides it while the game draws its own cursor.
 void set_os_cursor_hidden(bool hidden);
-// UI5 t02 (Options > Video > Hardware Mouse): a Windows cursor made from 32-bit BGRA pixels (top-left origin, straight
-// alpha) with its hot spot; null on failure. set_os_cursor_image makes it the window class cursor and the current one
-// (null = the arrow); repeated calls with the same cursor do nothing.
-void* create_os_cursor(const uint8_t* bgra, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y);
-void set_os_cursor_image(void* hwnd, void* cursor);
 
 // modc t08: starts this executable again with the command-line arguments `args` (argv[1..] already quoted: the mod
 // picker's relaunch with other MODPATH= / STEAMMOD= arguments), in the current working folder. False + err when the

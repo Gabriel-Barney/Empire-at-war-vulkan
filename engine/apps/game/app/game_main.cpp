@@ -50,7 +50,7 @@ bool App::init() {
         return false;
     }
     std::printf("device %s, validation %s%s\n", ctx_.caps().name.c_str(), ctx_.validation_enabled() ? "on" : "off", strict ? " (required)" : "");
-    // [port] the saved video options: present mode, frame cap, hardware mouse, advanced video (the resolution below).
+    // [port] the saved video options: present mode, frame cap, advanced video (the resolution below).
     // BM2a: a benchmark run reads no video options file (its preset sets everything, bench_apply_video).
     video_profile_path_ = bench_active()                 ? std::string()
                           : !opt_.video_options.empty() ? opt_.video_options
@@ -63,7 +63,6 @@ bool App::init() {
             opt_.mode = !video_profile_.vsync ? rhi::PresentMode::Immediate
                         : video_profile_.vsync_mode == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo;
         if (!opt_.frame_cap_set) opt_.frame_cap = video_profile_.frame_cap;
-        hardware_mouse_ = video_profile_.hardware_mouse;
         window_mode_ = video_profile_.window_mode;
         sync_detail(video_profile_);  // t43
         adv_video_ = video_profile_.advanced;
@@ -212,7 +211,6 @@ bool App::init() {
                                            "presenting with " + used +
                                            (limiter_.fps() ? ", capped at " + std::to_string(limiter_.fps()) + " fps" : std::string()));
         v.device = ui::utf8_to_utf32(ctx_.caps().name);
-        v.hardware_mouse = hardware_mouse_;
         return v;
     };
     mp.advanced_video = [this] { return adv_video_; };
