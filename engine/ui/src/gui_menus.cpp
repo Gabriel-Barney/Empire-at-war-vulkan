@@ -104,7 +104,7 @@ constexpr AdvCheck kAdvChecks[] = {
     {"IDC_BLOOM", &AdvancedVideoSettings::bloom},
 };
 constexpr const char* kGameplay = "IDD_GAMEPLAY_OPTIONS_DIALOG";
-constexpr float kAdvCheckWidth = 215.0f;  // QA D8 [port]: x 33 .. 248, clear of the combo column at x 297
+constexpr float kAdvCheckWidth = 215.0f;  // QA D8 [port]: x 33 .. 248, clear of the combo columns at x 252 and 386
 constexpr const char* kPause = "IDD_GAME_OPTIONS_DIALOG";
 constexpr const char* kSave = "IDD_SAVE_GAME_DIALOG";
 constexpr const char* kLoad = "IDD_LOAD_GAME_DIALOG";
@@ -326,11 +326,15 @@ BEGIN
     COMBOBOX        IDC_PORT_SHADOW_DETAIL,230,208,251,66,CBS_DROPDOWNLIST | WS_TABSTOP
     COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,236,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "TEXT_ANTI_ALIASING",IDC_PORT_ANTI_ALIASING_TEXT,9,267,173,8
-    COMBOBOX        IDC_PORT_ANTI_ALIASING,230,264,251,335,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,297,300,218,18
-    COMBOBOX        IDC_PORT_RENDER_SCALE,297,318,218,140,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,297,348,218,18
-    COMBOBOX        IDC_PORT_ANISOTROPY,297,366,218,120,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_ANTI_ALIASING,230,264,251,145,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Upscaler",IDC_PORT_UPSCALER_TEXT,252,300,122,18
+    COMBOBOX        IDC_PORT_UPSCALER,252,318,122,88,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Upscaler Quality",IDC_PORT_UPSCALE_QUALITY_TEXT,386,300,170,18
+    COMBOBOX        IDC_PORT_UPSCALE_QUALITY,386,318,170,130,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Anisotropy",IDC_PORT_ANISOTROPY_TEXT,252,348,122,18
+    COMBOBOX        IDC_PORT_ANISOTROPY,252,366,122,120,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,386,348,170,18
+    COMBOBOX        IDC_PORT_RENDER_SCALE,386,366,170,140,CBS_DROPDOWNLIST | WS_TABSTOP
     CONTROL         "Ambient Occlusion",IDC_PORT_AMBIENT_OCCLUSION,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,33,385,215,23
 END
 )RC";
@@ -364,6 +368,29 @@ std::vector<std::u32string> level_items(const GuiManager& gui, std::span<const L
     std::vector<std::u32string> items;
     for (const LevelChoice& c : choices) items.push_back(gui.port_text(c.label));
     return items;
+}
+// [port: Gabriel 2026-11-13] The Upscaler Quality list's rows for an upscaler: each level's name and that upscaler's ratio
+// ("Quality (1.5x)" for FSR, "Quality (1.7x)" for XeSS); the bare names while the upscaler is Off.
+std::vector<std::u32string> upscale_quality_items(const GuiManager& gui, int32_t upscaler) {
+    std::vector<std::u32string> items = level_items(gui, kUpscaleQualityChoices);
+    if (upscaler != kUpscalerFsr && upscaler != kUpscalerXess) return items;
+    const auto& ratios = kUpscaleRatioLabels[upscaler == kUpscalerFsr ? 0 : 1];
+    for (size_t i = 0; i < items.size() && i < std::size(ratios); ++i) items[i] += U" (" + std::u32string(ratios[i]) + U")";
+    return items;
+}
+// [port: Gabriel 2026-11-13] Graphics: an upscaler (FSR or XeSS) is its own anti-aliasing and picks its own render size, so
+// while the Upscaler list names one the Anti-aliasing and Render Scale lists are greyed out (their choices are kept); while it
+// says Off the Upscaler Quality list is. The Quality rows show the picked upscaler's ratios.
+void enable_upscale_rows(const GuiManager& gui, GuiDialog& d) {
+    const GuiControl* up = d.get("IDC_PORT_UPSCALER");
+    const int32_t type = up && up->selected >= 0 && static_cast<size_t>(up->selected) < std::size(kUpscalerChoices)
+                             ? kUpscalerChoices[static_cast<size_t>(up->selected)].value
+                             : kUpscalerOff;
+    const bool on = type != kUpscalerOff;
+    for (const char* id : {"IDC_PORT_ANTI_ALIASING", "IDC_PORT_ANTI_ALIASING_TEXT", "IDC_PORT_RENDER_SCALE", "IDC_PORT_RENDER_SCALE_TEXT"})
+        d.enable(id, !on);
+    for (const char* id : {"IDC_PORT_UPSCALE_QUALITY", "IDC_PORT_UPSCALE_QUALITY_TEXT"}) d.enable(id, on);
+    if (const GuiControl* q = d.get("IDC_PORT_UPSCALE_QUALITY")) d.set_items("IDC_PORT_UPSCALE_QUALITY", upscale_quality_items(gui, type), q->selected);
 }
 // The advanced options the player is on now: the host's, else (a host with no advanced provider) the Detail value for all seven.
 AdvancedVideoSettings current_advanced(const MenuProviders& p, const VideoSettings& v) {
@@ -1156,7 +1183,7 @@ void FrontEnd::fill_video(GuiDialog& d) {
 
 void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s) {
     // [port: Gabriel] Display / Graphics split: this dialog is Graphics. It holds the Detail Level list (a preset for the seven
-    // lists under it) and the Anti-Aliasing list that were in the Video dialog. The shipped Auto Detect button is removed
+    // lists under it) and the Anti-Aliasing list that were in the Video dialog, and the Upscaler / Upscaler Quality lists. The shipped Auto Detect button is removed
     // (Gabriel, 2026-11-13).
     d.set_text("IDC_STATIC_MEDIUM", gui_->port_text(U"Graphics"));
     d.show("IDC_AUTO_DETECT", false);
@@ -1165,7 +1192,12 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
     d.set_items("IDC_PORT_DETAIL_LEVEL", std::move(quality), static_cast<int32_t>(quality_level(s)));
     const int32_t aa = p_.video ? p_.video().anti_alias : VideoSettings{}.anti_alias;
     d.set_items("IDC_PORT_ANTI_ALIASING", level_items(*gui_, kAntiAliasChoices), static_cast<int32_t>(level_index(kAntiAliasChoices, aa)));
-    use_ui_font(d, {"IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING"});
+    // [port: Gabriel 2026-11-13] the upscaler type and its quality level, two lists apart from Anti-aliasing
+    const VideoSettings vs = p_.video ? p_.video() : VideoSettings{};
+    d.set_items("IDC_PORT_UPSCALER", level_items(*gui_, kUpscalerChoices), static_cast<int32_t>(level_index(kUpscalerChoices, vs.upscaler)));
+    d.set_items("IDC_PORT_UPSCALE_QUALITY", upscale_quality_items(*gui_, vs.upscaler),
+                static_cast<int32_t>(level_index(kUpscaleQualityChoices, vs.upscale_quality)));
+    use_ui_font(d, {"IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING", "IDC_PORT_UPSCALER", "IDC_PORT_UPSCALE_QUALITY"});
     for (const AdvLevel& l : kAdvLevels) {
         hide_slider(d, l.slider);
         d.set_items(l.combo, level_items(*gui_, l.choices), static_cast<int32_t>(level_index(l.choices, s.*l.field)));
@@ -1198,6 +1230,7 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
     d.set_items("IDC_PORT_RENDER_SCALE", std::move(rs), rs_sel);
     d.set_checked("IDC_PORT_AMBIENT_OCCLUSION", s.ambient_occlusion);
     use_ui_font(d, {"IDC_PORT_ANISOTROPY", "IDC_PORT_RENDER_SCALE"});
+    enable_upscale_rows(*gui_, d);
     // QA D8 [port]: the check rows are widened up to the combo column, so "Heat Distortion" is not narrowed to fit 152 units.
     for (const AdvCheck& k : kAdvChecks)
         if (GuiControl* c = d.get(k.id); c && c->def->w > 0) c->scale.x = kAdvCheckWidth / static_cast<float>(c->def->w);
@@ -1554,6 +1587,8 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
             }
         } else if (std::any_of(std::begin(kAdvLevels), std::end(kAdvLevels), [&](const AdvLevel& l) { return e.control == l.combo; })) {
             d->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(read_advanced_video(*d))));
+        } else if (e.control == "IDC_PORT_UPSCALER") {
+            enable_upscale_rows(*gui_, *d);
         }
     } else if (keyboard_page(n) >= 0 && e.kind == GuiEvent::Kind::Checked && ascii_istarts_with(e.control, "IDC_KEYBOARD_OPTIONS_")) {
         const int32_t page = e.control.back() - '1';
@@ -1747,14 +1782,21 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         }
     } else if (ascii_iequals(n, kAdvancedVideo) && d) {
         if (is("IDC_OK") || is("IDC_APPLY")) {
-            // [port: Gabriel] Graphics: an Anti-Aliasing list moved off the stored strength's level stores its level's value
-            // (an ApplyVideo with the display settings in force, so nothing else changes); left alone, nothing is sent for it.
+            // [port: Gabriel] Graphics: the Anti-Aliasing, Upscaler and Upscaler Quality lists, when one moved off the stored
+            // value's row, store their rows' values (an ApplyVideo with the display settings in force, so nothing else
+            // changes); left alone, nothing is sent for them.
             const VideoSettings now = p_.video ? p_.video() : VideoSettings{};
-            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_ANTI_ALIASING", std::size(kAntiAliasChoices));
-                row && *row != level_index(kAntiAliasChoices, now.anti_alias)) {
+            VideoSettings next = now;
+            const auto take = [&](const char* id, std::span<const LevelChoice> choices, int32_t& field) {
+                if (const std::optional<size_t> row = picked(*d, id, choices.size()); row && *row != level_index(choices, field))
+                    field = choices[*row].value;
+            };
+            take("IDC_PORT_ANTI_ALIASING", kAntiAliasChoices, next.anti_alias);
+            take("IDC_PORT_UPSCALER", kUpscalerChoices, next.upscaler);
+            take("IDC_PORT_UPSCALE_QUALITY", kUpscaleQualityChoices, next.upscale_quality);
+            if (next.anti_alias != now.anti_alias || next.upscaler != now.upscaler || next.upscale_quality != now.upscale_quality) {
                 MenuAction v = act(MenuAction::Kind::ApplyVideo);
-                v.video = now;
-                v.video.anti_alias = kAntiAliasChoices[*row].value;
+                v.video = std::move(next);
                 out.push_back(std::move(v));
             }
             MenuAction a = act(MenuAction::Kind::ApplyAdvancedVideo);

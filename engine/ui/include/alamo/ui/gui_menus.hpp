@@ -111,10 +111,10 @@ inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250,
 inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
 // [port: Gabriel 2026-11-13] Anti-aliasing modes (VideoSettings::anti_alias; the list kAntiAliasChoices below).
 inline constexpr int32_t kAaOff = 0, kAaSmaa = 1, kAaTaa = 2, kAaMsaa2 = 3, kAaMsaa4 = 4, kAaMsaa8 = 5;
-// [port: Gabriel 2026-11-13] FSR upscaling modes, one per FSR quality mode in render::UpscaleQuality order (mode - kAaFsrNative).
-inline constexpr int32_t kAaFsrNative = 6, kAaFsrQuality = 7, kAaFsrBalanced = 8, kAaFsrPerformance = 9, kAaFsrUltra = 10;
-// [port: Gabriel 2026-11-13] XeSS upscaling modes, the same five presets in the same order (mode - kAaXessNative).
-inline constexpr int32_t kAaXessNative = 11, kAaXessQuality = 12, kAaXessBalanced = 13, kAaXessPerformance = 14, kAaXessUltra = 15;
+// [port: Gabriel 2026-11-13] Upscaler types (VideoSettings::upscaler; the list kUpscalerChoices below) and the upscaler's
+// quality levels (VideoSettings::upscale_quality, render::UpscaleQuality order; the list kUpscaleQualityChoices below).
+inline constexpr int32_t kUpscalerOff = 0, kUpscalerFsr = 1, kUpscalerXess = 2;
+inline constexpr int32_t kUpscaleNative = 0, kUpscaleQuality = 1, kUpscaleBalanced = 2, kUpscalePerformance = 3, kUpscaleUltra = 4;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
     int32_t resolution = -1;
@@ -127,6 +127,8 @@ struct VideoSettings {
     std::u32string display_info;             // [port: Gabriel] IDC_PORT_DISPLAY_INFO ("160 Hz, Mailbox"); empty = blank
     int32_t detail = 100, gamma = 50;  // 0..100: Detail is picked from a list (kQualityPresets), Gamma is a slider
     int32_t anti_alias = kAaOff;       // [port: Gabriel] the Anti-aliasing list's mode (kAntiAliasChoices: kAaOff .. kAaMsaa8)
+    int32_t upscaler = kUpscalerOff;   // [port: Gabriel] the Upscaler list's type (kUpscalerChoices)
+    int32_t upscale_quality = kUpscaleQuality;  // [port: Gabriel] the Upscaler Quality list's level (kUpscaleQualityChoices)
     // Set on the ApplyVideo where the player picked a quality level (Low .. Ultra) the options did not already have: `detail`
     // is then that level's value and the host sets the seven advanced detail options to it (detail_preset). Left false when
     // the list still says what the options say, or says Custom, so a hand-made mix is never overwritten by an Apply.
@@ -162,22 +164,26 @@ struct LevelChoice {
 // [port: Gabriel 2026-11-13] Anti-aliasing: one list, one choice - Off, SMAA, TAA, MSAA 2x / 4x / 8x - each at one fixed
 // quality (game_display.hpp apply_aa_options; the original has no anti-aliasing option). The stored value is the mode below
 // (VideoSettings::anti_alias, profile key "aa_mode"). An MSAA count the device cannot do is drawn with the largest one it can
-// (render::Renderer::msaa_samples), so the list is the same on every device. The FSR rows draw the scene at a lower
-// resolution and upscale it with AMD FSR (4.1 where the GPU supports it, else 3.1); where FSR cannot run they draw TAA.
-// The XeSS rows do the same with Intel XeSS Super Resolution (its own preset ratios); where XeSS cannot run they draw TAA.
+// (render::Renderer::msaa_samples), so the list is the same on every device.
 inline constexpr LevelChoice kAntiAliasChoices[] = {{kAaOff, kAaOff, U"Off"},       {kAaSmaa, kAaSmaa, U"SMAA"},
                                                     {kAaTaa, kAaTaa, U"TAA"},       {kAaMsaa2, kAaMsaa2, U"MSAA 2x"},
-                                                    {kAaMsaa4, kAaMsaa4, U"MSAA 4x"}, {kAaMsaa8, kAaMsaa8, U"MSAA 8x"},
-                                                    {kAaFsrNative, kAaFsrNative, U"FSR Native AA"},
-                                                    {kAaFsrQuality, kAaFsrQuality, U"FSR Quality (1.5x)"},
-                                                    {kAaFsrBalanced, kAaFsrBalanced, U"FSR Balanced (1.7x)"},
-                                                    {kAaFsrPerformance, kAaFsrPerformance, U"FSR Performance (2x)"},
-                                                    {kAaFsrUltra, kAaFsrUltra, U"FSR Ultra Performance (3x)"},
-                                                    {kAaXessNative, kAaXessNative, U"XeSS Native AA"},
-                                                    {kAaXessQuality, kAaXessQuality, U"XeSS Quality (1.7x)"},
-                                                    {kAaXessBalanced, kAaXessBalanced, U"XeSS Balanced (2x)"},
-                                                    {kAaXessPerformance, kAaXessPerformance, U"XeSS Performance (2.3x)"},
-                                                    {kAaXessUltra, kAaXessUltra, U"XeSS Ultra Performance (3x)"}};
+                                                    {kAaMsaa4, kAaMsaa4, U"MSAA 4x"}, {kAaMsaa8, kAaMsaa8, U"MSAA 8x"}};
+// [port: Gabriel 2026-11-13] Upscaling, two lists apart from Anti-aliasing: the upscaler type (VideoSettings::upscaler, profile
+// key "upscaler") and its quality level (VideoSettings::upscale_quality, key "upscale_quality"). AMD FSR (4.1 where the GPU
+// supports it, else 3.1) or Intel XeSS Super Resolution draws the scene at the level's lower resolution and upscales it; an
+// upscaler is its own anti-aliasing, so while one is on the Anti-aliasing and Render Scale lists are greyed out (and the
+// Quality list while it is off). Where the upscaler cannot run the frame is drawn at full resolution with TAA. The quality
+// levels have the same names for both; their ratios differ (kUpscaleRatioLabels).
+inline constexpr LevelChoice kUpscalerChoices[] = {
+    {kUpscalerOff, kUpscalerOff, U"Off"}, {kUpscalerFsr, kUpscalerFsr, U"AMD FSR"}, {kUpscalerXess, kUpscalerXess, U"Intel XeSS"}};
+inline constexpr LevelChoice kUpscaleQualityChoices[] = {{kUpscaleNative, kUpscaleNative, U"Native AA"},
+                                                         {kUpscaleQuality, kUpscaleQuality, U"Quality"},
+                                                         {kUpscaleBalanced, kUpscaleBalanced, U"Balanced"},
+                                                         {kUpscalePerformance, kUpscalePerformance, U"Performance"},
+                                                         {kUpscaleUltra, kUpscaleUltra, U"Ultra Perf."}};
+// The per-dimension ratio shown after each quality level, by upscaler (render::upscale_ratio): FSR, then XeSS.
+inline constexpr const char32_t* kUpscaleRatioLabels[2][5] = {{U"1x", U"1.5x", U"1.7x", U"2x", U"3x"},
+                                                              {U"1x", U"1.7x", U"2x", U"2.3x", U"3x"}};
 // The seven detail options. Four levels where the renderer has four steps (Shader) or a continuous scale (Particle, Mesh,
 // Environment); three where it has three (Texture: top mips skipped 2 / 1 / 0, Water: reflection targets 0 / 1 / 2);
 // Shadow is on or off (any value above 0 draws shadows). Each list ends at the value the old slider's Max stood for.
@@ -263,8 +269,9 @@ inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // IDC_PORT_IN_GAME_OPTIONS_GRAPHICS) opens IDD_ADVANCED_VIDEO_OPTIONS_DIALOG as the Graphics page. That page gets the
 // Detail Level list (IDC_PORT_DETAIL_LEVEL: Low / Medium / High / Ultra / Custom, a preset for the seven lists, see
 // kQualityPresets), a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the level lists above), the
-// Anti-Aliasing list (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices), the render scale and anisotropic filtering combos and the
-// ambient occlusion check (AdvancedVideoSettings). Add with DialogScript::extend after GUIDialogs.rc is loaded.
+// Anti-Aliasing list (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices), the Upscaler and Upscaler Quality lists
+// (IDC_PORT_UPSCALER: kUpscalerChoices, IDC_PORT_UPSCALE_QUALITY: kUpscaleQualityChoices), the render scale and
+// anisotropic filtering combos and the ambient occlusion check (AdvancedVideoSettings). Add with DialogScript::extend after GUIDialogs.rc is loaded.
 extern const char* const kPortDialogExtensionsRc;
 
 // IDC_SCROLL_SPEED_SLIDER: the dialog slider runs 0..100; the original option is 0..3 with Defaults = 1.0
