@@ -534,7 +534,13 @@ struct KeysHeader {
 };
 #pragma pack(pop)
 constexpr char kMagic[8] = {'A', 'L', 'P', 'S', 'O', 'K', 'E', 'Y'};
-constexpr uint32_t kKeysVersion = 1;
+// Bump whenever the meaning of a stored key changes, the render pass ids above included: the header's programs fingerprint
+// does not cover them. 2 (2026-11-13): MSAA sample classes in the ids. A version-1 file can hold ids from an abandoned
+// MSAA layout (32 + count * 24 + pair) that now decode to other formats (4x R8G8B8A8_UNORM + D32S8 as 4x R8G8B8A8_SRGB + D24S8, which RDNA cannot use).
+constexpr uint32_t kKeysVersion = 2;
+static_assert(sizeof(materials::PsoKey) == 40 && kDepthIds == 24 && kSampleClasses == 4 && kColorOnlyBase == 128 &&
+                  std::size(kColorFormats) == 6,
+              "the stored key / render pass id layout changed: bump kKeysVersion and update this check");
 
 KeysHeader make_header(const rhi::DeviceCaps& c, uint32_t count) {
     KeysHeader h{};

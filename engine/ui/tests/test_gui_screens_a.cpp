@@ -287,7 +287,7 @@ void test_resolution_confirm() {
     cur.vsync = true;
     raw.time = 500.0;
     GuiDialog* v = env.gui.top();
-    v->set_checked("IDC_VSYNC_ENABLED", true);
+    v->set_selected("IDC_PORT_VSYNC_MODE", 1);
     click_video("IDC_APPLY", 0);
     CHECK(acts.size() == 1 && acts[0].video.vsync);
     acts.clear();
@@ -333,7 +333,7 @@ END
     // Advanced button are gone from Display; Gamma and the rows under it move up into Anti-Aliasing's place.
     CHECK(!d->get("IDC_ANTI_ALIAS_SLIDER")->visible && !d->get("IDC_DETAIL_LEVEL_SLIDER")->visible && !d->get("IDC_ANTI_ALIAS_OFF_STATIC")->visible &&
           !d->get("IDC_ANTI_ALIAS_STATIC")->visible && !d->get("IDC_ADVANCED")->visible);
-    CHECK(d->get("IDC_GAMMA_SLIDER")->visible && d->get("IDC_GAMMA_SLIDER")->offset.y == 51.0f && d->get("IDC_VSYNC_ENABLED")->offset.y == 51.0f &&
+    CHECK(d->get("IDC_GAMMA_SLIDER")->visible && d->get("IDC_GAMMA_SLIDER")->offset.y == 51.0f && !d->get("IDC_VSYNC_ENABLED")->visible &&
           d->get("IDC_RESOLUTION_LIST")->offset.y == 0.0f && d->get("IDC_OK")->offset.y == 0.0f);
     size_t shown = 0;
     for (size_t i = 0; i < d->size(); ++i) {
@@ -366,25 +366,16 @@ void test_video_vsync_mode() {
           d->get("IDC_PORT_DISPLAY_INFO")->text == U"160 Hz, Mailbox" && d->get("IDC_PORT_FRAME_CAP")->selected == 6 &&
           d->get("IDC_PORT_FRAME_CAP")->items[1] == U"Display refresh rate" && d->get("IDC_PORT_FRAME_CAP")->items[3] == U"60 fps");
     if (!d) return;
-    // U9: the check box and the mode list are one setting, whichever is used.
+    // U9 (Gabriel 2026-11-13): the mode list is the one v-sync setting; the shipped check box is hidden.
     auto changed = [&](GuiEvent::Kind k, const char* id, int32_t value) {
         GuiEvent e = event(k, "IDD_VIDEO_OPTIONS_DIALOG", id);
         e.value = value;
         fe.update(std::vector<GuiEvent>{e}, InputFrame{}, acts);
     };
-    CHECK(d->get("IDC_PORT_VSYNC_MODE")->items[0] == U"Off (no v-sync)" && d->get("IDC_VSYNC_ENABLED")->checked);
-    d->set_checked("IDC_VSYNC_ENABLED", false);
-    changed(GuiEvent::Kind::Checked, "IDC_VSYNC_ENABLED", 0);
-    CHECK(d->get("IDC_PORT_VSYNC_MODE")->selected == 0);
-    d->set_checked("IDC_VSYNC_ENABLED", true);
-    changed(GuiEvent::Kind::Checked, "IDC_VSYNC_ENABLED", 1);
-    CHECK(d->get("IDC_PORT_VSYNC_MODE")->selected == 2);  // back to the remembered Mailbox
-    d->set_selected("IDC_PORT_VSYNC_MODE", 0);
-    changed(GuiEvent::Kind::SelectionChanged, "IDC_PORT_VSYNC_MODE", 0);
-    CHECK(!d->get("IDC_VSYNC_ENABLED")->checked);
+    CHECK(d->get("IDC_PORT_VSYNC_MODE")->items[0] == U"Off (no v-sync)" && !d->get("IDC_VSYNC_ENABLED")->visible);
     d->set_selected("IDC_PORT_VSYNC_MODE", 1);
     changed(GuiEvent::Kind::SelectionChanged, "IDC_PORT_VSYNC_MODE", 1);
-    CHECK(d->get("IDC_VSYNC_ENABLED")->checked && acts.empty());
+    CHECK(acts.empty());
     // U8: the value beside the Gamma slider follows it. Anti-Aliasing and Detail Level are on the Graphics page now.
     CHECK(d->get("IDC_PORT_GAMMA_VALUE")->text == U"50");
     changed(GuiEvent::Kind::ValueChanged, "IDC_GAMMA_SLIDER", 80);
