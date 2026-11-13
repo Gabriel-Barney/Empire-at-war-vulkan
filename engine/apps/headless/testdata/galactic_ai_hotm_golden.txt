@@ -1,15 +1,15 @@
 # galactic-ai campaign Sandbox_Heart_Of_The_Maw_Underworld battles auto seed 1 ticks 18000
-# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (5254.2 ms), galactic frame 18000, decisions 553, orders 164 (rejected 0), conflicts 25, battles 0, planet owner changes 0, running plans 7, Lua errors 0, planets: 0=4/1607 1=4/2111 2=0/0 3=0/0 4=0/0 5=0/0 6=4/2571 7=0/0, final CRC 369f438670cd0dbf
-# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 11 conflicts 3 crc c24efe744d5cf2e5
-# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 8 crc ec401537d0d785ba
-# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 5 conflicts 10 crc 0ddb7a09766ec9ac
-# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 8 conflicts 10 crc e4c1ca56d7735b41
-# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 10 crc a855f15ab53eda96
-# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 5 conflicts 13 crc 70d0257a26422455
-# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 11 conflicts 20 crc 2f205fb5e2cfbcbd
-# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 25 crc 99c89ca7f14cebc6
-# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 5 conflicts 25 crc dd55508a24e191f3
-# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 25 crc 369f438670cd0dbf
+# galactic-ai Sandbox_Heart_Of_The_Maw_Underworld workers 4: 18000 ticks (3788.6 ms), galactic frame 18000, decisions 567, orders 160 (rejected 0), conflicts 34, battles 0, planet owner changes 0, running plans 7, Lua errors 0, planets: 0=4/1177 1=4/3051 2=0/0 3=0/0 4=0/0 5=0/0 6=4/2949 7=0/0, final CRC 977cbd1b9992920e
+# t=60s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 11 conflicts 4 crc 500fae8da987ac9a
+# t=120s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 8 conflicts 9 crc a22205d0cc68dd42
+# t=180s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 5 conflicts 11 crc 132232ac1a55464f
+# t=240s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 8 conflicts 13 crc bbc150299f9fcd38
+# t=300s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 13 crc c571cdbdc3a610f6
+# t=360s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 18 crc 1fd88ba56562d9ab
+# t=420s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 11 conflicts 23 crc 1b8adbfaeab08f04
+# t=480s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 31 crc 824925614e98c258
+# t=540s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 6 conflicts 34 crc 154a1c33a09f5b93
+# t=600s planets 0=4 1=4 2=0 3=0 4=0 5=0 6=4 7=0 plans 7 conflicts 34 crc 977cbd1b9992920e
 1 p0 opponent 6
 1 p0 templates Basic_Rebel_Default
 1 p1 opponent 6
@@ -24,10 +24,10 @@
 53 p6 plan 2 GENERATEMAGICSPACEDEFENSE for Generate_Magic_Space_Defense @Shola ReserveForce(0+10) net 0 gross 0 eta 27.6
 53 p6 plan 3 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
 55 p6 build task 0 U_Ground_Palace for BaseForce at Shola
-55 p6 magic spawn Interceptor4_Frigate at Shola
 55 p6 magic spawn Vengeance_Frigate at Shola
+55 p6 magic spawn Interceptor4_Frigate at Shola
 55 p6 magic spawn StarViper_Squadron at Shola
-55 p6 magic spawn Crusader_Gunship at Shola
+55 p6 magic spawn Vengeance_Frigate at Shola
 55 p6 magic spawn Interceptor4_Frigate at Shola
 55 p6 magic spawn StarViper_Squadron at Shola
 55 p6 magic spawn Skipray_Squadron at Shola
@@ -41,16 +41,16 @@
 56 p0 plan 8 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
 58 p0 build task 11 Corellian_Gunboat for ReserveForce
 58 p0 build task 12 Rebel_Light_Tank_Brigade for ReserveForce
-58 p0 build task 13 Rebel_Tank_Buster_Squad for ReserveForce
-58 p0 build task 14 Rebel_Infantry_Squad for ReserveForce
+58 p0 build task 13 Rebel_Infantry_Squad for ReserveForce
+58 p0 build task 14 Rebel_Tank_Buster_Squad for ReserveForce
 58 p1 plan 9 BUILDWEAPONSTRUCTUREPLAN for Build_Weapon @Tatooine StructureForce(0+1) net 2000 gross 2000 eta 48.0
 58 p1 plan 10 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 2500 gross 2500 eta 21.6
 58 p1 plan 11 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 56.0
 58 p1 plan 12 PATHBONUSFORDISTANTTARGETS for Distant_System_Path_Bonus @global EmptyForce(0+0) net 0 gross 0 eta 0.0
 58 p1 build task 15 Acclamator_Assault_Ship for ReserveForce
-58 p1 build task 16 Imperial_Anti_Infantry_Brigade for ReserveForce
+58 p1 build task 16 Imperial_Heavy_Scout_Squad for ReserveForce
 58 p1 build task 17 Imperial_Stormtrooper_Squad for ReserveForce
-58 p1 build task 18 Imperial_Heavy_Scout_Squad for ReserveForce
+58 p1 build task 18 Imperial_Anti_Infantry_Brigade for ReserveForce
 58 p1 build task 19 Imperial_Stormtrooper_Squad for ReserveForce
 79 p6 order build U_Ground_Palace at Shola
 90 p0 order build Rebel_Light_Tank_Brigade at Naboo
@@ -58,533 +58,556 @@
 91 p0 build task 21 R_Galactic_Turbolaser_Tower_Defenses for StructureForce at MonCalimari
 91 p1 build task 22 Ground_Magnepulse_Cannon for StructureForce at Tatooine
 95 p0 order build Corellian_Gunboat at Naboo
+101 p0 plan 13 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Yavin BaseForce(0+1) net 500 gross 500 eta 24.0
 103 p1 order build Acclamator_Assault_Ship at Corellia
-105 p6 plan 13 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
-105 p6 plan 14 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
-106 p6 build task 23 Underworld_Saboteur_Team for MainForce
-106 p6 build task 24 U_Ground_Vehicle_Factory for BaseForce at NalHutta
-106 p6 order launch 75 at NalHutta
-106 p6 order form 75 alone
+103 p6 plan 14 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
+103 p6 plan 15 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
+103 p6 build task 23 Underworld_Saboteur_Team for MainForce
+103 p6 build task 24 U_Ground_Vehicle_Factory for BaseForce at NalHutta
+103 p6 order launch 75 at NalHutta
+103 p6 order form 75 alone
+106 p6 order move fleet 118 -> Shola
 108 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
-109 p6 order move fleet 118 -> Shola
-110 p0 plan 15 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
+110 p1 plan 16 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 31.9
+110 p1 plan 17 UPGRADESTARBASEPLAN for Upgrade_Starbase @Kashyyyk BaseForce(0+1) net 1200 gross 1200 eta 24.0
+112 p1 build task 25 Empire_Star_Base_2 for BaseForce at Kashyyyk
 114 p0 order build R_Galactic_Turbolaser_Tower_Defenses at MonCalimari
-114 p1 plan 16 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 31.8
-114 p1 plan 17 UPGRADESTARBASEPLAN for Upgrade_Starbase @Kashyyyk BaseForce(0+1) net 1200 gross 1200 eta 24.0
-115 p0 order build Rebel_Tank_Buster_Squad at Kamino
-115 p1 build task 25 Empire_Star_Base_2 for BaseForce at Kashyyyk
-116 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
+115 p0 order build Rebel_Infantry_Squad at Kamino
+116 p1 order build Imperial_Heavy_Scout_Squad at Tatooine
 131 p6 order build U_Ground_Vehicle_Factory at NalHutta
 133 p1 order build Empire_Star_Base_2 at Kashyyyk
-142 p0 build task 26 Rebel_Ground_Mining_Facility for StructureForce at Yavin
+133 p0 build task 26 R_Ground_Light_Vehicle_Factory for BaseForce at Yavin
+134 p0 order build R_Ground_Light_Vehicle_Factory at Yavin
+142 p1 build task 27 E_Ground_Barracks for BaseForce at Kashyyyk
 147 p1 order build Imperial_Stormtrooper_Squad at Corellia
-148 p1 build task 27 E_Ground_Barracks for BaseForce at Kashyyyk
-150 p1 order build Imperial_Heavy_Scout_Squad at Kuat
-165 p0 order build Rebel_Ground_Mining_Facility at Yavin
-182 p6 plan 18 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-182 p6 plan 19 UPGRADESTARBASEPLAN for Upgrade_Starbase @Shola BaseForce(0+1) net 1600 gross 1600 eta 16.0
-182 p6 plan 13 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-184 p6 build task 28 U_Ground_Vehicle_Factory for BaseForce at Felucia
-184 p6 build task 29 Underworld_Star_Base_2 for BaseForce at Shola
-190 p0 plan 20 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Yavin BaseForce(0+1) net 500 gross 500 eta 47.2
-194 p6 order build Underworld_Star_Base_2 at Shola
-197 p1 plan 16 BUILDBASECOMPONENTBARRACKS ended failure (released)
-206 p6 order build U_Ground_Vehicle_Factory at Felucia
-217 p6 order auto-land detach 75 at Shola
-217 p6 order auto-land 75 at Shola
-220 p0 build task 30 R_Ground_Light_Vehicle_Factory for BaseForce at Yavin
-259 p6 plan 21 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
-259 p6 plan 22 UPGRADESTARBASEPLAN for Upgrade_Starbase @Felucia BaseForce(0+1) net 3000 gross 3000 eta 28.8
-259 p6 build task 31 Underworld_Saboteur_Team for MainForce
-259 p6 build task 32 Underworld_Star_Base_3 for BaseForce at Felucia
-259 p6 order launch 75 at Shola
-259 p6 order form 75 alone
-262 p6 order move fleet 119 -> The_Maw
-263 p6 order build Underworld_Star_Base_3 at Felucia
-270 p0 plan 4 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-270 p0 plan 20 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
-281 p1 plan 23 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 26.2
-313 p1 build task 33 E_Ground_Barracks for BaseForce at Kashyyyk
-343 p6 tf MainForce move to MonCalimari
-343 p6 order move fleet 119 -> Yavin
-351 p0 plan 24 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Yavin BaseForce(0+1) net 1000 gross 1000 eta 65.8
-364 p1 plan 23 BUILDBASECOMPONENTBARRACKS ended failure (released)
-382 p0 build task 34 R_Ground_Heavy_Vehicle_Factory for BaseForce at Yavin
-406 p6 order move fleet 119 -> MonCalimari
-431 p0 plan 24 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-448 p1 plan 25 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.7
-478 p1 build task 35 E_Ground_Barracks for BaseForce at Kashyyyk
-480 p1 order build E_Ground_Barracks at Kashyyyk
-481 p6 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
-512 p0 plan 26 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Kamino StructureForce(0+1) net 500 gross 500 eta 24.6
-512 p0 plan 27 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Yavin BaseForce(0+1) net 1000 gross 1000 eta 60.4
-512 p0 plan 15 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
-513 p0 cancel ended build Rebel_Ground_Mining_Facility at Yavin (refund)
-544 p0 build task 36 Rebel_Ground_Mining_Facility for StructureForce at Kamino
-544 p0 build task 37 R_Ground_Heavy_Vehicle_Factory for BaseForce at Yavin
-549 p0 order build Rebel_Ground_Mining_Facility at Kamino
-568 p0 order build R_Ground_Heavy_Vehicle_Factory at Yavin
+150 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+178 p1 plan 16 BUILDBASECOMPONENTBARRACKS ended failure (released)
+219 p0 plan 4 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
+220 p6 tf MainForce move to Corellia
+220 p6 order move fleet 118 -> Naboo
+248 p6 plan 18 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
+248 p6 plan 19 UPGRADESTARBASEPLAN for Upgrade_Starbase @Shola BaseForce(0+1) net 1600 gross 1600 eta 16.0
+248 p6 plan 14 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+250 p6 build task 28 U_Ground_Vehicle_Factory for BaseForce at Felucia
+250 p6 build task 29 Underworld_Star_Base_2 for BaseForce at Shola
+256 p6 order build Underworld_Star_Base_2 at Shola
+268 p6 order build U_Ground_Vehicle_Factory at Felucia
+328 p1 plan 20 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 24.7
+352 p0 plan 21 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Kamino StructureForce(0+1) net 500 gross 500 eta 25.3
+352 p0 plan 13 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
+353 p0 cancel ended build R_Ground_Light_Vehicle_Factory at Yavin (refund)
+358 p1 build task 30 E_Ground_Barracks for BaseForce at Kashyyyk
+382 p0 build task 31 Rebel_Ground_Mining_Facility for StructureForce at Kamino
+387 p6 plan 22 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
+388 p6 build task 32 Underworld_Saboteur_Team for MainForce
+388 p6 order move fleet 118 -> The_Maw
+394 p0 order build Rebel_Ground_Mining_Facility at Kamino
+463 p1 plan 20 BUILDBASECOMPONENTBARRACKS ended failure (released)
+485 p0 plan 23 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Yavin StructureForce(0+1) net 500 gross 500 eta 24.0
+485 p0 plan 24 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Naboo BaseForce(0+1) net 500 gross 500 eta 46.8
+517 p0 build task 33 Rebel_Ground_Mining_Facility for StructureForce at Yavin
+517 p0 build task 34 R_Ground_Light_Vehicle_Factory for BaseForce at Naboo
+525 p6 plan 25 UPGRADESTARBASEPLAN for Upgrade_Starbase @Felucia BaseForce(0+1) net 3000 gross 3000 eta 28.8
+526 p6 build task 35 Underworld_Star_Base_3 for BaseForce at Felucia
+537 p0 order build Rebel_Ground_Mining_Facility at Yavin
+542 p6 order build Underworld_Star_Base_3 at Felucia
+565 p6 tf MainForce move to MonCalimari
+565 p6 order move fleet 118 -> Yavin
 583 p0 plan 6 BUILDSPACEFORCESPLAN ended success
-682 p6 plan 19 UPGRADESTARBASEPLAN ended success
+588 p0 plan 24 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
+613 p1 plan 26 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kashyyyk BaseForce(0+1) net 500 gross 500 eta 20.0
+628 p6 order move fleet 118 -> MonCalimari
+643 p1 build task 36 E_Ground_Barracks for BaseForce at Kashyyyk
+666 p1 order build E_Ground_Barracks at Kashyyyk
 685 p6 plan 1 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDPALACE ended success
+703 p6 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
+707 p0 plan 27 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Naboo BaseForce(0+1) net 500 gross 500 eta 39.4
+739 p0 build task 37 R_Ground_Light_Vehicle_Factory for BaseForce at Naboo
+742 p6 plan 19 UPGRADESTARBASEPLAN ended success
 757 p1 plan 10 BUILDSPACEFORCESPLAN ended success
-781 p6 plan 21 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+811 p0 plan 27 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
 859 p1 plan 17 UPGRADESTARBASEPLAN ended success
-860 p1 order build Ground_Magnepulse_Cannon at Tatooine
-942 p6 plan 28 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
-942 p6 plan 29 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 23.5
-943 p6 build task 38 Underworld_Saboteur_Team for MainForce
-943 p6 build task 39 Underworld_Saboteur_Team for MainForce
-943 p6 order move fleet 119 -> Shola
-978 p6 order build Underworld_Saboteur_Team at Shola
-979 p6 plan 14 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-1030 p6 tf MainForce move to Naboo
-1030 p6 order move fleet 119 -> Naboo
-1054 p6 plan 18 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-1087 p1 plan 25 BUILDBASECOMPONENTBARRACKS ended success
-1117 p1 plan 11 BUILDGROUNDFORCESPLAN ended success
-1132 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Naboo not applied
-1135 p6 plan 22 UPGRADESTARBASEPLAN ended success
-1276 p0 plan 26 BUILDECONOMICSTRUCTUREPLAN ended success
-1286 p1 plan 30 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+1) net 150 gross 150 eta 32.0
-1288 p1 build task 40 Imperial_Heavy_Scout_Squad for ReserveForce
-1324 p0 order build Rebel_Infantry_Squad at Kamino
-1328 p1 order build Imperial_Heavy_Scout_Squad at Kuat
-1432 p6 plan 28 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-1483 p0 plan 31 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Naboo BaseForce(0+1) net 500 gross 500 eta 24.0
-1483 p0 plan 32 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Yavin BaseForce(0+1) net 500 gross 500 eta 41.5
-1483 p0 plan 27 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-1484 p0 cancel ended build R_Ground_Heavy_Vehicle_Factory at Yavin (refund)
-1484 p6 plan 33 UPGRADESTARBASEPLAN for Upgrade_Starbase @NalHutta BaseForce(0+1) net 3000 gross 3000 eta 28.8
-1484 p6 plan 34 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(1+0) net 0 gross 1000 eta 0.0
-1484 p6 plan 29 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1485 p6 cancel ended build Underworld_Saboteur_Team at Shola (refund)
-1486 p6 build task 41 Underworld_Star_Base_3 for BaseForce at NalHutta
-1486 p6 build task 42 Underworld_Saboteur_Team for MainForce
-1486 p6 order move fleet 119 -> Shola
-1496 p6 order build Underworld_Star_Base_3 at NalHutta
-1513 p0 build task 43 R_Ground_Light_Vehicle_Factory for BaseForce at Naboo
-1513 p0 build task 44 R_Ground_Light_Vehicle_Factory for BaseForce at Yavin
-1516 p0 order build R_Ground_Light_Vehicle_Factory at Naboo
-1529 p0 order build R_Ground_Light_Vehicle_Factory at Yavin
+930 p0 plan 28 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Naboo BaseForce(0+1) net 500 gross 500 eta 32.0
+964 p0 build task 38 R_Ground_Light_Vehicle_Factory for BaseForce at Naboo
+979 p6 plan 15 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+1006 p6 plan 22 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+1034 p0 plan 28 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended failure (released)
+1079 p6 plan 29 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
+1079 p6 plan 30 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 20.0
+1081 p6 build task 39 Underworld_Saboteur_Team for MainForce
+1081 p6 build task 40 Underworld_Saboteur_Team for MainForce
+1081 p6 order move fleet 118 -> Shola
+1084 p1 plan 11 BUILDGROUNDFORCESPLAN ended success
+1108 p1 order build Ground_Magnepulse_Cannon at Tatooine
+1114 p6 plan 18 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+1120 p0 plan 21 BUILDECONOMICSTRUCTUREPLAN ended success
+1123 p6 order build Underworld_Saboteur_Team at NalHutta
+1153 p0 plan 31 BUILDECONOMICSTRUCTUREPLAN for Build_Economic_Structure @Naboo StructureForce(0+1) net 500 gross 500 eta 24.6
+1153 p0 plan 23 BUILDECONOMICSTRUCTUREPLAN ended failure (released)
+1154 p0 cancel ended build Rebel_Ground_Mining_Facility at Yavin (refund)
+1168 p6 tf MainForce move to Naboo
+1168 p6 order move fleet 118 -> Naboo
+1169 p0 order build Rebel_Tank_Buster_Squad at Kamino
+1183 p0 build task 41 Rebel_Ground_Mining_Facility for StructureForce at Naboo
+1206 p0 order build Rebel_Ground_Mining_Facility at Naboo
+1270 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Naboo not applied
+1273 p1 plan 26 BUILDBASECOMPONENTBARRACKS ended success
+1414 p6 plan 25 UPGRADESTARBASEPLAN ended success
+1460 p1 plan 32 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 420 gross 420 eta 32.0
+1462 p1 build task 42 Imperial_Stormtrooper_Squad for ReserveForce
+1462 p1 build task 43 Imperial_Heavy_Scout_Squad for ReserveForce
+1462 p1 build task 44 Imperial_Light_Scout_Squad for ReserveForce
+1462 p1 build task 45 Imperial_Stormtrooper_Squad for ReserveForce
+1503 p1 order build Imperial_Light_Scout_Squad at Kashyyyk
+1511 p1 order build Imperial_Stormtrooper_Squad at Corellia
+1514 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+1522 p6 plan 33 UPGRADESTARBASEPLAN for Upgrade_Starbase @NalHutta BaseForce(0+1) net 3000 gross 3000 eta 28.8
+1522 p6 plan 29 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1522 p6 plan 30 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1522 p6 build task 46 Underworld_Star_Base_3 for BaseForce at NalHutta
+1523 p6 cancel ended build Underworld_Saboteur_Team at NalHutta (refund)
+1527 p6 order build Underworld_Star_Base_3 at NalHutta
+1555 p0 plan 34 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY for Build_Base_Component_Light_Vehicle_Factory @Yavin BaseForce(0+1) net 500 gross 500 eta 24.0
 1561 p0 plan 5 BUILDTURBOLASERS ended success
-1562 p6 plan 35 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 20.0
-1562 p6 plan 34 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1564 p6 build task 45 Underworld_Saboteur_Team for MainForce
-1582 p6 order auto-land detach 75 at Shola
-1582 p6 order auto-land 75 at Shola
-1606 p0 plan 7 BUILDGROUNDFORCESPLAN ended success
-1619 p6 order build Underworld_Saboteur_Team at NalHutta
-1640 p6 plan 36 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(1+0) net 0 gross 1000 eta 0.0
-1640 p6 plan 37 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Tatooine MainForce(0+1) net 1000 gross 1000 eta 20.0
-1640 p6 plan 35 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1641 p6 cancel ended build Underworld_Saboteur_Team at NalHutta (refund)
-1642 p6 build task 46 Underworld_Saboteur_Team for MainForce
-1642 p6 build task 47 Underworld_Saboteur_Team for MainForce
-1642 p6 order launch 75 at Shola
-1642 p6 order form 75 alone
-1645 p6 order move fleet 139 -> The_Maw
-1691 p6 order build Underworld_Saboteur_Team at Shola
-1717 p6 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 20.0
-1717 p6 plan 36 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1717 p6 plan 37 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-1717 p6 build task 48 Underworld_Saboteur_Team for MainForce
-1718 p6 cancel ended build Underworld_Saboteur_Team at Shola (refund)
-1753 p6 order build Underworld_Saboteur_Team at Shola
-1795 p6 plan 39 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
-1795 p6 build task 49 Underworld_Saboteur_Team for MainForce
-1804 p6 tf MainForce move to MonCalimari
-1804 p6 order move fleet 139 -> Yavin
-1867 p6 order move fleet 139 -> MonCalimari
-1942 p6 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
-2242 p0 plan 31 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended success
-2242 p6 plan 39 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-2257 p0 plan 32 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended success
-2296 p1 plan 30 BUILDGROUNDFORCESPLAN ended success
-2308 p1 plan 9 BUILDWEAPONSTRUCTUREPLAN ended success
-2335 p6 plan 40 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
-2335 p6 build task 50 Underworld_Saboteur_Team for MainForce
-2335 p6 order move fleet 139 -> Shola
-2368 p6 plan 33 UPGRADESTARBASEPLAN ended success
-2422 p6 tf MainForce move to Corellia
-2422 p6 order move fleet 139 -> Naboo
-2490 p6 plan 40 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-2568 p6 plan 41 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
-2569 p6 build task 51 Underworld_Saboteur_Team for MainForce
-2569 p6 order move fleet 139 -> The_Maw
-2746 p6 tf MainForce move to Yavin
-2746 p6 order move fleet 139 -> Yavin
+1585 p0 build task 47 R_Ground_Light_Vehicle_Factory for BaseForce at Yavin
+1591 p0 order build R_Ground_Light_Vehicle_Factory at Yavin
+1591 p0 plan 7 BUILDGROUNDFORCESPLAN ended success
+1673 p6 plan 35 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(1+0) net 0 gross 1000 eta 0.0
+1673 p6 plan 36 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(0+1) net 1000 gross 1000 eta 20.0
+1675 p6 build task 48 Underworld_Saboteur_Team for MainForce
+1675 p6 build task 49 Underworld_Saboteur_Team for MainForce
+1675 p6 order move fleet 118 -> The_Maw
+1712 p6 order build Underworld_Saboteur_Team at NalHutta
+1822 p6 plan 35 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1844 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+1933 p0 plan 31 BUILDECONOMICSTRUCTUREPLAN ended success
+1972 p6 plan 37 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(1+0) net 0 gross 1000 eta 0.0
+1972 p6 plan 36 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+1972 p6 build task 50 Underworld_Saboteur_Team for MainForce
+1972 p6 order move fleet 118 -> Shola
+1973 p6 cancel ended build Underworld_Saboteur_Team at NalHutta (refund)
+2053 p6 tf MainForce move to Kamino
+2053 p6 order move fleet 118 -> MonCalimari
+2122 p6 plan 37 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+2273 p6 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
+2273 p6 plan 39 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Tatooine MainForce(0+1) net 1000 gross 1000 eta 20.0
+2275 p6 build task 51 Underworld_Saboteur_Team for MainForce
+2275 p6 build task 52 Underworld_Saboteur_Team for MainForce
+2275 p6 order move fleet 118 -> Shola
+2311 p6 order build Underworld_Saboteur_Team at Shola
+2317 p0 plan 34 BUILDBASECOMPONENTLIGHTVEHICLEFACTORY ended success
+2362 p6 tf MainForce move to Corellia
+2362 p6 order move fleet 118 -> Naboo
+2398 p6 plan 33 UPGRADESTARBASEPLAN ended success
+2458 p6 order move fleet 118 -> Tatooine
+2482 p1 plan 32 BUILDGROUNDFORCESPLAN ended success
+2554 p1 plan 9 BUILDWEAPONSTRUCTUREPLAN ended success
+2572 p6 order move fleet 118 -> Corellia
+2605 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Corellia not applied
+2802 p1 plan 40 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+2802 p1 plan 41 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 56.0
 2802 p6 plan 42 UPGRADESTARBASEPLAN for Upgrade_Starbase @Shola BaseForce(0+1) net 3000 gross 3000 eta 28.8
-2802 p6 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-2802 p6 plan 41 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+2802 p6 plan 39 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
 2803 p6 cancel ended build Underworld_Saboteur_Team at Shola (refund)
-2803 p6 build task 52 Underworld_Star_Base_3 for BaseForce at Shola
-2821 p1 plan 43 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-2821 p1 plan 44 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 56.0
-2821 p1 build task 53 Imperial_Heavy_Scout_Squad for ReserveForce
-2821 p1 build task 54 Imperial_Stormtrooper_Squad for ReserveForce
-2821 p1 build task 55 Imperial_Anti_Infantry_Brigade for ReserveForce
-2821 p1 build task 56 Imperial_Stormtrooper_Squad for ReserveForce
+2803 p1 build task 53 Imperial_Anti_Infantry_Brigade for ReserveForce
+2803 p1 build task 54 Imperial_Stormtrooper_Squad for ReserveForce
+2803 p1 build task 55 Imperial_Heavy_Scout_Squad for ReserveForce
+2803 p1 build task 56 Imperial_Stormtrooper_Squad for ReserveForce
+2803 p6 build task 57 Underworld_Star_Base_3 for BaseForce at Shola
 2829 p6 order build Underworld_Star_Base_3 at Shola
-2851 p1 build task 57 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-2867 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
-2875 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
-2875 p1 order build Imperial_Stormtrooper_Squad at Corellia
-2878 p1 order build Imperial_Heavy_Scout_Squad at Kuat
-2880 p6 plan 45 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
-2881 p6 build task 58 Underworld_Saboteur_Team for MainForce
-2881 p6 order move fleet 139 -> The_Maw
-2950 p6 tf MainForce move to Kashyyyk
-2950 p6 order move fleet 139 -> Kashyyyk
-3118 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Kashyyyk not applied
-3418 p6 plan 45 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-3504 p6 plan 46 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(1+0) net 0 gross 1000 eta 0.0
-3505 p6 build task 59 Underworld_Saboteur_Team for MainForce
-3505 p6 order move fleet 139 -> Shola
-3582 p6 plan 46 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-3637 p6 order auto-land detach 75 at Shola
-3637 p6 order auto-land 75 at Shola
-3816 p6 plan 47 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
-3817 p6 build task 60 Underworld_Saboteur_Team for MainForce
-3817 p6 order launch 75 at Shola
-3817 p6 order form 75 alone
-3826 p6 tf MainForce move to Corellia
-3826 p6 order move fleet 147 -> Naboo
-3870 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
-3922 p6 order move fleet 147 -> Tatooine
-3972 p6 plan 47 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-4162 p6 plan 42 UPGRADESTARBASEPLAN ended success
-4206 p6 plan 48 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
-4207 p6 build task 61 U_Ground_Vehicle_Factory for BaseForce at NalHutta
-4210 p0 plan 49 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1250 gross 1250 eta 10.8
-4210 p0 build task 62 Corellian_Corvette for ReserveForce
-4223 p6 order build U_Ground_Vehicle_Factory at NalHutta
-4249 p0 order build Corellian_Corvette at Naboo
-4321 p1 plan 43 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-4362 p6 plan 50 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(1+0) net 0 gross 1000 eta 0.0
-4363 p6 build task 63 Underworld_Saboteur_Team for MainForce
-4363 p6 order move fleet 147 -> The_Maw
-4440 p6 plan 50 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-4579 p0 plan 49 BUILDSPACEFORCESPLAN ended success
-4597 p1 plan 44 BUILDGROUNDFORCESPLAN ended success
-5530 p6 plan 48 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-5532 p6 plan 51 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-5533 p0 plan 52 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
-5533 p6 build task 64 U_Ground_Vehicle_Factory for BaseForce at Felucia
-5538 p6 order build U_Ground_Vehicle_Factory at Felucia
-5552 p1 plan 53 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 800 gross 800 eta 40.0
-5554 p1 build task 65 Imperial_Armor_Group for ReserveForce
-5554 p1 build task 66 Imperial_Stormtrooper_Squad for ReserveForce
-5554 p1 build task 67 Imperial_Anti_Infantry_Brigade for ReserveForce
-5554 p1 build task 68 Imperial_Stormtrooper_Squad for ReserveForce
-5563 p0 build task 69 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
-5577 p0 order build R_Ground_Heavy_Vehicle_Factory at Naboo
-5595 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+2833 p1 build task 58 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+2836 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+2844 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
+2844 p1 order build Imperial_Stormtrooper_Squad at Corellia
+2847 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
+2905 p6 plan 38 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+3178 p6 plan 43 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
+3178 p6 build task 59 Underworld_Saboteur_Team for MainForce
+3178 p6 order move fleet 118 -> The_Maw
+3400 p6 tf MainForce move to Yavin
+3400 p6 order move fleet 118 -> Yavin
+3469 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Yavin not applied
+3591 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+3769 p6 plan 43 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+3929 p6 plan 44 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
+3931 p6 build task 60 Underworld_Saboteur_Team for MainForce
+3931 p6 order move fleet 118 -> Shola
+4075 p6 tf MainForce move to Naboo
+4075 p6 order move fleet 118 -> Naboo
+4079 p6 plan 45 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(0+1) net 1000 gross 1000 eta 20.0
+4081 p6 build task 61 Underworld_Saboteur_Team for MainForce
+4105 p6 plan 42 UPGRADESTARBASEPLAN ended success
+4136 p0 plan 46 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1800 gross 1800 eta 12.0
+4138 p0 build task 62 Marauder_Missile_Cruiser for ReserveForce
+4140 p6 order build Underworld_Saboteur_Team at Shola
+4177 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Naboo not applied
+4187 p0 order build Marauder_Missile_Cruiser at Naboo
+4228 p6 plan 47 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(0+1) net 1000 gross 1000 eta 20.0
+4228 p6 build task 63 Underworld_Saboteur_Team for MainForce
+4285 p6 order build Underworld_Saboteur_Team at NalHutta
+4291 p1 plan 40 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+4379 p6 plan 45 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+4379 p6 plan 47 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+4380 p6 cancel ended build Underworld_Saboteur_Team at Shola (refund)
+4380 p6 cancel ended build Underworld_Saboteur_Team at NalHutta (refund)
+4477 p6 plan 44 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+4532 p6 plan 48 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
+4534 p6 build task 64 U_Ground_Vehicle_Factory for BaseForce at NalHutta
+4555 p0 plan 46 BUILDSPACEFORCESPLAN ended success
+4558 p1 plan 41 BUILDGROUNDFORCESPLAN ended success
+4564 p6 order build U_Ground_Vehicle_Factory at NalHutta
+4607 p6 plan 49 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
+4609 p6 build task 65 Underworld_Saboteur_Team for MainForce
+4609 p6 order move fleet 118 -> The_Maw
+4786 p6 tf MainForce move to Kashyyyk
+4786 p6 order move fleet 118 -> Kashyyyk
+4954 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Kashyyyk not applied
+5254 p6 plan 49 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+5502 p6 plan 50 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
+5502 p6 plan 51 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(0+1) net 1000 gross 1000 eta 20.0
+5503 p6 build task 66 Underworld_Saboteur_Team for MainForce
+5503 p6 build task 67 Underworld_Saboteur_Team for MainForce
+5503 p6 order move fleet 118 -> The_Maw
+5535 p6 order build Underworld_Saboteur_Team at Shola
+5563 p1 plan 52 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 710 gross 710 eta 40.0
+5563 p1 build task 68 Imperial_Heavy_Scout_Squad for ReserveForce
+5563 p1 build task 69 Imperial_Armor_Group for ReserveForce
+5563 p1 build task 70 Imperial_Stormtrooper_Squad for ReserveForce
 5603 p1 order build Imperial_Armor_Group at Tatooine
 5603 p1 order build Imperial_Stormtrooper_Squad at Corellia
-5606 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
-6811 p1 plan 53 BUILDGROUNDFORCESPLAN ended success
-6858 p6 plan 54 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
-6858 p6 plan 51 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-6859 p6 cancel ended build U_Ground_Vehicle_Factory at Felucia (refund)
-6859 p6 build task 70 U_Ground_Vehicle_Factory for BaseForce at NalHutta
-6889 p6 order build U_Ground_Vehicle_Factory at NalHutta
-6913 p1 plan 55 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-6913 p1 plan 56 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 56.0
-6913 p1 build task 71 Imperial_Anti_Infantry_Brigade for ReserveForce
-6913 p1 build task 72 Imperial_Stormtrooper_Squad for ReserveForce
-6913 p1 build task 73 Imperial_Heavy_Scout_Squad for ReserveForce
-6913 p1 build task 74 Imperial_Stormtrooper_Squad for ReserveForce
-6943 p1 build task 75 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+5606 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+5608 p6 plan 48 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+5650 p6 plan 51 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+5651 p6 cancel ended build Underworld_Saboteur_Team at Shola (refund)
+5671 p6 tf MainForce move to MonCalimari
+5671 p6 order move fleet 118 -> Yavin
+5734 p6 order move fleet 118 -> MonCalimari
+5803 p6 plan 53 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @NalHutta BaseForce(0+1) net 2400 gross 2400 eta 28.0
+5803 p6 build task 71 U_Ground_Vehicle_Factory for BaseForce at NalHutta
+5804 p6 order build U_Ground_Vehicle_Factory at NalHutta
+5809 p6 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
+6109 p6 plan 50 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+6811 p1 plan 52 BUILDGROUNDFORCESPLAN ended success
+6838 p1 plan 54 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+6868 p1 build task 72 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+6869 p0 plan 55 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 1500 gross 1500 eta 36.0
+6869 p0 plan 56 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Yavin BaseForce(0+1) net 1000 gross 1000 eta 48.0
+6871 p0 build task 73 Rebel_Light_Tank_Brigade for ReserveForce
+6871 p0 build task 74 Rebel_Tank_Buster_Squad for ReserveForce
+6871 p0 build task 75 Rebel_MDU_Company for ReserveForce
+6871 p0 build task 76 Rebel_Tank_Buster_Squad for ReserveForce
+6874 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
+6901 p0 build task 77 R_Ground_Heavy_Vehicle_Factory for BaseForce at Yavin
+6904 p0 order build Rebel_Tank_Buster_Squad at Kamino
+6910 p0 order build Rebel_Light_Tank_Brigade at Naboo
+6916 p1 plan 57 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 800 gross 800 eta 86.6
+6916 p1 build task 78 Imperial_Armor_Group for ReserveForce
+6916 p1 build task 79 Imperial_Stormtrooper_Squad for ReserveForce
+6916 p1 build task 80 Imperial_Anti_Infantry_Brigade for ReserveForce
+6916 p1 build task 81 Imperial_Stormtrooper_Squad for ReserveForce
+6923 p0 order build Rebel_MDU_Company at Yavin
+6926 p6 plan 58 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
+6928 p6 build task 82 U_Ground_Vehicle_Factory for BaseForce at Felucia
+6933 p6 order build U_Ground_Vehicle_Factory at Felucia
+6944 p0 plan 56 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
 6959 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
-6967 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
 6967 p1 order build Imperial_Stormtrooper_Squad at Corellia
 6970 p1 order build Imperial_Anti_Infantry_Brigade at Kuat
-7014 p6 plan 57 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-7015 p6 build task 76 U_Ground_Vehicle_Factory for BaseForce at Felucia
-7024 p0 plan 52 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-7026 p6 order build U_Ground_Vehicle_Factory at Felucia
-7714 p1 order build Imperial_Heavy_Scout_Squad at Kuat
-7735 p6 plan 54 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-8184 p6 plan 58 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-8184 p6 plan 57 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
-8185 p6 cancel ended build U_Ground_Vehicle_Factory at Felucia (refund)
-8185 p6 build task 77 U_Ground_Droid_Works for BaseForce at NalHutta
-8191 p6 order build U_Ground_Droid_Works at NalHutta
-8253 p0 plan 59 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kamino BaseForce(0+1) net 500 gross 500 eta 20.0
-8284 p0 build task 78 R_Ground_Barracks for BaseForce at Kamino
-8299 p0 order build R_Ground_Barracks at Kamino
-8340 p6 plan 60 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-8341 p6 build task 79 U_Ground_Vehicle_Factory for BaseForce at Felucia
-8359 p6 order build U_Ground_Vehicle_Factory at Felucia
-8413 p1 plan 55 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-8680 p1 plan 56 BUILDGROUNDFORCESPLAN ended success
-8725 p6 plan 58 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
-8730 p6 plan 61 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
-8731 p6 build task 80 U_Ground_Barracks for BaseForce at NalHutta
-8749 p6 order build U_Ground_Barracks at NalHutta
-8905 p0 plan 59 BUILDBASECOMPONENTBARRACKS ended success
-9205 p6 plan 60 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-9354 p6 plan 62 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
-9355 p6 build task 81 Underworld_Saboteur_Team for MainForce
-9355 p6 order move fleet 147 -> Shola
-9432 p6 plan 62 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-9433 p6 order auto-land detach 75 at Shola
-9433 p6 order auto-land 75 at Shola
-9558 p1 plan 63 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+1) net 500 gross 500 eta 20.0
-9559 p1 build task 82 Imperial_Armor_Group for ReserveForce
-9588 p6 plan 64 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
-9588 p6 plan 61 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
-9589 p6 cancel ended build U_Ground_Barracks at NalHutta (refund)
-9589 p6 build task 83 U_Ground_Vehicle_Factory for BaseForce at Felucia
-9599 p6 order build U_Ground_Vehicle_Factory at Felucia
-9602 p1 order build Imperial_Armor_Group at Tatooine
-9900 p6 plan 65 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
-9901 p6 build task 84 Underworld_Saboteur_Team for MainForce
-9901 p6 order launch 75 at Shola
-9901 p6 order form 75 alone
-9904 p6 order move fleet 168 -> The_Maw
-9985 p6 tf MainForce move to MonCalimari
-9985 p6 order move fleet 168 -> Yavin
-10048 p6 order move fleet 168 -> MonCalimari
-10123 p6 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
-10210 p1 plan 63 BUILDGROUNDFORCESPLAN ended success
-10423 p6 plan 65 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-10447 p6 plan 64 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-10524 p6 plan 66 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
-10525 p6 build task 85 Underworld_Saboteur_Team for MainForce
-10525 p6 order move fleet 168 -> Shola
-10612 p6 tf MainForce move to Naboo
-10612 p6 order move fleet 168 -> Naboo
-10714 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Naboo not applied
-10914 p6 plan 67 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
-10914 p6 plan 68 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Tatooine MainForce(0+1) net 1000 gross 1000 eta 20.0
-10914 p6 plan 66 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-10915 p6 build task 86 U_Ground_Droid_Works for BaseForce at NalHutta
-10915 p6 build task 87 Underworld_Saboteur_Team for MainForce
-10919 p6 order build U_Ground_Droid_Works at NalHutta
-10926 p1 plan 69 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-10926 p1 plan 70 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 420 gross 420 eta 32.0
-10927 p1 build task 88 Imperial_Heavy_Scout_Squad for ReserveForce
-10927 p1 build task 89 Imperial_Stormtrooper_Squad for ReserveForce
-10927 p1 build task 90 Imperial_Light_Scout_Squad for ReserveForce
-10927 p1 build task 91 Imperial_Stormtrooper_Squad for ReserveForce
-10957 p1 build task 92 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-10960 p6 order build Underworld_Saboteur_Team at Shola
-10966 p1 order build Imperial_Heavy_Scout_Squad at Tatooine
-10966 p1 order build Imperial_Stormtrooper_Squad at Corellia
-10989 p1 order build Imperial_Light_Scout_Squad at Kashyyyk
-10992 p6 plan 71 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
-10992 p6 plan 72 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 20.0
-10992 p6 plan 68 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-10993 p6 cancel ended build Underworld_Saboteur_Team at Shola (refund)
-10993 p6 build task 93 Underworld_Saboteur_Team for MainForce
-10993 p6 build task 94 Underworld_Saboteur_Team for MainForce
-10993 p6 order move fleet 168 -> The_Maw
-11011 p1 plan 69 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+6985 p6 plan 53 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+7108 p0 plan 59 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Yavin BaseForce(0+1) net 1000 gross 1000 eta 65.8
+7138 p0 build task 83 R_Ground_Heavy_Vehicle_Factory for BaseForce at Yavin
+7183 p0 plan 59 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+7338 p0 order build Rebel_Tank_Buster_Squad at Kamino
+7347 p0 plan 60 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 69.4
+7378 p0 build task 84 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
+7422 p0 plan 60 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+7586 p0 plan 61 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 61.5
+7618 p0 build task 85 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
+7661 p0 plan 61 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+7825 p0 plan 62 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 53.5
+7855 p0 build task 86 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
+7900 p0 plan 62 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+8064 p0 plan 63 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
+8095 p0 build task 87 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
+8119 p0 order build R_Ground_Heavy_Vehicle_Factory at Naboo
+8179 p0 plan 55 BUILDGROUNDFORCESPLAN ended success
+8272 p6 plan 64 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
+8272 p6 plan 58 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
+8272 p6 build task 88 U_Ground_Droid_Works for BaseForce at NalHutta
+8273 p6 cancel ended build U_Ground_Vehicle_Factory at Felucia (refund)
+8284 p6 order build U_Ground_Droid_Works at NalHutta
+8320 p1 plan 54 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+8331 p1 order build Imperial_Armor_Group at Tatooine
+8572 p6 plan 65 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
+8572 p6 build task 89 U_Ground_Vehicle_Factory for BaseForce at Felucia
+8576 p6 order build U_Ground_Vehicle_Factory at Felucia
+8818 p6 plan 64 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
+8938 p1 plan 57 BUILDGROUNDFORCESPLAN ended success
+9424 p6 plan 65 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+9565 p0 plan 63 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+9595 p1 plan 66 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 32.0
+9595 p1 build task 90 Imperial_Heavy_Scout_Squad for ReserveForce
+9595 p1 build task 91 Imperial_Stormtrooper_Squad for ReserveForce
+9595 p1 build task 92 Imperial_Anti_Infantry_Brigade for ReserveForce
+9595 p1 build task 93 Imperial_Stormtrooper_Squad for ReserveForce
+9618 p6 plan 67 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @NalHutta BaseForce(0+1) net 1300 gross 1300 eta 17.6
+9618 p6 plan 68 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Felucia BaseForce(0+1) net 2400 gross 2400 eta 28.0
+9619 p6 build task 94 U_Ground_Droid_Works for BaseForce at NalHutta
+9619 p6 build task 95 U_Ground_Vehicle_Factory for BaseForce at Felucia
+9630 p6 order build U_Ground_Vehicle_Factory at Felucia
+9633 p1 order build Imperial_Stormtrooper_Squad at Corellia
+9636 p1 order build Imperial_Heavy_Scout_Squad at Kuat
+9648 p6 order build U_Ground_Droid_Works at NalHutta
+9656 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+9695 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
+9837 p6 plan 69 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
+9838 p6 build task 96 Underworld_Saboteur_Team for MainForce
+9838 p6 order move fleet 118 -> Shola
+9925 p6 tf MainForce move to Corellia
+9925 p6 order move fleet 118 -> Naboo
+10021 p6 order move fleet 118 -> Tatooine
+10135 p6 order move fleet 118 -> Corellia
+10168 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Corellia not applied
+10183 p6 plan 67 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
+10272 p6 plan 69 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+10422 p6 plan 70 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
+10423 p6 build task 97 Underworld_Saboteur_Team for MainForce
+10423 p6 order move fleet 118 -> The_Maw
+10603 p1 plan 66 BUILDGROUNDFORCESPLAN ended success
+10645 p6 tf MainForce move to MonCalimari
+10645 p6 order move fleet 118 -> Yavin
+10708 p6 order move fleet 118 -> MonCalimari
+10783 p6 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
+10959 p1 plan 71 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+10959 p1 plan 72 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 56.0
+10960 p1 build task 98 Imperial_Anti_Infantry_Brigade for ReserveForce
+10960 p1 build task 99 Imperial_Stormtrooper_Squad for ReserveForce
+10960 p1 build task 100 Imperial_Heavy_Scout_Squad for ReserveForce
+10960 p1 build task 101 Imperial_Stormtrooper_Squad for ReserveForce
+10965 p0 plan 73 BUILDBASECOMPONENTBARRACKS for Build_Base_Component_Barracks @Kamino BaseForce(0+1) net 500 gross 500 eta 20.0
+10990 p1 build task 102 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+10996 p0 build task 103 R_Ground_Barracks for BaseForce at Kamino
+10997 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
+10997 p1 order build Imperial_Stormtrooper_Squad at Corellia
+11018 p6 plan 74 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(0+1) net 1000 gross 1000 eta 20.0
+11020 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+11020 p6 build task 104 Underworld_Saboteur_Team for MainForce
+11027 p0 order build R_Ground_Barracks at Kamino
+11037 p1 plan 71 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
 11053 p6 order build Underworld_Saboteur_Team at Shola
-11170 p6 tf MainForce move to Yavin
-11170 p6 order move fleet 168 -> Yavin
-11239 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Yavin not applied
-11266 p1 plan 73 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 70.0
-11296 p1 build task 95 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-11299 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
-11351 p1 plan 73 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-11436 p1 plan 74 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 64.3
-11454 p6 plan 67 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended failure (released)
-11467 p1 build task 96 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-11521 p1 plan 74 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-11539 p6 plan 71 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-11606 p1 plan 75 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 58.7
-11638 p1 build task 97 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-11653 p6 order move fleet 176 -> The_Maw
-11688 p6 plan 76 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(1+0) net 0 gross 1000 eta 0.0
-11689 p6 build task 98 Underworld_Saboteur_Team for MainForce
-11689 p6 order move fleet 168 -> Shola
-11691 p1 plan 75 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-11734 p6 tf MainForce move to Kashyyyk
-11734 p6 order move fleet 176 -> Kashyyyk
-11776 p1 plan 77 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 53.0
-11806 p1 build task 99 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-11833 p6 tf MainForce move to Kamino
-11833 p6 order move fleet 168 -> MonCalimari
-11861 p1 plan 77 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-11902 p6 tf MainForce ability Underworld_Saboteur_Team 175 at Kashyyyk not applied
-11914 p6 order move fleet 168 -> Kamino
-11922 p6 plan 76 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-11932 p1 plan 70 BUILDGROUNDFORCESPLAN ended success
-11946 p1 plan 78 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
-11977 p1 build task 100 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
-11989 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
-12000 p6 plan 79 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
-12001 p6 build task 101 Underworld_Saboteur_Team for MainForce
-12061 p6 order move fleet 168 -> The_Maw
-12202 p6 plan 72 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-12234 p6 plan 80 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
-12234 p6 plan 81 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
-12235 p6 build task 102 U_Ground_Vehicle_Factory for BaseForce at Shola
-12235 p6 build task 103 Underworld_Saboteur_Team for MainForce
-12235 p6 order move fleet 176 -> Shola
-12262 p6 order build U_Ground_Vehicle_Factory at Shola
-12286 p1 plan 82 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 300 gross 300 eta 24.0
-12286 p1 build task 104 Imperial_Anti_Infantry_Brigade for ReserveForce
-12286 p1 build task 105 Imperial_Stormtrooper_Squad for ReserveForce
-12286 p1 build task 106 Imperial_Stormtrooper_Squad for ReserveForce
-12312 p0 plan 83 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
-12312 p0 plan 84 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1250 gross 1250 eta 10.8
-12313 p0 build task 107 Corellian_Corvette for ReserveForce
-12322 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
-12330 p1 order build Imperial_Stormtrooper_Squad at Corellia
-12343 p0 build task 108 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
-12346 p6 tf MainForce move to MonCalimari
-12346 p6 order move fleet 168 -> Yavin
-12366 p0 order build R_Ground_Heavy_Vehicle_Factory at Naboo
-12371 p0 order build Corellian_Corvette at Naboo
-12373 p6 tf MainForce move to Naboo
-12373 p6 order move fleet 176 -> Naboo
-12409 p6 order move fleet 168 -> MonCalimari
-12475 p6 tf MainForce ability Underworld_Saboteur_Team 175 at Naboo not applied
-12484 p6 tf MainForce ability Underworld_Saboteur_Team 75 at MonCalimari not applied
-12703 p0 plan 84 BUILDSPACEFORCESPLAN ended success
-12775 p6 plan 81 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-12784 p6 plan 79 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-12850 p6 plan 85 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
-12850 p6 build task 109 Underworld_Saboteur_Team for MainForce
-12850 p6 order move fleet 168 -> The_Maw
-12928 p6 plan 86 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
-12928 p6 build task 110 Underworld_Saboteur_Team for MainForce
-12928 p6 order move fleet 176 -> The_Maw
-12988 p6 tf MainForce move to Yavin
-12988 p6 order move fleet 168 -> Yavin
-13057 p6 tf MainForce ability Underworld_Saboteur_Team 75 at Yavin not applied
-13105 p6 tf MainForce move to Kashyyyk
-13105 p6 order move fleet 176 -> Kashyyyk
-13273 p6 tf MainForce ability Underworld_Saboteur_Team 175 at Kashyyyk not applied
-13357 p6 plan 85 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-13435 p1 plan 78 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-13446 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
-13573 p6 plan 86 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
-13582 p6 plan 80 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-13624 p6 plan 87 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
-13624 p6 plan 88 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
-13624 p6 build task 111 Underworld_Saboteur_Team for MainForce
-13624 p6 build task 112 U_Ground_Barracks for BaseForce at NalHutta
-13624 p6 order move fleet 168 -> Shola
-13647 p6 order build U_Ground_Barracks at NalHutta
-13702 p6 plan 89 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
-13702 p6 plan 90 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(1+0) net 0 gross 1000 eta 0.0
-13702 p6 plan 88 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
-13702 p6 plan 87 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-13702 p6 build task 113 U_Ground_Vehicle_Factory for BaseForce at Shola
-13702 p6 build task 114 Underworld_Saboteur_Team for MainForce
-13702 p6 order move fleet 176 -> The_Maw
-13703 p6 cancel ended build U_Ground_Barracks at NalHutta (refund)
-13719 p6 order build U_Ground_Vehicle_Factory at Shola
-13762 p6 order auto-land detach 75 at Shola
-13762 p6 order auto-land 75 at Shola
-13780 p6 plan 91 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(1+0) net 0 gross 1000 eta 0.0
-13780 p6 build task 115 Underworld_Saboteur_Team for MainForce
-13780 p6 order launch 75 at Shola
-13780 p6 order form 75 alone
-13789 p6 tf MainForce move to Kamino
-13789 p6 order move fleet 183 -> MonCalimari
-13813 p0 plan 83 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
-13857 p6 plan 90 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-13857 p6 plan 91 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-13935 p6 plan 92 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
-13936 p6 build task 116 Underworld_Saboteur_Team for MainForce
-13936 p6 order move fleet 176 -> Shola
-14013 p6 plan 93 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(1+0) net 0 gross 1000 eta 0.0
-14013 p6 plan 92 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-14014 p6 build task 117 Underworld_Saboteur_Team for MainForce
-14014 p6 order move fleet 183 -> The_Maw
-14014 p6 order auto-land detach 175 at Shola
-14014 p6 order auto-land 175 at Shola
-14152 p6 tf MainForce move to Kuat
-14152 p6 order move fleet 183 -> Kashyyyk
-14173 p1 plan 82 BUILDGROUNDFORCESPLAN ended success
-14314 p6 order move fleet 183 -> Kuat
-14325 p6 plan 93 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
-14327 p1 plan 94 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 32.0
-14329 p1 build task 118 Imperial_Anti_Infantry_Brigade for ReserveForce
-14329 p1 build task 119 Imperial_Stormtrooper_Squad for ReserveForce
-14329 p1 build task 120 Imperial_Heavy_Scout_Squad for ReserveForce
-14329 p1 build task 121 Imperial_Stormtrooper_Squad for ReserveForce
-14368 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
-14376 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
-14376 p1 order build Imperial_Stormtrooper_Squad at Corellia
-14947 p6 plan 89 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
-14949 p6 plan 95 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
-14950 p6 build task 122 U_Ground_Barracks for BaseForce at NalHutta
-14980 p6 order build U_Ground_Barracks at NalHutta
-15027 p6 plan 96 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @Shola BaseForce(0+1) net 1300 gross 1300 eta 17.6
-15027 p6 plan 95 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
-15028 p6 cancel ended build U_Ground_Barracks at NalHutta (refund)
-15028 p6 build task 123 U_Ground_Droid_Works for BaseForce at Shola
-15052 p6 order build U_Ground_Droid_Works at Shola
-15105 p6 plan 97 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
-15106 p6 build task 124 U_Ground_Barracks for BaseForce at NalHutta
-15135 p6 order build U_Ground_Barracks at NalHutta
-15151 p1 order build Imperial_Heavy_Scout_Squad at Tatooine
-15586 p6 plan 96 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
-16117 p1 plan 94 BUILDGROUNDFORCESPLAN ended success
-16283 p1 plan 98 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+2) net 560 gross 560 eta 13.3
-16285 p1 build task 125 Imperial_Armor_Group for ReserveForce
-16285 p1 build task 126 Imperial_Stormtrooper_Squad for ReserveForce
-16329 p1 order build Imperial_Armor_Group at Tatooine
-16329 p1 order build Imperial_Stormtrooper_Squad at Corellia
-16342 p6 plan 97 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended success
-16368 p1 plan 99 UPGRADESTARBASEPLAN for Upgrade_Starbase @Tatooine BaseForce(0+1) net 1200 gross 1200 eta 24.0
-16369 p1 build task 127 Empire_Star_Base_2 for BaseForce at Tatooine
-16400 p1 order build Empire_Star_Base_2 at Tatooine
-17602 p1 plan 98 BUILDGROUNDFORCESPLAN ended success
-17635 p1 plan 99 UPGRADESTARBASEPLAN ended success
-17688 p0 plan 100 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Naboo BaseForce(0+1) net 1000 gross 1000 eta 48.0
-17688 p0 plan 101 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 1170 gross 1170 eta 78.0
-17689 p0 build task 128 Rebel_Artillery_Brigade for ReserveForce
-17689 p0 build task 129 Rebel_Tank_Buster_Squad for ReserveForce
-17689 p0 build task 130 Rebel_Light_Tank_Brigade for ReserveForce
-17689 p0 build task 131 Rebel_Tank_Buster_Squad for ReserveForce
-17696 p6 plan 102 UPGRADESTARBASEPLAN for Upgrade_Starbase @Felucia BaseForce(0+1) net 5800 gross 5800 eta 30.0
-17698 p6 build task 132 Underworld_Star_Base_4 for BaseForce at Felucia
-17716 p6 order build Underworld_Star_Base_4 at Felucia
-17719 p0 build task 133 R_Ground_Heavy_Vehicle_Factory for BaseForce at Naboo
-17723 p0 order build Rebel_Tank_Buster_Squad at Kamino
-17729 p0 order build Rebel_Artillery_Brigade at Naboo
-17729 p1 plan 103 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 300 gross 300 eta 24.0
-17731 p1 build task 134 Imperial_Anti_Infantry_Brigade for ReserveForce
-17731 p1 build task 135 Imperial_Stormtrooper_Squad for ReserveForce
-17731 p1 build task 136 Imperial_Stormtrooper_Squad for ReserveForce
-17742 p0 order build Rebel_Light_Tank_Brigade at Yavin
-17770 p0 plan 100 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-17786 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
-17786 p1 order build Imperial_Stormtrooper_Squad at Corellia
-17852 p0 plan 104 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Yavin BaseForce(0+1) net 1000 gross 1000 eta 62.3
-17884 p0 build task 137 R_Ground_Heavy_Vehicle_Factory for BaseForce at Yavin
-17934 p0 plan 104 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
-17940 p0 order build Rebel_Tank_Buster_Squad at Kamino
-conflict tick 405 gframe 404 space Yavin Underworld vs Rebel: dropped
-conflict tick 475 gframe 474 space MonCalimari Underworld vs Rebel: dropped
-conflict tick 1124 gframe 1123 space Naboo Underworld vs Rebel: dropped
-conflict tick 1866 gframe 1865 space Yavin Underworld vs Rebel: dropped
-conflict tick 1936 gframe 1935 space MonCalimari Underworld vs Rebel: dropped
-conflict tick 2516 gframe 2515 space Naboo Underworld vs Rebel: dropped
-conflict tick 2808 gframe 2807 space Yavin Underworld vs Rebel: dropped
-conflict tick 3112 gframe 3111 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 3920 gframe 3919 space Naboo Underworld vs Rebel: dropped
-conflict tick 4035 gframe 4034 space Tatooine Underworld vs Empire: dropped
-conflict tick 10047 gframe 10046 space Yavin Underworld vs Rebel: dropped
-conflict tick 10117 gframe 10116 space MonCalimari Underworld vs Rebel: dropped
-conflict tick 10706 gframe 10705 space Naboo Underworld vs Rebel: dropped
-conflict tick 11232 gframe 11231 space Yavin Underworld vs Rebel: dropped
-conflict tick 11896 gframe 11895 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 11912 gframe 11911 space MonCalimari Underworld vs Rebel: dropped
-conflict tick 12060 gframe 12059 space Kamino Underworld vs Rebel: dropped
-conflict tick 12408 gframe 12407 space Yavin Underworld vs Rebel: dropped
-conflict tick 12467 gframe 12466 space Naboo Underworld vs Rebel: dropped
-conflict tick 12478 gframe 12477 space MonCalimari Underworld vs Rebel: dropped
-conflict tick 13050 gframe 13049 space Yavin Underworld vs Rebel: dropped
-conflict tick 13267 gframe 13266 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 13868 gframe 13867 space MonCalimari Underworld vs Rebel: dropped
-conflict tick 14314 gframe 14313 space Kashyyyk Underworld vs Empire: dropped
-conflict tick 14342 gframe 14341 space Kuat Underworld vs Empire: dropped
+11083 p6 plan 70 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+11315 p6 plan 75 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(1+0) net 0 gross 1000 eta 0.0
+11317 p6 build task 105 Underworld_Saboteur_Team for MainForce
+11317 p6 order move fleet 118 -> The_Maw
+11455 p6 tf MainForce move to Kuat
+11455 p6 order move fleet 118 -> Kashyyyk
+11611 p6 plan 75 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+11635 p0 plan 73 BUILDBASECOMPONENTBARRACKS ended success
+11659 p6 tf MainForce move to Naboo
+11659 p6 order move fleet 179 -> Naboo
+11741 p1 order build Imperial_Heavy_Scout_Squad at Tatooine
+11760 p6 plan 76 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(1+0) net 0 gross 1000 eta 0.0
+11761 p6 tf MainForce ability Underworld_Saboteur_Team 178 at Naboo not applied
+11761 p6 build task 106 Underworld_Saboteur_Team for MainForce
+11761 p6 order move fleet 118 -> Shola
+11896 p6 tf MainForce move to Kamino
+11896 p6 order move fleet 118 -> MonCalimari
+11977 p6 order move fleet 118 -> Kamino
+12056 p6 plan 76 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+12057 p1 plan 77 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 69.5
+12061 p6 plan 74 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+12088 p1 build task 107 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+12135 p1 plan 77 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+12205 p6 plan 78 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Tatooine MainForce(1+0) net 0 gross 1000 eta 0.0
+12205 p6 plan 79 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
+12205 p6 plan 80 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(0+1) net 1000 gross 1000 eta 20.0
+12205 p6 plan 68 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended failure (released)
+12205 p6 build task 108 Underworld_Saboteur_Team for MainForce
+12205 p6 build task 109 Underworld_Saboteur_Team for MainForce
+12205 p6 build task 110 Underworld_Saboteur_Team for MainForce
+12205 p6 order move fleet 118 -> Shola
+12205 p6 order move fleet 179 -> The_Maw
+12220 p1 plan 81 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 64.0
+12250 p1 build task 111 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+12262 p6 order build Underworld_Saboteur_Team at Shola
+12298 p1 plan 81 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+12303 p0 plan 82 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1350 gross 1350 eta 16.0
+12303 p0 plan 83 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 1147 gross 1147 eta 60.0
+12304 p0 build task 112 Corellian_Gunboat for ReserveForce
+12304 p0 build task 113 Rebel_Artillery_Brigade for ReserveForce
+12304 p0 build task 114 Rebel_Infantry_Squad for ReserveForce
+12304 p0 build task 115 Rebel_Light_Tank_Brigade for ReserveForce
+12304 p0 build task 116 Rebel_Tank_Buster_Squad for ReserveForce
+12340 p0 order build Corellian_Gunboat at Naboo
+12348 p0 order build Rebel_Light_Tank_Brigade at Yavin
+12356 p6 plan 78 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+12360 p0 order build Rebel_Infantry_Squad at Kamino
+12366 p0 order build Rebel_Artillery_Brigade at Naboo
+12382 p6 tf MainForce move to Yavin
+12382 p6 order move fleet 179 -> Yavin
+12383 p1 plan 84 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 58.6
+12415 p1 build task 117 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+12430 p6 order auto-land detach 75 at Shola
+12430 p6 order auto-land 75 at Shola
+12451 p6 tf MainForce ability Underworld_Saboteur_Team 178 at Yavin not applied
+12461 p1 plan 84 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+12515 p0 order build Rebel_Tank_Buster_Squad at Kamino
+12546 p1 plan 85 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 53.2
+12577 p1 build task 118 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+12584 p6 plan 86 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
+12586 p6 build task 119 Underworld_Saboteur_Team for MainForce
+12586 p6 order launch 75 at Shola
+12586 p6 order form 75 alone
+12595 p6 tf MainForce move to Corellia
+12595 p6 order move fleet 183 -> Naboo
+12624 p1 plan 85 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended failure (released)
+12660 p6 plan 86 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+12709 p1 plan 87 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY for Build_Base_Component_Heavy_Vehicle_Factory @Tatooine BaseForce(0+1) net 1000 gross 1000 eta 48.0
+12709 p1 plan 72 BUILDGROUNDFORCESPLAN ended success
+12739 p1 build task 120 E_Ground_Heavy_Vehicle_Factory for BaseForce at Tatooine
+12751 p6 plan 79 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+12764 p1 order build E_Ground_Heavy_Vehicle_Factory at Tatooine
+12826 p0 plan 82 BUILDSPACEFORCESPLAN ended success
+12862 p6 order move fleet 188 -> The_Maw
+12865 p1 plan 88 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 450 gross 450 eta 56.0
+12865 p1 build task 121 Imperial_Heavy_Scout_Squad for ReserveForce
+12865 p1 build task 122 Imperial_Stormtrooper_Squad for ReserveForce
+12865 p1 build task 123 Imperial_Anti_Infantry_Brigade for ReserveForce
+12865 p1 build task 124 Imperial_Stormtrooper_Squad for ReserveForce
+12889 p6 plan 89 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Yavin MainForce(1+0) net 0 gross 1000 eta 0.0
+12889 p6 build task 125 Underworld_Saboteur_Team for MainForce
+12889 p6 order move fleet 179 -> The_Maw
+12911 p1 order build Imperial_Stormtrooper_Squad at Kashyyyk
+12919 p1 order build Imperial_Stormtrooper_Squad at Corellia
+12943 p6 tf MainForce move to Kashyyyk
+12943 p6 order move fleet 188 -> Kashyyyk
+12958 p6 tf MainForce move to Yavin
+12958 p6 order move fleet 179 -> Yavin
+13027 p6 tf MainForce ability Underworld_Saboteur_Team 178 at Yavin not applied
+13111 p6 tf MainForce ability Underworld_Saboteur_Team 187 at Kashyyyk not applied
+13327 p6 plan 89 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+13411 p6 plan 80 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+13422 p6 plan 90 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
+13423 p6 build task 126 U_Ground_Barracks for BaseForce at NalHutta
+13430 p6 order build U_Ground_Barracks at NalHutta
+13497 p6 plan 91 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kamino MainForce(1+0) net 0 gross 1000 eta 0.0
+13497 p6 plan 92 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Corellia MainForce(1+0) net 0 gross 1000 eta 0.0
+13498 p6 build task 127 Underworld_Saboteur_Team for MainForce
+13498 p6 build task 128 Underworld_Saboteur_Team for MainForce
+13498 p6 order move fleet 179 -> Shola
+13498 p6 order move fleet 183 -> Shola
+13600 p6 tf MainForce move to Corellia
+13600 p6 order move fleet 183 -> Naboo
+13642 p6 tf MainForce move to Kamino
+13642 p6 order move fleet 179 -> MonCalimari
+13645 p6 plan 93 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Naboo MainForce(1+0) net 0 gross 1000 eta 0.0
+13645 p6 plan 90 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended failure (released)
+13645 p6 build task 129 Underworld_Saboteur_Team for MainForce
+13645 p6 order move fleet 188 -> Shola
+13646 p6 cancel ended build U_Ground_Barracks at NalHutta (refund)
+13696 p6 order move fleet 183 -> Tatooine
+13723 p6 order move fleet 179 -> Kamino
+13780 p6 tf MainForce move to Naboo
+13780 p6 order move fleet 188 -> Naboo
+13796 p6 plan 94 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
+13796 p6 plan 95 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS for Build_Underworld_Barracks @NalHutta BaseForce(0+1) net 1000 gross 1000 eta 14.4
+13796 p6 plan 92 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+13796 p6 plan 91 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+13798 p6 build task 130 U_Ground_Vehicle_Factory for BaseForce at Shola
+13798 p6 build task 131 U_Ground_Barracks for BaseForce at NalHutta
+13802 p6 order build U_Ground_Barracks at NalHutta
+13812 p6 order build U_Ground_Vehicle_Factory at Shola
+13882 p6 tf MainForce ability Underworld_Saboteur_Team 187 at Naboo not applied
+14173 p0 plan 83 BUILDGROUNDFORCESPLAN ended success
+14182 p6 plan 93 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+14212 p1 plan 87 BUILDBASECOMPONENTHEAVYVEHICLEFACTORY ended success
+14252 p1 order build Imperial_Heavy_Scout_Squad at Tatooine
+14523 p6 plan 96 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kashyyyk MainForce(1+0) net 0 gross 1000 eta 0.0
+14524 p6 build task 132 Underworld_Saboteur_Team for MainForce
+14524 p6 order move fleet 179 -> The_Maw
+14659 p6 plan 94 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+14809 p6 tf MainForce move to Kashyyyk
+14809 p6 order move fleet 179 -> Kashyyyk
+14817 p6 plan 97 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @Kuat MainForce(1+0) net 0 gross 1000 eta 0.0
+14818 p6 build task 133 Underworld_Saboteur_Team for MainForce
+14818 p6 order move fleet 183 -> The_Maw
+14965 p6 plan 97 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+14977 p6 tf MainForce ability Underworld_Saboteur_Team 178 at Kashyyyk not applied
+15001 p6 plan 95 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDBARRACKS ended success
+15114 p6 plan 98 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY for Build_Underworld_Vehicle_Factory @Shola BaseForce(0+1) net 2400 gross 2400 eta 28.0
+15114 p6 plan 96 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure (released)
+15115 p6 build task 134 U_Ground_Vehicle_Factory for BaseForce at Shola
+15145 p6 order build U_Ground_Vehicle_Factory at Shola
+15244 p1 order build Imperial_Anti_Infantry_Brigade at Tatooine
+15264 p6 plan 99 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR for Corrupt_Planet @MonCalimari MainForce(1+0) net 0 gross 1000 eta 0.0
+15265 p6 build task 135 Underworld_Saboteur_Team for MainForce
+15265 p6 order move fleet 179 -> The_Maw
+15433 p6 tf MainForce move to MonCalimari
+15433 p6 order move fleet 179 -> Yavin
+15496 p6 order move fleet 179 -> MonCalimari
+15571 p6 tf MainForce ability Underworld_Saboteur_Team 178 at MonCalimari not applied
+15871 p6 plan 99 AI_PLAN_UNDERWORLD_DEPLOYSABOTEUR ended failure
+15970 p1 plan 88 BUILDGROUNDFORCESPLAN ended success
+16140 p1 plan 100 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+1) net 500 gross 500 eta 13.3
+16141 p1 build task 136 Imperial_Armor_Group for ReserveForce
+16174 p1 order build Imperial_Armor_Group at Tatooine
+16347 p0 plan 101 BUILDSPACEFORCESPLAN for Build_Space_Forces @global ReserveForce(0+1) net 1250 gross 1250 eta 10.8
+16347 p0 plan 102 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+3) net 647 gross 647 eta 60.0
+16348 p0 build task 137 Corellian_Corvette for ReserveForce
+16348 p0 build task 138 Rebel_Artillery_Brigade for ReserveForce
+16348 p0 build task 139 Rebel_Tank_Buster_Squad for ReserveForce
+16348 p0 build task 140 Rebel_Infantry_Squad for ReserveForce
+16390 p0 order build Rebel_Tank_Buster_Squad at Kamino
+16396 p0 order build Rebel_Artillery_Brigade at Naboo
+16401 p0 order build Corellian_Corvette at Naboo
+16423 p6 plan 98 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDVEHICLEFACTORY ended success
+16582 p1 plan 100 BUILDGROUNDFORCESPLAN ended success
+16607 p0 order build Rebel_Infantry_Squad at Kamino
+16613 p6 plan 103 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS for Build_Underworld_Droid_Works @Shola BaseForce(0+1) net 1300 gross 1300 eta 17.6
+16615 p6 build task 141 U_Ground_Droid_Works for BaseForce at Shola
+16633 p6 order build U_Ground_Droid_Works at Shola
+16732 p0 plan 101 BUILDSPACEFORCESPLAN ended success
+16736 p1 plan 104 BUILDGROUNDFORCESPLAN for Build_Ground_Forces @global ReserveForce(0+4) net 420 gross 420 eta 32.0
+16738 p1 build task 142 Imperial_Heavy_Scout_Squad for ReserveForce
+16738 p1 build task 143 Imperial_Stormtrooper_Squad for ReserveForce
+16738 p1 build task 144 Imperial_Light_Scout_Squad for ReserveForce
+16738 p1 build task 145 Imperial_Stormtrooper_Squad for ReserveForce
+16794 p1 order build Imperial_Stormtrooper_Squad at Corellia
+17167 p6 plan 103 AI_PLAN_UNDERWORLD_BUILDUNDERWORLDDROIDWORKS ended success
+17671 p1 plan 105 UPGRADESTARBASEPLAN for Upgrade_Starbase @Tatooine BaseForce(0+1) net 1200 gross 1200 eta 24.0
+17671 p1 build task 146 Empire_Star_Base_2 for BaseForce at Tatooine
+17702 p1 order build Empire_Star_Base_2 at Tatooine
+conflict tick 314 gframe 313 space Naboo Underworld vs Rebel: dropped
+conflict tick 627 gframe 626 space Yavin Underworld vs Rebel: dropped
+conflict tick 697 gframe 696 space MonCalimari Underworld vs Rebel: dropped
+conflict tick 1262 gframe 1261 space Naboo Underworld vs Rebel: dropped
+conflict tick 2132 gframe 2131 space MonCalimari Underworld vs Rebel: dropped
+conflict tick 2456 gframe 2455 space Naboo Underworld vs Rebel: dropped
+conflict tick 2571 gframe 2570 space Tatooine Underworld vs Empire: dropped
+conflict tick 2598 gframe 2597 space Corellia Underworld vs Empire: dropped
+conflict tick 3462 gframe 3461 space Yavin Underworld vs Rebel: dropped
+conflict tick 4169 gframe 4168 space Naboo Underworld vs Rebel: dropped
+conflict tick 4948 gframe 4947 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 5733 gframe 5732 space Yavin Underworld vs Rebel: dropped
+conflict tick 5803 gframe 5802 space MonCalimari Underworld vs Rebel: dropped
+conflict tick 10019 gframe 10018 space Naboo Underworld vs Rebel: dropped
+conflict tick 10134 gframe 10133 space Tatooine Underworld vs Empire: dropped
+conflict tick 10161 gframe 10160 space Corellia Underworld vs Empire: dropped
+conflict tick 10707 gframe 10706 space Yavin Underworld vs Rebel: dropped
+conflict tick 10777 gframe 10776 space MonCalimari Underworld vs Rebel: dropped
+conflict tick 11617 gframe 11616 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 11753 gframe 11752 space Naboo Underworld vs Rebel: dropped
+conflict tick 11975 gframe 11974 space MonCalimari Underworld vs Rebel: dropped
+conflict tick 12123 gframe 12122 space Kamino Underworld vs Rebel: dropped
+conflict tick 12444 gframe 12443 space Yavin Underworld vs Rebel: dropped
+conflict tick 12689 gframe 12688 space Naboo Underworld vs Rebel: dropped
+conflict tick 13020 gframe 13019 space Yavin Underworld vs Rebel: dropped
+conflict tick 13105 gframe 13104 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 13694 gframe 13693 space Naboo Underworld vs Rebel: dropped
+conflict tick 13721 gframe 13720 space MonCalimari Underworld vs Rebel: dropped
+conflict tick 13809 gframe 13808 space Tatooine Underworld vs Empire: dropped
+conflict tick 13869 gframe 13868 space Kamino Underworld vs Rebel: dropped
+conflict tick 13874 gframe 13873 space Naboo Underworld vs Rebel: dropped
+conflict tick 14971 gframe 14970 space Kashyyyk Underworld vs Empire: dropped
+conflict tick 15495 gframe 15494 space Yavin Underworld vs Rebel: dropped
+conflict tick 15565 gframe 15564 space MonCalimari Underworld vs Rebel: dropped
