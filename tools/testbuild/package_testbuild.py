@@ -1,4 +1,4 @@
-"""Packs a test build zip for Gabriel: alamo_game + alamo_mod_check (with the DXC, FFmpeg and FSR runtime DLLs) from a
+"""Packs a test build zip for Gabriel: alamo_game + alamo_mod_check (with the DXC, FFmpeg, FSR and XeSS runtime DLLs) from a
 Release build tree, the launchers in
 tools/testbuild/launchers (Play.cmd for Forces of Corruption, Play_Mod.cmd for any installed mod), Play.exe (Play.cmd
 without a console window, built by build_msvc.cmd),
@@ -30,7 +30,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 HERE = ROOT / "tools" / "testbuild"
 BINARIES = ["Play.exe", "alamo_game.exe", "alamo_mod_check.exe", "avcodec-62.dll", "avformat-62.dll", "avutil-60.dll",
             "dxcompiler.dll", "dxil.dll", "amd_fidelityfx_loader_vk.dll", "amd_fidelityfx_upscaler_vk.dll",
-            "COPYING.LGPLv2.1"]
+            "libxess.dll", "intel_xess_license.txt", "COPYING.LGPLv2.1"]
 LAUNCHERS = ["Play.cmd", "Play_Mod.cmd", "find_game.cmd", "launcher.ps1"]
 SMOKE_MOD = "1125571106"  # Thrawn's Revenge (Steam workshop), the mod the smoke plays
 TOOLCHAIN = ROOT / "toolchain"
@@ -109,6 +109,9 @@ def third_party_notices():
         ("AMD FidelityFX SDK " + one_dir("fidelityfx-*").name.split("-", 1)[1],
          "amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll (FSR upscaling), unmodified",
          [one_dir("fidelityfx-*") / "license.md"]),
+        ("Intel XeSS SDK " + one_dir("xess-*").name.split("-", 1)[1],
+         "libxess.dll (XeSS upscaling), unmodified; its license is also intel_xess_license.txt",
+         [one_dir("xess-*") / "LICENSE.txt", one_dir("xess-*") / "third-party-programs.txt"]),
     ]
     ff_title = "FFmpeg %s: avcodec-62.dll, avformat-62.dll, avutil-60.dll" % ff_ver
     rule = "=" * 78

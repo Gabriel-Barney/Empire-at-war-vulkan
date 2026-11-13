@@ -623,7 +623,8 @@ END
     CHECK(kAntiAliasChoices[0].value == kAaOff && kAntiAliasChoices[1].value == kAaSmaa && kAntiAliasChoices[2].value == kAaTaa &&
           kAntiAliasChoices[5].value == kAaMsaa8);
     // [port] The FSR rows follow, in render::UpscaleQuality order.
-    CHECK(std::size(kAntiAliasChoices) == 11 && kAntiAliasChoices[6].value == kAaFsrNative && kAntiAliasChoices[10].value == kAaFsrUltra);
+    CHECK(std::size(kAntiAliasChoices) == 16 && kAntiAliasChoices[6].value == kAaFsrNative && kAntiAliasChoices[10].value == kAaFsrUltra);
+    CHECK(kAntiAliasChoices[11].value == kAaXessNative && kAntiAliasChoices[15].value == kAaXessUltra);  // then the XeSS rows
 }
 
 }  // namespace test_gui_screens_t

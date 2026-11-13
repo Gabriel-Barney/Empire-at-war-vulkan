@@ -478,7 +478,7 @@ void test_real(Gpu& g, const std::string& src_dir) {
             const int32_t k = gui.top() ? gui.top()->find(id) : -1;
             CHECK(k >= 0 && gui.combo_rows(*gui.top(), static_cast<size_t>(k)) == static_cast<int32_t>(gui.top()->get(id)->items.size()));  // every level reachable
         }
-        // [port] The Anti-aliasing list open (11 modes since FSR): every row on screen.
+        // [port] The Anti-aliasing list open (16 modes since FSR and XeSS): every row on screen.
         if (ui::GuiDialog* aa_page = gui.top(); aa_page && aa_page->get("IDC_PORT_ANTI_ALIASING")) {
             ui::GuiControl* aa = aa_page->get("IDC_PORT_ANTI_ALIASING");
             aa->open = true;

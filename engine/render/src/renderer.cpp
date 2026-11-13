@@ -22,6 +22,7 @@
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
 #include "fsr.hpp"  // [port] FSR upscaling
+#include "xess.hpp"  // [port] XeSS upscaling
 #include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
@@ -443,6 +444,7 @@ void Renderer::shutdown() {
     smaa_.reset();  // [port] SMAA pipelines + targets + lookup textures
     taa_.reset();   // [port] TAA pipelines + history
     fsr_.reset();   // [port] FSR context, runtime + output
+    xess_.reset();  // [port] XeSS context, runtime + output
     gamma_.reset();  // [port] gamma pipeline + scratch image
     psos_.shutdown(true);
     for (VkPipelineLayout& l : tlayout_) {

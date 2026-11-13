@@ -145,6 +145,10 @@ float gamma_value(int32_t slider);
 bool taa_active(int32_t mode);
 // [port: Gabriel 2026-11-13] The FSR modes of the list (ui::kAaFsrNative .. kAaFsrUltra): their quality mode; nullopt otherwise.
 std::optional<render::UpscaleQuality> fsr_quality(int32_t mode);
+// [port: Gabriel 2026-11-13] The XeSS modes (ui::kAaXessNative .. kAaXessUltra): their preset; nullopt otherwise.
+std::optional<render::UpscaleQuality> xess_quality(int32_t mode);
+// The upscaler a mode uses (Fsr, Xess or None).
+render::Upscaler aa_upscaler(int32_t mode);
 uint32_t aa_msaa_samples(int32_t mode);
 // Profile name of an Anti-aliasing mode ("off", "smaa", "taa", "msaa2", "msaa4", "msaa8"; unknown modes: "off") and back
 // (nullopt for an unknown name).

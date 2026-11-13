@@ -244,12 +244,16 @@ void detail_mappings() {
             bool smaa, taa;
             uint32_t msaa;
             int fsr = -1;  // [port] FSR quality mode (render::UpscaleQuality), -1 none; FSR modes also set TAA as the fallback
+            int xess = -1;  // [port] XeSS preset (render::UpscaleQuality), -1 none; likewise TAA as the fallback
         };
         const Want wants[] = {{ui::kAaOff, false, false, 1},  {ui::kAaSmaa, true, false, 1},   {ui::kAaTaa, false, true, 1},
                               {ui::kAaMsaa2, false, false, 2}, {ui::kAaMsaa4, false, false, 4}, {ui::kAaMsaa8, false, false, 8},
                               {ui::kAaFsrNative, false, true, 1, 0}, {ui::kAaFsrQuality, false, true, 1, 1},
                               {ui::kAaFsrBalanced, false, true, 1, 2}, {ui::kAaFsrPerformance, false, true, 1, 3},
-                              {ui::kAaFsrUltra, false, true, 1, 4}};
+                              {ui::kAaFsrUltra, false, true, 1, 4},
+                              {ui::kAaXessNative, false, true, 1, -1, 0}, {ui::kAaXessQuality, false, true, 1, -1, 1},
+                              {ui::kAaXessBalanced, false, true, 1, -1, 2}, {ui::kAaXessPerformance, false, true, 1, -1, 3},
+                              {ui::kAaXessUltra, false, true, 1, -1, 4}};
         CHECK(std::size(wants) == std::size(ui::kAntiAliasChoices));
         for (size_t i = 0; i < std::size(wants); ++i) {
             const Want& w = wants[i];
@@ -258,9 +262,12 @@ void detail_mappings() {
             o.taa_weight = 0.3f;  // a stale weight is reset to the renderer default
             game::apply_aa_options(o, w.mode);
             CHECK(o.smaa == w.smaa && o.taa == w.taa && o.msaa == w.msaa && o.taa_weight < 0.0f);
-            CHECK(game::taa_active(w.mode) == (w.taa && w.fsr < 0) && game::aa_msaa_samples(w.mode) == w.msaa);
+            CHECK(game::taa_active(w.mode) == (w.taa && w.fsr < 0 && w.xess < 0) && game::aa_msaa_samples(w.mode) == w.msaa);
             CHECK((o.upscaler == render::Upscaler::Fsr) == (w.fsr >= 0) && game::fsr_quality(w.mode).has_value() == (w.fsr >= 0));
+            CHECK((o.upscaler == render::Upscaler::Xess) == (w.xess >= 0) && game::xess_quality(w.mode).has_value() == (w.xess >= 0));
+            CHECK(game::aa_upscaler(w.mode) == o.upscaler);
             if (w.fsr >= 0) CHECK(o.upscale_quality == static_cast<render::UpscaleQuality>(w.fsr));
+            if (w.xess >= 0) CHECK(o.upscale_quality == static_cast<render::UpscaleQuality>(w.xess));
             CHECK(game::parse_aa_mode(game::aa_mode_name(w.mode)) == w.mode);
         }
         CHECK(!game::parse_aa_mode("high") && std::string(game::aa_mode_name(99)) == "off");

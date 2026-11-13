@@ -170,6 +170,34 @@ function(alamo_render_copy_ffx target)
   endif()
 endfunction()
 
+# ---------------------------------------------------------------- [port] XeSS upscaling (src/xess.cpp)
+# Intel XeSS SDK 3.0.2 (approved by Gabriel 2026-11-13, docs/DECISIONS.md "XeSS upscaling"): the C API headers and the
+# Intel-signed libxess.dll fetched by toolchain\13_xess.cmd (SHA-256 pinned there; binary-only, Intel Simplified
+# Software License). Without the headers the renderer builds without XeSS (Upscaler::Xess frames fall back to TAA). The
+# DLL is loaded at run time from the executable's folder; alamo_render_copy_xess(<target>) copies it and the licence +
+# third-party notices there (the licence asks for its notice with every redistribution).
+set(ALAMO_XESS_DIR "${PROJECT_SOURCE_DIR}/toolchain/xess-3.0.2" CACHE PATH "XeSS SDK subset (toolchain/13_xess.cmd)")
+target_sources(alamo_render PRIVATE src/xess.cpp)
+if(WIN32 AND EXISTS "${ALAMO_XESS_DIR}/inc/xess/xess_vk.h")
+  target_include_directories(alamo_render SYSTEM PRIVATE "${ALAMO_XESS_DIR}/inc")
+  target_compile_definitions(alamo_render PRIVATE ALAMO_RENDER_HAVE_XESS=1)
+  set(ALAMO_RENDER_HAVE_XESS ON CACHE INTERNAL "XeSS runtime headers found")
+else()
+  message(STATUS "alamo_render: XeSS SDK not found in ${ALAMO_XESS_DIR} (run toolchain/13_xess.cmd); XeSS upscaling off")
+  set(ALAMO_RENDER_HAVE_XESS OFF CACHE INTERNAL "XeSS runtime headers found")
+endif()
+function(alamo_render_copy_xess target)
+  if(ALAMO_RENDER_HAVE_XESS AND EXISTS "${ALAMO_XESS_DIR}/bin/libxess.dll")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_XESS_DIR}/bin/libxess.dll" "$<TARGET_FILE_DIR:${target}>"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_XESS_DIR}/LICENSE.txt"
+              "$<TARGET_FILE_DIR:${target}>/intel_xess_license.txt"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_XESS_DIR}/third-party-programs.txt"
+              "$<TARGET_FILE_DIR:${target}>/intel_xess_third-party-programs.txt"
+      VERBATIM)
+  endif()
+endfunction()
+
 # ---------------------------------------------------------------- [port] output gamma (shaders/gamma.hlsl, src/gamma.cpp)
 set(_render_gamma_headers)
 foreach(spec "gamma_vs:VSMain:vs_6_0" "gamma_ps:PSMain:ps_6_0")
@@ -235,6 +263,17 @@ alamo_render_copy_ffx(alamo_render_fsr_tests)
 add_test(NAME alamo_render_fsr_tests COMMAND alamo_render_fsr_tests)
 set_tests_properties(alamo_render_fsr_tests PROPERTIES TIMEOUT 900 LABELS slow ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
 
+# [port] XeSS upscaling: preset ratios (CPU), the upscale of an empty scene and its history rules (GPU, through Intel's
+# runtime; skipped with the reason when it cannot run here), with ALAMO_FOC_DATA a land map drawn with TAA vs XeSS
+# Quality / Performance -> logsender_xess_*.png.
+add_executable(alamo_render_xess_tests tests/test_render_xess.cpp)
+target_link_libraries(alamo_render_xess_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
+target_compile_definitions(alamo_render_xess_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
+alamo_shaderxlat_copy_dxc(alamo_render_xess_tests)
+alamo_render_copy_xess(alamo_render_xess_tests)
+add_test(NAME alamo_render_xess_tests COMMAND alamo_render_xess_tests)
+set_tests_properties(alamo_render_xess_tests PROPERTIES TIMEOUT 900 LABELS slow ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
+
 # Soft shadows must not darken the unshadowed frame (playtest 3); real data: _MP_LAND_ENDOR shadows off / hard / soft.
 add_executable(alamo_render_shadow_tests tests/test_render_shadow.cpp)
 target_link_libraries(alamo_render_shadow_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
@@ -258,6 +297,7 @@ if(WIN32)
 endif()
 alamo_shaderxlat_copy_dxc(alamo_render_app)  # runtime dxcompiler.dll + dxil.dll for track B
 alamo_render_copy_ffx(alamo_render_app)      # [port] FSR runtime DLLs
+alamo_render_copy_xess(alamo_render_app)     # [port] XeSS runtime DLL
 # Smoke run of the frame graph into a real swapchain with synchronization validation (0 hazards required:
 # the app exits non-zero on any validation message). 30 frames into a never-shown (hidden) window: the
 # swapchain, acquire / present and the sync validation stay covered without a window popping up.

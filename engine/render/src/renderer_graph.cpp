@@ -23,6 +23,7 @@
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
 #include "fsr.hpp"  // [port] FSR upscaling
+#include "xess.hpp"  // [port] XeSS upscaling
 #include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
@@ -647,11 +648,12 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     latch_anisotropy(frame);
     // [port: Gabriel] Render scale: the scene targets take the scaled size; the view's pixel size follows them (lasers,
     // the D3D9 half-pixel offset, TAA jitter), its projection (aspect) stays the output's.
-    // [port: Gabriel 2026-11-13] FSR (fsr.cpp): the scene and its post chain at the quality mode's render size instead (the
-    // render scale is then not used), upscaled to the output at the end.
+    // [port: Gabriel 2026-11-13] FSR (fsr.cpp) / XeSS (xess.cpp): the scene and its post chain at the quality mode's
+    // render size instead (the render scale is then not used), upscaled to the output at the end.
     VkExtent2D scene_ext = render_scale_extent(target.extent, opts.render_scale);
     VkExtent2D fsr_ext = target.extent;
-    const bool fsr_on = fsr_begin(target.extent, opts, fsr_ext);
+    const bool fsr_on = fsr_begin(target.extent, opts, fsr_ext);  // FSR or XeSS frame
+    const bool xess_on = fsr_on && opts.upscaler == Upscaler::Xess;
     if (fsr_on) scene_ext = fsr_ext;
     if (!ensure_targets(scene_ext)) return false;
     // [port] MSAA (RecordOptions::msaa): the main scene's sample count, render pass class and multisampled target. Every
@@ -1110,7 +1112,7 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     }
     bool fsr_out = false;  // [port] FSR: the frame's image is fsr_->output() (display size)
     if ((opts.taa || fsr_on) && taa_) {  // [port] TAA resolve + sharpen / FSR at the end of the post chain (taa.cpp, fsr.cpp)
-        const uint32_t taa_scope = gt ? gt->begin_scope(primary, fsr_on ? "fsr" : "taa") : 0u;
+        const uint32_t taa_scope = gt ? gt->begin_scope(primary, xess_on ? "xess" : (fsr_on ? "fsr" : "taa")) : 0u;
         // Object motion: the opaque draws of keyed instances (Instance::motion_id) that moved since the last TAA frame.
         // Alpha-tested / fading passes are left out (their cut-outs would write vectors over what shows through).
         std::vector<TaaMover>& movers = taa_->movers();
@@ -1148,7 +1150,11 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
             }
         }
         taa_->commit_motion(instances);
-        if (fsr_on) {  // [port] FSR: motion vectors + depth of the resolved scene, then the upscale into fsr_->output()
+        if (xess_on) {  // [port] XeSS: the same inputs as FSR, then the upscale into xess_->output()
+            fsr_out = taa_->fsr_inputs(frame, primary, out, b.set0) && xess_->dispatch(primary, out, *taa_, taa_->history_reset());
+            st.xess = fsr_out;
+            st.taa_reset = fsr_out && taa_->history_reset();
+        } else if (fsr_on) {  // [port] FSR: motion vectors + depth of the resolved scene, then the upscale into fsr_->output()
             fsr_out = taa_->fsr_inputs(frame, primary, out, b.set0) &&
                       fsr_->dispatch(primary, out, *taa_, opts.fsr_sharpness, opts.frame_ms, taa_->history_reset());
             st.fsr = fsr_out;
@@ -1179,8 +1185,8 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     dst.format = desc_.color_format;
     dst.before = rhi::ImageState::Undefined;
     dst.after = target.color_after;
-    if (fsr_out) {  // [port] FSR output (output size, General) -> the caller's image; the scene keeps its state
-        rhi::RenderTarget& up = fsr_->output();
+    if (fsr_out) {  // [port] FSR / XeSS output (output size, General) -> the caller's image; the scene keeps its state
+        rhi::RenderTarget& up = xess_on ? xess_->output() : fsr_->output();
         rhi::cmd_stretch_rect(fn, primary, copy_of(up, rhi::ImageState::General), dst, VK_FILTER_NEAREST);
         up.set_color_state(rhi::ImageState::General);
     } else {

@@ -577,8 +577,9 @@ uint32_t aa_msaa_samples(int32_t mode) {
 }
 
 namespace {
-constexpr const char* kAaModeNames[] = {"off",        "smaa",        "taa",          "msaa2",           "msaa4",    "msaa8",
-                                        "fsr_native", "fsr_quality", "fsr_balanced", "fsr_performance", "fsr_ultra"};  // by mode
+constexpr const char* kAaModeNames[] = {"off",         "smaa",         "taa",           "msaa2",            "msaa4",     "msaa8",
+                                        "fsr_native",  "fsr_quality",  "fsr_balanced",  "fsr_performance",  "fsr_ultra",
+                                        "xess_native", "xess_quality", "xess_balanced", "xess_performance", "xess_ultra"};  // by mode
 static_assert(std::size(kAaModeNames) == std::size(ui::kAntiAliasChoices));
 }  // namespace
 
@@ -597,13 +598,25 @@ std::optional<render::UpscaleQuality> fsr_quality(int32_t mode) {
     return static_cast<render::UpscaleQuality>(mode - ui::kAaFsrNative);
 }
 
+std::optional<render::UpscaleQuality> xess_quality(int32_t mode) {
+    if (mode < ui::kAaXessNative || mode > ui::kAaXessUltra) return std::nullopt;
+    return static_cast<render::UpscaleQuality>(mode - ui::kAaXessNative);
+}
+
+render::Upscaler aa_upscaler(int32_t mode) {
+    if (fsr_quality(mode)) return render::Upscaler::Fsr;
+    if (xess_quality(mode)) return render::Upscaler::Xess;
+    return render::Upscaler::None;
+}
+
 void apply_aa_options(render::RecordOptions& o, int32_t mode) {
     // [port: Gabriel 2026-11-13] One mode, one quality each: TAA keeps the renderer's tuned weight and sharpen. An FSR mode
-    // sets the upscaler and also TAA, which the renderer draws instead where FSR cannot run.
-    const std::optional<render::UpscaleQuality> fsr = fsr_quality(mode);
-    o.upscaler = fsr ? render::Upscaler::Fsr : render::Upscaler::None;
+    // sets the upscaler and also TAA, which the renderer draws instead where FSR cannot run; an XeSS mode likewise.
+    const std::optional<render::UpscaleQuality> fsr = fsr_quality(mode), xess = xess_quality(mode);
+    o.upscaler = aa_upscaler(mode);
     if (fsr) o.upscale_quality = *fsr;
-    o.taa = taa_active(mode) || fsr.has_value();
+    if (xess) o.upscale_quality = *xess;
+    o.taa = taa_active(mode) || fsr.has_value() || xess.has_value();
     o.smaa = mode == ui::kAaSmaa;
     o.msaa = aa_msaa_samples(mode);
     o.taa_weight = -1.0f;

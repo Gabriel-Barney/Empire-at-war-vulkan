@@ -290,7 +290,8 @@ struct RecordOptions {
     // frame (`taa` is then ignored) and reuses its object-motion bookkeeping. When FSR cannot run (no runtime, no
     // support, a failed dispatch) the frame is drawn at full size with TAA instead; DrawStats::fsr says which happened.
     // fsr_sharpness: FSR's own RCAS sharpening 0..1 (0 = off). frame_ms: time since the last frame (0: 16.6). "fsr" GPU
-    // timer scope.
+    // timer scope. [port: Gabriel 2026-11-13] Upscaler::Xess does the same with Intel XeSS Super Resolution (src/xess.hpp:
+    // XeSS's preset of the same name, its own render size; no sharpening, no frame time); DrawStats::xess, "xess" scope.
     Upscaler upscaler = Upscaler::None;
     UpscaleQuality upscale_quality = UpscaleQuality::Quality;
     float fsr_sharpness = kFsrDefaultSharpness;
@@ -374,6 +375,7 @@ class SmaaPass;       // src/smaa.hpp: [port] SMAA 1x
 class TaaPass;        // src/taa.hpp: [port] temporal anti-aliasing
 class GammaPass;      // src/gamma.hpp: [port] output gamma
 class FsrPass;        // src/fsr.hpp: [port] FSR upscaling
+class XessPass;       // src/xess.hpp: [port] XeSS upscaling
 struct WorldBindStats;
 
 struct DrawStats {
@@ -404,6 +406,7 @@ struct DrawStats {
     uint32_t taa_movers = 0;  // draws of the TAA velocity pass (keyed instances that moved since the last frame)
     // [port] FSR (RecordOptions::upscaler): the frame was drawn at render_width x render_height and upscaled by FSR.
     bool fsr = false;
+    bool xess = false;  // [port] the same with XeSS (RecordOptions::upscaler = Upscaler::Xess)
     uint32_t render_width = 0, render_height = 0;  // the scene's size this frame (the caller's size without FSR)
     bool smaa = false;        // [port] SMAA (RecordOptions::smaa) ran
     uint32_t msaa = 1;        // [port] samples the scene was drawn with (RecordOptions::msaa after the device clamp)
@@ -539,7 +542,10 @@ public:
     // (the context itself is created by the first FSR frame and can still fail - DrawStats::fsr). upscaler_status():
     // the provider in use ("FSR 4.1.2" style, once a frame created the context) or why FSR is off.
     bool fsr_supported();
-    std::string upscaler_status() const;
+    // [port] XeSS: the same for Upscaler::Xess. upscaler_status(u): that upscaler's runtime ("XeSS 2.0.2" style) or why
+    // it is off.
+    bool xess_supported();
+    std::string upscaler_status(Upscaler u = Upscaler::Fsr) const;
     // Laser projectiles (lasers.hpp, PROJECTILE_NEBULA_DRAW.md 1): init_lasers loads W_Laser_Pill.tga /
     // p_particle_master.tga through `textures` and Engine\PrimAdditive; set_lasers gives the frame's lasers (copied),
     // drawn by render() in the Transparent bucket after its mesh items (and the hook's transparent draws) with the frame's
@@ -763,7 +769,9 @@ private:
     // taa.cpp: jittered camera (or `view`); fsr_phases > 0: FSR's jitter sequence of that length (FSR frame).
     ViewMatrices taa_begin(const ViewMatrices& view, const RecordOptions& opts, uint32_t fsr_phases = 0);
     std::unique_ptr<FsrPass> fsr_;   // [port] created on first use (RecordOptions::upscaler)
-    bool fsr_begin(VkExtent2D display, const RecordOptions& opts, VkExtent2D& render);  // fsr hooks in taa.cpp
+    std::unique_ptr<XessPass> xess_;  // [port] created on first use (RecordOptions::upscaler = Upscaler::Xess)
+    // FSR / XeSS hooks in taa.cpp: true when this frame is drawn at `render` and upscaled by opts.upscaler.
+    bool fsr_begin(VkExtent2D display, const RecordOptions& opts, VkExtent2D& render);
     VkFormat ds_format_ = VK_FORMAT_UNDEFINED;        // scene depth-stencil (D32FS8 here)
     uint8_t rp_scene_ = 0, rp_external_ = 0, rp_post_ = 0;
     // [port] MSAA: rp_main_ = the main scene's render pass (rp_scene_ with msaa_ samples; == rp_scene_ at 1 sample), the

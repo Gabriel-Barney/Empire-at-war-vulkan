@@ -113,6 +113,8 @@ inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
 inline constexpr int32_t kAaOff = 0, kAaSmaa = 1, kAaTaa = 2, kAaMsaa2 = 3, kAaMsaa4 = 4, kAaMsaa8 = 5;
 // [port: Gabriel 2026-11-13] FSR upscaling modes, one per FSR quality mode in render::UpscaleQuality order (mode - kAaFsrNative).
 inline constexpr int32_t kAaFsrNative = 6, kAaFsrQuality = 7, kAaFsrBalanced = 8, kAaFsrPerformance = 9, kAaFsrUltra = 10;
+// [port: Gabriel 2026-11-13] XeSS upscaling modes, the same five presets in the same order (mode - kAaXessNative).
+inline constexpr int32_t kAaXessNative = 11, kAaXessQuality = 12, kAaXessBalanced = 13, kAaXessPerformance = 14, kAaXessUltra = 15;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
     int32_t resolution = -1;
@@ -162,6 +164,7 @@ struct LevelChoice {
 // (VideoSettings::anti_alias, profile key "aa_mode"). An MSAA count the device cannot do is drawn with the largest one it can
 // (render::Renderer::msaa_samples), so the list is the same on every device. The FSR rows draw the scene at a lower
 // resolution and upscale it with AMD FSR (4.1 where the GPU supports it, else 3.1); where FSR cannot run they draw TAA.
+// The XeSS rows do the same with Intel XeSS Super Resolution (its own preset ratios); where XeSS cannot run they draw TAA.
 inline constexpr LevelChoice kAntiAliasChoices[] = {{kAaOff, kAaOff, U"Off"},       {kAaSmaa, kAaSmaa, U"SMAA"},
                                                     {kAaTaa, kAaTaa, U"TAA"},       {kAaMsaa2, kAaMsaa2, U"MSAA 2x"},
                                                     {kAaMsaa4, kAaMsaa4, U"MSAA 4x"}, {kAaMsaa8, kAaMsaa8, U"MSAA 8x"},
@@ -169,7 +172,12 @@ inline constexpr LevelChoice kAntiAliasChoices[] = {{kAaOff, kAaOff, U"Off"},   
                                                     {kAaFsrQuality, kAaFsrQuality, U"FSR Quality (1.5x)"},
                                                     {kAaFsrBalanced, kAaFsrBalanced, U"FSR Balanced (1.7x)"},
                                                     {kAaFsrPerformance, kAaFsrPerformance, U"FSR Performance (2x)"},
-                                                    {kAaFsrUltra, kAaFsrUltra, U"FSR Ultra Performance (3x)"}};
+                                                    {kAaFsrUltra, kAaFsrUltra, U"FSR Ultra Performance (3x)"},
+                                                    {kAaXessNative, kAaXessNative, U"XeSS Native AA"},
+                                                    {kAaXessQuality, kAaXessQuality, U"XeSS Quality (1.7x)"},
+                                                    {kAaXessBalanced, kAaXessBalanced, U"XeSS Balanced (2x)"},
+                                                    {kAaXessPerformance, kAaXessPerformance, U"XeSS Performance (2.3x)"},
+                                                    {kAaXessUltra, kAaXessUltra, U"XeSS Ultra Performance (3x)"}};
 // The seven detail options. Four levels where the renderer has four steps (Shader) or a continuous scale (Particle, Mesh,
 // Environment); three where it has three (Texture: top mips skipped 2 / 1 / 0, Water: reflection targets 0 / 1 / 2);
 // Shadow is on or off (any value above 0 draws shadows). Each list ends at the value the old slider's Max stood for.

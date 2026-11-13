@@ -13,6 +13,7 @@
 #include "alamo/render/upscale.hpp"
 #include "render_internal.hpp"
 #include "fsr.hpp"
+#include "xess.hpp"
 #include "taa_ps_depth.h"
 #include "taa_ps_motion.h"
 #include "taa_ps_resolve.h"
@@ -766,13 +767,28 @@ ViewMatrices Renderer::taa_begin(const ViewMatrices& view, const RecordOptions& 
     return taa_->begin_frame(view, opts.taa_provisional);
 }
 
-// [port] FSR (fsr.hpp): true when this frame is drawn at `render` and upscaled; false leaves `render` = `display`.
+// [port] FSR (fsr.hpp) / XeSS (xess.hpp): true when this frame is drawn at `render` and upscaled by opts.upscaler;
+// false leaves `render` = `display`.
 bool Renderer::fsr_begin(VkExtent2D display, const RecordOptions& opts, VkExtent2D& render) {
     render = display;
-    if (opts.upscaler != Upscaler::Fsr || display.width == 0 || display.height == 0) return false;
+    if (display.width == 0 || display.height == 0) return false;
+    if (opts.upscaler == Upscaler::Xess) {  // XeSS's own input size for the preset (xessGetOptimalInputResolution)
+        if (!xess_supported() || !xess_->prepare(display, opts.upscale_quality)) return false;
+        render = xess_->render_size();
+        return true;
+    }
+    if (opts.upscaler != Upscaler::Fsr) return false;
     if (!fsr_supported() || !fsr_->prepare(display)) return false;
     upscale_render_size(display.width, display.height, opts.upscale_quality, render.width, render.height);
     return true;
+}
+
+bool Renderer::xess_supported() {
+    if (!xess_) {
+        xess_ = std::make_unique<XessPass>();
+        xess_->init(*ctx_, *alloc_);  // logs why when it cannot
+    }
+    return xess_->available();
 }
 
 bool Renderer::fsr_supported() {
@@ -783,7 +799,10 @@ bool Renderer::fsr_supported() {
     return fsr_->available();
 }
 
-std::string Renderer::upscaler_status() const { return fsr_ ? fsr_->status() : std::string("FSR not loaded yet"); }
+std::string Renderer::upscaler_status(Upscaler u) const {
+    if (u == Upscaler::Xess) return xess_ ? xess_->status() : std::string("XeSS not loaded yet");
+    return fsr_ ? fsr_->status() : std::string("FSR not loaded yet");
+}
 
 void Renderer::reset_taa_history() {
     if (taa_) taa_->reset();
