@@ -516,3 +516,28 @@ starting saboteur's id, then a Naboo run whose `PSTAGE` / `PPROD` follows and Na
 Naboo's `CP` above MonCalimari's at the pass near 116, or no MonCalimari `PSTART`. Compare with the port's trace of the same
 scenario (`docs/re/A2K_T08_RE_QUESTIONS.md` section 2: plan 10 MonCalimari 25.5, plan 11 Naboo 24.0 at 116, staged at
 Felucia). `saboteur.tsv` has one row per timeline record.
+
+## 11. bkg3 t03: the same kit with a human Empire (Rebel / Underworld budgets)
+
+For roadmap group bkg3, task t03 (`docs/re/BKG3_RE_ANSWERS.md` Q5 / Q6). The kit is unchanged; only the faction you play
+differs, so the AI players sampled are the **Rebel** and the **Underworld** (the story script is installed in all three
+Heart of the Maw plots and samples every AI player).
+
+Run: `run_a2f_empire.cmd` (own console window; `--windowed` and the other `a2f_run.py` options pass through). Play
+Heart of the Maw as **EMPIRE**, Medium, defaults, hands off, quit at "A2FB PROBE: 5-minute dense phase done" (frame
+9000). Cleanup after an interrupted run: `cleanup_a2f.cmd`.
+
+What bkg3 t03 reads from `out\<run>\records.txt`:
+- Rebel `SH` records (shipped budget-weight equations): `wOFF` (BasicRebelOffensiveBudgetAllocation) and `wINFRA`
+  (BasicRebelInfrastructureBudgetAllocation) at every frame of the first 4 s (frames 0..120: the Rebel's goal Commits
+  near frames 55 and 97) and at the later samples. The port has wOFF 7.53 and wINFRA 19.91 at 1, 56 and 99.
+- Rebel `SM` records: credits and the budget fractions (INFRA, OFF) around the same frames and up to frame 900.
+- `PSTART` / `PRET` / `PEXIT` of BuildEconomicStructurePlan (target planet, frame): when retail accepts the Naboo mine
+  (the port starts that plan at frame 99; retail's mine starts production at 807).
+- Channel Q (`QB` production begin with planet, type, cost, credits) for the Rebel in 0..1600: retail's order is mining
+  facility MonCalimari 89, Kamino 98, Corellian_Gunboat Naboo 109, light tank Yavin 140, tank buster Naboo 156, infantry
+  Naboo 559, mining facility Naboo 807.
+- ConquerPiratePlan `PSTART` for the Rebel (retail 5518 in the Q2 runs) with the Offensive budget at that frame.
+
+The report (`report.txt`) was written for an AI Empire; with a human Empire its Empire sections are empty and the run may
+end with a non-zero report code although `records.txt` is complete. The records are what counts.

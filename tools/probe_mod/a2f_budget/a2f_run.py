@@ -91,6 +91,17 @@ STEPS_SAB_LONG = r'''
     to the main menu > Quit. Do not save. The run finishes by itself (A2F_RUN_DONE exit=<n>); this window stays open.
 '''
 
+STEPS_EMPIRE = r'''
+ BKG3 T03 BUDGET PROBE, HUMAN EMPIRE (--human-empire; 5 minutes of galactic time). Nothing is clicked for you.
+ 1) Main menu > Single Player > Galactic Conquest > campaign "Heart of the Maw". Faction EMPIRE (so the Rebel and the
+    Underworld are the AI players whose budgets are recorded), difficulty Medium, Start (accept the defaults).
+ 2) Close the "Active Story Objectives" box. Then hands off: no orders, no pause, normal speed, keep the window in front
+    (FoC pauses when it loses focus). "A2FB PROBE: story script running" shows at the start. If a battle prompt appears,
+    choose auto-resolve (the prompt pauses galactic time).
+ 3) After 5 minutes of galactic time "A2FB PROBE: 5-minute dense phase done" shows (frame 9000). Then Esc > Quit to the
+    main menu > Quit. Do not save. The run finishes by itself (A2F_RUN_DONE exit=<n>); this window stays open.
+'''
+
 
 def canary_status(mod, percept=True, saboteur=False):
     """{'Story': 'deleted' | 'present' | 'no mod folder'} - _CustomScriptMessage deleted the file when the script ran."""
@@ -118,6 +129,8 @@ def main():
     ap.add_argument('--saboteur', action='store_true', help='a2k t05: the short saboteur run (run_a2f_sab.cmd)')
     ap.add_argument('--no-sab-desire', action='store_true', help='with --saboteur: no desire evaluations in channel U')
     ap.add_argument('--sab-long', action='store_true', help='with --saboteur: the 30-minute saboteur run (a2m t12)')
+    ap.add_argument('--human-empire', action='store_true',
+                    help='bkg3 t03: the same kit played as EMPIRE (Rebel / Underworld budgets), 5 minutes; steps text only')
     ap.add_argument('--wait-start-sec', type=float, default=900)
     ap.add_argument('--scan-sec', type=float, default=5.0)
     ap.add_argument('--report-only')
@@ -176,7 +189,7 @@ def main():
             with open(qt, 'rb') as src, open(os.path.join(run_dir, 'A2FB_QUEUE_TYPES.json'), 'wb') as dst:
                 dst.write(src.read())
         say('\n' + '=' * 110 + '\n Mod installed (Mods\\%s). Full notes: tools\\probe_mod\\a2f_budget\\README.md'
-            % build_a2f_mod.MOD_NAME + (STEPS_SAB_LONG if a.sab_long else STEPS_SAB if a.saboteur else STEPS) + '=' * 110)
+            % build_a2f_mod.MOD_NAME + (STEPS_SAB_LONG if a.sab_long else STEPS_SAB if a.saboteur else STEPS_EMPIRE if a.human_empire else STEPS) + '=' * 110)
         t0 = time.time()
         if not a.no_launch:
             subprocess.Popen([exe] + (WINDOWED if a.windowed else []) + [MODPATH], cwd=corr)
