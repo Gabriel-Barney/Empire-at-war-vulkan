@@ -110,6 +110,13 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
         co.human_faction = spec_.faction;
         co.ai_difficulty = difficulty_name(spec_.difficulty);
         setup_ = galactic::build_campaign_setup(d.db, d.rules, spec_.campaign, co, diag);
+        if (spec_.game_options)  // ui1 t06: the advanced options replace the campaign's starting credits and tech levels
+            for (galactic::PlayerSetup& p : setup_.players) {
+                if (!p.named) continue;
+                p.credits = static_cast<float>(std::max(0, spec_.start_credits));
+                p.max_tech_level = std::clamp(spec_.max_tech, 1, 5);
+                p.tech_level = std::clamp(spec_.start_tech, 1, p.max_tech_level);
+            }
         if (setup_.map.planets.size() == 0) return fail("campaign '" + spec_.campaign + "' has no planets");
     } else {
         std::string err;

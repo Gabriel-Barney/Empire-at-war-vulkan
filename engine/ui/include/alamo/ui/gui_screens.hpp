@@ -22,6 +22,7 @@
 //   (IDD_AUTO_RESOLVE_DIALOG is not modelled: retail shows it only in multiplayer, which is out of scope)
 //   (IDD_ADVANCED_VIDEO_OPTIONS_DIALOG belongs to the options flow: FrontEnd, gui_menus.hpp)
 //   IDD_SELECT_MAP_DIALOG          maps list; Select / double click -> MapSelected{map}; Cancel -> MapSelectCancelled
+//   IDD_RETRY_DIALOG               ui1 t05: Retry (load autosave) / Quit -> MessageBoxResult{"retry", 0 / 1}
 //
 // [port] choices: battle-end lists show "name" or "name x N", icons on the PETROGLYPH_DIALOG_IMAGE controls, a
 // trackbar value v (0..100) scrolls the 12 rows by round(v / 100 * (n - 12)); IDC_COUNTDOWN_TIMER shows whole seconds
@@ -159,6 +160,7 @@ inline constexpr const char* kRetreat = "IDD_RETREAT_DIALOG";
 inline constexpr const char* kChat = "IDD_INGAME_CHAT_DIALOG";
 inline constexpr const char* kPlanetInfo = "IDD_PLANET_INFO";
 inline constexpr const char* kSelectMap = "IDD_SELECT_MAP_DIALOG";
+inline constexpr const char* kRetry = "IDD_RETRY_DIALOG";  // ui1 t05
 }  // namespace dlg
 
 class GameScreens {
@@ -171,6 +173,9 @@ public:
     void set_countdown(float seconds);  // battle end
     bool show_campaign_score(const CampaignScoreInfo& info);
     bool show_retreat_confirm();
+    // ui1 t05 (Lua Activate_Retry_Dialog, LUA_API.md): IDD_RETRY_DIALOG - TEXT_MISSION_FAILED, IDC_RETRY_BUTTON
+    // (TEXT_LOAD_AUTOSAVE) -> MessageBoxResult{tag "retry", button 0}, IDC_QUIT_BUTTON -> button 1; Esc does nothing.
+    bool show_retry();
     bool open_chat(bool team_only = false);
     bool chat_open() const;
     // GALACTIC_DIALOGS §9.4: opens IDD_PLANET_INFO (no pause). Single instance: while it is open another call does nothing

@@ -40,6 +40,19 @@ ui::HudBombingRunButton bombing_run_button(bool land, bool controls_locked, bool
     return b;
 }
 
+ui::HudBombingRunButton space_weapon_button(bool space, int32_t icon, bool allowed, bool controls_locked, float readiness) {
+    ui::HudBombingRunButton b;
+    if (!space) return b;
+    b.present = true;
+    b.icon = icon;
+    b.hidden = icon < 0;
+    b.tooltip = allowed ? icon : 4;
+    const bool ready = icon >= 0 && allowed && !controls_locked && readiness >= 1.0f;
+    b.disabled = !ready;
+    if (!ready && icon >= 0) b.dial = allowed ? std::clamp(readiness, 0.0f, 1.0f) : 0.0f;
+    return b;
+}
+
 BombingRunStyle bombing_run_style(const galactic::FactionRules& faction) {
     BombingRunStyle s;
     s.blob_material = std::string(faction.xml_text("Bombing_Run_Shadow_Blob_Material_Name"));

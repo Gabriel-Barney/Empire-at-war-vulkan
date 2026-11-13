@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -123,7 +124,15 @@ void set_clipboard_text(std::u32string_view text) {
     CloseClipboard();
 }
 
-bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log) {
+std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes, bool widescreen) {
+    if (widescreen) return modes;
+    std::vector<DisplayMode> out;
+    for (const DisplayMode& m : modes)
+        if (static_cast<uint64_t>(m.width) * 3u <= static_cast<uint64_t>(m.height) * 4u) out.push_back(m);
+    return out.empty() ? modes : out;
+}
+
+bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, bool windowed) {
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || m.width == 0 || m.height == 0) return false;
     const std::wstring dev = monitor_device(hwnd);
@@ -146,7 +155,7 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log) {
         want.dmPelsWidth = reg.dmPelsWidth;
         want.dmPelsHeight = reg.dmPelsHeight;
         want.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
-        if (!fits) {
+        if (!fits || !windowed) {  // UI5 t01: full screen always takes the mode's resolution
             want.dmPelsWidth = m.width;
             want.dmPelsHeight = m.height;
         }
@@ -172,8 +181,9 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log) {
             what = "display unchanged (" + std::to_string(cur.dmDisplayFrequency) + " Hz)";
         }
     }
-    const bool ok = set_window_client_size(hwnd, m.width, m.height);
-    if (log) *log = "window " + std::to_string(m.width) + "x" + std::to_string(m.height) + (ok ? " applied" : " refused") + (what.empty() ? "" : ", " + what);
+    const bool ok = set_window_client_size(hwnd, m.width, m.height, !windowed);
+    if (log) *log = std::string(windowed ? "window " : "full screen ") + std::to_string(m.width) + "x" + std::to_string(m.height) +
+                    (ok ? " applied" : " refused") + (what.empty() ? "" : ", " + what);
     return ok;
 }
 
@@ -187,7 +197,7 @@ void enable_dpi_awareness() {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 }
 
-bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h) {
+bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h, bool borderless) {
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || w == 0 || h == 0) return false;
     MONITORINFO mi{};
@@ -203,7 +213,7 @@ bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h) {
     int ww = r.right - r.left, wh = r.bottom - r.top;
     int x = 0, y = 0;
     DWORD style = kFramed;
-    if (ww <= work.right - work.left && wh <= work.bottom - work.top) {
+    if (!borderless && ww <= work.right - work.left && wh <= work.bottom - work.top) {
         // Framed; kept on the work area when the new size would leave it [port].
         RECT cur{};
         GetWindowRect(wnd, &cur);
@@ -275,6 +285,49 @@ void FrameLimiter::wait() {
     deadline_ns_ = target;
 }
 
+void* create_os_cursor(const uint8_t* bgra, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y) {
+    if (!bgra || width == 0 || height == 0 || width > 256 || height > 256) return nullptr;
+    BITMAPV5HEADER bi{};
+    bi.bV5Size = sizeof bi;
+    bi.bV5Width = static_cast<LONG>(width);
+    bi.bV5Height = -static_cast<LONG>(height);  // top-down
+    bi.bV5Planes = 1;
+    bi.bV5BitCount = 32;
+    bi.bV5Compression = BI_BITFIELDS;
+    bi.bV5RedMask = 0x00FF0000;
+    bi.bV5GreenMask = 0x0000FF00;
+    bi.bV5BlueMask = 0x000000FF;
+    bi.bV5AlphaMask = 0xFF000000;
+    void* bits = nullptr;
+    HDC dc = GetDC(nullptr);
+    HBITMAP color = CreateDIBSection(dc, reinterpret_cast<const BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, dc);
+    if (!color || !bits) return nullptr;
+    std::memcpy(bits, bgra, static_cast<size_t>(width) * height * 4u);
+    HBITMAP mask = CreateBitmap(static_cast<int>(width), static_cast<int>(height), 1, 1, nullptr);
+    ICONINFO ii{};
+    ii.fIcon = FALSE;
+    ii.xHotspot = static_cast<DWORD>(std::clamp<int32_t>(hot_x, 0, static_cast<int32_t>(width) - 1));
+    ii.yHotspot = static_cast<DWORD>(std::clamp<int32_t>(hot_y, 0, static_cast<int32_t>(height) - 1));
+    ii.hbmMask = mask;
+    ii.hbmColor = color;
+    HICON cur = CreateIconIndirect(&ii);
+    DeleteObject(color);
+    if (mask) DeleteObject(mask);
+    return cur;
+}
+
+void set_os_cursor_image(void* hwnd, void* cursor) {
+    static void* last = nullptr;
+    static bool set = false;
+    if (set && cursor == last) return;
+    set = true;
+    last = cursor;
+    HCURSOR h = cursor ? static_cast<HCURSOR>(cursor) : LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
+    if (hwnd) SetClassLongPtrW(static_cast<HWND>(hwnd), GCLP_HCURSOR, reinterpret_cast<LONG_PTR>(h));
+    SetCursor(h);
+}
+
 void set_os_cursor_hidden(bool hidden) {
     static bool is_hidden = false;
     if (hidden == is_hidden) return;
@@ -322,6 +375,8 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.vsync_mode = v.vsync_mode;
     p.frame_cap = v.frame_cap;
     p.hardware_mouse = v.hardware_mouse;
+    p.windowed = v.windowed;
+    p.widescreen = v.widescreen;
     p.detail = v.detail;
     p.anti_alias = v.anti_alias;
     p.gamma = v.gamma;
@@ -358,6 +413,8 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     p.mode = {static_cast<uint32_t>(std::max(0, w)), static_cast<uint32_t>(std::max(0, h)), static_cast<uint32_t>(std::max(0, hz))};
     flag("vsync", p.vsync);
     flag("hardware_mouse", p.hardware_mouse);
+    flag("windowed", p.windowed);
+    flag("widescreen", p.widescreen);
     if (auto it = kv.find("vsync_mode"); it != kv.end()) p.vsync_mode = it->second == "mailbox" ? ui::VsyncMode::Mailbox : ui::VsyncMode::Fifo;
     for (const ProfileInt& e : kProfileInts) num(e.key, p.*e.field);
     for (const ProfileAdvInt& e : kProfileAdvInts) num(e.key, p.advanced.*e.field);
@@ -378,6 +435,7 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     f << "width=" << p.mode.width << "\nheight=" << p.mode.height << "\nrefresh_hz=" << p.mode.hz << "\n";
     f << "vsync=" << (p.vsync ? 1 : 0) << "\nvsync_mode=" << (p.vsync_mode == ui::VsyncMode::Mailbox ? "mailbox" : "fifo") << "\n";
     f << "hardware_mouse=" << (p.hardware_mouse ? 1 : 0) << "\n";
+    f << "windowed=" << (p.windowed ? 1 : 0) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\n";
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
     for (const ProfileAdvBool& e : kProfileAdvBools) f << e.key << "=" << (p.advanced.*e.field ? 1 : 0) << "\n";

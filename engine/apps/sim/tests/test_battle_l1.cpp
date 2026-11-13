@@ -296,7 +296,9 @@ struct Run {
 // destruction); 1 = on to the end, the Empire (defender) retreats during the TSW sequence (victory hold, §2); 2 = on to
 // the end, the Empire's Faction_Leader is a member of a company on the battle planet's surface (victory 7 / 0x10, §6);
 // 3 = on to the end, the Underworld escort frigates die (Hyperspace_Away) on the release frame, the Death Star is left.
-Run run(const Data& d, int32_t workers, int follow = 0) {
+// ui1 t04: via_command = the special weapon fires through command 25 (weapon + target object) instead of the direct
+// begin targeting + fire calls; the CRC log and the special-weapon trace must not change.
+Run run(const Data& d, int32_t workers, int follow = 0, bool via_command = false) {
     Run out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
@@ -411,9 +413,15 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
         }
         if (f == 70) out.engines_back = b->engines_online(slowed) == 1;
         if (weapon != objects::kNoObjectId && !out.fired && b->sw_readiness(weapon) >= 1.0f) {
-            CHECK(b->sw_begin_targeting(weapon));
             target_hp0 = b->combat().health(target);
-            out.fired = b->sw_fire_at_object(*tm, weapon, target);
+            if (via_command) {
+                commands::EventData ev(commands::EventType::SpecialWeaponFire);
+                ev.set("weapon", static_cast<uint32_t>(weapon)).set("player", 0).set("at_position", 0).set("target", static_cast<uint32_t>(target));
+                out.fired = b->handle_command(*tm, 0, ev, host.random().synced()) == commands::RejectReason::None;
+            } else {
+                CHECK(b->sw_begin_targeting(weapon));
+                out.fired = b->sw_fire_at_object(*tm, weapon, target);
+            }
             fire_frame = f;
         }
         if (out.fired && !out.hit && b->combat().has_unit(target) && b->combat().health(target) < target_hp0) out.hit = true;
@@ -498,6 +506,12 @@ void test_battle(const Data& d) {
     CHECK(a.increment == 3);
     CHECK(a.ground < -1.0e30f);
     CHECK(a.fields);
+    {  // ui1 t04: the human space special-weapon path (command 25 with a target object) fires exactly as the direct calls
+        const Run c = run(d, 0, 0, true);
+        const auto dv = first_divergence(a.crc, c.crc);
+        std::printf("  via command 25: fired %d hit %d, %s, trace %s\n", c.fired, c.hit, dv.message.c_str(), c.trace == a.trace ? "identical" : "DIFFERENT");
+        CHECK(c.fired && c.hit && !dv.diverged && c.trace == a.trace);
+    }
     for (int32_t w : jobs::determinism_worker_counts()) {
         if (w == 0) continue;
         const Run b = run(d, w);

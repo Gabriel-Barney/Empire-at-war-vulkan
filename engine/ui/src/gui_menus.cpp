@@ -706,7 +706,7 @@ int32_t FrontEnd::skirmish_game_type_row(int32_t type) const {
 
 void FrontEnd::fill_skirmish_colours(GuiDialog& d) {
     char id[32];
-    for (int32_t p = 0; p < 2; ++p) {  // the used slots [port: local player + one AI]
+    for (int32_t p = 0; p < skirmish_slots_; ++p) {  // the shown slots (ui1 t07)
         std::snprintf(id, sizeof id, "IDC_PLAYER_COLOR_%d", p);
         const bool has = !colour_palette_.empty();
         d.show(id, has);
@@ -719,7 +719,7 @@ void FrontEnd::fill_skirmish_colours(GuiDialog& d) {
 }
 
 int32_t FrontEnd::skirmish_colour(int32_t slot) const {
-    return slot >= 0 && slot < 2 && !colour_palette_.empty() ? std::min(slot_colour_[slot], static_cast<int32_t>(colour_palette_.size()) - 1) : -1;
+    return slot >= 0 && slot < skirmish_slots_ && !colour_palette_.empty() ? std::min(slot_colour_[slot], static_cast<int32_t>(colour_palette_.size()) - 1) : -1;
 }
 
 // IDC_IMAGE and its start numbers for the selected row (UI.md 9.6 / 9.6.1); IDC_SCENARIO_DESCRIPTION_TEXT_BOX is switched
@@ -744,7 +744,7 @@ void FrontEnd::fill_skirmish_preview(GuiDialog& d) {
 // UI.md 9.7: the picks are stored as they are, then in slot order slot 0 keeps its colour and each later slot whose colour
 // an earlier slot uses takes the lowest colour index no earlier slot uses; the combos show the result.
 void FrontEnd::resolve_skirmish_colours(GuiDialog& d) {
-    constexpr int32_t kUsed = 2;  // [port] local player + one AI
+    const int32_t kUsed = skirmish_slots_;  // ui1 t07: every shown slot
     const auto palette = static_cast<int32_t>(colour_palette_.size());
     for (int32_t p = 1; p < kUsed; ++p) {
         const auto taken = [&](int32_t col) {
@@ -767,6 +767,90 @@ void FrontEnd::resolve_skirmish_colours(GuiDialog& d) {
     }
 }
 
+// ---- ui1 t06: advanced game options ----
+namespace {
+constexpr int32_t kCreditStep = 1000;  // [port]
+constexpr const char* kAutoKeys[4] = {"TEXT_ALLOW_AUTORESOLVE_ALWAYS", "TEXT_ALLOW_AUTORESOLVE_NEVER", "TEXT_ALLOW_AUTORESOLVE_ASK",
+                                      "TEXT_ALLOW_AUTORESOLVE_OVERWHELMING_ODDS"};
+}  // namespace
+
+void FrontEnd::fill_game_options(GuiDialog& d, const GameOptionsSetup& o) {
+    const int32_t lo = std::max(0, o.min_credits / kCreditStep), hi = std::max(lo, o.max_credits / kCreditStep);
+    d.set_range("IDC_SKIRMISH_CREDITS_SLIDER", lo, hi);
+    d.set_value("IDC_SKIRMISH_CREDITS_SLIDER", std::clamp(o.credits / kCreditStep, lo, hi));
+    d.set_range("IDC_SKIRMISH_STARTING_TECH_LEVEL_SLIDER", 1, 5);
+    d.set_value("IDC_SKIRMISH_STARTING_TECH_LEVEL_SLIDER", std::clamp(o.start_tech, 1, 5));
+    d.set_range("IDC_SKIRMISH_MAX_TECH_LEVEL_SLIDER", 1, 5);
+    d.set_value("IDC_SKIRMISH_MAX_TECH_LEVEL_SLIDER", std::clamp(o.max_tech, 1, 5));
+    // CBS_SORT is not acted on by the gadget (UI.md 3.7.1 [M]): the rows stay in option order 0..3.
+    std::vector<std::u32string> rows;
+    for (const char* k : kAutoKeys) rows.push_back(text(k));
+    d.set_items("IDC_ALLOW_AUTORESOLVE_COMBO", std::move(rows), std::clamp(o.auto_resolve, 0, 3));
+    d.set_checked("IDC_ALLOW_RANDOM_EVENTS", o.random_events);
+    show_game_option_values(d);
+}
+
+GameOptionsSetup FrontEnd::read_game_options(const GuiDialog& d) const {
+    GameOptionsSetup o = p_.game_option_defaults;
+    if (const GuiControl* c = d.get("IDC_SKIRMISH_CREDITS_SLIDER")) o.credits = c->value * kCreditStep;
+    if (const GuiControl* c = d.get("IDC_SKIRMISH_STARTING_TECH_LEVEL_SLIDER")) o.start_tech = std::clamp(c->value, 1, 5);
+    if (const GuiControl* c = d.get("IDC_SKIRMISH_MAX_TECH_LEVEL_SLIDER")) o.max_tech = std::clamp(c->value, 1, 5);
+    o.max_tech = std::max(o.max_tech, o.start_tech);
+    if (const GuiControl* c = d.get("IDC_ALLOW_AUTORESOLVE_COMBO"); c && c->selected >= 0) o.auto_resolve = std::clamp(c->selected, 0, 3);
+    if (const GuiControl* c = d.get("IDC_ALLOW_RANDOM_EVENTS")) o.random_events = c->checked;
+    o.set = true;
+    return o;
+}
+
+// The value statics beside the sliders: the credits amount and "Tech n" (TEXT_TECH_LEVEL_n).
+void FrontEnd::show_game_option_values(GuiDialog& d) const {
+    if (const GuiControl* c = d.get("IDC_SKIRMISH_CREDITS_SLIDER")) d.set_text("IDC_SKIRMISH_CREDITS_VALUE", ascii32(std::to_string(c->value * kCreditStep)));
+    auto tech = [&](const char* slider, const char* label) {
+        if (const GuiControl* c = d.get(slider)) d.set_text(label, text("TEXT_TECH_LEVEL_" + std::to_string(std::clamp(c->value, 1, 5))));
+    };
+    tech("IDC_SKIRMISH_STARTING_TECH_LEVEL_SLIDER", "IDC_SKIRMISH_STARTING_TECH_LEVEL_VALUE");
+    tech("IDC_SKIRMISH_MAX_TECH_LEVEL_SLIDER", "IDC_SKIRMISH_MAX_TECH_LEVEL_VALUE");
+}
+
+// ui1 t07 [port] (UI.md 9.6.1: the map's start positions cap IDC_PLAYER_TEAM_n; the original's slot name rows are not
+// recovered): one row per player the selected map takes (2..8). Slot 0 is the local player, slot 1 an AI, slots 2.. a
+// "Closed" / "AI" choice (Closed first, so the default game stays one against one); teams 1..N (slot 0 team 1, the
+// others team 2). The skirmish sim takes two players (backlog b0240): the host starts slots 0 and 1 only.
+void FrontEnd::fill_skirmish_slots(GuiDialog& d) {
+    const GuiControl* list = d.get("IDC_STAGING_MAP_LIST");
+    const SkirmishMapInfo* m = list && list->selected >= 0 && static_cast<size_t>(list->selected) < map_view_.size()
+                                   ? &maps_[map_view_[static_cast<size_t>(list->selected)]]
+                                   : nullptr;
+    const uint32_t players = m ? (m->players ? m->players : m->max_players) : 2u;
+    skirmish_slots_ = std::clamp(static_cast<int32_t>(players), 2, 8);
+    std::vector<std::u32string> teams;
+    for (int32_t t = 1; t <= skirmish_slots_; ++t) teams.push_back(ascii32(std::to_string(t)));
+    char id[32];
+    for (int32_t p = 0; p < 8; ++p) {
+        const bool used = p < skirmish_slots_;
+        for (const char* row : {"IDC_PLAYER_NAME_%d", "IDC_PLAYER_FACTION_%d", "IDC_PLAYER_COLOR_%d", "IDC_PLAYER_TEAM_%d"}) {
+            std::snprintf(id, sizeof id, row, p);
+            d.show(id, used);
+        }
+        if (!used) continue;
+        std::snprintf(id, sizeof id, "IDC_PLAYER_NAME_%d", p);
+        const GuiControl* name = d.get(id);
+        const int32_t keep = name && name->items.size() == 2 ? name->selected : 0;
+        if (p < 2) d.set_items(id, {gui_->port_text(p == 0 ? U"Player" : U"AI")}, 0);
+        else d.set_items(id, {gui_->port_text(U"Closed"), gui_->port_text(U"AI")}, std::clamp(keep, 0, 1));
+        std::snprintf(id, sizeof id, "IDC_PLAYER_FACTION_%d", p);
+        const GuiControl* fc = d.get(id);
+        const int32_t fdefault = skirmish_factions_.empty() ? -1 : std::min<int32_t>(p % 2, static_cast<int32_t>(skirmish_factions_.size()) - 1);
+        const int32_t fsel = fc && fc->selected >= 0 && fc->items.size() == skirmish_factions_.size() ? fc->selected : fdefault;
+        d.set_items(id, skirmish_factions_, fsel);
+        std::snprintf(id, sizeof id, "IDC_PLAYER_TEAM_%d", p);
+        const GuiControl* tc = d.get(id);
+        const int32_t tsel = tc && tc->selected >= 0 && tc->items.size() == teams.size() ? tc->selected : (p == 0 ? 0 : 1);
+        d.set_items(id, teams, tsel);
+    }
+    fill_skirmish_colours(d);
+}
+
 void FrontEnd::fill_skirmish(GuiDialog& d) {
     maps_ = p_.skirmish_maps ? p_.skirmish_maps() : std::vector<SkirmishMapInfo>{};
     colour_palette_ = p_.player_colors ? p_.player_colors() : std::vector<Rgba8>{};
@@ -780,22 +864,8 @@ void FrontEnd::fill_skirmish(GuiDialog& d) {
     for (const SkirmishFaction& f : p_.skirmish_factions)
         factions.push_back(!f.text_id.empty() && gui_->text_db() && gui_->text_db()->find(f.text_id) ? gui_->caption_text(f.text_id)
                                                                                                      : faction_label(f.name));
-    char id[32];
-    for (int32_t p = 0; p < 8; ++p) {
-        const bool used = p < 2;  // [port] local player + one AI
-        for (const char* row : {"IDC_PLAYER_NAME_%d", "IDC_PLAYER_FACTION_%d", "IDC_PLAYER_COLOR_%d", "IDC_PLAYER_TEAM_%d"}) {
-            std::snprintf(id, sizeof id, row, p);
-            d.show(id, used);
-        }
-        if (!used) continue;
-        std::snprintf(id, sizeof id, "IDC_PLAYER_NAME_%d", p);
-        d.set_items(id, {gui_->port_text(p == 0 ? U"Player" : U"AI")}, 0);
-        std::snprintf(id, sizeof id, "IDC_PLAYER_FACTION_%d", p);
-        d.set_items(id, factions, factions.empty() ? -1 : std::min<int32_t>(p, static_cast<int32_t>(factions.size()) - 1));
-        std::snprintf(id, sizeof id, "IDC_PLAYER_TEAM_%d", p);
-        d.set_items(id, {U"1", U"2"}, p);
-    }
-    fill_skirmish_colours(d);
+    skirmish_factions_ = std::move(factions);
+    fill_skirmish_slots(d);
 }
 
 // modc t08: the mod picker. The rows come from the host when the dialog opens; the selection starts on the row selected
@@ -1060,6 +1130,8 @@ void FrontEnd::setup(GuiDialog& d) {
         fill_custom_staging(d);
     } else if (ascii_iequals(n, kSkirmish)) {
         fill_skirmish(d);
+    } else if (ascii_iequals(n, kAdvanced)) {  // ui1 t06: the accepted values, else the defaults
+        fill_game_options(d, game_options_.set ? game_options_ : p_.game_option_defaults);
     } else if (ascii_iequals(n, kTutorial)) {
         std::vector<std::u32string> items;
         for (const CampaignSetInfo& s : menu_.tutorials) items.push_back(text(s.text_id.empty() ? s.set : s.text_id));
@@ -1199,7 +1271,11 @@ void FrontEnd::on_cancel(const GuiEvent& e, std::vector<MenuAction>& out) {
         go(kMain);
         return;
     }
-    if (ascii_iequals(n, kCampaignSelect) || ascii_iequals(n, kCustomStaging) || ascii_iequals(n, kSkirmish) || ascii_iequals(n, kTutorial)) {
+    if (ascii_iequals(n, kTutorial)) {  // UI5 t07: Esc = its Cancel button (opened from the main menu)
+        go(kMain);
+        return;
+    }
+    if (ascii_iequals(n, kCampaignSelect) || ascii_iequals(n, kCustomStaging) || ascii_iequals(n, kSkirmish)) {
         go(kSingle);
         return;
     }
@@ -1247,16 +1323,18 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
             if (e.value >= 0 && static_cast<size_t>(e.value) < map_view_.size())
                 last_map_[game_type_ == kSkirmishGameSpace ? 1 : 0] = maps_[map_view_[static_cast<size_t>(e.value)]].map;
             fill_skirmish_preview(*d);
+            fill_skirmish_slots(*d);  // ui1 t07
         } else if (ascii_istarts_with(e.control, "IDC_PLAYER_COLOR_") && e.control.size() == 18 && e.value >= 0 &&
                    static_cast<size_t>(e.value) < colour_palette_.size()) {
             // UI.md 9.7: the pick is stored as it is, then the clash rule runs in slot order.
             const int32_t slot = e.control.back() - '0';
-            if (slot >= 0 && slot < 2) {
+            if (slot >= 0 && slot < skirmish_slots_) {
                 slot_colour_[slot] = e.value;
                 resolve_skirmish_colours(*d);
             }
         }
     }
+    else if (ascii_iequals(n, kAdvanced) && e.kind == GuiEvent::Kind::ValueChanged) show_game_option_values(*d);  // ui1 t06
     else if (ascii_iequals(n, kAudio) && e.kind == GuiEvent::Kind::ValueChanged) {
         MenuAction a = act(MenuAction::Kind::PreviewAudio);
         a.audio = read_audio(*d);
@@ -1344,12 +1422,20 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                     a.campaign = s.factions[fi].campaign;
                     a.faction = s.factions[fi].faction;
                     a.difficulty = difficulty_of(*d);
+                    a.game_options = game_options_;  // ui1 t06: the accepted advanced options (set = false: the campaign's)
                     out.push_back(std::move(a));
                 }
             }
         }
-    } else if (ascii_iequals(n, kAdvanced)) {
-        if (is("IDC_CANCEL_BUTTON") || is("IDC_BUTTON_ACCEPT")) pop();
+    } else if (ascii_iequals(n, kAdvanced) && d) {  // ui1 t06
+        if (is("IDC_BUTTON_ACCEPT")) {
+            game_options_ = read_game_options(*d);
+            pop();
+        } else if (is("IDC_CANCEL_BUTTON")) {
+            pop();
+        } else if (is("IDC_DEFAULTS_BUTTON")) {
+            fill_game_options(*d, p_.game_option_defaults);
+        }
     } else if (ascii_iequals(n, kSkirmish) && d) {
         if (is("IDC_CANCEL_BUTTON")) go(kSingle);
         else if (is("IDC_SELECT_OPTIONS")) push(kAdvanced);
@@ -1362,13 +1448,18 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 MenuAction a = act(MenuAction::Kind::StartSkirmish);
                 a.map = maps_[map_view_[static_cast<size_t>(list->selected)]].map;
                 a.game_type = game_type_;
-                for (int32_t p = 0; p < 2; ++p) {
-                    a.colors.push_back(slot_colour_[p]);
+                for (int32_t p = 0; p < skirmish_slots_; ++p) {
                     char id[32];
+                    std::snprintf(id, sizeof id, "IDC_PLAYER_NAME_%d", p);
+                    if (const GuiControl* nm = d->get(id); p >= 2 && (!nm || nm->selected != 1)) continue;  // ui1 t07: closed
+                    a.colors.push_back(slot_colour_[p]);
                     std::snprintf(id, sizeof id, "IDC_PLAYER_FACTION_%d", p);
                     const GuiControl* f = d->get(id);
                     const size_t fi = f && f->selected >= 0 ? static_cast<size_t>(f->selected) : 0;
                     a.factions.push_back(fi < p_.skirmish_factions.size() ? p_.skirmish_factions[fi].name : std::string());
+                    std::snprintf(id, sizeof id, "IDC_PLAYER_TEAM_%d", p);
+                    const GuiControl* t = d->get(id);
+                    a.teams.push_back(t && t->selected >= 0 ? t->selected + 1 : (p == 0 ? 1 : 2));
                 }
                 out.push_back(std::move(a));
             }

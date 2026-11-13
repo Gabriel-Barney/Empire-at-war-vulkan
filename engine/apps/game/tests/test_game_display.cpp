@@ -130,6 +130,8 @@ void profile_round_trip() {
     p.vsync_mode = ui::VsyncMode::Mailbox;
     p.frame_cap = ui::kFrameCapDisplay;
     p.hardware_mouse = true;
+    p.windowed = false;    // UI5 t01
+    p.widescreen = false;
     p.detail = 40;
     p.gamma = 70;
     p.anti_alias = 63;
@@ -144,6 +146,21 @@ void profile_round_trip() {
     CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay && q.hardware_mouse);
     CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == 63);
     CHECK(q.advanced == p.advanced);
+    CHECK(!q.windowed && !q.widescreen);
+    {  // UI5 t01: Widescreen off lists modes no wider than 4:3; all when none is
+        const std::vector<game::DisplayMode> all{{1024, 768, 60}, {1280, 1024, 60}, {1920, 1080, 60}, {2560, 1440, 144}};
+        const std::vector<game::DisplayMode> narrow = game::video_list_modes(all, false);
+        CHECK(narrow.size() == 2 && narrow[0].width == 1024 && narrow[1].width == 1280);
+        CHECK(game::video_list_modes(all, true).size() == 4);
+        const std::vector<game::DisplayMode> wide{{1920, 1080, 60}};
+        CHECK(game::video_list_modes(wide, false).size() == 1);
+        ui::VideoSettings v;
+        v.windowed = true;
+        v.widescreen = true;
+        game::VideoProfile r;
+        r.windowed = r.widescreen = false;
+        CHECK(game::update_video_profile(r, v, all) && r.windowed && r.widescreen);
+    }
     // A partial file (hand-written) keeps the other values.
     {
         std::ofstream f(path, std::ios::trunc);

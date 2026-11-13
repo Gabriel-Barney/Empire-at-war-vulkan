@@ -218,6 +218,7 @@ bool App::render_frame() {
         dialogs.add(ui::kHudLayers - 1, ui::HudList::Alpha, q);
     }
     info_.build_overlay(dialogs);  // data-chart lines over IDC_DATA_CHART_IMAGE
+    if (credits_.active() && !credits_.build(dialogs, *ui_.fonts, *canvas, now_s_)) open_main_menu();  // ui1 t03: ended
     if (overlay_.shown()) {  // OPT1 t07: the frame-time overlay, top layer of the dialogs list (under the cursor)
         overlay_.read_ticks();
         overlay_.build(dialogs, *canvas, *ui_.fonts);
@@ -445,6 +446,12 @@ void App::frame() {
     router_.route(raw, hooks, routed_);
     target_input_.update(raw);
     gui_events_.clear();
+    // ui1 t03 [port]: a click or Esc / Space / Enter ends the credits roll and brings the main menu back.
+    if (credits_.active() && (input_.button(ui::Button::Left).click || input_.button(ui::Button::Right).click ||
+                              input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace) || input_.key_pressed(0x0D))) {
+        credits_.stop();
+        open_main_menu();
+    }
     ui_.gui.update(raw, routed_, now_s_, gui_events_, typed);
     std::vector<ui::MenuAction> acts;
     ui_.front.update(gui_events_, raw, acts);

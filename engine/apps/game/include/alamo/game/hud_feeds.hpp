@@ -73,6 +73,11 @@ ui::HudOrderButtons order_buttons(std::span<const OrderUnitState> selection, int
 // dial = fraction, a 0 shown as 1.0 (§9.3 rule 4: a skirmish before its first run is disabled with a full dial); ready:
 // no dial [port, §9.9 item 1].
 ui::HudBombingRunButton bombing_run_button(bool land, bool controls_locked, bool available, float fraction);
+// ui1 t04 (HUD_GAPS §9.1, 0x317d00; [port] shown / hidden rule, backlog b0238): the space b_special_weapon. `space` = a
+// space battle (else not driven); `icon` = the local player's weapon (its Special_Weapon_Index, a station 2), < 0 = none:
+// hidden; ready = readiness >= 1, allowed (SpecialWeaponsAllowed, else tooltip 4) and controls not locked; the dial =
+// readiness while not ready.
+ui::HudBombingRunButton space_weapon_button(bool space, int32_t icon, bool allowed, bool controls_locked, float readiness);
 
 struct BombingRunStyle {
     std::string blob_material;   // Bombing_Run_Shadow_Blob_Material_Name ("" = no blob: targeting stays on without one)

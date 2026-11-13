@@ -303,6 +303,29 @@ void SimHost::scoring_mode_started(ModeKind kind, std::string map_name) {
 #endif
 }
 
+bool SimHost::scoring_game_stat(int32_t player, std::string_view control_id, bool tactical, double& number, std::string& text,
+                                bool& is_number) {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (!scoring_vm_ || !scoring_vm_->has_function("Get_Game_Stat_For_Control_ID")) return false;
+    lua::AiEventArg t;
+    t.kind = lua::AiEventArg::Boolean;
+    t.boolean = tactical;
+    std::string err;
+    const bool ok = lua::call_global_value(*scoring_vm_, "Get_Game_Stat_For_Control_ID",
+                                           {arg_player(player), arg_string(std::string(control_id)), t}, number, text, is_number, &err);
+    if (!ok && !err.empty()) scoring_note("Get_Game_Stat_For_Control_ID: " + err);
+    return ok;
+#else
+    (void)player;
+    (void)control_id;
+    (void)tactical;
+    (void)number;
+    (void)text;
+    (void)is_number;
+    return false;
+#endif
+}
+
 void SimHost::scoring_reset_tactical_stats() {
 #ifdef ALAMO_SIM_HAVE_STORY
     scoring_call("Reset_Tactical_Stats", {});

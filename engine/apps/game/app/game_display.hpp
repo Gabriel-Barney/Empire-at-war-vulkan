@@ -42,7 +42,13 @@ int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, ui
 // Windows restores the user's mode when the process ends; restore_display_mode() does it at once), then the window's
 // client area is resized (set_window_client_size). A rate the monitor does not offer at its current resolution leaves
 // the rate alone. `log` gets one line describing what changed. False when the window resize failed.
-bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr);
+// UI5 t01: `windowed` false (Options > Video, Windowed unchecked) is full screen [port: borderless, no exclusive mode]:
+// the monitor always takes the mode's resolution and rate and the window covers it without a frame (a refused mode
+// change leaves a borderless window of the mode's size centred on the monitor).
+bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr, bool windowed = true);
+// UI5 t01 [port]: Options > Video > Widescreen off lists only modes no wider than 4:3 (5:4 and 4:3); on, every mode. All
+// modes when none is that narrow.
+std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes, bool widescreen);
 // Puts back the monitor mode apply_display_mode changed (no-op when it changed nothing).
 void restore_display_mode();
 // UI5 t04: the Windows clipboard as UTF-32 text for the dialog edit boxes (GuiManager::set_clipboard). Empty when it
@@ -73,6 +79,7 @@ uint32_t game_speed_index(int32_t slider);
 struct VideoProfile {
     DisplayMode mode;
     bool vsync = true, hardware_mouse = false;
+    bool windowed = true, widescreen = true;  // UI5 t01 (the port starts windowed unless the profile says otherwise)
     ui::VsyncMode vsync_mode = ui::VsyncMode::Fifo;
     int32_t frame_cap = 0;
     int32_t detail = 100, anti_alias = 0, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100 (anti_alias: TAA strength, 0 = off)
@@ -151,7 +158,7 @@ void enable_dpi_awareness();
 // resolution) becomes a borderless window covering that monitor, at most the monitor's size [port: the original
 // switches to fullscreen]. A later size that fits restores the frame. The window's WM_SIZE then reaches the host's
 // resize path (Window::take_resized).
-bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h);
+bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h, bool borderless = false);
 // Refresh rate (Hz) of the monitor showing the window `hwnd` (HWND): its current display mode's frequency; 0 when unknown
 // (the query fails, or the driver reports the hardware default as 0 / 1).
 uint32_t monitor_refresh_hz(void* hwnd);
@@ -177,6 +184,11 @@ private:
 // Hides / shows the OS arrow over this thread's windows (ShowCursor, kept balanced: only state changes call it). The
 // host hides it while the game draws its own cursor (no hardware mouse).
 void set_os_cursor_hidden(bool hidden);
+// UI5 t02 (Options > Video > Hardware Mouse): a Windows cursor made from 32-bit BGRA pixels (top-left origin, straight
+// alpha) with its hot spot; null on failure. set_os_cursor_image makes it the window class cursor and the current one
+// (null = the arrow); repeated calls with the same cursor do nothing.
+void* create_os_cursor(const uint8_t* bgra, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y);
+void set_os_cursor_image(void* hwnd, void* cursor);
 
 // modc t08: starts this executable again with the command-line arguments `args` (argv[1..] already quoted: the mod
 // picker's relaunch with other MODPATH= / STEAMMOD= arguments), in the current working folder. False + err when the

@@ -1,9 +1,57 @@
 // test_gui_screens: tests split from test_gui_screens.cpp (PAF t08).
 #include "test_gui_screens_common.hpp"
+#include "alamo/ui/credits_roll.hpp"
 
 namespace test_gui_screens_t {
 
 // ---- mouse cursor ---------------------------------------------------------------------------------------------------
+// ui1 t03: CreditsText DAT (SPEC.md §7: records in file order, HEADER / CENTER keys, "[TBL]" blank) and the roll.
+void test_credits_roll() {
+    std::vector<uint8_t> b;
+    auto u32le = [&](uint32_t v) {
+        for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i)));
+    };
+    const std::vector<std::pair<std::string, std::u16string>> recs = {{"CENTER", u"[TBL]"}, {"HEADER", u"Producer"}, {"CENTER", u"A NAME"}};
+    u32le(static_cast<uint32_t>(recs.size()));
+    for (const auto& [k, v] : recs) {
+        u32le(0);
+        u32le(static_cast<uint32_t>(v.size()));
+        u32le(static_cast<uint32_t>(k.size()));
+    }
+    for (const auto& r : recs)
+        for (const char16_t c : r.second) {
+            b.push_back(static_cast<uint8_t>(c & 0xFF));
+            b.push_back(static_cast<uint8_t>(c >> 8));
+        }
+    for (const auto& r : recs) b.insert(b.end(), r.first.begin(), r.first.end());
+    std::vector<CreditsLine> lines;
+    CHECK(parse_credits(b, lines) && lines.size() == 3);
+    if (lines.size() == 3)
+        CHECK(lines[0].kind == CreditsLine::Kind::Blank && lines[1].kind == CreditsLine::Kind::Header && lines[1].text == U"Producer" &&
+              lines[2].kind == CreditsLine::Kind::Name && lines[2].text == U"A NAME");
+    std::vector<uint8_t> cut(b.begin(), b.end() - 3);
+    CHECK(!parse_credits(cut, lines));
+    CHECK(credits_path("ENGLISH") == "Data\\Text\\CreditsText_ENGLISH.DAT");
+    CreditsStyle st;
+    st.scroll_rate = -0.10f;
+    st.spacing = 0.04f;
+    CreditsRoll roll;
+    std::vector<CreditsLine> parsed;
+    CHECK(parse_credits(b, parsed));
+    roll.start(parsed, st, 100.0);
+    CHECK(roll.active() && roll.lines() == 3);
+    CHECK(std::fabs(roll.duration() - (1.0 + 4 * 0.04) / 0.10) < 1e-6);
+    auto raster = make_box_rasterizer();
+    FontCache fonts(*raster);
+    const HudCanvas cv = HudCanvas::make(1024, 768);
+    HudDrawList dl;
+    CHECK(roll.build(dl, fonts, cv, 100.0) && roll.drawn() == 0);  // all lines start below the screen
+    dl.clear();
+    CHECK(roll.build(dl, fonts, cv, 100.0 + 5.0) && roll.drawn() == 2);  // half a screen scrolled: both text lines visible
+    dl.clear();
+    CHECK(!roll.build(dl, fonts, cv, 100.0 + roll.duration() + 0.1) && !roll.active());
+}
+
 void test_cursor() {
     const char* xml = R"(<MousePointers>
       <MousePointer Name="POINTER_NORMAL"><Base_Texture> DEFAULTPOINTER_00.TGA </Base_Texture><Hot_X>0</Hot_X><Hot_Y>0</Hot_Y><Anim_Frame_Delay>5</Anim_Frame_Delay></MousePointer>

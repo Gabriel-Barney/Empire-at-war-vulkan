@@ -490,7 +490,7 @@ void App::answer_battle_prompt(bool auto_resolve) {
         std::printf("battle choice: begin (story link%s)\n", sent ? "" : ", not sent");
         return;
     }
-    const bool ar = auto_resolve && !prompt_.story_pending;
+    const bool ar = auto_resolve && !prompt_.story_pending && !prompt_.no_autoresolve;
     const galactic::BattleChoice c = ar ? galactic::BattleChoice::AutoResolve : galactic::BattleChoice::Fight;
     const galactic::GalacticSim* g = galaxy();
     const galactic::ConflictInfo* head = session_ ? session_->conflict_head() : nullptr;
@@ -531,6 +531,13 @@ void App::open_battle_prompt(const galactic::GalacticSim& g, const galactic::Con
     choice_open_ = true;  // the banner (GalacticHudFrame::battle) until Begin / Auto-Resolve
     ++choices_;
     if (prompt_.story_pending) ++prompts_story_;
+    // ui1 t06 (BATTLE_TRANSITIONS §1.6 step 4): with the advanced options' auto-resolve option, "always" (0) resolves a
+    // battle that is not story-locked without asking; "never" (1) [port: the original's GUI hook 0x140b15638 is not
+    // traced] offers Begin only; "ask" (2) and "overwhelming odds" (3) [port] ask.
+    if (session_ && session_->spec().game_options && !prompt_.story_pending && !prompt_.linked) {
+        if (session_->spec().auto_resolve_option == ui::kAutoResolveAlways) answer_battle_prompt(true);
+        else if (session_->spec().auto_resolve_option == ui::kAutoResolveNever) prompt_.no_autoresolve = true;
+    }
     std::printf("battle prompt: %s (%s, %s), yours %u units / %u stacks [%s], enemy %u units / %u stacks [%s]\n",
                 utf8_of(prompt_.title).c_str(), prompt_.land ? "land" : "space", prompt_.story_pending ? "begin only" : "begin / auto-resolve",
                 prompt_.left.units, prompt_.left.stacks, prompt_.left.icon.c_str(), prompt_.right.units, prompt_.right.stacks,
@@ -702,7 +709,25 @@ void App::show_campaign_end(bool victory) {
     const galactic::GalacticSim* g = galaxy();
     if (!g) return;
     campaign_over_ = true;
-    if (!screens_.show_campaign_score(campaign_score(*session_, *g, ui_.text, victory, tally_))) notes_.push_back("campaign score dialog missing");
+    // ui1 t05 (GAME_SCORING.md §7): the dialog's values come from the GameScoring script (galactic stats, tactical = false).
+    ScoringStats stats;
+    {
+        sim::SimHost& host = session_->host();
+        double v = 0.0;
+        std::string t;
+        bool num = false;
+        auto stat = [&](const char* id, double& out) {
+            if (host.scoring_game_stat(local_player(), id, false, v, t, num) && num) {
+                out = v;
+                return true;
+            }
+            return false;
+        };
+        stats.ok = stat("IDC_MILITARY_EFFICIENCY_STATIC", stats.military) && stat("IDC_CONQUEST_EFFICIENCY_STATIC", stats.conquest) &&
+                   stat("IDC_KILL_EFFICIENCY_STATIC", stats.kill);
+        if (stats.ok && host.scoring_game_stat(local_player(), "IDC_TITLE_STATIC", false, v, t, num) && !num) stats.title_key = t;
+    }
+    if (!screens_.show_campaign_score(campaign_score(*session_, *g, ui_.text, victory, tally_, stats))) notes_.push_back("campaign score dialog missing");
     std::printf("campaign end: %s\n", victory ? "victory" : "defeat");
 }
 
@@ -756,10 +781,15 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
     uint32_t object = 0;
     objects::TypeIndex type = objects::kNone;
     const uint32_t w = targets_.width, h = targets_.height;
+    uint32_t stack_fleet = 0;  // ui1 t03: a fleet under the cursor (map fleet in transit or a planet's fleet button)
+    bool stack_land = false;
     if (screen_ == Screen::Galactic && gview_.attached() && !ui_.gui.hit(mx, my)) {  // HUD_GAPS §6: not under a dialog
         const ui::View v = ui::make_view(gview_.camera_params(w, h), w, h);
         const std::vector<ui::PickSphere> items = gview_.pick_items();
-        if (const auto hit = ui::pick_spheres(items, ui::pixel_ray(v, mx, my)); hit && items[*hit].kind == ui::PickKind::Planet) {
+        stack_fleet = ui_.galactic_hud.stack_under(static_cast<float>(mx), static_cast<float>(my), stack_land);
+        const auto fhit = ui::pick_spheres(items, ui::pixel_ray(v, mx, my));
+        if (stack_fleet == 0 && routed_.hover_component < 0 && fhit && items[*fhit].kind == ui::PickKind::Fleet) stack_fleet = items[*fhit].id;
+        if (const auto hit = fhit; hit && items[*hit].kind == ui::PickKind::Planet) {
             object = items[*hit].id;
             for (const render::GalacticPlanetSnap& p : gview_.frame().planets)
                 if (static_cast<uint32_t>(p.id) == object) type = p.type;
@@ -773,6 +803,32 @@ void App::build_encyclopedia(ui::HudDrawList& dl, const ui::HudCanvas& canvas) {
             }
     }
     if (routed_.hover_component >= 0) object = 0;  // over the HUD: no world pop-up
+    // ui1 t03 (HUD_GAPS §2.2: fleets use a fleet summary and fire the story trigger fleet_tooltip, land forces land_tooltip;
+    // [port] the summary layout is not recovered: the pop-up of the fleet's representative unit, the unit with the highest
+    // Tactical_Health as on the stack button; the trigger fires once per hovered fleet / land stack).
+    if (stack_fleet != 0 && !stack_land)
+        if (const galactic::GalacticSim* g = galaxy()) {
+            const objects::ObjectStore& st = g->store();
+            float best = -1.0f;
+            for (const auto& fl : g->fleets()) {
+                if (!fl.alive || !st.alive(fl.object) || static_cast<uint32_t>(st.id(fl.object)) != stack_fleet) continue;
+                for (const objects::ObjectHandle m : fl.contents) {
+                    if (!st.alive(m)) continue;
+                    const objects::TypeIndex t = st.type(m);
+                    const float hp = t < data_.types.size() ? data_.types.get_float(t, "Tactical_Health") : 0.0f;
+                    if (hp > best) {
+                        best = hp;
+                        type = t;
+                        object = stack_fleet;
+                    }
+                }
+            }
+        }
+    {
+        const uint32_t key = stack_fleet == 0 ? 0u : (stack_fleet ^ (stack_land ? 0x80000000u : 0u));
+        if (key != 0 && key != tooltip_trigger_fleet_) story_ui_.generic(stack_land ? "land_tooltip" : "fleet_tooltip");
+        tooltip_trigger_fleet_ = key;
+    }
     if (type == objects::kNone) object = 0;
     int32_t component = -1;
     // FIXPASS_GALACTIC §2.2 hover: a good hero slot shows its hero's pop-up.
@@ -893,7 +949,7 @@ void App::update_cursor(ui::HudDrawList& dl) {
         return;
     }
     set_os_cursor_hidden(cursor_ok_ && !hardware_mouse_ && !opt_.hidden);
-    if (!cursor_ok_ || hardware_mouse_) return;
+    if (!cursor_ok_) return;  // UI5 t02: the hardware mouse keeps the context cursors (sync_os_cursor)
     ui::CursorContext c;
     c.movie = screen_ == Screen::Movie;
     c.busy = screen_ == Screen::SessionLoad;
@@ -935,6 +991,10 @@ void App::update_cursor(ui::HudDrawList& dl) {
                 c.targeting = ui::CursorContext::Targeting::Reinforcement;
             } else if (bombing_targeting_) {
                 c.targeting = ui::CursorContext::Targeting::BombingRun;  // POINTER_BOMBING_RUN_TARGET (HUD_GAPS §9.5)
+            } else if (sw_weapon_ != objects::kNoObjectId) {  // ui1 t04: POINTER_ATTACK_WITH_SPECIAL_WEAPON_n / _INVALID
+                c.targeting = ui::CursorContext::Targeting::SpecialWeapon;
+                c.special_weapon = sw_icon_;
+                c.target_valid = c.hover == ui::CursorContext::Hover::Enemy;
             }
         }
         // HUD_GAPS §1.4: the repair cursor over an own / allied damaged hard point not being repaired, when the selection
@@ -951,7 +1011,9 @@ void App::update_cursor(ui::HudDrawList& dl) {
         }
     }
     cursor_.update(ui::choose_pointer(c), now_s_);
-    cursor_.build(dl, ui_.gui.canvas(), {static_cast<float>(input_.mouse_x()), static_cast<float>(input_.mouse_y())}, now_s_);
+    sync_os_cursor();
+    if (!hardware_mouse_)
+        cursor_.build(dl, ui_.gui.canvas(), {static_cast<float>(input_.mouse_x()), static_cast<float>(input_.mouse_y())}, now_s_);
 }
 
 // Panels of the current screen into `lists` (one draw list per open panel; their shells follow open()).

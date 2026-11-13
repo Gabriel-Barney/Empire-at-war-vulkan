@@ -213,9 +213,9 @@ void App::stop_movies() {
 }
 
 void App::movie_step() {
-    // Movies.xml Cannot_Skip: the skip keys do nothing for that movie.
-    const bool skip = !full_movie_.cannot_skip() &&
-                      (input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace) || input_.button(ui::Button::Left).click);
+    // Movies.xml Cannot_Skip: the skip keys do nothing for that movie. UI.md §4.2: while a movie plays only Esc / Space skip
+    // (UI5 t07: a mouse click does not).
+    const bool skip = !full_movie_.cannot_skip() && (input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace));
     const bool playing = full_movie_.update(dt_, gpu_.hud, kMoviePage);
     if (playing && !skip) return;
     full_movie_.stop(audio_);
@@ -243,13 +243,9 @@ void App::lua_presentation() {
             if (!slot.open(data_, audio_, name, &slot == &advisor_movie_, &err)) std::fprintf(stderr, "Lua movie %s: %s\n", name.c_str(), err.c_str());
         } else if (e.op == lua::PresentationOp::StopBinkMovie) {
             stop_movies();
-        } else if (e.op == lua::PresentationOp::ActivateRetryDialog) {  // mission lost: Retry / Quit message box
-            ui::MessageBoxSpec m;
-            m.tag = "retry";
-            m.caption = U"Mission failed";
-            m.lines = {U"Retry the mission from the start, or quit to the main menu."};
-            m.buttons = {U"Retry", U"Quit"};
-            if (screens_.show_message(m)) ++retry_boxes_;
+        } else if (e.op == lua::PresentationOp::ActivateRetryDialog) {  // mission lost: IDD_RETRY_DIALOG (ui1 t05)
+            // [port] its Retry ("Load autosave") restarts the mission: the port keeps no mission-start autosave.
+            if (screens_.show_retry()) ++retry_boxes_;
         }
         if (session_->battle()) {  // story t13: the battle's letterbox overlay and the P11 hand-over (story_ui.hpp)
             using Op = lua::PresentationOp;
@@ -535,6 +531,7 @@ void App::begin_battle() {
     reinforce_unit_ = 0;  // no drop point pending from an earlier battle
     bombing_targeting_ = false;  // nor a bombing-run pick
     autofire_seen_.clear();  // ui1 t02: the default autofire is sent for this battle's objects
+    sw_weapon_ = objects::kNoObjectId;  // ui1 t04: nor a space special-weapon aim
     bombing_blob_.reset();
     targeting_.cancel();  // nor a targeted ability
     reinforce_blob_.reset();  // ui3: nor a drop preview / beacon pick; tether and interface keys reset per battle [port]
@@ -557,6 +554,7 @@ void App::begin_battle() {
     const bool space = tm && tm->kind() == objects::ModeKind::Space;
     const PlanetIndex planet = b ? b->request().info.planet : kInvalidPlanet;
     battle_place_ = battle_place_name(planet);
+    const bool story_mission = b && b->request().linked;  // UI5 t07: the Mission load dialogs
     // story t13 (BT §2.9.1 P10 / P11): a story-linked battle opens with the record's presentation (applied by the start,
     // CampaignBattles::linked_presentation); any other battle with nothing held.
     {
@@ -572,7 +570,7 @@ void App::begin_battle() {
     // QA t11: the dialog first, the blocking BattleView::start only after it has been presented (a Fight answer or a
     // skirmish start opened it even earlier, before the tactical push's own load).
     if (ui_.load.is_open()) load_intro_frames_ = 1;
-    else if (!open_battle_load(planet, space)) notes_.push_back("load screen dialog missing");
+    else if (!open_battle_load(planet, space, story_mission)) notes_.push_back("load screen dialog missing");
     if (ui_.load.is_open()) {
         screen_ = Screen::BattleLoad;
         battle_view_pending_ = true;

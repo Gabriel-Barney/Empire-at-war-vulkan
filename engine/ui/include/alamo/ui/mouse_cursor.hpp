@@ -116,6 +116,8 @@ public:
     size_t frame(double now) const;
     // Texture of the current frame ("" when the table has no entry).
     std::string texture(double now) const;
+    // The current pointer's table entry (hot spot); null without a table / entry.
+    const CursorDef* current_def() const { return table_ ? table_->find(current_) : nullptr; }
     // Adds the cursor quad (layer 12, Quads) at the cursor pixel. False when nothing could be drawn (no entry / image).
     bool build(HudDrawList& dl, const HudCanvas& canvas, Vec2f cursor_px, double now) const;
 

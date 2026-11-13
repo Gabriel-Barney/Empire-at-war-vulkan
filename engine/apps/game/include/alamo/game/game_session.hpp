@@ -90,6 +90,13 @@ struct SessionSpec {
     // command). local_player() stays 0 (the viewpoint). Space maps only (a land map fails start()). The demo's objects run
     // their Lua_Scripts (object-script host on, modc t18): a DEMO_CONTROLLER runs Demo_Attract_Controller.lua.
     bool attract = false;
+    // ui1 t06: the campaign's advanced game options (ui::GameOptionsSetup; game_options false = the campaign's own
+    // Starting_Credits / tech levels). Credits, start and max tech apply to every player the campaign names; the
+    // auto-resolve option (0 always / 1 never / 2 ask / 3 overwhelming odds) is the host's battle prompt rule; random
+    // events are carried for the rule that reads them (backlog). Not saved [port]: a loaded game asks again.
+    bool game_options = false;
+    int32_t start_credits = 6000, start_tech = 1, max_tech = 5, auto_resolve_option = 2;
+    bool random_events = false;
 };
 
 // The human's answer to a pending conflict as a port-only command (PortExtension subtype kBattleChoiceSubtype, one byte
