@@ -249,6 +249,25 @@ void test_camera() {
 
 // [port] SSAO depth reconstruction (ssao.hpp, the CPU mirror of ssao.hlsl's ViewPos): view point -> uv + depth ->
 // view point round trip for a perspective projection (normal and reversed depth, sub-pixel offset) and an orthographic one.
+// [port: Gabriel] Render scale is a share of the pixels: each side x sqrt(scale).
+void test_render_scale_extent() {
+    const VkExtent2D uhd{3840, 2160};
+    const VkExtent2D s75 = render::render_scale_extent(uhd, 0.75f);
+    CHECK(s75.width == 3326 && s75.height == 1871);
+    const VkExtent2D s50 = render::render_scale_extent(uhd, 0.5f);
+    CHECK(s50.width == 2715 && s50.height == 1527);
+    const VkExtent2D same = render::render_scale_extent(uhd, 1.0f);
+    CHECK(same.width == 3840 && same.height == 2160);
+    const VkExtent2D above = render::render_scale_extent(uhd, 2.0f);  // never above native
+    CHECK(above.width == 3840 && above.height == 2160);
+    const VkExtent2D low = render::render_scale_extent(uhd, 0.01f);  // clamped to kRenderScaleMin: half each side
+    CHECK(low.width == 1920 && low.height == 1080);
+    const VkExtent2D fhd = render::render_scale_extent({1920, 1080}, 0.75f);
+    CHECK(fhd.width == 1663 && fhd.height == 935);
+    const VkExtent2D tiny = render::render_scale_extent({1, 1}, 0.25f);
+    CHECK(tiny.width == 1 && tiny.height == 1);
+}
+
 void test_ssao_math() {
     render::Mat4 persp = render::perspective_rh(0.8f, 16.0f / 9.0f, 10.0f, 7000.0f);
     render::Mat4 jitter = persp;
@@ -422,15 +441,15 @@ void test_lod() {
         CHECK(near_eq(p.color[1].x, 237.0f / 255.0f) && near_eq(p.color[8].y, 129.0f / 255.0f));                         // Red, Eight
         CHECK(near_eq(render::owner_team_color(9, p).x, p.color[0].x) && render::owner_team_color(7, p).w == 1.0f);
     }
-    // Galactic camera (B.8): horizontal FOV atan(0.5) at every aspect, near 10, far 10000.
+    // Galactic camera (B.8): horizontal FOV atan(0.5) at 4:3, near 10, far 10000; [port: Gabriel] Hor+ above 4:3 - the
+    // vertical FOV stays 4:3's at 16:9 and 32:9.
     {
         render::OrbitCamera gc;
         gc.fov_x = 1.0f;
-        for (const float a : {4.0f / 3.0f, 16.0f / 9.0f}) {
-            const uint32_t w = a > 1.5f ? 1600u : 1200u;
+        const float fy43 = render::fov_y_from_horizontal(std::atan(0.5f), 4.0f / 3.0f);
+        for (const uint32_t w : {1200u, 1600u, 3200u}) {
             const render::ViewMatrices gv = render::make_galactic_view(gc, w, 900);
-            const float fy = render::fov_y_from_horizontal(std::atan(0.5f), static_cast<float>(w) / 900.0f);
-            CHECK(near_eq(gv.proj.m[1][1], 1.0f / std::tan(0.5f * fy)));  // vertical scale from the fixed horizontal FOV
+            CHECK(near_eq(gv.proj.m[1][1], 1.0f / std::tan(0.5f * fy43)));  // vertical scale = 4:3's at every aspect
             CHECK(near_eq(gv.proj.m[0][0] * static_cast<float>(w) / 900.0f, gv.proj.m[1][1]));
             const float zn = gv.proj.m[2][3] / gv.proj.m[2][2], zf = gv.proj.m[2][3] / (gv.proj.m[2][2] + 1.0f);
             CHECK(std::fabs(zn - 10.0f) < 1e-2f && std::fabs(zf - 10000.0f) < 5.0f);
@@ -1099,6 +1118,7 @@ int main() {
     test_layouts();
     test_samplers();
     test_camera();
+    test_render_scale_extent();
     test_ssao_math();
     test_idle_spin();
     test_lod();

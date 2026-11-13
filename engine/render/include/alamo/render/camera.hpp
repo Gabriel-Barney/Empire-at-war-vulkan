@@ -76,11 +76,14 @@ inline constexpr float kBackgroundNear = 10.0f, kBackgroundFar = 100000.0f;
 ViewMatrices background_view(const ViewMatrices& main);
 
 // Galactic camera (SPACE_AND_OPEN.md B.8 [H]): horizontal FOV atan(0.5) = 0.4636 rad (26.57 deg) for every
-// display aspect (no Hor+ correction, aspect = display aspect), near 10, far 10000, no distance fade
-// (RecordOptions::galactic for the post rules). Galactic background scenes use near 10 / far 100000.
+// display aspect in the original (no Hor+ correction), near 10, far 10000, no distance fade (RecordOptions::galactic for
+// the post rules). Galactic background scenes use near 10 / far 100000. [port: Gabriel 2026-11-13] Hor+: atan(0.5) is
+// the 4:3 value; wider displays keep 4:3's vertical FOV (galactic_fov_x, same as ui::galactic_fov_x).
 inline constexpr float kGalacticFovX = 0.46364761f;  // atan(0.5)
 inline constexpr float kGalacticNear = 10.0f, kGalacticFar = 10000.0f;
-// `cam` with fov_x replaced by kGalacticFovX and the galactic clip planes.
+// Horizontal FOV for a display aspect from the 4:3 one: 2 atan(tan(fov_x_4_3 / 2) x aspect x 3/4) above 4:3, else unchanged.
+float galactic_fov_x(float fov_x_4_3, float aspect);
+// `cam` with fov_x replaced by galactic_fov_x(kGalacticFovX, width / height) and the galactic clip planes.
 ViewMatrices make_galactic_view(const OrbitCamera& cam, uint32_t width, uint32_t height);
 
 // Fills the camera part of FrameCB (matrices, eye, resolution constants) and neutral defaults for

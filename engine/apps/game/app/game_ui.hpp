@@ -29,7 +29,8 @@ public:
     // atlas is missing (the game cannot show its menus then).
     bool init(GpuCore& gpu, const GameData& data, ui::MenuProviders providers, std::string* err);
     void shutdown(GpuCore& gpu);
-    void resize(uint32_t w, uint32_t h);
+    // `ui_scale_pct`: the DPI-style UI scale in percent (Options > Video > UI Scale, hud_canvas.hpp); 0 = the original fitted size.
+    void resize(uint32_t w, uint32_t h, int32_t ui_scale_pct = 0);
     // Uploads image pages the dialogs asked for since the last call (MenuBack_overlay, load-screen icons, ...).
     // `portraits`: serves "planet_portrait:<type>" pages (null = they fail like a missing texture).
     void upload_pages(GpuCore& gpu, render::PlanetPortraits* portraits = nullptr);

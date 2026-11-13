@@ -144,8 +144,8 @@ HudHitBox make_hit_box(int32_t component, uint32_t layer, Vec2f center, Vec2f si
 int32_t topmost_hit(std::span<const HudHitBox> hits, const HudCanvas& canvas, int32_t px, int32_t py);
 // A rectangle outline of 2-unit lines plus a translucent fill ([port] stand-in plates).
 void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f center, Vec2f size, Rgba8 back, Rgba8 edge);
-// Window resize: `canvas` becomes HudCanvas::make(width, height); the font cache is cleared when the screen height changed
-// (pixel sizes follow it).
+// Window resize: `canvas` becomes HudCanvas::make(width, height, canvas.ui_scale); the font cache is cleared when the text
+// height changed (pixel sizes follow it).
 void resize_canvas(HudCanvas& canvas, FontCache* fonts, uint32_t width, uint32_t height);
 
 // ---- Emitters -------------------------------------------------------------------------------------

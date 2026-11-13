@@ -258,7 +258,7 @@ void WorldHud::build(const WorldHudContext& ctx, std::span<const HudUnit> units,
             const CommandBarComponent* gc = group_ >= 0 && table_ ? &(*table_)[static_cast<size_t>(group_)] : nullptr;
             HudTextStyle st;
             st.font = fonts.font(gc && !gc->font_name.empty() ? gc->font_name : std::string(kFallbackFontFace),
-                                 gc && gc->font_point_size > 0 ? gc->font_point_size : 9.0f, cv.screen_height);
+                                 gc && gc->font_point_size > 0 ? gc->font_point_size : 9.0f, cv.font_height());
             st.color = gc && gc->has_text_color ? gc->text_color : Rgba8{};
             st.outline = gc ? gc->text_outline : true;
             st.emboss = gc ? gc->text_emboss : false;
@@ -276,7 +276,7 @@ void WorldHud::build(const WorldHudContext& ctx, std::span<const HudUnit> units,
         const CommandBarComponent* fc = flytext_ >= 0 && table_ ? &(*table_)[static_cast<size_t>(flytext_)] : nullptr;
         HudTextStyle st;
         st.font = fonts.font(fc && !fc->font_name.empty() ? fc->font_name : std::string(kFallbackFontFace),
-                             fc && fc->font_point_size > 0 ? fc->font_point_size : 7.0f, cv.screen_height);
+                             fc && fc->font_point_size > 0 ? fc->font_point_size : 7.0f, cv.font_height());
         st.outline = fc ? fc->text_outline : false;
         st.emboss = fc ? fc->text_emboss : true;
         st.align = TextAlign::Center;

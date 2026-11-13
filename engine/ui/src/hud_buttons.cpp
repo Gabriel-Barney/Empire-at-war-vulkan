@@ -239,7 +239,7 @@ Vec2f HudButtons::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache* fo
     if (fonts && (!r.text.empty() || !r.text2.empty())) {
         HudTextStyle st;
         st.font = fonts->font(c.font_name.empty() ? std::string(kFallbackFontFace) : c.font_name,
-                              c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas.screen_height);
+                              c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas.font_height());
         st.color = with_alpha(r.text_color_set ? r.text_color : c.has_text_color ? c.text_color : Rgba8{}, blink);
         st.outline = c.text_outline;
         st.emboss = c.text_emboss;
@@ -361,7 +361,7 @@ bool TooltipState::draw_text(HudDrawList& dl, const TextureAtlas& atlas, FontCac
     const uint32_t layer = back ? static_cast<uint32_t>(back->base_layer) : 10u;
     HudTextStyle st;
     st.font = fonts.font(font_c && !font_c->font_name.empty() ? font_c->font_name : std::string("Arial"),
-                         font_c && font_c->font_point_size > 0 ? font_c->font_point_size : 7.0f, canvas.screen_height);
+                         font_c && font_c->font_point_size > 0 ? font_c->font_point_size : 7.0f, canvas.font_height());
     // [port] the tooltip text uses the frame's light colour: tooltip_left_text's Color is a dark blue meant for the
     // encyclopedia panel; white keeps it readable on i_tooltip_back.
     st.color = Rgba8{230, 230, 230, 255};

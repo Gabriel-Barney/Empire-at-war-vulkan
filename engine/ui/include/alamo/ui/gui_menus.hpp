@@ -88,10 +88,23 @@ inline constexpr size_t kVsyncModeCount = 2;
 // The cap holds with v-sync on too (e.g. 60 fps on a 144 Hz display with FIFO, or Mailbox capped at the refresh rate).
 inline constexpr int32_t kFrameCapDisplay = -1;
 inline constexpr int32_t kFrameCapChoices[] = {0, kFrameCapDisplay, 30, 60, 90, 120, 144, 165, 240};
+// [port: Gabriel 2026-11-13] IDC_PORT_WINDOW_MODE rows (in this order), replacing the shipped "Run in window" check
+// (IDC_WINDOWED_MODE, hidden): Fullscreen = the monitor takes the picked resolution and a frameless window covers it
+// [port: no exclusive Vulkan full screen]; Borderless = a frameless window over the monitor at the desktop's own resolution
+// (the picked resolution's refresh rate is still applied, its size is not); Windowed = a framed window of the picked size.
+enum class WindowMode : uint8_t { Fullscreen, Borderless, Windowed };
+inline constexpr size_t kWindowModeCount = 3;
+// [port: Gabriel 2026-11-13] IDC_PORT_UI_SCALE rows: DPI-style UI scale in percent (HudCanvas::make). 100 % = one canvas
+// unit per physical pixel; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
+// The game starts at 100 % whatever the Windows display scale is (the process is per-monitor DPI aware).
+inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500};
+inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
     int32_t resolution = -1;
-    bool windowed = false, vsync = true, widescreen = true, hardware_mouse = false;
+    WindowMode window_mode = WindowMode::Fullscreen;  // [port: Gabriel] IDC_PORT_WINDOW_MODE
+    int32_t ui_scale = 100;                           // [port: Gabriel] IDC_PORT_UI_SCALE, one of kUiScaleChoices
+    bool vsync = true, widescreen = true, hardware_mouse = false;
     VsyncMode vsync_mode = VsyncMode::Fifo;  // [port: Gabriel] IDC_PORT_VSYNC_MODE
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
     int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP: one of kFrameCapChoices
@@ -116,6 +129,9 @@ inline constexpr double kResolutionConfirmSeconds = 15.0;
 // [port: Gabriel] plus the port's ambient occlusion check (IDC_PORT_AMBIENT_OCCLUSION) and anisotropic filtering combo
 // (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is not here: it is one list in the Video dialog.
 inline constexpr int32_t kAnisotropyChoices[] = {0, 2, 4, 8, 16};  // 0 = off (the materials' own sampler state)
+// [port: Gabriel] Render Scale combo (IDC_PORT_RENDER_SCALE): percent of the window's pixels the 3D scene is drawn with
+// (render::RecordOptions::render_scale; 75 at 3840 x 2160 = 3326 x 1871). 100 = native. HUD and dialogs stay native.
+inline constexpr int32_t kRenderScaleChoices[] = {50, 60, 67, 75, 85, 100};
 
 // [port: Gabriel] Named levels for the options that were 0..100 sliders. The stored values stay 0..100 (the profile file and
 // the renderer's mappings in game_display.hpp are unchanged); a list shows the level a stored value falls in, and picking a
@@ -153,6 +169,7 @@ struct AdvancedVideoSettings {
     bool soft_shadows = true, heat_distortion = true, bloom = true;
     bool ambient_occlusion = false;
     int32_t anisotropy = 0;  // one of kAnisotropyChoices
+    int32_t render_scale = 100;  // percent of the window's pixels, one of kRenderScaleChoices (a stored other value is kept)
     friend bool operator==(const AdvancedVideoSettings&, const AdvancedVideoSettings&) = default;
 };
 // The overall quality levels of the Video dialog's Detail Level list: each one sets all seven detail options to its value
@@ -204,7 +221,9 @@ inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
 // (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
 // (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
-// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use) under the Advanced button. Its Anti-Aliasing and Detail
+// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use) under the Advanced button, the display mode list
+// (IDC_PORT_WINDOW_MODE, WindowMode) in place of the hidden IDC_WINDOWED_MODE check and the UI scale list
+// (IDC_PORT_UI_SCALE, kUiScaleChoices). Its Anti-Aliasing and Detail
 // Level sliders are replaced by two lists in their rows (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices; IDC_PORT_DETAIL_LEVEL:
 // Low / Medium / High / Ultra / Custom, see kQualityPresets); the shipped sliders and their end captions are hidden.
 // IDD_ADVANCED_VIDEO_OPTIONS_DIALOG gets a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the

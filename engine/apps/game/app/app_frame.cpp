@@ -4,6 +4,17 @@
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ render
+void App::resize_ui() {
+    ui_.resize(win_.width(), win_.height(), ui_scale_);
+    // The side panels (hero / market / slice / sabotage / corruption / hack) follow the same canvas; their shells re-anchor.
+    const float s = static_cast<float>(ui_scale_) / 100.0f;
+    for (ui::HudPanel* p : panels()) {
+        p->set_ui_scale(s);
+        p->resize(win_.width(), win_.height());
+        if (panel_shells_ok_) panel_shells_.apply(p->layout());
+    }
+}
+
 bool App::present_settled() const {
     if (screen_ == Screen::Galactic) return gview_.settled() && draw_stats_.pending_pipeline == 0 && draw_stats_.translation_pending == 0;
     if (screen_ == Screen::Battle || screen_ == Screen::BattleLoad || (screen_ == Screen::Menu && demo_session() && bview_.active()))
@@ -67,6 +78,8 @@ bool App::render_frame() {
         gview_.set_particle_detail(particle_detail(adv_video_.particle));
         bview_.set_particle_detail(particle_detail(adv_video_.particle));
     }
+    // [port: Gabriel] Render Scale (Advanced video): the share of the window's pixels the galactic / battle scene is drawn with.
+    gro.render_scale = bro.render_scale = render_scale_value(adv_video_.render_scale);
     gro.gpu_timer = bro.gpu_timer = bench_gpu_timer();  // bm2: the renderer's scopes (null outside a benchmark)
     if (galactic) {
         ui::CameraParams cp = gview_.camera_params(w, h);
@@ -367,7 +380,7 @@ void App::frame() {
         sc_.recreate(win_.width(), win_.height());
         targets_.destroy(gpu_.alloc);
         targets_.create(gpu_.alloc, gpu_.ring.frames_in_flight(), win_.width(), win_.height());
-        ui_.resize(win_.width(), win_.height());
+        resize_ui();
     }
     // 1. Input (script frames replace the window in smoke runs).
     ui::InputFrame raw;

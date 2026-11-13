@@ -254,7 +254,7 @@ int32_t GalacticHud::font_of(int32_t component) const {
     if (component < 0 || !fonts_) return -1;
     const CommandBarComponent& c = (*table_)[static_cast<size_t>(component)];
     return fonts_->font(c.font_name.empty() ? std::string(kFallbackFontFace) : c.font_name,
-                        c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas_.screen_height);
+                        c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas_.font_height());
 }
 
 void GalacticHud::text_at(int32_t component, std::u32string_view text, Vec2f anchor, uint32_t layer, uint8_t alpha,
@@ -1496,7 +1496,7 @@ void GalacticHud::build_battle_prompt(const GalacticHudFrame& f) {
 void GalacticHud::build_screen_text(const GalacticHudFrame& f) {
     if (f.screen_text.empty() || !fonts_) return;
     HudTextStyle st;
-    st.font = fonts_->font("EmpireAtWar-Medium", 9.0f, canvas_.screen_height);
+    st.font = fonts_->font("EmpireAtWar-Medium", 9.0f, canvas_.font_height());
     if (st.font < 0) return;
     st.outline = true;
     st.align = TextAlign::Center;

@@ -347,7 +347,7 @@ void test_video_vsync_mode() {
     const size_t before = env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 8 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
           rd->w == 570 && rd->has_style("DS_CENTER"));  // the shipped header is kept
     FrontEnd fe;
     MenuProviders p;
@@ -389,9 +389,17 @@ void test_video_vsync_mode() {
     CHECK(d->get("IDC_PORT_GAMMA_VALUE")->text == U"80");
     CHECK(d->get("IDC_PORT_ANTI_ALIASING")->items.size() == std::size(kAntiAliasChoices) && d->get("IDC_PORT_ANTI_ALIASING")->selected == 0 &&
           d->get("IDC_PORT_DETAIL_LEVEL")->items.size() == kQualityCount + 1 && d->get("IDC_PORT_DETAIL_LEVEL")->selected == 3);
+    // [port: Gabriel] Display Mode (Fullscreen / Borderless fullscreen / Windowed) and UI Scale (100 .. 500 %) lists.
+    CHECK(d->get("IDC_PORT_WINDOW_MODE")->items.size() == kWindowModeCount && d->get("IDC_PORT_WINDOW_MODE")->selected == 0 &&
+          d->get("IDC_PORT_WINDOW_MODE")->items[1] == U"Borderless fullscreen");
+    CHECK(d->get("IDC_PORT_UI_SCALE")->items.size() == std::size(kUiScaleChoices) && d->get("IDC_PORT_UI_SCALE")->selected == 0 &&
+          d->get("IDC_PORT_UI_SCALE")->items.back() == U"500 %");
+    d->set_selected("IDC_PORT_WINDOW_MODE", 1);
+    d->set_selected("IDC_PORT_UI_SCALE", 4);
     // Apply leaves the dialog open: the status line picks up the mode the host switched to on the next frame.
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
     CHECK(acts.size() == 1 && acts[0].video.vsync && acts[0].video.vsync_mode == VsyncMode::Fifo);
+    CHECK(acts[0].video.window_mode == WindowMode::Borderless && acts[0].video.ui_scale == 200);
     cur.display_info = U"160 Hz, FIFO";
     acts.clear();
     fe.update({}, InputFrame{}, acts);
@@ -474,7 +482,7 @@ void test_advanced_video_port() {
     const size_t before = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 10 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
           rd->find("IDC_PORT_WATER_DETAIL") >= 0);
     CHECK(rd->find("IDC_PORT_ANTI_ALIASING") < 0);  // anti-aliasing is one list, in the Video dialog
     FrontEnd fe;
@@ -523,12 +531,18 @@ void test_advanced_video_port() {
     CHECK(d->get("IDC_PORT_ANISOTROPY")->selected == 3 && d->get("IDC_PORT_ANISOTROPY")->items.size() == std::size(kAnisotropyChoices) &&
           d->get("IDC_PORT_ANISOTROPY")->items[4] == U"16x" && !d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked);
     CHECK(!d->get("IDC_PARTICLE_DETAIL_SLIDER")->visible);
+    // [port: Gabriel] Render Scale: native by default, the listed percentages, 75 picked.
+    const GuiControl* rs = d->get("IDC_PORT_RENDER_SCALE");
+    CHECK(rs && rs->items.size() == std::size(kRenderScaleChoices) && rs->selected == static_cast<int32_t>(std::size(kRenderScaleChoices) - 1) &&
+          rs->items.back() == U"100% (native)" && rs->items[3] == U"75%" && rs->ui_font);
     d->set_selected("IDC_PORT_PARTICLE_DETAIL", 0);
     d->set_selected("IDC_PORT_ANISOTROPY", 4);
+    d->set_selected("IDC_PORT_RENDER_SCALE", 3);
     d->set_checked("IDC_PORT_AMBIENT_OCCLUSION", true);
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(acts.back().kind == MenuAction::Kind::ApplyAdvancedVideo && acts.back().advanced.particle == 0 && acts.back().advanced.mesh == 55 &&
-          acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion && acts.back().advanced.bloom);
+          acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion && acts.back().advanced.bloom &&
+          acts.back().advanced.render_scale == 75);
     // t43: Apply in Advanced moves the Detail Level list underneath to the level the seven make (Low amid Ultra: Custom) ...
     CHECK(quality->selected == static_cast<int32_t>(kQualityCustom));
     for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",

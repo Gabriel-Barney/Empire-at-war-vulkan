@@ -281,7 +281,11 @@ BEGIN
     COMBOBOX        IDC_PORT_ANTI_ALIASING,196,246,311,108,CBS_DROPDOWNLIST | WS_TABSTOP
     COMBOBOX        IDC_PORT_DETAIL_LEVEL,196,271,311,130,CBS_DROPDOWNLIST | WS_TABSTOP
     RTEXT           "",IDC_PORT_GAMMA_VALUE,143,297,32,21
-    LTEXT           "",IDC_PORT_DISPLAY_INFO,22,376,526,18
+    LTEXT           "",IDC_PORT_DISPLAY_INFO,22,376,236,18
+    LTEXT           "Display Mode",IDC_PORT_WINDOW_MODE_TEXT,264,350,112,18
+    COMBOBOX        IDC_PORT_WINDOW_MODE,378,348,170,70,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "UI Scale",IDC_PORT_UI_SCALE_TEXT,264,376,112,18
+    COMBOBOX        IDC_PORT_UI_SCALE,378,374,170,130,CBS_DROPDOWNLIST | WS_TABSTOP
 END
 IDD_ADVANCED_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 571, 454
 BEGIN
@@ -294,6 +298,8 @@ BEGIN
     COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,255,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,297,360,218,18
     COMBOBOX        IDC_PORT_ANISOTROPY,297,380,218,120,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,297,310,218,18
+    COMBOBOX        IDC_PORT_RENDER_SCALE,297,330,218,140,CBS_DROPDOWNLIST | WS_TABSTOP
     CONTROL         "Ambient Occlusion",IDC_PORT_AMBIENT_OCCLUSION,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,33,385,215,23
 END
 )RC";
@@ -339,6 +345,13 @@ std::optional<size_t> picked(const GuiDialog& d, const char* id, size_t count) {
     const GuiControl* c = d.get(id);
     if (!c || c->selected < 0 || static_cast<size_t>(c->selected) >= count) return std::nullopt;
     return static_cast<size_t>(c->selected);
+}
+// The IDC_PORT_UI_SCALE row a stored scale shows: the largest choice not above it (a value between rows shows the row below).
+size_t ui_scale_row(int32_t pct) {
+    size_t row = 0;
+    for (size_t i = 0; i < std::size(kUiScaleChoices); ++i)
+        if (kUiScaleChoices[i] <= pct) row = i;
+    return row;
 }
 // QA U11: the shipped IDD_GAME_OPTIONS_DIALOG leaves one button row empty between Options and Quit Game, with no control
 // for it in GUIDialogs.rc. Quit and Resume move up by that row and the dialog ends that much sooner [port].
@@ -954,7 +967,14 @@ void FrontEnd::fill_video(GuiDialog& d) {
     // [port] the list holds every mode at every refresh rate: open it on the current one, kept in range so a mode near
     // the end (the desktop's own, the largest) still fills the list with the sizes below it (QA U10).
     if (const GuiControl* l = d.get("IDC_RESOLUTION_LIST"); l && l->selected > 0) gui_->scroll_list_to(d, "IDC_RESOLUTION_LIST", l->selected - 3);
-    d.set_checked("IDC_WINDOWED_MODE", v.windowed);
+    // [port: Gabriel] the shipped "Run in window" check gives way to the display mode list in its row (WindowMode order).
+    d.show("IDC_WINDOWED_MODE", false);
+    d.set_items("IDC_PORT_WINDOW_MODE",
+                {gui_->port_text(U"Fullscreen"), gui_->port_text(U"Borderless fullscreen"), gui_->port_text(U"Windowed")},
+                static_cast<int32_t>(v.window_mode));
+    std::vector<std::u32string> scales;
+    for (const int32_t pct : kUiScaleChoices) scales.push_back(gui_->port_text(ascii32(std::to_string(pct) + " %")));
+    d.set_items("IDC_PORT_UI_SCALE", std::move(scales), static_cast<int32_t>(ui_scale_row(v.ui_scale)));
     d.set_checked("IDC_VSYNC_ENABLED", v.vsync);
     d.set_checked("IDC_WIDESCREEN", v.widescreen);
     d.set_checked("IDC_HARDWARE_MOUSE", v.hardware_mouse);
@@ -981,7 +1001,8 @@ void FrontEnd::fill_video(GuiDialog& d) {
         if (c == v.frame_cap) cap_sel = static_cast<int32_t>(i);
     }
     d.set_items("IDC_PORT_FRAME_CAP", std::move(caps), cap_sel);
-    use_ui_font(d, {"IDC_PORT_VSYNC_MODE", "IDC_PORT_FRAME_CAP", "IDC_PORT_ANTI_ALIASING", "IDC_PORT_DETAIL_LEVEL"});
+    use_ui_font(d, {"IDC_PORT_VSYNC_MODE", "IDC_PORT_FRAME_CAP", "IDC_PORT_ANTI_ALIASING", "IDC_PORT_DETAIL_LEVEL", "IDC_PORT_WINDOW_MODE",
+                    "IDC_PORT_UI_SCALE"});
     d.set_text("IDC_PORT_DISPLAY_INFO", gui_->port_text(v.display_info));
     // t47 [port]: the value column (143..175) sits inside the shipped caption box (41..187):
     // the caption ends where its value starts and is narrowed to fit, or a long one runs under the number.
@@ -1021,8 +1042,21 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
         if (a == s.anisotropy) af_sel = static_cast<int32_t>(i);
     }
     d.set_items("IDC_PORT_ANISOTROPY", std::move(af), af_sel);
+    // [port: Gabriel] Render Scale: the listed percentages; a stored value that is not one of them is listed too (selected).
+    std::vector<std::u32string> rs;
+    int32_t rs_sel = -1;
+    for (size_t i = 0; i < std::size(kRenderScaleChoices); ++i) {
+        const int32_t r = kRenderScaleChoices[i];
+        rs.push_back(ascii32(std::to_string(r) + (r == 100 ? "% (native)" : "%")));
+        if (r == s.render_scale) rs_sel = static_cast<int32_t>(i);
+    }
+    if (rs_sel < 0) {
+        rs.push_back(ascii32(std::to_string(s.render_scale) + "%"));
+        rs_sel = static_cast<int32_t>(rs.size() - 1);
+    }
+    d.set_items("IDC_PORT_RENDER_SCALE", std::move(rs), rs_sel);
     d.set_checked("IDC_PORT_AMBIENT_OCCLUSION", s.ambient_occlusion);
-    use_ui_font(d, {"IDC_PORT_ANISOTROPY"});
+    use_ui_font(d, {"IDC_PORT_ANISOTROPY", "IDC_PORT_RENDER_SCALE"});
     // QA D8 [port]: the check rows are widened up to the combo column, so "Heat Distortion" is not narrowed to fit 152 units.
     for (const AdvCheck& k : kAdvChecks)
         if (GuiControl* c = d.get(k.id); c && c->def->w > 0) c->scale.x = kAdvCheckWidth / static_cast<float>(c->def->w);
@@ -1038,6 +1072,9 @@ AdvancedVideoSettings FrontEnd::read_advanced_video(const GuiDialog& d) const {
         if (const GuiControl* c = d.get(k.id)) s.*k.field = c->checked;
     if (const GuiControl* c = d.get("IDC_PORT_ANISOTROPY"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < std::size(kAnisotropyChoices))
         s.anisotropy = kAnisotropyChoices[static_cast<size_t>(c->selected)];
+    // The extra row of an unlisted stored value (past the choices) keeps that value.
+    if (const GuiControl* c = d.get("IDC_PORT_RENDER_SCALE"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < std::size(kRenderScaleChoices))
+        s.render_scale = kRenderScaleChoices[static_cast<size_t>(c->selected)];
     if (const GuiControl* c = d.get("IDC_PORT_AMBIENT_OCCLUSION")) s.ambient_occlusion = c->checked;
     return s;
 }
@@ -1529,7 +1566,11 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 v.detail = kQualityPresets[*row];
                 v.detail_picked = true;
             }
-            chk("IDC_WINDOWED_MODE", v.windowed);
+            if (const GuiControl* x = d->get("IDC_PORT_WINDOW_MODE"); x && x->selected >= 0 && static_cast<size_t>(x->selected) < kWindowModeCount)
+                v.window_mode = static_cast<WindowMode>(x->selected);
+            // A list left on the row the stored value shows keeps that value (a hand-edited profile's 130 stays 130).
+            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_UI_SCALE", std::size(kUiScaleChoices)); row && *row != ui_scale_row(v.ui_scale))
+                v.ui_scale = kUiScaleChoices[*row];
             chk("IDC_VSYNC_ENABLED", v.vsync);
             // U9: row 0 is Off (the check box above says so); the mode is remembered while v-sync is off.
             if (const GuiControl* x = d->get("IDC_PORT_VSYNC_MODE"); x && x->selected > 0 && static_cast<size_t>(x->selected) <= kVsyncModeCount)
