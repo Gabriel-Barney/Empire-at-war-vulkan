@@ -119,13 +119,21 @@ void test_canvas() {
     CHECK(near(d.width, 1024) && near(d.height, 768) && near(d.units_per_pixel_x, 1.28f) && d.text_wrap_factor() == 0.95f);
     CHECK(a.text_wrap_factor() == 1.0f);
     CHECK(a.font_height() == 768 && b.font_height() == 1080 && c.font_height() == 1024);  // no UI scale: the screen height
-    // [port: Gabriel] DPI-style UI scale: 100 % at 3840 x 2160 is one unit per pixel (text sized for 2160 / (2160 / 768));
-    // 200 % halves it; 300 % would be smaller than the fitted canvas, so the fitted one (the original size) is used.
-    const HudCanvas e = HudCanvas::make(3840, 2160, 1.0f), f = HudCanvas::make(3840, 2160, 2.0f), g = HudCanvas::make(3840, 2160, 3.0f);
-    CHECK(near(e.width, 3840) && near(e.height, 2160) && near(e.units_per_pixel_y, 1) && e.font_height() == 768);
-    CHECK(near(f.width, 1920) && near(f.height, 1080) && near(f.units_per_pixel_x, 0.5f) && f.font_height() == 1536);
-    const HudCanvas fit = HudCanvas::make(3840, 2160);
+    // [port: Gabriel] DPI-style UI scale: 100 % is the original's size on a 1080p screen (1080 / 768 pixels per unit), so at
+    // 3840 x 2160 the canvas is 1536 units high (text sized for 1080); 150 % gives 1024 units (text for 1620); 200 % would be
+    // exactly the fitted canvas and 300 % smaller than it, so the fitted one (the original size) is used.
+    const HudCanvas e = HudCanvas::make(3840, 2160, 1.0f), f = HudCanvas::make(3840, 2160, 1.5f), g = HudCanvas::make(3840, 2160, 3.0f);
+    CHECK(near(e.width, 3840.0f / kUiScaleUnitPixels, 1e-2f) && near(e.height, 1536) && near(e.units_per_pixel_y, 1536.0f / 2160.0f) &&
+          e.font_height() == 1080);
+    CHECK(near(f.width, 3840.0f / 1.5f / kUiScaleUnitPixels, 1e-2f) && near(f.height, 1024) && f.font_height() == 1620);
+    const HudCanvas fit = HudCanvas::make(3840, 2160), two = HudCanvas::make(3840, 2160, 2.0f);
     CHECK(g.width == fit.width && g.height == fit.height && g.font_height() == 2160 && g.ui_scale == 3.0f);
+    CHECK(two.width == fit.width && two.height == fit.height && two.font_height() == 2160);
+    // 1080p at 100 % and 1440p at 150 % are the original fitted size; 1440p at 100 % is three quarters of it.
+    const HudCanvas hd = HudCanvas::make(1920, 1080, 1.0f), qhd = HudCanvas::make(2560, 1440, 1.5f), qhd1 = HudCanvas::make(2560, 1440, 1.0f);
+    CHECK(hd.width == b.width && hd.height == b.height && hd.font_height() == 1080);
+    CHECK(near(qhd.height, 768) && qhd.font_height() == 1440);
+    CHECK(near(qhd1.height, 1024) && qhd1.font_height() == 1080);
     const HudCanvas h = HudCanvas::make(1024, 768, 1.0f);  // the base size: 100 % is the original
     CHECK(h.width == a.width && h.height == a.height && h.font_height() == 768);
     for (const HudCanvas* cv : {&a, &b, &c, &d, &e, &f}) {

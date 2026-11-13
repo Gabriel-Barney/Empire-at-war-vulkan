@@ -462,8 +462,22 @@ void test_window_text() {
     CHECK(capped.size() == Window::kMaxTextPerFrame && capped.front() == U'0');  // the 10 oldest dropped
 }
 
+// [port] WM_ACTIVATEAPP (0x001C): app_active() follows it; take_activation_changed() reports each change once.
+void test_window_activation() {
+    Window w;
+    constexpr uint32_t kActivateApp = 0x001C;
+    CHECK(w.app_active() && !w.take_activation_changed());
+    w.handle_message(kActivateApp, 0, 0);
+    CHECK(!w.app_active() && w.take_activation_changed() && !w.take_activation_changed());
+    w.handle_message(kActivateApp, 0, 0);  // no change
+    CHECK(!w.app_active() && !w.take_activation_changed());
+    w.handle_message(kActivateApp, 1, 0);
+    CHECK(w.app_active() && w.take_activation_changed());
+}
+
 int run_cpu() {
     test_window_mouse();
+    test_window_activation();
     test_window_text();
     test_formats();
     test_ring();
@@ -2046,6 +2060,99 @@ bool layer_path_has_validation() {
     return false;
 }
 
+// [port: Gabriel 2026-11-13] Exclusive full screen: a presentation context enables VK_EXT_full_screen_exclusive when the
+// driver lists it; a swapchain asked for it builds (application-controlled when the surface supports it, else plain), a
+// hidden window never holds exclusive mode, frames still acquire and present, and switching it off rebuilds cleanly.
+// No validation errors (warnings too when the layer is required).
+void test_exclusive_swapchain(bool strict) {
+    Window w;
+    WindowDesc wd;
+    wd.visible = false;
+    wd.width = 320;
+    wd.height = 200;
+    if (!w.create(wd)) {
+        std::printf("  exclusive swapchain: SKIP (no window)\n");
+        return;
+    }
+    Context ctx;
+    ContextDesc cd;
+    cd.app_name = "alamo_rhi_tests_present";
+    cd.presentation = true;
+    cd.validation = strict ? Validation::Required : Validation::IfAvailable;
+    if (!ctx.init(cd)) {
+        std::printf("  exclusive swapchain: SKIP (no presentation device)\n");
+        return;
+    }
+    std::printf("  exclusive swapchain: VK_EXT_full_screen_exclusive %s\n", ctx.caps().full_screen_exclusive ? "enabled" : "not offered");
+    {
+        Swapchain sc;
+        SwapchainDesc sd;
+        sd.hinstance = w.native_instance();
+        sd.hwnd = w.native_handle();
+        sd.width = wd.width;
+        sd.height = wd.height;
+        sd.exclusive_fullscreen = true;
+        CHECK(sc.init(ctx, sd));
+        CHECK(sc.valid() && !sc.exclusive());  // a hidden window cannot take the monitor
+        CHECK(!sc.acquire_exclusive());
+        auto sci = vk_struct<VkSemaphoreCreateInfo>(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+        VkSemaphore acquired = VK_NULL_HANDLE;
+        CHECK(vk_check(ctx.vkd().vkCreateSemaphore(ctx.device(), &sci, nullptr, &acquired), "semaphore"));
+        auto frame = [&] {  // acquire, move the image to PRESENT_SRC, present
+            uint32_t image = 0;
+            const SwapchainStatus as = sc.acquire(acquired, image);
+            CHECK(as == SwapchainStatus::Ok || as == SwapchainStatus::Suboptimal);
+            if (as != SwapchainStatus::Ok && as != SwapchainStatus::Suboptimal) return;
+            const VkSemaphoreSubmitInfo wait = semaphore_info(acquired, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            const VkSemaphoreSubmitInfo signal = semaphore_info(sc.render_finished(image), 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            VkCommandBuffer cmd = VK_NULL_HANDLE;
+            auto pci = vk_struct<VkCommandPoolCreateInfo>(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+            pci.queueFamilyIndex = ctx.graphics().family;
+            VkCommandPool pool = VK_NULL_HANDLE;
+            CHECK(vk_check(ctx.vkd().vkCreateCommandPool(ctx.device(), &pci, nullptr, &pool), "pool"));
+            auto ai = vk_struct<VkCommandBufferAllocateInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+            ai.commandPool = pool;
+            ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            ai.commandBufferCount = 1;
+            CHECK(vk_check(ctx.vkd().vkAllocateCommandBuffers(ctx.device(), &ai, &cmd), "cmd"));
+            auto bi = vk_struct<VkCommandBufferBeginInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+            ctx.vkd().vkBeginCommandBuffer(cmd, &bi);
+            cmd_barrier(ctx.vkd(), cmd, transition(sc.image(image), ImageState::Undefined, ImageState::Present));
+            ctx.vkd().vkEndCommandBuffer(cmd);
+            auto cbi = vk_struct<VkCommandBufferSubmitInfo>(VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO);
+            cbi.commandBuffer = cmd;
+            auto si = vk_struct<VkSubmitInfo2>(VK_STRUCTURE_TYPE_SUBMIT_INFO_2);
+            si.waitSemaphoreInfoCount = 1;
+            si.pWaitSemaphoreInfos = &wait;
+            si.commandBufferInfoCount = 1;
+            si.pCommandBufferInfos = &cbi;
+            si.signalSemaphoreInfoCount = 1;
+            si.pSignalSemaphoreInfos = &signal;
+            CHECK(vk_check(ctx.graphics().submit({&si, 1}), "submit"));
+            const SwapchainStatus ps = sc.present(image);
+            CHECK(ps == SwapchainStatus::Ok || ps == SwapchainStatus::Suboptimal || ps == SwapchainStatus::OutOfDate);
+            ctx.wait_idle();
+            ctx.vkd().vkDestroyCommandPool(ctx.device(), pool, nullptr);
+        };
+        frame();
+        sc.set_exclusive_fullscreen(false);
+        CHECK(sc.recreate(wd.width, wd.height) && sc.valid() && !sc.exclusive());
+        frame();
+        sc.set_exclusive_fullscreen(true);
+        CHECK(sc.recreate(wd.width, wd.height) && sc.valid());
+        frame();
+        ctx.wait_idle();
+        ctx.vkd().vkDestroySemaphore(ctx.device(), acquired, nullptr);
+        sc.shutdown();
+    }
+    const uint32_t errors = ctx.validation_errors(), warnings = ctx.validation_warnings();
+    ctx.shutdown();
+    w.destroy();
+    std::printf("  exclusive swapchain: %u validation errors, %u warnings\n", errors, warnings);
+    CHECK(errors == 0);
+    CHECK(!strict || warnings == 0);
+}
+
 int run_gpu() {
     const bool strict = layer_path_has_validation();
     {
@@ -2196,6 +2303,7 @@ int run_gpu() {
     if (validated || strict) std::printf("  validation: %u errors, %u warnings\n", errors, warnings);
     CHECK(errors == 0);
     CHECK(!strict || warnings == 0);
+    test_exclusive_swapchain(strict);
 
     if (g_fail) {
         std::printf("alamo_rhi_tests gpu: %d failure(s)\n", g_fail);

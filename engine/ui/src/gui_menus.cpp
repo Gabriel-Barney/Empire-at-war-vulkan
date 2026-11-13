@@ -304,7 +304,9 @@ BEGIN
     LTEXT           "V-Sync Mode",IDC_PORT_VSYNC_MODE_TEXT,357,69,188,18
     COMBOBOX        IDC_PORT_VSYNC_MODE,357,89,188,80,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "Frame Rate Cap",IDC_PORT_FRAME_CAP_TEXT,357,115,188,18
-    COMBOBOX        IDC_PORT_FRAME_CAP,357,135,188,90,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_FRAME_CAP,357,135,188,70,CBS_DROPDOWNLIST | WS_TABSTOP
+    CONTROL         "",IDC_PORT_FRAME_CAP_SLIDER,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,357,163,138,18
+    LTEXT           "",IDC_PORT_FRAME_CAP_VALUE,499,163,46,18
     RTEXT           "",IDC_PORT_GAMMA_VALUE,143,297,32,21
     LTEXT           "",IDC_PORT_DISPLAY_INFO,22,376,236,18
     LTEXT           "Display Mode",IDC_PORT_WINDOW_MODE_TEXT,264,350,112,18
@@ -338,6 +340,7 @@ constexpr uint8_t kQueueModChoices[4] = {kModShift, kModCtrl, kModAlt, 0};
 constexpr const char32_t* kQueueModNames[4] = {U"Shift", U"Ctrl", U"Alt", U"None"};
 std::u32string fov_text(float deg) { return ascii32(std::to_string(static_cast<int>(std::lround(deg)))); }
 std::u32string value_text(int32_t v) { return ascii32(std::to_string(v)); }
+std::u32string fps_text(int32_t v) { return ascii32(std::to_string(v) + " fps"); }
 // QA D8 [port]: the combos the port adds hold plain ASCII choices, so they read in the dialog's caption font. The shipped
 // combos keep the skin's Combo_Box font (GUIDialogs.xml: Arial Unicode MS, for translated text).
 void use_ui_font(GuiDialog& d, std::initializer_list<const char*> ids) {
@@ -1106,7 +1109,8 @@ void FrontEnd::fill_video(GuiDialog& d) {
     std::vector<std::u32string> scales;
     for (const int32_t pct : kUiScaleChoices) scales.push_back(gui_->port_text(ascii32(std::to_string(pct) + " %")));
     d.set_items("IDC_PORT_UI_SCALE", std::move(scales), static_cast<int32_t>(ui_scale_row(v.ui_scale)));
-    d.set_checked("IDC_VSYNC_ENABLED", v.vsync);
+    // [port: Gabriel 2026-11-13] the shipped "V-sync enabled" check is gone: the V-Sync Mode list's Off row turns it off.
+    d.show("IDC_VSYNC_ENABLED", false);
     d.set_checked("IDC_WIDESCREEN", v.widescreen);
     d.show("IDC_HARDWARE_MOUSE", false);  // [port: Gabriel 2026-11-13] the option is gone: the game always draws its own cursor
     // [port: Gabriel] Display / Graphics split: this dialog is Display. Anti-Aliasing and Detail Level (and the Advanced and
@@ -1123,19 +1127,17 @@ void FrontEnd::fill_video(GuiDialog& d) {
     d.set_value("IDC_GAMMA_SLIDER", v.gamma);
     d.set_text("IDC_PORT_GAMMA_VALUE", value_text(v.gamma));
     d.set_text("IDC_DEVICE_DESC_STATIC", v.device);
-    vsync_on_row_ = static_cast<int32_t>(v.vsync_mode) + 1;
     d.set_items("IDC_PORT_VSYNC_MODE",
                 {gui_->port_text(U"Off (no v-sync)"), gui_->port_text(U"Standard (FIFO)"),
                  gui_->port_text(v.mailbox_available ? U"Low latency (Mailbox)" : U"Mailbox (not on this driver)")},
-                v.vsync ? vsync_on_row_ : 0);
-    std::vector<std::u32string> caps;
-    int32_t cap_sel = 0;
-    for (size_t i = 0; i < std::size(kFrameCapChoices); ++i) {
-        const int32_t c = kFrameCapChoices[i];
-        caps.push_back(gui_->port_text(c == 0 ? U"Off" : c == kFrameCapDisplay ? U"Display refresh rate" : ascii32(std::to_string(c) + " fps")));
-        if (c == v.frame_cap) cap_sel = static_cast<int32_t>(i);
-    }
-    d.set_items("IDC_PORT_FRAME_CAP", std::move(caps), cap_sel);
+                v.vsync ? static_cast<int32_t>(v.vsync_mode) + 1 : 0);
+    // [port: Gabriel 2026-11-13] Off / Display refresh rate / Custom, the Custom cap picked with the slider under the list.
+    d.set_items("IDC_PORT_FRAME_CAP", {gui_->port_text(U"Off"), gui_->port_text(U"Display refresh rate"), gui_->port_text(U"Custom")},
+                v.frame_cap == 0 ? kFrameCapRowOff : v.frame_cap == kFrameCapDisplay ? kFrameCapRowDisplay : kFrameCapRowCustom);
+    const int32_t custom_cap = std::clamp(v.frame_cap > 0 ? v.frame_cap : kFrameCapCustomDefault, kFrameCapCustomMin, kFrameCapCustomMax);
+    d.set_range("IDC_PORT_FRAME_CAP_SLIDER", kFrameCapCustomMin, kFrameCapCustomMax);
+    d.set_value("IDC_PORT_FRAME_CAP_SLIDER", custom_cap);
+    d.set_text("IDC_PORT_FRAME_CAP_VALUE", fps_text(custom_cap));
     use_ui_font(d, {"IDC_PORT_VSYNC_MODE", "IDC_PORT_FRAME_CAP", "IDC_PORT_WINDOW_MODE", "IDC_PORT_UI_SCALE"});
     d.set_text("IDC_PORT_DISPLAY_INFO", gui_->port_text(v.display_info));
     // t47 [port]: the value column (143..175) sits inside the shipped caption box (41..187):
@@ -1537,11 +1539,10 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
         if (e.control == "IDC_PORT_TACTICAL_FOV_SLIDER") d->set_text("IDC_PORT_TACTICAL_FOV_VALUE", fov_text(static_cast<float>(e.value)));
     } else if (ascii_iequals(n, kVideo) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port] the value beside the Gamma slider (U8)
         if (e.control == "IDC_GAMMA_SLIDER") d->set_text("IDC_PORT_GAMMA_VALUE", value_text(e.value));
-    } else if (ascii_iequals(n, kVideo) && e.kind == GuiEvent::Kind::Checked && e.control == "IDC_VSYNC_ENABLED") {  // U9: one setting
-        d->set_selected("IDC_PORT_VSYNC_MODE", e.value != 0 ? vsync_on_row_ : 0);
-    } else if (ascii_iequals(n, kVideo) && e.kind == GuiEvent::Kind::SelectionChanged && e.control == "IDC_PORT_VSYNC_MODE") {
-        if (e.value > 0) vsync_on_row_ = e.value;
-        d->set_checked("IDC_VSYNC_ENABLED", e.value > 0);
+        if (e.control == "IDC_PORT_FRAME_CAP_SLIDER") {  // [port: Gabriel] the custom cap: moving the slider picks Custom
+            d->set_text("IDC_PORT_FRAME_CAP_VALUE", fps_text(e.value));
+            d->set_selected("IDC_PORT_FRAME_CAP", kFrameCapRowCustom);
+        }
     } else if (ascii_iequals(n, kAdvancedVideo) && e.kind == GuiEvent::Kind::SelectionChanged) {
         // [port: Gabriel] Graphics: a quality level picked in Detail Level sets the seven lists to its preset at once (Custom
         // leaves them); a change in one of the seven moves Detail Level to the level they now make (a mix is Custom).
@@ -1724,12 +1725,15 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             // A list left on the row the stored value shows keeps that value (a hand-edited profile's 130 stays 130).
             if (const std::optional<size_t> row = picked(*d, "IDC_PORT_UI_SCALE", std::size(kUiScaleChoices)); row && *row != ui_scale_row(v.ui_scale))
                 v.ui_scale = kUiScaleChoices[*row];
-            chk("IDC_VSYNC_ENABLED", v.vsync);
-            // U9: row 0 is Off (the check box above says so); the mode is remembered while v-sync is off.
-            if (const GuiControl* x = d->get("IDC_PORT_VSYNC_MODE"); x && x->selected > 0 && static_cast<size_t>(x->selected) <= kVsyncModeCount)
-                v.vsync_mode = static_cast<VsyncMode>(x->selected - 1);
-            if (const GuiControl* x = d->get("IDC_PORT_FRAME_CAP"); x && x->selected >= 0 && static_cast<size_t>(x->selected) < std::size(kFrameCapChoices))
-                v.frame_cap = kFrameCapChoices[static_cast<size_t>(x->selected)];
+            // U9: the V-Sync Mode list is the one v-sync setting: row 0 is Off (the mode is remembered while v-sync is off).
+            if (const GuiControl* x = d->get("IDC_PORT_VSYNC_MODE"); x && x->selected >= 0 && static_cast<size_t>(x->selected) <= kVsyncModeCount) {
+                v.vsync = x->selected > 0;
+                if (v.vsync) v.vsync_mode = static_cast<VsyncMode>(x->selected - 1);
+            }
+            if (const GuiControl* x = d->get("IDC_PORT_FRAME_CAP"); x && x->selected == kFrameCapRowOff) v.frame_cap = 0;
+            else if (x && x->selected == kFrameCapRowDisplay) v.frame_cap = kFrameCapDisplay;
+            else if (const GuiControl* sl = d->get("IDC_PORT_FRAME_CAP_SLIDER"); x && x->selected == kFrameCapRowCustom && sl)
+                v.frame_cap = sl->value;
             chk("IDC_WIDESCREEN", v.widescreen);
             val("IDC_GAMMA_SLIDER", v.gamma);
             // t12: a different resolution / refresh rate asks "keep these settings?" first (the Yes answer stores it).
