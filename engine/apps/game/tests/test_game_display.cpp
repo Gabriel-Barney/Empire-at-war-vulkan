@@ -130,7 +130,8 @@ void profile_round_trip() {
     p.vsync_mode = ui::VsyncMode::Mailbox;
     p.frame_cap = ui::kFrameCapDisplay;
     p.hardware_mouse = true;
-    p.windowed = false;    // UI5 t01
+    p.window_mode = ui::WindowMode::Borderless;  // UI5 t01 / display mode list
+    p.ui_scale = 175;
     p.widescreen = false;
     p.detail = 40;
     p.gamma = 70;
@@ -147,7 +148,7 @@ void profile_round_trip() {
     CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay && q.hardware_mouse);
     CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == 63);
     CHECK(q.advanced == p.advanced);
-    CHECK(!q.windowed && !q.widescreen);
+    CHECK(q.window_mode == ui::WindowMode::Borderless && !q.widescreen && q.ui_scale == 175);
     {  // UI5 t01: Widescreen off lists modes no wider than 4:3; all when none is
         const std::vector<game::DisplayMode> all{{1024, 768, 60}, {1280, 1024, 60}, {1920, 1080, 60}, {2560, 1440, 144}};
         const std::vector<game::DisplayMode> narrow = game::video_list_modes(all, false);
@@ -156,11 +157,13 @@ void profile_round_trip() {
         const std::vector<game::DisplayMode> wide{{1920, 1080, 60}};
         CHECK(game::video_list_modes(wide, false).size() == 1);
         ui::VideoSettings v;
-        v.windowed = true;
+        v.window_mode = ui::WindowMode::Windowed;
         v.widescreen = true;
+        v.ui_scale = 900;  // clamped to kUiScaleMax
         game::VideoProfile r;
-        r.windowed = r.widescreen = false;
-        CHECK(game::update_video_profile(r, v, all) && r.windowed && r.widescreen);
+        r.window_mode = ui::WindowMode::Fullscreen;
+        r.widescreen = false;
+        CHECK(game::update_video_profile(r, v, all) && r.window_mode == ui::WindowMode::Windowed && r.widescreen && r.ui_scale == ui::kUiScaleMax);
     }
     // A partial file (hand-written) keeps the other values.
     {
@@ -173,6 +176,18 @@ void profile_round_trip() {
     CHECK(r.advanced.render_scale == 25);  // clamped to render::kRenderScaleMin
     CHECK(game::render_scale_value(75) == 0.75f && game::render_scale_value(100) == 1.0f && game::render_scale_value(0) == 0.25f);
     CHECK(r.mode.width == 0 && r.vsync && !r.advanced.ambient_occlusion && r.advanced.bloom);
+    CHECK(r.window_mode == ui::WindowMode::Windowed && r.ui_scale == 100);  // the defaults: windowed, UI scale 100 %
+    // A profile from before the display mode list: "windowed=0" is Fullscreen, "windowed=1" Windowed; window_mode wins.
+    for (const auto& [text, want] : {std::pair{"windowed=0\n", ui::WindowMode::Fullscreen}, std::pair{"windowed=1\n", ui::WindowMode::Windowed},
+                                     std::pair{"windowed=0\nwindow_mode=borderless\nui_scale=50\n", ui::WindowMode::Borderless}}) {
+        {
+            std::ofstream f(path, std::ios::trunc);
+            f << text;
+        }
+        game::VideoProfile old;
+        CHECK(game::load_video_profile(path, old) && old.window_mode == want && old.ui_scale >= ui::kUiScaleMin);
+    }
+    CHECK(game::parse_window_mode("borderless") == ui::WindowMode::Borderless && !game::parse_window_mode("exclusive"));
     CHECK(!game::load_video_profile((dir / "missing.txt").string(), r));
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
@@ -373,6 +388,7 @@ void options_round_trip() {
     p.gameplay.difficulty = 2;
     p.camera.tactical_fov_deg = 70.0f;
     p.camera.queue_mods = 2;
+    p.camera.show_path_lines = true;
     p.tactical_fov_set = true;
     ui::HotkeyTable t;
     ui::HotkeyBinding b = t.binding(20);
@@ -385,7 +401,8 @@ void options_round_trip() {
     CHECK(std::fabs(q.audio.master - 0.25f) < 1e-4f && q.audio.music == 0.0f && q.audio.sfx == 1.0f && !q.audio.subtitles);
     CHECK(q.gameplay.game_speed == 75 && q.gameplay.strategic_speed == 0 && q.gameplay.alternate_mouse &&
           q.gameplay.abilities_autofire && !q.gameplay.ask_autoresolve && q.gameplay.difficulty == 2 && q.gameplay.absolute_scroll);
-    CHECK(std::fabs(q.camera.tactical_fov_deg - 70.0f) < 1e-3f && q.camera.queue_mods == 2 && q.tactical_fov_set);
+    CHECK(std::fabs(q.camera.tactical_fov_deg - 70.0f) < 1e-3f && q.camera.queue_mods == 2 && q.tactical_fov_set &&
+          q.camera.show_path_lines);
     CHECK(q.keys == p.keys);
     ui::HotkeyTable u;
     CHECK(u.load(q.keys) && u.binding(20).key == 'Q');

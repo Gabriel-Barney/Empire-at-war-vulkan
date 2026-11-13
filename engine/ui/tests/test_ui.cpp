@@ -448,7 +448,8 @@ void test_camera() {
     GalacticCameraController g;
     CameraParams gp = g.params(16.0f / 9.0f);
     CHECK(g.zoom_progress() == 1.0f && g.zoom_blend() == 0.0f && g.zoom_state() == 0);  // settled, zoomed out
-    CHECK(gp.galactic && gp.fov_x == kGalacticFovX && gp.znear == 10.0f && gp.zfar == 10000.0f);
+    CHECK(gp.galactic && gp.fov_x == galactic_fov_x(kGalacticFovX, 16.0f / 9.0f) && gp.znear == 10.0f && gp.zfar == 10000.0f);
+    CHECK(g.params(4.0f / 3.0f).fov_x == kGalacticFovX && gp.fov_x > kGalacticFovX);  // [port: Gabriel] Hor+ above 4:3
     CHECK(g.look_at().z == 10.0f && near(gp.eye.y, -700.0f * std::cos(30.0f * kDegToRad), 0.01f) && near(gp.eye.z, 360.0f, 0.01f));
     g.set_look_at({5, 6, 0});
     CHECK(g.look_at().z == 10.0f);  // set position: z := plane

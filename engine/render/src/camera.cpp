@@ -160,9 +160,14 @@ ViewMatrices background_view(const ViewMatrices& main) {
     return b;
 }
 
+float galactic_fov_x(float fov_x_4_3, float aspect) {
+    if (aspect <= 4.0f / 3.0f + 1e-4f) return fov_x_4_3;
+    return 2.0f * std::atan(std::tan(0.5f * fov_x_4_3) * aspect * 0.75f);
+}
+
 ViewMatrices make_galactic_view(const OrbitCamera& cam, uint32_t width, uint32_t height) {
     OrbitCamera c = cam;
-    c.fov_x = kGalacticFovX;  // fixed: only the aspect follows the display
+    c.fov_x = galactic_fov_x(kGalacticFovX, static_cast<float>(width) / static_cast<float>(height ? height : 1u));  // Hor+ [port]
     return make_view(c, width, height, kGalacticNear, kGalacticFar);
 }
 

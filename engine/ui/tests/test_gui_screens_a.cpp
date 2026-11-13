@@ -350,7 +350,7 @@ void test_video_vsync_mode() {
     const size_t before = env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 6 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 10 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
           rd->w == 570 && rd->has_style("DS_CENTER"));  // the shipped header is kept
     FrontEnd fe;
     MenuProviders p;
@@ -391,9 +391,17 @@ void test_video_vsync_mode() {
     changed(GuiEvent::Kind::ValueChanged, "IDC_GAMMA_SLIDER", 80);
     CHECK(d->get("IDC_PORT_GAMMA_VALUE")->text == U"80");
     CHECK(d->get("IDC_PORT_ANTI_ALIASING") == nullptr && d->get("IDC_PORT_DETAIL_LEVEL") == nullptr);
+    // [port: Gabriel] Display Mode (Fullscreen / Borderless fullscreen / Windowed) and UI Scale (100 .. 500 %) lists.
+    CHECK(d->get("IDC_PORT_WINDOW_MODE")->items.size() == kWindowModeCount && d->get("IDC_PORT_WINDOW_MODE")->selected == 0 &&
+          d->get("IDC_PORT_WINDOW_MODE")->items[1] == U"Borderless fullscreen");
+    CHECK(d->get("IDC_PORT_UI_SCALE")->items.size() == std::size(kUiScaleChoices) && d->get("IDC_PORT_UI_SCALE")->selected == 0 &&
+          d->get("IDC_PORT_UI_SCALE")->items.back() == U"500 %");
+    d->set_selected("IDC_PORT_WINDOW_MODE", 1);
+    d->set_selected("IDC_PORT_UI_SCALE", 4);
     // Apply leaves the dialog open: the status line picks up the mode the host switched to on the next frame.
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
     CHECK(acts.size() == 1 && acts[0].video.vsync && acts[0].video.vsync_mode == VsyncMode::Fifo);
+    CHECK(acts[0].video.window_mode == WindowMode::Borderless && acts[0].video.ui_scale == 200);
     cur.display_info = U"160 Hz, FIFO";
     acts.clear();
     fe.update({}, InputFrame{}, acts);

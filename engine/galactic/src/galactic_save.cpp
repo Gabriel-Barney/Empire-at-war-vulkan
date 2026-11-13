@@ -17,7 +17,7 @@
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
 //   u32 + i32 stealthed ids; u32 + victory claims; i32 victory hold; u32 + pending S4 events (GalacticEvent,
 //   emission order); u32 + i32 ids with Prefer_Ground_Over_Space false (v5); u32 + {i32 player, u8 type} deferred
-//   victory tests (v6)
+//   victory tests (v6); u32 + {i32 id, str name} fleet / ship names, id-ascending, live objects only (v7, [port])
 // Object references: a handle whose object exists (live or dead-not-flushed) is written as its ObjectId and resolved
 // with ObjectStore::find on read (the store is restored first; an unknown id fails the read). A handle that refers to
 // no object any more (stale, or null) is written as kNoObjectId + its raw value, which read keeps as the same stale
@@ -49,9 +49,10 @@ namespace {
 // v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects; v4 (A2k t04 /
 // t01): + i32 x 2 build queue phases per planet, - the two PlanetState build bonus floats (the production modifiers are
 // derived, GalacticSim::production_bonus); v5 (cu8f t04b): + the Prefer_Ground_Over_Space false ids; v6 (q6 t21): + the
-// deferred victory tests. Only the current
-// version is read.
-constexpr uint32_t kGalacticSaveVersion = 6;
+// deferred victory tests; v7 (2026-11-13, [port: Gabriel]): + the fleet / ship names. Only the current version is read,
+// and v6 (no names: read as none), so saves from before the names still load.
+constexpr uint32_t kGalacticSaveVersion = 7;
+constexpr uint32_t kGalacticSaveVersionNoNames = 6;
 constexpr uint32_t kConflictSaveVersion = 3;  // v2: BattleRequest::linked (story t10); v3: BattleRequest::sandbox (q6)
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& s, ObjectHandle h) {
@@ -236,12 +237,17 @@ void GalacticSim::write(ByteWriter& w) const {
     for (int32_t id : ground_shy_) w.i32(id);
     w.u32(static_cast<uint32_t>(victory_deferred_.size()));  // q6 t21 (v6)
     for (const auto& e : victory_deferred_) w.i32(e.first).u8(e.second);
+    uint32_t live_names = 0;  // v7: names of live objects only (a dead object's name is dropped)
+    for (const auto& e : names_) live_names += st.alive(st.find(e.first)) ? 1u : 0u;
+    w.u32(live_names);
+    for (const auto& e : names_)
+        if (st.alive(st.find(e.first))) w.i32(e.first).str(e.second);
 }
 
 bool GalacticSim::read(ByteReader& r) {
     const objects::ObjectStore& st = *store_;
     const uint32_t version = r.u32();
-    if (version != kGalacticSaveVersion || !r.ok()) return false;
+    if ((version != kGalacticSaveVersion && version != kGalacticSaveVersionNoNames) || !r.ok()) return false;
     const uint32_t rows = r.u32(), routes = r.u32(), types = r.u32(), np = r.u32();
     if (!r.ok() || rows != planets_.size() || routes != map_.routes.size() || types != rules_->types.size() ||
         np != players_.size())
@@ -521,6 +527,22 @@ bool GalacticSim::read(ByteReader& r) {
             if (!r.ok() || !player_ok(e.first)) return false;
         }
     }
+    std::vector<std::pair<int32_t, std::string>> names;  // v7 ([port] fleet / ship names)
+    if (version >= 7) {
+        uint32_t nn = 0;
+        if (!r.count(nn, 8)) return false;
+        names.resize(nn);
+        for (size_t i = 0; i < names.size(); ++i) {
+            names[i].first = r.i32();
+            names[i].second = r.str();
+            std::string normalized;
+            if (!r.ok() || !st.alive(st.find(names[i].first))) return false;  // a live object of the restored store
+            if (!commands::normalize_object_name(names[i].second, normalized) || normalized != names[i].second ||
+                normalized.empty())
+                return false;
+            if (i > 0 && names[i].first <= names[i - 1].first) return false;  // ascending, unique
+        }
+    }
     if (!r.ok() || !r.done()) return false;
 
     // ---- commit ----
@@ -546,6 +568,7 @@ bool GalacticSim::read(ByteReader& r) {
     claims_ = std::move(claims);
     victory_hold_ = hold;
     victory_deferred_ = std::move(deferred);
+    names_ = std::move(names);
     events_ = std::move(events);
     // Rebuilt caches: store slot -> fleet / planet (creation order, so a reused slot maps to the newest fleet as
     // create_fleet left it), the per-tick owner derivation scratch, the spawn payload latch.

@@ -89,10 +89,23 @@ inline constexpr size_t kVsyncModeCount = 2;
 // The cap holds with v-sync on too (e.g. 60 fps on a 144 Hz display with FIFO, or Mailbox capped at the refresh rate).
 inline constexpr int32_t kFrameCapDisplay = -1;
 inline constexpr int32_t kFrameCapChoices[] = {0, kFrameCapDisplay, 30, 60, 90, 120, 144, 165, 240};
+// [port: Gabriel 2026-11-13] IDC_PORT_WINDOW_MODE rows (in this order), replacing the shipped "Run in window" check
+// (IDC_WINDOWED_MODE, hidden): Fullscreen = the monitor takes the picked resolution and a frameless window covers it
+// [port: no exclusive Vulkan full screen]; Borderless = a frameless window over the monitor at the desktop's own resolution
+// (the picked resolution's refresh rate is still applied, its size is not); Windowed = a framed window of the picked size.
+enum class WindowMode : uint8_t { Fullscreen, Borderless, Windowed };
+inline constexpr size_t kWindowModeCount = 3;
+// [port: Gabriel 2026-11-13] IDC_PORT_UI_SCALE rows: DPI-style UI scale in percent (HudCanvas::make). 100 % = one canvas
+// unit per physical pixel; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
+// The game starts at 100 % whatever the Windows display scale is (the process is per-monitor DPI aware).
+inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500};
+inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
     int32_t resolution = -1;
-    bool windowed = false, vsync = true, widescreen = true, hardware_mouse = false;
+    WindowMode window_mode = WindowMode::Fullscreen;  // [port: Gabriel] IDC_PORT_WINDOW_MODE
+    int32_t ui_scale = 100;                           // [port: Gabriel] IDC_PORT_UI_SCALE, one of kUiScaleChoices
+    bool vsync = true, widescreen = true, hardware_mouse = false;
     VsyncMode vsync_mode = VsyncMode::Fifo;  // [port: Gabriel] IDC_PORT_VSYNC_MODE
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
     int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP: one of kFrameCapChoices
@@ -192,6 +205,10 @@ struct CameraSettings {
     float galactic_fov_deg = 26.565f;  // atan(0.5), the original
     float tactical_fov_deg = 55.0f;
     uint8_t queue_mods = kModShift;
+    // [port: Gabriel, 2026-11-13] IDC_PORT_SHOW_PATH_LINES: draw the planned route (the sim's path, unit to destination)
+    // of every moving unit of the local player, one line per squadron / company, in tactical battles (space and land), as in the "Empire at War Remake" mod. Off by default: the original
+    // only draws the line of a queued waypoint path (UI.md 1.5).
+    bool show_path_lines = false;
     friend bool operator==(const CameraSettings&, const CameraSettings&) = default;
 };
 inline constexpr float kGalacticFovMinDeg = 15.0f, kGalacticFovMaxDeg = 60.0f, kTacticalFovMinDeg = 30.0f,
@@ -209,7 +226,8 @@ inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
 // (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
 // (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
-// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use).
+// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use), the display mode list (IDC_PORT_WINDOW_MODE,
+// WindowMode) in place of the hidden IDC_WINDOWED_MODE check and the UI scale list (IDC_PORT_UI_SCALE, kUiScaleChoices).
 // Display / Graphics split (Gabriel, 2026-11-13): the options menus' Video button is Display and opens IDD_VIDEO_OPTIONS_DIALOG
 // with the display settings only (its Anti-Aliasing and Detail Level rows, Advanced and Auto Detect buttons are hidden, the
 // rows under them move up); a Graphics button the port adds under it (IDC_PORT_MAIN_OPTIONS_GRAPHICS /
