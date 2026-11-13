@@ -30,8 +30,10 @@ HudCanvas HudCanvas::make(uint32_t screen_w, uint32_t screen_h, float ui_scale) 
     } else if (c.taller_than_4_3()) {
         fh = sh * 1024.0 / sw;
     }
-    // UI scale: the canvas is the screen / scale when that is larger than the fitted one (same aspect, so one factor).
-    const double k = c.ui_scale > 0.0f ? std::max(1.0, sh / (static_cast<double>(c.ui_scale) * fh)) : 1.0;
+    // UI scale: one canvas unit is ui_scale x kUiScaleUnitPixels pixels; the canvas is the screen / that when it is larger
+    // than the fitted one (same aspect, so one factor).
+    const double unit_px = static_cast<double>(c.ui_scale) * static_cast<double>(kUiScaleUnitPixels);
+    const double k = c.ui_scale > 0.0f ? std::max(1.0, sh / (unit_px * fh)) : 1.0;
     c.width = static_cast<float>(fw * k);
     c.height = static_cast<float>(fh * k);
     if (k > 1.0) c.text_height = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(sh / k)));
