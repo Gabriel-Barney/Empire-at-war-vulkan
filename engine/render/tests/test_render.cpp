@@ -249,6 +249,25 @@ void test_camera() {
 
 // [port] SSAO depth reconstruction (ssao.hpp, the CPU mirror of ssao.hlsl's ViewPos): view point -> uv + depth ->
 // view point round trip for a perspective projection (normal and reversed depth, sub-pixel offset) and an orthographic one.
+// [port: Gabriel] Render scale is a share of the pixels: each side x sqrt(scale).
+void test_render_scale_extent() {
+    const VkExtent2D uhd{3840, 2160};
+    const VkExtent2D s75 = render::render_scale_extent(uhd, 0.75f);
+    CHECK(s75.width == 3326 && s75.height == 1871);
+    const VkExtent2D s50 = render::render_scale_extent(uhd, 0.5f);
+    CHECK(s50.width == 2715 && s50.height == 1527);
+    const VkExtent2D same = render::render_scale_extent(uhd, 1.0f);
+    CHECK(same.width == 3840 && same.height == 2160);
+    const VkExtent2D above = render::render_scale_extent(uhd, 2.0f);  // never above native
+    CHECK(above.width == 3840 && above.height == 2160);
+    const VkExtent2D low = render::render_scale_extent(uhd, 0.01f);  // clamped to kRenderScaleMin: half each side
+    CHECK(low.width == 1920 && low.height == 1080);
+    const VkExtent2D fhd = render::render_scale_extent({1920, 1080}, 0.75f);
+    CHECK(fhd.width == 1663 && fhd.height == 935);
+    const VkExtent2D tiny = render::render_scale_extent({1, 1}, 0.25f);
+    CHECK(tiny.width == 1 && tiny.height == 1);
+}
+
 void test_ssao_math() {
     render::Mat4 persp = render::perspective_rh(0.8f, 16.0f / 9.0f, 10.0f, 7000.0f);
     render::Mat4 jitter = persp;
@@ -1099,6 +1118,7 @@ int main() {
     test_layouts();
     test_samplers();
     test_camera();
+    test_render_scale_extent();
     test_ssao_math();
     test_idle_spin();
     test_lod();

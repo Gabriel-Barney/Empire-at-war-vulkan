@@ -116,6 +116,9 @@ inline constexpr double kResolutionConfirmSeconds = 15.0;
 // [port: Gabriel] plus the port's ambient occlusion check (IDC_PORT_AMBIENT_OCCLUSION) and anisotropic filtering combo
 // (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is not here: it is one list in the Video dialog.
 inline constexpr int32_t kAnisotropyChoices[] = {0, 2, 4, 8, 16};  // 0 = off (the materials' own sampler state)
+// [port: Gabriel] Render Scale combo (IDC_PORT_RENDER_SCALE): percent of the window's pixels the 3D scene is drawn with
+// (render::RecordOptions::render_scale; 75 at 3840 x 2160 = 3326 x 1871). 100 = native. HUD and dialogs stay native.
+inline constexpr int32_t kRenderScaleChoices[] = {50, 60, 67, 75, 85, 100};
 
 // [port: Gabriel] Named levels for the options that were 0..100 sliders. The stored values stay 0..100 (the profile file and
 // the renderer's mappings in game_display.hpp are unchanged); a list shows the level a stored value falls in, and picking a
@@ -153,6 +156,7 @@ struct AdvancedVideoSettings {
     bool soft_shadows = true, heat_distortion = true, bloom = true;
     bool ambient_occlusion = false;
     int32_t anisotropy = 0;  // one of kAnisotropyChoices
+    int32_t render_scale = 100;  // percent of the window's pixels, one of kRenderScaleChoices (a stored other value is kept)
     friend bool operator==(const AdvancedVideoSettings&, const AdvancedVideoSettings&) = default;
 };
 // The overall quality levels of the Video dialog's Detail Level list: each one sets all seven detail options to its value
