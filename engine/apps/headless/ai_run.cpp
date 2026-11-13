@@ -257,6 +257,12 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         host.set_scoring_campaign(name);  // q6 t09: Game_Mode_Starting_Event("Galactic", campaign)
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
+        if (print && aopt.verbose) {  // q6 t22: the victory records (setup 0x289a90) per player
+            std::string vl = "galactic-ai: victory records:";
+            for (const galactic::VictoryRecord& r : gs->victory_records())
+                vl += " p" + std::to_string(r.player) + "=" + std::to_string(static_cast<int>(r.type)) + (r.implicit ? "i" : r.human_side ? "h" : "");
+            std::printf("%s\n", vl.c_str());
+        }
         ai::GalacticAiWorld* world_ptr = nullptr;
 #ifdef ALAMO_SIM_HAVE_STORY
         std::vector<sim::StorySwitchControl> switch_pending;  // q6: SWITCH_CONTROL rewards before the AI world exists
