@@ -760,14 +760,22 @@ void App::build_tactical_hud() {
     // current movement goal, then those points (sim const reads between ticks). [port] goal height = the unit's.
     // [port] A plain move draws no line (playtest video R1: with a whole fleet selected, one 3 px dotted line per fighter
     // covered the battle and read as laser fire); the original's waypoint line belongs to the Alt-queued path (UI.md 1.5).
-    // [port: Gabriel, 2026-11-13] With Camera and Controls > Show Unit Path Lines on, every moving selected unit gets a
-    // line along its planned path (land: the walked path at terrain height; space: the waypoint track at the unit's
-    // height; no path yet: straight to the goal), a destination square, then its queued move points.
+    // [port: Gabriel, 2026-11-13] With Camera and Controls > Show Unit Path Lines on, every moving unit of the local
+    // player, selected or not, gets a line along its planned path (land: the walked path at terrain height; space: the
+    // waypoint track at the unit's height; no path yet: straight to the goal), a destination square, then its queued
+    // move points. One line per squadron / company: only the unit standing for its marker (icon_links, unit == squad).
     waypoints_.clear();
     const bool path_lines = camera_.show_path_lines;
     const terrain::MapData* ground = !bview_.space() && bview_.scene() ? &bview_.scene()->map() : nullptr;
+    std::vector<uint32_t> line_units;
+    if (const sim::TacticalBattle* b = battle(); b && path_lines) {
+        for (const sim::TacticalBattle::IconLink& k : b->icon_links())
+            if (k.unit == k.squad) line_units.push_back(static_cast<uint32_t>(k.unit));
+    } else {
+        line_units = sel;
+    }
     if (const sim::TacticalBattle* b = battle())
-        for (const uint32_t id : sel) {
+        for (const uint32_t id : line_units) {
             const auto oid = static_cast<objects::ObjectId>(id);
             const render::SnapshotObject* o = obj_of(oid);
             if (!o || o->owner != local_player() || !b->movement().has_unit(oid)) continue;
