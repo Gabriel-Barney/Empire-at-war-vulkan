@@ -76,6 +76,7 @@ bool App::init() {
     sd.width = win_.width();
     sd.height = win_.height();
     sd.mode = opt_.mode;
+    sd.exclusive_fullscreen = window_mode_ == ui::WindowMode::Fullscreen;  // [port: Gabriel 2026-11-13]
     if (!sc_.init(ctx_, sd)) return false;
     vsync_mode_ = opt_.mode == rhi::PresentMode::Mailbox ? ui::VsyncMode::Mailbox : ui::VsyncMode::Fifo;
     if (have_video_profile_ && !opt_.mode_set) vsync_mode_ = video_profile_.vsync_mode;  // kept while v-sync is off
@@ -178,17 +179,15 @@ bool App::init() {
         o.max_credits = std::max(o.min_credits, gc.get_int("Max_Skirmish_Credits", o.max_credits));
     }
     // Video options: the primary display's modes (the current window size selected, else the largest mode under it); the
-    // display mode list picks fullscreen / borderless / windowed [port: no exclusive full screen]; v-sync = a FIFO or Mailbox present mode (the port's
+    // display mode list picks fullscreen (exclusive when the driver offers it) / borderless / windowed; v-sync = a FIFO or Mailbox present mode (the port's
     // V-sync mode combo picks which; off = Immediate), plus the port's frame rate cap and display line.
     display_modes_ = display_modes(win_.native_handle());
     shown_modes_ = video_list_modes(display_modes_, video_profile_.widescreen);
     if (live_input()) ui_scale_ = video_profile_.ui_scale;  // 100 % without a profile
     if (have_video_profile_ && live_input() && ((video_profile_.mode.width && video_profile_.mode.height) || !windowed())) {  // the saved mode
-        std::string line;
         DisplayMode m = video_profile_.mode;  // full screen without a stored mode: the display's largest mode
         if ((!m.width || !m.height) && !display_modes_.empty()) m = display_modes_.back();
-        apply_display_mode(win_.native_handle(), m, &line, window_mode_);
-        std::printf("video: %s\n", line.c_str());
+        apply_display(m);
         update_display_rate(true);
     }
     mp.video = [this] {
@@ -209,7 +208,7 @@ bool App::init() {
         const VkPresentModeKHR pm = sc_.present_mode();
         const char* used = pm == VK_PRESENT_MODE_MAILBOX_KHR ? "v-sync (Mailbox)" : pm == VK_PRESENT_MODE_IMMEDIATE_KHR ? "no v-sync" : "v-sync (FIFO)";
         v.display_info = ui::utf8_to_utf32((refresh_hz_ ? "Display " + std::to_string(refresh_hz_) + " Hz, " : std::string("Display ")) +
-                                           "presenting with " + used +
+                                           "presenting with " + used + (sc_.exclusive() ? ", exclusive full screen" : "") +
                                            (limiter_.fps() ? ", capped at " + std::to_string(limiter_.fps()) + " fps" : std::string()));
         v.device = ui::utf8_to_utf32(ctx_.caps().name);
         return v;

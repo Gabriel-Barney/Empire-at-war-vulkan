@@ -225,6 +225,14 @@ void restore_display_mode() {
     changed_device.clear();
 }
 
+void minimize_window(void* hwnd) {
+    if (hwnd && !IsIconic(static_cast<HWND>(hwnd))) ShowWindow(static_cast<HWND>(hwnd), SW_MINIMIZE);
+}
+
+void restore_window(void* hwnd) {
+    if (hwnd && IsIconic(static_cast<HWND>(hwnd))) ShowWindow(static_cast<HWND>(hwnd), SW_RESTORE);
+}
+
 void enable_dpi_awareness() {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 }

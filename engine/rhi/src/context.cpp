@@ -263,6 +263,8 @@ bool Context::create_instance(const ContextDesc& desc) {
             enabled.push_back(e);
         }
         presentation_ = true;
+        // [port] exclusive full screen (Swapchain, SwapchainDesc::exclusive_fullscreen) needs this with VK_EXT_full_screen_exclusive.
+        if (has_extension(exts, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)) enabled.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
     }
     debug_utils_ = has_extension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     if (debug_utils_) enabled.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -457,6 +459,10 @@ bool Context::create_device(const ContextDesc& desc) {
     std::vector<const char*> exts;
     if (desc.presentation) exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     if (has_extension(s.extensions, "VK_KHR_portability_subset")) exts.push_back("VK_KHR_portability_subset");
+    // [port] exclusive full screen: optional; Swapchain falls back to a plain swapchain without it.
+    const bool fse = desc.presentation && instance_extension_enabled(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) &&
+                     has_extension(s.extensions, "VK_EXT_full_screen_exclusive");
+    if (fse) exts.push_back("VK_EXT_full_screen_exclusive");
 
     // [port] FSR (ContextDesc::upscaler_features): every supported core feature (enabling a supported feature is always
     // valid) except the robustness ones, which only cost time, plus the extension features the ML upscaler may use.
@@ -513,6 +519,8 @@ bool Context::create_device(const ContextDesc& desc) {
     caps_.sampler_mirror_clamp_to_edge = s.f12.samplerMirrorClampToEdge == VK_TRUE;
     caps_.host_query_reset = s.f12.hostQueryReset == VK_TRUE;
     caps_.upscaler_features = desc.upscaler_features;
+    caps_.full_screen_exclusive = fse && vkd_.vkAcquireFullScreenExclusiveModeEXT && vkd_.vkReleaseFullScreenExclusiveModeEXT &&
+                                  vki_.vkGetPhysicalDeviceSurfaceCapabilities2KHR;
     caps_.cooperative_matrix = desc.upscaler_features && s.ext_supported(0);
     caps_.shader_float8 = desc.upscaler_features && s.ext_supported(2) && !validation_;
     {
