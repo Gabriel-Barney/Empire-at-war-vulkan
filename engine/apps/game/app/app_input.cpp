@@ -1184,9 +1184,9 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 set_present_mode(!a.video.vsync ? rhi::PresentMode::Immediate
                                  : vsync_mode_ == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo);
                 opt_.frame_cap = a.video.frame_cap;
-                if (a.video.resolution >= 0 && static_cast<size_t>(a.video.resolution) < shown_modes_.size()) {
+                if (a.video.resolution >= 0 && static_cast<size_t>(a.video.resolution) < display_modes_.size()) {
                     // The list item is a full mode: the window size and the monitor's refresh rate (game_display.hpp).
-                    const DisplayMode m = shown_modes_[static_cast<size_t>(a.video.resolution)];
+                    const DisplayMode m = display_modes_[static_cast<size_t>(a.video.resolution)];
                     if (window_changed || m.width != win_.width() || m.height != win_.height() || (m.hz && m.hz != refresh_hz_))
                         apply_display(m);
                 } else if (window_changed) {
@@ -1200,7 +1200,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 }
                 update_display_rate(true);
                 // t12: tried now, stored on the Yes answer of "keep these settings?" (or as the old mode on No / timeout).
-                if (update_video_profile(video_profile_, a.video, shown_modes_)) {
+                if (update_video_profile(video_profile_, a.video, display_modes_)) {
                     // t11 [M]: a quality level picked in the Detail Level list is a preset for the seven advanced detail options.
                     if (a.video.detail_picked) {
                         adv_video_ = detail_preset(adv_video_, video_profile_.detail);

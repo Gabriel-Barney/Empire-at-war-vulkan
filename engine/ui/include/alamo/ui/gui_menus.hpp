@@ -118,7 +118,7 @@ struct VideoSettings {
     int32_t resolution = -1;
     WindowMode window_mode = WindowMode::Fullscreen;  // [port: Gabriel] IDC_PORT_WINDOW_MODE
     int32_t ui_scale = 100;                           // [port: Gabriel] IDC_PORT_UI_SCALE, one of kUiScaleChoices
-    bool vsync = true, widescreen = true;
+    bool vsync = true;
     VsyncMode vsync_mode = VsyncMode::Fifo;  // [port: Gabriel] IDC_PORT_VSYNC_MODE
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
     int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP (+ slider): 0, kFrameCapDisplay or fps

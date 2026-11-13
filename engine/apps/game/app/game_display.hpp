@@ -55,9 +55,6 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nul
 // The profile / log name of a window mode ("fullscreen", "borderless", "windowed") and back (unknown text: nullopt).
 const char* window_mode_name(ui::WindowMode m);
 std::optional<ui::WindowMode> parse_window_mode(std::string_view s);
-// UI5 t01 [port]: Options > Video > Widescreen off lists only modes no wider than 4:3 (5:4 and 4:3); on, every mode. All
-// modes when none is that narrow.
-std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes, bool widescreen);
 // Puts back the monitor mode apply_display_mode changed (no-op when it changed nothing).
 void restore_display_mode();
 // [port: Gabriel 2026-11-13] Exclusive full screen losing / regaining the foreground (alt-tab), as a D3D9 full-screen game
@@ -96,7 +93,6 @@ struct VideoProfile {
     // UI5 t01 / [port: Gabriel 2026-11-13]: the port starts windowed unless the profile says otherwise. Key "window_mode"
     // (window_mode_name); a profile from before it has "windowed=0|1" (0 = Fullscreen).
     ui::WindowMode window_mode = ui::WindowMode::Windowed;
-    bool widescreen = true;
     int32_t ui_scale = 100;  // [port: Gabriel] Options > Video > UI Scale, percent (kUiScaleMin .. kUiScaleMax; key "ui_scale")
     ui::VsyncMode vsync_mode = ui::VsyncMode::Fifo;
     int32_t frame_cap = 0;

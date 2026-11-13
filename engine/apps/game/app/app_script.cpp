@@ -1656,9 +1656,9 @@ void App::make_script() {
             const ui::GuiControl* l = d ? d->get("IDC_RESOLUTION_LIST") : nullptr;
             if (!d || !a.paused_) return false;
             const size_t n = l ? l->items.size() : 0;
-            std::printf("script: video options - %zu resolutions (%zu display modes), selected %d, session paused\n", n, a.shown_modes_.size(),
+            std::printf("script: video options - %zu resolutions (%zu display modes), selected %d, session paused\n", n, a.display_modes_.size(),
                         l ? l->selected : -1);
-            if (n != a.shown_modes_.size()) {
+            if (n != a.display_modes_.size()) {
                 a.notes_.push_back("video options: resolution list not filled");
                 a.smoke_ok_ = false;
             }

@@ -21,3 +21,8 @@ tools/probe_mod/fixpass_capture/*.png
 # Vendored reference SMAA (MIT, approved by Gabriel 2026-11-13, docs/DECISIONS.md): the area lookup texture as a
 # C array (160 x 560 RG8), compiled into alamo_render; kept unmodified from iryoku/smaa.
 engine/render/third_party/smaa/AreaTex.h
+
+# Command Center launcher icons (launcher/, docs/DECISIONS.md 2026-11-13): build.rs embeds icon.ico as the exe icon,
+# app.rs include_bytes! icon.png for the window icon. Source assets, not build output.
+launcher/assets/icon.ico
+launcher/assets/icon.png
