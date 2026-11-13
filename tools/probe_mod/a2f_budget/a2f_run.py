@@ -136,6 +136,8 @@ def main():
     ap.add_argument('--report-only')
     ap.add_argument('--port-trace', help='with --report-only: a2j_port.py port.err for the per-cycle P / I table (a2j t04)')
     a = ap.parse_args()
+    if a.human_empire:
+        build_a2f_mod.a2fb_spec.set_human_empire()  # bkg3: Underworld -> Tatooine, Conquer_Opponent desire
     if a.sab_long and not a.saboteur:
         ap.error('--sab-long needs --saboteur (run_a2f_sab.cmd --sab-long)')
     if a.report_only:

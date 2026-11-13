@@ -541,3 +541,12 @@ What bkg3 t03 reads from `out\<run>\records.txt`:
 
 The report (`report.txt`) was written for an AI Empire; with a human Empire its Empire sections are empty and the run may
 end with a non-zero report code although `records.txt` is complete. The records are what counts.
+
+**bkg3 t04 addition (2026-11-13).** In this mode (`a2f_run.py --human-empire` calls `a2fb_spec.set_human_empire()`) the
+Underworld's channel-D pair samples **Tatooine** instead of Kashyyyk and adds three shipped equations to its `DS`
+records: `SCO` Should_Conquer_Opponent_Planet, `FAA` First_Attack_Allowed, `UGS` Should_Perform_Unrestricted_Grab_Space
+(every 30 frames in 0..600, then every 300 frames). The port's Underworld starts Conquer_Opponent @Tatooine near frame
+6895 in every seed and spends its credits on it (1 credit left at 9000 in seed 0); retail starts no Underworld Crush /
+Conquer_Opponent plan before frame 39000 (Q2 run 20261108-204711) and holds 2462 credits at 9000. The `DS` records at
+6900..9000 say whether retail's desire is zero (and which factor), and the Underworld's `SM` / `SH` records give its
+Offensive budget in the same window. The other modes of the kit are unchanged.
