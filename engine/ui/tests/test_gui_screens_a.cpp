@@ -525,7 +525,7 @@ END
     // options make (mesh 55 is High's range).
     GuiControl* aa = d->get("IDC_PORT_ANTI_ALIASING");
     GuiControl* quality = d->get("IDC_PORT_DETAIL_LEVEL");
-    CHECK(aa->selected == 4 && aa->items.size() == 6 && quality->selected == static_cast<int32_t>(kQualityCustom) &&
+    CHECK(aa->selected == 4 && aa->items.size() == std::size(kAntiAliasChoices) && quality->selected == static_cast<int32_t>(kQualityCustom) &&
           quality->items.size() == kQualityCount + 1 && quality->items.back() == U"Custom" && aa->ui_font && quality->ui_font);
     // Untouched anti-aliasing sends nothing for it; a moved list sends an ApplyVideo with the display settings in force.
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
