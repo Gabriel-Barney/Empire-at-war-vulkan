@@ -84,9 +84,9 @@ struct AudioVolumes {  // audio::AudioBus Master / Sfx / Speech / Music, 0..1
     bool subtitles = true;
     friend bool operator==(const AudioVolumes&, const AudioVolumes&) = default;
 };
-// [port: Gabriel] the swap mode IDC_VSYNC_ENABLED uses when checked. IDC_PORT_VSYNC_MODE lists Off (Immediate) first, then
-// these (row = mode + 1), and the dialog keeps the two controls in step (U9): Off <-> unchecked. FIFO (waits for the
-// display's refresh) or Mailbox (no tearing, the newest finished frame is shown: lower latency, the GPU never waits).
+// [port: Gabriel] the swap mode used while v-sync is on. IDC_PORT_VSYNC_MODE lists Off (Immediate) first, then these
+// (row = mode + 1); it is the one v-sync setting (U9; Gabriel 2026-11-13: the shipped IDC_VSYNC_ENABLED check is hidden).
+// FIFO (waits for the display's refresh) or Mailbox (no tearing, the newest finished frame is shown: lower latency, the GPU never waits).
 enum class VsyncMode : uint8_t { Fifo, Mailbox };
 inline constexpr size_t kVsyncModeCount = 2;
 // [port: Gabriel] IDC_PORT_FRAME_CAP rows: frames per second, 0 = no cap, kFrameCapDisplay = the monitor's refresh rate.
@@ -536,7 +536,6 @@ private:
     std::string quit_action_;  // "exit" / "main"; N1 / t09: "overwrite" / "delete" (confirm_save_); UI5 t05: "rebind" / "keys"
     std::string confirm_save_;  // the save an overwrite / delete confirmation is about
     bool save_blocked_ = false; // the open Save dialog's save_blocker refused
-    int32_t vsync_on_row_ = 1;  // U9: the V-sync combo row that re-checking IDC_VSYNC_ENABLED returns to
     bool video_status_stale_ = false;  // an ApplyVideo went out: re-read IDC_PORT_DISPLAY_INFO once the host has handled it
     bool res_confirm_ = false;  // t12: the confirmation dialog is open
     double res_deadline_ = 0.0, now_ = 0.0;
