@@ -1614,6 +1614,13 @@ objects::ObjectHandle detail::galactic_spawn_unit(Call& c, uint32_t type, int32_
     return sim->spawn_unit(player, row, type);
 }
 
+bool detail::galactic_container_of(Call& c, objects::ObjectHandle object, objects::ObjectHandle& out) {
+    const galactic::GalacticSim* sim = galactic_of(c, world_of(c.L));
+    if (!sim) return false;
+    out = sim->container_of(object);
+    return true;
+}
+
 }  // namespace alamo::lua
 
 #else  // !ALAMO_LUA_PLAYERS
@@ -1626,6 +1633,7 @@ bool detail::galactic_activate_ability(Call&) { return false; }
 void detail::galactic_trigger(Call&, const std::vector<std::pair<objects::ObjectHandle, uint32_t>>&) {}
 bool detail::black_market_allows(Call&, int32_t, std::string_view, bool) { return true; }
 objects::ObjectHandle detail::galactic_spawn_unit(Call&, uint32_t, int32_t, objects::ObjectHandle) { return {}; }
+bool detail::galactic_container_of(Call&, objects::ObjectHandle, objects::ObjectHandle&) { return false; }
 }  // namespace alamo::lua
 
 #endif

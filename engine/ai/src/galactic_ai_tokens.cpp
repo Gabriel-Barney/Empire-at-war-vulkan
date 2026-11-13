@@ -676,8 +676,7 @@ void GalacticSimTokenResolver::refresh(int32_t frame, int64_t logic_frame) {
             last_corruption_[i] = planets[i].corruption;
         }
     }
-    // Event stamps (signals 0x12 space conflict, 0x14 ground conflict, 0x1A conversion) [H]; the port observes
-    // the conflict flag's rising edge: hostile fleets in orbit = space, else ground [port].
+    // Event stamps: 0x1A conversion here [H]; 0x12 space / 0x14 ground conflict in observe_conflicts.
     const objects::ObjectStore& st = sim_->store();
     std::vector<uint8_t> owner_changed(n, 0);
     for (size_t i = 0; i < n; ++i) {
@@ -691,23 +690,10 @@ void GalacticSimTokenResolver::refresh(int32_t frame, int64_t logic_frame) {
             stamp_corruption_[i] = frame;
             last_corruption_[i] = ps.corruption;
         }
+        // bkg3 t04 (AI_GALACTIC_TOKENS §8.2 [H]): signals 0x12 / 0x14 are raised at battle END (0x2a7580), so the space and
+        // ground stamps are written from the conflict log (observe_conflicts), not from the conflict flag's rising edge
+        // (which a battle resolved inside one galactic tick never shows: the stamps stayed at 'never' in headless runs).
         const uint8_t battle = ps.in_battle ? 1 : 0;
-        if (battle && !last_battle_[i]) {
-            bool hostile_orbit = false;
-            for (const uint32_t f : ps.orbit) {
-                if (f >= sim_->fleets().size() || !sim_->fleets()[f].alive) continue;
-                for (const uint32_t g : ps.orbit)
-                    if (g < sim_->fleets().size() && sim_->fleets()[g].alive &&
-                        sim_->is_hostile(sim_->fleets()[f].owner, sim_->fleets()[g].owner))
-                        hostile_orbit = true;
-                if (ps.owner >= 0 && sim_->is_hostile(sim_->fleets()[f].owner, ps.owner)) hostile_orbit = true;
-            }
-            bool hostile_ground = false;
-            for (const ObjectHandle u : ps.surface)
-                if (st.alive(u) && ps.owner >= 0 && sim_->is_hostile(st.owner(u), ps.owner)) hostile_ground = true;
-            if (hostile_orbit || !hostile_ground) stamp_space_[i] = frame;
-            else stamp_ground_[i] = frame;
-        }
         last_battle_[i] = battle;
     }
     // q6 t18 (AI_GALACTIC_TOKENS §9.9): the presence fold's visibility signal 0xE, planet order, players in id order:
@@ -794,6 +780,12 @@ void GalacticSimTokenResolver::observe_conflicts(const gal::ConflictManager& cm,
     for (size_t i = conflict_log_seen_; i < log.size(); ++i) {
         const gal::ConflictLogEntry& e = log[i];
         const auto kind = static_cast<uint8_t>(e.kind);
+        // bkg3 t04: the planet's TimeSinceSpaceConflict / TimeSinceGroundConflict stamp, at the end of a battle that was
+        // resolved or fought ([M] a dropped record is no battle end).
+        if (e.how != 0 && e.planet != kInvalidPlanet) {
+            std::vector<int32_t>& ps = e.kind == gal::ConflictKind::Space ? stamp_space_ : stamp_ground_;
+            if (static_cast<size_t>(e.planet) < ps.size()) ps[static_cast<size_t>(e.planet)] = frame_;  // the clock of refresh()
+        }
         const bool matched = same(active_, kind, e.planet, e.attacker, e.defender);
         const ObservedConflict seen = matched ? active_ : ObservedConflict{};
         if (matched) active_ = {};

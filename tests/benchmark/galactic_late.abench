@@ -1,13 +1,13 @@
 ALAMO_BENCH 1
 name galactic_late
-version 12
+version 13
 description Late-game galactic campaign, all AI: FoC Sandbox_Equal_Footing_Underworld (56 planets, 4 AI players: galactic AI goal scoring, auto-resolved conflicts, story Lua), saved at tick 30000 (16 game minutes in), then 15 game minutes
 make --save-session galactic --campaign Sandbox_Equal_Footing_Underworld --battles auto --story --bench-save-at 30000 --ticks 27000 --bench-every 64 --bench-desc "Late-game galactic campaign, all AI: FoC Sandbox_Equal_Footing_Underworld (56 planets, 4 AI players: galactic AI goal scoring, auto-resolved conflicts, story Lua), saved at tick 30000 (16 game minutes in), then 15 game minutes"
-save galactic_late.alsv 428379 ff6c7070b319eaff
-orders galactic_late.acmd 72 e3fc5f25b684680b
-fingerprint galactic_late.crc 114817 36ecbbde4eeeab33
+save galactic_late.alsv 453582 cf5e443e807777b3
+orders galactic_late.acmd 72 b7ee2e02f60603d6
+fingerprint galactic_late.crc 114817 af01239c01187525
 fingerprint_every 64
 start_tick 30000
 ticks 27000
 workers auto
-final_crc e886d7f0508a3587
+final_crc 09b994480539d305
