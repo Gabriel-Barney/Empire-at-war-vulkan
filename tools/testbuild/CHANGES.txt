@@ -74,7 +74,7 @@ Still worth checking from earlier builds:
 Changes since the 2026-11-13 render scale build
 -----------------------------------------------
 - Options: Display and Graphics pages, display mode list, UI scale, galactic wide-screen view;
-  Auto Detect removed.
+  Auto Detect and the Widescreen check removed (the resolution list always shows every mode).
 - Anti-aliasing: one list with SMAA, TAA, MSAA 2x / 4x / 8x and five FSR modes.
 - Fighter / bomber squadrons of 12, wing select buttons and F2 / F3.
 - Fleet cohesion (O), unit path lines option, fleet and ship names, saved games tree.

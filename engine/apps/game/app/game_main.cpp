@@ -181,7 +181,6 @@ bool App::init() {
     // display mode list picks fullscreen / borderless / windowed [port: no exclusive full screen]; v-sync = a FIFO or Mailbox present mode (the port's
     // V-sync mode combo picks which; off = Immediate), plus the port's frame rate cap and display line.
     display_modes_ = display_modes(win_.native_handle());
-    shown_modes_ = video_list_modes(display_modes_, video_profile_.widescreen);
     if (live_input()) ui_scale_ = video_profile_.ui_scale;  // 100 % without a profile
     if (have_video_profile_ && live_input() && ((video_profile_.mode.width && video_profile_.mode.height) || !windowed())) {  // the saved mode
         std::string line;
@@ -193,15 +192,13 @@ bool App::init() {
     }
     mp.video = [this] {
         ui::VideoSettings v;
-        shown_modes_ = video_list_modes(display_modes_, video_profile_.widescreen);  // UI5 t01
-        for (const DisplayMode& m : shown_modes_) v.resolutions.push_back(ui::utf8_to_utf32(display_mode_label(m)));
-        v.resolution = display_mode_index(shown_modes_, win_.width(), win_.height(), refresh_hz_);
+        for (const DisplayMode& m : display_modes_) v.resolutions.push_back(ui::utf8_to_utf32(display_mode_label(m)));
+        v.resolution = display_mode_index(display_modes_, win_.width(), win_.height(), refresh_hz_);
         v.detail = video_profile_.detail;  // the original's sliders: saved with the profile, applied each frame (t11)
         v.anti_alias = video_profile_.anti_alias;
         v.gamma = video_profile_.gamma;
         v.window_mode = window_mode_;
         v.ui_scale = ui_scale_ > 0 ? ui_scale_ : video_profile_.ui_scale;
-        v.widescreen = video_profile_.widescreen;
         v.vsync = opt_.mode != rhi::PresentMode::Immediate;
         v.vsync_mode = vsync_mode_;
         v.mailbox_available = sc_.supports(rhi::PresentMode::Mailbox);
