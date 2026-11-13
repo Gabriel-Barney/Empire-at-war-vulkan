@@ -60,10 +60,13 @@ give every new group an `eta` (a group without one is counted as "without estima
 
 Status keys (groups and boxes): `next` Do next, `partly` Partly done, `big` Not started, `spec` Spec-blocked,
 `open` Guesses to confirm, `probe` Probe only, `gab` Needs Gabriel, `done` Done, `out` Out of scope, `parked` Parked (`park`).
-Presets: `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in the page, `PRESETS` in `roadmap-store/page_shell.html`).
-A preset is the recommended model and effort level for a group: `xhigh` Opus 5.5 · xhigh, `high` Opus 5.5 · high,
-`re2ui` Opus 5.5 · high then Sonnet 5.5 · high, `sonnet` Sonnet 5.5 · high, `tools` Sonnet 5.5 · medium,
-`gab` Gabriel + Opus 5.5 · medium.
+Presets: `fable`, `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in the page, `PRESETS` in `roadmap-store/page_shell.html`).
+A preset is the recommended model and effort level for a group: `fable` Fable 5.2 · high, `xhigh` Opus 5.5 · xhigh,
+`high` Opus 5.5 · high, `re2ui` Opus 5.5 · high then Sonnet 5.5 · high, `sonnet` Sonnet 5.5 · high,
+`tools` Sonnet 5.5 · medium, `gab` Gabriel + Opus 5.5 · medium.
+`fable` (Gabriel, 2026-11-12) is for open-ended parity diagnosis, where the cause of a retail difference is still unknown and
+spans several modules and many seeds (skai, q4, bkg3); fixes already pinned by an RE answer stay on Opus 5.5. Run one Fable
+group at a time; start at effort high and raise it only where a gain is measured.
 
 ## Common edits
 
