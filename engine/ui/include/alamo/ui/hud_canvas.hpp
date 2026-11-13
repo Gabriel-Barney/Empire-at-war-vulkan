@@ -6,7 +6,7 @@
 // (height stays 768); aspect < 4:3: height = screenH * 1024 / screenW (width stays 1024). Scale = canvas size /
 // base size; units per pixel = canvas size / screen pixels.
 // [port: Gabriel 2026-11-13] UI scale (Options > Video > UI Scale, DPI style): at scale s one canvas unit is
-// s x kUiScaleUnitPixels physical pixels (Gabriel 2026-11-13, second pass: 100 % = the original's size on a 1080p screen,
+// s x kUiScaleUnitPixels physical pixels (Gabriel 2026-11-13, third pass: 100 % = the original's size on a 1440p screen,
 // the same physical size on every resolution), so the canvas is the screen size / that - but never smaller than the
 // original's fitted canvas above (the layouts are made for at most 1024 x 768 units on screen; a scale whose canvas would
 // be smaller shows the original size). The canvas keeps the screen's aspect; text is sized for the screen height the canvas stands for (font_height(): screen height x
@@ -23,9 +23,9 @@
 namespace alamo::ui {
 
 inline constexpr float kHudBaseWidth = 1024.0f, kHudBaseHeight = 768.0f;
-// [port: Gabriel 2026-11-13] Pixels per canvas unit at UI scale 100 %: the original's fitted size on a 1080-pixel-high
-// screen (1080 / 768).
-inline constexpr float kUiScaleUnitPixels = 1080.0f / 768.0f;
+// [port: Gabriel 2026-11-13] Pixels per canvas unit at UI scale 100 %: the original's fitted size on a 1440-pixel-high
+// screen (1440 / 768), so 150 % on a 3840 x 2160 screen is the original size.
+inline constexpr float kUiScaleUnitPixels = 1440.0f / 768.0f;
 
 struct Vec2f {
     float x = 0, y = 0;
