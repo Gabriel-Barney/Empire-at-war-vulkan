@@ -262,7 +262,7 @@ std::u32string App::battle_place_name(PlanetIndex planet) const {
 // QA t16 (UI.md §5.1 step 1, §5.2): fills the load dialog from the planet type's text, as IDD_PLANET_INFO (GALACTIC_DIALOGS
 // §9.2) [inferred: the same fields; the fill function of the load dialog is not traced field by field]. QA t11: the sim
 // is held until it has been presented (end_load_intro_frame); no load moved off this thread.
-bool App::open_battle_load(PlanetIndex planet, bool space) {
+bool App::open_battle_load(PlanetIndex planet, bool space, bool mission) {
     if (ui_.load.is_open()) return true;
     if (!session_) return false;
     const bool skirmish = session_->spec().kind == SessionKind::Skirmish;
@@ -309,7 +309,13 @@ bool App::open_battle_load(PlanetIndex planet, bool space) {
     info.map_icon = std::move(d.map_icon);
     info.native_icon = std::move(d.native_icon);
     info.begin_button = !session_->spec().attract;  // OI host: the attract demo starts as soon as it is loaded
-    const ui::LoadScreenKind kind = skirmish ? ui::LoadScreenKind::Skirmish : space ? ui::LoadScreenKind::SpaceBattle : ui::LoadScreenKind::LandBattle;
+    // UI.md §5.1 step 1 names five dialogs; [port] UI5 t07: a story mission (LINK_TACTICAL battle) takes the Mission pair,
+    // a skirmish the skirmish dialog, every other battle the Battle pair (which battles retail sends to the Mission dialogs
+    // is an RE gap).
+    const ui::LoadScreenKind kind = skirmish ? ui::LoadScreenKind::Skirmish
+                                    : mission ? (space ? ui::LoadScreenKind::SpaceMission : ui::LoadScreenKind::LandMission)
+                                    : space   ? ui::LoadScreenKind::SpaceBattle
+                                              : ui::LoadScreenKind::LandBattle;
     screens_.close_planet_info();  // GALACTIC_DIALOGS §9.4: IDD_PLANET_INFO never survives into a battle
     ui_.load.set_progress_source([this] { return bview_.active() ? bview_.load_progress() : 0.0f; });
     if (!ui_.load.open(ui_.gui, kind, info)) return false;

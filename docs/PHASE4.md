@@ -985,3 +985,7 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   "FoC" dropped) in IDD_DIALOG_BOX_QUIT_CONFIRM, Yes moves it (the §4.3 rule), No keeps both; Back or Esc with unapplied
   edits asks "Apply the changed key settings?" (Yes applies, No discards); Camera and Controls Defaults also resets
   CameraZoomIn / ZoomOut. Retail capture behaviour is an RE gap (backlog, kind re).
+  **t07** a story-linked battle (`BattleRequest::linked`, LINK_TACTICAL) opens IDD_LAND / SPACE_MISSION_LOAD_DIALOG, a
+  skirmish the skirmish dialog, any other battle the Battle pair (the retail selector is an RE gap, backlog); Esc in
+  IDD_SELECT_TUTORIAL_DIALOG goes to the main menu like its Cancel; movies skip on Esc / Space only (UI.md §4.2), not on
+  a mouse click.

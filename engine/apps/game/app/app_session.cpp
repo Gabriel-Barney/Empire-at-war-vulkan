@@ -213,9 +213,9 @@ void App::stop_movies() {
 }
 
 void App::movie_step() {
-    // Movies.xml Cannot_Skip: the skip keys do nothing for that movie.
-    const bool skip = !full_movie_.cannot_skip() &&
-                      (input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace) || input_.button(ui::Button::Left).click);
+    // Movies.xml Cannot_Skip: the skip keys do nothing for that movie. UI.md §4.2: while a movie plays only Esc / Space skip
+    // (UI5 t07: a mouse click does not).
+    const bool skip = !full_movie_.cannot_skip() && (input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace));
     const bool playing = full_movie_.update(dt_, gpu_.hud, kMoviePage);
     if (playing && !skip) return;
     full_movie_.stop(audio_);
@@ -548,6 +548,7 @@ void App::begin_battle() {
     const bool space = tm && tm->kind() == objects::ModeKind::Space;
     const PlanetIndex planet = b ? b->request().info.planet : kInvalidPlanet;
     battle_place_ = battle_place_name(planet);
+    const bool story_mission = b && b->request().linked;  // UI5 t07: the Mission load dialogs
     // story t13 (BT §2.9.1 P10 / P11): a story-linked battle opens with the record's presentation (applied by the start,
     // CampaignBattles::linked_presentation); any other battle with nothing held.
     {
@@ -563,7 +564,7 @@ void App::begin_battle() {
     // QA t11: the dialog first, the blocking BattleView::start only after it has been presented (a Fight answer or a
     // skirmish start opened it even earlier, before the tactical push's own load).
     if (ui_.load.is_open()) load_intro_frames_ = 1;
-    else if (!open_battle_load(planet, space)) notes_.push_back("load screen dialog missing");
+    else if (!open_battle_load(planet, space, story_mission)) notes_.push_back("load screen dialog missing");
     if (ui_.load.is_open()) {
         screen_ = Screen::BattleLoad;
         battle_view_pending_ = true;

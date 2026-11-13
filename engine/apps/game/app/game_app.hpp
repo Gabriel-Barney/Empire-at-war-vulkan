@@ -698,7 +698,8 @@ public:
     // QA t11 / t16: the battle load screen, filled from the planet's text, is on screen before the blocking loads.
     std::u32string battle_place_name(PlanetIndex planet) const;
     void planet_type_info(ui::PlanetInfoData& d, objects::TypeIndex t) const;
-    bool open_battle_load(PlanetIndex planet, bool space);
+    // UI5 t07: `mission` (a story-linked LINK_TACTICAL battle) opens IDD_LAND / SPACE_MISSION_LOAD_DIALOG (UI.md §5.1).
+    bool open_battle_load(PlanetIndex planet, bool space, bool mission = false);
     void end_load_intro_frame();
     void post_tick();
     void step_sim();
