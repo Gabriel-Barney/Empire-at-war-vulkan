@@ -187,6 +187,10 @@ struct CameraSettings {
     float galactic_fov_deg = 26.565f;  // atan(0.5), the original
     float tactical_fov_deg = 55.0f;
     uint8_t queue_mods = kModShift;
+    // [port: Gabriel, 2026-11-13] IDC_PORT_SHOW_PATH_LINES: draw every selected moving unit's planned route (the sim's
+    // path, unit to destination) on the tactical map, as in the "Empire at War Remake" mod. Off by default: the original
+    // only draws the line of a queued waypoint path (UI.md 1.5).
+    bool show_path_lines = false;
     friend bool operator==(const CameraSettings&, const CameraSettings&) = default;
 };
 inline constexpr float kGalacticFovMinDeg = 15.0f, kGalacticFovMaxDeg = 60.0f, kTacticalFovMinDeg = 30.0f,

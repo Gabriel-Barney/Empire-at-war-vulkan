@@ -370,6 +370,7 @@ void options_round_trip() {
     p.gameplay.difficulty = 2;
     p.camera.tactical_fov_deg = 70.0f;
     p.camera.queue_mods = 2;
+    p.camera.show_path_lines = true;
     p.tactical_fov_set = true;
     ui::HotkeyTable t;
     ui::HotkeyBinding b = t.binding(20);
@@ -382,7 +383,8 @@ void options_round_trip() {
     CHECK(std::fabs(q.audio.master - 0.25f) < 1e-4f && q.audio.music == 0.0f && q.audio.sfx == 1.0f && !q.audio.subtitles);
     CHECK(q.gameplay.game_speed == 75 && q.gameplay.strategic_speed == 0 && q.gameplay.alternate_mouse &&
           q.gameplay.abilities_autofire && !q.gameplay.ask_autoresolve && q.gameplay.difficulty == 2 && q.gameplay.absolute_scroll);
-    CHECK(std::fabs(q.camera.tactical_fov_deg - 70.0f) < 1e-3f && q.camera.queue_mods == 2 && q.tactical_fov_set);
+    CHECK(std::fabs(q.camera.tactical_fov_deg - 70.0f) < 1e-3f && q.camera.queue_mods == 2 && q.tactical_fov_set &&
+          q.camera.show_path_lines);
     CHECK(q.keys == p.keys);
     ui::HotkeyTable u;
     CHECK(u.load(q.keys) && u.binding(20).key == 'Q');

@@ -54,10 +54,41 @@ uint32_t add_waypoint_lines(HudDrawList& dl, const HudCanvas& canvas, const View
                 carry = 0.0f;
                 continue;
             }
-            dots += dotted(dl, layer, canvas, ax, ay, bx, by, 9.0f, 3.0f, l.color, carry);
+            dots += dotted(dl, layer, canvas, ax, ay, bx, by, l.step_px, l.dot_px, l.color, carry);
+        }
+        float ex = 0, ey = 0;
+        if (l.end_px > 0.0f && l.points.size() > 1 && project(view, l.points.back(), ex, ey)) {
+            dot(dl, layer, canvas.pixel_to_canvas(ex, ey), 0.5f * l.end_px * canvas.units_per_pixel_y, l.color);
+            ++dots;
         }
     }
     return dots;
+}
+
+std::vector<Vec3> remaining_route(Vec3 unit, std::span<const Vec3> path, Vec3 goal) {
+    std::vector<Vec3> out{unit};
+    if (path.empty()) {
+        out.push_back(goal);
+        return out;
+    }
+    // The segment nearest the unit (2-D); a one-point path is its own "segment". Ties keep the later segment, so a unit
+    // standing on a waypoint continues past it.
+    size_t from = 0;
+    float best = 3.0e38f;
+    for (size_t i = 0; i < path.size(); ++i) {
+        const Vec3 a = path[i];
+        const Vec3 b = i + 1 < path.size() ? path[i + 1] : a;
+        const float dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+        float t = len2 > 0.0f ? ((unit.x - a.x) * dx + (unit.y - a.y) * dy) / len2 : 0.0f;
+        t = std::clamp(t, 0.0f, 1.0f);
+        const float px = a.x + dx * t - unit.x, py = a.y + dy * t - unit.y, d2 = px * px + py * py;
+        if (d2 <= best) {
+            best = d2;
+            from = i + 1 < path.size() ? i + 1 : i;
+        }
+    }
+    for (size_t i = from; i < path.size(); ++i) out.push_back(path[i]);
+    return out;
 }
 
 Rgba8 queue_step_color(HudQueuedStep::Kind k) {

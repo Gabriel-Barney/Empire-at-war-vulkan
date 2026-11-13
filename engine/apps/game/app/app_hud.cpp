@@ -758,7 +758,12 @@ void App::build_tactical_hud() {
     // current movement goal, then those points (sim const reads between ticks). [port] goal height = the unit's.
     // [port] A plain move draws no line (playtest video R1: with a whole fleet selected, one 3 px dotted line per fighter
     // covered the battle and read as laser fire); the original's waypoint line belongs to the Alt-queued path (UI.md 1.5).
+    // [port: Gabriel, 2026-11-13] With Camera and Controls > Show Unit Path Lines on, every moving selected unit gets a
+    // line along its planned path (land: the walked path at terrain height; space: the waypoint track at the unit's
+    // height; no path yet: straight to the goal), a destination square, then its queued move points.
     waypoints_.clear();
+    const bool path_lines = camera_.show_path_lines;
+    const terrain::MapData* ground = !bview_.space() && bview_.scene() ? &bview_.scene()->map() : nullptr;
     if (const sim::TacticalBattle* b = battle())
         for (const uint32_t id : sel) {
             const auto oid = static_cast<objects::ObjectId>(id);
@@ -767,7 +772,29 @@ void App::build_tactical_hud() {
             const tactical::movement::UnitView v = b->movement().view(oid);
             if (!v.has_goal || v.arrived) continue;
             ui::HudWaypointLine l;
-            l.points.push_back({o->position.x, o->position.y, o->position.z});
+            const ui::Vec3 here{o->position.x, o->position.y, o->position.z};
+            if (path_lines) {
+                auto at = [&](float x, float y) {
+                    return ui::Vec3{x, y, ground ? ground->terrain.sample_height(x, y) + 1.0f : o->position.z};
+                };
+                std::vector<ui::Vec3> path;
+                for (const tactical::movement::V2 p : b->movement().land_path(oid)) path.push_back(at(p.x, p.y));
+                if (path.empty())
+                    for (const tactical::movement::SpaceWaypoint& wp : b->movement().space_path(oid)) path.push_back(at(wp.pos.x, wp.pos.y));
+                l.points = ui::remaining_route(here, path, at(v.goal.x, v.goal.y));
+                l.color = v.atk_target >= 0 ? ui::kPathLineAttack : ui::kPathLineMove;
+                l.step_px = ui::kPathLineStepPx;
+                l.dot_px = ui::kPathLineDotPx;
+                l.end_px = ui::kPathLineEndPx;
+                for (const sim::TacticalBattle::QueuedOrder& e : b->queued_orders(oid)) {
+                    if (e.kind != sim::TacticalBattle::QueuedOrder::Kind::Move) continue;
+                    const ui::Vec3 p = at(e.x, e.y);
+                    if (p.x != l.points.back().x || p.y != l.points.back().y) l.points.push_back(p);
+                }
+                if (l.points.size() > 1) waypoints_.push_back(std::move(l));
+                continue;
+            }
+            l.points.push_back(here);
             l.points.push_back({v.goal.x, v.goal.y, o->position.z});
             for (const sim::TacticalBattle::QueuedOrder& e : b->queued_orders(oid)) {
                 if (e.kind != sim::TacticalBattle::QueuedOrder::Kind::Move) continue;
