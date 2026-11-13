@@ -465,6 +465,10 @@ void App::open_battle_prompt(const galactic::GalacticSim& g, const galactic::Con
                                   : txt("TEXT_TACTICAL_SPACE_BATTLE_IS_PENDING", U": SPACE BATTLE IMMINENT!"));
     prompt_.planet_name = planet_label(data_, ui_.text, g, c.planet);
     audio_.battle_pending(prompt_.land);
+    if (prompt_.land && c.attacker == me) {  // ui4 t08 [port]: the local player's land invasion begins (the battle prompt)
+        audio_.faction_sfx("SFXEvent_Land_Invasion_Commencing");
+        ++announcements_;
+    }
     choice_open_ = true;  // the banner (GalacticHudFrame::battle) until Begin / Auto-Resolve
     ++choices_;
     if (prompt_.story_pending) ++prompts_story_;

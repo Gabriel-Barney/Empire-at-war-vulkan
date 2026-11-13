@@ -9,6 +9,7 @@
 #include "alamo/core/ascii.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
+#include "alamo/game/hud_feeds.hpp"
 #include "alamo/game/story_script.hpp"
 #include "alamo/tactical/abilities/ability_types.hpp"
 #include "alamo/ui/hud_abilities.hpp"
@@ -171,7 +172,6 @@ void Holocron::sample(const galactic::GalacticSim& g) {
 }
 
 ui::DroidLogInfo Holocron::droid_log(const GameSession& s, const GameData& d, const ui::TextDatabase& text) const {
-    (void)d;
     ui::DroidLogInfo out;
     const galactic::GalacticSim* g = s.galaxy();
     if (!g) return out;
@@ -183,11 +183,27 @@ ui::DroidLogInfo Holocron::droid_log(const GameSession& s, const GameData& d, co
             for (const lua::StoryDialogEntry& e : story->model(set).dialog_log())
                 if (!e.dialog.empty()) lines.push_back(text_or(text, e.dialog));
         }
-#else
-    (void)text;
 #endif
+    // ui4 t05 [port]: a readable battle line (conflict_log_line) instead of the conflict log's debug text.
+    const auto planet_name = [g, &d, &text](PlanetIndex p) -> std::u32string {
+        if (p >= g->planets().size()) return U"?";
+        const uint32_t t = g->planets()[p].type;
+        if (t < d.types.size())
+            if (const std::string_view id = d.types.get_string(static_cast<objects::TypeIndex>(t), "Text_ID"); !id.empty())
+                if (const std::u16string* str = text.find(id)) return ui::utf16_to_utf32(*str);
+        return p < g->map().planets.name.size() ? u32(g->map().planets.name[p]) : std::u32string(U"?");
+    };
+    const auto faction_name = [g, &text](int32_t p) -> std::u32string {
+        if (p < 0 || static_cast<size_t>(p) >= g->players().size()) return U"?";
+        const uint32_t f = g->players()[static_cast<size_t>(p)].faction;
+        if (f >= g->rules().factions.size()) return U"?";
+        const galactic::FactionRules& fr = g->rules().factions[f];
+        if (!fr.text_id.empty())
+            if (const std::u16string* str = text.find(fr.text_id)) return ui::utf16_to_utf32(*str);
+        return u32(fr.name);
+    };
     if (const sim::CampaignBattles* b = s.battles())
-        for (const galactic::ConflictLogEntry& c : b->conflicts().log()) lines.push_back(u32(c.text(*g)));
+        for (const galactic::ConflictLogEntry& c : b->conflicts().log()) lines.push_back(conflict_log_line(c, planet_name, faction_name));
     for (auto it = lines.rbegin(); it != lines.rend() && out.entries.size() < 40; ++it) out.entries.push_back(*it);
     return out;
 }

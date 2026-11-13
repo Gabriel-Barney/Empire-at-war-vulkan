@@ -444,6 +444,13 @@ bool App::start_session(const SessionSpec& spec) {
     }
     loaded_save_.clear();
     session_started(diag);
+    credits_capped_ = false;
+    // ui4 t08 [port]: a new campaign (not a load, a skirmish or the attract demo) plays the faction's
+    // SFXEvent_GUI_Start_Campaign once it has started.
+    if (spec.kind == SessionKind::Campaign && !spec.attract && galaxy()) {
+        audio_.faction_sfx("SFXEvent_GUI_Start_Campaign");
+        ++announcements_;
+    }
     return true;
 }
 

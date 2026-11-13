@@ -989,3 +989,15 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   g_corruption_text = while a corruption transition runs, (int)(fraction × 100) put into TEXT_CORRUPTION_PERCENT /
   _REMOVE_PERCENT (its %d / %s field, else appended with '%') [M: the text's field]. Not done (no spec): Text_Land_Fleet's
   content, planet_bonus, Text_adv_help (planet map, t04) - RE gap filed on the backlog.
+- ⬜ **OPEN** · ui4 t05 / t08 (2026-11-13, galactic messages and announcer; specs `docs/re/P4_SIM_SYSTEMS.md` §2.3, `docs/re/GALACTIC_DIALOGS.md` §2,
+  `docs/re/GALACTIC_REVEAL_CORRUPTION.md` §4.4): **t05** the slice outcome and sabotage vigilance texts go through
+  `App::galactic_message` = a white screen-text line (the message callback 0x140b313c0 as the holocron message's line) [port];
+  every failed slice outcome of the local slicer plays SFXEvent_Slice_Failure [port]. The Droid Log battle entries use
+  `game::conflict_log_line` ("Battle of <planet> (space|land): A vs B - W victorious / R retreated / called off (auto-resolved)",
+  display names) instead of the debug text [port: no text ids traced]. **t08** `GameSession::take_announce_events` (PlanetOwnerChanged,
+  CorruptionChanged, FleetDeparted) -> `game::galactic_announcement`: gained / lost control (XML comments), corrupted / corruption
+  removed for the local owner or corrupter [H], enemy fleet approaching = a hostile, not all-stealthed fleet departing towards a
+  local planet [port]. [port] triggers in the host: pop cap and blockaded (space item, enemy in orbit) on a refused pad click instead
+  of the negative sound; Max_Credits_Limit_Reached when the credits reach the account cap (rising edge); Land_Invasion_Commencing
+  when the land battle prompt opens with the local player attacking; GUI_Start_Campaign when a new campaign starts. RE gap on the
+  backlog.

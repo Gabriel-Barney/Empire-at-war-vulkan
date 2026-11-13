@@ -540,6 +540,10 @@ public:
     uint32_t panel_preview_ = 0;
     uint32_t preview_planet_ = 0;
     uint64_t special_sfx_ = 0, special_msgs_ = 0, activations_ = 0;
+    void galactic_message(std::string_view id);  // ui4 t05: a message-callback text as a white screen-text line
+    void announcer_feedback();                   // ui4 t08
+    uint64_t announcements_ = 0;                 // ui4 t08: announcer events played
+    bool credits_capped_ = false;                // ui4 t08: the credits were at the cap last tick
     uint64_t build_refusals_ = 0;  // ui4 t02: clicks on greyed galactic build pads (negative feedback)
     bool activate_special_here(uint32_t hero_id);
     std::vector<objects::ObjectHandle> special_units(const galactic::GalacticSim& g, PlanetIndex pi) const;
