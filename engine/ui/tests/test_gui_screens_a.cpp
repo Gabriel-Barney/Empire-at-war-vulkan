@@ -489,7 +489,7 @@ void test_advanced_video_port() {
     const size_t before = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 16 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 20 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
           rd->find("IDC_PORT_WATER_DETAIL") >= 0 && rd->find("IDC_PORT_ANTI_ALIASING") >= 0 && rd->find("IDC_PORT_DETAIL_LEVEL") >= 0);
     // Display / Graphics split: anti-aliasing and the detail level are on the Graphics page only.
     CHECK(env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->find("IDC_PORT_ANTI_ALIASING") < 0 &&
@@ -550,6 +550,33 @@ END
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(acts[acts.size() - 2].kind == MenuAction::Kind::ApplyVideo && acts[acts.size() - 2].video.anti_alias == kAaOff);
     applied.anti_alias = kAaOff;
+    // [port: Gabriel 2026-11-13] Upscaler and Upscaler Quality: lists of their own beside Anti-aliasing. Off greys Quality out;
+    // FSR greys Anti-aliasing and Render Scale out (FSR does both jobs). A change sends one ApplyVideo with all three.
+    GuiControl* up = d->get("IDC_PORT_UPSCALER");
+    GuiControl* uq = d->get("IDC_PORT_UPSCALE_QUALITY");
+    CHECK(up && uq && up->items.size() == std::size(kUpscalerChoices) && up->items[1] == U"AMD FSR" && up->selected == 0 &&
+          uq->items.size() == std::size(kUpscaleQualityChoices) && uq->selected == kUpscaleQuality && up->ui_font && uq->ui_font);
+    CHECK(!uq->enabled && !d->get("IDC_PORT_UPSCALE_QUALITY_TEXT")->enabled && aa->enabled && d->get("IDC_PORT_RENDER_SCALE")->enabled);
+    changed("IDC_PORT_UPSCALER", 1);
+    CHECK(uq->enabled && d->get("IDC_PORT_UPSCALE_QUALITY_TEXT")->enabled && !aa->enabled && !d->get("IDC_PORT_ANTI_ALIASING_TEXT")->enabled &&
+          !d->get("IDC_PORT_RENDER_SCALE")->enabled && !d->get("IDC_PORT_RENDER_SCALE_TEXT")->enabled);
+    uq->selected = kUpscalePerformance;
+    acts.clear();
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 2 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.upscaler == kUpscalerFsr &&
+          acts[0].video.upscale_quality == kUpscalePerformance && acts[0].video.anti_alias == kAaOff && acts[0].video.resolution == 1);
+    applied.upscaler = kUpscalerFsr;  // the host stored it
+    applied.upscale_quality = kUpscalePerformance;
+    acts.clear();
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyAdvancedVideo);
+    changed("IDC_PORT_UPSCALER", 0);
+    CHECK(!uq->enabled && aa->enabled && d->get("IDC_PORT_RENDER_SCALE")->enabled);
+    acts.clear();
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 2 && acts[0].video.upscaler == kUpscalerOff && acts[0].video.upscale_quality == kUpscalePerformance);
+    applied.upscaler = kUpscalerOff;
+    acts.clear();
     // A list per option on the level the stored value is in, the shipped sliders hidden, anisotropy and AO as before.
     const struct {
         const char* id;
@@ -622,8 +649,10 @@ END
     for (size_t i = 0; i < std::size(kAntiAliasChoices); ++i) CHECK(level_index(kAntiAliasChoices, kAntiAliasChoices[i].value) == i);
     CHECK(kAntiAliasChoices[0].value == kAaOff && kAntiAliasChoices[1].value == kAaSmaa && kAntiAliasChoices[2].value == kAaTaa &&
           kAntiAliasChoices[5].value == kAaMsaa8);
-    // [port] The FSR rows follow, in render::UpscaleQuality order.
-    CHECK(std::size(kAntiAliasChoices) == 11 && kAntiAliasChoices[6].value == kAaFsrNative && kAntiAliasChoices[10].value == kAaFsrUltra);
+    // [port: Gabriel 2026-11-13] FSR is not in the anti-aliasing list: it has the Upscaler / Upscaler Quality lists.
+    CHECK(std::size(kAntiAliasChoices) == 6);
+    for (size_t i = 0; i < std::size(kUpscaleQualityChoices); ++i) CHECK(level_index(kUpscaleQualityChoices, kUpscaleQualityChoices[i].value) == i);
+    for (size_t i = 0; i < std::size(kUpscalerChoices); ++i) CHECK(level_index(kUpscalerChoices, kUpscalerChoices[i].value) == i);
 }
 
 }  // namespace test_gui_screens_t

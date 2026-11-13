@@ -195,6 +195,8 @@ bool App::init() {
         v.resolution = display_mode_index(display_modes_, win_.width(), win_.height(), refresh_hz_);
         v.detail = video_profile_.detail;  // the original's sliders: saved with the profile, applied each frame (t11)
         v.anti_alias = video_profile_.anti_alias;
+        v.upscaler = video_profile_.upscaler;  // [port: Gabriel 2026-11-13] the Upscaler / Upscaler Quality lists
+        v.upscale_quality = video_profile_.upscale_quality;
         v.gamma = video_profile_.gamma;
         v.window_mode = window_mode_;
         v.ui_scale = ui_scale_ > 0 ? ui_scale_ : video_profile_.ui_scale;

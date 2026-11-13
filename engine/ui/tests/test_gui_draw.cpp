@@ -474,11 +474,12 @@ void test_real(Gpu& g, const std::string& src_dir) {
         CHECK(fe2.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
         shoot("advanced_video", [&](double) {});
         for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",
-                               "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL", "IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING"}) {
+                               "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL", "IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING",
+                               "IDC_PORT_UPSCALER", "IDC_PORT_UPSCALE_QUALITY"}) {
             const int32_t k = gui.top() ? gui.top()->find(id) : -1;
             CHECK(k >= 0 && gui.combo_rows(*gui.top(), static_cast<size_t>(k)) == static_cast<int32_t>(gui.top()->get(id)->items.size()));  // every level reachable
         }
-        // [port] The Anti-aliasing list open (11 modes since FSR): every row on screen.
+        // [port] The Anti-aliasing list open: every row on screen.
         if (ui::GuiDialog* aa_page = gui.top(); aa_page && aa_page->get("IDC_PORT_ANTI_ALIASING")) {
             ui::GuiControl* aa = aa_page->get("IDC_PORT_ANTI_ALIASING");
             aa->open = true;
@@ -511,7 +512,8 @@ void test_real(Gpu& g, const std::string& src_dir) {
             CHECK(overlaps == 0);
         }
         for (const auto& [id, shot] : {std::pair{"IDC_PORT_TEXTURE_DETAIL", "advanced_video_texture_open"},  // the longest level names
-                                       std::pair{"IDC_PORT_ANTI_ALIASING", "advanced_video_aa_open"}, std::pair{"IDC_PORT_DETAIL_LEVEL", "advanced_video_quality_open"}})
+                                       std::pair{"IDC_PORT_ANTI_ALIASING", "advanced_video_aa_open"}, std::pair{"IDC_PORT_DETAIL_LEVEL", "advanced_video_quality_open"},
+                                       std::pair{"IDC_PORT_UPSCALE_QUALITY", "advanced_video_upscale_quality_open"}})
             if (ui::GuiControl* list = gui.top() ? gui.top()->get(id) : nullptr) {
                 list->open = true;
                 shoot(shot, [&](double) {});

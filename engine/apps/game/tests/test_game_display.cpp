@@ -243,27 +243,40 @@ void detail_mappings() {
             int32_t mode;
             bool smaa, taa;
             uint32_t msaa;
-            int fsr = -1;  // [port] FSR quality mode (render::UpscaleQuality), -1 none; FSR modes also set TAA as the fallback
         };
         const Want wants[] = {{ui::kAaOff, false, false, 1},  {ui::kAaSmaa, true, false, 1},   {ui::kAaTaa, false, true, 1},
-                              {ui::kAaMsaa2, false, false, 2}, {ui::kAaMsaa4, false, false, 4}, {ui::kAaMsaa8, false, false, 8},
-                              {ui::kAaFsrNative, false, true, 1, 0}, {ui::kAaFsrQuality, false, true, 1, 1},
-                              {ui::kAaFsrBalanced, false, true, 1, 2}, {ui::kAaFsrPerformance, false, true, 1, 3},
-                              {ui::kAaFsrUltra, false, true, 1, 4}};
+                              {ui::kAaMsaa2, false, false, 2}, {ui::kAaMsaa4, false, false, 4}, {ui::kAaMsaa8, false, false, 8}};
         CHECK(std::size(wants) == std::size(ui::kAntiAliasChoices));
         for (size_t i = 0; i < std::size(wants); ++i) {
             const Want& w = wants[i];
             CHECK(ui::kAntiAliasChoices[i].value == w.mode && ui::level_index(ui::kAntiAliasChoices, w.mode) == i);
             render::RecordOptions o;
             o.taa_weight = 0.3f;  // a stale weight is reset to the renderer default
+            o.upscaler = render::Upscaler::Fsr;  // the upscaler Off clears it
             game::apply_aa_options(o, w.mode);
-            CHECK(o.smaa == w.smaa && o.taa == w.taa && o.msaa == w.msaa && o.taa_weight < 0.0f);
-            CHECK(game::taa_active(w.mode) == (w.taa && w.fsr < 0) && game::aa_msaa_samples(w.mode) == w.msaa);
-            CHECK((o.upscaler == render::Upscaler::Fsr) == (w.fsr >= 0) && game::fsr_quality(w.mode).has_value() == (w.fsr >= 0));
-            if (w.fsr >= 0) CHECK(o.upscale_quality == static_cast<render::UpscaleQuality>(w.fsr));
+            CHECK(o.smaa == w.smaa && o.taa == w.taa && o.msaa == w.msaa && o.taa_weight < 0.0f && o.upscaler == render::Upscaler::None);
+            CHECK(game::taa_active(w.mode) == w.taa && game::aa_msaa_samples(w.mode) == w.msaa);
             CHECK(game::parse_aa_mode(game::aa_mode_name(w.mode)) == w.mode);
+            // [port: Gabriel 2026-11-13] The upscaler, a list of its own: FSR at each quality replaces any anti-aliasing mode
+            // (TAA on as the fallback, no SMAA, one sample).
+            for (int32_t q = ui::kUpscaleNative; q <= ui::kUpscaleUltra; ++q) {
+                render::RecordOptions f;
+                game::apply_aa_options(f, w.mode, ui::kUpscalerFsr, q);
+                CHECK(f.upscaler == render::Upscaler::Fsr && f.upscale_quality == static_cast<render::UpscaleQuality>(q) && f.taa && !f.smaa &&
+                      f.msaa == 1);
+            }
         }
         CHECK(!game::parse_aa_mode("high") && std::string(game::aa_mode_name(99)) == "off");
+        CHECK(!game::parse_aa_mode("fsr_quality"));  // FSR is not an anti-aliasing mode any more
+        // Upscaler and quality lists: one row per type / level, names round-trip.
+        CHECK(std::size(ui::kUpscalerChoices) == 2 && ui::kUpscalerChoices[1].value == ui::kUpscalerFsr &&
+              std::size(ui::kUpscaleQualityChoices) == render::kUpscaleQualityCount);
+        for (size_t i = 0; i < std::size(ui::kUpscaleQualityChoices); ++i)
+            CHECK(ui::kUpscaleQualityChoices[i].value == static_cast<int32_t>(i) &&
+                  game::parse_upscale_quality(game::upscale_quality_name(static_cast<int32_t>(i))) == static_cast<int32_t>(i));
+        CHECK(game::parse_upscaler(game::upscaler_name(ui::kUpscalerFsr)) == ui::kUpscalerFsr && std::string(game::upscaler_name(7)) == "off");
+        CHECK(!game::fsr_quality(ui::kUpscalerOff, ui::kUpscaleUltra) &&
+              game::fsr_quality(ui::kUpscalerFsr, 99) == render::UpscaleQuality::Quality);
     }
     // The Video dialog's list sets the profile; older profiles still load: the TAA strength ("anti_alias" above 0 = TAA) and
     // the Advanced dialog's box ("anti_aliasing=taa"); "aa_mode" wins.
@@ -293,6 +306,34 @@ void detail_mappings() {
         CHECK(load("anti_alias=63\naa_mode=msaa8\n") == ui::kAaMsaa8);     // the new key wins
         CHECK(load("aa_mode=smaa\n") == ui::kAaSmaa);
         CHECK(load("aa_mode=ultra\n") == ui::kAaOff);                      // unknown name: the default stays
+        // [port: Gabriel 2026-11-13] Upscaler keys; an "aa_mode=fsr_<quality>" profile (FSR in the AA list) loads as FSR + TAA.
+        const auto load_up = [&](const char* text) {
+            {
+                std::ofstream f(path, std::ios::trunc);
+                f << text;
+            }
+            game::VideoProfile r;
+            CHECK(game::load_video_profile(path, r));
+            return r;
+        };
+        game::VideoProfile up = load_up("aa_mode=smaa\n");
+        CHECK(up.upscaler == ui::kUpscalerOff && up.upscale_quality == ui::kUpscaleQuality);
+        up = load_up("aa_mode=msaa4\nupscaler=fsr\nupscale_quality=performance\n");
+        CHECK(up.anti_alias == ui::kAaMsaa4 && up.upscaler == ui::kUpscalerFsr && up.upscale_quality == ui::kUpscalePerformance);
+        up = load_up("aa_mode=fsr_balanced\n");
+        CHECK(up.anti_alias == ui::kAaTaa && up.upscaler == ui::kUpscalerFsr && up.upscale_quality == ui::kUpscaleBalanced);
+        up = load_up("aa_mode=fsr_ultra\nupscaler=off\n");  // the new key wins
+        CHECK(up.anti_alias == ui::kAaTaa && up.upscaler == ui::kUpscalerOff && up.upscale_quality == ui::kUpscaleUltra);
+        up = load_up("upscaler=dlss\nupscale_quality=max\n");  // unknown names: the defaults stay
+        CHECK(up.upscaler == ui::kUpscalerOff && up.upscale_quality == ui::kUpscaleQuality);
+        // Saved and loaded back; the Graphics page's ApplyVideo sets them.
+        vs.upscaler = ui::kUpscalerFsr;
+        vs.upscale_quality = ui::kUpscaleNative;
+        CHECK(game::update_video_profile(aa, vs, {}) && aa.upscaler == ui::kUpscalerFsr && aa.upscale_quality == ui::kUpscaleNative);
+        CHECK(game::save_video_profile(path, aa));
+        game::VideoProfile back;
+        CHECK(game::load_video_profile(path, back) && back.upscaler == ui::kUpscalerFsr && back.upscale_quality == ui::kUpscaleNative &&
+              back.anti_alias == aa.anti_alias);
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
     }

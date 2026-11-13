@@ -98,6 +98,8 @@ struct VideoProfile {
     int32_t frame_cap = 0;
     int32_t detail = 100, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100
     int32_t anti_alias = ui::kAaOff;   // [port: Gabriel] the Anti-aliasing list's mode (ui::kAntiAliasChoices; key "aa_mode")
+    int32_t upscaler = ui::kUpscalerOff;            // [port: Gabriel] the Upscaler list (key "upscaler")
+    int32_t upscale_quality = ui::kUpscaleQuality;  // [port: Gabriel] the Upscaler Quality list (key "upscale_quality")
     ui::AdvancedVideoSettings advanced;
 };
 // Copies an applied ApplyVideo's settings into the stored profile; false (profile untouched) while `v.unconfirmed` - a
@@ -107,7 +109,10 @@ struct VideoProfile {
 // Anti-aliasing is the one value p.anti_alias, a mode of the Video dialog's list (ui::kAntiAliasChoices), stored as
 // "aa_mode=off|smaa|taa|msaa2|msaa4|msaa8" (aa_mode_name). [port: Gabriel 2026-11-13] Older profiles still load: their
 // "anti_alias" was the TAA strength 0..100 (above 0 = TAA, 0 = Off) and before that an Advanced dialog box
-// "anti_aliasing=taa" also meant TAA; "aa_mode", when present, wins.
+// "anti_aliasing=taa" also meant TAA; "aa_mode", when present, wins. [port: Gabriel 2026-11-13] Upscaling is p.upscaler
+// ("upscaler=off|fsr", upscaler_name) and p.upscale_quality ("upscale_quality=native|quality|balanced|performance|ultra",
+// upscale_quality_name); a profile from when FSR was in the Anti-aliasing list ("aa_mode=fsr_<quality>") loads as FSR at
+// that quality with TAA.
 bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std::vector<DisplayMode>& modes);
 // t43: the stored Detail value is the level of the seven advanced options (ui::advanced_detail_level); applied with them and
 // to a profile saved before the two agreed.
@@ -143,16 +148,26 @@ float particle_detail(int32_t slider);
 float environment_fade_scale(int32_t slider);
 float gamma_value(int32_t slider);
 bool taa_active(int32_t mode);
-// [port: Gabriel 2026-11-13] The FSR modes of the list (ui::kAaFsrNative .. kAaFsrUltra): their quality mode; nullopt otherwise.
-std::optional<render::UpscaleQuality> fsr_quality(int32_t mode);
+// [port: Gabriel 2026-11-13] The FSR quality mode the Upscaler / Upscaler Quality lists ask for; nullopt when the upscaler is
+// Off (or unknown). An out-of-range quality is Quality.
+std::optional<render::UpscaleQuality> fsr_quality(int32_t upscaler, int32_t quality);
 uint32_t aa_msaa_samples(int32_t mode);
 // Profile name of an Anti-aliasing mode ("off", "smaa", "taa", "msaa2", "msaa4", "msaa8"; unknown modes: "off") and back
 // (nullopt for an unknown name).
 const char* aa_mode_name(int32_t mode);
 std::optional<int32_t> parse_aa_mode(std::string_view name);
+// [port: Gabriel 2026-11-13] Profile names of the Upscaler ("off", "fsr") and Upscaler Quality ("native", "quality",
+// "balanced", "performance", "ultra") rows and back; unknown values: the first name, unknown names: nullopt.
+const char* upscaler_name(int32_t upscaler);
+std::optional<int32_t> parse_upscaler(std::string_view name);
+const char* upscale_quality_name(int32_t quality);
+std::optional<int32_t> parse_upscale_quality(std::string_view name);
 // [port: Gabriel] Advanced video > Render Scale percent -> RecordOptions::render_scale (share of the window's pixels; 100 = 1).
 float render_scale_value(int32_t percent);
-void apply_aa_options(render::RecordOptions& o, int32_t mode);
+// [port: Gabriel 2026-11-13] With the upscaler on (fsr_quality), FSR replaces the Anti-aliasing mode: RecordOptions::upscaler
+// / upscale_quality are set, taa is on (the renderer draws TAA where FSR cannot run), smaa off and msaa 1.
+void apply_aa_options(render::RecordOptions& o, int32_t mode, int32_t upscaler = ui::kUpscalerOff,
+                      int32_t upscale_quality = ui::kUpscaleQuality);
 // The overall Detail Level (IDD_VIDEO_OPTIONS_DIALOG: Low / Medium / High / Ultra, ui::kQualityPresets) as a preset [M]: a
 // quality level picked there (VideoSettings::detail_picked) sets the seven advanced detail options (particle, mesh, texture,
 // water, shader, shadow, environment) to its value; the checks (soft shadows, heat, bloom), anti-aliasing and anisotropy are
