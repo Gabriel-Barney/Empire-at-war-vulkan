@@ -787,7 +787,7 @@ void GuiManager::key_input(GuiDialog& d, const InputFrame& raw, std::u32string_v
     const auto fi = static_cast<size_t>(std::max(d.focus_, 0));
     const bool edit = f && (f->type == GuiGadgetType::EditBox || f->type == GuiGadgetType::IMEEditBox);
 
-    if (k.test(vk::kTab)) move_focus(d, shift ? -1 : 1);
+    if (k.test(vk::kTab) && !(edit && f->key_capture)) move_focus(d, shift ? -1 : 1);
     if (k.test(vk::kEscape)) {
         bool closed = false;
         for (GuiControl& c : d.controls_)

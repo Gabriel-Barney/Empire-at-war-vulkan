@@ -1034,10 +1034,16 @@ void test_menus() {
     CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text == U"H" &&
           kb->get("IDC_EDIT_GROUP_1_SELECT")->text == U"1");
     step(env.click(*kb, "IDC_EDIT_STOP"));
-    step(env.frame({0, 0}, false, {vk::key('x')}));
-    CHECK(kb->get("IDC_EDIT_STOP")->text == U"X" && keys.binding(hk::kStop).key == 'H');  // not applied yet
-    step(env.frame({0, 0}, false, {vk::kControl, vk::key('q')}));  // Ctrl+Q (select like's key) moves here
-    CHECK(kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");
+    step(env.frame({0, 0}, false, {vk::key('j')}));  // a free key: taken at once
+    CHECK(kb->get("IDC_EDIT_STOP")->text == U"J" && keys.binding(hk::kStop).key == 'H');  // not applied yet
+    step(env.frame({0, 0}, false, {vk::kControl, vk::key('q')}));  // Ctrl+Q is select like's key: UI5 t05 asks first
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM" && kb->get("IDC_EDIT_STOP")->text == U"J");
+    {
+        GuiDialog* qb = env.gui.top();
+        CHECK(qb->get("IDC_USER_TEXT_STRING_1")->text == U"Ctrl+Q: Select Like" && qb->get("IDC_USER_TEXT_STRING_1")->visible);
+        step(env.click(*qb, "IDC_DIALOG_BOX_BUTTON_LEFT"));  // Yes: the key moves here
+    }
+    CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");
     acts.clear();
     step(env.click(*kb, "IDC_APPLY"));
     CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::KeybindingsChanged);
@@ -1048,6 +1054,57 @@ void test_menus() {
           keyboard_edit_slot("IDC_EDIT_SCROLL_UP") == hk::kScrollUp && keyboard_edit_slot("IDC_EDIT_IP") == -1);
     CHECK(hotkey_label({0x7B, HotkeyMod::None}) == U"F12" && hotkey_label({0x6D, HotkeyMod::None}) == U"Numpad -" &&
           hotkey_label({'1', HotkeyMod::Shift}) == U"Shift+1");
+
+    // UI5 t05: clear with Delete / Backspace, Tab is a key (focus stays), a conflict can be refused, Back / Esc with
+    // unapplied edits ask Apply? (No discards, Yes applies).
+    CHECK(hotkey_action_label(hk::kSelectLike) == U"Select Like" &&
+          hotkey_action_label(static_cast<uint16_t>(hotkey_slot("Ability_SpreadOut"))) == U"Spread Out" &&
+          hotkey_action_label(static_cast<uint16_t>(hotkey_slot("Taunt1"))) == U"Taunt 1");
+    {
+        HotkeyTable t;
+        const auto holo = static_cast<uint16_t>(hotkey_slot("MissionHolocron"));
+        CHECK(t.conflicts(hk::kStop, {vk::kTab, HotkeyMod::None}) == std::vector<uint16_t>{holo});
+        CHECK(t.conflicts(hk::kStop, {'J', HotkeyMod::None}).empty() && t.conflicts(hk::kStop, HotkeyBinding{}).empty());
+        CHECK(t.conflicts(0, {'2', HotkeyMod::None}).size() == 4);  // group 2's recall key and its three derived keys
+    }
+    auto open_keys = [&] {
+        std::vector<GuiEvent> e(1);
+        e[0].kind = GuiEvent::Kind::Clicked;
+        e[0].dialog = "IDD_IN_GAME_OPTIONS_DIALOG";
+        e[0].control = "IDC_IN_GAME_OPTIONS_KEYBOARD";
+        step(e);
+        GuiDialog* k = env.gui.top();
+        step(env.click(*k, "IDC_EDIT_STOP"));
+        return k;
+    };
+    kb = open_keys();
+    CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");
+    step(env.frame({0, 0}, false, {vk::kDelete}));
+    CHECK(kb->get("IDC_EDIT_STOP")->text.empty() && keys.binding(hk::kStop).key == 'Q');
+    step(env.frame({0, 0}, false, {vk::kTab}));  // Tab: MissionHolocron's key -> asks; focus stays on the field
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM");
+    step(env.click(*env.gui.top(), "IDC_DIALOG_BOX_BUTTON_RIGHT"));  // No: nothing changes
+    CHECK(fe.top() == "IDD_KEYBOARD_OPTIONS_DIALOG" && kb->get("IDC_EDIT_STOP")->text.empty() &&
+          kb->focus_index() == kb->find("IDC_EDIT_STOP"));
+    acts.clear();
+    step(env.click(*kb, "IDC_OK"));  // Back with an unapplied edit: Apply?
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM" && acts.empty());
+    step(env.click(*env.gui.top(), "IDC_DIALOG_BOX_BUTTON_RIGHT"));  // No: discarded, the page closes
+    CHECK(fe.top() != "IDD_KEYBOARD_OPTIONS_DIALOG" && fe.top() != "IDD_DIALOG_BOX_QUIT_CONFIRM" && acts.empty() &&
+          keys.binding(hk::kStop).key == 'Q');
+    kb = open_keys();
+    CHECK(kb->get("IDC_EDIT_STOP")->text == U"Ctrl+Q");  // the discarded edit is gone
+    step(env.frame({0, 0}, false, {vk::kBack}));
+    CHECK(kb->get("IDC_EDIT_STOP")->text.empty());
+    step(env.frame({0, 0}, false, {vk::kEscape}));  // Esc with an unapplied edit asks too
+    CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM");
+    step(env.click(*env.gui.top(), "IDC_DIALOG_BOX_BUTTON_LEFT"));  // Yes: applied, the page closes
+    CHECK(fe.top() != "IDD_KEYBOARD_OPTIONS_DIALOG" && !acts.empty() && acts.back().kind == MenuAction::Kind::KeybindingsChanged &&
+          keys.binding(hk::kStop).key == -1);
+    // Back without edits closes at once.
+    kb = open_keys();
+    step(env.click(*kb, "IDC_OK"));
+    CHECK(fe.top() != "IDD_KEYBOARD_OPTIONS_DIALOG" && fe.top() != "IDD_DIALOG_BOX_QUIT_CONFIRM");
 }
 
 void test_load_screen() {
