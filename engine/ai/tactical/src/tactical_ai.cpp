@@ -1280,7 +1280,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
             ++n;
             humans += p.is_human ? 1 : 0;
         }
-        return n - humans;
+        return std::max(n, w->cfg.player_list_size) - humans;  // skai t12: N = the whole PlayerList
     }
 
     // ---- ContextModeServices ----
@@ -3748,6 +3748,10 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
         // §2.1], so the time tests (accept, Resolve time_ok: 0 < AllowedTime < ETA) never fail (§4); the value is hashed and
         // saved with the goal.
         gcfg.nominal_allowed_time = true;
+        // skai t12 (AI_GALACTIC §1.6 step 5 [H]): the Commit limit's extension is the AIPlayerType's GoalSetExtensionSize
+        // (default 2) in every mode: retail's first land skirmish commit starts two scouts and two Secure_Contestable
+        // plans (SKAI_T06_LAND_RUNS §7); the config default 1 started one of each.
+        gcfg.extra_goals_per_category = type->goal_set_extension_size;
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, eq, -1, out); });
         if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)

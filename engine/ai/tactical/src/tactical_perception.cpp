@@ -960,8 +960,13 @@ struct Eval {
                 std::vector<std::string_view> types;
                 param_names(ps, "Parameter_Type", types);
                 uint32_t c = 0;
-                for (const PerceptionObject& o : w.objects)
-                    if (o.owner == P && o.alive && o.built_structure && (types.empty() || listed(types, type_name(o.type)))) ++c;
+                for (const PerceptionObject& o : w.objects) {
+                    if (o.owner != P || !o.alive || !o.built_structure) continue;
+                    // skai t12: a structure under construction counts as the type it becomes.
+                    const PerceptionType* t = w.type_of(o);
+                    const int32_t ty = t && t->under_construction && t->constructed_type >= 0 ? t->constructed_type : o.type;
+                    if (types.empty() || listed(types, type_name(ty))) ++c;
+                }
                 out = static_cast<double>(c);
                 return true;
             }

@@ -9,6 +9,7 @@
 
 #include "alamo/ai/ai_types.hpp"
 #include "alamo/ai/tactical/tactical_perception.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/data/game_database.hpp"  // a2h t05: load_tactical_ai_data
@@ -119,6 +120,19 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
             }
         }
         cfg.lua_players.push_back(ls);
+    }
+    {
+        // skai t12: the PlayerList of the goal quota = the players plus one per faction without a player (the galactic
+        // AI's count, galactic_ai.cpp quota_players; a faction defined twice under one name counts once [port]).
+        const auto& factions = g.rules().factions;
+        auto n = static_cast<int32_t>(players);
+        for (size_t f = 0; f < factions.size(); ++f) {
+            bool seen = false;
+            for (size_t k = 0; k < f && !seen; ++k) seen = ascii_iequals(factions[k].name, factions[f].name);
+            for (uint32_t p = 0; p < players && p < g.players().size(); ++p) seen = seen || g.players()[p].faction == f;
+            n += seen ? 0 : 1;
+        }
+        cfg.player_list_size = n;
     }
     world_ = std::make_unique<at::TacticalAiWorld>(mode.primary(), &mode.types(), setup.files, host.random(), *setup.defs,
                                                    *setup.equations, *this, std::move(cfg));
@@ -483,6 +497,10 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
                              (kGroundBase != objects::kNoBehavior && types.has_behavior(ti, objects::BehaviorSet::Union, kGroundBase));
             static const objects::BehaviorTypeId kUc = objects::behavior_type_id("TACTICAL_UNDER_CONSTRUCTION");
             pt.under_construction = kUc != objects::kNoBehavior && types.has_behavior(ti, objects::BehaviorSet::Union, kUc);
+            if (pt.under_construction) {  // skai t12: the finished type, for TacticalBuiltStructureCount
+                const objects::TypeIndex ft = types.resolve_name(types.get_string(ti, "Tactical_Buildable_Constructed"));
+                if (ft != objects::kNone && ft < types.size()) pt.constructed_type = static_cast<int32_t>(ft);
+            }
             // Pad price 0x3744e0 (_Campaign, else _Multiplayer; [port] skirmish too, no planet
             // factor); other types: the same tags as their tactical price [M] (only TacticalBuild of build plans reads it).
             // Skirmish production of non-UC types (station buy bar): Tactical_Build_Cost_Multiplayer.
@@ -619,10 +637,15 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     for (const TacticalBattle::L1BombingRun& run : b_->l1_runs_)
         for (const TacticalBattle::L1Bomber& bm : run.bombers) bombing_run_objects.push_back(bm.id);
     std::sort(bombing_run_objects.begin(), bombing_run_objects.end());
-    // skai: the finished structures standing on build pads (PadState::built), ascending (TacticalBuiltStructureCount).
+    // skai: the structures standing on build pads, ascending (TacticalBuiltStructureCount): finished (PadState::built) and,
+    // skai t12, under construction (PadState::uc). Retail counts a refinery from the build start: the Rebel AI buys its
+    // first units and early upgrade (both gated by Num_Refineries > 0) at 2295, 386 frames after the Mineral Processor's
+    // UC object appears (1909) and 364 before it is finished (2659) [H, trace: SKAI_T06_LAND_RUNS s7].
     std::vector<objects::ObjectId> pad_built;
-    for (const TacticalBattle::PadState& ps : b_->pads_)
+    for (const TacticalBattle::PadState& ps : b_->pads_) {
         if (ps.built != objects::kNoObjectId) pad_built.push_back(ps.built);
+        if (ps.uc != objects::kNoObjectId) pad_built.push_back(ps.uc);
+    }
     std::sort(pad_built.begin(), pad_built.end());
     // OPT2 t03: the listed objects (store order) first; their entries are built on the job system (per-index outputs, every
     // read below is const); the UNIT_AI stamp draws then run serially in store order.
