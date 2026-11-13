@@ -1697,7 +1697,7 @@ int32_t TacticalBattle::first_hardpoint_of_type(objects::ObjectId target, int32_
 
 void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng,
                                float facing_deg, bool attack_move, uint8_t flags, bool switch_locomotor,
-                               objects::ObjectId goal_object, bool no_destination_check) {
+                               objects::ObjectId goal_object, bool no_destination_check, bool cohesion_tight) {
     // s78n t26.1 (MOVEMENT §3.2.1 item 2, the group move 0x2a7b80): a deployed manual deployer is skipped entirely - its
     // orders (garrison enter, attack, team target) are kept and it is not moved
     std::vector<objects::ObjectId> admitted;
@@ -1721,6 +1721,7 @@ void TacticalBattle::exec_move(TacticalMode& mode, std::span<const objects::Obje
     o.goal_object = goal_object == objects::kNoObjectId ? -1 : goal_object;  // S7 t37 (movement: -1 = none)
     // s78n t20 (MOVEMENT §4.3.1 item 2): an object goal goes to the attack-arc slot test, not to the destination check
     o.skip_destination_check = no_destination_check || goal_object != objects::kNoObjectId;
+    o.cohesion_tight = cohesion_tight && space_;  // [port] fleet cohesion (space only)
     movement_->move(o, rng, frame_);
     for (const objects::ObjectId id : o.units) {
         if (!attack_move) combat_->clear_order(id);
@@ -2448,6 +2449,15 @@ void TacticalBattle::attack_block_service(TacticalMode& mode, SimRng& rng) {
     movement_->clear_attack_block(gone);
 }
 
+void TacticalBattle::set_fleet_cohesion(uint8_t player, bool tight) {
+    if (player < fleet_cohesion_.size()) fleet_cohesion_[player] = tight ? 1u : 0u;
+}
+
+// [port] fleet cohesion: only the player's own UI moves (flag 0x04) follow the setting; AI / Lua / script moves send 0.
+bool TacticalBattle::cohesion_for(uint8_t player, uint8_t move_flags) const {
+    return (move_flags & mv::kMoveFlagPlayerOrder) != 0 && fleet_cohesion(player);
+}
+
 cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x,
                                              float y, SimRng& rng, float facing_deg, bool attack_move, bool queued,
                                              uint8_t move_flags, bool switch_locomotor) {
@@ -2465,7 +2475,8 @@ cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player,
     if (!queued) {
         clear_queues(ids);
         raise_order_replaced(ids);  // S7 t31: signal 0xb
-        exec_move(mode, ids, x, y, rng, facing_deg, attack_move, move_flags, switch_locomotor);
+        exec_move(mode, ids, x, y, rng, facing_deg, attack_move, move_flags, switch_locomotor, kNoObjectId, false,
+                  cohesion_for(player, move_flags));
         return R::None;
     }
     // MOVEMENT §6.2: the swap comes first, then the waypoint queue (each swapped unit continues its re-issued order).
@@ -2513,7 +2524,9 @@ cmd::RejectReason TacticalBattle::order_move(TacticalMode& mode, uint8_t player,
     q.flags = move_flags;
     const std::vector<objects::ObjectId> now = enqueue(ids, q);
     raise_order_replaced(now);  // S7 t31: the units that start it now
-    if (!now.empty()) exec_move(mode, now, q.x, q.y, rng, q.facing, attack_move, move_flags);
+    if (!now.empty())
+        exec_move(mode, now, q.x, q.y, rng, q.facing, attack_move, move_flags, false, kNoObjectId, false,
+                  cohesion_for(player, move_flags));
     return R::None;
 }
 
@@ -3717,7 +3730,10 @@ void TacticalBattle::advance_queues(TacticalMode& mode, SimRng& rng) {
         for (Start& s : starts) {
             const QueuedOrder& o = s.o;
             switch (o.kind) {
-                case QueuedOrder::Kind::Move: exec_move(mode, s.ids, o.x, o.y, rng, o.facing, o.attack_move, o.flags); break;
+                case QueuedOrder::Kind::Move:  // [port] fleet cohesion: the player's setting when the move starts
+                    exec_move(mode, s.ids, o.x, o.y, rng, o.facing, o.attack_move, o.flags, false, kNoObjectId, false,
+                              cohesion_for(o.player, o.flags));
+                    break;
                 case QueuedOrder::Kind::MoveToObject: {
                     const objects::ObjectHandle th = st.find(o.target);
                     if (!st.alive(th)) break;  // target gone: dropped, the next entry runs next pass
@@ -6106,6 +6122,11 @@ void TacticalBattle::hash(StateHasher& h) const {
             h.i32(player);
         }
     }
+    for (size_t p = 0; p < fleet_cohesion_.size(); ++p)  // [port] fleet cohesion: only tight players (none: as before)
+        if (fleet_cohesion_[p] != 0) {
+            h.u8(0x43);
+            h.u32(static_cast<uint32_t>(p));
+        }
     if (!attack_blocks_.empty()) {  // s78n t20 stage A (absent while none: space and older land states hash as before)
         h.u32(static_cast<uint32_t>(attack_blocks_.size()));
         for (const AttackBlock& r : attack_blocks_) {

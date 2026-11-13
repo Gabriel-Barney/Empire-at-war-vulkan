@@ -40,7 +40,7 @@ namespace alamo::ui {
 // wingmen -> Alt+', Alt+S force sight -> Alt+=, Alt+D drain life -> Alt+\, Alt+A FoC full salvo -> Alt+. An original-format
 // profile is migrated on load (HotkeyTable::load).
 inline constexpr uint16_t kOriginalHotkeySlots = 153;
-inline constexpr uint16_t kHotkeySlots = 162;
+inline constexpr uint16_t kHotkeySlots = 163;
 
 enum class HotkeyMod : uint8_t { None = 0, Shift = 1, Ctrl = 2, Alt = 3 };  // profile encoding
 
@@ -83,7 +83,8 @@ inline constexpr uint16_t kSelectAll = 10, kSelectLike = 11, kNextUnit = 12, kPr
                           kAssignBase = 123, kAddBase = 133, kThirdBase = 143,
                           // [port: Gabriel]
                           kPause = 153, kYawLeft = 154, kYawRight = 155, kPitchUp = 156, kPitchDown = 157, kRollLeft = 158,
-                          kRollRight = 159, kZoomIn = 160, kZoomOut = 161;
+                          kRollRight = 159, kZoomIn = 160, kZoomOut = 161,
+                          kFleetCohesion = 162;  // [port: Gabriel 2026-11-13] fleet cohesion toggle (O)
 }  // namespace hk
 
 // Profile values (name -> integer), e.g. a registry / ini abstraction owned by the host.

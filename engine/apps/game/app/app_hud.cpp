@@ -680,6 +680,10 @@ void App::build_tactical_hud() {
                                      : planet_label(data_, ui_.text, *g, b->request().info.planet);
             }
             hf.pop = static_cast<int32_t>(std::lround(b->population_used(local_player())));
+            // [port: Gabriel 2026-11-13] fleet cohesion: the battle's setting (space only; O toggles it)
+            if (bview_.space())
+                hf.cohesion_text = b->fleet_cohesion(static_cast<uint8_t>(local_player())) ? U"Fleet cohesion: Tight (O)"
+                                                                                           : U"Fleet cohesion: Loose (O)";
             const float cap = b->population_cap(local_player());
             hf.pop_cap = cap >= 0.0f ? static_cast<int32_t>(std::lround(cap)) : -1;
         }

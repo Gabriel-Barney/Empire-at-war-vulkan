@@ -508,6 +508,13 @@ public:
     commands::RejectReason order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y,
                                       SimRng& rng, float facing_deg = tactical::movement::kNoFacing, bool attack_move = false,
                                       bool queued = false, uint8_t move_flags = 0, bool switch_locomotor = false);
+    // [port: Gabriel 2026-11-13] Fleet cohesion: a per-player setting, not in retail. Tight: the player's space move orders
+    // (order_move and the queued moves it runs later) keep the fleet together - every ship that is not a fighter flies at
+    // the slowest such ship's speed (mv::MoveOrder::cohesion_tight). Loose (the default): retail behaviour, each ship at
+    // its own speed. Set by the port event kFleetCohesionSubtype (GameSession); saved in the battle state (version 13).
+    // AI, Lua and script moves are never tight. Land ignores it (land group moves already share the slowest speed).
+    void set_fleet_cohesion(uint8_t player, bool tight);
+    bool fleet_cohesion(uint8_t player) const { return player < fleet_cohesion_.size() && fleet_cohesion_[player] != 0; }
     // Facing event (id 20, P1_DOUBLE_CLICK_MOVE.md §2.2: a land drag that started on a selected unit; rotate only) [port:
     // MovementSystem has no turn-in-place order]: one single-unit move per eligible movable unit (selection order) to its
     // own position with final facing `facing_deg`; attack orders and order queues are kept.
@@ -1619,7 +1626,9 @@ private:
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
                    bool attack_move, uint8_t flags = 0, bool switch_locomotor = false,
                    objects::ObjectId goal_object = kNoObjectId,  // S7 t37: an object goal (mv::MoveOrder::goal_object)
-                   bool no_destination_check = false);
+                   bool no_destination_check = false,
+                   bool cohesion_tight = false);  // [port] fleet cohesion (mv::MoveOrder::cohesion_tight)
+    bool cohesion_for(uint8_t player, uint8_t move_flags) const;  // [port] fleet cohesion of a player move
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
     // --- q6: an attack ordered on a TEAM container (A1_READINGS §33.2.1 row 1: a TEAM container passes 0x5680b0 on its
     // own; TACTICAL_COMBAT §2.8 B step 5 / FIGHTER_FLYING §4.10 B: the attacker's target is the container itself). The
@@ -1678,6 +1687,7 @@ private:
         float gx = 0.0f, gy = 0.0f;                       // recorded goal: the target's position at the last plan
     };
     std::vector<AttackBlock> attack_blocks_;
+    std::array<uint8_t, 8> fleet_cohesion_{};  // [port] fleet cohesion per player (1 = tight; state version 13)
     // bkt1 t05 (b0075): AttackBlock::flags host-only bit (0x40) - a unit Attack_Move on a non-hostile attackable object (kind 3 with
     // flag 0x01, no Order_Attack, no lock: BKT1_ATTACK_RE §3 [H]); masked off the movement order's flags.
     static constexpr uint8_t kAttackBlockNoLock = 0x40;  // (0x40: no movement flag uses it in the port)

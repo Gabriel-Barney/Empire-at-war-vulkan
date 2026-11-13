@@ -112,6 +112,9 @@ constexpr HotkeySlotInfo kSlots[kHotkeySlots] = {
     // 160, 161 [port: Gabriel] keyboard zoom (was Home / End in ui::Bindings, which collided with CameraHome / CameraReset):
     // = and - on the main keyboard (Alt+= / Alt+- stay Force Sight / Radioactive Contaminate: exact modifiers).
     {"CameraZoomIn", HK::Camera, {kVkOemPlus, N}}, {"CameraZoomOut", HK::Camera, {kVkOemMinus, N}},
+    // 162 [port: Gabriel 2026-11-13] fleet cohesion toggle (space battles: tight = the fleet flies at its slowest ship's
+    // speed); the host acts on the event (GameSession::toggle_fleet_cohesion).
+    {"FleetCohesion", HK::Interface, {K('O'), N}},
 };
 
 }  // namespace
