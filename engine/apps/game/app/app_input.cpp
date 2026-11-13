@@ -495,7 +495,7 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                     break;
                 }
                 // cu9g t03 (HUD_GAPS §9.4): the land b_special_weapon = the bombing-run button (0x346a80 -> 0x2e7950); a disabled
-                // button never reaches here (HudButtons swallows the click). Space: the superweapon button is not modelled.
+                // button never reaches here (HudButtons swallows the click). Space: below (ui1 t04).
                 if (screen_ == Screen::Battle && !bview_.space() && ascii_iequals(a.name, "b_special_weapon") && a.button == ui::Button::Left) {
                     bombing_toggle();
                     break;
