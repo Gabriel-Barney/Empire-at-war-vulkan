@@ -1,5 +1,5 @@
 {
- "commit": "bbc07f31",
+ "commit": "75aeedf8",
  "mode": "distribution",
  "scenarios": {
   "geonosis_skirmish": {
@@ -87,7 +87,7 @@
     "ai.build_mix[Underworld]": "PASS",
     "ai.first_build_tick[Rebel]": "PASS",
     "ai.first_build_tick[Underworld]": "PASS",
-    "ai.first_departure_tick[Empire]": "FAIL",
+    "ai.first_departure_tick[Empire]": "N/A",
     "ai.first_departure_tick[Rebel]": "PASS",
     "ai.first_departure_tick[Underworld]": "PASS",
     "ai.fleet_departures[Empire]": "PASS",
@@ -98,6 +98,7 @@
     "ai.fleet_targets[Underworld]": "PASS",
     "build.ticks[CORELLIAN_GUNBOAT@NABOO]": "PASS",
     "build.ticks[CRUSADER_GUNSHIP@FELUCIA]": "PASS",
+    "build.ticks[CRUSADER_GUNSHIP@NALHUTTA]": "PASS",
     "build.ticks[DESTROYER_DROID_COMPANY@NALHUTTA]": "FAIL",
     "build.ticks[INTERCEPTOR4_FRIGATE@THE_MAW]": "PASS",
     "build.ticks[MAL_ROCKET_VEHICLE_COMPANY@NALHUTTA]": "FAIL",
@@ -113,8 +114,10 @@
     "build.ticks[R_GALACTIC_TURBOLASER_TOWER_DEFENSES@YAVIN]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@KAMINO]": "PASS",
     "build.ticks[R_GROUND_BARRACKS@NABOO]": "PASS",
+    "build.ticks[R_GROUND_BARRACKS@SHOLA]": "PASS",
+    "build.ticks[R_GROUND_HEAVY_VEHICLE_FACTORY@YAVIN]": "PASS",
     "build.ticks[UNDERWORLD_DISRUPTOR_MERC_SQUAD@NALHUTTA]": "PASS",
-    "build.ticks[UNDERWORLD_MDU_COMPANY@SHOLA]": "PASS",
+    "build.ticks[UNDERWORLD_MDU_COMPANY@SHOLA]": "FAIL",
     "build.ticks[UNDERWORLD_MERC_SQUAD@FELUCIA]": "PASS",
     "build.ticks[UNDERWORLD_MERC_SQUAD@NALHUTTA]": "PASS",
     "build.ticks[UNDERWORLD_SABOTEUR_TEAM@NALHUTTA]": "PASS",
@@ -142,8 +145,8 @@
     "econ.cycle_tick[8]": "PASS",
     "econ.cycle_tick[9]": "PASS",
     "econ.income_cycle1[Empire]": "PASS",
-    "econ.income_cycle1[Rebel]": "FAIL",
-    "econ.income_cycle1[Underworld]": "FAIL",
+    "econ.income_cycle1[Rebel]": "PASS",
+    "econ.income_cycle1[Underworld]": "PASS",
     "econ.income_mean[Empire]": "PASS",
     "econ.income_mean[Rebel]": "PASS",
     "econ.income_mean[Underworld]": "PASS",
@@ -152,9 +155,8 @@
     "outcome.captures[Underworld]": "PASS",
     "outcome.owner_changes": "PASS",
     "outcome.planets_final[Empire]": "PASS",
-    "outcome.planets_final[Rebel]": "PASS",
+    "outcome.planets_final[Rebel]": "FAIL",
     "outcome.planets_final[Underworld]": "FAIL",
-    "travel.hop_ticks[Empire:TATOOINE->CORELLIA]": "PASS",
     "travel.hop_ticks[Rebel:CORELLIA->KUAT]": "PASS",
     "travel.hop_ticks[Rebel:CORELLIA->TATOOINE]": "PASS",
     "travel.hop_ticks[Rebel:FELUCIA->KASHYYYK]": "PASS",
@@ -194,10 +196,10 @@
     "travel.hop_ticks[Underworld:NALHUTTA->SHOLA]": "FAIL",
     "travel.hop_ticks[Underworld:SHOLA->MONCALIMARI]": "PASS",
     "travel.hop_ticks[Underworld:SHOLA->NABOO]": "PASS",
-    "travel.hop_ticks[Underworld:SHOLA->NALHUTTA]": "PASS",
-    "travel.hop_ticks[Underworld:SHOLA->THE_MAW]": "FAIL",
+    "travel.hop_ticks[Underworld:SHOLA->NALHUTTA]": "FAIL",
+    "travel.hop_ticks[Underworld:SHOLA->THE_MAW]": "PASS",
     "travel.hop_ticks[Underworld:TATOOINE->CORELLIA]": "PASS",
-    "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "FAIL",
+    "travel.hop_ticks[Underworld:TATOOINE->NABOO]": "PASS",
     "travel.hop_ticks[Underworld:THE_MAW->KASHYYYK]": "FAIL",
     "travel.hop_ticks[Underworld:THE_MAW->SHOLA]": "FAIL",
     "travel.hop_ticks[Underworld:THE_MAW->YAVIN]": "PASS",
@@ -206,23 +208,22 @@
    },
    "summary": {
     "AI choices": {
-     "FAIL": 1,
+     "N/A": 1,
      "PASS": 16
     },
     "battle outcomes": {
-     "FAIL": 1,
-     "PASS": 6
+     "FAIL": 2,
+     "PASS": 5
     },
     "diagnostic": {
      "INFO": 1
     },
     "income": {
-     "FAIL": 2,
-     "PASS": 23
+     "PASS": 25
     },
     "timing": {
      "FAIL": 8,
-     "PASS": 66
+     "PASS": 68
     }
    }
   }
