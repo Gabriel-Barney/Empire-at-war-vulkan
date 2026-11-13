@@ -439,6 +439,7 @@ public:
     std::vector<DisplayMode> shown_modes_;    // UI5 t01: the video options' resolution list (video_list_modes; Widescreen)
     ui::WindowMode window_mode_ = ui::WindowMode::Windowed;  // UI5 t01 / [port: Gabriel] Options > Video > Display Mode
     bool windowed() const { return window_mode_ == ui::WindowMode::Windowed; }
+    DisplayMode applied_mode_{};  // the mode apply_display last set (restored when Fullscreen regains the foreground)
     // [port: Gabriel] Options > Video > UI Scale in percent (live play: the profile's, 100 at first start); 0 in scripted /
     // smoke / benchmark runs, which keep the original fitted UI so their captures do not depend on the window size.
     int32_t ui_scale_ = 0;
@@ -651,6 +652,14 @@ public:
     uint32_t display_planet_type(const galactic::GalacticSim& g, PlanetIndex p) const;
     void update_display_rate(bool force);
     void set_present_mode(rhi::PresentMode m);
+    // [port: Gabriel 2026-11-13] apply_display_mode for the current window_mode_ (logged as "video: ..."), remembered for
+    // alt-tab, then sync_exclusive_fullscreen.
+    void apply_display(const DisplayMode& m);
+    // Fullscreen takes exclusive Vulkan full screen (rhi::Swapchain) when the driver offers it; the other modes release it.
+    void sync_exclusive_fullscreen();
+    // Fullscreen losing the foreground minimizes the window and gives the desktop its resolution back; regaining it
+    // restores the window and the full-screen mode (live play only).
+    void on_activation_changed();
     float render_alpha();
     void show_battle_end(bool dialog = true);  // story t13: dialog false = the bookkeeping only (BT §2.9.6 skip)
     int32_t galactic_faction_icon(const galactic::GalacticSim& g, int32_t player) const;

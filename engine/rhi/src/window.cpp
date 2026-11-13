@@ -192,6 +192,12 @@ intptr_t Window::handle_message(uint32_t msg, uintptr_t wparam, intptr_t lparam)
         case WM_SYSKEYUP:
             if (wparam < 256) keys_[wparam] = false;
             break;
+        case WM_ACTIVATEAPP: {
+            const bool active = wparam != 0;
+            if (active != app_active_) activation_changed_ = true;
+            app_active_ = active;
+            break;
+        }
         case WM_KILLFOCUS:
             for (bool& k : keys_) k = false;
             for (size_t i = 0; i < static_cast<size_t>(MouseButton::Count); ++i)

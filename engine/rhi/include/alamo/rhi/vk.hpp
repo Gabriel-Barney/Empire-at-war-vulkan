@@ -37,7 +37,7 @@
     X(vkGetPhysicalDeviceSurfaceSupportKHR)         \
     X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR)    \
     X(vkGetPhysicalDeviceSurfaceFormatsKHR)         \
-    X(vkGetPhysicalDeviceSurfacePresentModesKHR)    \
+    X(vkGetPhysicalDeviceSurfacePresentModesKHR)        X(vkGetPhysicalDeviceSurfaceCapabilities2KHR)   \
     X(vkCreateDebugUtilsMessengerEXT)               \
     X(vkDestroyDebugUtilsMessengerEXT)              \
     X(vkSetDebugUtilsObjectNameEXT)                 \
@@ -157,6 +157,9 @@ struct InstanceFns {
 struct DeviceFns {
     ALAMO_VK_DEVICE_FUNCS(ALAMO_VK_DECLARE_MEMBER)
     ALAMO_VK_DEVICE_OPT_FUNCS(ALAMO_VK_DECLARE_MEMBER)
+    // VK_EXT_full_screen_exclusive (Win32; cast in swapchain.cpp). Null when the extension is not enabled.
+    PFN_vkVoidFunction vkAcquireFullScreenExclusiveModeEXT = nullptr;
+    PFN_vkVoidFunction vkReleaseFullScreenExclusiveModeEXT = nullptr;
 };
 
 #undef ALAMO_VK_DECLARE_MEMBER
