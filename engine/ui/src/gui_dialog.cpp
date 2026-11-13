@@ -1078,6 +1078,7 @@ void GuiManager::update(const InputFrame& raw, const RoutedInput& routed, double
                                 const bool dbl = last_list_click_ == hc && last_list_row_ == row &&
                                                  now - last_list_time_ <= style_.double_click;
                                 list_select(*target, i, row, events);
+                                if (!dbl) events.push_back(make_event(GuiEvent::Kind::RowClicked, *target, hc, row));
                                 if (dbl) {
                                     events.push_back(make_event(GuiEvent::Kind::DoubleClicked, *target, hc, row));
                                     last_list_time_ = -1e30;
@@ -1532,6 +1533,14 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
                 tr.min.x += 2.0f;
                 {
                     const size_t ri = static_cast<size_t>(row);
+                    // [port: Gabriel] indent and icon (saved games tree)
+                    if (ri < c.item_indent.size()) tr.min.x += static_cast<float>(c.item_indent[ri]) * rh;
+                    if (ri < c.item_icons.size() && !c.item_icons[ri].empty()) {
+                        const float pad = std::max(1.0f, 0.1f * rh);
+                        quad(dl, layer, c.item_icons[ri], {{tr.min.x, rr.min.y + pad}, {tr.min.x + rh - 2.0f * pad, rr.max.y - pad}},
+                             c.enabled ? Rgba8{255, 255, 255, 255} : Rgba8{255, 255, 255, 128});
+                        tr.min.x += rh;
+                    }
                     // UI.md §3.7.1: an item colour recolours the item's text (flat), also on a disabled control.
                     const Rgba8* ic = ri < c.item_colors.size() ? &c.item_colors[ri] : nullptr;
                     const Rgba8* tc = ic ? ic : ri < c.item_text_colors.size() && c.item_text_colors[ri].a > 0 ? &c.item_text_colors[ri] : nullptr;

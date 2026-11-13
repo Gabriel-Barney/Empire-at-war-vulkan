@@ -983,6 +983,62 @@ void test_menus() {
     CHECK(fe.top() == "IDD_GAME_OPTIONS_DIALOG");
     blocker.clear();
     exists = false;
+    {
+        // [port: Gabriel] the saved games tree: campaign > faction > playthrough, newest first; the newest save's groups
+        // open; a click on a group row opens / closes it (closing closes the groups inside it); Load on a group toggles it.
+        auto lvl = [](const char* key, const char32_t* label, const char* icon = "") { return SaveGroupLevel{key, label, icon}; };
+        saves = {
+            {"new", U"new  -  Week 9", "i_icon_empire.tga", {lvl("c:GCW", U"Galactic Civil War"), lvl("Empire", U"Empire", "i_icon_empire.tga"), lvl("p2", U"Game 2")}},
+            {"rebel", U"rebel  -  Week 2", "i_icon_rebel.tga", {lvl("c:GCW", U"Galactic Civil War"), lvl("Rebel", U"Rebel", "i_icon_rebel.tga"), lvl("p3", U"Game 3")}},
+            {"old", U"old  -  Week 4", "i_icon_empire.tga", {lvl("c:GCW", U"Galactic Civil War"), lvl("Empire", U"Empire", "i_icon_empire.tga"), lvl("p1", U"Game 1")}},
+            {"older", U"older  -  Week 3", "i_icon_empire.tga", {lvl("c:GCW", U"Galactic Civil War"), lvl("Empire", U"Empire", "i_icon_empire.tga"), lvl("p2", U"Game 2")}},
+            {"bad", U"bad  -  (unreadable)"},
+        };
+        step(env.click(*env.gui.top(), "IDC_SAVE_GAME"));
+        sv = env.gui.top();
+        const GuiControl* l = sv->get("IDC_SAVE_GAME_LIST");
+        const std::vector<std::u32string> open_rows = {U"[-] Galactic Civil War  (4)", U"[-] Empire  (3)", U"[-] Game 2  (2)",
+                                                      U"new  -  Week 9", U"older  -  Week 3", U"[+] Game 1  (1)",
+                                                      U"[+] Rebel  (1)", U"bad  -  (unreadable)"};
+        CHECK(l->items == open_rows);
+        CHECK((l->item_indent == std::vector<uint8_t>{0, 1, 2, 3, 3, 2, 1, 0}));
+        CHECK(l->item_icons.size() == 8 && l->item_icons[1] == "i_icon_empire.tga" && l->item_icons[3] == "i_icon_empire.tga" &&
+              l->item_icons[0].empty() && l->item_icons[7].empty());
+        auto row_event = [&](GuiEvent::Kind k, int32_t row) {
+            std::vector<GuiEvent> e(1);
+            e[0].kind = k;
+            e[0].dialog = "IDD_SAVE_GAME_DIALOG";
+            e[0].control = "IDC_SAVE_GAME_LIST";
+            e[0].value = row;
+            step(e);
+        };
+        row_event(GuiEvent::Kind::SelectionChanged, 4);  // a save row: its name into the edit
+        CHECK(sv->get("IDC_SAVE_GAME_NAME_EDIT")->text == U"older");
+        row_event(GuiEvent::Kind::SelectionChanged, 6);  // a group row: the edit keeps the name
+        row_event(GuiEvent::Kind::RowClicked, 6);
+        CHECK(sv->get("IDC_SAVE_GAME_NAME_EDIT")->text == U"older" && l->items.size() == 9 && l->items[6] == U"[-] Rebel  (1)" &&
+              l->items[7] == U"[+] Game 3  (1)" && l->item_indent[7] == 2 && l->selected == 6);
+        row_event(GuiEvent::Kind::RowClicked, 0);  // closing the campaign closes everything inside it
+        CHECK(l->items.size() == 2 && l->items[0] == U"[+] Galactic Civil War  (4)");
+        row_event(GuiEvent::Kind::RowClicked, 0);  // ... and opening it shows its factions closed
+        CHECK(l->items.size() == 4 && l->items[1] == U"[+] Empire  (3)" && l->items[2] == U"[+] Rebel  (1)");
+        step(env.click(*sv, "IDC_SAVE_CANCEL_BUTTON"));
+        step(env.click(*env.gui.top(), "IDC_SAVE_GAME"));  // reopened: the newest save's groups open again
+        sv = env.gui.top();
+        l = sv->get("IDC_SAVE_GAME_LIST");
+        CHECK(fe.top() == "IDD_SAVE_GAME_DIALOG" && l->items.size() == 8 && l->items[2] == U"[-] Game 2  (2)");
+        sv->set_selected("IDC_SAVE_GAME_LIST", 2);
+        acts.clear();
+        step(env.click(*sv, "IDC_DELETE_GAME_BUTTON"));  // Delete on a group row: nothing
+        CHECK(acts.empty() && fe.top() == "IDD_SAVE_GAME_DIALOG");
+        sv->set_selected("IDC_SAVE_GAME_LIST", 4);
+        step(env.click(*sv, "IDC_DELETE_GAME_BUTTON"));  // ... on a save row: that save
+        CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM" && env.gui.top()->get("IDC_USER_TEXT_STRING_1")->text == U"older");
+        step(env.click(*env.gui.top(), "IDC_DIALOG_BOX_BUTTON_RIGHT"));
+        CHECK(acts.empty() && fe.top() == "IDD_SAVE_GAME_DIALOG");
+        step(env.click(*sv, "IDC_SAVE_CANCEL_BUTTON"));
+        CHECK(fe.top() == "IDD_GAME_OPTIONS_DIALOG");
+    }
     step(env.click(*env.gui.top(), "IDC_GAME_OPTIONS_QUIT"));
     CHECK(fe.top() == "IDD_DIALOG_BOX_QUIT_CONFIRM" && env.gui.top()->get("IDC_DIALOG_BOX_BUTTON_LEFT")->text == U"Yes");
     acts.clear();
