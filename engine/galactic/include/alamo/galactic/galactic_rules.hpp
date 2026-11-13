@@ -164,6 +164,18 @@ struct GalacticRules {
     std::vector<DifficultyRules> difficulties; // DifficultyAdjustments.xml order
     std::vector<TypeInfo> types;               // index = objects::TypeIndex
     SpecialRules special;                      // P4 sim: black market, sabotage, hack, income abilities, corruption choices
+    // bkg3 b0115 (BKG1_RE_ANSWERS 11 [H]): the fleet hop factor R (0x397470 -> 0x471470) does not read the campaign's
+    // listed route: it walks the global TradeRoute table in ascending unsigned CRC-32 of the upper-cased route name and
+    // takes the first route whose endpoint planet types match (either orientation). Links, path costs and the AI travel
+    // estimate keep the listed route. One entry per unordered planet-name-CRC pair (lo <= hi), sorted by (lo, hi): the
+    // lowest-CRC route's HS_Speed_Factor. Empty when the rules are built by hand (then the listed route is used).
+    struct HopRoute {
+        uint32_t lo = 0, hi = 0;   // name_crc of the two planet type names, lo <= hi
+        uint32_t route_crc = 0;    // the winning route's name CRC
+        float hs = 1.0f;           // its HS_Speed_Factor
+    };
+    std::vector<HopRoute> hop_routes;
+    const HopRoute* find_hop_route(uint32_t planet_crc_a, uint32_t planet_crc_b) const;  // nullptr if none
 
     uint32_t find_faction(std::string_view name) const;     // case-insensitive, kNoIndex if absent
     uint32_t find_difficulty(std::string_view name) const;

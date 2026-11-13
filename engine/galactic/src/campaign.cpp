@@ -1439,9 +1439,15 @@ RejectReason GalacticSim::begin_move(uint32_t fleet, std::vector<PlanetIndex> pa
 void GalacticSim::depart_hop(uint32_t fleet, PlanetIndex from, PlanetIndex to, bool leave_orbit) {
     FleetState& f = fleets_[fleet];
     // 5. hop factor R (0x397470) and 6. hop speed [H].
+    // bkg3 b0115 [H]: the link gate uses the listed route, the factor the lowest-CRC TradeRoute joining the two planet
+    // types (GalacticRules::hop_routes; the listed route when the rules carry no table).
     const uint32_t r = route_between(from, to);
-    const float r_factor = econ::hop_factor(benefits(f.owner), corrupted(from), corrupted(to), r != kNoRoute,
-                                            r != kNoRoute ? map_.routes.hs_speed_factor[r] : 0.0f,
+    float route_hs = 0.0f;
+    if (r != kNoRoute) {
+        const GalacticRules::HopRoute* h = rules_->find_hop_route(map_.planets.name_crc[from], map_.planets.name_crc[to]);
+        route_hs = h ? h->hs : map_.routes.hs_speed_factor[r];
+    }
+    const float r_factor = econ::hop_factor(benefits(f.owner), corrupted(from), corrupted(to), r != kNoRoute, route_hs,
                                             rules_->constants.corruption_hyperspace_bonus);
     f.hop_speed = econ::hop_speed(f.base_speed, r_factor);
     f.from = from;

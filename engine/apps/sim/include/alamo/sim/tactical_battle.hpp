@@ -2082,6 +2082,13 @@ private:
     uint32_t bt_lead_participant_ = 0xFFFFFFFFu;
     bool bt_raid_ = false, bt_sw_killed_ = false, bt_used_ = false;
     bool bt_have_ds_ = false;  // DEATH_STAR_POSITION marker found (space maps)
+    // bkg3 b0028 (BKG3 RE b0028 [H]): the garrison / hangar spawn byte (retail obj +0x3CB). hg_adopt adds a SPAWN_SQUADRON
+    // carrier with spawning off while hg_spawn_off_ is set: the skirmish team-marker structures (0x295cf0 clears +0x3CB
+    // after the create), map placements of a skirmish whose placement byte (mini 0x29) is 0 (every _MP_ map object), and
+    // structures built on a skirmish pad (the pad's byte is copied; every skirmish pad holds 0). bt_team_swap_ marks the
+    // map_.objects entries made by the team-marker swap (index parallel to map_.objects after bt_filter).
+    bool hg_spawn_off_ = false;
+    std::vector<uint8_t> bt_team_swap_;
     Vec3 bt_ds_pos_{};
     struct UcRamp {
         objects::ObjectId id = objects::kNoObjectId;

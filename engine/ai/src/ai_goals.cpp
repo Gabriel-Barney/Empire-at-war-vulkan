@@ -114,7 +114,7 @@ void GoalSystem::end_pass(int64_t now) {
 }
 
 bool GoalSystem::skip(uint32_t goal_type, int32_t target) {
-    if (find_active(goal_type, target)) return true;
+    if (cfg_.like_sets ? active_like(goal_type, target) : find_active(goal_type, target) != nullptr) return true;
     return hooks_->blocked(goal_type, target);
 }
 
@@ -321,6 +321,13 @@ Goal* GoalSystem::find_active(uint32_t goal_type, int32_t target) {
     for (Goal& g : active_[static_cast<size_t>(c)])
         if (g.type == goal_type && g.target == target) return &g;
     return nullptr;
+}
+
+bool GoalSystem::active_like(uint32_t goal_type, int32_t target) const {
+    for (const auto& cat : active_)
+        for (const Goal& g : cat)
+            if (g.target == target && defs_->goals[g.type].like(goal_type)) return true;
+    return false;
 }
 
 void GoalSystem::block_proposals(uint32_t goal_serial) {
@@ -533,11 +540,22 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
     for (Goal& g : props) pool.push_back(std::move(g));
     sort_by_eff(pool);
     uint32_t last_old_type = kAiNone;
+    int32_t last_old_target = -1;
     for (const Goal& g : pool)
-        if (g.state != GoalState::Proposed) last_old_type = g.type;  // the lowest old candidate (pool sorted desc)
+        if (g.state != GoalState::Proposed) {  // the lowest old candidate (pool sorted desc)
+            last_old_type = g.type;
+            last_old_target = g.target;
+        }
     std::vector<uint8_t> taken(pool.size(), 0);
     auto is_kept_or_active = [&](const Goal& g) {
         if (g.state != GoalState::Proposed) return true;
+        if (cfg_.like_sets) {
+            // bkg3 (BKG3_RE_ANSWERS Q4) [H]: 0x721a50 on this Resolve's kept set, then on the active set (this category's
+            // goals were moved out of it above, so that reads the other categories).
+            for (const Goal& k : keep)
+                if (k.target == g.target && defs_->goals[k.type].like(g.type)) return true;
+            return active_like(g.type, g.target);
+        }
         for (const Goal& k : keep)
             if (k.type == g.type && k.target == g.target) return true;
         return false;
@@ -565,9 +583,13 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
             learning_->record_activation(g.type, g.target, false, def.activation_tracking_duration, now);
             break;
         }
-        if (last_old_type != kAiNone && is_like(g.type, last_old_type)) break;
+        if (!cfg_.like_sets && last_old_type != kAiNone && is_like(g.type, last_old_type)) break;
         if (keep.size() >= limit) break;
+        // bkg3 (BKG3_RE_ANSWERS Q4, 0x692d30) [H]: the lastOld test runs after the accept: the goal stays, the greedy phase ends
+        // when it and lastOld share the target and lastOld's type is in its like-set.
+        const bool like_last = cfg_.like_sets && last_old_type != kAiNone && g.target == last_old_target && def.like(last_old_type);
         accept_goal(i);
+        if (like_last) break;
     }
     // 6. Weighted random phase.
     while (keep.size() < limit) {

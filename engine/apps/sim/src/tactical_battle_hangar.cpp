@@ -306,7 +306,10 @@ void TacticalBattle::hg_adopt(const Unit& u, SimRng& rng) {
     hg_holster_attach(u);  // cu8g t01: before mode enter, so a holster hero starts suppressed (no hum)
     if (hg_engine_unit(u) || hg_walk_engine_unit(u)) engine_loops_.mode_enter(u.id, frame_);
     if (!hangars_ || u.type >= hangar_desc_.size() || hangar_desc_[u.type] < 0) return;
-    if (hangars_->add_carrier(u.id, static_cast<uint32_t>(hangar_desc_[u.type]), frame_, &rng)) hg_used_ = true;
+    if (hangars_->add_carrier(u.id, static_cast<uint32_t>(hangar_desc_[u.type]), frame_, &rng)) {
+        hg_used_ = true;
+        if (hg_spawn_off_) hangars_->set_spawn_enabled(u.id, false);  // bkg3 b0028: +0x3CB = 0 (tactical_battle.hpp)
+    }
 }
 
 void TacticalBattle::hg_unit_removed(objects::ObjectId id) {
