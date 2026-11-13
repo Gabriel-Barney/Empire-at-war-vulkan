@@ -9,8 +9,9 @@
 //   DIALOG                          slider), Custom Campaign -> IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG (custom sets, faction
 //                                   combo, difficulty radios, advanced options), Skirmish -> IDD_SKIRMISH_STAGING_DIALOG
 //   IDD_MAIN_OPTIONS_DIALOG /       Audio (IDD_AUDIO_OPTIONS_DIALOG: 4 sliders = AudioBus Master / Sfx / Speech / Music),
-//   IDD_IN_GAME_OPTIONS_DIALOG      Video (IDD_VIDEO_OPTIONS_DIALOG -> Advanced: IDD_ADVANCED_VIDEO_OPTIONS_DIALOG ->
-//                                   ApplyAdvancedVideo; Auto detect -> AutoDetectVideo), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
+//   IDD_IN_GAME_OPTIONS_DIALOG      Display (the Video button: IDD_VIDEO_OPTIONS_DIALOG -> ApplyVideo), Graphics ([port:
+//                                   Gabriel] button: IDD_ADVANCED_VIDEO_OPTIONS_DIALOG -> ApplyAdvancedVideo, plus ApplyVideo
+//                                   when its Anti-Aliasing list changed; Auto detect -> AutoDetectVideo), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
 //                                   key-capture edits bound to the P2 HotkeyTable, Accept syncs P1 Bindings), Gameplay
 //                                   (IDD_GAMEPLAY_OPTIONS_DIALOG)
 //   IDD_GAME_OPTIONS_DIALOG (pause) Save -> IDD_SAVE_GAME_DIALOG, Load -> IDD_LOAD_GAME_DIALOG, Options ->
@@ -112,9 +113,9 @@ struct VideoSettings {
 // [port: Gabriel] t12: seconds the resolution-change confirmation waits before it reverts (the original's countdown,
 // TEXT_REVERTING_IN_X_SECONDS, is not in the recovered specs: 15 s as Windows' own display dialog [M] guess).
 inline constexpr double kResolutionConfirmSeconds = 15.0;
-// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (from IDD_VIDEO_OPTIONS_DIALOG's Advanced button): 7 detail options + 3 checks.
+// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (the Graphics page since the Display / Graphics split): 7 detail options + 3 checks.
 // [port: Gabriel] plus the port's ambient occlusion check (IDC_PORT_AMBIENT_OCCLUSION) and anisotropic filtering combo
-// (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is not here: it is one list in the Video dialog.
+// (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is VideoSettings::anti_alias (its list is on this page).
 inline constexpr int32_t kAnisotropyChoices[] = {0, 2, 4, 8, 16};  // 0 = off (the materials' own sampler state)
 // [port: Gabriel] Render Scale combo (IDC_PORT_RENDER_SCALE): percent of the window's pixels the 3D scene is drawn with
 // (render::RecordOptions::render_scale; 75 at 3840 x 2160 = 3326 x 1871). 100 = native. HUD and dialogs stay native.
@@ -208,12 +209,15 @@ inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
 // (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
 // (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
-// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use) under the Advanced button. Its Anti-Aliasing and Detail
-// Level sliders are replaced by two lists in their rows (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices; IDC_PORT_DETAIL_LEVEL:
-// Low / Medium / High / Ultra / Custom, see kQualityPresets); the shipped sliders and their end captions are hidden.
-// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG gets a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the
-// level lists above), the anisotropic filtering combo and the ambient occlusion check (AdvancedVideoSettings).
-// Add with DialogScript::extend after GUIDialogs.rc is loaded.
+// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use).
+// Display / Graphics split (Gabriel, 2026-11-13): the options menus' Video button is Display and opens IDD_VIDEO_OPTIONS_DIALOG
+// with the display settings only (its Anti-Aliasing and Detail Level rows, Advanced and Auto Detect buttons are hidden, the
+// rows under them move up); a Graphics button the port adds under it (IDC_PORT_MAIN_OPTIONS_GRAPHICS /
+// IDC_PORT_IN_GAME_OPTIONS_GRAPHICS) opens IDD_ADVANCED_VIDEO_OPTIONS_DIALOG as the Graphics page. That page gets the
+// Detail Level list (IDC_PORT_DETAIL_LEVEL: Low / Medium / High / Ultra / Custom, a preset for the seven lists, see
+// kQualityPresets), a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the level lists above), the
+// Anti-Aliasing list (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices), the render scale and anisotropic filtering combos and the
+// ambient occlusion check (AdvancedVideoSettings). Add with DialogScript::extend after GUIDialogs.rc is loaded.
 extern const char* const kPortDialogExtensionsRc;
 
 // IDC_SCROLL_SPEED_SLIDER: the dialog slider runs 0..100; the original option is 0..3 with Defaults = 1.0
@@ -372,9 +376,9 @@ public:
     void show_pause_menu();       // in-game menu (IDD_GAME_OPTIONS_DIALOG) over the HUD
     void close_pause_menu();
     bool pause_menu_open() const;
-    // [port] After the host answered MenuAction::Kind::AutoDetectVideo by changing its video options: the open Video dialog's
-    // Anti-Aliasing and Detail Level lists and the open Advanced dialog's lists, checks and anisotropy show the provider's
-    // values again. Everything else in those dialogs (resolution, v-sync, gamma, ...) keeps what the player has set.
+    // [port] After the host answered MenuAction::Kind::AutoDetectVideo by changing its video options: the open Graphics
+    // dialog's lists, checks and combos (Detail Level, the seven, Anti-Aliasing, anisotropy, ...) show the provider's values
+    // again. The Display dialog (resolution, v-sync, gamma, ...) is not touched.
     void refresh_video_dialogs();
     void set_in_game(bool g) { in_game_ = g; }
     const CampaignMenu& campaigns() const { return menu_; }

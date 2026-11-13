@@ -446,6 +446,19 @@ void test_real(Gpu& g, const std::string& src_dir) {
         };
         clicked("IDD_MAIN_MENU_DIALOG", "IDC_OPTIONS");
         CHECK(gui.top() && gui.top()->get("IDC_MAIN_OPTIONS_MODS")->visible);
+        // [port: Gabriel] Display / Graphics split: Display (the Video button) with Graphics under it, the rest one row lower.
+        if (const ui::GuiDialog* o = gui.top()) {
+            shoot("main_options", [&](double) {});
+            CHECK(o->get("IDC_MAIN_OPTIONS_VIDEO")->text == U"Display" && o->get("IDC_PORT_MAIN_OPTIONS_GRAPHICS")->text == U"Graphics" &&
+                  o->get("IDC_PORT_MAIN_OPTIONS_GRAPHICS")->visible);
+            const char* column[] = {"IDC_MAIN_OPTIONS_AUDIO", "IDC_MAIN_OPTIONS_VIDEO", "IDC_PORT_MAIN_OPTIONS_GRAPHICS", "IDC_MAIN_OPTIONS_MODS",
+                                    "IDC_MAIN_OPTIONS_KEYBOARD", "IDC_MAIN_OPTIONS_GAMEPLAY", "IDC_OK_MAIN"};
+            for (size_t k = 1; k < std::size(column); ++k) {  // one row (36 units) apart, top to bottom
+                const ui::GuiRect a = o->control_rect(static_cast<size_t>(o->find(column[k - 1])));
+                const ui::GuiRect b = o->control_rect(static_cast<size_t>(o->find(column[k])));
+                CHECK(std::fabs((a.max.y - b.max.y) - 36.0f) < 0.01f);
+            }
+        }
         clicked("IDD_MAIN_OPTIONS_DIALOG", "IDC_MAIN_OPTIONS_MODS");
         CHECK(fe2.top() == ui::kPortControlsDialog);
         const std::vector<uint8_t> px = shoot("port_controls", [&](double) {});
@@ -453,25 +466,66 @@ void test_real(Gpu& g, const std::string& src_dir) {
         const double cov = coverage(px, W, H, gui.canvas().canvas_to_pixel(r.min.x, r.max.y), gui.canvas().canvas_to_pixel(r.max.x, r.min.y));
         std::printf("real gui port_controls: dialog coverage %.1f%%\n", 100.0 * cov);
         CHECK(cov > 0.3);
-        // QA D8 / U11: the advanced video page and the pause menu at full size.
+        // QA D8 / U11: the Graphics page (the advanced video dialog) and the pause menu at full size.
         gui.close_all();
-        gui.open("IDD_VIDEO_OPTIONS_DIALOG");
-        clicked("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
+        fe2.show_main_menu();
+        clicked("IDD_MAIN_MENU_DIALOG", "IDC_OPTIONS");  // through the menu, so the options column behind is set up
+        clicked("IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS");
         CHECK(fe2.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
         shoot("advanced_video", [&](double) {});
         for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",
-                               "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL"}) {
+                               "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL", "IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING"}) {
             const int32_t k = gui.top() ? gui.top()->find(id) : -1;
             CHECK(k >= 0 && gui.combo_rows(*gui.top(), static_cast<size_t>(k)) == static_cast<int32_t>(gui.top()->get(id)->items.size()));  // every level reachable
         }
-        if (ui::GuiControl* tex = gui.top() ? gui.top()->get("IDC_PORT_TEXTURE_DETAIL") : nullptr) {  // a list with the longest level names
-            tex->open = true;
-            shoot("advanced_video_texture_open", [&](double) {});
-            tex->open = false;
+        // No two visible controls with a caption or a box overlap (the Render Scale list used to sit on Auto Detect).
+        if (const ui::GuiDialog* gd_page = gui.top(); gd_page && fe2.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG") {
+            uint32_t overlaps = 0;
+            const auto box = [&](size_t i) {  // a closed combo is its field (the top of its rc rectangle, which holds the list)
+                ui::GuiRect r = gd_page->control_rect(i);
+                if ((*gd_page)[i].type == ui::GuiGadgetType::ComboBox) r.min.y = r.max.y - std::min(r.height(), gui.combo_field_height(*gd_page, i));
+                return r;
+            };
+            for (size_t i = 0; i < gd_page->size(); ++i)
+                for (size_t j = i + 1; j < gd_page->size(); ++j) {
+                    const ui::GuiControl &a = (*gd_page)[i], &b = (*gd_page)[j];
+                    if (!a.visible || !b.visible || a.id() == "IDC_STATIC_MEDIUM" || b.id() == "IDC_STATIC_MEDIUM") continue;
+                    const ui::GuiRect ra = box(i), rb = box(j);
+                    if (ra.width() <= 0 || rb.width() <= 0) continue;
+                    if (ra.min.x < rb.max.x && rb.min.x < ra.max.x && ra.min.y < rb.max.y && rb.min.y < ra.max.y) {
+                        ++overlaps;
+                        std::printf("real gui advanced_video: %s overlaps %s\n", std::string(a.id()).c_str(), std::string(b.id()).c_str());
+                    }
+                }
+            CHECK(overlaps == 0);
         }
+        for (const auto& [id, shot] : {std::pair{"IDC_PORT_TEXTURE_DETAIL", "advanced_video_texture_open"},  // the longest level names
+                                       std::pair{"IDC_PORT_ANTI_ALIASING", "advanced_video_aa_open"}, std::pair{"IDC_PORT_DETAIL_LEVEL", "advanced_video_quality_open"}})
+            if (ui::GuiControl* list = gui.top() ? gui.top()->get(id) : nullptr) {
+                list->open = true;
+                shoot(shot, [&](double) {});
+                list->open = false;
+            }
         gui.close_all();
         fe2.show_pause_menu();
         shoot("pause_menu", [&](double) {});
+        // [port: Gabriel] Display / Graphics split: the in-game options' seven buttons, 36 units apart, inside the dialog.
+        clicked("IDD_GAME_OPTIONS_DIALOG", "IDC_INGAME_OPTIONS");
+        if (const ui::GuiDialog* o = fe2.top() == "IDD_IN_GAME_OPTIONS_DIALOG" ? gui.top() : nullptr) {
+            shoot("in_game_options", [&](double) {});
+            const ui::GuiRect dr = o->rect();
+            const char* column[] = {"IDC_IN_GAME_OPTIONS_AUDIO", "IDC_IN_GAME_OPTIONS_VIDEO", "IDC_PORT_IN_GAME_OPTIONS_GRAPHICS",
+                                    "IDC_IN_GAME_OPTIONS_NETWORK", "IDC_IN_GAME_OPTIONS_KEYBOARD", "IDC_IN_GAME_OPTIONS_GAMEPLAY"};
+            for (size_t k = 1; k < std::size(column); ++k) {
+                const ui::GuiRect a = o->control_rect(static_cast<size_t>(o->find(column[k - 1])));
+                const ui::GuiRect b = o->control_rect(static_cast<size_t>(o->find(column[k])));
+                CHECK(std::fabs((a.max.y - b.max.y) - 36.0f) < 0.01f && b.min.y > dr.min.y);
+            }
+            CHECK(o->get("IDC_IN_GAME_OPTIONS_VIDEO")->text == U"Display" && o->get("IDC_PORT_IN_GAME_OPTIONS_GRAPHICS")->visible);
+        } else {
+            CHECK(false);
+        }
+        gui.close_all();
         gui.close_all();
         gui.set_backdrop({});
     }
@@ -503,16 +557,9 @@ void test_real(Gpu& g, const std::string& src_dir) {
         if (vd && fe3.top() == "IDD_VIDEO_OPTIONS_DIALOG") {
             CHECK(vd->get("IDC_DEVICE_DESC_STATIC") && vd->get("IDC_DEVICE_DESC_STATIC")->text.empty());
             shoot("video_options", [&](double) {});
-            // The two named-level lists open, one at a time (a list covers the rows under it): every level name fits its list.
-            for (const auto& [id, shot] : {std::pair{"IDC_PORT_ANTI_ALIASING", "video_options_aa_open"}, std::pair{"IDC_PORT_DETAIL_LEVEL", "video_options_quality_open"}}) {
-                ui::GuiControl* list = vd->get(id);
-                CHECK(list != nullptr && list->items.size() >= 4);
-                if (!list) continue;
-                CHECK(gui.combo_rows(*vd, static_cast<size_t>(vd->find(id))) == static_cast<int32_t>(list->items.size()));  // no level cut off
-                list->open = true;
-                shoot(shot, [&](double) {});
-                list->open = false;
-            }
+            // [port: Gabriel] Display / Graphics split: this is Display; anti-aliasing and the detail level are on Graphics.
+            CHECK(vd->get("IDC_STATIC_MEDIUM")->text == U"Display" && !vd->get("IDC_ADVANCED")->visible && !vd->get("IDC_AUTO_DETECT")->visible &&
+                  !vd->get("IDC_ANTI_ALIAS_STATIC")->visible && vd->get("IDC_GAMMA_LABEL_STATIC")->visible);
             // Every text glyph of a static lies inside its control rect (x) and inside the dialog.
             ui::HudDrawList dl;
             gui.build(dl, 1.0);
@@ -527,8 +574,7 @@ void test_real(Gpu& g, const std::string& src_dir) {
                 }
             // One static at a time (the others hidden): its glyphs stay inside its rect horizontally.
             uint32_t overflow = 0;
-            const char* ids[] = {"IDC_ANTI_ALIAS_STATIC", "IDC_ANTI_ALIAS_OFF_STATIC", "IDC_ANTI_ALIAS_MAX_STATIC",
-                                 "IDC_GAMMA_LABEL_STATIC", "IDC_GAMMA_LOW_STATIC", "IDC_GAMMA_HIGH_STATIC"};
+            const char* ids[] = {"IDC_GAMMA_LABEL_STATIC", "IDC_GAMMA_LOW_STATIC", "IDC_GAMMA_HIGH_STATIC"};
             std::vector<uint8_t> was(vd->size());
             for (size_t k = 0; k < vd->size(); ++k) was[k] = (*vd)[k].visible ? 1 : 0;
             for (const char* id : ids) {
