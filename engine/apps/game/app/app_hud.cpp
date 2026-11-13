@@ -927,6 +927,7 @@ void App::build_tactical_hud() {
             hf.bombing_run = space_weapon_button(true, icon, tb->special_weapons_allowed(local_player()), story_controls_locked(), ready);
         }
     }
+    fill_wings(hf);            // [port: Gabriel] squadron wing buttons
     fill_command_buttons(hf);  // ui3 t03 / t04: b_retreat / b_reinforcement / beacon / movie mode, reinforcement texts
     hud_units_ = units;
     // FIXPASS_GALACTIC §4.2: the advisor *_LOOP Bink in Movie_tactical (the HUD's own component), only while it plays.

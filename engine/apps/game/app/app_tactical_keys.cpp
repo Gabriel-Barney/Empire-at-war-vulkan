@@ -116,6 +116,97 @@ void App::select_like() {
     if (!ids.empty()) submit(commands::ev::select(ids));
 }
 
+// [port: Gabriel, 2026-11-13] Squadron wings: every own squadron (icon_links: unit -> its squadron's lead) whose member type
+// is listed in some Squadron_Units joins the bomber wing when the member's CategoryMask has Bomber, else the fighter wing
+// when it has Fighter. A wing's ids hold whole squadrons up to the selection cap (OrderTranslator::kMaxSelect); its count
+// is every squadron. Selected look = every id of the wing selected.
+void App::fill_wings(ui::TacticalHudFrame& hf) {
+    wings_.assign(2, ui::HudWing{});
+    wings_[0].label = U"FIGHTERS";
+    wings_[0].hotkey = U"F2";
+    wings_[1].label = U"BOMBERS";
+    wings_[1].hotkey = U"F3";
+    const sim::TacticalBattle* b = battle();
+    if (b && bview_.active()) {
+        const std::vector<render::SnapshotObject>& objs = bview_.frame().objects;  // ascending id
+        const objects::EnumConverter& cat = data_.types.enums().get(objects::EnumId::GameObjectCategory);
+        const auto fighter = static_cast<uint64_t>(cat.lookup("Fighter").value_or(0x1));
+        const auto bomber = static_cast<uint64_t>(cat.lookup("Bomber").value_or(0x2));
+        struct Squad {
+            objects::ObjectId lead = objects::kNoObjectId;
+            size_t wing = 0;
+            std::vector<uint32_t> ids;
+        };
+        std::vector<Squad> squads;  // first-seen order (ascending member id)
+        for (const sim::TacticalBattle::IconLink& l : b->icon_links()) {
+            const auto it = std::lower_bound(objs.begin(), objs.end(), l.unit,
+                                             [](const render::SnapshotObject& x, objects::ObjectId v) { return x.id < v; });
+            if (it == objs.end() || it->id != l.unit || it->owner != local_player()) continue;
+            const objects::TypeIndex t = it->type;
+            if (t >= data_.types.size() || !data_.types.squadron_member(t)) continue;
+            const uint64_t mask = data_.types.get_mask(t, "CategoryMask");
+            const size_t wing = (mask & bomber) != 0 ? 1u : (mask & fighter) != 0 ? 0u : 2u;
+            if (wing > 1) continue;
+            Squad* sq = nullptr;
+            for (Squad& s : squads)
+                if (s.lead == l.squad) sq = &s;
+            if (!sq) {
+                squads.push_back(Squad{l.squad, wing, {}});
+                sq = &squads.back();
+            }
+            sq->ids.push_back(static_cast<uint32_t>(l.unit));
+        }
+        for (const Squad& s : squads) {
+            ui::HudWing& w = wings_[s.wing];
+            ++w.squadrons;
+            if (w.ids.size() + s.ids.size() <= ui::OrderTranslator::kMaxSelect) w.ids.insert(w.ids.end(), s.ids.begin(), s.ids.end());
+        }
+        std::vector<uint32_t> sel = orders_.selection();
+        std::sort(sel.begin(), sel.end());
+        for (ui::HudWing& w : wings_) {
+            std::sort(w.ids.begin(), w.ids.end());
+            w.selected = !w.ids.empty() && std::includes(sel.begin(), sel.end(), w.ids.begin(), w.ids.end());
+        }
+    }
+    hf.wings = wings_;
+}
+
+// A wing button / F2 / F3: select the wing (`add`: the selection plus the wing); a second press of the same wing within
+// 0.4 s [port], or `centre_only`, centres the camera on the wing's members.
+void App::select_wing(size_t wing, bool add, bool centre_only) {
+    if (screen_ != Screen::Battle || !bview_.active() || wing >= wings_.size() || wings_[wing].ids.empty()) return;
+    const std::vector<uint32_t>& members = wings_[wing].ids;
+    const bool again = wing_last_ == static_cast<int32_t>(wing) && now_s_ - wing_last_s_ <= 0.4;
+    wing_last_ = static_cast<int32_t>(wing);
+    wing_last_s_ = now_s_;
+    if (!centre_only) {
+        std::vector<uint32_t> ids = members;
+        if (add) {
+            const std::vector<uint32_t> sel = orders_.selection();
+            ids.insert(ids.end(), sel.begin(), sel.end());
+            std::sort(ids.begin(), ids.end());
+            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        }
+        if (ids.size() > ui::OrderTranslator::kMaxSelect) ids.resize(ui::OrderTranslator::kMaxSelect);
+        submit(commands::ev::select(ids));
+    }
+    if (again || centre_only) {
+        double x = 0.0, y = 0.0, z = 0.0;
+        size_t n = 0;
+        for (const render::SnapshotObject& o : bview_.frame().objects)
+            if (std::binary_search(members.begin(), members.end(), static_cast<uint32_t>(o.id))) {
+                x += o.position.x;
+                y += o.position.y;
+                z += o.position.z;
+                ++n;
+            }
+        if (n > 0) {
+            const double k = 1.0 / static_cast<double>(n);
+            bview_.camera().jump_to({static_cast<float>(x * k), static_cast<float>(y * k), static_cast<float>(z * k)});
+        }
+    }
+}
+
 // QuickSave (F6) / QuickLoad (F5) / Screenshot (F12), galactic and tactical [port]: the save slot "QuickSave" through the
 // save / load dialogs' path; the screenshot is a PNG of the next presented frame in a Screenshots folder beside the saves.
 void App::interface_hotkey(uint16_t slot) {

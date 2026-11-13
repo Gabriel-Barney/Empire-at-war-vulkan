@@ -428,6 +428,9 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                 ++build_refusals_;
                 break;
             }
+            case ui::HudAction::Kind::WingSelect:  // [port: Gabriel] squadron wing button: shift adds, ctrl centres only
+                if (a.value >= 0) select_wing(static_cast<size_t>(a.value), a.shift, a.ctrl);
+                break;
             case ui::HudAction::Kind::HeroSelect:  // FIXPASS_GALACTIC §2.3 tactical single click: replace the selection
                 if (a.unit && screen_ == Screen::Battle) submit(commands::ev::select({a.unit}));
                 break;
@@ -961,6 +964,11 @@ void App::battle_input() {
         if (const auto c = focus.selection()) bview_.camera().set_look_at(*c);
     std::vector<ui::HudAction> acts;
     tactical_hotkeys(hk, cmds, acts);
+    // [port: Gabriel, 2026-11-13] F2 / F3: the fighter / bomber wing (Shift adds to the selection, Ctrl centres only).
+    constexpr uint32_t kVkF2 = 0x71, kVkF3 = 0x72;
+    if (routed_.keys_to_world && !paused_)
+        for (size_t wing = 0; wing < 2; ++wing)
+            if (input_.key_pressed(wing == 0 ? kVkF2 : kVkF3)) select_wing(wing, input_.shift(), input_.ctrl());
     // P1_DOUBLE_CLICK_MOVE.md §2.1: the attack-move (T), guard (G) and waypoint hotkeys arm the next move order's toggle.
     for (const ui::HotkeyEvent& e : hk) {
         if (e.slot == ui::hk::kAttackMove) orders_.arm_move_toggle(ui::MoveToggle::AttackMove);

@@ -55,6 +55,9 @@ using ::alamo::test::g_fail;
 inline bool g_regen = false;
 // The temp folder prefix of make_data (one per test exe, so the exes can run in parallel under ctest -j).
 inline const char* g_temp_prefix = "alamo_sim_battle_tests";
+// [port: Gabriel, 2026-11-13] squadron size the fixture's type database loads with (GameObjectTypes::set_squadron_size):
+// the port's 12 by default; 0 = the XML lists, for tests that trace a retail mechanic on authored squadron sizes.
+inline uint32_t g_squadron_size = alamo::objects::GameObjectTypes::kPortSquadronSize;
 // s78n t20 review: an edit make_data applies to the S10Types.xml text it writes (null: none). A test that sets it also
 // sets its own g_temp_prefix (the edited data gets its own folder) and resets both.
 inline std::string (*g_types_patch)(std::string) = nullptr;
@@ -814,6 +817,7 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
     std::vector<std::string> diag;
     CHECK(d->db.load(*d->files, {}, &diag));
     CHECK(d->raw.load(*d->files));
+    d->types.set_squadron_size(g_squadron_size);
     CHECK(d->types.build(d->raw, d->files.get(), &diag));
     CHECK(galactic::load_galactic_rules(*d->files, d->db, d->types, d->rules, &diag));
     CHECK(galactic::load_conflict_rules(*d->files, d->db, d->types, d->rules, d->crules, &diag));

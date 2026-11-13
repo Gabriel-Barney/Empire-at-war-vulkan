@@ -145,6 +145,11 @@ struct HudAction {
         // unit = the fleet object (header) or the pad's unit (a stack: its first unit), ids = {fleet}, value = 1 for a
         // fleet / 0 for a unit, name = the component name. Host: open the rename prompt (current name from the sim).
         Rename,
+        // [port: Gabriel] appended 2026-11-13: a squadron wing button (HudWing) clicked: value = the wing index into
+        // TacticalHudFrame::wings, ids = the wing's members, shift = add to the selection, ctrl = centre the camera only
+        // [port]. Host: select them (shift: the selection plus them); a second click within the double-click time also
+        // centres the camera on the wing.
+        WingSelect,
     };
     Kind kind = Kind::Button;
     int32_t component = -1;
@@ -237,6 +242,19 @@ struct HudCommandButtons {
     int32_t pop_used = -1, pop_cap = -1;
 };
 
+// [port: Gabriel, 2026-11-13] Squadron wing buttons: the local player's fighter squadrons (and bomber squadrons) form one
+// wing each; a column of buttons at the left edge selects a whole wing with one click (HudAction::WingSelect). Drawn
+// only while the wing has a squadron. The original has no such buttons.
+struct HudWing {
+    std::u32string label;            // "FIGHTERS", "BOMBERS"
+    std::u32string hotkey;           // key hint drawn after the label ("F2"); empty = none
+    uint32_t squadrons = 0;          // squadrons in the wing (drawn as the count)
+    std::vector<uint32_t> ids;       // every member of the wing's squadrons, ascending
+    bool selected = false;           // the whole wing is in the selection (the selected look)
+};
+inline constexpr int32_t kWingHitBase = 0x40000000;  // hit-box ids of the wing buttons (not CommandBarComponents)
+inline constexpr size_t kMaxWings = 4;
+
 struct TacticalHudFrame {
     WorldHudContext world;          // canvas is filled by TacticalHud
     // Radar mapping: world rectangle shown by the radar (the map's playable box).
@@ -312,6 +330,7 @@ struct TacticalHudFrame {
     // original is the POINTER_DRAG_SELECT_MODE cursor (DragSelectPointer_00), drawn by the cursor pass, not here.
     bool drag_select = false;
     DragRect drag_rect;
+    std::span<const HudWing> wings;  // [port: Gabriel] squadron wing buttons (HudWing); empty = none
 };
 
 struct TacticalHudStats {
@@ -326,6 +345,7 @@ struct TacticalHudStats {
     bool pause_banner = false;          // Game Paused banner drawn
     uint32_t objectives = 0, objective_lines = 0;
     bool drag_box = false;              // drag-select box drawn
+    uint32_t wings = 0;                 // [port: Gabriel] squadron wing buttons drawn
 };
 
 class TacticalHud {
@@ -393,6 +413,7 @@ private:
     void apply_command_buttons(const HudCommandButtons& s);
     void build_pause_banner(const TacticalHudFrame& f);
     void build_objectives(const TacticalHudFrame& f);
+    void build_wings(const TacticalHudFrame& f);
     int32_t font_of(int32_t component, float fallback_points) const;
     void hit(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot = 0);
     Vec2f component_size(uint32_t component, const ComponentPlacement& p) const;
@@ -448,6 +469,8 @@ private:
     bool paused_ = false;
     int32_t pause_text_ = -1, resume_ = -1;  // pause_shell text_attack / attack_button
     int32_t obj_back_ = -1, obj_header_ = -1, obj_text_ = -1, obj_icon_ = -1;
+    std::vector<std::vector<uint32_t>> wing_ids_;  // [port: Gabriel] members per wing button of the last build
+    int32_t wing_hover_ = -1;                      // wing button under the cursor (index), -1 none
     RadarView radar_view_;
     std::vector<HudModelDraw> radar_models_;
     bool radar_drag_ = false;
