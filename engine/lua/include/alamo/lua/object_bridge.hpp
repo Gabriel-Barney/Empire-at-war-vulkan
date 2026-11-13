@@ -94,7 +94,7 @@ struct AbilityState {
 };
 
 struct ScriptObjectState {
-    std::string hint;                 // map-editor hint (Find_Hint / Get_Hint); set by the map loader
+    std::string hint;                 // script-set hint (Create_Cinematic_Transport); map hints come from ObjectBridge::map_hint
     bool hidden = false;              // Hide / Hide_Object
     int8_t selectable = -1;           // Set_Selectable; -1 = default (type has SELECTABLE behaviour)
     bool prevent_ai_usage = false;
@@ -235,6 +235,10 @@ public:
     // representative type for every galactic object of the port model (GalacticSim::representative_type) and for
     // tactical objects other than team containers without a Create_Team_Type (store type "Team") and transports.
     std::function<objects::TypeIndex(objects::ObjectHandle)> representative_type;
+    // q6 t28 (TERRAIN_WATER_POST 1.6): the object's map hint name (.ted chunk 0x482, loaded with the map object). Find_Hint,
+    // Get_Hint and Find_All_Objects_With_Hint read ScriptObjectState::hint when a script set one (Create_Cinematic_Transport),
+    // else this. Unset or "": no map hint.
+    std::function<std::string_view(objects::ObjectHandle)> map_hint;
 
     // ---- L1/S4 wave 2a: tactical systems (see the header comment) ----
     // S9 ability system of the battle (object ids = store ids). Used only in builds where engine/lua links

@@ -62,6 +62,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -1236,6 +1237,9 @@ public:
     // else the company type). The battle has no tactical transport or fleet objects; anything else -> objects::kNone (the
     // binding then uses the store type).
     objects::TypeIndex representative_type(objects::ObjectId id) const;
+    // q6 t28 (TERRAIN_WATER_POST 1.6): the map hint name (.ted chunk 0x482) of an object the map load created for a
+    // placement (lua::ObjectBridge::map_hint: Find_Hint / Get_Hint / Find_All_Objects_With_Hint); "" when it has none.
+    std::string_view map_hint(objects::ObjectId id) const;
     // The fog's view of a live object (Lua Reveal / Temporary_Reveal input); false when not alive.
     bool fog_object(objects::ObjectId id, tactical::fog::FogObject& out) const;
     // OI fog: host-level FOW-active flag / render option (FOG_OF_WAR §1.3, §6.5: Lua Disable_Rendering, story
@@ -2044,6 +2048,9 @@ private:
         std::vector<objects::TypeIndex> specific;  // Marker_For_Specific_Object_Type
         bool used = false;
     };
+    // q6 t28: map hint names by object id (ascending), set by bt_map_load. [port] Not saved: a loaded battle is rebuilt
+    // through the same map load, which hands the map objects the same ids.
+    std::vector<std::pair<objects::ObjectId, std::string>> map_hints_;
     std::vector<MapMarker> bt_markers_;  // MARKER objects with an owner, map (GOM list) order
     // S10 land outcome: the start markers for the AI's IsFriendly / IsEnemyStartLocation (AI_TACTICAL_PERCEPTION §3):
     // (true = Defending Forces Position, false = Attacker Entry Position, position), map order.

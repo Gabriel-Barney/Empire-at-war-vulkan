@@ -271,6 +271,9 @@ struct ObjectPlacement {
     std::vector<std::string> attachments;  // 0x4BA child names that are not "NONE" (hardpoint slots)
     uint32_t attachment_slots = 0;         // number of 0x4BA children
     std::vector<RawMini> owner_raw;        // 0x476/1 minis
+    // 0x482 (TERRAIN_WATER_POST 1.6): the object's hint (marker) name, leaf child 0 mini 01 (NUL-terminated);
+    // empty = the object has no 0x482 chunk. Lua Find_Hint / Get_Hint read it.
+    std::string hint;
 };
 
 // ---------------------------------------------------------------- 0x10B: AI zones (cheap decode)
