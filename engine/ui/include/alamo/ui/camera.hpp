@@ -341,6 +341,7 @@ public:
     float pitch_deg() const;   // down angle (positive)
     float pullback() const;
     bool zoomed() const { return zoomed_; }
+    bool dragging() const { return dragging_; }  // ui1 t01: a middle / right-scroll drag holds the map
     bool transitioning() const { return t_anim_ < 1.0f; }
     // Zoom transition progress z (0..1, linear in time over GMC_ZoomTime, before the pose smoothstep; 1 = settled).
     // Direction: zoomed() (true = zooming / zoomed in, false = zooming / zoomed out).

@@ -727,6 +727,48 @@ void feed(InputState& in, OrderTranslator& ot, const Bindings& b, const OrderCon
     }
 }
 
+// ui1 t02: IDC_ALTERNATE_MOUSE_CONTROLS - left click selects own units, orders elsewhere; right click clears.
+void test_orders_alternate() {
+    World w;
+    const OrderContext c = w.ctx();
+    Bindings keys;
+    InputState in;
+    OrderTranslator ot;
+    ot.set_alternate_mouse(true);
+    CHECK(ot.alternate_mouse());
+    Script s;
+    int32_t x = 0, y = 0;
+    w.screen({60, 0, 0}, x, y);
+    size_t mark = s.frames.size();
+    s.click(Button::Left, x, y);
+    feed(in, ot, keys, c, s, mark);
+    auto out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::Select);
+    // left click on ground -> the move order
+    mark = s.frames.size();
+    for (int i = 0; i < 40; ++i) s.idle();
+    s.click(Button::Left, 650, 150);
+    feed(in, ot, keys, c, s, mark);
+    out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::MoveToRay);
+    ot.take_move_acks();
+    // left click on the enemy -> Attack
+    w.screen({-300, 200, 0}, x, y);
+    mark = s.frames.size();
+    for (int i = 0; i < 40; ++i) s.idle();
+    s.click(Button::Left, x, y);
+    feed(in, ot, keys, c, s, mark);
+    out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::Attack);
+    // a right click clears the selection; the default scheme's right-click order is gone
+    mark = s.frames.size();
+    for (int i = 0; i < 40; ++i) s.idle();
+    s.click(Button::Right, 650, 150);
+    feed(in, ot, keys, c, s, mark);
+    out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::Select && out[0].ids("ids").empty());
+}
+
 void test_orders() {
     World w;
     const OrderContext c = w.ctx();
@@ -1451,6 +1493,7 @@ int main() {
     test_parse();
     test_picking();
     test_orders();
+    test_orders_alternate();
     test_double_click_move();
     test_session();
     if (g_fail) {

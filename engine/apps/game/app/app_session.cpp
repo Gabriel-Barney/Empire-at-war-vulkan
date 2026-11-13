@@ -450,6 +450,7 @@ bool App::start_session(const SessionSpec& spec) {
 // The presentation side of a session that just started or was loaded (session_ is set).
 void App::session_started(const std::vector<std::string>& diag) {
     const SessionSpec& spec = session_->spec();
+    apply_gameplay_options();  // ui1 t02: the session start reset the game speed indices (MAIN_LOOP.md §1.5)
     holo_.reset();
     story_cursor_ = 0;
     story_ui_.reset();  // L1/S4 wave 1: a new session's UI state
@@ -530,6 +531,7 @@ void App::begin_battle() {
     ++battles_seen_;
     reinforce_unit_ = 0;  // no drop point pending from an earlier battle
     bombing_targeting_ = false;  // nor a bombing-run pick
+    autofire_seen_.clear();  // ui1 t02: the default autofire is sent for this battle's objects
     bombing_blob_.reset();
     targeting_.cancel();  // nor a targeted ability
     // L1/S4 wave 1: the battle's tactical plots (loaded by CampaignBattles at the tactical push) for STORY_MISSION_LOST;

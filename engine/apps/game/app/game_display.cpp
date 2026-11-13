@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <string_view>
 #include <thread>
 
 #include "alamo/render/renderer.hpp"
@@ -335,6 +337,115 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
     for (const ProfileAdvBool& e : kProfileAdvBools) f << e.key << "=" << (p.advanced.*e.field ? 1 : 0) << "\n";
     return static_cast<bool>(f);
+}
+
+// ---- ui1 t02 [port] other options file --------------------------------------------------------------------------
+std::string default_options_profile_path() {
+    const char* la = std::getenv("LOCALAPPDATA");
+    if (!la || !*la) return {};
+    return (std::filesystem::path(la) / "alamo" / "game_options.txt").string();
+}
+
+namespace {
+struct OptInt {
+    const char* key;
+    int32_t ui::GameplaySettings::*field;
+};
+struct OptBool {
+    const char* key;
+    bool ui::GameplaySettings::*field;
+};
+struct OptVolume {
+    const char* key;
+    float ui::AudioVolumes::*field;
+};
+constexpr OptInt kOptInts[] = {{"game_speed", &ui::GameplaySettings::game_speed},
+                               {"strategic_speed", &ui::GameplaySettings::strategic_speed},
+                               {"scroll_speed", &ui::GameplaySettings::scroll_speed},
+                               {"difficulty", &ui::GameplaySettings::difficulty}};
+constexpr OptBool kOptBools[] = {{"ask_autoresolve", &ui::GameplaySettings::ask_autoresolve},
+                                 {"delay_tooltips", &ui::GameplaySettings::delay_tooltips},
+                                 {"absolute_scroll", &ui::GameplaySettings::absolute_scroll},
+                                 {"alternate_mouse", &ui::GameplaySettings::alternate_mouse},
+                                 {"right_button_scroll", &ui::GameplaySettings::right_button_scroll},
+                                 {"both_buttons_rotate", &ui::GameplaySettings::both_buttons_rotate},
+                                 {"simplified_colors", &ui::GameplaySettings::simplified_colors},
+                                 {"abilities_autofire", &ui::GameplaySettings::abilities_autofire}};
+constexpr OptVolume kOptVolumes[] = {{"volume_master", &ui::AudioVolumes::master},
+                                     {"volume_sfx", &ui::AudioVolumes::sfx},
+                                     {"volume_speech", &ui::AudioVolumes::speech},
+                                     {"volume_music", &ui::AudioVolumes::music}};
+constexpr std::string_view kKeyPrefix = "key.";
+
+std::string opt_float(float v) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.4f", static_cast<double>(v));
+    return buf;
+}
+}  // namespace
+
+bool load_options_profile(const std::string& path, OptionsProfile& p) {
+    std::ifstream f(path);
+    if (path.empty() || !f) return false;
+    std::map<std::string, std::string> kv;
+    for (std::string line; std::getline(f, line);) {
+        const size_t eq = line.find('=');
+        if (line.empty() || line[0] == '#' || eq == std::string::npos) continue;
+        auto trim = [](std::string t) {
+            while (!t.empty() && (t.back() == ' ' || t.back() == '\r' || t.back() == '\t')) t.pop_back();
+            size_t b = 0;
+            while (b < t.size() && (t[b] == ' ' || t[b] == '\t')) ++b;
+            return t.substr(b);
+        };
+        kv[trim(line.substr(0, eq))] = trim(line.substr(eq + 1));
+    }
+    auto find = [&](const char* k) -> const std::string* {
+        const auto it = kv.find(k);
+        return it != kv.end() && !it->second.empty() ? &it->second : nullptr;
+    };
+    auto flag = [](const std::string& v) { return v == "1" || v == "true" || v == "on"; };
+    for (const OptInt& e : kOptInts)
+        if (const std::string* v = find(e.key)) p.gameplay.*e.field = static_cast<int32_t>(std::strtol(v->c_str(), nullptr, 10));
+    p.gameplay.difficulty = std::clamp(p.gameplay.difficulty, 0, 2);
+    for (const OptBool& e : kOptBools)
+        if (const std::string* v = find(e.key)) p.gameplay.*e.field = flag(*v);
+    for (const OptVolume& e : kOptVolumes)
+        if (const std::string* v = find(e.key)) p.audio.*e.field = std::clamp(std::strtof(v->c_str(), nullptr), 0.0f, 1.0f);
+    if (const std::string* v = find("subtitles")) p.audio.subtitles = flag(*v);
+    if (const std::string* v = find("galactic_fov"))
+        p.camera.galactic_fov_deg = std::clamp(std::strtof(v->c_str(), nullptr), ui::kGalacticFovMinDeg, ui::kGalacticFovMaxDeg);
+    if (const std::string* v = find("tactical_fov"))
+        p.camera.tactical_fov_deg = std::clamp(std::strtof(v->c_str(), nullptr), ui::kTacticalFovMinDeg, ui::kTacticalFovMaxDeg);
+    if (const std::string* v = find("tactical_fov_set")) p.tactical_fov_set = flag(*v);
+    if (const std::string* v = find("queue_mods")) p.camera.queue_mods = static_cast<uint8_t>(std::strtoul(v->c_str(), nullptr, 10) & 0xFFu);
+    for (const auto& [k, v] : kv)
+        if (k.size() > kKeyPrefix.size() && std::string_view(k).substr(0, kKeyPrefix.size()) == kKeyPrefix && !v.empty())
+            p.keys[k.substr(kKeyPrefix.size())] = static_cast<int32_t>(std::strtol(v.c_str(), nullptr, 10));
+    return true;
+}
+
+bool save_options_profile(const std::string& path, const OptionsProfile& p) {
+    if (path.empty()) return false;
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+    std::ofstream f(path, std::ios::trunc);
+    if (!f) return false;
+    f << "# alamo_game options (audio, gameplay, camera and controls, keyboard dialogs)\n";
+    for (const OptInt& e : kOptInts) f << e.key << "=" << p.gameplay.*e.field << "\n";
+    for (const OptBool& e : kOptBools) f << e.key << "=" << (p.gameplay.*e.field ? 1 : 0) << "\n";
+    for (const OptVolume& e : kOptVolumes) f << e.key << "=" << opt_float(p.audio.*e.field) << "\n";
+    f << "subtitles=" << (p.audio.subtitles ? 1 : 0) << "\n";
+    f << "galactic_fov=" << opt_float(p.camera.galactic_fov_deg) << "\n";
+    f << "tactical_fov=" << opt_float(p.camera.tactical_fov_deg) << "\n";
+    f << "tactical_fov_set=" << (p.tactical_fov_set ? 1 : 0) << "\n";
+    f << "queue_mods=" << static_cast<unsigned>(p.camera.queue_mods) << "\n";
+    for (const auto& [k, v] : p.keys) f << kKeyPrefix << k << "=" << v << "\n";
+    return static_cast<bool>(f);
+}
+
+uint32_t game_speed_index(int32_t slider) {
+    // The nearest of the five positions 0, 25, 50, 75, 100.
+    return static_cast<uint32_t>((std::clamp(slider, 0, 100) + 12) / 25);
 }
 
 namespace {
