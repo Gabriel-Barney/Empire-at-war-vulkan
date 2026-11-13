@@ -718,6 +718,21 @@ void App::galactic_screens() {
         story_page_ = -1;
     }
     if (story_summary_open_ && !ui_.gui.find(ui::dlg::kStorySummary)) story_summary_open_ = false;  // closed by Esc
+    // [port: Gabriel, 2026-11-13] a new campaign opens the mission holocron at its first chapter, once no story dialog,
+    // locked cinematic or battle prompt is up; a campaign that adds no chapter in its first 300 ticks never opens it.
+    if (summary_auto_open_) {
+        if (!holocron_chapters_.empty()) {
+            if (!story_summary_open_ && !story_controls_locked() && !ui_.gui.find(ui::dlg::kStory) && !choice_open_) {
+                summary_auto_open_ = false;
+                summary_completed_ = false;
+                summary_entry_ = 0;  // the newest row
+                open_story_summary();
+                std::printf("holocron: opened at campaign start\n");
+            }
+        } else if (session_->host().frame() > 300) {
+            summary_auto_open_ = false;
+        }
+    }
     if (session_->battle_choice_pending() && !choice_open_)
         if (const galactic::ConflictInfo* c = session_->conflict_head()) open_battle_prompt(*g, *c);
     // story t13: the linked record's banner (it can also go down without Begin, e.g. a loaded save shows it again).

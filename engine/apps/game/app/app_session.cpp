@@ -446,6 +446,7 @@ bool App::start_session(const SessionSpec& spec) {
     if (spec.kind == SessionKind::Campaign && !spec.attract && galaxy()) {
         audio_.faction_sfx("SFXEvent_GUI_Start_Campaign");
         ++announcements_;
+        summary_auto_open_ = true;  // [port: Gabriel] the mission holocron opens with the first chapter (galactic_screens)
     }
     return true;
 }
@@ -475,7 +476,7 @@ void App::session_started(const std::vector<std::string>& diag) {
     prompt_ = {};
     ar_log_seen_ = 0;
     holocron_chapters_.clear();
-    holocron_flash_ = story_summary_open_ = false;
+    holocron_flash_ = story_summary_open_ = summary_auto_open_ = false;
     summary_entry_ = 0;
     summary_rows_.clear();
     story_scripts_.clear();  // the new session's plots ask for their dialog scripts again (sync_story_scripts)
