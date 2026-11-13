@@ -109,7 +109,7 @@ private:
     VkDescriptorSetLayout set0_ = VK_NULL_HANDLE, set1_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline cs_update_ = VK_NULL_HANDLE, cs_spawn_ = VK_NULL_HANDLE, cs_sort_ = VK_NULL_HANDLE, cs_clear_ = VK_NULL_HANDLE;
-    std::map<std::tuple<uint32_t, VkFormat, VkFormat, VkFormat>, VkPipeline> gfx_;
+    std::map<std::tuple<uint32_t, VkFormat, VkFormat, VkFormat, VkSampleCountFlagBits>, VkPipeline> gfx_;
     rhi::Buffer particles_, order_, death_;
     uint32_t capacity_ = 0;
     GpuTexture default_tex_;

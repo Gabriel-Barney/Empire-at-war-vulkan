@@ -339,6 +339,8 @@ bool Context::pick_device(const ContextDesc& desc) {
             caps_.non_coherent_atom_size = props.limits.nonCoherentAtomSize;
             caps_.max_push_constants_size = props.limits.maxPushConstantsSize;
             caps_.timestamp_period_ns = props.limits.timestampPeriod;
+            caps_.framebuffer_samples = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
+                                        props.limits.framebufferStencilSampleCounts;
             std::memcpy(caps_.pipeline_cache_uuid, props.pipelineCacheUUID, VK_UUID_SIZE);
             auto p12 = vk_struct<VkPhysicalDeviceVulkan12Properties>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES);
             auto p2 = vk_struct<VkPhysicalDeviceProperties2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2);

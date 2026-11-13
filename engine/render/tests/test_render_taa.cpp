@@ -14,6 +14,10 @@
 //   [port] SMAA 1x (RecordOptions::smaa) rides along: on the empty scene a flat frame stays flat (alone and after TAA);
 //     on Endor the last orbit view with SMAA -> logs/render_smaa_on.png (+ crops), smoother edges than TAA off, the same
 //     picture, GPU time of the "smaa" scope.
+//   [port] MSAA (RecordOptions::msaa): on the empty scene every count the device has keeps a flat frame flat (alone and with
+//     TAA + SMAA), and switching counts back and forth works; on Endor 4x and 8x of the last orbit view (with SSAO, so its
+//     mid-scene depth resolve runs too) -> logs/render_msaa4_on.png / render_msaa8_on.png (+ crops), smoother edges than
+//     one sample, the same picture, GPU time of the scene and the "msaa" resolve scope.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -155,7 +159,7 @@ struct Gpu : render::test::GpuCore {
 using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 struct GpuTimes {
-    double taa = -1, post = -1, scene = -1, smaa = -1;
+    double taa = -1, post = -1, scene = -1, smaa = -1, msaa = -1;
     double cpu_ms = 0;  // DrawTiming build + record
 };
 
@@ -200,6 +204,7 @@ bool frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices
             if (res.name == "post") times->post = res.ms;
             if (res.name == "scene") times->scene = res.ms;
             if (res.name == "smaa") times->smaa = res.ms;
+            if (res.name == "msaa") times->msaa = res.ms;
         }
     }
     return drawn;
@@ -394,6 +399,54 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
                 so.taa = true;            // both: TAA restarts its history after the frames without it, SMAA after the resolve
                 CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), so, st, clear, scene.sky()));
                 CHECK(st.smaa && st.taa && st.taa_reset);
+            }
+
+            // [port] MSAA 4x / 8x on the last orbit view (SSAO on, so its depth resolve runs): smoother edges, same picture.
+            {
+                render::RecordOptions base = ro;
+                base.taa = false;
+                base.ambient_occlusion = true;
+                GpuTimes t1;
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), base, st, clear, scene.sky(), &t1));
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), base, st, clear, scene.sky(), &t1));
+                const std::vector<uint8_t> one(o.data(), o.data() + bytes);
+                const double e_one = edge_energy(one, W, H);
+                for (const uint32_t n : {4u, 8u}) {
+                    if (rr.msaa_samples(n) != n) {
+                        std::printf("land map MSAA %ux: not supported, skipped\n", n);
+                        continue;
+                    }
+                    render::RecordOptions mo = base;
+                    mo.msaa = n;
+                    GpuTimes tm;
+                    bool settled = false;  // the multisampled pipelines compile on first use
+                    for (int k = 0; k < 200 && !settled; ++k) {
+                        CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), mo, st, clear, scene.sky(), &tm));
+                        settled = k > 1 && st.pending_pipeline == 0 && st.translation_pending == 0 && st.post_pending == 0;
+                        if (!settled) {
+                            rr.wait_translations();
+                            rr.pipelines().wait_idle();
+                        }
+                    }
+                    CHECK(settled && st.msaa == n);
+                    const std::vector<uint8_t> img(o.data(), o.data() + bytes);
+                    const std::string tag = "msaa" + std::to_string(n);
+                    CHECK(save_png(src_dir + "/logs/render_" + tag + "_on.png", img, W, H));
+                    CHECK(save_crop(src_dir + "/logs/render_" + tag + "_on_crop.png", img, W, 0, 0, 240, 135, 4));
+                    CHECK(save_crop(src_dir + "/logs/render_" + tag + "_on_crop2.png", img, W, 800, 380, 200, 140, 4));
+                    const double e_ms = edge_energy(img, W, H);
+                    double diff = 0;
+                    for (size_t i = 0; i + 3 < bytes; i += 4) diff += std::fabs(luma(&one[i]) - luma(&img[i]));
+                    diff /= static_cast<double>(bytes / 4);
+                    std::printf("land map MSAA %ux (+AO): edge energy 1x %.3f / %ux %.3f, mean |1x - %ux| luma %.2f; GPU scene %.3f ms "
+                                "(1x %.3f ms), resolve %.3f ms\n",
+                                n, e_one, n, e_ms, n, diff, tm.scene, t1.scene, tm.msaa);
+                    CHECK(e_ms < e_one);  // smoother edges
+                    CHECK(diff < 3.0);    // same picture
+                }
+                render::RecordOptions back = base;  // back to one sample: the same frame as before
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), back, st, clear, scene.sky()));
+                CHECK(st.msaa == 1);
             }
 
             // Moving objects. The materials have no motion vectors, so the resolve has to tell a mover from the background
@@ -615,6 +668,23 @@ int run_gpu(const std::string& src_dir) {
                 CHECK(flat);
                 render::RecordOptions none;
                 CHECK(frame(g, r, o, v, {}, none, st, clear) && !st.smaa);
+            }
+            {  // [port] MSAA: every supported count keeps a flat frame flat; counts switch back and forth
+                bool flat = true;
+                for (const uint32_t n : {4u, 2u, 8u, 1u, 4u}) {
+                    render::RecordOptions mo;
+                    mo.msaa = n;
+                    CHECK(frame(g, r, o, v, {}, mo, st, clear) && st.msaa == r.msaa_samples(n));
+                    for (size_t i = 0; i < static_cast<size_t>(o.w) * o.h; ++i) flat = flat && rgb_close_to(o.data() + i * 4, clear, 0);
+                }
+                render::RecordOptions all;
+                all.msaa = 4;
+                all.taa = all.smaa = true;
+                CHECK(frame(g, r, o2, render::make_view(cam, 80, 40), {}, all, st, clear) && st.msaa == r.msaa_samples(4) && st.taa &&
+                      st.smaa);
+                for (size_t i = 0; i < static_cast<size_t>(o2.w) * o2.h; ++i) flat = flat && rgb_close_to(o2.data() + i * 4, clear, 1);
+                CHECK(flat);
+                std::printf("gpu: MSAA counts 2 / 4 / 8 -> %u / %u / %u\n", r.msaa_samples(2), r.msaa_samples(4), r.msaa_samples(8));
             }
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && st.taa_reset);  // first frame: no history
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && !st.taa_reset);
