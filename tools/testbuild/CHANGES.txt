@@ -1,4 +1,4 @@
-Alamo engine test build, 2026-11-07
+Alamo engine test build, 2026-11-12
 ====================================
 
 How to run
@@ -30,35 +30,48 @@ Built from: @BUILD@.
 
 What to try
 -----------
-- Thrawn's Revenge (menu entry "Thrawn's Revenge 3.3, workshop 1125571106"): galactic conquest,
-  skirmish land and space, save and load, as in the 2026-11-04 build.
-- The other installed mods: Fall of the Republic, EAW-Remake, Age of Legends, and the local submods
-  (Thrawn's Legacy HD, the ships transfer and compatibility patches). Check each with C<number>
-  first; the report's last line says OK or ERRORS.
-- The in-game Mods button: does the list match, does switching restart into the right mod?
+- Forces of Corruption land skirmish (any faction): how squads and vehicles move, keep formation,
+  get round each other and attack. This is the biggest change since the last build.
+- Land skirmish "Capture Control Points": capturing, the announcer, the AI building on its pads.
+- Galactic conquest against the AI (Rebel, Empire, Underworld): what the AI builds, when and where
+  it attacks, auto-resolved battles.
+- Abilities: Bribe, the vehicle thief, Saber Throw, bombing runs (the new tactical button),
+  hero-vs-hero clashes on land.
+- Thrawn's Revenge and the other mods, as in the 2026-11-07 build (Play_Mod.cmd).
 
-Changes since test build 2026-11-04
+Changes since test build 2026-11-07
 -----------------------------------
-- Mods in general, not only Thrawn's Revenge: no faction, unit, planet or map name is built into the
-  engine any more; factions, AI players, skirmish starting forces, the skirmish planet and the default
-  map come from the mod's data. Base Forces of Corruption plays as before.
-- STEAMMOD=<id> works like the original (the launcher uses it for workshop mods); several mods can
-  be stacked, the first one wins.
-- Mod check report: missing files, Lua scripts that do not compile or fail, engine calls a mod uses
-  that the port does not have yet, shader problems, and a hint when a submod is checked without the
-  mod it needs.
-- Mod shaders: shader model 3 effects are translated; Age of Legends and EAW-Remake show no shader
-  issues in the check.
-- Fixes found with EAW-Remake and Age of Legends: story files with their own root tag, planets made
-  as variants of a template planet, a crash when a fighter attacked a whole group, Find_Nearest with
-  no player.
-- Galactic AI, battles and story: more of the original's AI budget and goal rules, fighter formations,
-  landing and team behaviour, story victory rewards reaching the battle and the galaxy.
-- Graphics options: named quality levels, one anti-aliasing control; Auto Detect picks a level
-  from the GPU.
+- Land movement rebuilt to follow the original closely: an infantry squad moves as one group with
+  its members in their slots (rows or a spread), a formation walks one shared path with each unit
+  on its own lane, units wait for, pass or go round each other the way the original does, and
+  turning, cornering and stopping speeds match it.
+- Walkers that deploy (Destroyer Droid) can walk deployed; hover units rise and settle on the
+  ground; a squad enters and leaves a garrison as a whole, and occupants of a destroyed building
+  come out where it stood.
+- Land attacks: units close in on their target, keep in range and guard a target like the
+  original; Attack_Move works on non-hostile units.
+- Land skirmish: start forces stand at the map's spawn points; Capture Control Points game type;
+  the AI uses its build pads and respects the per-player unit limit.
+- Combat details: Bribe and ability ranges, vehicle-thief takeover, Saber Throw, bombing runs,
+  hero clashes on land, diminishing firepower, Combat_Bonus auras, Cancel_Special, energy drain.
+- Galactic AI: much more of the original's budget, production, task-force and free-store rules;
+  every AI starts on the same frame; auto-resolve pays the Underworld's bounty; the Rebel home
+  fleet defence at Yavin; AI units skip planets they cannot land on.
+- Campaign and story: space fleet placement and the start fleet's hyperspace arrival, Esc in
+  story missions, one player per faction, galactic auto-land, weather picked when a map loads.
+- A large internal clean-up of the whole engine. Please report anything that worked in the
+  2026-11-07 build and no longer does.
 
 Known gaps
 ----------
+- Saves made with earlier test builds may not load (the save format changed). Start new games.
+- Galactic AI is close to the original but not the same yet: the Underworld ends up with less
+  money, and the Rebels attack Shola earlier than in the original.
+- Land skirmish AI: its economy runs ahead of the original's (it builds its Mineral Processor
+  sooner) and it rarely lands a hero, so its army mix differs.
+- Land skirmish Empire against Underworld: on some maps the AI's main force gets an invalid
+  destination ("not a valid destination for TaskForce MainForce" in the log) and the battle can
+  stall without ending. Known bug, being fixed.
 - EAW-Remake: Single Player in its main menu does nothing yet (its menu draws Single Player as a
   heading); its space skirmish on Geonosis runs slowly (huge asteroid fields).
 - Age of Legends: the skirmish setup's game-type list stops the skirmish start.
