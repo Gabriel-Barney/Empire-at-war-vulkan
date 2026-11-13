@@ -996,3 +996,10 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   width; click = nearest character boundary, drag / Shift+click / Shift+arrows select, Ctrl+Left / Right by word,
   Ctrl+A / C / X / V and Ctrl+Insert / Shift+Delete / Shift+Insert; the clipboard is a manager-private string unless the
   host sets `GuiManager::set_clipboard`; key-capture fields (read_only) keep the one-line narrowing and draw no caret.
+  **t05** key-capture fields (`GuiControl::key_capture`): unmodified Delete / Backspace clear the binding, Tab is bindable
+  (MissionHolocron's default; focus stays), Esc stays the dialog's Cancel (UI.md §4.2: in battle Esc closes the in-game
+  panel before the hotkey dispatch, so an Esc binding could never fire); a key another slot holds (`HotkeyTable::conflicts`,
+  derived group slots included) asks "Key already in use" (`<key>: <action>`, action = the slot name spaced, "Ability_" /
+  "FoC" dropped) in IDD_DIALOG_BOX_QUIT_CONFIRM, Yes moves it (the §4.3 rule), No keeps both; Back or Esc with unapplied
+  edits asks "Apply the changed key settings?" (Yes applies, No discards); Camera and Controls Defaults also resets
+  CameraZoomIn / ZoomOut. Retail capture behaviour is an RE gap (backlog, kind re).

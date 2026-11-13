@@ -141,6 +141,7 @@ struct GuiControl {
     float field_height = 15.0f;        // combo: closed field height (canvas units; the skin's pop-down button height)
     size_t max_chars = 256;            // edit limit [port]
     bool read_only = false;            // edit: keys are not typed into it (key-capture fields)
+    bool key_capture = false;          // edit: a key-binding field - Tab is a key to bind there, not a focus move (UI5 t05)
     bool text_outline = false;         // [port] force an outline under the caption (readability over bright art)
     bool ui_font = false;              // [port] QA D8: text in the dialog's L_Text font instead of the gadget's skin font
     // [port] QA U2: a static with fit_lines > 0 is never narrowed: word-wrapped to the control width in at most fit_lines
