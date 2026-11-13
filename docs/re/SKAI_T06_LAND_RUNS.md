@@ -231,14 +231,36 @@ those types list UNIT_AI:
 - §6: BurnUnitsLand's `Find_Nearest(MainForce, "InBase", PlayerObject, false)` finds nothing while the human's Command
   Center stands, and its fallback finds a stormtrooper team. Find_Nearest walks the same per-player UNIT_AI list.
 
-Port experiment with that rule (not on dev): at 2333 it buys RL_Combat_Armor_L1, Katarn_Team and a
-Rebel_Light_Tank_Brigade (tech 2 "cannot afford"), tech 2 at 5924, tech 3 at 14018, and the idle-human Utapau run does
-not end in 36000 ticks (the Command Center falls at 20074; Light Vehicle Factory, Base Shield and Power Generator
-stand). But AI against AI stalls: foc-land seeds 1-6 do not end in 30000 ticks, because the enemy force that normalises
-`EnemyUnitConcentrationNBTD` drops by the base structures too, so Clear_Infantry (100 x concentration) wins the first
-commit for the Empire AI and takes all four start teams into the Rebel base; it never captures a mineral pad. Whether
-retail does the same is not known (no retail AI-against-AI land run exists). The rule is held back until run 2 confirms
-the Find_Nearest part (FNEAR with `fn_ret=nil` and `fn_any=nil` while the Command Center lives and `fn_count > 0`).
+The first two observations repeat in the 2026-11-08 run (`20261108-220755`, another seed): units at 2295 with tech 2
+affordable; tech 2 at 7966, the first commit with 2500 credits; units at 12182 with 6201 credits (tech 3, 4000, was
+affordable) while units + all structures were 3960 and units + pad-built structures 1860; tech 3 at 14379 with units
++ pad-built structures at 4145. So the force part is [H, two traces]; the Find_Nearest part rests on run 1 alone.
+
+Port experiments (branch `claude/lane-skai-grid-rule`, commit 0d1e12c0 = the narrow rule; not on dev), idle-human
+Utapau run and AI against AI (foc-land, seeds 1-6):
+
+| | Retail | dev fee1c429 | Narrow rule: player force sums + Find_Nearest | Full rule: also out of the threat grid |
+|---|---|---|---|---|
+| Purchase at the 2295 commit | armour L1, Katarn, 2 light tank brigades, infantry | armour L1, tech 2 (2333) | armour L1, Katarn, light tank brigade (2336) | same (2333) |
+| Tech 2 / tech 3 bought | 7494 / 13352 | 2333 / 9989 | 5918 / 13211 | 5924 / 14018 |
+| Human structures lost | 9 of 10, 10987-32213 (CC 32213) | all | 9 of 10, 12852-23885 (CC 18959) | 7 of 10, 13548-21698 (CC 20074) |
+| Idle-human battle | no end in 36000 | Rebel wins 18727 | no end in 36000 | no end in 36000 |
+| AI against AI, 30000 ticks | not known | 6 of 6 end (21313-24479) | 0 of 6 end; with 54000 ticks 2 of 6 (31016, 38710) | 0 of 6 end |
+
+With either rule the Rebel AI behaves as in retail against a passive base: Burn_Units_Land finds no base structure,
+single-unit Destroy_Structure plans and units standing near the base wear the structures down, and the last one or two
+stand. AI against AI goes the same way because the Empire AI collapses early: `EnemyUnitConcentrationNBTD` is
+normalised by the enemy force sum, which no longer holds 2100 of base structures, so Clear_Infantry (100 x
+concentration) wins the Empire's first commit and walks all four start teams across the map into the Rebel base
+(arrival 5785); it never takes a mineral pad, and from then on it is a passive base. The Rebels do not do this in
+either retail run (their 180 of infantry is under the Empire's 252, so the plan's contrast fails); whether retail's
+Empire AI does it is not known: no retail run with an Empire AI exists. One probe run settles it: the same lobby with
+the factions swapped (you = Rebel idle, slot 2 = Empire Medium AI), read for where the four stormtrooper teams go at
+the first commit (frame ~390).
+
+The rule is held back because it turns the AI-against-AI end tests red (`alamo_headless_skirmish_ai_foc_land_end*`),
+which the skai exit test names. The two halves of that exit test pull apart: retail's AI does not finish a passive
+base in 36000 frames, and the port's AI-against-AI games ended only because Burn_Units_Land found base structures.
 
 **Kit for a run 3:** `make_plan_hooks.py` adds to every land plan's PSTART record the values of six shipped equations
 read with `EvaluatePerception(name, PlayerObject)` (the land goal system evaluates all of them for this player every
