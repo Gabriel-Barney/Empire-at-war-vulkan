@@ -21,6 +21,7 @@ its kind below and add it there instead of starting a second copy.
 | Phase 2 (architecture, headless core): results and design notes (determinism contract, file resolution order) | [`PHASE2.md`](PHASE2.md) | |
 | Game asset catalog, file formats, shader catalog and porting notes | [`assets/`](assets/), [`formats/`](formats/), [`shaders/`](shaders/) | Generated catalogs: do not edit by hand |
 | Mod compatibility: hard-coded names in `engine/` (audit, replacements, the name lint) | [`status/modc-audit.md`](status/modc-audit.md) | The mod-loading contract is `MODS.md` (PR #92); the audit becomes its section 9 when that lands |
+| Command Center launcher (`launcher/`, Rust): why it is here, its dependencies, how to build it | [`DECISIONS.md`](DECISIONS.md) "Command Center launcher", [`BUILD.md`](BUILD.md) | Code: `launcher/src/` |
 | Playtest QA notes | [`qa/`](qa/) | |
 | Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md), [`PERF_AUDIT_2026-11-07.md`](PERF_AUDIT_2026-11-07.md) (CPU / GPU performance audit and research, input for the deferred side goals) | History, not kept current |
 | Old versions of moved or trimmed documents | [`archive/`](archive/) | Zips |
