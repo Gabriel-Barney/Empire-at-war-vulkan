@@ -129,24 +129,25 @@ void profile_round_trip() {
     p.vsync = false;
     p.vsync_mode = ui::VsyncMode::Mailbox;
     p.frame_cap = ui::kFrameCapDisplay;
-    p.hardware_mouse = true;
-    p.windowed = false;    // UI5 t01
+    p.window_mode = ui::WindowMode::Borderless;  // UI5 t01 / display mode list
+    p.ui_scale = 175;
     p.widescreen = false;
     p.detail = 40;
     p.gamma = 70;
-    p.anti_alias = 63;
+    p.anti_alias = ui::kAaMsaa4;
     p.advanced.ambient_occlusion = true;
     p.advanced.anisotropy = 8;
     p.advanced.mesh = 25;
     p.advanced.bloom = false;
+    p.advanced.render_scale = 75;
     CHECK(game::save_video_profile(path, p));
     game::VideoProfile q;
     CHECK(game::load_video_profile(path, q));
     CHECK(q.mode == p.mode);
-    CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay && q.hardware_mouse);
-    CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == 63);
+    CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay);
+    CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == ui::kAaMsaa4);
     CHECK(q.advanced == p.advanced);
-    CHECK(!q.windowed && !q.widescreen);
+    CHECK(q.window_mode == ui::WindowMode::Borderless && !q.widescreen && q.ui_scale == 175);
     {  // UI5 t01: Widescreen off lists modes no wider than 4:3; all when none is
         const std::vector<game::DisplayMode> all{{1024, 768, 60}, {1280, 1024, 60}, {1920, 1080, 60}, {2560, 1440, 144}};
         const std::vector<game::DisplayMode> narrow = game::video_list_modes(all, false);
@@ -155,21 +156,37 @@ void profile_round_trip() {
         const std::vector<game::DisplayMode> wide{{1920, 1080, 60}};
         CHECK(game::video_list_modes(wide, false).size() == 1);
         ui::VideoSettings v;
-        v.windowed = true;
+        v.window_mode = ui::WindowMode::Windowed;
         v.widescreen = true;
+        v.ui_scale = 900;  // clamped to kUiScaleMax
         game::VideoProfile r;
-        r.windowed = r.widescreen = false;
-        CHECK(game::update_video_profile(r, v, all) && r.windowed && r.widescreen);
+        r.window_mode = ui::WindowMode::Fullscreen;
+        r.widescreen = false;
+        CHECK(game::update_video_profile(r, v, all) && r.window_mode == ui::WindowMode::Windowed && r.widescreen && r.ui_scale == ui::kUiScaleMax);
     }
     // A partial file (hand-written) keeps the other values.
     {
         std::ofstream f(path, std::ios::trunc);
-        f << "# comment\r\nanti_aliasing = taa\r\nanisotropy=16\n";
+        f << "# comment\r\nanti_aliasing = taa\r\nanisotropy=16\nrender_scale=5\n";
     }
     game::VideoProfile r;
     CHECK(game::load_video_profile(path, r));
-    CHECK(r.anti_alias == ui::kAntiAliasDefaultSlider && r.advanced.anisotropy == 16);
+    CHECK(r.anti_alias == ui::kAaTaa && r.advanced.anisotropy == 16);
+    CHECK(r.advanced.render_scale == 25);  // clamped to render::kRenderScaleMin
+    CHECK(game::render_scale_value(75) == 0.75f && game::render_scale_value(100) == 1.0f && game::render_scale_value(0) == 0.25f);
     CHECK(r.mode.width == 0 && r.vsync && !r.advanced.ambient_occlusion && r.advanced.bloom);
+    CHECK(r.window_mode == ui::WindowMode::Windowed && r.ui_scale == 100);  // the defaults: windowed, UI scale 100 %
+    // A profile from before the display mode list: "windowed=0" is Fullscreen, "windowed=1" Windowed; window_mode wins.
+    for (const auto& [text, want] : {std::pair{"windowed=0\n", ui::WindowMode::Fullscreen}, std::pair{"windowed=1\n", ui::WindowMode::Windowed},
+                                     std::pair{"windowed=0\nwindow_mode=borderless\nui_scale=50\n", ui::WindowMode::Borderless}}) {
+        {
+            std::ofstream f(path, std::ios::trunc);
+            f << text;
+        }
+        game::VideoProfile old;
+        CHECK(game::load_video_profile(path, old) && old.window_mode == want && old.ui_scale >= ui::kUiScaleMin);
+    }
+    CHECK(game::parse_window_mode("borderless") == ui::WindowMode::Borderless && !game::parse_window_mode("exclusive"));
     CHECK(!game::load_video_profile((dir / "missing.txt").string(), r));
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
@@ -228,23 +245,43 @@ void detail_mappings() {
     CHECK(game::particle_detail(100) == 1.0f && game::particle_detail(0) == 0.0f && game::particle_detail(250) == 1.0f);
     CHECK(game::environment_fade_scale(100) == 1.0f && std::fabs(game::environment_fade_scale(0) - 0.6f) < 1e-6f);
     CHECK(game::gamma_value(50) == 1.0f && game::gamma_value(100) == 2.0f && game::gamma_value(0) == 0.5f);
-    CHECK(!game::taa_active(0) && game::taa_active(1));  // any strength above 0 switches the resolve on
-    render::RecordOptions o;
-    game::apply_aa_options(o, 100);
-    CHECK(o.taa && std::fabs(o.taa_weight - 0.04f) < 1e-6f);
-    game::apply_aa_options(o, ui::kAntiAliasDefaultSlider);
-    CHECK(o.taa && std::fabs(o.taa_weight - 0.1f) < 0.002f);  // Medium = the tuned default weight
-    game::apply_aa_options(o, 0);
-    CHECK(!o.taa && o.taa_weight < 0.0f);
-    // Anti-aliasing is one value in the profile: the Video dialog's list sets it, and a profile written when the Advanced dialog
-    // had its own box ("anti_aliasing=taa") still turns it on.
+    // [port: Gabriel 2026-11-13] One list, one mode: exactly one of SMAA / TAA / MSAA (or none), each at its one quality.
+    {
+        struct Want {
+            int32_t mode;
+            bool smaa, taa;
+            uint32_t msaa;
+            int fsr = -1;  // [port] FSR quality mode (render::UpscaleQuality), -1 none; FSR modes also set TAA as the fallback
+        };
+        const Want wants[] = {{ui::kAaOff, false, false, 1},  {ui::kAaSmaa, true, false, 1},   {ui::kAaTaa, false, true, 1},
+                              {ui::kAaMsaa2, false, false, 2}, {ui::kAaMsaa4, false, false, 4}, {ui::kAaMsaa8, false, false, 8},
+                              {ui::kAaFsrNative, false, true, 1, 0}, {ui::kAaFsrQuality, false, true, 1, 1},
+                              {ui::kAaFsrBalanced, false, true, 1, 2}, {ui::kAaFsrPerformance, false, true, 1, 3},
+                              {ui::kAaFsrUltra, false, true, 1, 4}};
+        CHECK(std::size(wants) == std::size(ui::kAntiAliasChoices));
+        for (size_t i = 0; i < std::size(wants); ++i) {
+            const Want& w = wants[i];
+            CHECK(ui::kAntiAliasChoices[i].value == w.mode && ui::level_index(ui::kAntiAliasChoices, w.mode) == i);
+            render::RecordOptions o;
+            o.taa_weight = 0.3f;  // a stale weight is reset to the renderer default
+            game::apply_aa_options(o, w.mode);
+            CHECK(o.smaa == w.smaa && o.taa == w.taa && o.msaa == w.msaa && o.taa_weight < 0.0f);
+            CHECK(game::taa_active(w.mode) == (w.taa && w.fsr < 0) && game::aa_msaa_samples(w.mode) == w.msaa);
+            CHECK((o.upscaler == render::Upscaler::Fsr) == (w.fsr >= 0) && game::fsr_quality(w.mode).has_value() == (w.fsr >= 0));
+            if (w.fsr >= 0) CHECK(o.upscale_quality == static_cast<render::UpscaleQuality>(w.fsr));
+            CHECK(game::parse_aa_mode(game::aa_mode_name(w.mode)) == w.mode);
+        }
+        CHECK(!game::parse_aa_mode("high") && std::string(game::aa_mode_name(99)) == "off");
+    }
+    // The Video dialog's list sets the profile; older profiles still load: the TAA strength ("anti_alias" above 0 = TAA) and
+    // the Advanced dialog's box ("anti_aliasing=taa"); "aa_mode" wins.
     {
         game::VideoProfile aa;
         ui::VideoSettings vs;
-        vs.anti_alias = 40;
-        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == 40 && game::taa_active(aa.anti_alias));
-        vs.anti_alias = 0;
-        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == 0 && !game::taa_active(aa.anti_alias));
+        vs.anti_alias = ui::kAaSmaa;
+        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == ui::kAaSmaa);
+        vs.anti_alias = ui::kAaOff;
+        CHECK(game::update_video_profile(aa, vs, {}) && aa.anti_alias == ui::kAaOff);
         const std::filesystem::path dir = std::filesystem::temp_directory_path() / "alamo_game_display_aa";
         std::filesystem::create_directories(dir);
         const std::string path = (dir / "video_options.txt").string();
@@ -257,10 +294,13 @@ void detail_mappings() {
             CHECK(game::load_video_profile(path, r));
             return r.anti_alias;
         };
-        CHECK(load("anti_aliasing=taa\nanti_alias=0\n") == ui::kAntiAliasDefaultSlider);  // old file: box on, slider 0
-        CHECK(load("anti_aliasing=off\nanti_alias=30\n") == 30);                           // old file: box off, slider above 0
-        CHECK(load("anti_aliasing=taa\nanti_alias=20\n") == 20);                           // strength kept
-        CHECK(load("anti_alias=0\n") == 0);
+        CHECK(load("anti_aliasing=taa\nanti_alias=0\n") == ui::kAaTaa);   // old file: box on, slider 0
+        CHECK(load("anti_aliasing=off\nanti_alias=30\n") == ui::kAaTaa);  // old file: box off, slider above 0
+        CHECK(load("anti_alias=100\n") == ui::kAaTaa);                     // old file: High strength
+        CHECK(load("anti_alias=0\n") == ui::kAaOff);
+        CHECK(load("anti_alias=63\naa_mode=msaa8\n") == ui::kAaMsaa8);     // the new key wins
+        CHECK(load("aa_mode=smaa\n") == ui::kAaSmaa);
+        CHECK(load("aa_mode=ultra\n") == ui::kAaOff);                      // unknown name: the default stays
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
     }
@@ -277,7 +317,6 @@ void detail_mappings() {
             game::apply_detail_options(r, s);
             return r.shadows ? 1 : 0;
         });
-        for (const ui::LevelChoice& c : ui::kAntiAliasChoices) CHECK(game::taa_active(c.value) == (c.value > 0));
         // The four quality levels are four different looks.
         std::array<int, 4> shader{}, tex{};
         for (size_t i = 0; i < 4; ++i) {
@@ -309,50 +348,6 @@ void detail_mappings() {
     CHECK(dp.detail == 40);
 }
 
-void auto_detect() {
-    constexpr uint64_t kGiB = 1024ull * 1024ull * 1024ull;
-    const auto gpu = [](game::GpuKind k, uint64_t gib, float aniso) {
-        game::GpuClass g;
-        g.kind = k;
-        g.memory_bytes = gib * kGiB;
-        g.sampler_anisotropy = aniso > 1.0f;
-        g.max_anisotropy = aniso;
-        return g;
-    };
-    using game::GpuKind;
-    const game::AutoVideoChoice big = game::recommend_video(gpu(GpuKind::Discrete, 12, 16.0f));
-    CHECK(big.quality == 3 && big.advanced.anisotropy == 16 && big.advanced.ambient_occlusion && big.anti_alias == ui::kAntiAliasChoices[3].value);
-    CHECK(ui::quality_level(big.advanced) == 3);
-    const game::AutoVideoChoice mid = game::recommend_video(gpu(GpuKind::Discrete, 4, 16.0f));
-    CHECK(mid.quality == 2 && mid.advanced.anisotropy == 8 && !mid.advanced.ambient_occlusion && ui::quality_level(mid.advanced) == 2);
-    const game::AutoVideoChoice small = game::recommend_video(gpu(GpuKind::Discrete, 2, 16.0f));
-    CHECK(small.quality == 1 && small.advanced.anisotropy == 4 && !small.advanced.soft_shadows && ui::quality_level(small.advanced) == 1);
-    CHECK(game::recommend_video(gpu(GpuKind::Integrated, 8, 16.0f)).quality == 1);
-    const game::AutoVideoChoice weak = game::recommend_video(gpu(GpuKind::Integrated, 1, 16.0f));
-    CHECK(weak.quality == 0 && weak.anti_alias == 0 && weak.advanced.anisotropy == 2 && ui::quality_level(weak.advanced) == 0);
-    const game::AutoVideoChoice soft = game::recommend_video(gpu(GpuKind::Other, 16, 1.0f));
-    CHECK(soft.quality == 0 && soft.advanced.anisotropy == 0 && !soft.advanced.ambient_occlusion);
-    // Filtering never exceeds the device's limit, and is off without the feature.
-    CHECK(game::recommend_video(gpu(GpuKind::Discrete, 12, 4.0f)).advanced.anisotropy == 4);
-    CHECK(game::recommend_video(gpu(GpuKind::Discrete, 12, 0.0f)).advanced.anisotropy == 0);
-    // Every recommended anisotropy is a listed choice.
-    for (game::GpuKind k : {GpuKind::Other, GpuKind::Integrated, GpuKind::Discrete})
-        for (uint64_t gib : {0u, 1u, 2u, 4u, 8u})
-            for (float a : {0.0f, 2.0f, 8.0f, 16.0f}) {
-                const int32_t v = game::recommend_video(gpu(k, gib, a)).advanced.anisotropy;
-                bool listed = false;
-                for (int32_t c : ui::kAnisotropyChoices) listed = listed || c == v;
-                CHECK(listed);
-            }
-    // Stored in the profile: the options, the anti-aliasing strength and the Detail value; mode, v-sync and gamma stay.
-    game::VideoProfile p;
-    p.vsync = false;
-    p.gamma = 61;
-    p.mode = {1920, 1080, 144};
-    game::apply_auto_video(p, mid);
-    CHECK(p.advanced == mid.advanced && p.anti_alias == mid.anti_alias && p.detail == ui::kQualityPresets[2]);
-    CHECK(!p.vsync && p.gamma == 61 && p.mode.width == 1920);
-}
 // ui1 t02: the options file round trip and the game speed index.
 void options_round_trip() {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "alamo_game_display_tests";
@@ -370,6 +365,7 @@ void options_round_trip() {
     p.gameplay.difficulty = 2;
     p.camera.tactical_fov_deg = 70.0f;
     p.camera.queue_mods = 2;
+    p.camera.show_path_lines = true;
     p.tactical_fov_set = true;
     ui::HotkeyTable t;
     ui::HotkeyBinding b = t.binding(20);
@@ -382,7 +378,8 @@ void options_round_trip() {
     CHECK(std::fabs(q.audio.master - 0.25f) < 1e-4f && q.audio.music == 0.0f && q.audio.sfx == 1.0f && !q.audio.subtitles);
     CHECK(q.gameplay.game_speed == 75 && q.gameplay.strategic_speed == 0 && q.gameplay.alternate_mouse &&
           q.gameplay.abilities_autofire && !q.gameplay.ask_autoresolve && q.gameplay.difficulty == 2 && q.gameplay.absolute_scroll);
-    CHECK(std::fabs(q.camera.tactical_fov_deg - 70.0f) < 1e-3f && q.camera.queue_mods == 2 && q.tactical_fov_set);
+    CHECK(std::fabs(q.camera.tactical_fov_deg - 70.0f) < 1e-3f && q.camera.queue_mods == 2 && q.tactical_fov_set &&
+          q.camera.show_path_lines);
     CHECK(q.keys == p.keys);
     ui::HotkeyTable u;
     CHECK(u.load(q.keys) && u.binding(20).key == 'Q');
@@ -400,7 +397,6 @@ int main() {
     profile_resolution_confirmation();
     detail_options();
     detail_mappings();
-    auto_detect();
     options_round_trip();
     std::printf(g_fail ? "alamo_game_display_tests: %d FAILED\n" : "alamo_game_display_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;

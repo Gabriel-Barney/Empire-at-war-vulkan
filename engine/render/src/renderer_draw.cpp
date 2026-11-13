@@ -23,6 +23,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
+#include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
@@ -300,7 +301,7 @@ bool Renderer::build(rhi::Frame& frame, const ViewMatrices& view, std::span<cons
     // ---- Per-model memo (persistent, serial, first-appearance order). Instances share models, so PipelineManager
     // (mutex) and the translation table are touched only while a model still waits for a pipeline / program.
     const int cfg = (mode == DrawMode::Lit ? 1 : 0) | (external_ ? 2 : 0) | (opts.mirrored ? 4 : 0) | (sky_build_ ? 8 : 0) |
-                    (opts.coverage_alpha ? 16 : 0);
+                    (opts.coverage_alpha ? 16 : 0) | (!external_ && render_pass_ != rp_scene_ ? 32 : 0);  // [port] MSAA class
     BuildCache::MemoSet& ms = bc.sets[cfg];
     if (ms.render_pass != render_pass_) {  // colour format changed: every key differs
         ms.index.clear();
@@ -629,7 +630,7 @@ bool Renderer::build(rhi::Frame& frame, const ViewMatrices& view, std::span<cons
                     }
                 } else {
                     const BlendMode bm = g.unlit_blend;
-                    out.items[it++] = {gi, -1, (external_ ? unlit_ : unlit_int_)[g.skinned ? 1 : 0][static_cast<int>(bm)],
+                    out.items[it++] = {gi, -1, (external_ ? unlit_ : render_pass_ != rp_scene_ ? unlit_ms_ : unlit_int_)[g.skinned ? 1 : 0][static_cast<int>(bm)],
                                        bm == BlendMode::Opaque ? PhaseBucket::Opaque : PhaseBucket::Transparent, false,
                                        static_cast<uint64_t>((g.skinned ? 3 : 0) + static_cast<int>(bm)), nullptr, nullptr};
                 }
@@ -1239,7 +1240,7 @@ bool Renderer::draw(rhi::Frame& frame, VkCommandBuffer cmd, const ViewMatrices& 
     render_pass_ = rp_external_;
     const bool ok = build(frame, view, instances, mode, opts, b, st);
     external_ = false;
-    render_pass_ = rp_scene_;
+    render_pass_ = rp_main_;
     if (!ok) return false;
     const size_t s0 = bucket_begin(b.items, PhaseBucket::Shadow), s1 = bucket_begin(b.items, PhaseBucket::Water);
     const size_t h0 = bucket_begin(b.items, PhaseBucket::Heat);

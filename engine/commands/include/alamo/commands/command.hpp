@@ -164,4 +164,19 @@ EventData port_extension(uint16_t subtype, std::span<const uint8_t> data);
 EventData fleet_management_event(FleetOp op, ObjectId target, ObjectId fleet, ObjectId unit, ObjectId a = kNoObject,
                                  uint32_t slot = 0);
 
+// [port: Gabriel, 2026-11-13] Fleet and ship names (docs/DECISIONS.md "Fleet and ship names"; retail has none). A port-only
+// PortExtension event, subtype kRenameSubtype, data = u32 object id (little-endian) + the name's UTF-8 bytes. An empty
+// name (after normalisation) clears the name: the object shows its default name again. GalacticSim::execute applies it.
+inline constexpr uint16_t kRenameSubtype = 0x524E;   // "RN"
+inline constexpr size_t kMaxObjectNameChars = 32;    // code points after normalisation
+inline constexpr size_t kMaxObjectNameBytes = 128;   // wire guard (32 code points are at most 128 UTF-8 bytes)
+// The name as it is stored: leading / trailing spaces dropped, runs of spaces kept. False when `raw` is not well-formed
+// UTF-8, holds a control character (U+0000..U+001F, U+007F..U+009F), or has more than kMaxObjectNameChars code points
+// after trimming; `out` is then unchanged. An empty result is valid (= clear the name).
+bool normalize_object_name(std::string_view raw, std::string& out);
+EventData rename_object_event(ObjectId object, std::string_view name);
+// False when `e` is not a rename event or its data is malformed (shorter than the id, or longer than the guard). The name
+// is returned as sent (not normalised).
+bool read_rename_event(const EventData& e, ObjectId& object, std::string& name);
+
 }  // namespace alamo::commands

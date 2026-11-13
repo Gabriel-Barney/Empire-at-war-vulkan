@@ -3,10 +3,12 @@
 // <windows.h> stays in this one translation unit.
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "alamo/render/upscale.hpp"
 #include "alamo/ui/gui_menus.hpp"
 #include "alamo/ui/hotkeys.hpp"
 
@@ -42,10 +44,17 @@ int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, ui
 // Windows restores the user's mode when the process ends; restore_display_mode() does it at once), then the window's
 // client area is resized (set_window_client_size). A rate the monitor does not offer at its current resolution leaves
 // the rate alone. `log` gets one line describing what changed. False when the window resize failed.
-// UI5 t01: `windowed` false (Options > Video, Windowed unchecked) is full screen [port: borderless, no exclusive mode]:
-// the monitor always takes the mode's resolution and rate and the window covers it without a frame (a refused mode
-// change leaves a borderless window of the mode's size centred on the monitor).
-bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr, bool windowed = true);
+// UI5 t01 / [port: Gabriel 2026-11-13] `mode` (Options > Video > Display Mode):
+//   Windowed   - as above;
+//   Fullscreen - [port: frameless, no exclusive mode] the monitor always takes the mode's resolution and rate and the window
+//                covers it without a frame (a refused mode change leaves a frameless window of the mode's size centred on
+//                the monitor);
+//   Borderless - the monitor keeps (or gets back) the user's desktop resolution, takes the mode's refresh rate when it is
+//                offered at that resolution, and a frameless window covers the whole monitor (the mode's size is unused).
+bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr, ui::WindowMode mode = ui::WindowMode::Windowed);
+// The profile / log name of a window mode ("fullscreen", "borderless", "windowed") and back (unknown text: nullopt).
+const char* window_mode_name(ui::WindowMode m);
+std::optional<ui::WindowMode> parse_window_mode(std::string_view s);
 // UI5 t01 [port]: Options > Video > Widescreen off lists only modes no wider than 4:3 (5:4 and 4:3); on, every mode. All
 // modes when none is that narrow.
 std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes, bool widescreen);
@@ -78,19 +87,26 @@ uint32_t game_speed_index(int32_t slider);
 // the port writes a key = value text file, %LOCALAPPDATA%/alamo/video_options.txt). `mode` 0 x 0 = not stored.
 struct VideoProfile {
     DisplayMode mode;
-    bool vsync = true, hardware_mouse = false;
-    bool windowed = true, widescreen = true;  // UI5 t01 (the port starts windowed unless the profile says otherwise)
+    bool vsync = true;
+    // UI5 t01 / [port: Gabriel 2026-11-13]: the port starts windowed unless the profile says otherwise. Key "window_mode"
+    // (window_mode_name); a profile from before it has "windowed=0|1" (0 = Fullscreen).
+    ui::WindowMode window_mode = ui::WindowMode::Windowed;
+    bool widescreen = true;
+    int32_t ui_scale = 100;  // [port: Gabriel] Options > Video > UI Scale, percent (kUiScaleMin .. kUiScaleMax; key "ui_scale")
     ui::VsyncMode vsync_mode = ui::VsyncMode::Fifo;
     int32_t frame_cap = 0;
-    int32_t detail = 100, anti_alias = 0, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100 (anti_alias: TAA strength, 0 = off)
+    int32_t detail = 100, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100
+    int32_t anti_alias = ui::kAaOff;   // [port: Gabriel] the Anti-aliasing list's mode (ui::kAntiAliasChoices; key "aa_mode")
     ui::AdvancedVideoSettings advanced;
 };
 // Copies an applied ApplyVideo's settings into the stored profile; false (profile untouched) while `v.unconfirmed` - a
 // resolution change waiting on the "keep these settings?" dialog (ui::VideoSettings::unconfirmed): the Yes answer, or the
 // revert to the previous mode on No / timeout, comes as a later ApplyVideo with unconfirmed false and stores then. `modes`
 // is the list the resolution index refers to.
-// Anti-aliasing is the one value p.anti_alias (the Video dialog's list); a profile file from before it was also an Advanced
-// dialog box (key "anti_aliasing=taa") loads as Medium strength when its own strength was 0.
+// Anti-aliasing is the one value p.anti_alias, a mode of the Video dialog's list (ui::kAntiAliasChoices), stored as
+// "aa_mode=off|smaa|taa|msaa2|msaa4|msaa8" (aa_mode_name). [port: Gabriel 2026-11-13] Older profiles still load: their
+// "anti_alias" was the TAA strength 0..100 (above 0 = TAA, 0 = Off) and before that an Advanced dialog box
+// "anti_aliasing=taa" also meant TAA; "aa_mode", when present, wins.
 bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std::vector<DisplayMode>& modes);
 // t43: the stored Detail value is the level of the seven advanced options (ui::advanced_detail_level); applied with them and
 // to a profile saved before the two agreed.
@@ -114,41 +130,33 @@ void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSetti
 //   particle_detail(slider)     ParticleWorld::set_detail: slider / 100 (ANIM_PARTICLES B.4: the option is 0..1)
 //   environment_fade_scale(slider)  Object_Fade_Begin / End scale for the battle camera: 0.6 + 0.4 * slider / 100
 //   gamma_value(slider)         Options > Video > Gamma, default 50 = 1.0 (identity), 2^((slider - 50) / 50): 0.5 .. 2; > 1 brightens
-//   taa_active(strength)        the Anti-aliasing strength is above 0 (the list's Low / Medium / High: 30 / 63 / 100)
-//   apply_aa_options(o, strength)  RecordOptions::taa / taa_weight: strength 1..100 lerps the current-frame weight 0.2 -> 0.04
-//                                  (smoother, more history; Medium = 0.1, the tuned default); off leaves the weight unset
+//   taa_active(mode)            the Anti-aliasing mode is TAA
+//   aa_msaa_samples(mode)       MSAA samples of the mode: 2 / 4 / 8 for MSAA 2x / 4x / 8x, else 1
+//   apply_aa_options(o, mode)   [port: Gabriel 2026-11-13] exactly one of RecordOptions::smaa / taa / msaa > 1 (none for Off),
+//                               each at its one quality: taa_weight / taa_sharpen stay the renderer defaults; an MSAA count the
+//                               device lacks is lowered by the renderer (Renderer::msaa_samples)
 int shader_level(int32_t slider);
 int water_level(int32_t slider);
 uint32_t texture_reduction(int32_t slider);
 float particle_detail(int32_t slider);
 float environment_fade_scale(int32_t slider);
 float gamma_value(int32_t slider);
-bool taa_active(int32_t strength);
-void apply_aa_options(render::RecordOptions& o, int32_t strength);
+bool taa_active(int32_t mode);
+// [port: Gabriel 2026-11-13] The FSR modes of the list (ui::kAaFsrNative .. kAaFsrUltra): their quality mode; nullopt otherwise.
+std::optional<render::UpscaleQuality> fsr_quality(int32_t mode);
+uint32_t aa_msaa_samples(int32_t mode);
+// Profile name of an Anti-aliasing mode ("off", "smaa", "taa", "msaa2", "msaa4", "msaa8"; unknown modes: "off") and back
+// (nullopt for an unknown name).
+const char* aa_mode_name(int32_t mode);
+std::optional<int32_t> parse_aa_mode(std::string_view name);
+// [port: Gabriel] Advanced video > Render Scale percent -> RecordOptions::render_scale (share of the window's pixels; 100 = 1).
+float render_scale_value(int32_t percent);
+void apply_aa_options(render::RecordOptions& o, int32_t mode);
 // The overall Detail Level (IDD_VIDEO_OPTIONS_DIALOG: Low / Medium / High / Ultra, ui::kQualityPresets) as a preset [M]: a
 // quality level picked there (VideoSettings::detail_picked) sets the seven advanced detail options (particle, mesh, texture,
 // water, shader, shadow, environment) to its value; the checks (soft shadows, heat, bloom), anti-aliasing and anisotropy are
 // left as they are.
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail);
-// Auto Detect (the Video and Advanced dialogs' Auto Detect button, ui::MenuAction::Kind::AutoDetectVideo) [port: the original's
-// detection is not recovered; the choice below is a documented guess from the GPU class and its video memory]. Discrete GPUs
-// get Medium under 3 GiB, High under 6 GiB and Ultra from there; an integrated GPU Medium with 2 GiB or more of memory it can
-// use, else Low; anything else (software or virtual) Low. Resolution, v-sync, frame cap and gamma are left alone.
-enum class GpuKind : uint8_t { Other, Integrated, Discrete };
-struct GpuClass {
-    GpuKind kind = GpuKind::Other;
-    uint64_t memory_bytes = 0;      // largest device-local heap
-    bool sampler_anisotropy = false;
-    float max_anisotropy = 1.0f;    // the device's limit; the recommended filtering never exceeds it
-};
-struct AutoVideoChoice {
-    size_t quality = 0;             // index into ui::kQualityPresets
-    int32_t anti_alias = 0;         // strength, one of ui::kAntiAliasChoices
-    ui::AdvancedVideoSettings advanced;  // the seven options at the quality level, plus the checks, AO and anisotropy
-};
-AutoVideoChoice recommend_video(const GpuClass& gpu);
-// Stores the choice in the profile: the advanced options, the Anti-aliasing strength and the Detail value (sync_detail).
-void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c);
 // Per-monitor DPI awareness (v2) for the process, so window sizes, the client area and the display modes are all physical
 // pixels; without it a scaled display (150 %) stretches the window and a mode the size of the display no longer fits.
 // Call before the first window. No-op off Windows or when the call is refused.
@@ -182,13 +190,8 @@ private:
     void* timer_ = nullptr;  // HANDLE
 };
 // Hides / shows the OS arrow over this thread's windows (ShowCursor, kept balanced: only state changes call it). The
-// host hides it while the game draws its own cursor (no hardware mouse).
+// host hides it while the game draws its own cursor.
 void set_os_cursor_hidden(bool hidden);
-// UI5 t02 (Options > Video > Hardware Mouse): a Windows cursor made from 32-bit BGRA pixels (top-left origin, straight
-// alpha) with its hot spot; null on failure. set_os_cursor_image makes it the window class cursor and the current one
-// (null = the arrow); repeated calls with the same cursor do nothing.
-void* create_os_cursor(const uint8_t* bgra, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y);
-void set_os_cursor_image(void* hwnd, void* cursor);
 
 // modc t08: starts this executable again with the command-line arguments `args` (argv[1..] already quoted: the mod
 // picker's relaunch with other MODPATH= / STEAMMOD= arguments), in the current working folder. False + err when the

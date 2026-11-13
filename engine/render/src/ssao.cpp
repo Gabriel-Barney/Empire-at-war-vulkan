@@ -121,7 +121,7 @@ void SsaoPass::shutdown() {
     alloc_ = nullptr;
 }
 
-VkPipeline SsaoPass::pipeline(int which, VkFormat color_format) {
+VkPipeline SsaoPass::pipeline(int which, VkFormat color_format, VkSampleCountFlagBits samples) {
     const std::vector<uint32_t> vs = rhi::spirv_from_bytes(std::span<const uint8_t>(g_ssao_vs, sizeof g_ssao_vs));
     std::vector<uint32_t> fs;
     if (which == 0) fs = rhi::spirv_from_bytes(std::span<const uint8_t>(g_ssao_ps_ao, sizeof g_ssao_ps_ao));
@@ -145,29 +145,32 @@ VkPipeline SsaoPass::pipeline(int which, VkFormat color_format) {
         d.blend.write_mask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
     }
     d.color_formats = std::span<const VkFormat>(&color_format, 1);
+    d.samples = samples;
     d.layout = layout_;
     d.name = kName[which];
     return cache_.create_graphics(d);
 }
 
-bool SsaoPass::record(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget& scene, VkFormat color_format,
-                      const ViewMatrices& view, float strength, float radius, float depth_empty, rhi::GpuTimer* timer) {
-    if (!ctx_ || !scene.has_depth() || !scene.has_color() || strength <= 0.0f || radius <= 0.0f) return false;
+bool SsaoPass::record(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget& scene, rhi::RenderTarget& depth_src,
+                      VkFormat color_format, VkSampleCountFlagBits samples, const ViewMatrices& view, float strength, float radius,
+                      float depth_empty, rhi::GpuTimer* timer) {
+    if (!ctx_ || !depth_src.has_depth() || !scene.has_color() || strength <= 0.0f || radius <= 0.0f) return false;
     const rhi::DeviceFns& fn = ctx_->vkd();
-    // Apply pipeline for this colour format.
+    // Apply pipeline for this colour format and sample count.
     VkPipeline apply = VK_NULL_HANDLE;
     for (const Apply& a : apply_)
-        if (a.format == color_format) apply = a.pipe;
+        if (a.format == color_format && a.samples == samples) apply = a.pipe;
     if (!apply) {
-        apply = pipeline(2, color_format);
+        apply = pipeline(2, color_format, samples);
         if (!apply) {
-            log::errorf("render", "ssao: apply pipeline (format %d) failed", static_cast<int>(color_format));
+            log::errorf("render", "ssao: apply pipeline (format %d, %d samples) failed", static_cast<int>(color_format),
+                        static_cast<int>(samples));
             return false;
         }
-        apply_.push_back({color_format, apply});
+        apply_.push_back({color_format, samples, apply});
     }
     // Half-res targets following the scene size.
-    const VkExtent2D ext = scene.extent();
+    const VkExtent2D ext = depth_src.extent();
     if (!targets_) {
         rhi::RenderTargetDesc td;
         td.color = rhi::Format::RG32F;
@@ -202,7 +205,7 @@ bool SsaoPass::record(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget&
     VkDescriptorSet sets[3] = {da.allocate(set_layout_), da.allocate(set_layout_), da.allocate(set_layout_)};
     if (!sets[0] || !sets[1] || !sets[2]) return false;
     const VkSampler point = samplers_.get(rhi::SamplerKey::point_clamp());
-    const VkImageView depth_view = scene.depth().view;  // depth aspect only
+    const VkImageView depth_view = depth_src.depth().view;  // depth aspect only
     // Set n: binding 0 = scene depth, binding 1 = the pass input (AO pass: the depth again, never read).
     const VkImageView inputs[3] = {depth_view, ao_a_.color().view, ao_b_.color().view};
     for (uint32_t s = 0; s < 3; ++s) {
@@ -246,7 +249,7 @@ bool SsaoPass::record(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget&
     pc.blur[3] = kMaxRadiusFraction * static_cast<float>(ext.height);
 
     const uint32_t scope = timer ? timer->begin_scope(cmd, "ao") : 0u;
-    scene.transition_depth(fn, cmd, rhi::ImageState::DepthRead);
+    depth_src.transition_depth(fn, cmd, rhi::ImageState::DepthRead);
     auto pass = [&](rhi::RenderTarget& dst, VkPipeline pipe, VkDescriptorSet set) {
         dst.begin_rendering(fn, cmd, nullptr);
         fn.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);

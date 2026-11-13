@@ -132,7 +132,23 @@ std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes,
     return out.empty() ? modes : out;
 }
 
-bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, bool windowed) {
+const char* window_mode_name(ui::WindowMode m) {
+    switch (m) {
+        case ui::WindowMode::Fullscreen: return "fullscreen";
+        case ui::WindowMode::Borderless: return "borderless";
+        case ui::WindowMode::Windowed: break;
+    }
+    return "windowed";
+}
+
+std::optional<ui::WindowMode> parse_window_mode(std::string_view s) {
+    for (const ui::WindowMode m : {ui::WindowMode::Fullscreen, ui::WindowMode::Borderless, ui::WindowMode::Windowed})
+        if (s == window_mode_name(m)) return m;
+    return std::nullopt;
+}
+
+bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, ui::WindowMode mode) {
+    const bool windowed = mode == ui::WindowMode::Windowed, borderless = mode == ui::WindowMode::Borderless;
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || m.width == 0 || m.height == 0) return false;
     const std::wstring dev = monitor_device(hwnd);
@@ -155,11 +171,18 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, bool
         want.dmPelsWidth = reg.dmPelsWidth;
         want.dmPelsHeight = reg.dmPelsHeight;
         want.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
-        if (!fits || !windowed) {  // UI5 t01: full screen always takes the mode's resolution
+        if (mode == ui::WindowMode::Fullscreen || (windowed && !fits)) {  // UI5 t01: full screen always takes the mode's resolution
             want.dmPelsWidth = m.width;
             want.dmPelsHeight = m.height;
         }
         if (m.hz) want.dmDisplayFrequency = m.hz;
+        // Borderless: the rate only when the monitor offers it at the desktop resolution (a mode picked at another size may
+        // carry a rate that size alone has); otherwise the desktop's own rate.
+        if (borderless && m.hz && (m.width != reg.dmPelsWidth || m.height != reg.dmPelsHeight)) {
+            DEVMODEW probe = want;
+            if (ChangeDisplaySettingsExW(dev.c_str(), &probe, nullptr, CDS_FULLSCREEN | CDS_TEST, nullptr) != DISP_CHANGE_SUCCESSFUL)
+                want.dmDisplayFrequency = reg.dmDisplayFrequency;
+        }
         const bool differs = want.dmPelsWidth != cur.dmPelsWidth || want.dmPelsHeight != cur.dmPelsHeight ||
                              want.dmDisplayFrequency != cur.dmDisplayFrequency;
         if (differs) {
@@ -181,8 +204,17 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, bool
             what = "display unchanged (" + std::to_string(cur.dmDisplayFrequency) + " Hz)";
         }
     }
-    const bool ok = set_window_client_size(hwnd, m.width, m.height, !windowed);
-    if (log) *log = std::string(windowed ? "window " : "full screen ") + std::to_string(m.width) + "x" + std::to_string(m.height) +
+    uint32_t cw = m.width, ch = m.height;
+    if (borderless) {  // the whole monitor, at whatever resolution it is on now
+        MONITORINFO now{};
+        now.cbSize = sizeof now;
+        if (GetMonitorInfoW(MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST), &now)) {
+            cw = static_cast<uint32_t>(now.rcMonitor.right - now.rcMonitor.left);
+            ch = static_cast<uint32_t>(now.rcMonitor.bottom - now.rcMonitor.top);
+        }
+    }
+    const bool ok = set_window_client_size(hwnd, cw, ch, !windowed);
+    if (log) *log = std::string(window_mode_name(mode)) + " " + std::to_string(cw) + "x" + std::to_string(ch) +
                     (ok ? " applied" : " refused") + (what.empty() ? "" : ", " + what);
     return ok;
 }
@@ -285,49 +317,6 @@ void FrameLimiter::wait() {
     deadline_ns_ = target;
 }
 
-void* create_os_cursor(const uint8_t* bgra, uint32_t width, uint32_t height, int32_t hot_x, int32_t hot_y) {
-    if (!bgra || width == 0 || height == 0 || width > 256 || height > 256) return nullptr;
-    BITMAPV5HEADER bi{};
-    bi.bV5Size = sizeof bi;
-    bi.bV5Width = static_cast<LONG>(width);
-    bi.bV5Height = -static_cast<LONG>(height);  // top-down
-    bi.bV5Planes = 1;
-    bi.bV5BitCount = 32;
-    bi.bV5Compression = BI_BITFIELDS;
-    bi.bV5RedMask = 0x00FF0000;
-    bi.bV5GreenMask = 0x0000FF00;
-    bi.bV5BlueMask = 0x000000FF;
-    bi.bV5AlphaMask = 0xFF000000;
-    void* bits = nullptr;
-    HDC dc = GetDC(nullptr);
-    HBITMAP color = CreateDIBSection(dc, reinterpret_cast<const BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
-    ReleaseDC(nullptr, dc);
-    if (!color || !bits) return nullptr;
-    std::memcpy(bits, bgra, static_cast<size_t>(width) * height * 4u);
-    HBITMAP mask = CreateBitmap(static_cast<int>(width), static_cast<int>(height), 1, 1, nullptr);
-    ICONINFO ii{};
-    ii.fIcon = FALSE;
-    ii.xHotspot = static_cast<DWORD>(std::clamp<int32_t>(hot_x, 0, static_cast<int32_t>(width) - 1));
-    ii.yHotspot = static_cast<DWORD>(std::clamp<int32_t>(hot_y, 0, static_cast<int32_t>(height) - 1));
-    ii.hbmMask = mask;
-    ii.hbmColor = color;
-    HICON cur = CreateIconIndirect(&ii);
-    DeleteObject(color);
-    if (mask) DeleteObject(mask);
-    return cur;
-}
-
-void set_os_cursor_image(void* hwnd, void* cursor) {
-    static void* last = nullptr;
-    static bool set = false;
-    if (set && cursor == last) return;
-    set = true;
-    last = cursor;
-    HCURSOR h = cursor ? static_cast<HCURSOR>(cursor) : LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
-    if (hwnd) SetClassLongPtrW(static_cast<HWND>(hwnd), GCLP_HCURSOR, reinterpret_cast<LONG_PTR>(h));
-    SetCursor(h);
-}
-
 void set_os_cursor_hidden(bool hidden) {
     static bool is_hidden = false;
     if (hidden == is_hidden) return;
@@ -355,13 +344,15 @@ struct ProfileAdvBool {
     const char* key;
     bool ui::AdvancedVideoSettings::*field;
 };
+// [port: Gabriel 2026-11-13] "anti_alias" (the old TAA strength) is not written any more; anti-aliasing is "aa_mode".
 constexpr ProfileInt kProfileInts[] = {{"frame_cap", &VideoProfile::frame_cap}, {"detail", &VideoProfile::detail},
-                                       {"anti_alias", &VideoProfile::anti_alias}, {"gamma", &VideoProfile::gamma}};
+                                       {"gamma", &VideoProfile::gamma}};
 constexpr ProfileAdvInt kProfileAdvInts[] = {
     {"particle_detail", &ui::AdvancedVideoSettings::particle}, {"mesh_detail", &ui::AdvancedVideoSettings::mesh},
     {"texture_detail", &ui::AdvancedVideoSettings::texture},   {"water_detail", &ui::AdvancedVideoSettings::water},
     {"shader_detail", &ui::AdvancedVideoSettings::shader},     {"shadow_detail", &ui::AdvancedVideoSettings::shadow},
-    {"environment_detail", &ui::AdvancedVideoSettings::environment}, {"anisotropy", &ui::AdvancedVideoSettings::anisotropy}};
+    {"environment_detail", &ui::AdvancedVideoSettings::environment}, {"anisotropy", &ui::AdvancedVideoSettings::anisotropy},
+    {"render_scale", &ui::AdvancedVideoSettings::render_scale}};
 constexpr ProfileAdvBool kProfileAdvBools[] = {{"soft_shadows", &ui::AdvancedVideoSettings::soft_shadows},
                                                {"heat_distortion", &ui::AdvancedVideoSettings::heat_distortion},
                                                {"bloom", &ui::AdvancedVideoSettings::bloom},
@@ -374,9 +365,9 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.vsync = v.vsync;
     p.vsync_mode = v.vsync_mode;
     p.frame_cap = v.frame_cap;
-    p.hardware_mouse = v.hardware_mouse;
-    p.windowed = v.windowed;
+    p.window_mode = v.window_mode;
     p.widescreen = v.widescreen;
+    p.ui_scale = std::clamp(v.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     p.detail = v.detail;
     p.anti_alias = v.anti_alias;
     p.gamma = v.gamma;
@@ -412,16 +403,28 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     num("refresh_hz", hz);
     p.mode = {static_cast<uint32_t>(std::max(0, w)), static_cast<uint32_t>(std::max(0, h)), static_cast<uint32_t>(std::max(0, hz))};
     flag("vsync", p.vsync);
-    flag("hardware_mouse", p.hardware_mouse);
-    flag("windowed", p.windowed);
+    if (auto it = kv.find("windowed"); it != kv.end())  // a profile from before the display mode list
+        p.window_mode = it->second == "1" || it->second == "true" || it->second == "on" ? ui::WindowMode::Windowed : ui::WindowMode::Fullscreen;
+    if (auto it = kv.find("window_mode"); it != kv.end())
+        if (const std::optional<ui::WindowMode> wm = parse_window_mode(it->second)) p.window_mode = *wm;
     flag("widescreen", p.widescreen);
+    num("ui_scale", p.ui_scale);
+    p.ui_scale = std::clamp(p.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     if (auto it = kv.find("vsync_mode"); it != kv.end()) p.vsync_mode = it->second == "mailbox" ? ui::VsyncMode::Mailbox : ui::VsyncMode::Fifo;
     for (const ProfileInt& e : kProfileInts) num(e.key, p.*e.field);
     for (const ProfileAdvInt& e : kProfileAdvInts) num(e.key, p.advanced.*e.field);
     for (const ProfileAdvBool& e : kProfileAdvBools) flag(e.key, p.advanced.*e.field);
-    // A profile from before anti-aliasing was one setting also has "anti_aliasing=taa|off" (the Advanced dialog's box) next to the
-    // strength (the Video dialog's slider): either one on meant TAA. A box on over strength 0 is Medium, the old default.
-    if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa" && p.anti_alias <= 0) p.anti_alias = ui::kAntiAliasDefaultSlider;
+    p.advanced.render_scale = std::clamp(p.advanced.render_scale, static_cast<int32_t>(render::kRenderScaleMin * 100.0f), 100);
+    // Anti-aliasing [port: Gabriel 2026-11-13]: "aa_mode" (aa_mode_name). Older profiles: "anti_alias" was the TAA strength
+    // 0..100 (above 0 = TAA, 0 = Off), and before that also "anti_aliasing=taa|off" (the Advanced dialog's box): either one on
+    // meant TAA. "aa_mode" wins when present; an unknown name keeps the value.
+    int32_t strength = -1;
+    num("anti_alias", strength);
+    if (strength >= 0) p.anti_alias = strength > 0 ? ui::kAaTaa : ui::kAaOff;
+    if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa") p.anti_alias = ui::kAaTaa;
+    if (auto it = kv.find("aa_mode"); it != kv.end())
+        if (const std::optional<int32_t> m = parse_aa_mode(it->second)) p.anti_alias = *m;
+    if (p.anti_alias < ui::kAaOff || p.anti_alias > ui::kAaMsaa8) p.anti_alias = ui::kAaOff;
     return true;
 }
 
@@ -434,9 +437,9 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     f << "# alamo_game video options (written by the Video / Advanced video dialogs)\n";
     f << "width=" << p.mode.width << "\nheight=" << p.mode.height << "\nrefresh_hz=" << p.mode.hz << "\n";
     f << "vsync=" << (p.vsync ? 1 : 0) << "\nvsync_mode=" << (p.vsync_mode == ui::VsyncMode::Mailbox ? "mailbox" : "fifo") << "\n";
-    f << "hardware_mouse=" << (p.hardware_mouse ? 1 : 0) << "\n";
-    f << "windowed=" << (p.windowed ? 1 : 0) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\n";
+    f << "window_mode=" << window_mode_name(p.window_mode) << "\nwidescreen=" << (p.widescreen ? 1 : 0) << "\nui_scale=" << p.ui_scale << "\n";
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
+    f << "aa_mode=" << aa_mode_name(p.anti_alias) << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
     for (const ProfileAdvBool& e : kProfileAdvBools) f << e.key << "=" << (p.advanced.*e.field ? 1 : 0) << "\n";
     return static_cast<bool>(f);
@@ -521,6 +524,7 @@ bool load_options_profile(const std::string& path, OptionsProfile& p) {
         p.camera.tactical_fov_deg = std::clamp(std::strtof(v->c_str(), nullptr), ui::kTacticalFovMinDeg, ui::kTacticalFovMaxDeg);
     if (const std::string* v = find("tactical_fov_set")) p.tactical_fov_set = flag(*v);
     if (const std::string* v = find("queue_mods")) p.camera.queue_mods = static_cast<uint8_t>(std::strtoul(v->c_str(), nullptr, 10) & 0xFFu);
+    if (const std::string* v = find("show_path_lines")) p.camera.show_path_lines = flag(*v);
     for (const auto& [k, v] : kv)
         if (k.size() > kKeyPrefix.size() && std::string_view(k).substr(0, kKeyPrefix.size()) == kKeyPrefix && !v.empty())
             p.keys[k.substr(kKeyPrefix.size())] = static_cast<int32_t>(std::strtol(v.c_str(), nullptr, 10));
@@ -542,6 +546,7 @@ bool save_options_profile(const std::string& path, const OptionsProfile& p) {
     f << "tactical_fov=" << opt_float(p.camera.tactical_fov_deg) << "\n";
     f << "tactical_fov_set=" << (p.tactical_fov_set ? 1 : 0) << "\n";
     f << "queue_mods=" << static_cast<unsigned>(p.camera.queue_mods) << "\n";
+    f << "show_path_lines=" << (p.camera.show_path_lines ? 1 : 0) << "\n";
     for (const auto& [k, v] : p.keys) f << kKeyPrefix << k << "=" << v << "\n";
     return static_cast<bool>(f);
 }
@@ -562,19 +567,58 @@ float particle_detail(int32_t slider) { return static_cast<float>(slider_clamp(s
 float environment_fade_scale(int32_t slider) { return 0.6f + 0.4f * static_cast<float>(slider_clamp(slider)) / 100.0f; }
 float gamma_value(int32_t slider) { return std::exp2((static_cast<float>(slider_clamp(slider)) - 50.0f) / 50.0f); }
 
-bool taa_active(int32_t strength) { return strength > 0; }
+bool taa_active(int32_t mode) { return mode == ui::kAaTaa; }
 
-void apply_aa_options(render::RecordOptions& o, int32_t strength) {
-    o.taa = taa_active(strength);
-    // Off keeps the renderer's tuned default weight for a later switch-on. On: the share of the current frame falls with the
-    // strength (more history = smoother edges, a little more softness / ghosting).
-    o.taa_weight = o.taa ? 0.2f - 0.16f * static_cast<float>(slider_clamp(strength)) / 100.0f : -1.0f;
+uint32_t aa_msaa_samples(int32_t mode) {
+    switch (mode) {
+        case ui::kAaMsaa2: return 2;
+        case ui::kAaMsaa4: return 4;
+        case ui::kAaMsaa8: return 8;
+        default: return 1;
+    }
+}
+
+namespace {
+constexpr const char* kAaModeNames[] = {"off",        "smaa",        "taa",          "msaa2",           "msaa4",    "msaa8",
+                                        "fsr_native", "fsr_quality", "fsr_balanced", "fsr_performance", "fsr_ultra"};  // by mode
+static_assert(std::size(kAaModeNames) == std::size(ui::kAntiAliasChoices));
+}  // namespace
+
+const char* aa_mode_name(int32_t mode) {
+    return mode >= 0 && static_cast<size_t>(mode) < std::size(kAaModeNames) ? kAaModeNames[static_cast<size_t>(mode)] : kAaModeNames[0];
+}
+
+std::optional<int32_t> parse_aa_mode(std::string_view name) {
+    for (size_t i = 0; i < std::size(kAaModeNames); ++i)
+        if (name == kAaModeNames[i]) return static_cast<int32_t>(i);
+    return std::nullopt;
+}
+
+std::optional<render::UpscaleQuality> fsr_quality(int32_t mode) {
+    if (mode < ui::kAaFsrNative || mode > ui::kAaFsrUltra) return std::nullopt;
+    return static_cast<render::UpscaleQuality>(mode - ui::kAaFsrNative);
+}
+
+void apply_aa_options(render::RecordOptions& o, int32_t mode) {
+    // [port: Gabriel 2026-11-13] One mode, one quality each: TAA keeps the renderer's tuned weight and sharpen. An FSR mode
+    // sets the upscaler and also TAA, which the renderer draws instead where FSR cannot run.
+    const std::optional<render::UpscaleQuality> fsr = fsr_quality(mode);
+    o.upscaler = fsr ? render::Upscaler::Fsr : render::Upscaler::None;
+    if (fsr) o.upscale_quality = *fsr;
+    o.taa = taa_active(mode) || fsr.has_value();
+    o.smaa = mode == ui::kAaSmaa;
+    o.msaa = aa_msaa_samples(mode);
+    o.taa_weight = -1.0f;
 }
 
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail) {
     ui::AdvancedVideoSettings r = s;
     ui::set_advanced_detail(r, slider_clamp(detail));
     return r;
+}
+
+float render_scale_value(int32_t percent) {
+    return std::max(render::kRenderScaleMin, static_cast<float>(std::clamp(percent, 0, 100)) / 100.0f);
 }
 
 void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSettings& s) {
@@ -585,43 +629,6 @@ void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSetti
     o.water_detail = water_level(s.water);
     if (!s.bloom) o.bloom_strength = 0.0f;
     if (!s.heat_distortion) o.heat_amount = 0.0f;
-}
-
-AutoVideoChoice recommend_video(const GpuClass& gpu) {
-    constexpr uint64_t kGiB = 1024ull * 1024ull * 1024ull;
-    AutoVideoChoice c;
-    int32_t aniso = 0;
-    bool soft_shadows = false, ao = false;
-    switch (gpu.kind) {
-        case GpuKind::Discrete:
-            if (gpu.memory_bytes >= 6 * kGiB) { c.quality = 3; c.anti_alias = ui::kAntiAliasChoices[3].value; aniso = 16; soft_shadows = true; ao = true; }
-            else if (gpu.memory_bytes >= 3 * kGiB) { c.quality = 2; c.anti_alias = ui::kAntiAliasChoices[2].value; aniso = 8; soft_shadows = true; }
-            else { c.quality = 1; c.anti_alias = ui::kAntiAliasChoices[1].value; aniso = 4; }
-            break;
-        case GpuKind::Integrated:
-            c.quality = gpu.memory_bytes >= 2 * kGiB ? 1 : 0;
-            c.anti_alias = 0;
-            aniso = 2;
-            break;
-        case GpuKind::Other: break;  // Low, everything off
-    }
-    // Filtering the device cannot do is not recommended: the largest listed level at or under its limit.
-    if (!gpu.sampler_anisotropy) aniso = 0;
-    while (aniso > 0 && static_cast<float>(aniso) > gpu.max_anisotropy) aniso /= 2;
-    if (aniso < 2) aniso = 0;
-    ui::set_advanced_detail(c.advanced, ui::kQualityPresets[c.quality]);
-    c.advanced.soft_shadows = soft_shadows;
-    c.advanced.heat_distortion = true;
-    c.advanced.bloom = true;
-    c.advanced.ambient_occlusion = ao;
-    c.advanced.anisotropy = aniso;
-    return c;
-}
-
-void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c) {
-    p.advanced = c.advanced;
-    p.anti_alias = c.anti_alias;
-    sync_detail(p);
 }
 
 // modc t08: CreateProcessW on GetModuleFileNameW; `args` is already quoted (mod_picker.hpp windows_command_line). The

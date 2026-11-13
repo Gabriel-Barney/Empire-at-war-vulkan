@@ -201,3 +201,44 @@ float4 PSSharpen(float4 pos : SV_Position) : SV_Target0 {
     return float4(clamp(sharp, mn, mx), c.a);
 }
 #endif
+
+#ifdef MOTION
+// [port] FSR inputs (render/src/fsr.cpp, alamo/render/upscale.hpp): per render pixel, the motion vector FSR wants - the
+// pixel's surface point from where it is now (un-jittered) to where it was in the previous frame's image, in uv units
+// (FSR scales it by the render size) - and the raw 0..1 scene depth as R32F (FSR samples it as a colour texture).
+// Params: x / y this frame's jitter in uv (jittered uv - un-jittered uv), z reset (> 0.5: no vectors), w 1 = velocity
+// target valid (the movers' own motion, taa_velocity.hlsl, else the camera reprojection through Reproj).
+[[vk::combinedImageSampler]][[vk::binding(0, 0)]] Texture2D<float> MvDepthTex;
+[[vk::combinedImageSampler]][[vk::binding(0, 0)]] SamplerState MvDepthSmp;
+[[vk::combinedImageSampler]][[vk::binding(1, 0)]] Texture2D<float4> MvVelTex;
+[[vk::combinedImageSampler]][[vk::binding(1, 0)]] SamplerState MvVelSmp;
+
+struct MotionOut {
+    float2 mv : SV_Target0;
+    float depth : SV_Target1;
+};
+
+MotionOut PSMotion(float4 pos : SV_Position) {
+    const int2 p = int2(pos.xy);
+    MotionOut o;
+    const float d = MvDepthTex.Load(int3(p, 0));
+    o.depth = d;
+    o.mv = float2(0.0, 0.0);
+    if (PC.Params.z > 0.5) return o;
+    const float2 uv = (float2(p) + 0.5) * PC.Texel.xy;  // jittered sample position
+    const float2 uv_now = uv - PC.Params.xy;             // the same surface point under the un-jittered camera
+    const float4 vel = PC.Params.w > 0.5 ? MvVelTex.Load(int3(p, 0)) : float4(0.0, 0.0, 0.0, 0.0);
+    float2 puv;
+    if (vel.w > 0.5) {
+        puv = vel.xy;
+    } else {
+        const float4 ndc = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);  // render(): viewport Y flipped
+        const float4 clip = float4(dot(PC.Reproj[0], ndc), dot(PC.Reproj[1], ndc), dot(PC.Reproj[2], ndc), dot(PC.Reproj[3], ndc));
+        if (clip.w <= 1e-6) return o;  // behind the previous camera: no vector
+        const float2 pn = clip.xy / clip.w;
+        puv = float2(pn.x * 0.5 + 0.5, 0.5 - pn.y * 0.5);
+    }
+    o.mv = puv - uv_now;
+    return o;
+}
+#endif

@@ -64,6 +64,7 @@
 #include "alamo/ui/mouse_cursor.hpp"
 #include "alamo/ui/orders.hpp"
 #include "alamo/ui/render_bridge.hpp"
+#include "alamo/ui/rename_prompt.hpp"
 #include "alamo/ui/targeting.hpp"
 #include "alamo/ui/window_input.hpp"
 #include "frame_overlay.hpp"
@@ -297,6 +298,7 @@ public:
     uint64_t last_submit_frame_ = 0;
     uint64_t frames_ = 0;
     double now_s_ = 0.0;
+    double fsr_last_s_ = -1.0;  // [port] FSR: now_s_ of the last frame (RecordOptions::frame_ms)
     float dt_ = 0.0f;
     uint32_t last_tick_ms_ = 0;
     uint32_t prev_tick_ms_ = 0;  // the tick before last_tick_ms_ (render interpolation period)
@@ -306,8 +308,8 @@ public:
     FrameLimiter limiter_;
     uint32_t refresh_hz_ = 0;
     uint64_t refresh_checked_frame_ = 0;
-    // [port: Gabriel] advanced video: ambient occlusion and anisotropic filtering (anti-aliasing, TAA, is the profile's
-    // anti_alias strength). The detail levels and the soft shadow / heat / bloom checks reach the renderer in apply_detail_options (game_display.hpp, t10 / t11). world_view_: the last
+    // [port: Gabriel] advanced video: ambient occlusion and anisotropic filtering (anti-aliasing is the profile's anti_alias
+    // mode: Off / SMAA / TAA / MSAA 2x / 4x / 8x). The detail levels and the soft shadow / heat / bloom checks reach the renderer in apply_detail_options (game_display.hpp, t10 / t11). world_view_: the last
     // frame's world (0 none, 1 galactic, 2 battle); a change restarts the TAA history.
     ui::AdvancedVideoSettings adv_video_;
     int world_view_ = 0;
@@ -323,6 +325,8 @@ public:
     render::DrawStats draw_stats_;
     // OPT1 t07: the frame-time overlay and this frame's phase times (wall clock, presentation only).
     FrameOverlay overlay_;
+    // [port: Gabriel, 2026-11-13] fleet / ship rename prompt (HudAction::Rename opens it; app_frame.cpp feeds and draws it).
+    ui::RenamePrompt rename_;
     FrameTimes ft_;
     Clock::time_point frame_t0_{};
     bool smoke_ok_ = true;
@@ -338,8 +342,7 @@ public:
     ui::CursorTable cursor_table_;
     ui::MouseCursor cursor_;
     bool cursor_ok_ = false;
-    bool hardware_mouse_ = false;
-    std::vector<ui::HudObjective> hud_objectives_;  // tactical objectives box (built per frame)  // video options IDC_HARDWARE_MOUSE: the OS arrow instead of the drawn cursor
+    std::vector<ui::HudObjective> hud_objectives_;  // tactical objectives box (built per frame)
     ui::RadarSettings radar_settings_;
     ui::RadarImage radar_;
     ui::RadarEvents radar_events_;
@@ -434,7 +437,12 @@ public:
     bool tactical_fov_set_ = false;     // the player changed the tactical FOV (else TacticalCameras.xml's applies)
     std::vector<DisplayMode> display_modes_;  // the display's modes (primary display, game_display.hpp)
     std::vector<DisplayMode> shown_modes_;    // UI5 t01: the video options' resolution list (video_list_modes; Widescreen)
-    bool windowed_ = true;                    // UI5 t01: Options > Video > Windowed (false: full screen)
+    ui::WindowMode window_mode_ = ui::WindowMode::Windowed;  // UI5 t01 / [port: Gabriel] Options > Video > Display Mode
+    bool windowed() const { return window_mode_ == ui::WindowMode::Windowed; }
+    // [port: Gabriel] Options > Video > UI Scale in percent (live play: the profile's, 100 at first start); 0 in scripted /
+    // smoke / benchmark runs, which keep the original fitted UI so their captures do not depend on the window size.
+    int32_t ui_scale_ = 0;
+    void resize_ui();  // the GUI, both HUDs and the side panels to the window size at ui_scale_
     uint64_t video_applies_ = 0;
     bool menu_dialog_open() const;  // the in-game menu or one of its option / save / load / quit dialogs is open
     uint32_t reinforce_unit_ = 0;       // reinforcement chosen on the pad, waiting for its drop point (0 = none)
@@ -465,6 +473,14 @@ public:
     bool cancel_picks();               // Esc: ends a reinforcement / bombing-run / beacon pick (true when one was on)
     void select_cycle(int32_t step);   // NextUnit / PreviousUnit
     void select_like();                // SelectLike
+    // [port: Gabriel, 2026-11-13] squadron wings (ui::HudWing): wing 0 = the local player's fighter squadrons, wing 1 =
+    // its bomber squadrons (a member type with Bomber in its CategoryMask). F2 / F3 or the wing buttons select one; a
+    // second press within 0.4 s centres the camera on it.
+    void fill_wings(ui::TacticalHudFrame& hf);
+    void select_wing(size_t wing, bool add, bool centre_only);
+    std::vector<ui::HudWing> wings_;
+    int32_t wing_last_ = -1;           // wing selected last and when (double press -> camera)
+    double wing_last_s_ = -1.0e30;
     bool movie_mode_ = false;          // MovieMode key / b_camera_t [port]: the interface hidden
     bool interface_hidden_ = false;    // ToggleInterface key (byte 0x140b3069b)
     bool objectives_hidden_ = false;   // MissionHolocron key in a battle [port]
@@ -647,10 +663,6 @@ public:
     ui::CreditsRoll credits_;            // ui1 t03: the front end's credits roll (ShowCredits)
     uint32_t tooltip_trigger_fleet_ = 0;  // ui1 t03: the fleet / land stack whose fleet_tooltip / land_tooltip fired last
     void show_credits();
-    // UI5 t02: with Hardware Mouse on, the current pointer's frame becomes the Windows cursor (same art, hot spot and
-    // context cursors as the drawn one); off: the arrow class cursor (the drawn cursor hides it).
-    void sync_os_cursor();
-    std::map<std::string, void*> hw_cursors_;  // frame texture -> HCURSOR (null: could not be made; the arrow is used)
     void fill_cursor_hover(ui::CursorContext& c);  // ui1 t01: hovered object -> cursor context (battle)
     void update_radar();
 

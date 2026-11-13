@@ -808,6 +808,13 @@ ScriptStep step_reinforce() {
                         return false;
                     }
                     if (st->n < st->next) return false;
+                    // [port: Gabriel, 2026-11-13] with 12-fighter squadrons the starting fleet can fill the space cap, so
+                    // the pad refuses the pick itself (reinforce_available: QueueFull) and no drop is ever clicked: the
+                    // same answer as a refused drop.
+                    if (st->n > 60 && a.reinforce_drops_ == 0 && !a.reinforce_available(pool[0].galactic_id)) {
+                        std::printf("script: reinforcement drop answered: pick refused (cap full)\n");
+                        return true;
+                    }
                     ui::HudAction act;
                     act.kind = ui::HudAction::Kind::BeginReinforcement;
                     act.unit = static_cast<uint32_t>(pool[0].galactic_id);

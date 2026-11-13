@@ -112,9 +112,11 @@ private:
     Stats stats_;
 };
 
-// Attachment formats <-> PsoKey::render_pass (stable small ids, 0 = unknown).
-uint8_t render_pass_id(VkFormat color, VkFormat depth);
+// Attachment formats + sample count <-> PsoKey::render_pass (stable small ids, 0 = unknown). [port] MSAA: `samples` 1, 2, 4
+// or 8 (anything else: 0); single-sample ids are the ones from before MSAA (persisted pipeline-cache keys stay valid).
+uint8_t render_pass_id(VkFormat color, VkFormat depth, uint32_t samples = 1);
 bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth);
+bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth, VkSampleCountFlagBits& samples);
 
 const materials::ShaderBlob* shader_blob_by_id(uint32_t id);
 // Input locations of the vertex-stage SPIR-V (Location-decorated Input variables), sorted.

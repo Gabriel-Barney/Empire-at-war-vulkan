@@ -556,6 +556,21 @@ commands::EventData tactical_auto_resolve_event() {
     return commands::ev::port_extension(kTacticalAutoResolveSubtype, std::span<const uint8_t>(&b, 1));
 }
 bool GameSession::auto_resolve_battle() { return host_ && submit(tactical_auto_resolve_event()).ok(); }
+
+// [port: Gabriel 2026-11-13] fleet cohesion: the preference, and the command for the running battle (none: after_tick
+// sends it when a battle starts).
+namespace {
+commands::EventData fleet_cohesion_event(bool tight) {
+    const uint8_t b = tight ? 1 : 0;
+    return commands::ev::port_extension(commands::kPortFleetCohesionSubtype, std::span<const uint8_t>(&b, 1));
+}
+}  // namespace
+bool GameSession::set_fleet_cohesion(bool tight) {
+    fleet_cohesion_ = tight;
+    if (!host_ || replay_ || !battle()) return false;
+    fleet_cohesion_sent_ = submit(fleet_cohesion_event(tight)).ok();
+    return fleet_cohesion_sent_;
+}
 // L1/S4 wave 1: story UI notification through the command stream (port_event applies it).
 bool GameSession::notify_story_ui(const sim::StoryUiNotification& n) {
     return host_ && host_->story() && submit(story_ui_event(n)).ok();
@@ -726,6 +741,10 @@ void GameSession::after_tick() {
     save_checked_ = false;
     tap_events(false);
     land_skirmish_invade();
+    // [port] fleet cohesion: a battle whose setting differs from the preference (a new battle starts loose) gets it
+    if (!replay_ && !fleet_cohesion_sent_ && local_player_ >= 0)
+        if (const sim::TacticalBattle* b = battle(); b && b->fleet_cohesion(static_cast<uint8_t>(local_player_)) != fleet_cohesion_)
+            fleet_cohesion_sent_ = submit(fleet_cohesion_event(fleet_cohesion_)).ok();
     if (banner_sent_ && (!battles_ || !battles_->linked_banner_up())) banner_sent_ = false;  // story t13
 }
 
@@ -821,6 +840,15 @@ commands::RejectReason GameSession::port_event(uint8_t player, const commands::E
             ++port_stats_.tactical_auto_resolve_refused;
             return R::NotAllowed;
         }
+        return R::None;
+    }
+    if (sub == commands::kPortFleetCohesionSubtype) {
+        // [port: Gabriel 2026-11-13] fleet cohesion: the issuer's setting in the running battle (refused without one)
+        const std::span<const uint8_t> b = ev.bytes_view("data");
+        if (local) fleet_cohesion_sent_ = false;
+        sim::TacticalBattle* tb = battles_ ? battles_->battle() : nullptr;
+        if (b.size() != 1 || b[0] > 1 || !tb || tb->finished()) return R::NotAllowed;
+        tb->set_fleet_cohesion(player, b[0] != 0);
         return R::None;
     }
     if (sub == kStoryEscSubtype) {
@@ -1077,12 +1105,17 @@ SaveMeta GameSession::save_meta(std::string name, int64_t saved_at) const {
     m.campaign = campaign ? spec_.campaign : spec_.skirmish_map;
     m.difficulty = std::clamp(spec_.difficulty, 0, 2);
     m.saved_at = saved_at;
+    m.playthrough = playthrough_;
+    m.playthrough_started = playthrough_started_;
     if (host_) m.tick = host_->frame();
     if (const galactic::GalacticSim* g = galaxy()) {
         const int32_t lp = local_player_;
         if (lp >= 0 && static_cast<size_t>(lp) < g->players().size()) {
             const uint32_t f = g->players()[static_cast<size_t>(lp)].faction;
-            if (f < g->rules().factions.size()) m.faction = g->rules().factions[f].name;
+            if (f < g->rules().factions.size()) {
+                m.faction = g->rules().factions[f].name;
+                m.faction_icon = g->rules().factions[f].icon;
+            }
         }
         const int32_t frame = std::max(g->frame(), 0);
         m.game_seconds = static_cast<uint64_t>(frame) / 30u;
@@ -1222,6 +1255,7 @@ std::unique_ptr<GameSession> load_game(const GameData& data, jobs::JobSystem& js
         if (err) *err = e;
         return nullptr;  // the half-loaded session is discarded here
     }
+    if (SaveMeta m; decode_description(f.description, m)) s->set_playthrough(std::move(m.playthrough), m.playthrough_started);
     if (file_out) *file_out = std::move(f);
     return s;
 }

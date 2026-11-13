@@ -41,16 +41,18 @@ public:
 
     bool init(rhi::Context& ctx, rhi::Allocator& alloc);
     void shutdown();  // caller makes sure the GPU is idle
-    // Records outside rendering: `scene` depth -> DepthRead (left there; the next scene pass transitions it back),
-    // AO + blur into the half-res targets (recreated on a size change), then the multiply into the scene colour
-    // (color_format = its format). `depth_empty` = the depth clear value (sky / nothing drawn: no AO).
+    // Records outside rendering: `depth_src` depth -> DepthRead (left there; the next scene pass transitions it back),
+    // AO + blur into the half-res targets (recreated on a size change), then the multiply into the colour of `scene`
+    // (color_format = its format, `samples` its sample count; [port] MSAA: a multisampled scene with its resolved depth in
+    // `depth_src`, else both the same target). `depth_empty` = the depth clear value (sky / nothing drawn: no AO).
     // strength 0..1 (0 = off), radius in world units. False (nothing applied) on a failed pipeline / allocation.
-    bool record(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget& scene, VkFormat color_format,
-                const ViewMatrices& view, float strength, float radius, float depth_empty, rhi::GpuTimer* timer);
+    bool record(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget& scene, rhi::RenderTarget& depth_src,
+                VkFormat color_format, VkSampleCountFlagBits samples, const ViewMatrices& view, float strength, float radius,
+                float depth_empty, rhi::GpuTimer* timer);
 
 private:
     struct Push;
-    VkPipeline pipeline(int which, VkFormat color_format);  // 0 AO, 1 blur, 2 apply
+    VkPipeline pipeline(int which, VkFormat color_format, VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);  // 0 AO, 1 blur, 2 apply
     rhi::Context* ctx_ = nullptr;
     rhi::Allocator* alloc_ = nullptr;
     rhi::PipelineCache cache_;
@@ -60,9 +62,10 @@ private:
     VkPipeline ao_ = VK_NULL_HANDLE, blur_ = VK_NULL_HANDLE;
     struct Apply {
         VkFormat format;
+        VkSampleCountFlagBits samples;
         VkPipeline pipe;
     };
-    std::vector<Apply> apply_;  // per scene colour format (kept until shutdown: frames in flight may use them)
+    std::vector<Apply> apply_;  // per scene colour format + sample count (kept until shutdown: frames in flight may use them)
     rhi::RenderTarget ao_a_, ao_b_;  // half res, RG32F (visibility, view distance)
     bool targets_ = false;
 };

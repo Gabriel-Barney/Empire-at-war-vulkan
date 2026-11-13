@@ -416,6 +416,68 @@ static bool same_types(const GameObjectTypes& a, const GameObjectTypes& b) {
 // ------------------------------------------------------------------------------------------
 // OBJECT_TYPES.md §9 / OBJECT_RUNTIME.md §9 rules
 
+// [port: Gabriel, 2026-11-13] Every fighter / bomber squadron has GameObjectTypes::kPortSquadronSize (12) members: a
+// one-type Fighter or Bomber Squadron_Units list is rewritten and its prices / power scaled by 12 / the list's count (each
+// type's own final values: a variant overriding a price is scaled once, a hero variant with a mixed list keeps the
+// inherited price), mixed lists and hero members keep the XML list, other categories are untouched;
+// set_squadron_size(0) keeps the retail lists and prices.
+static void test_squadron_size() {
+    const fs::path root = fs::temp_directory_path() / "alamo_objects_squad_size_test";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<L><File>S.xml</File></L>");
+    write_file(root / "Data/XML/S.xml",
+               "<R>\n"
+               " <Squadron Name=\"Fsq\"><Squadron_Units>Fi, Fi, Fi, Fi</Squadron_Units><Build_Cost_Credits>-1</Build_Cost_Credits></Squadron>\n"
+               " <Squadron Name=\"Bsq\"><Squadron_Units>Bo, Bo</Squadron_Units><Build_Cost_Credits>150</Build_Cost_Credits>\n"
+               "  <Tactical_Build_Cost_Multiplayer>550</Tactical_Build_Cost_Multiplayer><Score_Cost_Credits>370</Score_Cost_Credits></Squadron>\n"
+               " <Squadron Name=\"Bsq_V\"><Variant_Of_Existing_Type>Bsq</Variant_Of_Existing_Type>\n"
+               "  <Tactical_Build_Cost_Multiplayer>350</Tactical_Build_Cost_Multiplayer></Squadron>\n"
+               " <Squadron Name=\"Bsq_Hero\"><Variant_Of_Existing_Type>Bsq</Variant_Of_Existing_Type><Squadron_Units>He, Bo</Squadron_Units></Squadron>\n"
+               " <Squadron Name=\"Fsq_V\"><Variant_Of_Existing_Type>Fsq</Variant_Of_Existing_Type></Squadron>\n"
+               " <Squadron Name=\"Mixed\"><Squadron_Units>Fi, Bo</Squadron_Units></Squadron>\n"
+               " <Squadron Name=\"Hero\"><Squadron_Units>He, He</Squadron_Units></Squadron>\n"
+               " <Squadron Name=\"Corv\"><Squadron_Units>Co, Co, Co</Squadron_Units></Squadron>\n"
+               " <SpaceUnit Name=\"Fi\"><CategoryMask>Fighter | AntiBomber</CategoryMask><Build_Cost_Credits>10</Build_Cost_Credits>\n"
+               "  <AI_Combat_Power>2</AI_Combat_Power></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Bo\"><CategoryMask>Bomber | AntiCapital</CategoryMask></SpaceUnit>\n"
+               " <SpaceUnit Name=\"He\"><CategoryMask>Fighter | SpaceHero</CategoryMask></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Co\"><CategoryMask>Corvette</CategoryMask></SpaceUnit>\n"
+               "</R>\n");
+    DirectoryProvider dp(root.string());
+    ObjectTypeDatabase raw;
+    CHECK(raw.load(dp));
+    GameObjectTypes ty;
+    CHECK(ty.squadron_size() == GameObjectTypes::kPortSquadronSize && GameObjectTypes::kPortSquadronSize == 12u);
+    CHECK(ty.build(raw, &dp));
+    auto members = [&](const char* n) { return ty.get_list(raw.find(n), "Squadron_Units").size(); };
+    CHECK(members("Fsq") == 12u);
+    CHECK(members("Bsq") == 12u);
+    CHECK(members("Fsq_V") == 12u);
+    CHECK(members("Mixed") == 2u);
+    CHECK(members("Hero") == 2u);
+    CHECK(members("Corv") == 3u);
+    CHECK(members("Bsq_V") == 12u && members("Bsq_Hero") == 2u);
+    auto cost = [&](const char* n, const char* tag) { return ty.get_int(raw.find(n), tag); };
+    CHECK(cost("Fsq", "Build_Cost_Credits") == 120);                  // derived 4 x 10, scaled to 12 x 10
+    CHECK(cost("Fsq_V", "Build_Cost_Credits") == 120);
+    CHECK(cost("Bsq", "Build_Cost_Credits") == 900);                  // 150 for 2 -> 900 for 12
+    CHECK(cost("Bsq", "Tactical_Build_Cost_Multiplayer") == 3300);    // 550 x 6
+    CHECK(cost("Bsq", "Score_Cost_Credits") == 370);                  // not a price: as written
+    CHECK(cost("Bsq_V", "Build_Cost_Credits") == 900);                // inherited, scaled once
+    CHECK(cost("Bsq_V", "Tactical_Build_Cost_Multiplayer") == 2100);  // own override 350 x 6
+    CHECK(cost("Bsq_Hero", "Build_Cost_Credits") == 150);             // mixed list: the inherited retail price
+    CHECK(cost("Bsq", "Tactical_Build_Cost_Campaign") == -1);         // default -1 untouched
+    CHECK(ty.get_float(raw.find("Fsq"), "AI_Combat_Power") == 24.0f);  // members' power summed, scaled
+    CHECK(ty.stats().squadrons_resized > 0);
+    ty.set_squadron_size(0);  // retail: the lists as written, kept across build()
+    CHECK(ty.build(raw, &dp));
+    CHECK(members("Fsq") == 4u && members("Bsq") == 2u && members("Fsq_V") == 4u);
+    CHECK(cost("Fsq", "Build_Cost_Credits") == 40 && cost("Bsq", "Build_Cost_Credits") == 150);
+    CHECK(cost("Bsq", "Tactical_Build_Cost_Multiplayer") == 550 && cost("Bsq_V", "Tactical_Build_Cost_Multiplayer") == 350);
+    remove_all_long(root, ec);
+}
+
 static void test_enum_converters() {
     EnumRegistry reg;  // built-in tables
     const EnumConverter& cat = reg.get(EnumId::GameObjectCategory);
@@ -1755,6 +1817,7 @@ int main() {
     test_loader_synthetic();
     test_converters();
     test_types_synthetic();
+    test_squadron_size();
     test_enum_converters();
     test_s1_rules();
     test_s1_registries();

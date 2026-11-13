@@ -570,6 +570,7 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
             gf.fleet = st.alive(fl.object) ? static_cast<uint32_t>(st.id(fl.object)) : 0u;
             gf.slot = fl.slot;
             gf.enemy = fl.owner != me;
+            gf.name = ui::utf8_to_utf32(gs->object_name(fl.object));  // [port: Gabriel] fleet / ship names
             bool all_stealth = true;
             for (const objects::ObjectHandle m : fl.contents) {
                 if (!st.alive(m)) continue;
@@ -579,7 +580,8 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
                     continue;
                 }
                 const objects::TypeIndex t = st.type(m);
-                gf.units.push_back({static_cast<uint32_t>(st.id(m)), t < types->size() ? (*types)[t].icon_name : std::string(), 1, false, t});
+                gf.units.push_back({static_cast<uint32_t>(st.id(m)), t < types->size() ? (*types)[t].icon_name : std::string(), 1, false, t,
+                                    ui::utf8_to_utf32(gs->object_name(m))});
             }
             if (gf.units.empty() || gf.fleet == 0 || (!own && all_stealth)) continue;
             out.push_back(std::move(gf));
@@ -678,6 +680,10 @@ void App::build_tactical_hud() {
                                      : planet_label(data_, ui_.text, *g, b->request().info.planet);
             }
             hf.pop = static_cast<int32_t>(std::lround(b->population_used(local_player())));
+            // [port: Gabriel 2026-11-13] fleet cohesion: the battle's setting (space only; O toggles it)
+            if (bview_.space())
+                hf.cohesion_text = b->fleet_cohesion(static_cast<uint8_t>(local_player())) ? U"Fleet cohesion: Tight (O)"
+                                                                                           : U"Fleet cohesion: Loose (O)";
             const float cap = b->population_cap(local_player());
             hf.pop_cap = cap >= 0.0f ? static_cast<int32_t>(std::lround(cap)) : -1;
         }
@@ -758,16 +764,51 @@ void App::build_tactical_hud() {
     // current movement goal, then those points (sim const reads between ticks). [port] goal height = the unit's.
     // [port] A plain move draws no line (playtest video R1: with a whole fleet selected, one 3 px dotted line per fighter
     // covered the battle and read as laser fire); the original's waypoint line belongs to the Alt-queued path (UI.md 1.5).
+    // [port: Gabriel, 2026-11-13] With Camera and Controls > Show Unit Path Lines on, every moving unit of the local
+    // player, selected or not, gets a line along its planned path (land: the walked path at terrain height; space: the
+    // waypoint track at the unit's height; no path yet: straight to the goal), a destination square, then its queued
+    // move points. One line per squadron / company: only the unit standing for its marker (icon_links, unit == squad).
     waypoints_.clear();
+    const bool path_lines = camera_.show_path_lines;
+    const terrain::MapData* ground = !bview_.space() && bview_.scene() ? &bview_.scene()->map() : nullptr;
+    std::vector<uint32_t> line_units;
+    if (const sim::TacticalBattle* b = battle(); b && path_lines) {
+        for (const sim::TacticalBattle::IconLink& k : b->icon_links())
+            if (k.unit == k.squad) line_units.push_back(static_cast<uint32_t>(k.unit));
+    } else {
+        line_units = sel;
+    }
     if (const sim::TacticalBattle* b = battle())
-        for (const uint32_t id : sel) {
+        for (const uint32_t id : line_units) {
             const auto oid = static_cast<objects::ObjectId>(id);
             const render::SnapshotObject* o = obj_of(oid);
             if (!o || o->owner != local_player() || !b->movement().has_unit(oid)) continue;
             const tactical::movement::UnitView v = b->movement().view(oid);
             if (!v.has_goal || v.arrived) continue;
             ui::HudWaypointLine l;
-            l.points.push_back({o->position.x, o->position.y, o->position.z});
+            const ui::Vec3 here{o->position.x, o->position.y, o->position.z};
+            if (path_lines) {
+                auto at = [&](float x, float y) {
+                    return ui::Vec3{x, y, ground ? ground->terrain.sample_height(x, y) + 1.0f : o->position.z};
+                };
+                std::vector<ui::Vec3> path;
+                for (const tactical::movement::V2 p : b->movement().land_path(oid)) path.push_back(at(p.x, p.y));
+                if (path.empty())
+                    for (const tactical::movement::SpaceWaypoint& wp : b->movement().space_path(oid)) path.push_back(at(wp.pos.x, wp.pos.y));
+                l.points = ui::remaining_route(here, path, at(v.goal.x, v.goal.y));
+                l.color = v.atk_target >= 0 ? ui::kPathLineAttack : ui::kPathLineMove;
+                l.step_px = ui::kPathLineStepPx;
+                l.dot_px = ui::kPathLineDotPx;
+                l.end_px = ui::kPathLineEndPx;
+                for (const sim::TacticalBattle::QueuedOrder& e : b->queued_orders(oid)) {
+                    if (e.kind != sim::TacticalBattle::QueuedOrder::Kind::Move) continue;
+                    const ui::Vec3 p = at(e.x, e.y);
+                    if (p.x != l.points.back().x || p.y != l.points.back().y) l.points.push_back(p);
+                }
+                if (l.points.size() > 1) waypoints_.push_back(std::move(l));
+                continue;
+            }
+            l.points.push_back(here);
             l.points.push_back({v.goal.x, v.goal.y, o->position.z});
             for (const sim::TacticalBattle::QueuedOrder& e : b->queued_orders(oid)) {
                 if (e.kind != sim::TacticalBattle::QueuedOrder::Kind::Move) continue;
@@ -886,6 +927,7 @@ void App::build_tactical_hud() {
             hf.bombing_run = space_weapon_button(true, icon, tb->special_weapons_allowed(local_player()), story_controls_locked(), ready);
         }
     }
+    fill_wings(hf);            // [port: Gabriel] squadron wing buttons
     fill_command_buttons(hf);  // ui3 t03 / t04: b_retreat / b_reinforcement / beacon / movie mode, reinforcement texts
     hud_units_ = units;
     // FIXPASS_GALACTIC §4.2: the advisor *_LOOP Bink in Movie_tactical (the HUD's own component), only while it plays.
@@ -1048,39 +1090,6 @@ void App::hud_hit_dump(const char* where, int32_t component, int32_t px, int32_t
     hud_hit_last_ = component;
     const char* name = component >= 0 && static_cast<size_t>(component) < ui_.components.size() ? ui_.components[static_cast<size_t>(component)].name.c_str() : "-";
     std::printf("hud hit (%s): %d %s at %d,%d\n", where, component, name, px, py);
-}
-
-void App::sync_os_cursor() {
-    void* want = nullptr;
-    if (hardware_mouse_ && cursor_ok_ && !opt_.hidden) {
-        const std::string tex = cursor_.texture(now_s_);
-        const ui::CursorDef* def = cursor_.current_def();
-        if (!tex.empty() && def) {
-            auto it = hw_cursors_.find(tex);
-            if (it == hw_cursors_.end()) {
-                void* made = nullptr;
-                std::vector<uint8_t> bytes;
-                for (const std::string& c : assets::texture_candidates(tex)) {
-                    if (!data_.files->read(c, bytes)) continue;
-                    assets::TextureAsset t;
-                    if (assets::decode_texture(std::move(bytes), t) && !t.levels.empty() &&
-                        (t.format == assets::TextureFormat::BGRA8 || t.format == assets::TextureFormat::RGBA8)) {
-                        const std::span<const uint8_t> px = t.level_bytes(t.levels[0]);
-                        std::vector<uint8_t> bgra(px.begin(), px.end());
-                        if (t.format == assets::TextureFormat::RGBA8)
-                            for (size_t k = 0; k + 3 < bgra.size(); k += 4) std::swap(bgra[k], bgra[k + 2]);
-                        if (bgra.size() >= static_cast<size_t>(t.width) * t.height * 4u)
-                            made = create_os_cursor(bgra.data(), t.width, t.height, def->hot_x, def->hot_y);
-                    }
-                    break;
-                }
-                if (!made) std::printf("hardware mouse: no cursor from %s (arrow)\n", tex.c_str());
-                it = hw_cursors_.emplace(tex, made).first;
-            }
-            want = it->second;
-        }
-    }
-    set_os_cursor_image(win_.native_handle(), want);
 }
 
 }  // namespace alamo_game_app

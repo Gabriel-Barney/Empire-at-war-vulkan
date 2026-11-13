@@ -1035,6 +1035,7 @@ void test_fleet_placement_campaign() {
     std::vector<std::string> diag;
     CHECK(d->db.load(*d->files, {}, &diag));
     CHECK(d->raw.load(*d->files));
+    d->types.set_squadron_size(g_squadron_size);
     CHECK(d->types.build(d->raw, d->files.get(), &diag));
     CHECK(galactic::load_galactic_rules(*d->files, d->db, d->types, d->rules, &diag));
     CHECK(galactic::load_conflict_rules(*d->files, d->db, d->types, d->rules, d->crules, &diag));
@@ -1144,6 +1145,7 @@ void test_fleet_placement_campaign() {
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     g_temp_prefix = "alamo_sim_battle_fighter_tests";
+    g_squadron_size = 0;  // [port: Gabriel] these trace retail fighter mechanics on the authored 3-fighter squadron
     for (int i = 1; i < argc; ++i)
         if (std::string(argv[i]) == "--regen") g_regen = true;
     std::printf("S7 t12: a fighter squadron moved past an enemy keeps its move order (formation attack target)\n");

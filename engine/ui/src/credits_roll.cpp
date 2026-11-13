@@ -124,7 +124,7 @@ bool CreditsRoll::build(HudDrawList& dl, FontCache& fonts, const HudCanvas& cv, 
     bg.color = {0, 0, 0, 255};
     dl.add(kHudLayers - 1, HudList::Alpha, bg);
     HudTextStyle st;
-    st.font = fonts.font(style_.font, style_.font_size, cv.screen_height);
+    st.font = fonts.font(style_.font, style_.font_size, cv.font_height());
     if (st.font < 0) return true;
     st.align = TextAlign::Center;
     st.gradient = true;

@@ -112,6 +112,15 @@ was never a large cost (under 0.5% of tick time), so this removes spikes rather 
 - With 2,000 ships on screen (2,502 draws): draw-list build **0.88 -> 0.67 ms**, sort **0.19 -> 0.09 ms**; draw lists are
   identical at 1, 4 and 15 threads.
 - TAA costs about **0.10 ms** of GPU time at 720p; SSAO about **0.4 ms** at 1080p.
+- FSR upscaling (2026-11-13, `alamo_render_fsr_tests`, _MP_LAND_ENDOR, output 1280x720, RX 9070 XT, AMD runtime FSR 4.1.2,
+  validation on): the "fsr" scope (motion-vector pass + FSR dispatch) **0.31 ms** at Quality (render 853x480) and
+  Performance (640x360), against TAA's 0.07 ms; the scene itself **0.08 -> 0.05 / 0.04 ms**. A still camera settles to a
+  frame-to-frame luma change of **0.24 / 0.22** (TAA 2.26); mean luma difference from the full-size TAA picture **5.6 / 7.0**.
+  At this scene's cost FSR is a picture-quality option more than a speed-up; it pays at high output resolutions.
+- Anti-aliasing list (2026-11-13, `alamo_render_taa_tests`, _MP_LAND_ENDOR 1280x720, RX 9070 XT, validation on): SMAA
+  **0.06-0.12 ms**; MSAA (with SSAO) scene **0.23 -> 0.29 ms at 4x, 0.42 ms at 8x**, the resolve **0.03 ms (4x) / 0.06 ms
+  (8x)**. Edge energy barely moves with MSAA (15.12 -> 15.09): it smooths geometric edges (the landing pad's rim) while the
+  metric is dominated by terrain texture detail and alpha-tested foliage, which MSAA does not touch.
 
 ### Tried and not shipped
 Documented so nobody repeats them without new evidence.

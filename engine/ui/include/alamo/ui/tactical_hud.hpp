@@ -141,6 +141,15 @@ struct HudAction {
         // ui4 t02, appended 2026-11-13: a left click on a greyed galactic build pad (GalacticBuildOption::block != None):
         // value = the Block, name = the pad component; the host plays the GUI negative feedback, no command is sent.
         BuildRefused,
+        // [port: Gabriel] appended 2026-11-13: a double click on an own galactic organiser pad (fleet header or unit pad):
+        // unit = the fleet object (header) or the pad's unit (a stack: its first unit), ids = {fleet}, value = 1 for a
+        // fleet / 0 for a unit, name = the component name. Host: open the rename prompt (current name from the sim).
+        Rename,
+        // [port: Gabriel] appended 2026-11-13: a squadron wing button (HudWing) clicked: value = the wing index into
+        // TacticalHudFrame::wings, ids = the wing's members, shift = add to the selection, ctrl = centre the camera only
+        // [port]. Host: select them (shift: the selection plus them); a second click within the double-click time also
+        // centres the camera on the wing.
+        WingSelect,
     };
     Kind kind = Kind::Button;
     int32_t component = -1;
@@ -233,6 +242,19 @@ struct HudCommandButtons {
     int32_t pop_used = -1, pop_cap = -1;
 };
 
+// [port: Gabriel, 2026-11-13] Squadron wing buttons: the local player's fighter squadrons (and bomber squadrons) form one
+// wing each; a column of buttons at the left edge selects a whole wing with one click (HudAction::WingSelect). Drawn
+// only while the wing has a squadron. The original has no such buttons.
+struct HudWing {
+    std::u32string label;            // "FIGHTERS", "BOMBERS"
+    std::u32string hotkey;           // key hint drawn after the label ("F2"); empty = none
+    uint32_t squadrons = 0;          // squadrons in the wing (drawn as the count)
+    std::vector<uint32_t> ids;       // every member of the wing's squadrons, ascending
+    bool selected = false;           // the whole wing is in the selection (the selected look)
+};
+inline constexpr int32_t kWingHitBase = 0x40000000;  // hit-box ids of the wing buttons (not CommandBarComponents)
+inline constexpr size_t kMaxWings = 4;
+
 struct TacticalHudFrame {
     WorldHudContext world;          // canvas is filled by TacticalHud
     // Radar mapping: world rectangle shown by the radar (the map's playable box).
@@ -241,6 +263,7 @@ struct TacticalHudFrame {
     // [port: Gabriel, original screenshot] planet panel above the radar: Text_Planet_tactical (battle planet name),
     // Text_Tactical_Tech ("Tech: 3", TEXT_TECH), Text_Planetary_Pop ("13/20"; Text_Pop_Cap without it); empty / < 0 = blank.
     std::u32string planet_name;
+    std::u32string cohesion_text;  // [port: Gabriel 2026-11-13] fleet cohesion line above the planet name ("" = none)
     int32_t tech = -1, pop = -1, pop_cap = -1;
     // FIXPASS_GALACTIC §4.2 bottom-left advisor frame (i_main_skirmish = i_tactical_controls.alo bones: Movie_tactical
     // (50, 288), b_droid_help_tactical (19, 255), Text_tactical_help (65, 309), Text_Planet_tactical (179, 239); the
@@ -307,6 +330,7 @@ struct TacticalHudFrame {
     // original is the POINTER_DRAG_SELECT_MODE cursor (DragSelectPointer_00), drawn by the cursor pass, not here.
     bool drag_select = false;
     DragRect drag_rect;
+    std::span<const HudWing> wings;  // [port: Gabriel] squadron wing buttons (HudWing); empty = none
 };
 
 struct TacticalHudStats {
@@ -321,6 +345,7 @@ struct TacticalHudStats {
     bool pause_banner = false;          // Game Paused banner drawn
     uint32_t objectives = 0, objective_lines = 0;
     bool drag_box = false;              // drag-select box drawn
+    uint32_t wings = 0;                 // [port: Gabriel] squadron wing buttons drawn
 };
 
 class TacticalHud {
@@ -328,6 +353,9 @@ public:
     // Tables must outlive the HUD. `text` may be null (keys shown as text).
     void init(const ComponentTable& table, const TextureAtlas& atlas, FontCache& fonts, const TextDatabase* text = nullptr);
     void resize(uint32_t width, uint32_t height);
+    // [port: Gabriel] DPI-style UI scale (hud_canvas.hpp; 1 = 100 %, 0 = the original fitted canvas): takes effect on the
+    // next resize().
+    void set_ui_scale(float s) { canvas_.ui_scale = s > 0.0f ? s : 0.0f; }
     const HudCanvas& canvas() const { return canvas_; }
     HudLayout& layout() { return layout_; }
     const HudLayout& layout() const { return layout_; }
@@ -385,6 +413,7 @@ private:
     void apply_command_buttons(const HudCommandButtons& s);
     void build_pause_banner(const TacticalHudFrame& f);
     void build_objectives(const TacticalHudFrame& f);
+    void build_wings(const TacticalHudFrame& f);
     int32_t font_of(int32_t component, float fallback_points) const;
     void hit(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot = 0);
     Vec2f component_size(uint32_t component, const ComponentPlacement& p) const;
@@ -440,6 +469,8 @@ private:
     bool paused_ = false;
     int32_t pause_text_ = -1, resume_ = -1;  // pause_shell text_attack / attack_button
     int32_t obj_back_ = -1, obj_header_ = -1, obj_text_ = -1, obj_icon_ = -1;
+    std::vector<std::vector<uint32_t>> wing_ids_;  // [port: Gabriel] members per wing button of the last build
+    int32_t wing_hover_ = -1;                      // wing button under the cursor (index), -1 none
     RadarView radar_view_;
     std::vector<HudModelDraw> radar_models_;
     bool radar_drag_ = false;

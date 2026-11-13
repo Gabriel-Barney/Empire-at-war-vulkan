@@ -131,6 +131,11 @@ struct GuiControl {
     // [port] per-item text colours (list): item k is drawn in item_text_colors[k] (flat, no font gradient) when that
     // colour's alpha is > 0, else in the skin's font colours. Story dialog scripts' TEXTCOLOR lines use it.
     std::vector<Rgba8> item_text_colors;
+    // [port: Gabriel] per-item icon and indent (list): item k draws item_icons[k] (a texture name; "" or a missing texture =
+    // no icon, the text keeps its place) in a square one row high, item_indent[k] row-heights in from the left edge. The
+    // saved games tree (FrontEnd) uses them.
+    std::vector<std::string> item_icons;
+    std::vector<uint8_t> item_indent;
     int32_t selected = -1;             // list / combo selection
     int32_t top = 0;                   // first visible list row
     bool open = false;                 // combo drop-down shown
@@ -235,6 +240,8 @@ struct GuiEvent {
         Cancel,            // Esc on the topmost dialog
         Opened,
         Closed,
+        RowClicked,        // [port] list row pressed with the mouse (value = row; after its SelectionChanged; the second press of a
+                           // double click sends DoubleClicked instead)
     };
     Kind kind = Kind::Clicked;
     std::string dialog;
@@ -270,6 +277,9 @@ public:
     void init(const DialogScript& script, const GuiSkin& skin, const TextureAtlas& atlas, FontCache& fonts,
               const TextDatabase* text = nullptr);
     void resize(uint32_t width, uint32_t height);
+    // [port: Gabriel] DPI-style UI scale (hud_canvas.hpp; 1 = 100 %, 0 = the original fitted canvas): takes effect on the
+    // next resize().
+    void set_ui_scale(float s) { canvas_.ui_scale = s > 0.0f ? s : 0.0f; }
     const HudCanvas& canvas() const { return canvas_; }
     GuiStyle& style() { return style_; }
     void set_sfx_hook(HudSfxHook hook) { sfx_ = std::move(hook); }

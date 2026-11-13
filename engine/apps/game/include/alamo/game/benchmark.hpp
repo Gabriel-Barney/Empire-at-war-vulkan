@@ -38,8 +38,8 @@ const char* bench_mode_name(BenchMode m);  // "off" / "realtime" / "fixed"
 enum class BenchAudio : uint8_t { Null, Off };  // never the device: no output timing in a benchmark
 
 // A named benchmark preset. Detail levels are the Video dialog's 0..100 values (ui::kQualityPresets: 0, 40, 75, 100 =
-// Low / Medium / High / Ultra; all seven advanced detail options take that value); anti_alias is the TAA strength
-// (0 = off; ui::kAntiAliasChoices), gamma 50 = identity, anisotropy one of ui::kAnisotropyChoices.
+// Low / Medium / High / Ultra; all seven advanced detail options take that value); anti_alias is the Anti-aliasing list's
+// mode (ui::kAaOff .. kAaMsaa8, ui::kAntiAliasChoices), gamma 50 = identity, anisotropy one of ui::kAnisotropyChoices.
 struct BenchPreset {
     std::string_view name;
     std::string_view description;

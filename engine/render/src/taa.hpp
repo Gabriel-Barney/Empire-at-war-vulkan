@@ -15,6 +15,11 @@
 // Velocity pass: the opaque items of instances that moved are drawn again into an RGBA32F target (taa_velocity.hlsl),
 // depth-tested against the finished scene depth, writing where each visible surface point stood in the previous image.
 // The resolve uses it at the nearest-depth pixel instead of the camera-only reprojection.
+// [port] FSR (alamo/render/upscale.hpp, src/fsr.cpp): with set_fsr_jitter(phases > 0) the same pass runs FSR's side
+// instead of the resolve - begin_frame() jitters with FSR's sequence (upscale_jitter_pixels) and fsr_inputs() replaces
+// resolve(): the movers' velocity pass, then one full-screen pass writing FSR's motion vectors (RG32F, uv units) and a
+// copy of the scene depth (R32F) at the render size. No colour history is kept (FSR keeps its own). A provisional frame
+// (BM2b) can be discarded here as with TAA, but FSR's internal history keeps it.
 #pragma once
 #include <cstdint>
 #include <span>
@@ -76,10 +81,30 @@ public:
     bool history_reset() const { return reset_now_; }  // this frame took the current colour only
     uint32_t last_movers() const { return last_movers_; }  // movers the last resolve drew
 
+    // [port] FSR: phases > 0 switches the jitter to FSR's sequence of that length (upscale_jitter_pixels), 0 back to
+    // TAA's; a change restarts everything (reset()).
+    void set_fsr_jitter(uint32_t phases) {
+        if (phases == fsr_phases_) return;
+        fsr_phases_ = phases;
+        reset();
+    }
+    uint32_t fsr_phases() const { return fsr_phases_; }
+    // This frame's jitter in render pixels as FSR takes it (+x right, +y down); (0, 0) in TAA mode.
+    float fsr_jitter_x() const { return fsr_jx_; }
+    float fsr_jitter_y() const { return fsr_jy_; }
+    // FSR's inputs from the finished scene (colour untouched, depth sampled): velocity pass for the movers, then
+    // fsr_motion() / fsr_depth() at the scene's size, left in ShaderRead. False when a target / pipeline is missing.
+    bool fsr_inputs(rhi::Frame& frame, VkCommandBuffer cmd, rhi::RenderTarget& scene, VkDescriptorSet hot_set0);
+    rhi::RenderTarget& fsr_motion() { return fsr_motion_; }
+    rhi::RenderTarget& fsr_depth() { return fsr_depth_; }
+    const TaaCamera& camera() const { return cam_; }  // this frame's un-jittered camera
+
 private:
     bool ensure_history(VkExtent2D ext);
     bool ensure_pipelines(VkFormat scene_format);
     bool ensure_velocity_pipelines(VkFormat depth_format);
+    bool ensure_fsr_targets(VkExtent2D ext);
+    bool ensure_motion_pipeline();
     void destroy_pipelines();
     void record_velocity(const rhi::DeviceFns& fn, VkCommandBuffer cmd, rhi::RenderTarget& scene, VkDescriptorSet hot_set0);
 
@@ -88,14 +113,20 @@ private:
     rhi::PipelineCache cache_;
     rhi::SamplerCache samplers_;
     VkDescriptorSetLayout set_resolve_ = VK_NULL_HANDLE, set_sharpen_ = VK_NULL_HANDLE, hot_set0_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout set_motion_ = VK_NULL_HANDLE;  // FSR motion pass: scene depth, velocity
     VkPipelineLayout layout_resolve_ = VK_NULL_HANDLE, layout_sharpen_ = VK_NULL_HANDLE, layout_velocity_ = VK_NULL_HANDLE;
-    VkPipeline resolve_ = VK_NULL_HANDLE, sharpen_ = VK_NULL_HANDLE, depth_ = VK_NULL_HANDLE;
+    VkPipelineLayout layout_motion_ = VK_NULL_HANDLE;
+    VkPipeline resolve_ = VK_NULL_HANDLE, sharpen_ = VK_NULL_HANDLE, depth_ = VK_NULL_HANDLE, motion_pipe_ = VK_NULL_HANDLE;
     VkPipeline velocity_pipe_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};  // static / rigid-skin vertex layout
     VkFormat sharpen_format_ = VK_FORMAT_UNDEFINED;   // scene colour format the sharpen pipeline was made for
     VkFormat velocity_depth_format_ = VK_FORMAT_UNDEFINED;  // scene depth format the velocity pipelines were made for
     rhi::RenderTarget history_[2];
     rhi::RenderTarget depth_history_[2];  // R32F linear view distance of the frame each history slot was resolved from
     rhi::RenderTarget velocity_;          // RGBA32F: previous uv, previous NDC depth, 1 = written (movers only)
+    rhi::RenderTarget fsr_motion_;        // [port] FSR: RG32F motion vectors (uv units, current -> previous)
+    rhi::RenderTarget fsr_depth_;         // [port] FSR: R32F copy of the 0..1 scene depth
+    uint32_t fsr_phases_ = 0;             // 0: TAA jitter; else FSR's sequence length
+    float fsr_jx_ = 0, fsr_jy_ = 0;       // this frame's FSR jitter (render pixels, y down)
     uint32_t cur_ = 0;               // history written this frame
     uint64_t frame_ = 0;             // TAA frames begun (jitter index)
     bool history_valid_ = false;     // history_[cur_ ^ 1] holds the last resolve of prev_

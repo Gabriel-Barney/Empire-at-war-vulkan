@@ -409,8 +409,8 @@ void test_hotkeys() {
     disp.update(keys_frame({'K'}, false, false, true), d, sel, 14.1, cmds, evs);
     CHECK2(evs.size() == e0 + 2 && evs[e0].slot == hk::kGuard && evs[e0 + 1].kind == HotkeyKind::Ability &&
            evs[e0 + 1].slot == hotkey_slot("Ability_LuckyShot"));
-    // [port] fleet groups: N / U / O do nothing while off; on, they send the fleet group commands for a non-empty selection
-    // (O locks unless the selection's groups are all locked, then unlocks).
+    // [port] fleet groups: N / U / J do nothing while off; on, they send the fleet group commands for a non-empty selection
+    // (J locks unless the selection's groups are all locked, then unlocks).
     {
         HotkeyDispatcher fd;
         std::vector<commands::EventData> fc;
@@ -422,9 +422,9 @@ void test_hotkeys() {
         CHECK2(fc.empty());
         fd.update(keys_frame({'N'}), d, sel, 20.2, fc, fe);
         fd.update(keys_frame({'U'}), d, sel, 20.3, fc, fe);
-        fd.update(keys_frame({'O'}), d, sel, 20.4, fc, fe);
+        fd.update(keys_frame({'J'}), d, sel, 20.4, fc, fe);
         fd.set_fleet_groups(true, true);
-        fd.update(keys_frame({'O'}), d, sel, 20.5, fc, fe);
+        fd.update(keys_frame({'J'}), d, sel, 20.5, fc, fe);
         const auto fg = [](commands::FleetGroupOp o, bool locked) {
             commands::FleetGroupCommand c;
             c.op = o;
@@ -714,6 +714,28 @@ void test_markers() {
     line.points = {{0, 0, 0}, {200, 0, 0}, {200, 200, 0}};
     const uint32_t dots = add_waypoint_lines(dl, cv, v, std::span<const HudWaypointLine>(&line, 1));
     CHECK2(dots > 10 && dl.items(0, HudList::Alpha).size() == dots);
+    {  // path lines: denser dots and one destination square
+        HudDrawList dl2;
+        HudWaypointLine pl = line;
+        pl.step_px = kPathLineStepPx;
+        pl.dot_px = kPathLineDotPx;
+        pl.end_px = kPathLineEndPx;
+        const uint32_t pdots = add_waypoint_lines(dl2, cv, v, std::span<const HudWaypointLine>(&pl, 1));
+        CHECK2(pdots > dots && dl2.items(0, HudList::Alpha).size() == pdots);
+    }
+    {  // remaining_route: the line starts at the unit and skips the travelled path points
+        const std::vector<Vec3> path = {{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {200, 100, 0}};
+        const std::vector<Vec3> r = remaining_route({100, 40, 5}, path, {200, 100, 0});
+        CHECK2(r.size() == 3 && r[0].z == 5 && r[1].x == 100 && r[1].y == 100 && r[2].x == 200);
+        const std::vector<Vec3> s = remaining_route({10, 1, 0}, path, {200, 100, 0});
+        CHECK2(s.size() == 4 && s[1].x == 100 && s[1].y == 0);
+        const std::vector<Vec3> on = remaining_route({100, 0, 0}, path, {200, 100, 0});  // on a waypoint: past it
+        CHECK2(on.size() == 3 && on[1].y == 100);
+        const std::vector<Vec3> end = remaining_route({250, 100, 0}, path, {200, 100, 0});
+        CHECK2(end.size() == 2 && end[1].x == 200);
+        const std::vector<Vec3> none = remaining_route({0, 0, 0}, {}, {50, 60, 0});
+        CHECK2(none.size() == 2 && none[1].x == 50 && none[1].y == 60);
+    }
     const data::XmlDocument gc = data::XmlDocument::parse(std::string_view(R"(<GameConstants>
       <GUI_Move_Command_Ack_Effect> GUI_Move_Command_Particle </GUI_Move_Command_Ack_Effect>
       <GUI_Attack_Move_Command_Ack_Effect> GUI_Attack_Move_Command_Particle </GUI_Attack_Move_Command_Ack_Effect>

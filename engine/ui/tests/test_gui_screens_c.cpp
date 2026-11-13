@@ -549,7 +549,7 @@ void test_controls() {
     CHECK(pause_event(true).type() == commands::EventType::PortExtension && pause_event(true).u("subtype") == kPortPauseSubtype);
     {
         HotkeyTable table;
-        CHECK(table.binding(hk::kPause).key == vk::kPause && kHotkeySlots == 165 && hotkey_slot("Pause") == hk::kPause);
+        CHECK(table.binding(hk::kPause).key == vk::kPause && kHotkeySlots == 166 && hotkey_slot("Pause") == hk::kPause);
         HotkeyDispatcher disp;
         InputState in;
         std::vector<commands::EventData> cmds;
@@ -634,7 +634,8 @@ void test_controls() {
         GalacticCameraController gc;
         CHECK(std::fabs(gc.fov_deg() - 26.565f) < 1e-2f);
         gc.set_fov_deg(40.0f);
-        CHECK(std::fabs(gc.params(1.5f).fov_x - 40.0f * kDegToRad) < 1e-5f);
+        CHECK(std::fabs(gc.params(4.0f / 3.0f).fov_x - 40.0f * kDegToRad) < 1e-5f);  // the setting is the 4:3 FOV (Hor+ above it)
+        CHECK(std::fabs(gc.params(1.5f).fov_x - galactic_fov_x(40.0f * kDegToRad, 1.5f)) < 1e-6f);
     }
     {
         Env env;

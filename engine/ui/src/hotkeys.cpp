@@ -114,10 +114,13 @@ constexpr HotkeySlotInfo kSlots[kHotkeySlots] = {
     // 160, 161 [port: Gabriel] keyboard zoom (was Home / End in ui::Bindings, which collided with CameraHome / CameraReset):
     // = and - on the main keyboard (Alt+= / Alt+- stay Force Sight / Radioactive Contaminate: exact modifiers).
     {"CameraZoomIn", HK::Camera, {kVkOemPlus, N}}, {"CameraZoomOut", HK::Camera, {kVkOemMinus, N}},
-    // 162..164 [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): N new group, U ungroup,
-    // O lock / unlock (G and L are Guard and Waypoint).
+    // 162 [port: Gabriel 2026-11-13] fleet cohesion toggle (space battles: tight = the fleet flies at its slowest ship's
+    // speed); the host acts on the event (GameSession::toggle_fleet_cohesion).
+    {"FleetCohesion", HK::Interface, {K('O'), N}},
+    // 163..165 [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): N new group, U ungroup,
+    // J lock / unlock (G, L and O are Guard, Waypoint and FleetCohesion).
     {"FleetGroupCreate", HK::Order, {K('N'), N}}, {"FleetGroupUngroup", HK::Order, {K('U'), N}},
-    {"FleetGroupLock", HK::Order, {K('O'), N}},
+    {"FleetGroupLock", HK::Order, {K('J'), N}},
 };
 
 }  // namespace
