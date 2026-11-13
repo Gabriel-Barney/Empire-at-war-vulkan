@@ -326,7 +326,7 @@ BEGIN
     COMBOBOX        IDC_PORT_SHADOW_DETAIL,230,208,251,66,CBS_DROPDOWNLIST | WS_TABSTOP
     COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,236,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "TEXT_ANTI_ALIASING",IDC_PORT_ANTI_ALIASING_TEXT,9,267,173,8
-    COMBOBOX        IDC_PORT_ANTI_ALIASING,230,264,251,390,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_ANTI_ALIASING,230,264,251,335,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,297,300,218,18
     COMBOBOX        IDC_PORT_RENDER_SCALE,297,318,218,140,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,297,348,218,18
@@ -1713,9 +1713,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             VideoSettings v = p_.video ? p_.video() : VideoSettings{};
             const int32_t previous_resolution = v.resolution;  // the mode in use now (provider)
             if (const GuiControl* l = d->get("IDC_RESOLUTION_LIST")) v.resolution = l->selected;
-            auto chk = [&](const char* id, bool& o) {
-                if (const GuiControl* x = d->get(id)) o = x->checked;
-            };
             auto val = [&](const char* id, int32_t& o) {
                 if (const GuiControl* x = d->get(id)) o = x->value;
             };
