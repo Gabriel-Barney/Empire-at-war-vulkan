@@ -357,6 +357,13 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                 }
                 break;
             }
+            case ui::HudAction::Kind::Rename: {  // [port: Gabriel] double click on an own organiser pad: the rename prompt
+                const galactic::GalacticSim* g = galaxy();
+                if (!g || a.unit == 0) break;
+                const objects::ObjectHandle h = g->store().find(static_cast<objects::ObjectId>(a.unit));
+                rename_.open(a.unit, a.value == 1, g->object_name(h));
+                break;
+            }
             case ui::HudAction::Kind::BattleBegin: answer_battle_prompt(false); break;  // GALACTIC_DIALOGS §1.5
             case ui::HudAction::Kind::BattleAutoResolve: answer_battle_prompt(true); break;
             case ui::HudAction::Kind::ResumeGame:  // the Game Paused banner's Resume Game (pause_event(false))

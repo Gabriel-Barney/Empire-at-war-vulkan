@@ -141,6 +141,10 @@ struct HudAction {
         // ui4 t02, appended 2026-11-13: a left click on a greyed galactic build pad (GalacticBuildOption::block != None):
         // value = the Block, name = the pad component; the host plays the GUI negative feedback, no command is sent.
         BuildRefused,
+        // [port: Gabriel] appended 2026-11-13: a double click on an own galactic organiser pad (fleet header or unit pad):
+        // unit = the fleet object (header) or the pad's unit (a stack: its first unit), ids = {fleet}, value = 1 for a
+        // fleet / 0 for a unit, name = the component name. Host: open the rename prompt (current name from the sim).
+        Rename,
     };
     Kind kind = Kind::Button;
     int32_t component = -1;

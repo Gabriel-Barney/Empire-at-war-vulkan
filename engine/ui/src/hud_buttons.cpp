@@ -308,7 +308,7 @@ void TooltipState::update(const HudButtons& buttons, const ComponentTable& table
     const int32_t h = buttons.hover();
     if (h < 0 || static_cast<size_t>(h) >= table.size()) return;
     const ButtonRuntime* r = buttons.find_state(static_cast<uint32_t>(h));
-    if (table[static_cast<size_t>(h)].tooltip_text.empty() && (!r || r->tooltip_key.empty())) return;
+    if (table[static_cast<size_t>(h)].tooltip_text.empty() && (!r || (r->tooltip_key.empty() && r->tooltip_text.empty()))) return;
     if (buttons.pressed() >= 0) return;  // no tooltip while a button is held
     if (now - buttons.hover_since() + 1e-9 < cfg.delay) return;
     component_ = h;
@@ -329,7 +329,9 @@ bool TooltipState::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache& f
                         const ComponentTable& table, const HudButtons& buttons, const TextDatabase* text, Vec2f cursor_px,
                         int32_t faction_alt, const TooltipConfig& cfg) const {
     const std::string k = key(buttons, table);
-    if (k.empty()) return false;
+    const ButtonRuntime* rt = component_ >= 0 ? buttons.find_state(static_cast<uint32_t>(component_)) : nullptr;
+    const std::u32string literal = rt ? rt->tooltip_text : std::u32string();  // [port] a player-given name
+    if (k.empty() && literal.empty()) return false;
     // ui3 t07: a runtime tooltip_key may list several keys separated by spaces (ability name + description): one line each.
     std::u32string body;
     size_t at = 0;
@@ -342,6 +344,10 @@ bool TooltipState::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache& f
             body += text ? utf16_to_utf32(text->text(one)) : ascii32(one);
         }
         at = e + 1;
+    }
+    if (!literal.empty()) {
+        if (!body.empty()) body += U'\n';
+        body += literal;
     }
     return draw_text(dl, atlas, fonts, canvas, table, body, cursor_px, faction_alt, cfg);
 }

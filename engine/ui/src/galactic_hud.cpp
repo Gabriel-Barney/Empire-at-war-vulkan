@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "alamo/core/ascii.hpp"
@@ -806,6 +807,7 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         r.icon_override = s.icon;
         r.selected = s.selected;
         r.text = s.count > 1 ? num32(s.count) : std::u32string();
+        r.tooltip_text = s.name;  // [port] a player-given fleet / ship name
         const ComponentPlacement& p = layout_.placement(u);
         if (!p.placed) return false;
         const CommandBarComponent& c = (*table_)[u];
@@ -824,6 +826,7 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         ps.unit = unit;
         ps.empty = empty;
         ps.icon = s.icon;
+        ps.name = s.name;
         pads_.push_back(std::move(ps));
         return true;
     };
@@ -838,6 +841,7 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
             if (fd) {
                 GalacticFleetSlot hs;
                 hs.object = fd->fleet;
+                hs.name = fd->name;
                 draw_slot(fleet_header_[fl], hs, fd->enemy ? std::vector<uint32_t>{} : std::vector<uint32_t>{fd->fleet}, fi, fd->fleet, 0, fd->enemy);
             } else {
                 buttons_.state(static_cast<uint32_t>(fleet_header_[fl])).hidden = true;
@@ -861,9 +865,9 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
             const size_t first = stacks.size();
             for (const GalacticFleetSlot& u : gf->units) {
                 Stack* into = nullptr;
-                if (u.type != kNoSlotType)
+                if (u.type != kNoSlotType && u.name.empty())  // [port] a named unit keeps a pad of its own
                     for (size_t k = first; k < stacks.size(); ++k)
-                        if (stacks[k].slot.type == u.type) into = &stacks[k];
+                        if (stacks[k].slot.type == u.type && stacks[k].slot.name.empty()) into = &stacks[k];
                 if (into) {
                     into->slot.count += u.count;
                     into->slot.selected = into->slot.selected || u.selected;
@@ -1650,6 +1654,28 @@ void GalacticHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
                 a.shift = k.shift;
                 a.ctrl = k.ctrl;
                 act(std::move(a));
+                // [port: Gabriel] a second left click on the same own pad within 0.5 s and 4 px (HeroPanel's double-click
+                // rule) asks the host to rename the fleet (header) or the pad's unit.
+                if (k.button == Button::Left && !k.shift && !k.ctrl) {
+                    const bool dbl = last_pad_click_ == k.component && now - last_pad_click_time_ <= 0.5 &&
+                                     std::abs(k.x - last_pad_click_x_) <= 4 && std::abs(k.y - last_pad_click_y_) <= 4;
+                    if (dbl && (s.unit != 0 || s.fleet != 0)) {
+                        HudAction r;
+                        r.kind = HudAction::Kind::Rename;
+                        r.component = k.component;
+                        r.name = (*table_)[static_cast<size_t>(k.component)].name;
+                        r.unit = s.unit != 0 ? s.unit : s.fleet;
+                        r.value = s.unit != 0 ? 0 : 1;
+                        if (s.fleet != 0) r.ids = {s.fleet};
+                        act(std::move(r));
+                        last_pad_click_ = -1;
+                    } else {
+                        last_pad_click_ = k.component;
+                        last_pad_click_time_ = now;
+                        last_pad_click_x_ = k.x;
+                        last_pad_click_y_ = k.y;
+                    }
+                }
             } else if (k.button == Button::Left && s.option.enabled && !s.option.production_disabled &&
                        s.option.block == HudBuildOption::Block::None && selected_id_ != 0) {
                 out.push_back(commands::ev::production(s.option.type_index, selected_id_));

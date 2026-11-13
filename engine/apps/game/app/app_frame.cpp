@@ -219,6 +219,7 @@ bool App::render_frame() {
     }
     info_.build_overlay(dialogs);  // data-chart lines over IDC_DATA_CHART_IMAGE
     if (credits_.active() && !credits_.build(dialogs, *ui_.fonts, *canvas, now_s_)) open_main_menu();  // ui1 t03: ended
+    if (rename_.active()) rename_.build(dialogs, *ui_.fonts, *canvas, now_s_);  // [port] fleet / ship rename prompt
     if (overlay_.shown()) {  // OPT1 t07: the frame-time overlay, top layer of the dialogs list (under the cursor)
         overlay_.read_ticks();
         overlay_.build(dialogs, *canvas, *ui_.fonts);
@@ -413,6 +414,21 @@ void App::frame() {
     cinematic_input(raw);  // refixf t05: the cinematic controller takes the mouse first (TSW_PLANET_DESTROY.md §11.2)
     std::u32string typed = printable(win_.take_text());
     if (bench_active()) typed.clear();
+    // [port: Gabriel] The fleet / ship rename prompt takes the keyboard while open (typed text, Backspace, Enter, Esc): no
+    // key reaches the camera, the hotkeys, the dialogs or the pause menu. It closes when the galactic screen does.
+    if (rename_.active()) {
+        if (screen_ != Screen::Galactic || !session_ || ui_.gui.has_focus()) {
+            rename_.close();
+        } else {
+            const ui::RenamePrompt::Result r =
+                rename_.update(typed, raw.keys_pressed.test(ui::vk::kBack), raw.keys_pressed.test(ui::vk::kReturn),
+                               raw.keys_pressed.test(ui::vk::kEscape));
+            if (r == ui::RenamePrompt::Result::Submit) submit(commands::rename_object_event(rename_.object(), rename_.utf8()), false);
+            typed.clear();
+            raw.keys_pressed = {};
+            raw.keys_down = {};
+        }
+    }
     // OI host: attract demo (idle clock, idle pause, map cycle); input reaches the menus as usual.
     attract_step(raw);
     // 2. Routing: overlay -> dialogs -> HUD -> world.

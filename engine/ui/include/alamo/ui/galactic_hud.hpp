@@ -135,6 +135,9 @@ struct GalacticFleetSlot {
     // UI.md §7.2: units of one fleet with the same type share one organiser pad (a stack with a count). Host: the unit's
     // object type index; kNoSlotType = its own stack. Land-force slots ignore it.
     uint32_t type = kNoSlotType;
+    // [port: Gabriel, 2026-11-13] the unit's player-given name (galactic GalacticSim::object_name; "" = none): shown as the
+    // pad's tooltip; a named unit gets a pad of its own (never merged into a type stack).
+    std::u32string name;
 };
 // One fleet in orbit at the selected planet, as the organiser sees it (UI.md §7.2). The HUD, not the host, decides which
 // of the three panes q1 / q2 / q3 it fills, from `slot`, `enemy` and the planet's GalacticPlanetInfo::orbit_local; the
@@ -145,6 +148,7 @@ struct GalacticFleet {
     std::vector<GalacticFleetSlot> units;
     int32_t slot = -1;                  // the fleet's own orbit slot 0..2 (galactic FleetState::slot); -1 = unknown, first free pane [port]
     bool enemy = false;                 // not the local player's (foreign or allied): drawn in pane 0, not draggable, clicks do nothing [port]
+    std::u32string name;                // [port: Gabriel] player-given fleet name ("" = none): the q{n}_fleet header's tooltip
 };
 struct GalacticBuildOption {
     uint16_t type_index = 0;
@@ -487,7 +491,12 @@ private:
         uint32_t fleet = 0, unit = 0;  // unit 0 = fleet header; a stack: its first unit (a drag takes that one unit)
         bool empty = false;            // an empty organiser pad shown while dragging (UI.md §7.3): fleet 0 = a pane without a fleet
         std::string icon;
+        std::u32string name;           // [port] the fleet's (header) or the unit's (stack of one) name, "" = none
     };
+    // [port: Gabriel] double click on an own organiser pad -> HudAction::Rename
+    int32_t last_pad_click_ = -1;
+    double last_pad_click_time_ = -1.0;
+    int32_t last_pad_click_x_ = 0, last_pad_click_y_ = 0;
     std::vector<PadSlot> pads_;
     const PadSlot* pad_of(int32_t component) const;
     // g_planet_fleet / g_planet_land_forces buttons of the last build (one component, many instances).

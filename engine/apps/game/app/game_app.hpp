@@ -64,6 +64,7 @@
 #include "alamo/ui/mouse_cursor.hpp"
 #include "alamo/ui/orders.hpp"
 #include "alamo/ui/render_bridge.hpp"
+#include "alamo/ui/rename_prompt.hpp"
 #include "alamo/ui/targeting.hpp"
 #include "alamo/ui/window_input.hpp"
 #include "frame_overlay.hpp"
@@ -322,6 +323,8 @@ public:
     render::DrawStats draw_stats_;
     // OPT1 t07: the frame-time overlay and this frame's phase times (wall clock, presentation only).
     FrameOverlay overlay_;
+    // [port: Gabriel, 2026-11-13] fleet / ship rename prompt (HudAction::Rename opens it; app_frame.cpp feeds and draws it).
+    ui::RenamePrompt rename_;
     FrameTimes ft_;
     Clock::time_point frame_t0_{};
     bool smoke_ok_ = true;
