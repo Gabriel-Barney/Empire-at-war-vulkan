@@ -210,6 +210,11 @@ Port after these three changes (dev, 2026-11-12):
 | Tech 2 bought | 7494 (2498 credits; done 9270) | 2326 | 2333 |
 | Battle | no end in 36000 | Rebel wins 20207 | Rebel wins 18727 |
 
+AI against AI, foc-land, 30000 ticks, seeds 1-6 (frame of the end; Rebel wins each): before 24866 / 26186 / 23038 /
+25631 / 22518 / 19855; with the quota and the extension 26334 / 21659 / 23802 / 22630 / 22490 / 24824; with all three
+21942 / 24479 / 21427 / 22930 / 21313 / 21549. The space outcome seeds (`--skirmish-ai foc`, 16000 ticks): 15 of 16
+end, seed 3 runs into the 14400-frame limit and is left out of the tests.
+
 **Still different: what the force sums and Find_Nearest see [M, trace; waits for run 2's FNEAR records].** Three
 observations point at one rule, "an object with DUMMY_GROUND_STRUCTURE (the base structures: Command Center, Barracks,
 factories, Research Facility, turbolaser towers...) is not in the perception grid's per-player object list", although
