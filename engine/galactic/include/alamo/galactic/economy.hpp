@@ -134,6 +134,8 @@ struct FactionRules {
     // Tech_Tree_Dialog_Name (+0x2698: IDD_TECH_TREE_REBEL / _EMPIRE / _BLACKMARKET), Tech_Level_Icon_Name (+0x138:
     // i_button_r_tech_upgrade_ / _e_), all trimmed as written; "" = none.
     std::string text_id, tech_tree_dialog, tech_level_icon;
+    // [port: Gabriel] the faction's emblem for the saved games list: Icon_Name, else Alternate_Icon_Name (trimmed; "" = none).
+    std::string icon;
     // Land_ / Space_Mode_Selection_Blob_Material_Name (+0x2818 / +0x2840; UI.md selection circle's faction default).
     std::string land_selection_blob, space_selection_blob;
     // cu5 t01: every child element of this <Faction> definition, (tag, trimmed text) in document order. The loaders of

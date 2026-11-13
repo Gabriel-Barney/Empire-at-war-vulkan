@@ -98,6 +98,8 @@ struct Options {
     bool taa = false;                            // [port] --taa: temporal anti-aliasing (RecordOptions::taa)
     float taa_sharpen = -1.0f;                   // --taa-sharpen S (0..1; < 0: RecordOptions default)
     int fsr = -1;                                // [port] --fsr Q: FSR upscaling, quality mode Q 0..4 (RecordOptions::upscaler)
+    bool smaa = false;                           // [port] --smaa: SMAA 1x (RecordOptions::smaa)
+    uint32_t msaa = 1;                           // [port] --msaa N: MSAA samples (RecordOptions::msaa; 1, 2, 4, 8)
     float time_scale = 1.0f;  // scene clock = wall time x scale (UV scrolling, FF expressions)
     uint32_t fleet = 0, seed = 1;
     int32_t record_threads = -1;  // -1: worker count
@@ -155,6 +157,8 @@ int usage() {
                  "       [--ao] [--ao-strength S] [--ao-radius R] [port] screen-space ambient occlusion (land maps)\n"
                  "       [--taa] [--taa-sharpen S] [port] temporal anti-aliasing (S 0..1, 0 = no sharpen)\n"
                  "       [--fsr Q] [port] FSR upscaling, Q = 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance\n"
+                 "       [--smaa] [port] SMAA 1x after the post chain (and after TAA)\n"
+                 "       [--msaa N] [port] multisampled scene, N = 2, 4 or 8 (clamped to the device)\n"
                  "       [--aniso N] anisotropic filtering of world textures (0/1 off, 2, 4, 8, 16; default off)\n");
     return 2;
 }
@@ -536,6 +540,8 @@ int main(int argc, char** argv) {
         else if (a == "--soft-shadows") opt.soft_shadows = true;
         else if (a == "--ao") opt.ao = true;
         else if (a == "--taa") opt.taa = true;
+        else if (a == "--smaa") opt.smaa = true;
+        else if (a == "--msaa") opt.msaa = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--taa-sharpen") opt.taa_sharpen = std::strtof(next().c_str(), nullptr);
         else if (a == "--fsr") opt.fsr = std::clamp(std::atoi(next().c_str()), 0, 4);
         else if (a == "--ao-strength") opt.ao_strength = std::strtof(next().c_str(), nullptr);
@@ -721,6 +727,8 @@ int main(int argc, char** argv) {
             if (opt.ao_strength >= 0.0f) ropt.ao_strength = opt.ao_strength;
             if (opt.ao_radius > 0.0f) ropt.ao_radius = opt.ao_radius;
             ropt.taa = opt.taa;
+            ropt.smaa = opt.smaa;
+            ropt.msaa = opt.msaa;
             if (opt.taa_sharpen >= 0.0f) ropt.taa_sharpen = opt.taa_sharpen;
             if (opt.fsr >= 0) {  // [port] FSR (falls back to TAA where it cannot run)
                 ropt.upscaler = render::Upscaler::Fsr;

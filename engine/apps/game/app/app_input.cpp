@@ -357,6 +357,13 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                 }
                 break;
             }
+            case ui::HudAction::Kind::Rename: {  // [port: Gabriel] double click on an own organiser pad: the rename prompt
+                const galactic::GalacticSim* g = galaxy();
+                if (!g || a.unit == 0) break;
+                const objects::ObjectHandle h = g->store().find(static_cast<objects::ObjectId>(a.unit));
+                rename_.open(a.unit, a.value == 1, g->object_name(h));
+                break;
+            }
             case ui::HudAction::Kind::BattleBegin: answer_battle_prompt(false); break;  // GALACTIC_DIALOGS §1.5
             case ui::HudAction::Kind::BattleAutoResolve: answer_battle_prompt(true); break;
             case ui::HudAction::Kind::ResumeGame:  // the Game Paused banner's Resume Game (pause_event(false))
@@ -962,6 +969,7 @@ void App::battle_input() {
         else if (e.slot == ui::hk::kSuperWeapon && !bview_.space() && bombing_run_ready()) bombing_toggle();  // 0x63f00 case 0x16 (land)
         else if (e.slot == ui::hk::kSuperWeapon && bview_.space()) space_weapon_toggle();  // ui1 t04: 0x63f00 case 0x16 (space)
         else if (e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);  // capture C2 (no galaxy in a skirmish: nothing)
+        else if (e.slot == ui::hk::kFleetCohesion && bview_.space()) session_->toggle_fleet_cohesion();  // [port] fleet cohesion
     }
     ui_.tactical_hud.update_input(routed_, input_.shift(), input_.ctrl(), now_s_, cmds, &acts);
     // L1/S4 wave 1 (tactical): STORY_CLICK_GUI to the tactical plot set - the galactic rule (left click on a component that
@@ -1035,7 +1043,7 @@ void App::move_ack(const ui::MoveAck& a) {
 ui::CameraTuning App::option_tuning(ui::CameraTuning t) const {
     if (!live_input()) return t;  // smoke / replay runs: the defaults (machine and profile independent)
     t.scroll_speed_option = ui::scroll_speed_option_from_slider(gameplay_.scroll_speed);  // IDC_SCROLL_SPEED_SLIDER
-    t.windowed = windowed_;  // UI5 t01: Options > Video > Windowed (edge scrolling, P1_CAMERA_INPUT)
+    t.windowed = windowed();  // UI5 t01: Options > Video > Windowed (edge scrolling, P1_CAMERA_INPUT)
     t.absolute_scrolling = gameplay_.absolute_scroll;
     t.right_button_scroll = gameplay_.right_button_scroll;
     t.both_buttons_rotate = gameplay_.both_buttons_rotate;
@@ -1147,9 +1155,8 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 break;
             case K::ApplyVideo: {  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
                 ++video_applies_;
-                hardware_mouse_ = a.video.hardware_mouse;
-                const bool window_changed = a.video.windowed != windowed_;  // UI5 t01
-                windowed_ = a.video.windowed;
+                const bool window_changed = a.video.window_mode != window_mode_;  // UI5 t01
+                window_mode_ = a.video.window_mode;
                 vsync_mode_ = a.video.vsync_mode;
                 set_present_mode(!a.video.vsync ? rhi::PresentMode::Immediate
                                  : vsync_mode_ == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo);
@@ -1159,15 +1166,20 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                     const DisplayMode m = shown_modes_[static_cast<size_t>(a.video.resolution)];
                     if (window_changed || m.width != win_.width() || m.height != win_.height() || (m.hz && m.hz != refresh_hz_)) {
                         std::string line;
-                        apply_display_mode(win_.native_handle(), m, &line, windowed_);
+                        apply_display_mode(win_.native_handle(), m, &line, window_mode_);
                         std::printf("video: %s\n", line.c_str());
                     }
                 } else if (window_changed) {
                     std::string line;
-                    apply_display_mode(win_.native_handle(), DisplayMode{win_.width(), win_.height(), refresh_hz_}, &line, windowed_);
+                    apply_display_mode(win_.native_handle(), DisplayMode{win_.width(), win_.height(), refresh_hz_}, &line, window_mode_);
                     std::printf("video: %s\n", line.c_str());
                 }
                 if (window_changed) apply_camera_tuning();
+                if (const int32_t s = std::clamp(a.video.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax); live_input() && s != ui_scale_) {
+                    ui_scale_ = s;  // [port: Gabriel] UI Scale: the canvas is rebuilt now (the window size may not change)
+                    resize_ui();
+                    std::printf("video: UI scale %d %%\n", ui_scale_);
+                }
                 update_display_rate(true);
                 // t12: tried now, stored on the Yes answer of "keep these settings?" (or as the old mode on No / timeout).
                 if (update_video_profile(video_profile_, a.video, shown_modes_)) {
@@ -1176,44 +1188,25 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                         adv_video_ = detail_preset(adv_video_, video_profile_.detail);
                         video_profile_.advanced = adv_video_;
                     }
-                    std::printf("video: anti-aliasing %s (strength %d), detail level %d\n",
-                                fsr_quality(video_profile_.anti_alias) ? "FSR" : taa_active(video_profile_.anti_alias) ? "TAA" : "off",
-                                video_profile_.anti_alias, video_profile_.detail);
-                    if (fsr_quality(video_profile_.anti_alias))
-                        std::printf("video: FSR %s\n", gpu_.renderer.fsr_supported() ? gpu_.renderer.upscaler_status().c_str()
-                                                                                         : ("unavailable, TAA instead: " + gpu_.renderer.upscaler_status()).c_str());
+                    std::printf("video: anti-aliasing %s, detail level %d\n", aa_mode_name(video_profile_.anti_alias), video_profile_.detail);
+                    if (fsr_quality(video_profile_.anti_alias)) {  // [port] which FSR runs, or why TAA is drawn instead
+                        const bool fsr_ok = gpu_.renderer.fsr_supported();
+                        std::printf("video: FSR %s%s\n", fsr_ok ? "" : "unavailable, TAA instead: ", gpu_.renderer.upscaler_status().c_str());
+                    }
                     save_video_options();
                 }
                 break;
             }
-            case K::ApplyAdvancedVideo:  // AO goes into the next frame's RecordOptions; anisotropy latches next frame
+            case K::ApplyAdvancedVideo: {  // AO and render scale go into the next frame's RecordOptions; anisotropy latches next frame
                 adv_video_ = a.advanced;
                 gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
-                std::printf("video: ambient occlusion %s, anisotropy %dx requested\n", adv_video_.ambient_occlusion ? "on" : "off",
-                            adv_video_.anisotropy);
+                const VkExtent2D scene = render::render_scale_extent({targets_.width, targets_.height}, render_scale_value(adv_video_.render_scale));
+                std::printf("video: ambient occlusion %s, anisotropy %dx requested, render scale %d%% (%ux%u of %ux%u)\n",
+                            adv_video_.ambient_occlusion ? "on" : "off", adv_video_.anisotropy, adv_video_.render_scale, scene.width,
+                            scene.height, targets_.width, targets_.height);
                 video_profile_.advanced = adv_video_;
                 sync_detail(video_profile_);  // t43: the Detail value follows
                 save_video_options();
-                break;
-            case K::AutoDetectVideo: {  // gfxf t02: a quality level from the GPU; the open dialogs show it
-                const rhi::DeviceCaps& caps = ctx_.caps();
-                GpuClass gpu;
-                gpu.kind = caps.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? GpuKind::Discrete
-                           : caps.type == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GpuKind::Integrated
-                                                                                 : GpuKind::Other;
-                gpu.memory_bytes = caps.device_local_bytes;
-                gpu.sampler_anisotropy = caps.sampler_anisotropy;
-                gpu.max_anisotropy = caps.max_anisotropy;
-                static constexpr const char* kQualityNames[] = {"low", "medium", "high", "ultra"};
-                const AutoVideoChoice choice = recommend_video(gpu);
-                apply_auto_video(video_profile_, choice);
-                adv_video_ = video_profile_.advanced;
-                gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
-                std::printf("video: auto detect (%s, %llu MiB): %s detail, anti-aliasing strength %d, anisotropy %dx, ambient occlusion %s\n",
-                            caps.name.c_str(), static_cast<unsigned long long>(caps.device_local_bytes >> 20),
-                            kQualityNames[choice.quality], video_profile_.anti_alias, adv_video_.anisotropy, adv_video_.ambient_occlusion ? "on" : "off");
-                save_video_options();
-                ui_.front.refresh_video_dialogs();
                 break;
             }
             default: break;

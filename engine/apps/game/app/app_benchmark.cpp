@@ -47,6 +47,8 @@ void App::bench_apply_window() {
     opt_.audio = p.audio == BenchAudio::Off ? AudioBackendKind::Off : AudioBackendKind::Null;
 }
 
+static_assert(ui::kAaOff == 0 && ui::kAaTaa == 2, "benchmark.cpp's anti-aliasing modes");
+
 void App::bench_apply_video() {
     const BenchPreset& p = *find_bench_preset(opt_.bench.preset);
     VideoProfile v;
@@ -64,7 +66,6 @@ void App::bench_apply_video() {
     video_profile_ = v;
     adv_video_ = v.advanced;
     detail_options_ = true;
-    hardware_mouse_ = false;
     std::printf("benchmark: preset %s (%s)\n", std::string(p.name).c_str(), std::string(p.description).c_str());
 }
 

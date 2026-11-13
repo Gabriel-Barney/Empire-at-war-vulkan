@@ -141,6 +141,10 @@ struct HudAction {
         // ui4 t02, appended 2026-11-13: a left click on a greyed galactic build pad (GalacticBuildOption::block != None):
         // value = the Block, name = the pad component; the host plays the GUI negative feedback, no command is sent.
         BuildRefused,
+        // [port: Gabriel] appended 2026-11-13: a double click on an own galactic organiser pad (fleet header or unit pad):
+        // unit = the fleet object (header) or the pad's unit (a stack: its first unit), ids = {fleet}, value = 1 for a
+        // fleet / 0 for a unit, name = the component name. Host: open the rename prompt (current name from the sim).
+        Rename,
     };
     Kind kind = Kind::Button;
     int32_t component = -1;
@@ -241,6 +245,7 @@ struct TacticalHudFrame {
     // [port: Gabriel, original screenshot] planet panel above the radar: Text_Planet_tactical (battle planet name),
     // Text_Tactical_Tech ("Tech: 3", TEXT_TECH), Text_Planetary_Pop ("13/20"; Text_Pop_Cap without it); empty / < 0 = blank.
     std::u32string planet_name;
+    std::u32string cohesion_text;  // [port: Gabriel 2026-11-13] fleet cohesion line above the planet name ("" = none)
     int32_t tech = -1, pop = -1, pop_cap = -1;
     // FIXPASS_GALACTIC §4.2 bottom-left advisor frame (i_main_skirmish = i_tactical_controls.alo bones: Movie_tactical
     // (50, 288), b_droid_help_tactical (19, 255), Text_tactical_help (65, 309), Text_Planet_tactical (179, 239); the
@@ -328,6 +333,9 @@ public:
     // Tables must outlive the HUD. `text` may be null (keys shown as text).
     void init(const ComponentTable& table, const TextureAtlas& atlas, FontCache& fonts, const TextDatabase* text = nullptr);
     void resize(uint32_t width, uint32_t height);
+    // [port: Gabriel] DPI-style UI scale (hud_canvas.hpp; 1 = 100 %, 0 = the original fitted canvas): takes effect on the
+    // next resize().
+    void set_ui_scale(float s) { canvas_.ui_scale = s > 0.0f ? s : 0.0f; }
     const HudCanvas& canvas() const { return canvas_; }
     HudLayout& layout() { return layout_; }
     const HudLayout& layout() const { return layout_; }

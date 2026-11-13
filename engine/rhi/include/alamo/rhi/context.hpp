@@ -86,6 +86,9 @@ struct DeviceCaps {
     VkDeviceSize min_storage_buffer_offset_alignment = 256;
     VkDeviceSize non_coherent_atom_size = 256;
     uint32_t max_push_constants_size = 128;
+    // Sample counts usable for a colour + depth-stencil render target (framebufferColor / Depth / StencilSampleCounts,
+    // intersected; MSAA scene targets).
+    VkSampleCountFlags framebuffer_samples = VK_SAMPLE_COUNT_1_BIT;
     float timestamp_period_ns = 1.0f;   // ns per timestamp tick
     uint32_t timestamp_valid_bits = 0;  // graphics queue family; 0 = no timestamps
     bool host_query_reset = false;

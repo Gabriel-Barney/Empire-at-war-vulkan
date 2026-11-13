@@ -354,7 +354,7 @@ VkDescriptorSet ParticleRenderer::texture_set(rhi::Frame& frame, const GpuTextur
 }
 
 VkPipeline ParticleRenderer::pipeline(uint32_t mode, const SceneHookPass& p) {
-    const auto key = std::make_tuple(mode, p.color_format, p.depth_format, p.stencil_format);
+    const auto key = std::make_tuple(mode, p.color_format, p.depth_format, p.stencil_format, p.samples);
     auto it = gfx_.find(key);
     if (it != gfx_.end()) return it->second;
     const std::vector<uint32_t> vs = rhi::spirv_from_bytes(std::span<const uint8_t>(g_particles_vs, sizeof g_particles_vs));
@@ -395,6 +395,7 @@ VkPipeline ParticleRenderer::pipeline(uint32_t mode, const SceneHookPass& p) {
     d.color_formats = std::span<const VkFormat>(&color, 1);
     d.depth_format = p.depth_format;
     d.stencil_format = p.stencil_format;
+    d.samples = p.samples;
     d.layout = layout_;
     d.name = "particles.draw";
     const VkPipeline pl = cache_.create_graphics(d);

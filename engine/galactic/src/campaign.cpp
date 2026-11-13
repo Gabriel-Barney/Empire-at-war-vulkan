@@ -1767,6 +1767,14 @@ RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& 
         return fleet_management(player, ev);
     case EventType::SpecialAbility:  // P4 sim: kinds 1 / 4 / 5 / 7 (kind 6 and others: Unhandled -> host hooks)
         return special_command(player, ev);
+    case EventType::PortExtension: {  // [port: Gabriel] fleet and ship names (src/object_names.cpp)
+        if (ev.u("subtype") != commands::kRenameSubtype) return RejectReason::Unhandled;
+        commands::ObjectId id = commands::kNoObject;
+        std::string name;
+        if (!commands::read_rename_event(ev, id, name)) return RejectReason::Malformed;
+        const ObjectHandle h = id == commands::kNoObject ? ObjectHandle{} : store_->find(static_cast<objects::ObjectId>(id));
+        return rename(player, h, name);
+    }
     default:
         return RejectReason::Unhandled;
     }

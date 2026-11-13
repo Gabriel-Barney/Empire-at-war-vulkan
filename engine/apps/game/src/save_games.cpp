@@ -128,6 +128,34 @@ std::string save_label(const SaveMeta& m) {
     return s;
 }
 
+std::string save_row_label(const SaveMeta& m) {
+    std::string s = m.name.empty() ? std::string("(unnamed)") : m.name;
+    std::string when;
+    if (m.week > 0) {
+        when = "Week " + std::to_string(m.week);
+    } else if (m.game_seconds > 0 || m.kind == "skirmish") {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%llu:%02llu", static_cast<unsigned long long>(m.game_seconds / 60u),
+                      static_cast<unsigned long long>(m.game_seconds % 60u));
+        when = buf;
+    }
+    const std::string at = format_local_time(m.saved_at);
+    std::string rest = when;
+    if (!at.empty()) rest += (rest.empty() ? "" : ", ") + at;
+    if (!rest.empty()) s += "  -  " + rest;
+    return s;
+}
+
+std::string new_playthrough_id(int64_t now) {
+    // Presentation only (never read by the sim): the wall clock plus the high-resolution clock's low bits, so two games
+    // started in the same second still differ.
+    const auto hr = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%llx-%08llx", static_cast<unsigned long long>(now),
+                  static_cast<unsigned long long>((hr ^ (hr >> 32)) & 0xffffffffull));
+    return buf;
+}
+
 std::string encode_description(const SaveMeta& m) {
     std::string s = one_line(save_label(m));
     s += "\n";
@@ -148,6 +176,9 @@ std::string encode_description(const SaveMeta& m) {
     kv("week", std::to_string(m.week));
     kv("game_seconds", std::to_string(m.game_seconds));
     kv("saved_at", std::to_string(m.saved_at));
+    kv("faction_icon", m.faction_icon);
+    kv("playthrough", m.playthrough);
+    kv("playthrough_started", std::to_string(m.playthrough_started));
     return s;
 }
 
@@ -184,6 +215,9 @@ bool decode_description(std::string_view text, SaveMeta& out) {
         else if (k == "week") m.week = static_cast<uint32_t>(std::clamp<int64_t>(to_i64(v, 0), 0, 0x7fffffff));
         else if (k == "game_seconds") m.game_seconds = static_cast<uint64_t>(std::max<int64_t>(0, to_i64(v, 0)));
         else if (k == "saved_at") m.saved_at = to_i64(v, 0);
+        else if (k == "faction_icon") m.faction_icon = std::string(v);
+        else if (k == "playthrough") m.playthrough = std::string(v);
+        else if (k == "playthrough_started") m.playthrough_started = to_i64(v, 0);
     }
     out = std::move(m);
     return true;

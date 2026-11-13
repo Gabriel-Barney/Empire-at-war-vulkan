@@ -5,6 +5,12 @@
 // Canvas units [H]: base 1024 x 768, origin at the screen centre. Aspect > 4:3: width = screenW * 768 / screenH
 // (height stays 768); aspect < 4:3: height = screenH * 1024 / screenW (width stays 1024). Scale = canvas size /
 // base size; units per pixel = canvas size / screen pixels.
+// [port: Gabriel 2026-11-13] UI scale (Options > Video > UI Scale, DPI style): at scale s one canvas unit is s physical
+// pixels, so the canvas is the screen size / s - but never smaller than the original's fitted canvas above (the layouts are
+// made for at most 1024 x 768 units on screen; a scale whose canvas would be smaller shows the original size). The canvas
+// keeps the screen's aspect; text is sized for the screen height the canvas stands for (font_height(): screen height x
+// fitted height / canvas height), so text shrinks with the rest of the UI. ui_scale 0 (the default) is the original: the
+// fitted canvas.
 // [port] axis convention: canvas +X right, +Y UP (the ortho camera's convention, like world space); pixel
 // coordinates are top-left origin, +Y down (InputFrame / picking). Component offsets from
 // CommandBarComponents.xml (Offset, Text_Offset, ...) are read as canvas units with +Y DOWN (screen
@@ -45,11 +51,15 @@ struct HudCanvas {
     float width = kHudBaseWidth, height = kHudBaseHeight;  // canvas units
     float scale_x = 1.0f, scale_y = 1.0f;                 // width / 1024, height / 768
     float units_per_pixel_x = 1.0f, units_per_pixel_y = 1.0f;
+    float ui_scale = 0.0f;           // what make() was given (0 = the original's fitted canvas)
+    uint32_t text_height = 768;      // screen height the font sizes follow (font_pixel_height); screen_height at the fitted size
     std::array<Vec2f, 4> corners{};  // canvas units: top-left, top-right, bottom-right, bottom-left
     std::array<HudOrthoCamera, kHudCameraCount> cameras{};
 
     // Rebuilt on every resolution change (WM_SIZE in the original). 0 sizes are treated as 1.
-    static HudCanvas make(uint32_t screen_w, uint32_t screen_h);
+    // `ui_scale` > 0: the DPI-style UI scale (1 = 100 %); see above.
+    static HudCanvas make(uint32_t screen_w, uint32_t screen_h, float ui_scale = 0.0f);
+    uint32_t font_height() const { return text_height; }
     bool wider_than_4_3() const { return static_cast<uint64_t>(screen_width) * 3u > static_cast<uint64_t>(screen_height) * 4u; }
     bool taller_than_4_3() const { return static_cast<uint64_t>(screen_width) * 3u < static_cast<uint64_t>(screen_height) * 4u; }
 

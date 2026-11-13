@@ -9,8 +9,9 @@
 //   DIALOG                          slider), Custom Campaign -> IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG (custom sets, faction
 //                                   combo, difficulty radios, advanced options), Skirmish -> IDD_SKIRMISH_STAGING_DIALOG
 //   IDD_MAIN_OPTIONS_DIALOG /       Audio (IDD_AUDIO_OPTIONS_DIALOG: 4 sliders = AudioBus Master / Sfx / Speech / Music),
-//   IDD_IN_GAME_OPTIONS_DIALOG      Video (IDD_VIDEO_OPTIONS_DIALOG -> Advanced: IDD_ADVANCED_VIDEO_OPTIONS_DIALOG ->
-//                                   ApplyAdvancedVideo; Auto detect -> AutoDetectVideo), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
+//   IDD_IN_GAME_OPTIONS_DIALOG      Display (the Video button: IDD_VIDEO_OPTIONS_DIALOG -> ApplyVideo), Graphics ([port:
+//                                   Gabriel] button: IDD_ADVANCED_VIDEO_OPTIONS_DIALOG -> ApplyAdvancedVideo, plus ApplyVideo
+//                                   when its Anti-Aliasing list changed; the shipped Auto Detect button is hidden), Keyboard (IDD_KEYBOARD_OPTIONS_DIALOG[_2.._5]:
 //                                   key-capture edits bound to the P2 HotkeyTable, Accept syncs P1 Bindings), Gameplay
 //                                   (IDD_GAMEPLAY_OPTIONS_DIALOG)
 //   IDD_GAME_OPTIONS_DIALOG (pause) Save -> IDD_SAVE_GAME_DIALOG, Load -> IDD_LOAD_GAME_DIALOG, Options ->
@@ -21,6 +22,10 @@
 //                                   on IDC_USER_TEXT_STRING_1) before SaveGame / DeleteSave; a save_blocker reason
 //                                   disables Save and the edit and shows the reason in it. The host re-lists with
 //                                   refresh_saves() after deleting.
+//                                   [port: Gabriel 2026-11-13] the list is a tree: SaveGameInfo::groups nests each save in
+//                                   groups (rows "[+] label  (count)", indented one row height per level, the group's icon);
+//                                   a mouse click on a group row (Load on a selected one) opens / closes it, the newest
+//                                   save's groups open each time the dialog fills. Save rows show SaveGameInfo::icon.
 //
 // [port] choices: campaign menu rules (build_campaign_menu); faction button A / B = the set's first two factions in data
 // order (hidden when absent); difficulty 0 easy / 1 normal / 2 hard (slider 0..2, radios); IDC_MAIN_MENU_PLAY_DEMO
@@ -88,15 +93,33 @@ inline constexpr size_t kVsyncModeCount = 2;
 // The cap holds with v-sync on too (e.g. 60 fps on a 144 Hz display with FIFO, or Mailbox capped at the refresh rate).
 inline constexpr int32_t kFrameCapDisplay = -1;
 inline constexpr int32_t kFrameCapChoices[] = {0, kFrameCapDisplay, 30, 60, 90, 120, 144, 165, 240};
+// [port: Gabriel 2026-11-13] IDC_PORT_WINDOW_MODE rows (in this order), replacing the shipped "Run in window" check
+// (IDC_WINDOWED_MODE, hidden): Fullscreen = the monitor takes the picked resolution and a frameless window covers it
+// [port: no exclusive Vulkan full screen]; Borderless = a frameless window over the monitor at the desktop's own resolution
+// (the picked resolution's refresh rate is still applied, its size is not); Windowed = a framed window of the picked size.
+enum class WindowMode : uint8_t { Fullscreen, Borderless, Windowed };
+inline constexpr size_t kWindowModeCount = 3;
+// [port: Gabriel 2026-11-13] IDC_PORT_UI_SCALE rows: DPI-style UI scale in percent (HudCanvas::make). 100 % = one canvas
+// unit per physical pixel; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
+// The game starts at 100 % whatever the Windows display scale is (the process is per-monitor DPI aware).
+inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500};
+inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
+// [port: Gabriel 2026-11-13] Anti-aliasing modes (VideoSettings::anti_alias; the list kAntiAliasChoices below).
+inline constexpr int32_t kAaOff = 0, kAaSmaa = 1, kAaTaa = 2, kAaMsaa2 = 3, kAaMsaa4 = 4, kAaMsaa8 = 5;
+// [port: Gabriel 2026-11-13] FSR upscaling modes, one per FSR quality mode in render::UpscaleQuality order (mode - kAaFsrNative).
+inline constexpr int32_t kAaFsrNative = 6, kAaFsrQuality = 7, kAaFsrBalanced = 8, kAaFsrPerformance = 9, kAaFsrUltra = 10;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
     int32_t resolution = -1;
-    bool windowed = false, vsync = true, widescreen = true, hardware_mouse = false;
+    WindowMode window_mode = WindowMode::Fullscreen;  // [port: Gabriel] IDC_PORT_WINDOW_MODE
+    int32_t ui_scale = 100;                           // [port: Gabriel] IDC_PORT_UI_SCALE, one of kUiScaleChoices
+    bool vsync = true, widescreen = true;
     VsyncMode vsync_mode = VsyncMode::Fifo;  // [port: Gabriel] IDC_PORT_VSYNC_MODE
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
     int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP: one of kFrameCapChoices
     std::u32string display_info;             // [port: Gabriel] IDC_PORT_DISPLAY_INFO ("160 Hz, Mailbox"); empty = blank
-    int32_t detail = 100, anti_alias = 0, gamma = 50;  // 0..100: Detail / Anti-aliasing are picked from lists (kQualityPresets, kAntiAliasChoices), Gamma is a slider
+    int32_t detail = 100, gamma = 50;  // 0..100: Detail is picked from a list (kQualityPresets), Gamma is a slider
+    int32_t anti_alias = kAaOff;       // [port: Gabriel] the Anti-aliasing list's mode (kAntiAliasChoices: kAaOff .. kAaMsaa8)
     // Set on the ApplyVideo where the player picked a quality level (Low .. Ultra) the options did not already have: `detail`
     // is then that level's value and the host sets the seven advanced detail options to it (detail_preset). Left false when
     // the list still says what the options say, or says Custom, so a hand-made mix is never overwritten by an Apply.
@@ -112,10 +135,13 @@ struct VideoSettings {
 // [port: Gabriel] t12: seconds the resolution-change confirmation waits before it reverts (the original's countdown,
 // TEXT_REVERTING_IN_X_SECONDS, is not in the recovered specs: 15 s as Windows' own display dialog [M] guess).
 inline constexpr double kResolutionConfirmSeconds = 15.0;
-// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (from IDD_VIDEO_OPTIONS_DIALOG's Advanced button): 7 detail options + 3 checks.
+// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG (the Graphics page since the Display / Graphics split): 7 detail options + 3 checks.
 // [port: Gabriel] plus the port's ambient occlusion check (IDC_PORT_AMBIENT_OCCLUSION) and anisotropic filtering combo
-// (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is not here: it is one list in the Video dialog.
+// (IDC_PORT_ANISOTROPY) from kPortDialogExtensionsRc. Anti-aliasing is VideoSettings::anti_alias (its list is on this page).
 inline constexpr int32_t kAnisotropyChoices[] = {0, 2, 4, 8, 16};  // 0 = off (the materials' own sampler state)
+// [port: Gabriel] Render Scale combo (IDC_PORT_RENDER_SCALE): percent of the window's pixels the 3D scene is drawn with
+// (render::RecordOptions::render_scale; 75 at 3840 x 2160 = 3326 x 1871). 100 = native. HUD and dialogs stay native.
+inline constexpr int32_t kRenderScaleChoices[] = {50, 60, 67, 75, 85, 100};
 
 // [port: Gabriel] Named levels for the options that were 0..100 sliders. The stored values stay 0..100 (the profile file and
 // the renderer's mappings in game_display.hpp are unchanged); a list shows the level a stored value falls in, and picking a
@@ -126,18 +152,19 @@ struct LevelChoice {
     int32_t from;
     const char32_t* label;
 };
-// Anti-aliasing (temporal, TAA): the stored value is the strength, 0 = off; the share of the current frame falls from 0.2 to
-// 0.04 as it rises (game_display.hpp apply_aa_options): more history means smoother edges and more softness in motion.
-// Medium is the tuned default (current-frame weight 0.1) [inferred: the original has no anti-aliasing option].
-inline constexpr int32_t kAntiAliasDefaultSlider = 63;  // Medium: what an old profile's "anti_aliasing=taa" with strength 0 becomes
-// [port: Gabriel 2026-11-13] FSR upscaling rows after the TAA ones: stored values 110 .. 150 (above every TAA strength), one
-// per FSR quality mode, (value - kAntiAliasFsrFirst) / 10 = render::UpscaleQuality (game_display.hpp apply_aa_options).
-// Where FSR cannot run the frame falls back to TAA at Medium strength.
-inline constexpr int32_t kAntiAliasFsrFirst = 110;
-inline constexpr LevelChoice kAntiAliasChoices[] = {
-    {0, 0, U"Off"}, {30, 1, U"Low - light smoothing"}, {kAntiAliasDefaultSlider, 47, U"Medium - balanced"}, {100, 82, U"High - smoothest, softer in motion"},
-    {110, 101, U"FSR - native resolution"}, {120, 115, U"FSR Quality - 1.5x upscale"}, {130, 125, U"FSR Balanced - 1.7x upscale"},
-    {140, 135, U"FSR Performance - 2x upscale"}, {150, 145, U"FSR Ultra Performance - 3x upscale"}};
+// [port: Gabriel 2026-11-13] Anti-aliasing: one list, one choice - Off, SMAA, TAA, MSAA 2x / 4x / 8x - each at one fixed
+// quality (game_display.hpp apply_aa_options; the original has no anti-aliasing option). The stored value is the mode below
+// (VideoSettings::anti_alias, profile key "aa_mode"). An MSAA count the device cannot do is drawn with the largest one it can
+// (render::Renderer::msaa_samples), so the list is the same on every device. The FSR rows draw the scene at a lower
+// resolution and upscale it with AMD FSR (4.1 where the GPU supports it, else 3.1); where FSR cannot run they draw TAA.
+inline constexpr LevelChoice kAntiAliasChoices[] = {{kAaOff, kAaOff, U"Off"},       {kAaSmaa, kAaSmaa, U"SMAA"},
+                                                    {kAaTaa, kAaTaa, U"TAA"},       {kAaMsaa2, kAaMsaa2, U"MSAA 2x"},
+                                                    {kAaMsaa4, kAaMsaa4, U"MSAA 4x"}, {kAaMsaa8, kAaMsaa8, U"MSAA 8x"},
+                                                    {kAaFsrNative, kAaFsrNative, U"FSR Native AA"},
+                                                    {kAaFsrQuality, kAaFsrQuality, U"FSR Quality (1.5x)"},
+                                                    {kAaFsrBalanced, kAaFsrBalanced, U"FSR Balanced (1.7x)"},
+                                                    {kAaFsrPerformance, kAaFsrPerformance, U"FSR Performance (2x)"},
+                                                    {kAaFsrUltra, kAaFsrUltra, U"FSR Ultra Performance (3x)"}};
 // The seven detail options. Four levels where the renderer has four steps (Shader) or a continuous scale (Particle, Mesh,
 // Environment); three where it has three (Texture: top mips skipped 2 / 1 / 0, Water: reflection targets 0 / 1 / 2);
 // Shadow is on or off (any value above 0 draws shadows). Each list ends at the value the old slider's Max stood for.
@@ -159,6 +186,7 @@ struct AdvancedVideoSettings {
     bool soft_shadows = true, heat_distortion = true, bloom = true;
     bool ambient_occlusion = false;
     int32_t anisotropy = 0;  // one of kAnisotropyChoices
+    int32_t render_scale = 100;  // percent of the window's pixels, one of kRenderScaleChoices (a stored other value is kept)
     friend bool operator==(const AdvancedVideoSettings&, const AdvancedVideoSettings&) = default;
 };
 // The overall quality levels of the Video dialog's Detail Level list: each one sets all seven detail options to its value
@@ -193,6 +221,10 @@ struct CameraSettings {
     float galactic_fov_deg = 26.565f;  // atan(0.5), the original
     float tactical_fov_deg = 55.0f;
     uint8_t queue_mods = kModShift;
+    // [port: Gabriel, 2026-11-13] IDC_PORT_SHOW_PATH_LINES: draw the planned route (the sim's path, unit to destination)
+    // of every moving unit of the local player, one line per squadron / company, in tactical battles (space and land), as in the "Empire at War Remake" mod. Off by default: the original
+    // only draws the line of a queued waypoint path (UI.md 1.5).
+    bool show_path_lines = false;
     friend bool operator==(const CameraSettings&, const CameraSettings&) = default;
 };
 inline constexpr float kGalacticFovMinDeg = 15.0f, kGalacticFovMaxDeg = 60.0f, kTacticalFovMinDeg = 30.0f,
@@ -210,12 +242,16 @@ inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
 // (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
 // (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
-// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use) under the Advanced button. Its Anti-Aliasing and Detail
-// Level sliders are replaced by two lists in their rows (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices; IDC_PORT_DETAIL_LEVEL:
-// Low / Medium / High / Ultra / Custom, see kQualityPresets); the shipped sliders and their end captions are hidden.
-// IDD_ADVANCED_VIDEO_OPTIONS_DIALOG gets a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the
-// level lists above), the anisotropic filtering combo and the ambient occlusion check (AdvancedVideoSettings).
-// Add with DialogScript::extend after GUIDialogs.rc is loaded.
+// (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use), the display mode list (IDC_PORT_WINDOW_MODE,
+// WindowMode) in place of the hidden IDC_WINDOWED_MODE check and the UI scale list (IDC_PORT_UI_SCALE, kUiScaleChoices).
+// Display / Graphics split (Gabriel, 2026-11-13): the options menus' Video button is Display and opens IDD_VIDEO_OPTIONS_DIALOG
+// with the display settings only (its Anti-Aliasing and Detail Level rows, Advanced and Auto Detect buttons are hidden, the
+// rows under them move up); a Graphics button the port adds under it (IDC_PORT_MAIN_OPTIONS_GRAPHICS /
+// IDC_PORT_IN_GAME_OPTIONS_GRAPHICS) opens IDD_ADVANCED_VIDEO_OPTIONS_DIALOG as the Graphics page. That page gets the
+// Detail Level list (IDC_PORT_DETAIL_LEVEL: Low / Medium / High / Ultra / Custom, a preset for the seven lists, see
+// kQualityPresets), a list in place of each of the seven detail sliders (IDC_PORT_<NAME>_DETAIL, the level lists above), the
+// Anti-Aliasing list (IDC_PORT_ANTI_ALIASING: kAntiAliasChoices), the render scale and anisotropic filtering combos and the
+// ambient occlusion check (AdvancedVideoSettings). Add with DialogScript::extend after GUIDialogs.rc is loaded.
 extern const char* const kPortDialogExtensionsRc;
 
 // IDC_SCROLL_SPEED_SLIDER: the dialog slider runs 0..100; the original option is 0..3 with Defaults = 1.0
@@ -245,9 +281,18 @@ struct GameOptionsSetup {
     bool set = false;  // Accept was pressed: the game uses these (else the campaign's own values)
     friend bool operator==(const GameOptionsSetup&, const GameOptionsSetup&) = default;
 };
+// [port: Gabriel] one level of the saved games tree (SaveGameInfo::groups, outermost first). Saves with the same keys up to
+// a level share that level's group; its row shows the first such save's label and icon.
+struct SaveGroupLevel {
+    std::string key;       // the group among its siblings
+    std::u32string label;  // group row text
+    std::string icon{};    // group row icon texture ("" = none)
+};
 struct SaveGameInfo {
     std::string name;      // save identifier (host)
     std::u32string label;  // list text
+    std::string icon{};    // [port: Gabriel] row icon texture (the save's faction; "" = none)
+    std::vector<SaveGroupLevel> groups{};  // [port: Gabriel] the groups the save is listed in (empty = top level)
 };
 struct SkirmishMapInfo {
     std::string map;       // map file / id (what StartSkirmish carries)
@@ -292,7 +337,6 @@ struct MenuAction {
         KeybindingsChanged,  // the HotkeyTable (and Bindings) were updated
         // P4 completion (2026-10-27), appended:
         ApplyAdvancedVideo,  // advanced
-        AutoDetectVideo,     // Auto detect on the video / advanced video dialogs
         ApplyCamera,         // [port: Gabriel] camera (FOVs, queue modifier); hotkeys changed too -> KeybindingsChanged
         // modc t08 (IDD_PORT_MODS_DIALOG), appended:
         CheckMod,   // mod: the picker row selected (ModPickerEntry::id; "" = the base game) wants its load report
@@ -374,10 +418,6 @@ public:
     void show_pause_menu();       // in-game menu (IDD_GAME_OPTIONS_DIALOG) over the HUD
     void close_pause_menu();
     bool pause_menu_open() const;
-    // [port] After the host answered MenuAction::Kind::AutoDetectVideo by changing its video options: the open Video dialog's
-    // Anti-Aliasing and Detail Level lists and the open Advanced dialog's lists, checks and anisotropy show the provider's
-    // values again. Everything else in those dialogs (resolution, v-sync, gamma, ...) keeps what the player has set.
-    void refresh_video_dialogs();
     void set_in_game(bool g) { in_game_ = g; }
     const CampaignMenu& campaigns() const { return menu_; }
 
@@ -469,6 +509,18 @@ private:
     void apply_keys(std::vector<MenuAction>& out);
     void refill_keys();
     std::vector<SaveGameInfo> saves_;
+    // [port: Gabriel] the saved games tree: one entry per list row, a save (index into saves_) or a group (save = -1, its
+    // key path); the open groups' key paths (kept across refills).
+    struct SaveRow {
+        int32_t save = -1;
+        std::string group;
+    };
+    std::vector<SaveRow> save_rows_;
+    std::vector<std::string> saves_open_;
+    void build_save_rows(GuiDialog& d, int32_t selected, int32_t top);
+    int32_t row_save(int32_t row) const;               // a list row's save (index into saves_), -1 for a group / no row
+    int32_t selected_save(const GuiDialog& d) const;  // the selected row's save (index into saves_), -1 for none / a group
+    bool toggle_save_group(GuiDialog& d, int32_t row);  // a group row: open / close it (false: not a group row)
     std::vector<SkirmishMapInfo> maps_;
     std::vector<size_t> map_view_;   // skirmish list rows -> index into maps_ (active tab, sorted)
     bool custom_tab_ = false;        // skirmish list: Custom tab active

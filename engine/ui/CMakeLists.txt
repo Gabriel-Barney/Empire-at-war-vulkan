@@ -48,6 +48,7 @@ add_library(alamo_ui_hud STATIC
   src/gui_menus.cpp
   src/load_screen.cpp
   src/galactic_hud.cpp
+  src/rename_prompt.cpp  # [port: Gabriel 2026-11-13] fleet / ship rename prompt
   src/gui_script.cpp
   # P4 completion: in-game screens, HUD panels (encyclopedia, heroes, FoC shells).
   src/gui_screens.cpp

@@ -17,3 +17,7 @@ docs/images/opt1_frame_overlay.png
 tools/probe_mod/s10_map_owners/expected_objects.json
 # Fix-pass probe screenshots (evidence for docs/re; candidates for a docs/archive zip):
 tools/probe_mod/fixpass_capture/*.png
+
+# Vendored reference SMAA (MIT, approved by Gabriel 2026-11-13, docs/DECISIONS.md): the area lookup texture as a
+# C array (160 x 560 RG8), compiled into alamo_render; kept unmodified from iryoku/smaa.
+engine/render/third_party/smaa/AreaTex.h

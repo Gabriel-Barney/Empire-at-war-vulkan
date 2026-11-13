@@ -23,6 +23,7 @@
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
 #include "fsr.hpp"  // [port] FSR upscaling
+#include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
@@ -30,6 +31,16 @@ namespace alamo::render {
 using namespace detail;
 
 // ------------------------------------------------------------------------------------ frame graph
+
+VkExtent2D render_scale_extent(VkExtent2D out, float scale) {
+    if (!(scale < 1.0f)) return out;  // also NaN
+    const double k = std::sqrt(static_cast<double>(std::max(scale, kRenderScaleMin)));
+    auto side = [k](uint32_t s) {
+        const uint32_t v = static_cast<uint32_t>(std::llround(static_cast<double>(s) * k));
+        return std::clamp(v, 1u, std::max(s, 1u));
+    };
+    return {side(out.width), side(out.height)};
+}
 
 bool Renderer::ensure_targets(VkExtent2D ext) {
     if (tg_.ready && tg_.scene.extent().width == ext.width && tg_.scene.extent().height == ext.height) return true;
@@ -398,7 +409,7 @@ bool Renderer::post_darken(rhi::Frame& frame, VkCommandBuffer cmd, const materia
         if (!p.restore_only && !pass) pass = &p;
     if (!pass || !pass->fixed_function || !pass->ff || !fx.effect || !pass->program.vs) return false;
     materials::PsoKey key = pass->pso[0];
-    key.render_pass = rp_scene_;
+    key.render_pass = rp_main_;  // [port] MSAA: the main scene target
     key.vertex_layout = materials::VertexLayout::PrimVert;
     // Alpha reset [port]: the StencilDarkenToAlpha pass (colour write A only) without its stencil test, vertex alpha 1.
     if (reset_alpha) {
@@ -512,6 +523,66 @@ void begin_target(const rhi::DeviceFns& fn, VkCommandBuffer cmd, rhi::RenderTarg
     const VkRect2D sc{{0, 0}, t.extent()};
     fn.vkCmdSetScissor(cmd, 0, 1, &sc);
 }
+// [port] MSAA: an empty dynamic-rendering instance over the multisampled `ms` whose end resolves its colour (average) into
+// `color_dst` and / or its depth (sample 0; the stencil aspect is not attached) into `depth_dst`. Both are left as
+// attachments; a barrier after the pass orders the depth resolve (colour-attachment-output stage) before later depth use.
+void resolve_into(const rhi::DeviceFns& fn, VkCommandBuffer cmd, rhi::RenderTarget& ms, rhi::RenderTarget* color_dst,
+                  rhi::RenderTarget* depth_dst) {
+    if (color_dst) {
+        ms.transition_color(fn, cmd, rhi::ImageState::ColorAttachment);
+        color_dst->transition_color(fn, cmd, rhi::ImageState::ColorAttachment);
+    }
+    if (depth_dst) {
+        ms.transition_depth(fn, cmd, rhi::ImageState::DepthAttachment);
+        // The depth resolve writes in the colour-attachment-output stage (not the fragment tests): the barrier into the
+        // attachment layout covers that stage too, on both sides (an earlier resolve into the same image).
+        const rhi::Image& d = depth_dst->depth();
+        VkImageMemoryBarrier2 b = rhi::transition(d.handle, depth_dst->depth_state(), rhi::ImageState::DepthAttachment, d.range());
+        b.srcStageMask |= VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        b.srcAccessMask |= VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        b.dstStageMask |= VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        b.dstAccessMask |= VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        rhi::cmd_barrier(fn, cmd, b);
+        depth_dst->set_depth_state(rhi::ImageState::DepthAttachment);
+    }
+    auto view_of = [](const rhi::Image& i) { return i.attachment_view ? i.attachment_view : i.view; };
+    auto ca = rhi::vk_struct<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+    if (color_dst) {
+        ca.imageView = view_of(ms.color());
+        ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ca.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        ca.resolveImageView = view_of(color_dst->color());
+        ca.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    auto da = rhi::vk_struct<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+    if (depth_dst) {
+        da.imageView = view_of(ms.depth());
+        da.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        da.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        da.resolveImageView = view_of(depth_dst->depth());
+        da.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        da.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    auto ri = rhi::vk_struct<VkRenderingInfo>(VK_STRUCTURE_TYPE_RENDERING_INFO);
+    ri.renderArea = {{0, 0}, ms.extent()};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = color_dst ? 1u : 0u;
+    ri.pColorAttachments = color_dst ? &ca : nullptr;
+    ri.pDepthAttachment = depth_dst ? &da : nullptr;
+    fn.vkCmdBeginRendering(cmd, &ri);
+    fn.vkCmdEndRendering(cmd);
+    if (depth_dst) {
+        const rhi::StateInfo to = rhi::state_info(rhi::ImageState::DepthAttachment);
+        const rhi::Image& d = depth_dst->depth();
+        rhi::cmd_barrier(fn, cmd,
+                         rhi::image_barrier(d.handle, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, to.layout,
+                                            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                            to.stages, to.access, d.range()));
+    }
+}
 rhi::CopyImage copy_of(const rhi::RenderTarget& t, rhi::ImageState after) {
     rhi::CopyImage c;
     c.image = t.color().handle;
@@ -524,6 +595,7 @@ rhi::CopyImage copy_of(const rhi::RenderTarget& t, rhi::ImageState after) {
 }  // namespace detail
 using detail::begin_target;
 using detail::copy_of;
+using detail::resolve_into;
 
 bool Renderer::build_sky(rhi::Frame& frame, const ViewMatrices& view, std::span<const Instance> sky, DrawMode mode,
                          const RecordOptions& opts, Built& out, std::vector<Instance>& storage, DrawStats& st) {
@@ -573,18 +645,49 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     const auto t0 = clock::now();
     if (ring_) collect_released();  // after begin_frame: retire released bindless slots + their images
     latch_anisotropy(frame);
-    // [port] FSR (fsr.cpp): the scene and its post chain at the quality mode's render size, upscaled at the end.
-    VkExtent2D scene_ext = target.extent;
-    const bool fsr_on = fsr_begin(target.extent, opts, scene_ext);
+    // [port: Gabriel] Render scale: the scene targets take the scaled size; the view's pixel size follows them (lasers,
+    // the D3D9 half-pixel offset, TAA jitter), its projection (aspect) stays the output's.
+    // [port: Gabriel 2026-11-13] FSR (fsr.cpp): the scene and its post chain at the quality mode's render size instead (the
+    // render scale is then not used), upscaled to the output at the end.
+    VkExtent2D scene_ext = render_scale_extent(target.extent, opts.render_scale);
+    VkExtent2D fsr_ext = target.extent;
+    const bool fsr_on = fsr_begin(target.extent, opts, fsr_ext);
+    if (fsr_on) scene_ext = fsr_ext;
     if (!ensure_targets(scene_ext)) return false;
-    ViewMatrices view_scene = view_in;
-    if (fsr_on) {  // same projection; the pixel size (jitter, translated half-pixel offset, viewport) is the render size
-        view_scene.width = scene_ext.width;
-        view_scene.height = scene_ext.height;
+    // [port] MSAA (RecordOptions::msaa): the main scene's sample count, render pass class and multisampled target. Every
+    // build of this frame for the main scene uses rp_main_; the world prepass switches to the single-sample rp_scene_.
+    set_msaa(msaa_samples(opts.msaa));  // a failure falls back to one sample (logged)
+    if (msaa_ > 1 && (!tg_.scene_ms.has_color() || tg_.scene_ms.extent().width != scene_ext.width ||
+                      tg_.scene_ms.extent().height != scene_ext.height)) {
+        if (tg_.scene_ms.has_color()) ctx_->wait_idle();  // old images may still be in use by frames in flight
+        tg_.scene_ms.shutdown();
+        rhi::RenderTargetDesc md;
+        md.color = rhi::from_vk(desc_.color_format);
+        md.depth = rhi::from_vk(ds_format_);
+        md.samples = static_cast<VkSampleCountFlagBits>(msaa_);
+        md.name = "render.scene_ms";
+        if (!tg_.scene_ms.init(*alloc_, md, scene_ext)) {
+            log::errorf("render", "MSAA %ux scene target (%ux%u) could not be created; drawing with one sample", msaa_,
+                        scene_ext.width, scene_ext.height);
+            tg_.scene_ms.shutdown();
+            set_msaa(1);
+        }
     }
+    render_pass_ = rp_world_ = rp_main_;
+    struct RpRestore {  // every exit: the world class back to single-sample, the main class for builds outside render()
+        Renderer* r;
+        ~RpRestore() {
+            r->rp_world_ = r->rp_scene_;
+            r->render_pass_ = r->rp_main_;
+        }
+    } rp_restore{this};
+    ViewMatrices scaled_view = view_in;
+    scaled_view.width = scene_ext.width;
+    scaled_view.height = scene_ext.height;
     // [port] TAA (taa.cpp): every scene draw of the frame uses the sub-pixel jittered camera; without TAA `view_in` itself.
+    // FSR frames jitter with FSR's sequence for the render / output ratio.
     const ViewMatrices taa_view =
-        taa_begin(view_scene, opts, fsr_on ? upscale_jitter_phases(scene_ext.width, target.extent.width) : 0u);
+        taa_begin(scaled_view, opts, fsr_on ? upscale_jitter_phases(scene_ext.width, target.extent.width) : 0u);
     const ViewMatrices& view = taa_view;
     if (world_ && mode == DrawMode::Lit) {
         world_frame_constants();  // clouds before any build of this frame
@@ -605,10 +708,17 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     const auto t1 = clock::now();
 
     const rhi::DeviceFns& fn = ctx_->vkd();
-    rhi::RenderTarget& scene = tg_.scene;
+    // [port] MSAA: `scene` is the target of the scene buckets (multisampled with MSAA), `out` the single-sample target the
+    // post chain works on and the frame is copied out of; without MSAA they are the same target.
+    const bool msaa = msaa_ > 1;
+    rhi::RenderTarget& out = tg_.scene;
+    rhi::RenderTarget& scene = msaa ? tg_.scene_ms : tg_.scene;
+    st.msaa = msaa_;
     const uint32_t W = scene.extent().width, H = scene.extent().height;
     scene.set_color_state(rhi::ImageState::Undefined);  // contents of the last frame are discarded
     scene.set_depth_state(rhi::ImageState::Undefined);
+    out.set_color_state(rhi::ImageState::Undefined);
+    out.set_depth_state(rhi::ImageState::Undefined);
     const bool depth = scene.has_depth();
     const float clear[4] = {target.clear[0], target.clear[1], target.clear[2], 1.0f};  // frame clear alpha is 0xFF
     // Space too: the "no stencil shadows" rule of space mode applies to the background scene only (SPACE_AND_OPEN.md A
@@ -640,6 +750,7 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
         hp.color_format = desc_.color_format;
         hp.depth_format = depth ? scene.depth().vk_format() : VK_FORMAT_UNDEFINED;
         hp.stencil_format = depth && (scene.depth().aspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? scene.depth().vk_format() : VK_FORMAT_UNDEFINED;
+        hp.samples = static_cast<VkSampleCountFlagBits>(msaa_);
         hp.width = W;
         hp.height = H;
         if (open_pass) begin_target(fn, primary, scene, depth, nullptr, false, false);
@@ -687,7 +798,7 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
             inh.depthAttachmentFormat = depth ? scene.depth().vk_format() : VK_FORMAT_UNDEFINED;
             inh.stencilAttachmentFormat = depth && (scene.depth().aspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? scene.depth().vk_format()
                                                                                                          : VK_FORMAT_UNDEFINED;
-            inh.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            inh.rasterizationSamples = static_cast<VkSampleCountFlagBits>(msaa_);  // [port] MSAA
             std::vector<VkCommandBuffer>& secs = secs_;
             secs.assign(chunks.size(), VK_NULL_HANDLE);
             desc_.js->parallel_for(static_cast<uint32_t>(chunks.size()), 1, [&](uint32_t cb, uint32_t ce) {
@@ -719,7 +830,9 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     const auto tw0 = clock::now();
     if (world_on) {
         const uint32_t world_scope = gt ? gt->begin_scope(primary, "world") : 0u;
+        render_pass_ = rp_world_ = rp_scene_;  // [port] MSAA: water / sky-cube targets are single-sample
         const bool wok = world_prepass(frame, primary, view, instances, sky, mode, opts);
+        render_pass_ = rp_world_ = rp_main_;
         if (gt) gt->end_scope(primary, world_scope);
         if (!wok) return false;
     }
@@ -782,10 +895,15 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
             fn.vkCmdEndRendering(primary);
         }
         if (ok && soft_on) {
-            // StencilDarkenFinalBlur: back buffer -> SceneTexture, 4 taps, ZERO / SRCCOLOR (4.3).
-            tg_.scene_tex.copy_from(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), VK_FILTER_NEAREST,
-                                    rhi::ImageState::ShaderRead);
-            scene.set_color_state(rhi::ImageState::ColorAttachment);
+            // StencilDarkenFinalBlur: back buffer -> SceneTexture, 4 taps, ZERO / SRCCOLOR (4.3). [port] MSAA: resolved.
+            if (msaa) {
+                resolve_into(fn, primary, scene, &tg_.scene_tex, nullptr);
+                tg_.scene_tex.transition_color(fn, primary, rhi::ImageState::ShaderRead);
+            } else {
+                tg_.scene_tex.copy_from(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), VK_FILTER_NEAREST,
+                                        rhi::ImageState::ShaderRead);
+                scene.set_color_state(rhi::ImageState::ColorAttachment);
+            }
             const materials::MaterialEffect* fb = post_effect(2);
             ok = false;
             if (fb)
@@ -794,7 +912,7 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
                         PostSpec ps;
                         ps.fx = fx_post_[2];
                         ps.pass = &p;
-                        ps.render_pass = rp_scene_;
+                        ps.render_pass = rp_main_;  // [port] MSAA: the main scene target
                         ps.width = W;
                         ps.height = H;
                         ps.slot_default = tg_.scene_tex.color().view;  // samplers 0-3 = SceneTexture (alpha = shadow mask)
@@ -817,7 +935,10 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
             ssao_ = std::make_unique<SsaoPass>();
             ssao_->init(*ctx_, *alloc_);  // a failure is logged once; record() then does nothing
         }
-        ssao_->record(frame, primary, scene, desc_.color_format, view, opts.ao_strength, opts.ao_radius, 1.0f, gt);
+        // [port] MSAA: the AO reads the resolved depth (sample 0) and multiplies into the multisampled colour.
+        if (msaa) resolve_into(fn, primary, scene, nullptr, &out);
+        ssao_->record(frame, primary, scene, out, desc_.color_format, static_cast<VkSampleCountFlagBits>(msaa_), view,
+                      opts.ao_strength, opts.ao_radius, 1.0f, gt);
     }
     // 3b. Water patches (bucket 7, the water render task before the bucket's mesh draws).
     if (world_on) {
@@ -879,25 +1000,37 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
     }
     count_items(b, s1, h0, st);
     if (gt) gt->end_scope(primary, scene_scope);
+    // [port] MSAA: the finished scene (colour average, depth sample 0) into the single-sample target of the post chain.
+    if (msaa) {
+        const uint32_t msaa_scope = gt ? gt->begin_scope(primary, "msaa") : 0u;
+        resolve_into(fn, primary, scene, &out, &out);
+        if (gt) gt->end_scope(primary, msaa_scope);
+    }
     // 5. Post: SceneTexture copy after Transparent, heat, bloom (RENDER.md 1.4/1.5, 4.4/4.5).
     const auto tp0 = clock::now();
     const uint32_t post_scope = gt ? gt->begin_scope(primary, "post") : 0u;
     if (heat_on || bloom_on) {
-        tg_.scene_tex.copy_from(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), VK_FILTER_NEAREST,
+        tg_.scene_tex.copy_from(fn, primary, copy_of(out, rhi::ImageState::ColorAttachment), VK_FILTER_NEAREST,
                                 rhi::ImageState::ShaderRead);
-        scene.set_color_state(rhi::ImageState::ColorAttachment);
+        out.set_color_state(rhi::ImageState::ColorAttachment);
     }
     if (heat_on) {
-        // Heat bucket into the back buffer cleared to 0x008080FF (A 0, R G 128, B 255), scene depth kept.
+        // Heat bucket into the back buffer cleared to 0x008080FF (A 0, R G 128, B 255), scene depth kept. [port] MSAA: drawn
+        // into the multisampled target (its pipelines are the scene's) and resolved into DistortionTexture.
         const float heat_clear[4] = {128.0f / 255.0f, 128.0f / 255.0f, 1.0f, 0.0f};
         begin_target(fn, primary, scene, depth, heat_clear, false, false);
         record_range(primary, b, h0, b.items.size(), W, H, true);
         if (hook_heat) hook_pass(PhaseBucket::Heat, false);  // R4: heat particles after the heat meshes
         fn.vkCmdEndRendering(primary);
         count_items(b, h0, b.items.size(), st);
-        tg_.distortion.copy_from(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), VK_FILTER_NEAREST,
-                                 rhi::ImageState::ShaderRead);
-        scene.set_color_state(rhi::ImageState::ColorAttachment);
+        if (msaa) {
+            resolve_into(fn, primary, scene, &tg_.distortion, nullptr);
+            tg_.distortion.transition_color(fn, primary, rhi::ImageState::ShaderRead);
+        } else {
+            tg_.distortion.copy_from(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), VK_FILTER_NEAREST,
+                                     rhi::ImageState::ShaderRead);
+            scene.set_color_state(rhi::ImageState::ColorAttachment);
+        }
         // SceneHeat composite (DistortionAmount = FXO default 0.25 unless overridden).
         const materials::MaterialEffect* he = post_effect(4);
         bool ok = false;
@@ -916,13 +1049,13 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
                     const PostValue heat_val[1] = {{"DistortionAmount", amount}};
                     ps.textures = heat_tex;
                     if (opts.heat_amount >= 0.0f) ps.values = heat_val;
-                    begin_target(fn, primary, scene, false, nullptr, false, false);
+                    begin_target(fn, primary, out, false, nullptr, false, false);
                     ok = post_translated(frame, primary, ps);
                     fn.vkCmdEndRendering(primary);
                     break;
                 }
         if (!ok) {  // composite not ready: put the pre-heat scene back
-            scene.copy_from(fn, primary, copy_of(tg_.scene_tex, rhi::ImageState::ShaderRead), VK_FILTER_NEAREST,
+            out.copy_from(fn, primary, copy_of(tg_.scene_tex, rhi::ImageState::ShaderRead), VK_FILTER_NEAREST,
                             rhi::ImageState::ColorAttachment);
             ++st.post_pending;
         }
@@ -970,7 +1103,7 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
         }
         if (ok) {
             last->transition_color(fn, primary, rhi::ImageState::ShaderRead);
-            ok = bloom_pass(bp[2], scene, last->color().view, 0.0f, rp_post_);
+            ok = bloom_pass(bp[2], out, last->color().view, 0.0f, rp_post_);
         }
         st.bloom = ok;
         if (!ok) ++st.post_pending;
@@ -1015,41 +1148,50 @@ bool Renderer::render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarg
             }
         }
         taa_->commit_motion(instances);
-        if (fsr_on) {
-            fsr_out = taa_->fsr_inputs(frame, primary, scene, b.set0) &&
-                      fsr_->dispatch(primary, scene, *taa_, opts.fsr_sharpness, opts.frame_ms, taa_->history_reset());
+        if (fsr_on) {  // [port] FSR: motion vectors + depth of the resolved scene, then the upscale into fsr_->output()
+            fsr_out = taa_->fsr_inputs(frame, primary, out, b.set0) &&
+                      fsr_->dispatch(primary, out, *taa_, opts.fsr_sharpness, opts.frame_ms, taa_->history_reset());
             st.fsr = fsr_out;
             st.taa_reset = fsr_out && taa_->history_reset();
         } else {
-            st.taa = taa_->resolve(frame, primary, scene, opts.taa_sharpen,
+            st.taa = taa_->resolve(frame, primary, out, opts.taa_sharpen,
                                    opts.taa_weight >= 0.0f ? opts.taa_weight : kTaaCurrentWeight, b.set0);
             st.taa_reset = st.taa && taa_->history_reset();
         }
         st.taa_movers = taa_->last_movers();
         if (gt) gt->end_scope(primary, taa_scope);
     }
+    if (opts.smaa && !fsr_on) {  // [port] SMAA 1x on the finished frame (smaa.hpp; not on FSR frames); SceneTexture is free again here
+        if (!smaa_) {
+            smaa_ = std::make_unique<SmaaPass>();
+            smaa_->init(*ctx_, *alloc_);  // a failure is logged once; record() then does nothing
+        }
+        const uint32_t smaa_scope = gt ? gt->begin_scope(primary, "smaa") : 0u;
+        st.smaa = smaa_->record(primary, out, tg_.scene_tex);
+        if (gt) gt->end_scope(primary, smaa_scope);
+    }
     if (gt) gt->end_scope(primary, post_scope);
     const auto tp1 = clock::now();
-    // 6. Out to the caller's image (StretchRect, point filter).
+    // 6. Out to the caller's image (StretchRect, point filter; a render-scaled scene is stretched with a linear filter).
     rhi::CopyImage dst;
     dst.image = target.color;
     dst.extent = target.extent;
     dst.format = desc_.color_format;
     dst.before = rhi::ImageState::Undefined;
     dst.after = target.color_after;
-    if (fsr_out) {  // [port] FSR output (display size, General) -> the caller's image; the scene keeps its state
+    if (fsr_out) {  // [port] FSR output (output size, General) -> the caller's image; the scene keeps its state
         rhi::RenderTarget& up = fsr_->output();
         rhi::cmd_stretch_rect(fn, primary, copy_of(up, rhi::ImageState::General), dst, VK_FILTER_NEAREST);
         up.set_color_state(rhi::ImageState::General);
     } else {
-        // Without FSR the sizes match (point copy); a failed FSR frame is stretched up from its render size.
-        const bool same = scene.extent().width == target.extent.width && scene.extent().height == target.extent.height;
-        rhi::cmd_stretch_rect(fn, primary, copy_of(scene, rhi::ImageState::ColorAttachment), dst,
-                              same ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
-        scene.set_color_state(rhi::ImageState::ColorAttachment);
+        // A render-scaled scene (or an FSR frame whose upscale failed) is stretched up with a linear filter.
+        const bool native = W == target.extent.width && H == target.extent.height;
+        rhi::cmd_stretch_rect(fn, primary, copy_of(out, rhi::ImageState::ColorAttachment), dst,
+                              native ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+        out.set_color_state(rhi::ImageState::ColorAttachment);
     }
-    st.render_width = scene.extent().width;
-    st.render_height = scene.extent().height;
+    st.render_width = W;
+    st.render_height = H;
     const auto t2 = clock::now();
     if (stats) *stats = st;
     if (timing) {

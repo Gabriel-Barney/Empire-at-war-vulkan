@@ -190,6 +190,31 @@ endforeach()
 add_custom_target(alamo_render_gamma_shaders DEPENDS ${_render_gamma_headers})
 target_sources(alamo_render PRIVATE src/gamma.cpp ${_render_gamma_headers})
 add_dependencies(alamo_render alamo_render_gamma_shaders)
+
+# ---------------------------------------------------------------- [port] SMAA 1x (shaders/smaa_pass.hlsl, src/smaa.cpp)
+# third_party/smaa: the reference SMAA (Jimenez et al., MIT licence, LICENSE.txt), approved by Gabriel 2026-11-13.
+# No -WX: the reference shader is kept unmodified.
+set(_render_smaa_dir ${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa)
+set(_render_smaa_headers)
+foreach(spec "smaa_vs:VSFull:vs_6_0" "smaa_ps_edge:PSEdge:ps_6_0" "smaa_ps_weights:PSWeights:ps_6_0" "smaa_ps_blend:PSBlend:ps_6_0")
+  string(REPLACE ":" ";" parts "${spec}")
+  list(GET parts 0 _name)
+  list(GET parts 1 _entry)
+  list(GET parts 2 _profile)
+  set(_hdr ${_render_gen_dir}/${_name}.h)
+  add_custom_command(
+    OUTPUT ${_hdr}
+    COMMAND "${_render_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -O3
+            -T ${_profile} -E ${_entry} -I "${_render_smaa_dir}" -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/smaa_pass.hlsl"
+    DEPENDS ${_render_shader_dir}/smaa_pass.hlsl ${_render_smaa_dir}/SMAA.hlsl
+    COMMENT "DXC ${_name} (smaa_pass.hlsl ${_entry} ${_profile})"
+    VERBATIM)
+  list(APPEND _render_smaa_headers ${_hdr})
+endforeach()
+add_custom_target(alamo_render_smaa_shaders DEPENDS ${_render_smaa_headers})
+target_sources(alamo_render PRIVATE src/smaa.cpp ${_render_smaa_headers})
+target_include_directories(alamo_render PRIVATE ${_render_smaa_dir})
+add_dependencies(alamo_render alamo_render_smaa_shaders)
 # Halton / jitter / history rules (CPU) + the resolve on the GPU (empty scene, validation required when available) and,
 # with ALAMO_FOC_DATA, a land map under a slowly moving camera, TAA off vs on -> logs\render_taa_*.png.
 add_executable(alamo_render_taa_tests tests/test_render_taa.cpp)

@@ -665,6 +665,19 @@ static void test_gpu(const std::string& src_dir) {
         const std::string png = src_dir + "/logs/particles_synthetic.png";
         CHECK(render::write_png_rgba(png, o.w, o.h, rgba));
         std::printf("wrote %s\n", png.c_str());
+        // [port] MSAA 4x: the hook's Water / Transparent draws go into the multisampled scene (pipelines per sample count).
+        if (g.renderer.msaa_samples(4) == 4) {
+            render::RecordOptions mo = ro;
+            mo.msaa = 4;
+            bool mok = true;
+            for (int f = 0; f < 3; ++f) mok = frame(g, o, vm, {}, mo) && mok;
+            uint32_t mlit = 0;
+            for (size_t i = 0; i < static_cast<size_t>(o.w) * o.h; ++i)
+                if (px[i * 4] > 60 || px[i * 4 + 1] > 60) ++mlit;
+            std::printf("gpu: MSAA 4x: %u draw calls, %u particle pixels\n", pr.last_stats().draw_calls, mlit);
+            CHECK(mok && pr.last_stats().draw_calls >= 5 && mlit > lit / 2);
+            CHECK(frame(g, o, vm, {}, ro));  // back to one sample
+        }
         // Hidden systems keep updating but draw nothing.
         world.for_each([&](uint32_t, const SystemState&) {});
         for (auto h : hs) world.set_visible(h, false);

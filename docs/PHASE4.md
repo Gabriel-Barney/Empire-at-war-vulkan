@@ -1035,10 +1035,9 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   without a frame; checked = the framed window as before. Windowed / Widescreen are stored in video_options.txt (the port
   still starts windowed without a profile); the camera's windowed flag (edge scrolling, P1_CAMERA_INPUT) follows it.
   Widescreen [port; the retail meaning is an RE gap]: off lists only modes no wider than 4:3 (5:4, 4:3) in
-  IDC_RESOLUTION_LIST (all modes when none is that narrow); on, every mode. **t02** Hardware Mouse: the pointer the
-  context picks (same art, animation frame and hot spot as the drawn cursor) becomes the Windows class cursor
-  (CreateIconIndirect from the decoded TGA, cached per frame texture; the arrow when a frame cannot be made); off: the
-  drawn cursor. Movie subtitles: no subtitle text source is known (AUDIO.md §3.4 [L]) - RE gap, the option is only stored.
+  IDC_RESOLUTION_LIST (all modes when none is that narrow); on, every mode. **t02** Hardware Mouse: built, then removed
+  2026-11-13 (Gabriel): the checkbox is hidden and the game always draws its own cursor (an old `hardware_mouse=` line
+  in video_options.txt is ignored). Movie subtitles: no subtitle text source is known (AUDIO.md §3.4 [L]) - RE gap, the option is only stored.
 - ⬜ **OPEN** · ui4 t01 / t02 / t03 (2026-11-13, galactic HUD; specs `docs/re/FIXPASS_GALACTIC.md` §2, `docs/re/A2K_T01_BUILD_COST_RE.md` §1,
   `docs/re/GALACTIC_DIALOGS.md` §5.1, `docs/re/GALAXY_MAP_PRESENTATION.md` §1.1 / §1.2, `docs/re/GALACTIC_REVEAL_CORRUPTION.md` §4.6):
   **t01** the galactic input loop now hands the routed input to the hero roster too (it was skipped as "tactical"), so a good slot's

@@ -948,8 +948,8 @@ void App::update_cursor(ui::HudDrawList& dl) {
         set_os_cursor_hidden(true);
         return;
     }
-    set_os_cursor_hidden(cursor_ok_ && !hardware_mouse_ && !opt_.hidden);
-    if (!cursor_ok_) return;  // UI5 t02: the hardware mouse keeps the context cursors (sync_os_cursor)
+    set_os_cursor_hidden(cursor_ok_ && !opt_.hidden);
+    if (!cursor_ok_) return;
     ui::CursorContext c;
     c.movie = screen_ == Screen::Movie;
     c.busy = screen_ == Screen::SessionLoad;
@@ -1011,9 +1011,7 @@ void App::update_cursor(ui::HudDrawList& dl) {
         }
     }
     cursor_.update(ui::choose_pointer(c), now_s_);
-    sync_os_cursor();
-    if (!hardware_mouse_)
-        cursor_.build(dl, ui_.gui.canvas(), {static_cast<float>(input_.mouse_x()), static_cast<float>(input_.mouse_y())}, now_s_);
+    cursor_.build(dl, ui_.gui.canvas(), {static_cast<float>(input_.mouse_x()), static_cast<float>(input_.mouse_y())}, now_s_);
 }
 
 // Panels of the current screen into `lists` (one draw list per open panel; their shells follow open()).

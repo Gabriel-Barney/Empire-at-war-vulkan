@@ -510,6 +510,13 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
                 const TextBlock tb = measure_text_block(*fonts_, canvas_, frame.planet_name, 0.0f, st);
                 add_text_block(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, frame.planet_name,
                                {p.center.x, p.center.y + 0.5f * tb.height}, 0.0f, st);
+                // [port: Gabriel 2026-11-13] fleet cohesion: one line above the name, same style
+                if (!frame.cohesion_text.empty()) {
+                    st.width_scale = fit_width_scale(measure_text_block(*fonts_, canvas_, frame.cohesion_text, 0.0f, st).width,
+                                                     c.max_text_width);
+                    add_text_block(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, frame.cohesion_text,
+                                   {p.center.x, p.center.y - 0.75f * tb.height}, 0.0f, st);
+                }
             }
         }
         // FIXPASS_GALACTIC §4.2 (capture C2): the advisor *_LOOP movie in Movie_tactical (Icon, Size 200 x 200) with its
@@ -570,7 +577,7 @@ void TacticalHud::build_skeleton(const TacticalHudFrame& f) {
             add_atlas_quad(dl_, layer, HudList::Alpha, *atlas_, c->icon_texture[0], {at.x + 14.0f, at.y}, {}, c->scale, Rgba8{});
         HudTextStyle st;
         st.font = fonts_->font(c && !c->font_name.empty() ? c->font_name : std::string(kFallbackFontFace),
-                               c && c->font_point_size > 0 ? c->font_point_size : 7.0f, canvas_.screen_height);
+                               c && c->font_point_size > 0 ? c->font_point_size : 7.0f, canvas_.font_height());
         st.color = c && c->has_text_color ? c->text_color : Rgba8{255, 212, 33, 255};
         st.outline = true;
         st.align = c && c->right_justified ? TextAlign::Right : TextAlign::Left;
@@ -725,7 +732,7 @@ void TacticalHud::build_panel(const TacticalHudFrame& f, std::span<const HudType
         if (g.ids.size() > 1) {
             HudTextStyle st;
             st.font = fonts_->font(c.font_name.empty() ? std::string(kFallbackFontFace) : c.font_name,
-                                   c.font_point_size > 0 ? c.font_point_size : 6.0f, canvas_.screen_height);
+                                   c.font_point_size > 0 ? c.font_point_size : 6.0f, canvas_.font_height());
             st.color = c.has_text_color ? c.text_color : Rgba8{};
             st.outline = c.text_outline;
             st.align = TextAlign::Right;
@@ -1049,7 +1056,7 @@ void TacticalHud::build_buttons(const TacticalHudFrame& f) {
 int32_t TacticalHud::font_of(int32_t component, float fallback_points) const {
     const CommandBarComponent* c = component >= 0 ? &(*table_)[static_cast<size_t>(component)] : nullptr;
     return fonts_->font(c && !c->font_name.empty() ? c->font_name : std::string(kFallbackFontFace),
-                        c && c->font_point_size > 0 ? c->font_point_size : fallback_points, canvas_.screen_height);
+                        c && c->font_point_size > 0 ? c->font_point_size : fallback_points, canvas_.font_height());
 }
 
 namespace {

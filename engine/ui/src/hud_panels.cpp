@@ -47,7 +47,7 @@ HudTextStyle style_of(const CommandBarComponent* c, FontCache& fonts, const HudC
                       Rgba8 default_color, TextAlign default_align) {
     HudTextStyle st;
     const std::string face = c && !c->font_name.empty() ? c->font_name : std::string("Arial");
-    st.font = fonts.font(face, c && c->font_point_size > 0 ? c->font_point_size : default_pt, cv.screen_height);
+    st.font = fonts.font(face, c && c->font_point_size > 0 ? c->font_point_size : default_pt, cv.font_height());
     st.color = c && c->has_text_color ? c->text_color : (c && c->has_color ? c->color : default_color);
     st.outline = c && c->text_outline;
     st.emboss = c && c->text_emboss;

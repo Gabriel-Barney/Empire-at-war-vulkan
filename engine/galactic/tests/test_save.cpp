@@ -578,6 +578,17 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             if (f != kNoFleet) s.move_fleet(pEmpire, f, rB);
             break;
         }
+        case 6:  // [port] fleet / ship names (save v7): the Empire fleet in transit and its first unit
+            for (const FleetState& f : s.fleets())
+                if (f.alive && f.owner == pEmpire && !f.contents.empty()) {
+                    CHECK(s.execute(static_cast<uint8_t>(pUnder), commands::rename_object_event(id(f.object), "Pirates")) ==
+                          RejectReason::NotOwner);
+                    CHECK(s.execute(static_cast<uint8_t>(pEmpire), commands::rename_object_event(id(f.object), " Home Fleet ")) ==
+                          RejectReason::None);
+                    CHECK(s.rename(pEmpire, f.contents[0], "Avenger") == RejectReason::None);
+                    break;
+                }
+            break;
         case 8:
             s.enqueue(pEmpire, rA, tFighters);
             s.enqueue(pEmpire, rA, tFighters);
@@ -591,6 +602,13 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             s.add_visibility_modifier(rC, pEmpire, k, kVisFleetContents, 30.0f, 99u);
             break;
         }
+        case 14:  // a surface unit's name (it launches at t 700 and keeps it)
+            for (ObjectHandle u : s.planets()[rA].surface)
+                if (st.alive(u) && st.owner(u) == pEmpire) {
+                    CHECK(s.rename(pEmpire, u, "Garrison \xC3\x89lite") == RejectReason::None);  // UTF-8 "Garrison Élite"
+                    break;
+                }
+            break;
         case 15: s.set_galactic_stealth(s.planets()[rE].starbase, true); break;
         case 16:  // cu8f t04b: Set_Prefer_Ground_Over_Space false on one unit (save v5)
             for (ObjectHandle u : s.planets()[rA].surface)
@@ -651,6 +669,14 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             if (f != kNoFleet) s.move_fleet(pEmpire, f, rD);  // A -> B -> D
             break;
         }
+        case 1100:  // clear one name again
+            for (const FleetState& f : s.fleets())
+                if (f.alive && f.owner == pEmpire && s.object_name(f.object) == "Home Fleet") {
+                    CHECK(s.rename(pEmpire, f.object, "  ") == RejectReason::None);
+                    CHECK(s.object_name(f.object).empty());
+                    break;
+                }
+            break;
         case 1200: s.queue_linked_battle(); break;
         case 1260: s.clear_linked_battle(); break;
         case 2200:
@@ -755,12 +781,22 @@ void test_queue_phases() {
         // cu8f t04b: v5 adds the Prefer_Ground_Over_Space false ids at the end; a v4 image is refused (only the current
         // version is read, cu6). The flag is saved and enters the hash only once a live unit has it false.
         // q6 t21: v6 adds the deferred victory tests after them (u32 count 0 here); a v5 image is refused.
-        CHECK(bytes.size() >= 8 && bytes[0] == 6 && bytes[bytes.size() - 8] == 0 && bytes[bytes.size() - 1] == 0);
-        std::vector<uint8_t> v5(bytes.begin(), bytes.end() - 4);
+        // [port] v7 adds the fleet / ship names after them (u32 count 0 here). v6 is still read (as no names), so saves
+        // from before the names load; v5 and older are refused.
+        CHECK(bytes.size() >= 12 && bytes[0] == 7 && bytes[bytes.size() - 12] == 0 && bytes[bytes.size() - 1] == 0);
+        std::vector<uint8_t> v6(bytes.begin(), bytes.end() - 4);
+        v6[0] = 6;
+        ByteReader r6(v6);
+        CHECK(o.read(r6) && o.object_names().empty() && sim_bytes(o) == bytes);
+        std::vector<uint8_t> v6names = bytes;  // a v6 image with the v7 tail is refused (trailing bytes)
+        v6names[0] = 6;
+        ByteReader r6n(v6names);
+        CHECK(!o.read(r6n));
+        std::vector<uint8_t> v5(bytes.begin(), bytes.end() - 8);
         v5[0] = 5;
         ByteReader r5(v5);
         CHECK(!o.read(r5));
-        std::vector<uint8_t> v4(bytes.begin(), bytes.end() - 8);
+        std::vector<uint8_t> v4(bytes.begin(), bytes.end() - 12);
         v4[0] = 4;
         ByteReader r4(v4);
         CHECK(!o.read(r4));
@@ -777,7 +813,53 @@ void test_queue_phases() {
         CHECK(o.read(rf) && !o.prefer_ground_over_space(o.store().find(store.id(unit))) && sim_bytes(o) == flagged);
         s.set_prefer_ground_over_space(unit, true);
         CHECK(s.prefer_ground_over_space(unit) && sim_hash(s) == h0 && sim_bytes(s) == bytes);
+
+        // [port] names: saved, not hashed; round trip; owner / object / name checks.
+        const int32_t owner = store.owner(unit);
+        CHECK(s.rename(owner, unit, "Rogue \xE2\x98\x85") == RejectReason::None);  // UTF-8 star
+        CHECK(s.object_name(unit) == "Rogue \xE2\x98\x85" && sim_hash(s) == h0 && sim_bytes(s) != bytes);
+        const std::vector<uint8_t> named = sim_bytes(s);
+        ByteReader rn(named);
+        CHECK(o.read(rn) && o.object_name(o.store().find(store.id(unit))) == "Rogue \xE2\x98\x85" && sim_bytes(o) == named);
+        const int32_t other = owner == 0 ? 1 : 0;
+        CHECK(s.rename(other, unit, "Mine") == RejectReason::NotOwner);
+        CHECK(s.rename(owner, s.planets()[rA].object, "Planet") == RejectReason::InvalidUnit);  // planets are not renamed
+        CHECK(s.rename(owner, ObjectHandle{}, "None") == RejectReason::InvalidUnit);
+        CHECK(s.rename(owner, unit, "bad\x01") == RejectReason::InvalidTarget);
+        CHECK(s.rename(owner, unit, "\xC3") == RejectReason::InvalidTarget);              // truncated UTF-8
+        CHECK(s.rename(owner, unit, std::string(33, 'x')) == RejectReason::InvalidTarget);  // over 32 characters
+        CHECK(s.rename(owner, unit, std::string(32, 'x')) == RejectReason::None);
+        CHECK(s.execute(static_cast<uint8_t>(owner), commands::rename_object_event(static_cast<uint32_t>(store.id(unit)), "")) ==
+              RejectReason::None);
+        CHECK(s.object_name(unit).empty() && s.object_names().empty() && sim_bytes(s) == bytes);
     }
+}
+
+// [port] name normalisation and the rename event's wire form (commands::normalize_object_name / rename_object_event).
+void test_name_rules() {
+    std::printf("  name rules\n");
+    std::string out = "keep";
+    CHECK(commands::normalize_object_name("  Home  Fleet  ", out) && out == "Home  Fleet");
+    CHECK(commands::normalize_object_name("   ", out) && out.empty());
+    out = "keep";
+    CHECK(!commands::normalize_object_name("a\tb", out) && out == "keep");
+    CHECK(!commands::normalize_object_name("a\x7F", out));
+    CHECK(!commands::normalize_object_name("\xC2\x85", out));          // U+0085 (C1 control)
+    CHECK(!commands::normalize_object_name("\xC0\xAF", out));          // overlong
+    CHECK(!commands::normalize_object_name("\xED\xA0\x80", out));     // surrogate
+    CHECK(!commands::normalize_object_name("\xF4\x90\x80\x80", out));  // past U+10FFFF
+    CHECK(commands::normalize_object_name("\xF0\x9F\x9A\x80", out) && out.size() == 4);  // U+1F680
+    CHECK(commands::normalize_object_name(std::string(32, 'a'), out) && !commands::normalize_object_name(std::string(33, 'a'), out));
+    const commands::EventData e = commands::rename_object_event(0x01020304u, "Avenger");
+    commands::ObjectId id = 0;
+    std::string name;
+    CHECK(commands::read_rename_event(e, id, name) && id == 0x01020304u && name == "Avenger");
+    std::vector<uint8_t> wire;
+    commands::encode_payload(e, wire);
+    commands::EventData back;
+    CHECK(commands::decode_payload(e.type_id(), wire, back) == commands::DecodeError::None && back == e);
+    CHECK(!commands::read_rename_event(commands::ev::port_extension(commands::kRenameSubtype, std::vector<uint8_t>{1, 2}), id, name));
+    CHECK(!commands::read_rename_event(commands::ev::stop(), id, name));
 }
 
 // ---- 3. FoC data ----------------------------------------------------------------------------------------------------------
@@ -899,6 +981,7 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     test_synthetic();
     test_queue_phases();
+    test_name_rules();
     test_foc();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

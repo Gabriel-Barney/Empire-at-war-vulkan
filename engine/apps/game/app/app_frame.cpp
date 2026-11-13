@@ -4,6 +4,17 @@
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ render
+void App::resize_ui() {
+    ui_.resize(win_.width(), win_.height(), ui_scale_);
+    // The side panels (hero / market / slice / sabotage / corruption / hack) follow the same canvas; their shells re-anchor.
+    const float s = static_cast<float>(ui_scale_) / 100.0f;
+    for (ui::HudPanel* p : panels()) {
+        p->set_ui_scale(s);
+        p->resize(win_.width(), win_.height());
+        if (panel_shells_ok_) panel_shells_.apply(p->layout());
+    }
+}
+
 bool App::present_settled() const {
     if (screen_ == Screen::Galactic) return gview_.settled() && draw_stats_.pending_pipeline == 0 && draw_stats_.translation_pending == 0;
     if (screen_ == Screen::Battle || screen_ == Screen::BattleLoad || (screen_ == Screen::Menu && demo_session() && bview_.active()))
@@ -52,7 +63,7 @@ bool App::render_frame() {
     const int world_view = galactic ? 1 : battle_view ? 2 : 0;
     if (world_view != world_view_) gpu_.renderer.reset_taa_history();
     world_view_ = world_view;
-    apply_aa_options(gview_.ropt, video_profile_.anti_alias);  // the Anti-Aliasing list (t11)
+    apply_aa_options(gview_.ropt, video_profile_.anti_alias);  // the Anti-Aliasing list (t11; one mode since 2026-11-13)
     bview_.ropt.taa = gview_.ropt.taa;
     bview_.ropt.taa_weight = gview_.ropt.taa_weight;
     bview_.ropt.upscaler = gview_.ropt.upscaler;  // [port] FSR rows of the same list
@@ -62,6 +73,8 @@ bool App::render_frame() {
         fsr_last_s_ = now_s_;
         gview_.ropt.frame_ms = bview_.ropt.frame_ms = std::min(ms, 100.0f);  // FSR's frame time (0: the renderer's 16.6 ms)
     }
+    bview_.ropt.smaa = gview_.ropt.smaa;
+    bview_.ropt.msaa = gview_.ropt.msaa;
     bview_.ropt.ambient_occlusion = adv_video_.ambient_occlusion;  // land battles only (render skips space / galactic)
     // The original's detail options on top of each view's own frame options (copies: the views keep theirs).
     render::RecordOptions gro = gview_.ropt, bro = bview_.ropt;
@@ -74,6 +87,8 @@ bool App::render_frame() {
         gview_.set_particle_detail(particle_detail(adv_video_.particle));
         bview_.set_particle_detail(particle_detail(adv_video_.particle));
     }
+    // [port: Gabriel] Render Scale (Advanced video): the share of the window's pixels the galactic / battle scene is drawn with.
+    gro.render_scale = bro.render_scale = render_scale_value(adv_video_.render_scale);
     gro.gpu_timer = bro.gpu_timer = bench_gpu_timer();  // bm2: the renderer's scopes (null outside a benchmark)
     if (galactic) {
         ui::CameraParams cp = gview_.camera_params(w, h);
@@ -226,6 +241,7 @@ bool App::render_frame() {
     }
     info_.build_overlay(dialogs);  // data-chart lines over IDC_DATA_CHART_IMAGE
     if (credits_.active() && !credits_.build(dialogs, *ui_.fonts, *canvas, now_s_)) open_main_menu();  // ui1 t03: ended
+    if (rename_.active()) rename_.build(dialogs, *ui_.fonts, *canvas, now_s_);  // [port] fleet / ship rename prompt
     if (overlay_.shown()) {  // OPT1 t07: the frame-time overlay, top layer of the dialogs list (under the cursor)
         overlay_.read_ticks();
         overlay_.build(dialogs, *canvas, *ui_.fonts);
@@ -373,7 +389,7 @@ void App::frame() {
         sc_.recreate(win_.width(), win_.height());
         targets_.destroy(gpu_.alloc);
         targets_.create(gpu_.alloc, gpu_.ring.frames_in_flight(), win_.width(), win_.height());
-        ui_.resize(win_.width(), win_.height());
+        resize_ui();
     }
     // 1. Input (script frames replace the window in smoke runs).
     ui::InputFrame raw;
@@ -420,6 +436,21 @@ void App::frame() {
     cinematic_input(raw);  // refixf t05: the cinematic controller takes the mouse first (TSW_PLANET_DESTROY.md §11.2)
     std::u32string typed = printable(win_.take_text());
     if (bench_active()) typed.clear();
+    // [port: Gabriel] The fleet / ship rename prompt takes the keyboard while open (typed text, Backspace, Enter, Esc): no
+    // key reaches the camera, the hotkeys, the dialogs or the pause menu. It closes when the galactic screen does.
+    if (rename_.active()) {
+        if (screen_ != Screen::Galactic || !session_ || ui_.gui.has_focus()) {
+            rename_.close();
+        } else {
+            const ui::RenamePrompt::Result r =
+                rename_.update(typed, raw.keys_pressed.test(ui::vk::kBack), raw.keys_pressed.test(ui::vk::kReturn),
+                               raw.keys_pressed.test(ui::vk::kEscape));
+            if (r == ui::RenamePrompt::Result::Submit) submit(commands::rename_object_event(rename_.object(), rename_.utf8()), false);
+            typed.clear();
+            raw.keys_pressed = {};
+            raw.keys_down = {};
+        }
+    }
     // OI host: attract demo (idle clock, idle pause, map cycle); input reaches the menus as usual.
     attract_step(raw);
     // 2. Routing: overlay -> dialogs -> HUD -> world.

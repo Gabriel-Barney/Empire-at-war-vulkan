@@ -59,22 +59,41 @@ constexpr const char* kVideo = "IDD_VIDEO_OPTIONS_DIALOG";
 constexpr const char* kAdvancedVideo = "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG";
 // [port: Gabriel] each detail option the shipped dialog has as a 0..100 slider is a list of named levels (LevelChoice); the
 // shipped slider and the Low / High captions at its ends are hidden, the port's list takes its place.
+// The Graphics dialog packs the rows closer (Detail Level above, Anti-Aliasing below): each shipped row title follows its list.
 struct AdvLevel {
     const char* slider;
     const char* combo;
+    const char* label;  // the shipped row title
     int32_t AdvancedVideoSettings::*field;
     std::span<const LevelChoice> choices;
 };
 constexpr AdvLevel kAdvLevels[] = {
-    {"IDC_PARTICLE_DETAIL_SLIDER", "IDC_PORT_PARTICLE_DETAIL", &AdvancedVideoSettings::particle, kLevels4},
-    {"IDC_MESH_DETAIL_SLIDER", "IDC_PORT_MESH_DETAIL", &AdvancedVideoSettings::mesh, kLevels4},
-    {"IDC_TEXTURE_MIP_DETAIL_SLIDER", "IDC_PORT_TEXTURE_DETAIL", &AdvancedVideoSettings::texture, kTextureChoices},
-    {"IDC_WATER_DETAIL_SLIDER", "IDC_PORT_WATER_DETAIL", &AdvancedVideoSettings::water, kLevels3},
-    {"IDC_SHADER_DETAIL_SLIDER", "IDC_PORT_SHADER_DETAIL", &AdvancedVideoSettings::shader, kLevels4},
-    {"IDC_SHADOW_DETAIL_SLIDER", "IDC_PORT_SHADOW_DETAIL", &AdvancedVideoSettings::shadow, kShadowChoices},
-    {"IDC_ENVIRONMENT_DETAIL_SLIDER", "IDC_PORT_ENVIRONMENT_DETAIL", &AdvancedVideoSettings::environment, kLevels4},
+    {"IDC_PARTICLE_DETAIL_SLIDER", "IDC_PORT_PARTICLE_DETAIL", "IDC_PARTICLE_DETAIL", &AdvancedVideoSettings::particle, kLevels4},
+    {"IDC_MESH_DETAIL_SLIDER", "IDC_PORT_MESH_DETAIL", "IDC_MESH_DETAIL", &AdvancedVideoSettings::mesh, kLevels4},
+    {"IDC_TEXTURE_MIP_DETAIL_SLIDER", "IDC_PORT_TEXTURE_DETAIL", "IDC_TEXTURE_MIP_LEVEL", &AdvancedVideoSettings::texture, kTextureChoices},
+    {"IDC_WATER_DETAIL_SLIDER", "IDC_PORT_WATER_DETAIL", "IDC_WATER_DETAIL_LEVEL", &AdvancedVideoSettings::water, kLevels3},
+    {"IDC_SHADER_DETAIL_SLIDER", "IDC_PORT_SHADER_DETAIL", "IDC_SHADER_DETAIL_LEVEL", &AdvancedVideoSettings::shader, kLevels4},
+    {"IDC_SHADOW_DETAIL_SLIDER", "IDC_PORT_SHADOW_DETAIL", "IDC_SHADOW_DETAIL", &AdvancedVideoSettings::shadow, kShadowChoices},
+    {"IDC_ENVIRONMENT_DETAIL_SLIDER", "IDC_PORT_ENVIRONMENT_DETAIL", "IDC_ENVIRONMENT_DETAIL_TEXT", &AdvancedVideoSettings::environment, kLevels4},
 };
-constexpr const char32_t* kQualityNames[kQualityCount + 1] = {U"Low", U"Medium", U"High", U"Ultra", U"Custom - see Advanced"};
+// [port: Gabriel] Display / Graphics split (2026-11-13): the options menus get a Graphics button under Video (renamed
+// Display); the buttons below it move down one row. Main options: rows 36 units apart already. In-game options: the
+// seven buttons are re-spaced 36 apart in the shipped dialog's height (Audio at 60, Back at 275 stay).
+struct ButtonMove {
+    const char* id;
+    float up;  // canvas units, + = up
+};
+constexpr ButtonMove kMainOptionsMoves[] = {
+    {"IDC_MAIN_OPTIONS_MODS", -36.0f}, {"IDC_MAIN_OPTIONS_KEYBOARD", -36.0f}, {"IDC_MAIN_OPTIONS_GAMEPLAY", -36.0f}, {"IDC_OK_MAIN", -36.0f}};
+constexpr ButtonMove kInGameOptionsMoves[] = {{"IDC_IN_GAME_OPTIONS_VIDEO", 7.0f},
+                                              {"IDC_IN_GAME_OPTIONS_NETWORK", -22.0f},
+                                              {"IDC_IN_GAME_OPTIONS_KEYBOARD", -15.0f},
+                                              {"IDC_IN_GAME_OPTIONS_GAMEPLAY", -8.0f}};
+// Display (IDD_VIDEO_OPTIONS_DIALOG): the Anti-Aliasing and Detail Level rows (y 240 .. 289) moved to Graphics; the rows
+// under them (Gamma, the checks, the display line) close the gap.
+constexpr int32_t kDisplayMovedRowsTop = 240, kDisplayMovedRowsEnd = 290, kDisplayRowsBelowEnd = 400;
+constexpr float kDisplayRowsUp = 51.0f;  // Gamma takes Anti-Aliasing's row (297 -> 246)
+constexpr const char32_t* kQualityNames[kQualityCount + 1] = {U"Low", U"Medium", U"High", U"Ultra", U"Custom"};
 struct AdvCheck {
     const char* id;
     bool AdvancedVideoSettings::*field;
@@ -204,7 +223,6 @@ const char* menu_action_name(MenuAction::Kind k) {
         case MenuAction::Kind::ApplyGameplay: return "ApplyGameplay";
         case MenuAction::Kind::KeybindingsChanged: return "KeybindingsChanged";
         case MenuAction::Kind::ApplyAdvancedVideo: return "ApplyAdvancedVideo";
-        case MenuAction::Kind::AutoDetectVideo: return "AutoDetectVideo";
         case MenuAction::Kind::ApplyCamera: return "ApplyCamera";
         case MenuAction::Kind::CheckMod: return "CheckMod";
         case MenuAction::Kind::LaunchMod: return "LaunchMod";
@@ -248,7 +266,8 @@ BEGIN
     EDITTEXT        IDC_EDIT_PORT_ZOOM_OUT,386,266,150,18,ES_AUTOHSCROLL
     RTEXT           "Queue Orders With",IDC_STATIC,16,302,200,18
     COMBOBOX        IDC_PORT_QUEUE_MODIFIER,226,302,150,80,CBS_DROPDOWNLIST | WS_TABSTOP
-    PUSHBUTTON      "TEXT_BUTTON_CANCEL",IDC_CANCEL_BUTTON,14,398,160,24
+    CONTROL         "Show Unit Path Lines",IDC_PORT_SHOW_PATH_LINES,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,226,332,310,23
+    PUSHBUTTON     "TEXT_BUTTON_CANCEL",IDC_CANCEL_BUTTON,14,398,160,24
     PUSHBUTTON      "TEXT_BUTTON_DEFAULTS",IDC_DEFAULTS_BUTTON,200,398,160,24
     PUSHBUTTON      "TEXT_BUTTON_ACCEPT",IDC_BUTTON_ACCEPT,386,398,160,24
 END
@@ -272,28 +291,44 @@ IDD_MAIN_MENU_DIALOG DIALOGEX 0, 0, 512, 1024
 BEGIN
     PUSHBUTTON      "Mods",IDC_PORT_MAIN_MENU_MODS,265,742,236,22
 END
+IDD_MAIN_OPTIONS_DIALOG DIALOGEX 0, 0, 512, 1024
+BEGIN
+    PUSHBUTTON      "Graphics",IDC_PORT_MAIN_OPTIONS_GRAPHICS,265,598,236,21
+END
+IDD_IN_GAME_OPTIONS_DIALOG DIALOGEX 0, 0, 321, 328
+BEGIN
+    PUSHBUTTON      "Graphics",IDC_PORT_IN_GAME_OPTIONS_GRAPHICS,41,132,239,21
+END
 IDD_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
 BEGIN
-    LTEXT           "V-Sync Mode",IDC_PORT_VSYNC_MODE_TEXT,357,142,188,18
-    COMBOBOX        IDC_PORT_VSYNC_MODE,357,162,188,80,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Frame Rate Cap",IDC_PORT_FRAME_CAP_TEXT,357,188,188,18
-    COMBOBOX        IDC_PORT_FRAME_CAP,357,208,188,90,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_ANTI_ALIASING,196,246,311,108,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_DETAIL_LEVEL,196,271,311,130,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "V-Sync Mode",IDC_PORT_VSYNC_MODE_TEXT,357,69,188,18
+    COMBOBOX        IDC_PORT_VSYNC_MODE,357,89,188,80,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Frame Rate Cap",IDC_PORT_FRAME_CAP_TEXT,357,115,188,18
+    COMBOBOX        IDC_PORT_FRAME_CAP,357,135,188,90,CBS_DROPDOWNLIST | WS_TABSTOP
     RTEXT           "",IDC_PORT_GAMMA_VALUE,143,297,32,21
-    LTEXT           "",IDC_PORT_DISPLAY_INFO,22,376,526,18
+    LTEXT           "",IDC_PORT_DISPLAY_INFO,22,376,236,18
+    LTEXT           "Display Mode",IDC_PORT_WINDOW_MODE_TEXT,264,350,112,18
+    COMBOBOX        IDC_PORT_WINDOW_MODE,378,348,170,70,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "UI Scale",IDC_PORT_UI_SCALE_TEXT,264,376,112,18
+    COMBOBOX        IDC_PORT_UI_SCALE,378,374,170,130,CBS_DROPDOWNLIST | WS_TABSTOP
 END
 IDD_ADVANCED_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 571, 454
 BEGIN
-    COMBOBOX        IDC_PORT_PARTICLE_DETAIL,230,75,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_MESH_DETAIL,230,105,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_WATER_DETAIL,230,135,251,88,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_SHADER_DETAIL,230,165,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_TEXTURE_DETAIL,230,195,251,88,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_SHADOW_DETAIL,230,225,251,66,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,255,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,297,360,218,18
-    COMBOBOX        IDC_PORT_ANISOTROPY,297,380,218,120,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "TEXT_DETAIL_LEVEL",IDC_PORT_DETAIL_LEVEL_TEXT,9,43,173,8
+    COMBOBOX        IDC_PORT_DETAIL_LEVEL,230,40,251,130,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_PARTICLE_DETAIL,230,68,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_MESH_DETAIL,230,96,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_WATER_DETAIL,230,124,251,88,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_SHADER_DETAIL,230,152,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_TEXTURE_DETAIL,230,180,251,88,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_SHADOW_DETAIL,230,208,251,66,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,236,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "TEXT_ANTI_ALIASING",IDC_PORT_ANTI_ALIASING_TEXT,9,267,173,8
+    COMBOBOX        IDC_PORT_ANTI_ALIASING,230,264,251,152,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,297,300,218,18
+    COMBOBOX        IDC_PORT_RENDER_SCALE,297,318,218,140,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,297,348,218,18
+    COMBOBOX        IDC_PORT_ANISOTROPY,297,366,218,120,CBS_DROPDOWNLIST | WS_TABSTOP
     CONTROL         "Ambient Occlusion",IDC_PORT_AMBIENT_OCCLUSION,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,33,385,215,23
 END
 )RC";
@@ -340,6 +375,13 @@ std::optional<size_t> picked(const GuiDialog& d, const char* id, size_t count) {
     if (!c || c->selected < 0 || static_cast<size_t>(c->selected) >= count) return std::nullopt;
     return static_cast<size_t>(c->selected);
 }
+// The IDC_PORT_UI_SCALE row a stored scale shows: the largest choice not above it (a value between rows shows the row below).
+size_t ui_scale_row(int32_t pct) {
+    size_t row = 0;
+    for (size_t i = 0; i < std::size(kUiScaleChoices); ++i)
+        if (kUiScaleChoices[i] <= pct) row = i;
+    return row;
+}
 // QA U11: the shipped IDD_GAME_OPTIONS_DIALOG leaves one button row empty between Options and Quit Game, with no control
 // for it in GUIDialogs.rc. Quit and Resume move up by that row and the dialog ends that much sooner [port].
 float pause_menu_gap(const GuiDialog& d) {
@@ -365,6 +407,7 @@ void FrontEnd::fill_port_controls(GuiDialog& d, const CameraSettings& s) {
         if (kQueueModChoices[i] == s.queue_mods) sel = i;
     d.set_items("IDC_PORT_QUEUE_MODIFIER", std::move(mods), sel);
     use_ui_font(d, {"IDC_PORT_QUEUE_MODIFIER"});
+    d.set_checked("IDC_PORT_SHOW_PATH_LINES", s.show_path_lines);
     fill_keyboard(d);
 }
 
@@ -374,6 +417,7 @@ CameraSettings FrontEnd::read_port_controls(const GuiDialog& d) const {
     if (const GuiControl* c = d.get("IDC_PORT_TACTICAL_FOV_SLIDER")) s.tactical_fov_deg = static_cast<float>(c->value);
     if (const GuiControl* c = d.get("IDC_PORT_QUEUE_MODIFIER"); c && c->selected >= 0 && c->selected < 4)
         s.queue_mods = kQueueModChoices[c->selected];
+    if (const GuiControl* c = d.get("IDC_PORT_SHOW_PATH_LINES")) s.show_path_lines = c->checked;
     return s;
 }
 
@@ -915,12 +959,112 @@ void FrontEnd::set_mod_report(std::string_view id, std::vector<std::u32string> l
         if (GuiDialog* d = gui_->find(kPortModsDialog)) show_mod_report(*d);
 }
 
+namespace {
+constexpr char kSaveKeySep = '\x1f';  // before each level of a group key path
+}  // namespace
+
 void FrontEnd::fill_saves(GuiDialog& d) {
     saves_ = p_.saves ? p_.saves() : std::vector<SaveGameInfo>{};
-    std::vector<std::u32string> items;
-    for (const SaveGameInfo& s : saves_) items.push_back(s.label.empty() ? ascii32(s.name) : s.label);
-    d.set_items("IDC_SAVE_GAME_LIST", std::move(items), -1);
+    if (!saves_.empty()) {  // [port: Gabriel] the newest save's groups open
+        std::string path;
+        for (const SaveGroupLevel& g : saves_.front().groups) {
+            path += kSaveKeySep;
+            path += g.key;
+            if (std::find(saves_open_.begin(), saves_open_.end(), path) == saves_open_.end()) saves_open_.push_back(path);
+        }
+    }
+    build_save_rows(d, -1, 0);
     d.show("IDC_CHECK_RECORDINGS", false);  // replays are not saved games [port]
+}
+
+void FrontEnd::build_save_rows(GuiDialog& d, int32_t selected, int32_t top) {
+    // The tree in provider order (newest first): a group sits where its first save is.
+    struct Node {
+        std::string path;
+        const SaveGroupLevel* level = nullptr;
+        uint32_t count = 0;
+        std::vector<std::pair<int32_t, int32_t>> kids;  // {node, -1} or {-1, save}
+    };
+    std::vector<Node> nodes(1);
+    for (size_t si = 0; si < saves_.size(); ++si) {
+        size_t cur = 0;
+        ++nodes[0].count;
+        for (const SaveGroupLevel& g : saves_[si].groups) {
+            const std::string path = nodes[cur].path + kSaveKeySep + g.key;
+            size_t next = 0;
+            for (const auto& k : nodes[cur].kids)
+                if (k.first >= 0 && nodes[static_cast<size_t>(k.first)].path == path) next = static_cast<size_t>(k.first);
+            if (next == 0) {
+                next = nodes.size();
+                nodes[cur].kids.emplace_back(static_cast<int32_t>(next), -1);
+                Node n;
+                n.path = path;
+                n.level = &g;
+                nodes.push_back(std::move(n));
+            }
+            cur = next;
+            ++nodes[cur].count;
+        }
+        nodes[cur].kids.emplace_back(-1, static_cast<int32_t>(si));
+    }
+    save_rows_.clear();
+    std::vector<std::u32string> items;
+    std::vector<std::string> icons;
+    std::vector<uint8_t> indent;
+    auto emit = [&](auto& self, size_t n, uint8_t depth) -> void {
+        for (const auto& k : nodes[n].kids) {
+            if (k.second >= 0) {
+                const SaveGameInfo& s = saves_[static_cast<size_t>(k.second)];
+                save_rows_.push_back({k.second, {}});
+                items.push_back(s.label.empty() ? ascii32(s.name) : s.label);
+                icons.push_back(s.icon);
+                indent.push_back(depth);
+                continue;
+            }
+            const Node& g = nodes[static_cast<size_t>(k.first)];
+            const bool open = std::find(saves_open_.begin(), saves_open_.end(), g.path) != saves_open_.end();
+            save_rows_.push_back({-1, g.path});
+            items.push_back((open ? std::u32string(U"[-] ") : std::u32string(U"[+] ")) + g.level->label + U"  (" +
+                            ascii32(std::to_string(g.count)) + U")");
+            icons.push_back(g.level->icon);
+            indent.push_back(depth);
+            if (open) self(self, static_cast<size_t>(k.first), static_cast<uint8_t>(std::min(depth + 1, 255)));
+        }
+    };
+    emit(emit, 0, 0);
+    d.set_items("IDC_SAVE_GAME_LIST", std::move(items), selected);
+    if (GuiControl* c = d.get("IDC_SAVE_GAME_LIST")) {
+        c->item_icons = std::move(icons);
+        c->item_indent = std::move(indent);
+    }
+    if (top > 0 && gui_) gui_->scroll_list_to(d, "IDC_SAVE_GAME_LIST", top);
+}
+
+int32_t FrontEnd::row_save(int32_t row) const {
+    if (row < 0 || static_cast<size_t>(row) >= save_rows_.size()) return -1;
+    const int32_t s = save_rows_[static_cast<size_t>(row)].save;
+    return s >= 0 && static_cast<size_t>(s) < saves_.size() ? s : -1;
+}
+
+int32_t FrontEnd::selected_save(const GuiDialog& d) const {
+    const GuiControl* l = d.get("IDC_SAVE_GAME_LIST");
+    return l ? row_save(l->selected) : -1;
+}
+
+bool FrontEnd::toggle_save_group(GuiDialog& d, int32_t row) {
+    if (row < 0 || static_cast<size_t>(row) >= save_rows_.size() || save_rows_[static_cast<size_t>(row)].save >= 0) return false;
+    const std::string path = save_rows_[static_cast<size_t>(row)].group;
+    if (std::find(saves_open_.begin(), saves_open_.end(), path) != saves_open_.end()) {
+        // closing a group closes the groups inside it too
+        std::erase_if(saves_open_, [&path](const std::string& o) {
+            return o.compare(0, path.size(), path) == 0 && (o.size() == path.size() || o[path.size()] == kSaveKeySep);
+        });
+    } else {
+        saves_open_.push_back(path);
+    }
+    const GuiControl* l = d.get("IDC_SAVE_GAME_LIST");
+    build_save_rows(d, row, l ? l->top : 0);
+    return true;
 }
 
 void FrontEnd::refresh_saves() {
@@ -954,17 +1098,28 @@ void FrontEnd::fill_video(GuiDialog& d) {
     // [port] the list holds every mode at every refresh rate: open it on the current one, kept in range so a mode near
     // the end (the desktop's own, the largest) still fills the list with the sizes below it (QA U10).
     if (const GuiControl* l = d.get("IDC_RESOLUTION_LIST"); l && l->selected > 0) gui_->scroll_list_to(d, "IDC_RESOLUTION_LIST", l->selected - 3);
-    d.set_checked("IDC_WINDOWED_MODE", v.windowed);
+    // [port: Gabriel] the shipped "Run in window" check gives way to the display mode list in its row (WindowMode order).
+    d.show("IDC_WINDOWED_MODE", false);
+    d.set_items("IDC_PORT_WINDOW_MODE",
+                {gui_->port_text(U"Fullscreen"), gui_->port_text(U"Borderless fullscreen"), gui_->port_text(U"Windowed")},
+                static_cast<int32_t>(v.window_mode));
+    std::vector<std::u32string> scales;
+    for (const int32_t pct : kUiScaleChoices) scales.push_back(gui_->port_text(ascii32(std::to_string(pct) + " %")));
+    d.set_items("IDC_PORT_UI_SCALE", std::move(scales), static_cast<int32_t>(ui_scale_row(v.ui_scale)));
     d.set_checked("IDC_VSYNC_ENABLED", v.vsync);
     d.set_checked("IDC_WIDESCREEN", v.widescreen);
-    d.set_checked("IDC_HARDWARE_MOUSE", v.hardware_mouse);
-    // [port: Gabriel] Anti-Aliasing and Detail Level are lists of named levels in the sliders' rows; Gamma stays a slider.
-    hide_slider(d, "IDC_ANTI_ALIAS_SLIDER");
-    hide_slider(d, "IDC_DETAIL_LEVEL_SLIDER");
-    d.set_items("IDC_PORT_ANTI_ALIASING", level_items(*gui_, kAntiAliasChoices), static_cast<int32_t>(level_index(kAntiAliasChoices, v.anti_alias)));
-    std::vector<std::u32string> quality;
-    for (const char32_t* q : kQualityNames) quality.push_back(gui_->port_text(q));
-    d.set_items("IDC_PORT_DETAIL_LEVEL", std::move(quality), static_cast<int32_t>(quality_level(current_advanced(p_, v))));
+    d.show("IDC_HARDWARE_MOUSE", false);  // [port: Gabriel 2026-11-13] the option is gone: the game always draws its own cursor
+    // [port: Gabriel] Display / Graphics split: this dialog is Display. Anti-Aliasing and Detail Level (and the Advanced and
+    // Auto Detect buttons) belong to Graphics: their rows are hidden and the rows under them move up into the space.
+    d.set_text("IDC_STATIC_MEDIUM", gui_->port_text(U"Display"));
+    d.show("IDC_ADVANCED", false);
+    d.show("IDC_AUTO_DETECT", false);
+    for (size_t i = 0; i < d.size(); ++i) {
+        GuiControl& c = d[i];
+        if (!c.def) continue;
+        if (c.def->y >= kDisplayMovedRowsTop && c.def->y < kDisplayMovedRowsEnd) c.visible = false;
+        else if (c.def->y >= kDisplayMovedRowsEnd && c.def->y < kDisplayRowsBelowEnd) c.offset.y = kDisplayRowsUp;
+    }
     d.set_value("IDC_GAMMA_SLIDER", v.gamma);
     d.set_text("IDC_PORT_GAMMA_VALUE", value_text(v.gamma));
     d.set_text("IDC_DEVICE_DESC_STATIC", v.device);
@@ -981,7 +1136,7 @@ void FrontEnd::fill_video(GuiDialog& d) {
         if (c == v.frame_cap) cap_sel = static_cast<int32_t>(i);
     }
     d.set_items("IDC_PORT_FRAME_CAP", std::move(caps), cap_sel);
-    use_ui_font(d, {"IDC_PORT_VSYNC_MODE", "IDC_PORT_FRAME_CAP", "IDC_PORT_ANTI_ALIASING", "IDC_PORT_DETAIL_LEVEL"});
+    use_ui_font(d, {"IDC_PORT_VSYNC_MODE", "IDC_PORT_FRAME_CAP", "IDC_PORT_WINDOW_MODE", "IDC_PORT_UI_SCALE"});
     d.set_text("IDC_PORT_DISPLAY_INFO", gui_->port_text(v.display_info));
     // t47 [port]: the value column (143..175) sits inside the shipped caption box (41..187):
     // the caption ends where its value starts and is narrowed to fit, or a long one runs under the number.
@@ -997,20 +1152,25 @@ void FrontEnd::fill_video(GuiDialog& d) {
     }
 }
 
-void FrontEnd::refresh_video_dialogs() {
-    if (GuiDialog* vd = gui_->find(kVideo)) {
-        const VideoSettings v = p_.video ? p_.video() : VideoSettings{};
-        vd->set_selected("IDC_PORT_ANTI_ALIASING", static_cast<int32_t>(level_index(kAntiAliasChoices, v.anti_alias)));
-        vd->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(current_advanced(p_, v))));
-    }
-    if (GuiDialog* ad = gui_->find(kAdvancedVideo)) fill_advanced_video(*ad, current_advanced(p_, p_.video ? p_.video() : VideoSettings{}));
-}
-
 void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s) {
+    // [port: Gabriel] Display / Graphics split: this dialog is Graphics. It holds the Detail Level list (a preset for the seven
+    // lists under it) and the Anti-Aliasing list that were in the Video dialog. The shipped Auto Detect button is removed
+    // (Gabriel, 2026-11-13).
+    d.set_text("IDC_STATIC_MEDIUM", gui_->port_text(U"Graphics"));
+    d.show("IDC_AUTO_DETECT", false);
+    std::vector<std::u32string> quality;
+    for (const char32_t* q : kQualityNames) quality.push_back(gui_->port_text(q));
+    d.set_items("IDC_PORT_DETAIL_LEVEL", std::move(quality), static_cast<int32_t>(quality_level(s)));
+    const int32_t aa = p_.video ? p_.video().anti_alias : VideoSettings{}.anti_alias;
+    d.set_items("IDC_PORT_ANTI_ALIASING", level_items(*gui_, kAntiAliasChoices), static_cast<int32_t>(level_index(kAntiAliasChoices, aa)));
+    use_ui_font(d, {"IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING"});
     for (const AdvLevel& l : kAdvLevels) {
         hide_slider(d, l.slider);
         d.set_items(l.combo, level_items(*gui_, l.choices), static_cast<int32_t>(level_index(l.choices, s.*l.field)));
         use_ui_font(d, {l.combo});
+        const GuiControl* combo = d.get(l.combo);
+        if (GuiControl* label = d.get(l.label); label && label->def && combo && combo->def)
+            label->offset.y = static_cast<float>(label->def->y - 3 - combo->def->y);  // the shipped title sat 3 below its slider
     }
     for (const AdvCheck& c : kAdvChecks) d.set_checked(c.id, s.*c.field);
     std::vector<std::u32string> af;
@@ -1021,8 +1181,21 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
         if (a == s.anisotropy) af_sel = static_cast<int32_t>(i);
     }
     d.set_items("IDC_PORT_ANISOTROPY", std::move(af), af_sel);
+    // [port: Gabriel] Render Scale: the listed percentages; a stored value that is not one of them is listed too (selected).
+    std::vector<std::u32string> rs;
+    int32_t rs_sel = -1;
+    for (size_t i = 0; i < std::size(kRenderScaleChoices); ++i) {
+        const int32_t r = kRenderScaleChoices[i];
+        rs.push_back(ascii32(std::to_string(r) + (r == 100 ? "% (native)" : "%")));
+        if (r == s.render_scale) rs_sel = static_cast<int32_t>(i);
+    }
+    if (rs_sel < 0) {
+        rs.push_back(ascii32(std::to_string(s.render_scale) + "%"));
+        rs_sel = static_cast<int32_t>(rs.size() - 1);
+    }
+    d.set_items("IDC_PORT_RENDER_SCALE", std::move(rs), rs_sel);
     d.set_checked("IDC_PORT_AMBIENT_OCCLUSION", s.ambient_occlusion);
-    use_ui_font(d, {"IDC_PORT_ANISOTROPY"});
+    use_ui_font(d, {"IDC_PORT_ANISOTROPY", "IDC_PORT_RENDER_SCALE"});
     // QA D8 [port]: the check rows are widened up to the combo column, so "Heat Distortion" is not narrowed to fit 152 units.
     for (const AdvCheck& k : kAdvChecks)
         if (GuiControl* c = d.get(k.id); c && c->def->w > 0) c->scale.x = kAdvCheckWidth / static_cast<float>(c->def->w);
@@ -1038,6 +1211,9 @@ AdvancedVideoSettings FrontEnd::read_advanced_video(const GuiDialog& d) const {
         if (const GuiControl* c = d.get(k.id)) s.*k.field = c->checked;
     if (const GuiControl* c = d.get("IDC_PORT_ANISOTROPY"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < std::size(kAnisotropyChoices))
         s.anisotropy = kAnisotropyChoices[static_cast<size_t>(c->selected)];
+    // The extra row of an unlisted stored value (past the choices) keeps that value.
+    if (const GuiControl* c = d.get("IDC_PORT_RENDER_SCALE"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < std::size(kRenderScaleChoices))
+        s.render_scale = kRenderScaleChoices[static_cast<size_t>(c->selected)];
     if (const GuiControl* c = d.get("IDC_PORT_AMBIENT_OCCLUSION")) s.ambient_occlusion = c->checked;
     return s;
 }
@@ -1142,6 +1318,15 @@ void FrontEnd::setup(GuiDialog& d) {
         const bool port = gui_->has_dialog(kPortControlsDialog);
         d.show(slot, port);
         if (port) d.set_text(slot, gui_->port_text(U"Camera and Controls"));
+        // [port: Gabriel] Display / Graphics split: Video is Display; the Graphics button under it opens the advanced dialog.
+        const bool main = ascii_iequals(n, kOptions);
+        const char* graphics = main ? "IDC_PORT_MAIN_OPTIONS_GRAPHICS" : "IDC_PORT_IN_GAME_OPTIONS_GRAPHICS";
+        if (d.get(graphics)) {
+            d.set_text(main ? "IDC_MAIN_OPTIONS_VIDEO" : "IDC_IN_GAME_OPTIONS_VIDEO", gui_->port_text(U"Display"));
+            d.set_text(graphics, gui_->port_text(U"Graphics"));
+            for (const ButtonMove& m : main ? std::span<const ButtonMove>(kMainOptionsMoves) : std::span<const ButtonMove>(kInGameOptionsMoves))
+                if (GuiControl* c = d.get(m.id)) c->offset.y = m.up;
+        }
     } else if (is_port_controls(n)) {
         fill_port_controls(d, p_.camera_settings ? p_.camera_settings() : CameraSettings{});
     } else if (ascii_iequals(n, kPortModsDialog)) {
@@ -1152,12 +1337,7 @@ void FrontEnd::setup(GuiDialog& d) {
     } else if (ascii_iequals(n, kVideo)) {
         fill_video(d);
     } else if (ascii_iequals(n, kAdvancedVideo)) {
-        AdvancedVideoSettings s = p_.advanced_video ? p_.advanced_video() : AdvancedVideoSettings{};
-        // t43: opened from the Video dialog, a quality level picked there but not yet applied shows here as the preset it will be.
-        if (const GuiDialog* vd = gui_->find(kVideo))
-            if (const std::optional<size_t> level = picked(*vd, "IDC_PORT_DETAIL_LEVEL", kQualityCount); level && *level != quality_level(s))
-                set_advanced_detail(s, kQualityPresets[*level]);
-        fill_advanced_video(d, s);
+        fill_advanced_video(d, current_advanced(p_, p_.video ? p_.video() : VideoSettings{}));
     } else if (ascii_iequals(n, kGameplay)) {
         fill_gameplay(d, p_.gameplay ? p_.gameplay() : GameplaySettings{});
     } else if (keyboard_page(n) >= 0) {
@@ -1339,15 +1519,19 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
         MenuAction a = act(MenuAction::Kind::PreviewAudio);
         a.audio = read_audio(*d);
         out.push_back(std::move(a));
-    } else if (ascii_iequals(n, kSave) && e.control == "IDC_SAVE_GAME_LIST" && e.value >= 0 &&
-               static_cast<size_t>(e.value) < saves_.size()) {
+    } else if ((ascii_iequals(n, kSave) || ascii_iequals(n, kLoad)) && e.control == "IDC_SAVE_GAME_LIST" &&
+               e.kind == GuiEvent::Kind::RowClicked) {
+        toggle_save_group(*d, e.value);  // [port: Gabriel] a group row opens / closes
+    } else if (ascii_iequals(n, kSave) && e.control == "IDC_SAVE_GAME_LIST" && e.kind == GuiEvent::Kind::SelectionChanged) {
         // N1 / t09: the save's name (the file), not its label.
-        if (!save_blocked_) d->set_text("IDC_SAVE_GAME_NAME_EDIT", ascii32(saves_[static_cast<size_t>(e.value)].name));
-    } else if (ascii_iequals(n, kLoad) && e.kind == GuiEvent::Kind::DoubleClicked && e.value >= 0 &&
-               static_cast<size_t>(e.value) < saves_.size()) {
-        MenuAction a = act(MenuAction::Kind::LoadGame);
-        a.save = saves_[static_cast<size_t>(e.value)].name;
-        out.push_back(std::move(a));
+        if (const int32_t si = row_save(e.value); si >= 0 && !save_blocked_)
+            d->set_text("IDC_SAVE_GAME_NAME_EDIT", ascii32(saves_[static_cast<size_t>(si)].name));
+    } else if (ascii_iequals(n, kLoad) && e.kind == GuiEvent::Kind::DoubleClicked && e.control == "IDC_SAVE_GAME_LIST") {
+        if (const int32_t si = row_save(e.value); si >= 0) {
+            MenuAction a = act(MenuAction::Kind::LoadGame);
+            a.save = saves_[static_cast<size_t>(si)].name;
+            out.push_back(std::move(a));
+        }
     } else if (is_port_controls(n) && e.kind == GuiEvent::Kind::ValueChanged) {  // [port: Gabriel] FOV value labels
         if (e.control == "IDC_PORT_GALACTIC_FOV_SLIDER") d->set_text("IDC_PORT_GALACTIC_FOV_VALUE", fov_text(static_cast<float>(e.value)));
         if (e.control == "IDC_PORT_TACTICAL_FOV_SLIDER") d->set_text("IDC_PORT_TACTICAL_FOV_VALUE", fov_text(static_cast<float>(e.value)));
@@ -1358,6 +1542,18 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
     } else if (ascii_iequals(n, kVideo) && e.kind == GuiEvent::Kind::SelectionChanged && e.control == "IDC_PORT_VSYNC_MODE") {
         if (e.value > 0) vsync_on_row_ = e.value;
         d->set_checked("IDC_VSYNC_ENABLED", e.value > 0);
+    } else if (ascii_iequals(n, kAdvancedVideo) && e.kind == GuiEvent::Kind::SelectionChanged) {
+        // [port: Gabriel] Graphics: a quality level picked in Detail Level sets the seven lists to its preset at once (Custom
+        // leaves them); a change in one of the seven moves Detail Level to the level they now make (a mix is Custom).
+        if (e.control == "IDC_PORT_DETAIL_LEVEL") {
+            if (e.value >= 0 && static_cast<size_t>(e.value) < kQualityCount) {
+                AdvancedVideoSettings s = read_advanced_video(*d);
+                set_advanced_detail(s, kQualityPresets[static_cast<size_t>(e.value)]);
+                for (const AdvLevel& l : kAdvLevels) d->set_selected(l.combo, static_cast<int32_t>(level_index(l.choices, s.*l.field)));
+            }
+        } else if (std::any_of(std::begin(kAdvLevels), std::end(kAdvLevels), [&](const AdvLevel& l) { return e.control == l.combo; })) {
+            d->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(read_advanced_video(*d))));
+        }
     } else if (keyboard_page(n) >= 0 && e.kind == GuiEvent::Kind::Checked && ascii_istarts_with(e.control, "IDC_KEYBOARD_OPTIONS_")) {
         const int32_t page = e.control.back() - '1';
         if (page >= 0 && page < 5 && !ascii_iequals(n, kKeyboardPages[page])) go(kKeyboardPages[page]);
@@ -1479,7 +1675,8 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         }
     } else if (ascii_iequals(n, kOptions) || ascii_iequals(n, kInGameOptions)) {
         if (is("IDC_MAIN_OPTIONS_AUDIO") || is("IDC_IN_GAME_OPTIONS_AUDIO")) push(kAudio);
-        else if (is("IDC_MAIN_OPTIONS_VIDEO") || is("IDC_IN_GAME_OPTIONS_VIDEO")) push(kVideo);
+        else if (is("IDC_MAIN_OPTIONS_VIDEO") || is("IDC_IN_GAME_OPTIONS_VIDEO")) push(kVideo);  // Display
+        else if (is("IDC_PORT_MAIN_OPTIONS_GRAPHICS") || is("IDC_PORT_IN_GAME_OPTIONS_GRAPHICS")) push(kAdvancedVideo);  // [port: Gabriel]
         else if (is("IDC_MAIN_OPTIONS_GAMEPLAY") || is("IDC_IN_GAME_OPTIONS_GAMEPLAY")) push(kGameplay);
         else if (is("IDC_MAIN_OPTIONS_KEYBOARD") || is("IDC_IN_GAME_OPTIONS_KEYBOARD")) {
             keys_work_ = p_.hotkeys ? *p_.hotkeys : HotkeyTable{};
@@ -1521,15 +1718,12 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             auto val = [&](const char* id, int32_t& o) {
                 if (const GuiControl* x = d->get(id)) o = x->value;
             };
-            // [port: Gabriel] A list still on the level the stored value falls in keeps that exact value; one moved stores its
-            // level's value. A new quality level (not Custom) also asks the host to set the seven advanced options to it.
-            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_ANTI_ALIASING", std::size(kAntiAliasChoices)); row && *row != level_index(kAntiAliasChoices, v.anti_alias))
-                v.anti_alias = kAntiAliasChoices[*row].value;
-            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_DETAIL_LEVEL", kQualityCount); row && *row != quality_level(current_advanced(p_, v))) {
-                v.detail = kQualityPresets[*row];
-                v.detail_picked = true;
-            }
-            chk("IDC_WINDOWED_MODE", v.windowed);
+            // Anti-aliasing and the detail level are set in Graphics ([port: Gabriel] Display / Graphics split): kept as they are.
+            if (const GuiControl* x = d->get("IDC_PORT_WINDOW_MODE"); x && x->selected >= 0 && static_cast<size_t>(x->selected) < kWindowModeCount)
+                v.window_mode = static_cast<WindowMode>(x->selected);
+            // A list left on the row the stored value shows keeps that value (a hand-edited profile's 130 stays 130).
+            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_UI_SCALE", std::size(kUiScaleChoices)); row && *row != ui_scale_row(v.ui_scale))
+                v.ui_scale = kUiScaleChoices[*row];
             chk("IDC_VSYNC_ENABLED", v.vsync);
             // U9: row 0 is Off (the check box above says so); the mode is remembered while v-sync is off.
             if (const GuiControl* x = d->get("IDC_PORT_VSYNC_MODE"); x && x->selected > 0 && static_cast<size_t>(x->selected) <= kVsyncModeCount)
@@ -1537,7 +1731,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             if (const GuiControl* x = d->get("IDC_PORT_FRAME_CAP"); x && x->selected >= 0 && static_cast<size_t>(x->selected) < std::size(kFrameCapChoices))
                 v.frame_cap = kFrameCapChoices[static_cast<size_t>(x->selected)];
             chk("IDC_WIDESCREEN", v.widescreen);
-            chk("IDC_HARDWARE_MOUSE", v.hardware_mouse);
             val("IDC_GAMMA_SLIDER", v.gamma);
             // t12: a different resolution / refresh rate asks "keep these settings?" first (the Yes answer stores it).
             const bool confirm = v.resolution >= 0 && v.resolution != previous_resolution && !res_confirm_;
@@ -1551,22 +1744,24 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             if (is("IDC_OK")) pop();
         } else if (is("IDC_CANCEL")) {
             pop();
-        } else if (is("IDC_ADVANCED")) {
-            push(kAdvancedVideo);
-        } else if (is("IDC_AUTO_DETECT")) {
-            out.push_back(act(MenuAction::Kind::AutoDetectVideo));
         }
     } else if (ascii_iequals(n, kAdvancedVideo) && d) {
         if (is("IDC_OK") || is("IDC_APPLY")) {
+            // [port: Gabriel] Graphics: an Anti-Aliasing list moved off the stored strength's level stores its level's value
+            // (an ApplyVideo with the display settings in force, so nothing else changes); left alone, nothing is sent for it.
+            const VideoSettings now = p_.video ? p_.video() : VideoSettings{};
+            if (const std::optional<size_t> row = picked(*d, "IDC_PORT_ANTI_ALIASING", std::size(kAntiAliasChoices));
+                row && *row != level_index(kAntiAliasChoices, now.anti_alias)) {
+                MenuAction v = act(MenuAction::Kind::ApplyVideo);
+                v.video = now;
+                v.video.anti_alias = kAntiAliasChoices[*row].value;
+                out.push_back(std::move(v));
+            }
             MenuAction a = act(MenuAction::Kind::ApplyAdvancedVideo);
             a.advanced = read_advanced_video(*d);
-            // t43: the Video dialog underneath shows the quality level the seven now make (the host stores the same, so its
-            // Accept is no new preset).
-            if (GuiDialog* vd = gui_->find(kVideo)) vd->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(a.advanced)));
+            d->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(a.advanced)));
             out.push_back(std::move(a));
             if (is("IDC_OK")) pop();
-        } else if (is("IDC_AUTO_DETECT")) {
-            out.push_back(act(MenuAction::Kind::AutoDetectVideo));
         } else if (is("IDC_CANCEL")) {
             pop();
         }
@@ -1659,9 +1854,8 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
                 pop();
             }
         } else if (is("IDC_DELETE_GAME_BUTTON")) {
-            const GuiControl* l = d->get("IDC_SAVE_GAME_LIST");
-            if (l && l->selected >= 0 && static_cast<size_t>(l->selected) < saves_.size()) {  // N1 / t09: confirm first
-                confirm_save_ = saves_[static_cast<size_t>(l->selected)].name;
+            if (const int32_t si = selected_save(*d); si >= 0) {  // N1 / t09: confirm first
+                confirm_save_ = saves_[static_cast<size_t>(si)].name;
                 quit_action_ = "delete";
                 push(kQuit);
             }
@@ -1670,8 +1864,10 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
         if (is("IDC_LOAD_CANCEL_BUTTON")) pop();
         else if (is("IDC_LOAD_GAME_BUTTON") || is("IDC_DELETE_GAME_BUTTON")) {
             const GuiControl* l = d->get("IDC_SAVE_GAME_LIST");
-            if (l && l->selected >= 0 && static_cast<size_t>(l->selected) < saves_.size()) {
-                const std::string& name = saves_[static_cast<size_t>(l->selected)].name;
+            if (l && is("IDC_LOAD_GAME_BUTTON") && toggle_save_group(*d, l->selected)) {
+                // [port: Gabriel] Load on a group row opens / closes it
+            } else if (const int32_t si = selected_save(*d); si >= 0) {
+                const std::string& name = saves_[static_cast<size_t>(si)].name;
                 if (is("IDC_DELETE_GAME_BUTTON")) {  // N1 / t09: confirm first
                     confirm_save_ = name;
                     quit_action_ = "delete";
@@ -1788,6 +1984,9 @@ void FrontEnd::update(std::span<const GuiEvent> events, const InputFrame& raw, s
             case GuiEvent::Kind::SelectionChanged:
             case GuiEvent::Kind::DoubleClicked:
             case GuiEvent::Kind::ValueChanged: on_change(e, out); break;
+            case GuiEvent::Kind::RowClicked:  // [port: Gabriel] only the saved games tree uses row clicks
+                if (ascii_iequals(e.dialog, kSave) || ascii_iequals(e.dialog, kLoad)) on_change(e, out);
+                break;
             case GuiEvent::Kind::Submitted:
                 if (ascii_iequals(e.dialog, kSave)) {
                     GuiEvent b = e;

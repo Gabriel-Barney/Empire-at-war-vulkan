@@ -322,4 +322,62 @@ EventData fleet_management_event(FleetOp op, ObjectId target, ObjectId fleet, Ob
     return e;
 }
 
+bool normalize_object_name(std::string_view raw, std::string& out) {
+    size_t b = 0, e = raw.size();
+    while (b < e && raw[b] == ' ') ++b;
+    while (e > b && raw[e - 1] == ' ') --e;
+    const std::string_view s = raw.substr(b, e - b);
+    size_t chars = 0;
+    for (size_t i = 0; i < s.size();) {
+        const auto c0 = static_cast<uint8_t>(s[i]);
+        uint32_t cp = 0;
+        size_t len = 0;
+        if (c0 < 0x80) {
+            cp = c0;
+            len = 1;
+        } else if (c0 >= 0xC2 && c0 <= 0xDF) {
+            cp = c0 & 0x1Fu;
+            len = 2;
+        } else if (c0 >= 0xE0 && c0 <= 0xEF) {
+            cp = c0 & 0x0Fu;
+            len = 3;
+        } else if (c0 >= 0xF0 && c0 <= 0xF4) {
+            cp = c0 & 0x07u;
+            len = 4;
+        } else {
+            return false;  // stray continuation byte, overlong lead (C0 / C1) or out of range (F5..FF)
+        }
+        if (i + len > s.size()) return false;
+        for (size_t k = 1; k < len; ++k) {
+            const auto ck = static_cast<uint8_t>(s[i + k]);
+            if ((ck & 0xC0u) != 0x80u) return false;
+            cp = (cp << 6) | (ck & 0x3Fu);
+        }
+        if ((len == 3 && cp < 0x800) || (len == 4 && (cp < 0x10000 || cp > 0x10FFFF))) return false;  // overlong / range
+        if (cp >= 0xD800 && cp <= 0xDFFF) return false;                                              // surrogates
+        if (cp < 0x20 || (cp >= 0x7F && cp <= 0x9F)) return false;                                    // control characters
+        i += len;
+        if (++chars > kMaxObjectNameChars) return false;
+    }
+    out.assign(s);
+    return true;
+}
+
+EventData rename_object_event(ObjectId object, std::string_view name) {
+    std::vector<uint8_t> data(4 + name.size());
+    for (size_t i = 0; i < 4; ++i) data[i] = static_cast<uint8_t>(object >> (8 * i));
+    for (size_t i = 0; i < name.size(); ++i) data[4 + i] = static_cast<uint8_t>(name[i]);
+    return ev::port_extension(kRenameSubtype, data);
+}
+
+bool read_rename_event(const EventData& e, ObjectId& object, std::string& name) {
+    if (e.type() != EventType::PortExtension || e.u("subtype") != kRenameSubtype) return false;
+    const std::span<const uint8_t> d = e.bytes_view("data");
+    if (d.size() < 4 || d.size() > 4 + kMaxObjectNameBytes) return false;
+    object = static_cast<ObjectId>(d[0]) | static_cast<ObjectId>(d[1]) << 8 | static_cast<ObjectId>(d[2]) << 16 |
+             static_cast<ObjectId>(d[3]) << 24;
+    name.assign(reinterpret_cast<const char*>(d.data() + 4), d.size() - 4);
+    return true;
+}
+
 }  // namespace alamo::commands

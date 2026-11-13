@@ -592,6 +592,17 @@ public:
     // without a battle); other owner changes keep the records.
     void keep_built_objects(PlanetIndex planet, int32_t keep);
     std::span<const FleetState> fleets() const { return fleets_; }
+    // [port: Gabriel, 2026-11-13] Fleet and ship names (docs/DECISIONS.md "Fleet and ship names"; retail has none). A name
+    // belongs to a fleet object or a unit object (it stays with a unit that changes fleets; a merged-away fleet's name goes
+    // with it). Presentation only: no sim system reads a name, so names are saved (galactic.state v7) but not hashed.
+    // object_name: "" = no name (the HUD shows the default). rename: the issuer's own live fleet, or a live unit the
+    // issuer owns that is in a fleet or on a planet's surface list; `name` is normalised (commands::normalize_object_name),
+    // empty clears. InvalidUnit (no such fleet / unit) / NotOwner / InvalidTarget (bad name).
+    // Allowed while paused (it changes nothing the sim reads). Event: commands::rename_object_event (PortExtension).
+    std::string_view object_name(ObjectHandle object) const;
+    RejectReason rename(int32_t player, ObjectHandle object, std::string_view name);
+    // Every stored name {ObjectId, name}, id-ascending (names of dead objects are dropped on the next rename / save).
+    std::span<const std::pair<int32_t, std::string>> object_names() const { return names_; }
     float credits(int32_t player) const { return players_[static_cast<size_t>(player)].account.credits; }
     int32_t neutral_player() const { return neutral_player_; }
     int32_t player_of_faction(std::string_view faction) const;
@@ -1223,6 +1234,8 @@ private:
     std::vector<VictoryClaim> claims_;    // declaration order
     int32_t victory_hold_ = 0;            // story t11: galactic monitor hold (+0x5c)
     std::vector<std::pair<int32_t, uint8_t>> victory_deferred_;  // q6 t21: {player, type}, monitor +0x60
+    std::vector<std::pair<int32_t, std::string>> names_;  // [port] fleet / ship names {ObjectId, name}, id-ascending (v7)
+    void prune_names();                                     // drops names of objects that are no longer alive
     // q6 t21 / t22: from set_victory_rules (definition-derived, not saved, not hashed)
     VictoryRules victory_rules_;
     std::vector<VictoryRecord> victory_records_;  // player order, then the side's list order, implicit last

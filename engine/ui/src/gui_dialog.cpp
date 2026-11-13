@@ -215,8 +215,8 @@ void GuiManager::init(const DialogScript& script, const GuiSkin& skin, const Tex
 }
 
 void GuiManager::resize(uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts_ && next.screen_height != canvas_.screen_height) fonts_->clear();
+    const HudCanvas next = HudCanvas::make(width, height, canvas_.ui_scale);  // the UI scale is kept
+    if (fonts_ && next.font_height() != canvas_.font_height()) fonts_->clear();
     canvas_ = next;
     for (auto& d : stack_) place(*d);
 }
@@ -279,8 +279,8 @@ void GuiManager::place(GuiDialog& d) const {
     if (d.placed_) return;
     const auto w = static_cast<float>(d.def().w);
     const float h = d.height();
-    if (h > canvas_.height) {
-        // Menu column: top edge, right edge on the screen's right edge (base 20.jpg at 16:9: the buttons end ~1 % from the
+    if (h > canvas_.height || h > kHudBaseHeight) {
+        // Menu column (taller than the base canvas; a UI-scaled canvas may be taller than the column itself): top edge, right edge on the screen's right edge (base 20.jpg at 16:9: the buttons end ~1 % from the
         // right edge; UI.md §3.3 at 4:3). Its IDC_MENU_PETRO_LOGO hotspot follows the stretched backdrop (build()).
         d.origin_ = {0.5f * canvas_.width - w, 0.5f * canvas_.height};
     } else {
@@ -1078,6 +1078,7 @@ void GuiManager::update(const InputFrame& raw, const RoutedInput& routed, double
                                 const bool dbl = last_list_click_ == hc && last_list_row_ == row &&
                                                  now - last_list_time_ <= style_.double_click;
                                 list_select(*target, i, row, events);
+                                if (!dbl) events.push_back(make_event(GuiEvent::Kind::RowClicked, *target, hc, row));
                                 if (dbl) {
                                     events.push_back(make_event(GuiEvent::Kind::DoubleClicked, *target, hc, row));
                                     last_list_time_ = -1e30;
@@ -1173,14 +1174,14 @@ const GuiFontSpec& GuiManager::font_spec(const GuiDialog& d, size_t i) const {
 int32_t GuiManager::control_font(const GuiDialog& d, size_t i) const {
     if (!fonts_ || !skin_) return -1;
     const GuiFontSpec& f = font_spec(d, i);
-    return fonts_->font(f.face, f.size, canvas_.screen_height, f.stretch);
+    return fonts_->font(f.face, f.size, canvas_.font_height(), f.stretch);
 }
 
 HudTextStyle GuiManager::text_style(const GuiDialog& d, size_t i, bool disabled) const {
     HudTextStyle s;
     const GuiControl& c = d[i];
     const GuiFontSpec& f = font_spec(d, i);
-    s.font = fonts_->font(f.face, f.size, canvas_.screen_height, f.stretch);
+    s.font = fonts_->font(f.face, f.size, canvas_.font_height(), f.stretch);
     s.color = disabled ? style_.disabled_text : f.top;
     s.color_bottom = f.bottom;
     s.gradient = !disabled && !(f.top == f.bottom);
@@ -1532,6 +1533,14 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
                 tr.min.x += 2.0f;
                 {
                     const size_t ri = static_cast<size_t>(row);
+                    // [port: Gabriel] indent and icon (saved games tree)
+                    if (ri < c.item_indent.size()) tr.min.x += static_cast<float>(c.item_indent[ri]) * rh;
+                    if (ri < c.item_icons.size() && !c.item_icons[ri].empty()) {
+                        const float pad = std::max(1.0f, 0.1f * rh);
+                        quad(dl, layer, c.item_icons[ri], {{tr.min.x, rr.min.y + pad}, {tr.min.x + rh - 2.0f * pad, rr.max.y - pad}},
+                             c.enabled ? Rgba8{255, 255, 255, 255} : Rgba8{255, 255, 255, 128});
+                        tr.min.x += rh;
+                    }
                     // UI.md §3.7.1: an item colour recolours the item's text (flat), also on a disabled control.
                     const Rgba8* ic = ri < c.item_colors.size() ? &c.item_colors[ri] : nullptr;
                     const Rgba8* tc = ic ? ic : ri < c.item_text_colors.size() && c.item_text_colors[ri].a > 0 ? &c.item_text_colors[ri] : nullptr;
@@ -1653,7 +1662,7 @@ void GuiManager::build(HudDrawList& dl, double now) {
     for (auto& dp : stack_) {
         GuiDialog& d = *dp;
         const auto w = static_cast<float>(d.def().w);
-        const bool column = static_cast<float>(d.def().h) > canvas_.height;
+        const bool column = static_cast<float>(d.def().h) > canvas_.height || static_cast<float>(d.def().h) > kHudBaseHeight;
         const float base_x = column ? 0.5f * kHudBaseWidth - w : d.origin().x;
         for (size_t i = 0; i < d.size(); ++i) {
             GuiControl& c = d[i];
@@ -1676,7 +1685,7 @@ void GuiManager::build(HudDrawList& dl, double now) {
         quad(dl, 0, backdrop_, all);
         if (!version_text_.empty() && fonts_) {
             HudTextStyle st;
-            st.font = fonts_->font("Arial", 8.0f, canvas_.screen_height);
+            st.font = fonts_->font("Arial", 8.0f, canvas_.font_height());
             if (st.font >= 0) {
                 st.color = Rgba8{40, 160, 255, 128};
                 const float lh = static_cast<float>(fonts_->metrics(st.font).line_height) * canvas_.units_per_pixel_y;
@@ -1700,7 +1709,7 @@ void GuiManager::build(HudDrawList& dl, double now) {
         if (!key.empty()) {
             const std::u32string t = caption_text(key);
             HudTextStyle s;
-            s.font = fonts_->font(skin_->global_font().face, skin_->global_font().size, canvas_.screen_height);
+            s.font = fonts_->font(skin_->global_font().face, skin_->global_font().size, canvas_.font_height());
             s.color = {255, 255, 255, 255};
             const TextBlock b = measure_text_block(*fonts_, canvas_, t, 200.0f, s);
             const GuiRect box{{cursor_.x + 12.0f, cursor_.y + 8.0f}, {cursor_.x + 20.0f + b.width, cursor_.y + 12.0f + b.height}};

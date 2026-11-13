@@ -3313,9 +3313,10 @@ void test_landing_drop(bool timed, uint32_t destroy_at = 0) {
             // s78f t02 / q6: battle state version 8 (the two version-7 branches merged: FighterFormationRecord::pushed dropped
             // and the q6 TEAM-container attacks); ccpgt t02: version 9 (the domination timer); cu8k t01: version 10 (the
             // thrown sabers); cu8l t03: version 11 (the start fleet arrivals); s78n t20 stage A: version 12 (the land attack
-            // blocks; exact: every other version is refused): 10, 11 and 13 are refused.
+            // blocks); fleet cohesion: version 13 (per-player cohesion; exact: every other version is refused): 11, 12 and 14
+            // are refused.
             std::vector<uint8_t> stale(w.bytes().begin(), w.bytes().end());
-            for (const uint32_t v : {10u, 11u, 13u}) {
+            for (const uint32_t v : {11u, 12u, 14u}) {
                 for (size_t k = 0; k < 4; ++k) stale[k] = static_cast<uint8_t>(v >> (8 * k));
                 ByteReader rs(stale);
                 CHECK(!b->read_part(TacticalBattle::SavePart::State, rs));
