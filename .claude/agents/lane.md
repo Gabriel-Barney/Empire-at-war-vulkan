@@ -33,8 +33,15 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    tasks; a tier-3 task of your group is skipped, not started (`docs/DECISIONS.md`, "Current focus"). Never grow the group past its cap (8 tasks).
 6. **Build in your own tree** (one tree per worktree; never share `build-msvc` or another lane's tree). From PowerShell:
    `& .\build_agent.cmd --% msvc wt "core;<modules and their dependencies>"` gives `build-wt-msvc` (`wt` is the default tree and may be left out) and runs the fast tier
-   (`ctest -LE slow`); pass a regex as 4th argument for specific tests (slow ones included) or `all`. Never put `>` after `--%`.
-   Read the summary it prints (`tools\lint\build_summary.py`), not the whole log; zero warnings at MSVC `/W4` and clang.
+   (`ctest -LE slow`); pass a regex as 4th argument for specific tests (slow ones included) or `all`. Never put `>` after `--%`,
+   and put nothing after the `--%` command on the same line (PowerShell passes the rest of the line to it).
+   - **While iterating, test only what you changed:** `& .\build_agent.cmd --% msvc wt "<modules>" changed` runs the fast-tier
+     tests of the engine modules you changed against `origin/dev` (`tools\lint\changed_tests.py`), `none` only builds. Run the
+     whole fast tier (no 4th argument, or `all`) once before landing; `land_on_dev.cmd` runs it on the merged HEAD anyway.
+   - An identical failing rerun is refused (exit 3, `tools\lint\build_state.py`): it prints the last summary again. Change the
+     code first; for a flaky test or a changed environment set `ALAMO_RERUN=1`.
+   Read the summary it prints (`tools\lint\build_summary.py`), not the whole log; zero warnings at MSVC `/W4` and clang. It splits
+   failed tests into `real failures` (fix them first) and `golden drift` (only a stored golden differs: step 7).
    - Sim code (everything in `engine/` except render, audio, video, UI): also `& .\build_agent.cmd --% clang wt "<modules>"`
      (`build-wt-clang`), including the CRC selfchecks.
    - `engine/jobs` or other threading code: also `build_asan.cmd` (UBSan; `set ALAMO_SANITIZE=address` for ASan).
@@ -59,7 +66,8 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    The roadmap lives only in `roadmap-store/` (PR #89, 2026-11-06): nothing about it is committed to this repository.
    Check that `sync` prints `in sync with origin/main`.
 9. **Land on `dev`** (no PR): commit, then `tools\land_on_dev.cmd`. It merges `origin/dev` into your branch (resolve a conflict
-   there, rebuild the affected modules, rerun), pushes to `dev` as a fast-forward and deletes your branch on origin. A rejected
+   there, rebuild the affected modules, rerun; a conflict only in goldens regen_goldens writes is resolved for you: it takes
+   `dev`'s, builds and regenerates those goldens, `tools\lint\golden_merge.py`), pushes to `dev` as a fast-forward and deletes your branch on origin. A rejected
    push means `dev` moved: rerun it. It also refuses generated or oversized new files (`tools\lint\check_tracked.py`;
    tools write into ignored output folders, exceptions go in `tools/lint/tracked_allow.txt`). The last commit message says what changed, build and test results (MSVC / clang / ASan as
    applicable, skips), goldens changed or "none", roadmap group and tasks closed, open items, and ends with

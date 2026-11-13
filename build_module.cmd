@@ -22,6 +22,9 @@ set PATH=%~dp0toolchain\venv\Scripts;%PATH%
 rem Cheap check first (2026-11-12): a string literal split across lines (C2001) fails here instead of in a build.
 python -I tools\lint\check_string_literals.py --changed
 if errorlevel 1 (echo build_module: fix the literal above first; nothing was built.& exit /b 1)
+rem Which code this run builds, for the build record; refuses an identical failing rerun (ALAMO_RERUN=1 builds anyway).
+python -I tools\lint\build_state.py begin build-%~1 --modules "!MODULES!" --tests "%~1 !SLOWFILTER!" --refuse-repeat
+if errorlevel 3 exit /b 3
 > %LOG% (
   cmake -S . -B build-%~1 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl "-DALAMO_ENGINE_MODULES=!MODULES!" 2>&1
   echo configure exit !ERRORLEVEL!
@@ -36,7 +39,10 @@ if errorlevel 1 (echo build_module: fix the literal above first; nothing was bui
   python tools\lint\ctest_skips.py "%~dp0build-%~1\ctest_junit.xml"
 )
 echo MODULE_DONE>> %LOG%
+python tools\lint\build_summary.py --state build-%~1\build_state.json %LOG%
+set "MRC=!ERRORLEVEL!"
+set "ALAMO_BUILD_EXTRA=%~dp0build-%~1\build_state.json"
 python roadmap-store\roadmap_store.py record-build msvc build-%~1 %LOG%
-python tools\lint\build_summary.py %LOG%
 echo full log: %LOG%
 if defined ALAMO_FULL_LOG type %LOG%
+exit /b !MRC!

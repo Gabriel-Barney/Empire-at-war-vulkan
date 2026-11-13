@@ -236,6 +236,10 @@ python roadmap-store/roadmap_store.py release <group> [--by <session>] [--force]
 `record-build`, so the roadmap shows them with no further step. The full log stays in `logs\` on the machine that built; the
 record carries the summary and the first error lines. Set `ALAMO_ROADMAP_GROUP=<group id>` before a build to link it to a
 group, and `ALAMO_SESSION=<name>` to name the session instead of the OS user. Records are only added: do not edit or prune them.
+Since 2026-11-13 the build scripts also set `ALAMO_BUILD_EXTRA` to `<tree>\build_state.json`, and the record carries `commit`,
+`worktree`, `branch`, `dirty`, `source` (hash of the built source), `modules`, `test_filter`, `failure_kind` (configure, compile,
+warnings, test, golden, unfinished, other; null on a pass), `golden_drift` and `real_failures` (`docs/BUILD.md`, "Build state and
+repeat check", "Golden drift in the summary"). A `build_agent.cmd ... none` run has no ctest step and passes on configure and build.
 
 `record-build` only writes the record file and a journal line (no commit, no regenerate, no push): one build run used to make one
 commit and one push. The commit and the push are batched: a push happens at most every 10 minutes (`FLUSH_INTERVAL`). After a

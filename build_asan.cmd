@@ -21,6 +21,8 @@ set CMAKE=%TC%\venv\Scripts\cmake.exe
 set CTEST=%TC%\venv\Scripts\ctest.exe
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
+rem Which code this run builds (commit, worktree, source hash), copied into the build record with the outcome.
+python -I tools\lint\build_state.py begin build-asan --modules "!MODULES!" --tests all
 rem ALAMO_SANITIZE picks the sanitizers (default undefined). ASan on clang 20 (MSVC ABI) crashes in any catch handler
 rem (even a minimal try/catch) because the stack instrumentation touches the exception funclet frame; address,undefined also
 rem made UBSan report a false "member call on null pointer" in engine/jobs/tests/test_jobs.cpp:196. The same cause: both go
@@ -47,5 +49,6 @@ echo %ALAMO_SANITIZE%| findstr /c:address >nul && set SAN=!SAN! -mllvm -asan-sta
   python tools\lint\ctest_skips.py "%~dp0build-asan\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\asan_configure.txt
-python tools\lint\build_summary.py logs\asan_configure.txt logs\asan_build.txt
+python tools\lint\build_summary.py --state build-asan\build_state.json logs\asan_configure.txt logs\asan_build.txt
+set "ALAMO_BUILD_EXTRA=%~dp0build-asan\build_state.json"
 python roadmap-store\roadmap_store.py record-build clang-asan build-asan logs\asan_configure.txt logs\asan_build.txt

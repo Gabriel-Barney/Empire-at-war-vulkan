@@ -5,7 +5,10 @@ rem
 rem Usage (from any worktree, branch committed):  tools\land_on_dev.cmd [--create]
 rem   1. refuses on main, on detached HEAD and with uncommitted tracked edits
 rem   2. fetches origin; with --create makes origin/dev from origin/main when dev does not exist yet
-rem   3. merges origin/dev INTO THIS BRANCH (conflicts are resolved here, so dev never holds a broken merge)
+rem   3. merges origin/dev INTO THIS BRANCH (conflicts are resolved here, so dev never holds a broken merge). When every
+rem      conflicted file is a golden regen_goldens writes (headless *.crc, game smoke .crc/.rec, tests/benchmark/*), it takes
+rem      origin/dev's version, builds the merged HEAD and regenerates only those goldens (tools\lint\golden_merge.py,
+rem      2026-11-13); any other conflict stops here for you to resolve
 rem   4. refuses generated or oversized new files (tools\lint\check_tracked.py)
 rem   5. refuses a merged HEAD that has no passing MSVC build of every module with the fast tier (tools\lint\verified_build.py;
 rem      runs build_agent.cmd msvc wt all itself when there is none; docs / *.md / .claude-only changes need none), then
@@ -18,6 +21,9 @@ rem "git branch -d <name>" from another checkout removes them once the work is o
 setlocal
 set "CREATE=0"
 if /i "%~1"=="--create" set "CREATE=1"
+set "GOLDEN_MERGE="
+set "PY=python"
+if exist "%~dp0..\toolchain\venv\Scripts\python.exe" set "PY=%~dp0..\toolchain\venv\Scripts\python.exe"
 
 for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD') do set "BR=%%b"
 if "%BR%"=="" goto :nobranch
@@ -54,24 +60,39 @@ if errorlevel 1 (
 
 if /i "%BR%"=="dev" goto :pushit
 
+rem Golden-only conflicts: golden_merge.py takes origin/dev's goldens and commits the merge; they are regenerated below.
 git merge --no-edit origin/dev
 if errorlevel 1 (
-  echo.
-  echo land_on_dev: merge conflict with origin/dev. Nothing was pushed.
-  echo Resolve here, commit, rebuild the affected modules, then rerun this script.
-  exit /b 1
+  "%PY%" -I "%~dp0lint\golden_merge.py" resolve
+  if errorlevel 1 (
+    echo.
+    echo land_on_dev: merge conflict with origin/dev. Nothing was pushed.
+    echo Resolve here, commit, rebuild the affected modules, then rerun this script.
+    exit /b 1
+  )
+  set "GOLDEN_MERGE=1"
 )
 
 :pushit
 rem Refuse generated or oversized files this landing would add (tools\lint\check_tracked.py; exceptions in
 rem tools\lint\tracked_allow.txt). Nothing is pushed when it fails.
-set "PY=python"
-if exist "%~dp0..\toolchain\venv\Scripts\python.exe" set "PY=%~dp0..\toolchain\venv\Scripts\python.exe"
 "%PY%" -I "%~dp0lint\check_tracked.py" --base origin/dev --head HEAD
 if errorlevel 1 (
   echo.
   echo land_on_dev: new files failed the tracked-file check above. Nothing was pushed.
   exit /b 1
+)
+
+if defined GOLDEN_MERGE (
+  echo land_on_dev: building the merged HEAD without tests, to regenerate the goldens taken from origin/dev.
+  call "%~dp0..\build_agent.cmd" msvc wt all none
+  cd /d "%~dp0.."
+  "%PY%" -I "%~dp0lint\golden_merge.py" regen build-wt-msvc
+  if errorlevel 1 (
+    echo.
+    echo land_on_dev: regenerating the merged goldens failed, see above. The merge is committed here; nothing was pushed.
+    exit /b 1
+  )
 )
 
 rem dev must stay green (2026-11-12): push only a commit that was built and tested AS MERGED. Two branches that each pass
