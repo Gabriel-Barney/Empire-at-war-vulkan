@@ -85,6 +85,11 @@ add_executable(alamo_tactical_movement_b5_tests tests/test_movement_b5.cpp)
 target_link_libraries(alamo_tactical_movement_b5_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_b5_tests COMMAND alamo_tactical_movement_b5_tests)
 set_tests_properties(alamo_tactical_movement_b5_tests PROPERTIES TIMEOUT 300)
+# [port: Gabriel 2026-11-13] fleet cohesion (MoveOrder::cohesion_tight): the tight space move's shared speed cap.
+add_executable(alamo_tactical_movement_cohesion_tests tests/test_movement_cohesion.cpp)
+target_link_libraries(alamo_tactical_movement_cohesion_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_cohesion_tests COMMAND alamo_tactical_movement_cohesion_tests)
+set_tests_properties(alamo_tactical_movement_cohesion_tests PROPERTIES TIMEOUT 120)
 # bkm1 (2026-11-12): the retail rules of backlog group bkm1 (formation class, lanes, 3-D brake lengths, secondary facing).
 add_executable(alamo_tactical_movement_bkm_tests tests/test_movement_bkm.cpp)
 target_link_libraries(alamo_tactical_movement_bkm_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)

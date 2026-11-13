@@ -510,6 +510,13 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
                 const TextBlock tb = measure_text_block(*fonts_, canvas_, frame.planet_name, 0.0f, st);
                 add_text_block(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, frame.planet_name,
                                {p.center.x, p.center.y + 0.5f * tb.height}, 0.0f, st);
+                // [port: Gabriel 2026-11-13] fleet cohesion: one line above the name, same style
+                if (!frame.cohesion_text.empty()) {
+                    st.width_scale = fit_width_scale(measure_text_block(*fonts_, canvas_, frame.cohesion_text, 0.0f, st).width,
+                                                     c.max_text_width);
+                    add_text_block(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, frame.cohesion_text,
+                                   {p.center.x, p.center.y - 0.75f * tb.height}, 0.0f, st);
+                }
             }
         }
         // FIXPASS_GALACTIC §4.2 (capture C2): the advisor *_LOOP movie in Movie_tactical (Icon, Size 200 x 200) with its

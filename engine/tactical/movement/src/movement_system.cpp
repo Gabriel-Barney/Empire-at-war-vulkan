@@ -484,6 +484,7 @@ UnitView MovementSystem::view(ObjectId id) const {
     v.space_fallback = u->fallback;
     v.start_frame = u->start_frame;  // OI tactical
     v.formation_speed = u->formation_speed;
+    v.cohesion_speed = u->cohesion_speed;  // [port] fleet cohesion
     v.team_speed = u->team_cap;  // s78k t03
     v.team_coast = u->d.team_container && u->coast;  // s78n t18 review
     v.team_final_turn = u->d.team_container && u->fturn;
@@ -1428,6 +1429,24 @@ void MovementSystem::move_space(const MoveOrder& order, const std::vector<uint32
         f.order = u.d.formation_order;
         mem.push_back(f);
     }
+    // [port: Gabriel 2026-11-13] fleet cohesion (MoveOrder::cohesion_tight): every ship of the order that is not a
+    // fighter and can move plans at the slowest such ship's max speed, so the fleet keeps its spacing in flight. A loose
+    // order (or a tight one with fewer than two such ships) clears the cap: retail behaviour.
+    float cohesion = kInf;
+    if (order.cohesion_tight) {
+        uint32_t ships = 0;
+        for (uint32_t i : idx) {
+            const Unit& u = units_[i];
+            if (u.d.locomotor == LocomotorKind::Fighter || !(u.lp.max_speed > 0.0f)) continue;
+            cohesion = std::min(cohesion, u.lp.max_speed);
+            ++ships;
+        }
+        if (ships < 2) cohesion = kInf;
+    }
+    for (uint32_t i : idx) {
+        Unit& u = units_[i];
+        u.cohesion_speed = u.d.locomotor == LocomotorKind::Fighter ? kInf : cohesion;
+    }
     std::vector<ReservedSpot> reserved;
     V2 dest = order.destination;
     if (space_.has_box()) {
@@ -1487,6 +1506,7 @@ void MovementSystem::stop(std::span<const ObjectId> ids) {
         u->m.state = LocoState::WalkStopped;
         u->around.clear();  // s78n t18: the path stack is cleared
         u->form_id = 0;     // s78n t20: it leaves its formation
+        u->cohesion_speed = kInf;  // [port] fleet cohesion: a stop ends the move's cap
         u->self_arrive = false;
         u->atk_theta = u->atk_rho = 0.0f;  // s78n t25.2: a stop drops the attack block (halt() keeps it)
         u->atk_form = 0;
@@ -4844,7 +4864,7 @@ void MovementSystem::tick_space(uint32_t frame, const ParallelFor& pf) {
                 q.start = u.m.pos;
                 q.goal = u.goal;
                 q.start_heading = u.m.yaw;
-                q.speed = u.lp.max_speed;
+                q.speed = std::min(u.lp.max_speed, u.cohesion_speed);  // [port] fleet cohesion cap (3e38: none)
                 q.turn_rate = u.lp.turn_rate;
                 q.radius = u.d.radius;
                 q.layer = u.d.space_layer;
@@ -5565,6 +5585,10 @@ void MovementSystem::hash_speed(StateHasher& h) const {
         if (u.speed_override >= 0.0f) {  // OI abilities: only while overridden
             h.u8(0x29);
             h.f32(u.speed_override);
+        }
+        if (u.cohesion_speed < kInf) {  // [port] fleet cohesion: only while capped (loose moves hash as before)
+            h.u8(0x43);
+            h.f32(u.cohesion_speed);
         }
     }
 }

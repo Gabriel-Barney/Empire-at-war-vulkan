@@ -1459,10 +1459,11 @@ void test_s78o_unit_rejections() {
         if (std::equal(th.begin(), th.end(), good.begin() + static_cast<std::ptrdiff_t>(i)) &&
             std::equal(rh.begin(), rh.end(), good.begin() + static_cast<std::ptrdiff_t>(i + 4)))
             hits.push_back(i);
-    CHECK(hits.size() == 1 && hits[0] >= 147);
-    if (hits.size() != 1 || hits[0] < 147) return;
-    // 127 = the bytes from the end of the wt block to atk_theta (bkm1, version 31: + end_z / end_at / yaw2 and lane_z)
-    const size_t at_th = hits[0], at_wt = at_th - 127 - 20;
+    CHECK(hits.size() == 1 && hits[0] >= 151);
+    if (hits.size() != 1 || hits[0] < 151) return;
+    // 131 = the bytes from the end of the wt block to atk_theta (bkm1, version 31: + end_z / end_at / yaw2 and lane_z;
+    // version 32: + the fleet cohesion speed)
+    const size_t at_th = hits[0], at_wt = at_th - 131 - 20;
     const uint8_t idle[20] = {0xFF, 0xFF, 0xFF, 0xFF};  // wt_clip -1, then 4 x 0.0f
     CHECK(std::equal(std::begin(idle), std::end(idle), good.begin() + static_cast<std::ptrdiff_t>(at_wt)));
     World t(sc.cfg);
@@ -1840,7 +1841,9 @@ void test_rejections() {
     CHECK(rejects(u.sys, bad));
     put_u32(bad, 0, 30);  // 30: before the bkm1 stored waypoint heights and the secondary yaw (31)
     CHECK(rejects(u.sys, bad));
-    put_u32(bad, 0, 32);
+    put_u32(bad, 0, 31);  // 31: before the fleet cohesion speed (32)
+    CHECK(rejects(u.sys, bad));
+    put_u32(bad, 0, 33);
     CHECK(rejects(u.sys, bad));
     bad = good;
     bad[4] = static_cast<uint8_t>(bad[4] ^ 3);  // mode
