@@ -130,6 +130,16 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     alamo_add_worker_count_check(alamo_sim_battle_ai_hero_clash
         COMMAND alamo_sim_battle_ai_tests --hero-clash
         TIMEOUT 600)
+    # [port] fleet groups, phase 1 (docs/DECISIONS.md "Fleet groups: exception to the current focus"): commands, the group
+    # logic and a locked group's block move in a space battle; the --fleet mode is the worker-count check of that battle.
+    add_executable(alamo_sim_fleet_groups_tests sim/tests/test_fleet_groups.cpp)
+    target_link_libraries(alamo_sim_fleet_groups_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)
+    target_compile_definitions(alamo_sim_fleet_groups_tests PRIVATE "ALAMO_SIM_TESTDATA=\"${CMAKE_CURRENT_SOURCE_DIR}/sim/testdata\"")
+    add_test(NAME alamo_sim_fleet_groups_tests COMMAND alamo_sim_fleet_groups_tests)
+    set_tests_properties(alamo_sim_fleet_groups_tests PROPERTIES TIMEOUT 600)
+    alamo_add_worker_count_check(alamo_sim_fleet_groups_battle
+        COMMAND alamo_sim_fleet_groups_tests --fleet
+        TIMEOUT 600)
     # --- L1 systems (owner: tactical-systems agent): special weapons / TSW / hyperspace / engines in a campaign battle ---
     add_executable(alamo_sim_l1_tests sim/tests/test_battle_l1.cpp)
     target_link_libraries(alamo_sim_l1_tests PRIVATE alamo_sim alamo_vfs alamo_test_support)

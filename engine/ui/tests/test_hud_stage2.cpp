@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/commands/fleet_group.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/camera.hpp"
 #include "alamo/ui/hotkeys.hpp"
@@ -408,6 +409,32 @@ void test_hotkeys() {
     disp.update(keys_frame({'K'}, false, false, true), d, sel, 14.1, cmds, evs);
     CHECK2(evs.size() == e0 + 2 && evs[e0].slot == hk::kGuard && evs[e0 + 1].kind == HotkeyKind::Ability &&
            evs[e0 + 1].slot == hotkey_slot("Ability_LuckyShot"));
+    // [port] fleet groups: N / U / O do nothing while off; on, they send the fleet group commands for a non-empty selection
+    // (O locks unless the selection's groups are all locked, then unlocks).
+    {
+        HotkeyDispatcher fd;
+        std::vector<commands::EventData> fc;
+        std::vector<HotkeyEvent> fe;
+        fd.update(keys_frame({'N'}), d, sel, 20.0, fc, fe);
+        CHECK2(fc.empty() && fe.empty());
+        fd.set_fleet_groups(true, false);
+        fd.update(keys_frame({'N'}), d, {}, 20.1, fc, fe);
+        CHECK2(fc.empty());
+        fd.update(keys_frame({'N'}), d, sel, 20.2, fc, fe);
+        fd.update(keys_frame({'U'}), d, sel, 20.3, fc, fe);
+        fd.update(keys_frame({'O'}), d, sel, 20.4, fc, fe);
+        fd.set_fleet_groups(true, true);
+        fd.update(keys_frame({'O'}), d, sel, 20.5, fc, fe);
+        const auto fg = [](commands::FleetGroupOp o, bool locked) {
+            commands::FleetGroupCommand c;
+            c.op = o;
+            c.locked = locked;
+            return commands::fleet_group_event(c);
+        };
+        using FO = commands::FleetGroupOp;
+        CHECK2(fc.size() == 4 && fc[0] == fg(FO::Create, true) && fc[1] == fg(FO::Dissolve, true) && fc[2] == fg(FO::SetLock, true) &&
+               fc[3] == fg(FO::SetLock, false) && fe.empty());
+    }
     // P1 Bindings follow the table.
     Bindings b;
     t.apply_to_bindings(b);
