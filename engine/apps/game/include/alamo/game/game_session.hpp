@@ -304,6 +304,13 @@ public:
     bool save(SaveFile& out, const SaveMeta& meta, std::string* err = nullptr);
     // The description fields of this session now (name and wall-clock time from the caller; title = the campaign name).
     SaveMeta save_meta(std::string name, int64_t saved_at) const;
+    // [port: Gabriel] the playthrough this session's saves belong to (SaveMeta::playthrough / playthrough_started): the
+    // host sets a new one for a new game; load_game sets the loaded save's.
+    void set_playthrough(std::string id, int64_t started) {
+        playthrough_ = std::move(id);
+        playthrough_started_ = started;
+    }
+    const std::string& playthrough() const { return playthrough_; }
     // The SessionSpec a save was written with (false + *err: no session chunk, not an alamo_game save, bad options).
     // Tests' in-memory skirmish maps (skirmish_map_data) are not saved: the caller sets them again.
     static bool spec_from_save(const SaveFile& save, SessionSpec& out, std::string* err = nullptr);
@@ -368,6 +375,8 @@ private:
     // N1 / t09 save / load.
     bool loading_ = false;  // start() runs for start_from_save (no skirmish opening order)
     bool loaded_ = false;
+    std::string playthrough_;           // [port: Gabriel] presentation only, never read by the sim
+    int64_t playthrough_started_ = 0;
     commands::SavePoint load_point_;
     sim::LoadReport load_report_;
     std::vector<std::string> ai_types_;  // per player: the galactic AI type ("" = none), for the descriptor

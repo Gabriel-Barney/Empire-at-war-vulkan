@@ -1832,6 +1832,16 @@ void save_files_test() {
     sk.game_seconds = 125;
     CHECK(game::save_label(sk) == "s  -  Skirmish _MP_SPACE_KUAT, 2:05");
     CHECK(!game::decode_description("just a line", back));
+    // [port: Gabriel] the saved games tree: faction emblem and playthrough round-trip; a save from before them has none.
+    CHECK(back.faction_icon.empty() && back.playthrough.empty() && back.playthrough_started == 0);
+    m.faction_icon = "i_icon_empire.tga";
+    m.playthrough = game::new_playthrough_id(1790000000);
+    m.playthrough_started = 1789990000;
+    CHECK(m.playthrough.rfind("6ab13b80-", 0) == 0 && m.playthrough.size() == 17);
+    CHECK(game::decode_description(game::encode_description(m), back));
+    CHECK(back.faction_icon == m.faction_icon && back.playthrough == m.playthrough && back.playthrough_started == 1789990000);
+    CHECK(game::save_row_label(m).rfind("Week 3  -  Week 3, ", 0) == 0);
+    CHECK(game::save_row_label(sk) == "s  -  2:05");
 
     // Listing: newest first, then by name (case-insensitive); unreadable files listed; other extensions ignored.
     const fs::path dir = fs::temp_directory_path() / "alamo_game_save_files_test";

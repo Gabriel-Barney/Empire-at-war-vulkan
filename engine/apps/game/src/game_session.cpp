@@ -1068,12 +1068,17 @@ SaveMeta GameSession::save_meta(std::string name, int64_t saved_at) const {
     m.campaign = campaign ? spec_.campaign : spec_.skirmish_map;
     m.difficulty = std::clamp(spec_.difficulty, 0, 2);
     m.saved_at = saved_at;
+    m.playthrough = playthrough_;
+    m.playthrough_started = playthrough_started_;
     if (host_) m.tick = host_->frame();
     if (const galactic::GalacticSim* g = galaxy()) {
         const int32_t lp = local_player_;
         if (lp >= 0 && static_cast<size_t>(lp) < g->players().size()) {
             const uint32_t f = g->players()[static_cast<size_t>(lp)].faction;
-            if (f < g->rules().factions.size()) m.faction = g->rules().factions[f].name;
+            if (f < g->rules().factions.size()) {
+                m.faction = g->rules().factions[f].name;
+                m.faction_icon = g->rules().factions[f].icon;
+            }
         }
         const int32_t frame = std::max(g->frame(), 0);
         m.game_seconds = static_cast<uint64_t>(frame) / 30u;
@@ -1212,6 +1217,7 @@ std::unique_ptr<GameSession> load_game(const GameData& data, jobs::JobSystem& js
         if (err) *err = e;
         return nullptr;  // the half-loaded session is discarded here
     }
+    if (SaveMeta m; decode_description(f.description, m)) s->set_playthrough(std::move(m.playthrough), m.playthrough_started);
     if (file_out) *file_out = std::move(f);
     return s;
 }
