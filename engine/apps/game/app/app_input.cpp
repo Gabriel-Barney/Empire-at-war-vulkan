@@ -860,7 +860,7 @@ void App::move_ack(const ui::MoveAck& a) {
 ui::CameraTuning App::option_tuning(ui::CameraTuning t) const {
     if (!live_input()) return t;  // smoke / replay runs: the defaults (machine and profile independent)
     t.scroll_speed_option = ui::scroll_speed_option_from_slider(gameplay_.scroll_speed);  // IDC_SCROLL_SPEED_SLIDER
-    t.windowed = true;  // [port] the game window is always windowed (no exclusive full screen)
+    t.windowed = windowed_;  // UI5 t01: Options > Video > Windowed (edge scrolling, P1_CAMERA_INPUT)
     t.absolute_scrolling = gameplay_.absolute_scroll;
     t.right_button_scroll = gameplay_.right_button_scroll;
     t.both_buttons_rotate = gameplay_.both_buttons_rotate;
@@ -958,25 +958,32 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 audio_.set_volumes(a.audio.master, a.audio.sfx, a.audio.speech, a.audio.music);
                 save_game_options();
                 break;
-            case K::ApplyVideo:  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
+            case K::ApplyVideo: {  // the chosen resolution resizes the window (the resize path recreates swapchain + targets)
                 ++video_applies_;
                 hardware_mouse_ = a.video.hardware_mouse;
+                const bool window_changed = a.video.windowed != windowed_;  // UI5 t01
+                windowed_ = a.video.windowed;
                 vsync_mode_ = a.video.vsync_mode;
                 set_present_mode(!a.video.vsync ? rhi::PresentMode::Immediate
                                  : vsync_mode_ == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo);
                 opt_.frame_cap = a.video.frame_cap;
-                if (a.video.resolution >= 0 && static_cast<size_t>(a.video.resolution) < display_modes_.size()) {
+                if (a.video.resolution >= 0 && static_cast<size_t>(a.video.resolution) < shown_modes_.size()) {
                     // The list item is a full mode: the window size and the monitor's refresh rate (game_display.hpp).
-                    const DisplayMode m = display_modes_[static_cast<size_t>(a.video.resolution)];
-                    if (m.width != win_.width() || m.height != win_.height() || (m.hz && m.hz != refresh_hz_)) {
+                    const DisplayMode m = shown_modes_[static_cast<size_t>(a.video.resolution)];
+                    if (window_changed || m.width != win_.width() || m.height != win_.height() || (m.hz && m.hz != refresh_hz_)) {
                         std::string line;
-                        apply_display_mode(win_.native_handle(), m, &line);
+                        apply_display_mode(win_.native_handle(), m, &line, windowed_);
                         std::printf("video: %s\n", line.c_str());
                     }
+                } else if (window_changed) {
+                    std::string line;
+                    apply_display_mode(win_.native_handle(), DisplayMode{win_.width(), win_.height(), refresh_hz_}, &line, windowed_);
+                    std::printf("video: %s\n", line.c_str());
                 }
+                if (window_changed) apply_camera_tuning();
                 update_display_rate(true);
                 // t12: tried now, stored on the Yes answer of "keep these settings?" (or as the old mode on No / timeout).
-                if (update_video_profile(video_profile_, a.video, display_modes_)) {
+                if (update_video_profile(video_profile_, a.video, shown_modes_)) {
                     // t11 [M]: a quality level picked in the Detail Level list is a preset for the seven advanced detail options.
                     if (a.video.detail_picked) {
                         adv_video_ = detail_preset(adv_video_, video_profile_.detail);
@@ -987,6 +994,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                     save_video_options();
                 }
                 break;
+            }
             case K::ApplyAdvancedVideo:  // AO goes into the next frame's RecordOptions; anisotropy latches next frame
                 adv_video_ = a.advanced;
                 gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));

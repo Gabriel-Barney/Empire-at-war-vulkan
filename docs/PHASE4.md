@@ -1007,3 +1007,12 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   skirmish the skirmish dialog, any other battle the Battle pair (the retail selector is an RE gap, backlog); Esc in
   IDD_SELECT_TUTORIAL_DIALOG goes to the main menu like its Cancel; movies skip on Esc / Space only (UI.md §4.2), not on
   a mouse click.
+  **t01** Windowed unchecked = full screen [port: borderless, no VK_EXT_full_screen_exclusive]: the monitor takes the
+  chosen mode's resolution and rate (ChangeDisplaySettingsEx CDS_FULLSCREEN, restored at exit) and the window covers it
+  without a frame; checked = the framed window as before. Windowed / Widescreen are stored in video_options.txt (the port
+  still starts windowed without a profile); the camera's windowed flag (edge scrolling, P1_CAMERA_INPUT) follows it.
+  Widescreen [port; the retail meaning is an RE gap]: off lists only modes no wider than 4:3 (5:4, 4:3) in
+  IDC_RESOLUTION_LIST (all modes when none is that narrow); on, every mode. **t02** Hardware Mouse: the pointer the
+  context picks (same art, animation frame and hot spot as the drawn cursor) becomes the Windows class cursor
+  (CreateIconIndirect from the decoded TGA, cached per frame texture; the arrow when a frame cannot be made); off: the
+  drawn cursor. Movie subtitles: no subtitle text source is known (AUDIO.md §3.4 [L]) - RE gap, the option is only stored.

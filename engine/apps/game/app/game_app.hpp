@@ -429,7 +429,9 @@ public:
     uint64_t pause_toggles_ = 0;
     ui::CameraSettings camera_;         // FOVs / queue modifier from the options (camera and controls dialog)
     bool tactical_fov_set_ = false;     // the player changed the tactical FOV (else TacticalCameras.xml's applies)
-    std::vector<DisplayMode> display_modes_;  // the video options' resolution list (primary display, game_display.hpp)
+    std::vector<DisplayMode> display_modes_;  // the display's modes (primary display, game_display.hpp)
+    std::vector<DisplayMode> shown_modes_;    // UI5 t01: the video options' resolution list (video_list_modes; Widescreen)
+    bool windowed_ = true;                    // UI5 t01: Options > Video > Windowed (false: full screen)
     uint64_t video_applies_ = 0;
     bool menu_dialog_open() const;  // the in-game menu or one of its option / save / load / quit dialogs is open
     uint32_t reinforce_unit_ = 0;       // reinforcement chosen on the pad, waiting for its drop point (0 = none)
@@ -604,6 +606,10 @@ public:
     void show_auto_resolve_end(const galactic::ConflictLogEntry& e);  // ui ask 10: the battle-end screen after an auto-resolve
     void build_panels(std::vector<ui::HudDrawList>& lists);
     void update_cursor(ui::HudDrawList& dl);
+    // UI5 t02: with Hardware Mouse on, the current pointer's frame becomes the Windows cursor (same art, hot spot and
+    // context cursors as the drawn one); off: the arrow class cursor (the drawn cursor hides it).
+    void sync_os_cursor();
+    std::map<std::string, void*> hw_cursors_;  // frame texture -> HCURSOR (null: could not be made; the arrow is used)
     void fill_cursor_hover(ui::CursorContext& c);  // ui1 t01: hovered object -> cursor context (battle)
     void update_radar();
 

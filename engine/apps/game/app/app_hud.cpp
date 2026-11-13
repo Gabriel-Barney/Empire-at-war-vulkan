@@ -1,6 +1,8 @@
 // alamo_game App: galactic / tactical HUD frame building (split from game_main.cpp).
 #include "game_app.hpp"
 
+#include "alamo/assets/texture.hpp"
+
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ HUD frames
@@ -988,6 +990,39 @@ void App::hud_hit_dump(const char* where, int32_t component, int32_t px, int32_t
     hud_hit_last_ = component;
     const char* name = component >= 0 && static_cast<size_t>(component) < ui_.components.size() ? ui_.components[static_cast<size_t>(component)].name.c_str() : "-";
     std::printf("hud hit (%s): %d %s at %d,%d\n", where, component, name, px, py);
+}
+
+void App::sync_os_cursor() {
+    void* want = nullptr;
+    if (hardware_mouse_ && cursor_ok_ && !opt_.hidden) {
+        const std::string tex = cursor_.texture(now_s_);
+        const ui::CursorDef* def = cursor_.current_def();
+        if (!tex.empty() && def) {
+            auto it = hw_cursors_.find(tex);
+            if (it == hw_cursors_.end()) {
+                void* made = nullptr;
+                std::vector<uint8_t> bytes;
+                for (const std::string& c : assets::texture_candidates(tex)) {
+                    if (!data_.files->read(c, bytes)) continue;
+                    assets::TextureAsset t;
+                    if (assets::decode_texture(std::move(bytes), t) && !t.levels.empty() &&
+                        (t.format == assets::TextureFormat::BGRA8 || t.format == assets::TextureFormat::RGBA8)) {
+                        const std::span<const uint8_t> px = t.level_bytes(t.levels[0]);
+                        std::vector<uint8_t> bgra(px.begin(), px.end());
+                        if (t.format == assets::TextureFormat::RGBA8)
+                            for (size_t k = 0; k + 3 < bgra.size(); k += 4) std::swap(bgra[k], bgra[k + 2]);
+                        if (bgra.size() >= static_cast<size_t>(t.width) * t.height * 4u)
+                            made = create_os_cursor(bgra.data(), t.width, t.height, def->hot_x, def->hot_y);
+                    }
+                    break;
+                }
+                if (!made) std::printf("hardware mouse: no cursor from %s (arrow)\n", tex.c_str());
+                it = hw_cursors_.emplace(tex, made).first;
+            }
+            want = it->second;
+        }
+    }
+    set_os_cursor_image(win_.native_handle(), want);
 }
 
 }  // namespace alamo_game_app
