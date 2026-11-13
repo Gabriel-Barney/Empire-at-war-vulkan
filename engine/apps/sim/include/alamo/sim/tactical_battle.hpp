@@ -72,6 +72,7 @@
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/sim/battle_catalog.hpp"
+#include "alamo/sim/fleet_groups.hpp"  // [port] fleet groups
 #include "alamo/sim/game_modes.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
@@ -519,6 +520,27 @@ public:
     commands::RejectReason order_move_to_object(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units,
                                                 objects::ObjectId target, SimRng& rng, bool attack_move = false, bool queued = false);
     commands::RejectReason order_stop(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units);
+    // ---- [port] Fleet groups, phase 1 (sim/fleet_groups.hpp; docs/DECISIONS.md "Fleet groups: exception to the current
+    // focus"). Off by default: while off, fleet_group_command is NotAllowed, fleet_order_move passes every unit through
+    // (`rest`) and nothing reaches the CRC or a save. The host enables it before the first tick (CampaignBattles).
+    void enable_fleet_groups(bool on) { fleet_on_ = on; }
+    bool fleet_groups_enabled() const { return fleet_on_; }
+    const FleetGroups& fleet_groups() const { return fleet_; }
+    // A kFleetGroupSubtype payload for `player`, applied to the player's live movable battle units in `selection`.
+    commands::RejectReason fleet_group_command(TacticalMode& mode, uint8_t player, std::span<const uint8_t> data,
+                                               std::span<const objects::ObjectId> selection);
+    // A human move order: the members of `player`'s locked groups among `units` get one order_move each to their slot (in
+    // group order, ascending id); the other units are returned in `rest` (selection order) for the caller's normal move.
+    // Queued moves are not expanded (all of `units` goes to `rest`). `moved` = how many locked groups were ordered.
+    void fleet_order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y, SimRng& rng,
+                          float facing_deg, bool attack_move, bool queued, uint8_t move_flags, std::vector<objects::ObjectId>& rest,
+                          uint32_t& moved);
+    // Any other order to these units stops their locked group's running move.
+    void fleet_interrupt(std::span<const objects::ObjectId> units) {
+        if (fleet_on_) fleet_.interrupt(units);
+    }
+    void write_fleet_groups(ByteWriter& w) const { fleet_.write(w); }
+    bool read_fleet_groups(ByteReader& r) { return fleet_.read(r); }
     // The target's first targetable hard point of HardPointType `type` (Attack ref2 = 1 + type), -1 when none.
     int32_t first_hardpoint_of_type(objects::ObjectId target, int32_t type) const;
     // True when `player`'s units are left to commands (BattleConfig::skip_human_units and a human galactic player).
@@ -1608,6 +1630,11 @@ private:
     std::vector<OrderQueue> queues_;  // ascending id, never empty orders
     uint32_t queue_group_ = 0;        // command serial
     bool queue_used_ = false;         // some order was queued (CRC section on from then)
+    // [port] fleet groups (fleet_groups.hpp): CRC section on once a group was made; never saved in state_io (own chunk).
+    FleetGroups fleet_;
+    bool fleet_on_ = false;
+    FleetUnitInfo fleet_unit_info(const objects::ObjectStore& store, objects::ObjectId id) const;
+    void fleet_tick(const TacticalMode& mode);  // prune + speed regulation, after apply_speed_factors
     bool order_busy(objects::ObjectId id, const OrderQueue* q) const;
     void clear_queues(std::span<const objects::ObjectId> ids);
     std::vector<objects::ObjectId> enqueue(std::span<const objects::ObjectId> ids, const QueuedOrder& o);  // -> run now

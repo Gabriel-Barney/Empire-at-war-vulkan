@@ -58,6 +58,10 @@ struct CampaignBattleOptions {
     galactic::ConflictConfig conflict;  // human choice (headless default), fight AI-vs-AI battles
     BattleConfig battle;
     bool tactical = true;               // false: every battle is refused -> auto-resolved
+    // [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): off = retail behaviour,
+    // no fleet group command is accepted and no battle.fleet_groups save chunk exists. A save made with it on loads only
+    // in a session with it on (the chunk is expected / unexpected otherwise).
+    bool fleet_groups = false;
     // S10-int: sim-owned animation (sim_anim.hpp, attached to the host separately); battles drive its tactical
     // world (weapon Attack, flinch gate, locomotor Move / Walk, idles, animated fire bones). Null = none.
     SimAnimation* animation = nullptr;

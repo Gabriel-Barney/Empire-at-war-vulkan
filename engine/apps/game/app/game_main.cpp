@@ -555,6 +555,7 @@ int main(int argc, char** argv) {
         else if (a == "--width") opt.width = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10)), opt.size_set = true;
         else if (a == "--height") opt.height = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10)), opt.size_set = true;
         else if (a == "--hidden") opt.hidden = true;
+        else if (a == "--fleet-groups") opt.fleet_groups = true;  // [port] fleet groups (off by default)
         else if (a == "--audio") {
             const std::string m = next();
             if (m == "device") opt.audio = AudioBackendKind::Device;

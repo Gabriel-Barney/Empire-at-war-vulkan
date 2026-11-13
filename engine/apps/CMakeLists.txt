@@ -69,6 +69,7 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
       sim/src/tactical_battle_oi_abilities.cpp  # OI abilities: ability host side (owner: abilities agent)
       sim/src/tactical_battle_save.cpp       # N1 stage 2 (owner: n2-host): battle save / load
       sim/src/tactical_battle_clash.cpp      # s78n t06: land hero clashes (HERO_CLASH.md)
+      sim/src/fleet_groups.cpp               # [port] fleet groups, phase 1 (docs/DECISIONS.md)
       # Hangars / station upgrade / engine-loop requests (docs/re/STATION_HANGARS_SOUND.md): engine/tactical/hangar.
       sim/src/tactical_battle_hangar.cpp
     )

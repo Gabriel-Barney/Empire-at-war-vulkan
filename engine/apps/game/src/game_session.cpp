@@ -6,6 +6,7 @@
 #include <span>
 #include <string_view>
 
+#include "alamo/commands/fleet_group.hpp"
 #include "alamo/game/battle_orders.hpp"
 #include "alamo/game/story_ui.hpp"
 #include "alamo/galactic/campaign.hpp"
@@ -224,6 +225,7 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     bo.conflict.human_choice = galactic::BattleChoice::Fight;  // without ask_battle_choice: every human conflict is fought
     bo.conflict.fight_ai_battles = spec_.attract;  // OI host: the attract demo's AI-vs-AI battle is fought
     bo.battle.max_frames = spec_.battle_max_frames;
+    bo.fleet_groups = spec_.fleet_groups;  // [port] fleet groups (off = retail)
     bo.battle.end_hold_frames = spec_.battle_end_hold_frames;
     bo.battle.order_interval = spec_.battle_order_interval;
     bo.battle.skirmish = spec_.kind == SessionKind::Skirmish;  // SpecialWeaponsAllowed ANDs the hard-point flag
@@ -792,6 +794,12 @@ commands::RejectReason GameSession::port_event(uint8_t player, const commands::E
     }
     if (ev.type() != commands::EventType::PortExtension) return R::Unhandled;
     const uint32_t sub = ev.u("subtype");
+    if (sub == commands::kFleetGroupSubtype) {  // [port] fleet groups: TacticalBattle::fleet_group_command (NotAllowed while off)
+        sim::TacticalBattle* battle = battles_ ? battles_->battle() : nullptr;
+        sim::TacticalMode* tm = host_ ? host_->tactical() : nullptr;
+        if (!battle || !tm) return R::NotAllowed;
+        return battle->fleet_group_command(*tm, player, ev.bytes_view("data"), host_->selection(player));
+    }
     if (sub == kBattleChoiceSubtype) {  // the pending-battle choice (local player, Vote state only)
         const std::span<const uint8_t> b = ev.bytes_view("data");
         if (!local || b.size() != 1) return R::NotAllowed;
@@ -951,6 +959,7 @@ void GameSession::describe_session() {
     d.set_option("spec.galactic_ai", flag(spec_.galactic_ai));
     d.set_option("spec.story", flag(spec_.story));
     d.set_option("spec.ask_battle_choice", flag(spec_.ask_battle_choice));
+    if (spec_.fleet_groups) d.set_option("spec.fleet_groups", flag(true));  // [port] fleet groups: written only when on
     if (!campaign) {
         const SkirmishSetup& s = spec_.skirmish;
         d.set_option("skirmish.human_faction", s.human_faction);
@@ -1119,6 +1128,7 @@ bool GameSession::spec_from_save(const SaveFile& save, SessionSpec& out, std::st
     s.galactic_ai = o.boolean("spec.galactic_ai");
     s.story = o.boolean("spec.story");
     s.ask_battle_choice = o.boolean("spec.ask_battle_choice");
+    s.fleet_groups = o.has("spec.fleet_groups") && o.boolean("spec.fleet_groups");  // [port] absent = off
     if (s.kind == SessionKind::Skirmish) {
         s.skirmish.human_faction = std::string(o.text("skirmish.human_faction"));
         s.skirmish.ai_faction = std::string(o.text("skirmish.ai_faction"));

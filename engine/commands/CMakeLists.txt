@@ -5,6 +5,7 @@
 add_library(alamo_commands STATIC
   src/event_types.cpp
   src/command.cpp
+  src/fleet_group.cpp  # [port] fleet groups (PortExtension subtype "FG")
   src/events.cpp
   src/scheduler.cpp
   src/recording.cpp

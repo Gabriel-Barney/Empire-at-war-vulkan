@@ -922,6 +922,19 @@ void App::battle_input() {
         hud_hit_dump("tactical", ui_.tactical_hud.hit_test(px, py), px, py);
     }
     std::vector<ui::HotkeyEvent> hk;
+    {  // [port] fleet groups: the lock hotkey locks unless every fleet group of the selection is locked already
+        const sim::CampaignBattles* cb = session_ ? session_->battles() : nullptr;
+        const sim::TacticalBattle* tb = cb ? cb->battle() : nullptr;
+        const bool on = session_ && session_->spec().fleet_groups && tb && tb->fleet_groups_enabled();
+        bool any = false, all_locked = true;
+        if (on)
+            for (const uint32_t id : orders_.selection())
+                if (const sim::FleetGroup* g = tb->fleet_groups().group_of(static_cast<objects::ObjectId>(id))) {
+                    any = true;
+                    all_locked = all_locked && g->locked;
+                }
+        hotkeys_.set_fleet_groups(on, any && all_locked);
+    }
     hotkeys_.update(input_, ui_.hotkeys, orders_.selection(), now_s_, cmds, hk);
     // Camera hotkeys (P1): group / selection / home focus points from the battle snapshot.
     const render::InterpolatedFrame& fr = bview_.frame();
@@ -1079,6 +1092,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;
                 s.battle_end_hold_frames = kBattleEndHoldFrames;
+                s.fleet_groups = opt_.fleet_groups;  // [port] fleet groups (--fleet-groups)
                 if (!start_session(s)) {
                     notes_.push_back("campaign " + a.campaign + " did not start");
                     open_main_menu();
@@ -1103,6 +1117,7 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;
                 s.battle_end_hold_frames = kBattleEndHoldFrames;
+                s.fleet_groups = opt_.fleet_groups;  // [port] fleet groups (--fleet-groups)
                 open_buy_units(s);  // the skirmish starts from the buy-units screen
                 break;
             }

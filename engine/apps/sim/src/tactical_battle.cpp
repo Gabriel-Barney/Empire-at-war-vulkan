@@ -2628,6 +2628,69 @@ cmd::RejectReason TacticalBattle::order_stop(TacticalMode& mode, uint8_t player,
     return R::None;
 }
 
+// ---- [port] fleet groups (fleet_groups.hpp; docs/DECISIONS.md "Fleet groups: exception to the current focus") ----
+
+FleetUnitInfo TacticalBattle::fleet_unit_info(const objects::ObjectStore& store, objects::ObjectId id) const {
+    FleetUnitInfo out;
+    const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
+    if (it == units_.end() || it->id != id || !it->alive || it->retreated || !it->movable || !movement_ || !movement_->has_unit(id))
+        return out;
+    const mv::UnitView v = movement_->view(id);
+    out.valid = true;
+    out.owner = store.owner(it->h);
+    out.pos = v.pos;
+    out.yaw_deg = v.yaw;
+    out.max_speed = v.max_speed;
+    out.has_goal = v.has_goal;
+    return out;
+}
+
+cmd::RejectReason TacticalBattle::fleet_group_command(TacticalMode& mode, uint8_t player, std::span<const uint8_t> data,
+                                                      std::span<const objects::ObjectId> selection) {
+    using R = cmd::RejectReason;
+    if (!fleet_on_ || finished_ || !movement_) return R::NotAllowed;
+    const std::optional<cmd::FleetGroupCommand> c = cmd::parse_fleet_group(data);
+    if (!c) return R::Malformed;
+    std::vector<objects::ObjectId> ids;
+    for (const Unit* u : owned_units<Unit>(mode.primary(), player, selection, [this](objects::ObjectId id) { return unit_by_id(id); }, true))
+        ids.push_back(u->id);
+    const objects::ObjectStore& st = mode.primary();
+    return fleet_.apply(player, *c, ids, [this, &st](objects::ObjectId id) { return fleet_unit_info(st, id); });
+}
+
+void TacticalBattle::fleet_order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y,
+                                      SimRng& rng, float facing_deg, bool attack_move, bool queued, uint8_t move_flags,
+                                      std::vector<objects::ObjectId>& rest, uint32_t& moved) {
+    moved = 0;
+    rest.assign(units.begin(), units.end());
+    if (!fleet_on_ || finished_ || !movement_ || queued || !std::isfinite(x) || !std::isfinite(y)) return;
+    const objects::ObjectStore& st = mode.primary();
+    const FleetGroups::InfoFn info = [this, &st](objects::ObjectId id) { return fleet_unit_info(st, id); };
+    std::vector<FleetGroups::LockedMove> moves;
+    fleet_.plan_move(player, units, {x, y}, facing_deg, info, moves, rest);
+    for (const FleetGroups::LockedMove& m : moves) {
+        bool any = false;
+        for (const FleetGroups::MemberGoal& g : m.goals) {
+            const objects::ObjectId one[1] = {g.id};
+            if (order_move(mode, player, one, g.goal.x, g.goal.y, rng, m.facing_deg, attack_move, false, move_flags, false) ==
+                cmd::RejectReason::None)
+                any = true;
+        }
+        if (!any) continue;
+        fleet_.start_move(m, info);
+        ++moved;
+    }
+}
+
+void TacticalBattle::fleet_tick(const TacticalMode& mode) {
+    if (!fleet_on_ || !fleet_.used() || !movement_) return;
+    const objects::ObjectStore& st = mode.primary();
+    const FleetGroups::InfoFn info = [this, &st](objects::ObjectId id) { return fleet_unit_info(st, id); };
+    fleet_.prune(info);
+    if (!fleet_.any_moving()) return;
+    fleet_.regulate(info, [this](objects::ObjectId id, float s) { movement_->set_speed_factor(id, movement_->speed_factor(id) * s); });
+}
+
 // ---- P host (owner: game host agent): human reinforcements (Reinforce, COMMANDS.md id 12) ------------------------------
 
 float TacticalBattle::population_used(int32_t player) const {
@@ -5554,6 +5617,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     attack_block_service(mode, rng);  // s78n t20 stage A: serial, ascending mover, before the collision feed and the movement tick
     // 4. speed factors, movement, positions into the store and the trees, locomotor animation.
     apply_speed_factors();
+    fleet_tick(mode);  // [port] fleet groups: slowest-member cap and straggler wait (no-op while no group exists)
     feed_collision_info(store);  // s78n t20: targets / ranges / hero clashes for the land collision decisions
     fighter_sync();  // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
     feed_attack_targets(store);
@@ -6143,6 +6207,7 @@ void TacticalBattle::hash(StateHasher& h) const {
     h.u32(0);  // empty DAMAGE_TRACKING store (same layout without engine/ai)
 #endif
     if (queue_used_) hash_queues(h);  // [port: Gabriel] order queues (absent until an order was queued)
+    if (fleet_.used()) fleet_.hash(h);  // [port] fleet groups (absent until a group was made; never with the switch off)
     s4_hash(h);                       // S4: garrisons / capture points (absent while none exist)
     if (bt_used_) bt_hash(h);         // battle host: pad units, HIJACK reserves, lead object, attrition (absent until used)
     if (!fformations_.empty()) {      // S7 t22: fighter formations (absent while none)

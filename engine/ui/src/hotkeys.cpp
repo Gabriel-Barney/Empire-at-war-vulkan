@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "alamo/commands/fleet_group.hpp"
+
 namespace alamo::ui {
 
 namespace {
@@ -112,6 +114,10 @@ constexpr HotkeySlotInfo kSlots[kHotkeySlots] = {
     // 160, 161 [port: Gabriel] keyboard zoom (was Home / End in ui::Bindings, which collided with CameraHome / CameraReset):
     // = and - on the main keyboard (Alt+= / Alt+- stay Force Sight / Radioactive Contaminate: exact modifiers).
     {"CameraZoomIn", HK::Camera, {kVkOemPlus, N}}, {"CameraZoomOut", HK::Camera, {kVkOemMinus, N}},
+    // 162..164 [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): N new group, U ungroup,
+    // O lock / unlock (G and L are Guard and Waypoint).
+    {"FleetGroupCreate", HK::Order, {K('N'), N}}, {"FleetGroupUngroup", HK::Order, {K('U'), N}},
+    {"FleetGroupLock", HK::Order, {K('O'), N}},
 };
 
 }  // namespace
@@ -398,6 +404,16 @@ void HotkeyDispatcher::update(const InputState& in, const HotkeyTable& table, st
         }
         if (s == hk::kRetreat) {
             cmds.push_back(commands::ev::retreat(true));
+            continue;
+        }
+        if (s == hk::kFleetCreate || s == hk::kFleetUngroup || s == hk::kFleetLock) {  // [port] fleet groups
+            if (!fleet_on_ || selection.empty()) continue;
+            commands::FleetGroupCommand c;
+            c.op = s == hk::kFleetCreate ? commands::FleetGroupOp::Create
+                 : s == hk::kFleetUngroup ? commands::FleetGroupOp::Dissolve
+                                          : commands::FleetGroupOp::SetLock;
+            c.locked = !fleet_locked_;
+            cmds.push_back(commands::fleet_group_event(c));
             continue;
         }
         events.push_back(e);

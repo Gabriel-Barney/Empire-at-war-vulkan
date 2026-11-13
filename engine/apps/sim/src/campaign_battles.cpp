@@ -498,6 +498,15 @@ void CampaignBattles::register_battle_chunks() {
                get_section(r, [this](ByteReader& sub) { return read_battle_level(sub); }) && r.done();
     };
     host_->add_save_participant(std::move(st));
+    if (battle_->fleet_groups_enabled()) {  // [port] fleet groups: only with the switch on (no chunk otherwise)
+        SaveParticipant fg;
+        fg.name = "battle.fleet_groups";
+        fg.write = [this](ByteWriter& w) {
+            if (battle_) battle_->write_fleet_groups(w);
+        };
+        fg.read = [this](ByteReader& r) { return battle_ && battle_->read_fleet_groups(r) && r.done(); };
+        host_->add_save_participant(std::move(fg));
+    }
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     if (ai_) {
         SaveParticipant ap;
@@ -516,6 +525,7 @@ void CampaignBattles::remove_battle_chunks() {
         host_->remove_save_participant(TacticalBattle::save_part_name(static_cast<TacticalBattle::SavePart>(p)));
     host_->remove_save_participant("battle.ai");
     host_->remove_save_participant("battle.types");
+    host_->remove_save_participant("battle.fleet_groups");
 }
 
 // battle.state, second section: this object's battle-level state.
@@ -786,6 +796,7 @@ void CampaignBattles::push_battle(SimHost& host) {
     battle_->set_weather_data(opt_.weather);       // L1 systems
     battle_->set_hero_clash_data(opt_.hero_clash);  // s78n t06
     battle_->set_l1_factions(opt_.l1_factions);    // L1 systems
+    battle_->enable_fleet_groups(opt_.fleet_groups);  // [port] fleet groups (off by default)
     battle_->set_arrival_hold([this] { return lk_.presentation.hyperspace_hold; });  // story t12 (P9 == 2)
     // AI_GALACTIC_TOKENS §9.4: the battle planet's persisted built objects (the battle applies the gate: not in a skirmish,
     // not the sandbox battle). A battle rebuilt by a save load does not recreate them (the save has the battle's objects).

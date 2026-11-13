@@ -549,7 +549,7 @@ void test_controls() {
     CHECK(pause_event(true).type() == commands::EventType::PortExtension && pause_event(true).u("subtype") == kPortPauseSubtype);
     {
         HotkeyTable table;
-        CHECK(table.binding(hk::kPause).key == vk::kPause && kHotkeySlots == 162 && hotkey_slot("Pause") == hk::kPause);
+        CHECK(table.binding(hk::kPause).key == vk::kPause && kHotkeySlots == 165 && hotkey_slot("Pause") == hk::kPause);
         HotkeyDispatcher disp;
         InputState in;
         std::vector<commands::EventData> cmds;

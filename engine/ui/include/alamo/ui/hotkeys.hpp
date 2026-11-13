@@ -40,7 +40,7 @@ namespace alamo::ui {
 // wingmen -> Alt+', Alt+S force sight -> Alt+=, Alt+D drain life -> Alt+\, Alt+A FoC full salvo -> Alt+. An original-format
 // profile is migrated on load (HotkeyTable::load).
 inline constexpr uint16_t kOriginalHotkeySlots = 153;
-inline constexpr uint16_t kHotkeySlots = 162;
+inline constexpr uint16_t kHotkeySlots = 165;
 
 enum class HotkeyMod : uint8_t { None = 0, Shift = 1, Ctrl = 2, Alt = 3 };  // profile encoding
 
@@ -83,7 +83,9 @@ inline constexpr uint16_t kSelectAll = 10, kSelectLike = 11, kNextUnit = 12, kPr
                           kAssignBase = 123, kAddBase = 133, kThirdBase = 143,
                           // [port: Gabriel]
                           kPause = 153, kYawLeft = 154, kYawRight = 155, kPitchUp = 156, kPitchDown = 157, kRollLeft = 158,
-                          kRollRight = 159, kZoomIn = 160, kZoomOut = 161;
+                          kRollRight = 159, kZoomIn = 160, kZoomOut = 161,
+                          // [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus")
+                          kFleetCreate = 162, kFleetUngroup = 163, kFleetLock = 164;
 }  // namespace hk
 
 // Profile values (name -> integer), e.g. a registry / ini abstraction owned by the host.
@@ -137,9 +139,17 @@ public:
     // with the sim (e.g. after a HUD pause button).
     void set_paused(bool p) { paused_ = p; }
     bool paused() const { return paused_; }
+    // [port] fleet groups: while `on`, FleetGroupCreate / Ungroup / Lock send fleet group commands (commands/fleet_group.hpp)
+    // for a non-empty selection; Lock sends SetLock(!selection_locked). Off (the default): those slots do nothing. The host
+    // sets it every frame (`selection_locked` = every fleet group of the selection is locked).
+    void set_fleet_groups(bool on, bool selection_locked) {
+        fleet_on_ = on;
+        fleet_locked_ = selection_locked;
+    }
 
 private:
     bool paused_ = false;
+    bool fleet_on_ = false, fleet_locked_ = false;
     int8_t last_group_ = -1;
     double last_recall_ = -1e30;
     std::vector<uint16_t> fired_;

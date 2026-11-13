@@ -97,6 +97,9 @@ struct SessionSpec {
     bool game_options = false;
     int32_t start_credits = 6000, start_tech = 1, max_tech = 5, auto_resolve_option = 2;
     bool random_events = false;
+    // [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): off = retail. Copied into
+    // CampaignBattleOptions::fleet_groups; the HUD hotkeys send fleet group commands only while it is on.
+    bool fleet_groups = false;
 };
 
 // The human's answer to a pending conflict as a port-only command (PortExtension subtype kBattleChoiceSubtype, one byte
