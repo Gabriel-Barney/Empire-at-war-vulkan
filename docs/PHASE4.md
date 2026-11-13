@@ -1032,10 +1032,11 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   a mouse click.
   **t01** Windowed unchecked = full screen [port: borderless, no VK_EXT_full_screen_exclusive]: the monitor takes the
   chosen mode's resolution and rate (ChangeDisplaySettingsEx CDS_FULLSCREEN, restored at exit) and the window covers it
-  without a frame; checked = the framed window as before. Windowed / Widescreen are stored in video_options.txt (the port
+  without a frame; checked = the framed window as before. Windowed is stored in video_options.txt (the port
   still starts windowed without a profile); the camera's windowed flag (edge scrolling, P1_CAMERA_INPUT) follows it.
-  Widescreen [port; the retail meaning is an RE gap]: off lists only modes no wider than 4:3 (5:4, 4:3) in
-  IDC_RESOLUTION_LIST (all modes when none is that narrow); on, every mode. **t02** Hardware Mouse: built, then removed
+  Widescreen: built (off listed only modes no wider than 4:3), then removed 2026-11-13 (Gabriel): IDC_WIDESCREEN is
+  hidden, IDC_RESOLUTION_LIST lists every display mode, the HUD's wide layout follows the window's shape (an old
+  `widescreen=` line in video_options.txt is ignored; the retail meaning stays an RE gap). **t02** Hardware Mouse: built, then removed
   2026-11-13 (Gabriel): the checkbox is hidden and the game always draws its own cursor (an old `hardware_mouse=` line
   in video_options.txt is ignored). Movie subtitles: no subtitle text source is known (AUDIO.md §3.4 [L]) - RE gap, the option is only stored.
 - ⬜ **OPEN** · ui4 t01 / t02 / t03 (2026-11-13, galactic HUD; specs `docs/re/FIXPASS_GALACTIC.md` §2, `docs/re/A2K_T01_BUILD_COST_RE.md` §1,

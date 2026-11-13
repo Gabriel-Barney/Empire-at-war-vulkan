@@ -131,7 +131,6 @@ void profile_round_trip() {
     p.frame_cap = ui::kFrameCapDisplay;
     p.window_mode = ui::WindowMode::Borderless;  // UI5 t01 / display mode list
     p.ui_scale = 175;
-    p.widescreen = false;
     p.detail = 40;
     p.gamma = 70;
     p.anti_alias = ui::kAaMsaa4;
@@ -147,22 +146,15 @@ void profile_round_trip() {
     CHECK(!q.vsync && q.vsync_mode == ui::VsyncMode::Mailbox && q.frame_cap == ui::kFrameCapDisplay);
     CHECK(q.detail == 40 && q.gamma == 70 && q.anti_alias == ui::kAaMsaa4);
     CHECK(q.advanced == p.advanced);
-    CHECK(q.window_mode == ui::WindowMode::Borderless && !q.widescreen && q.ui_scale == 175);
-    {  // UI5 t01: Widescreen off lists modes no wider than 4:3; all when none is
+    CHECK(q.window_mode == ui::WindowMode::Borderless && q.ui_scale == 175);
+    {
         const std::vector<game::DisplayMode> all{{1024, 768, 60}, {1280, 1024, 60}, {1920, 1080, 60}, {2560, 1440, 144}};
-        const std::vector<game::DisplayMode> narrow = game::video_list_modes(all, false);
-        CHECK(narrow.size() == 2 && narrow[0].width == 1024 && narrow[1].width == 1280);
-        CHECK(game::video_list_modes(all, true).size() == 4);
-        const std::vector<game::DisplayMode> wide{{1920, 1080, 60}};
-        CHECK(game::video_list_modes(wide, false).size() == 1);
         ui::VideoSettings v;
         v.window_mode = ui::WindowMode::Windowed;
-        v.widescreen = true;
         v.ui_scale = 900;  // clamped to kUiScaleMax
         game::VideoProfile r;
         r.window_mode = ui::WindowMode::Fullscreen;
-        r.widescreen = false;
-        CHECK(game::update_video_profile(r, v, all) && r.window_mode == ui::WindowMode::Windowed && r.widescreen && r.ui_scale == ui::kUiScaleMax);
+        CHECK(game::update_video_profile(r, v, all) && r.window_mode == ui::WindowMode::Windowed && r.ui_scale == ui::kUiScaleMax);
     }
     // A partial file (hand-written) keeps the other values.
     {
