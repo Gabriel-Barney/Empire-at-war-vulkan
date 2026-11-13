@@ -314,6 +314,11 @@ bool black_market_allows(Call& c, int32_t player, std::string_view ability_name,
 // company: the members are the company's views, no member objects). Null when not handled (no galactic sim, not a
 // planet, a type without a galactic role): the caller then creates the object directly.
 objects::ObjectHandle galactic_spawn_unit(Call& c, uint32_t type, int32_t player, objects::ObjectHandle location);
+// bkg3 t04: the container of an object of the galactic sim's store (GalacticSim::container_of: a unit's fleet, a
+// stationary fleet's planet, a landed unit's / structure's planet), for VMs without an ObjectBridge::container_of hook
+// (the galactic AI's plan and free-store VMs: the sim keeps fleet membership outside the store's container links).
+// False when the VM's store is not a galactic sim's store.
+bool galactic_container_of(Call& c, objects::ObjectHandle object, objects::ObjectHandle& out);
 
 // Store tag of a GameObjectWrapper's object (Ud::reserved, LuaVm::Impl::store_tag): 0 the VM's store, 1 the parent
 // mode's store (L1/S4 wave 2b, Get_Parent_Mode_Object).

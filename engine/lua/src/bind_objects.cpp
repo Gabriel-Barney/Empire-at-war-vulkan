@@ -95,6 +95,9 @@ ObjectHandle self_object(Call& c) { return detail::object_handle(*c.self); }
 ObjectHandle container_of(Call& c, ObjectHandle h) {
     const ObjectBridge* b = bridge(c);
     if (b && b->container_of) return b->container_of(h);
+    // bkg3 t04: no hook (the galactic AI's VMs): the galactic sim's own containment, so Get_Planet_Location and
+    // Get_Parent_Object see a unit's fleet and the fleet's planet (the free store's MoveUnit needs the planet).
+    if (ObjectHandle g; detail::galactic_container_of(c, h, g)) return g;
     return store(c)->container(h);
 }
 // Live contained objects: the hook's order, else the store's insertion order.
