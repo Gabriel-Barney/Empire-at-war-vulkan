@@ -587,43 +587,6 @@ void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSetti
     if (!s.heat_distortion) o.heat_amount = 0.0f;
 }
 
-AutoVideoChoice recommend_video(const GpuClass& gpu) {
-    constexpr uint64_t kGiB = 1024ull * 1024ull * 1024ull;
-    AutoVideoChoice c;
-    int32_t aniso = 0;
-    bool soft_shadows = false, ao = false;
-    switch (gpu.kind) {
-        case GpuKind::Discrete:
-            if (gpu.memory_bytes >= 6 * kGiB) { c.quality = 3; c.anti_alias = ui::kAntiAliasChoices[3].value; aniso = 16; soft_shadows = true; ao = true; }
-            else if (gpu.memory_bytes >= 3 * kGiB) { c.quality = 2; c.anti_alias = ui::kAntiAliasChoices[2].value; aniso = 8; soft_shadows = true; }
-            else { c.quality = 1; c.anti_alias = ui::kAntiAliasChoices[1].value; aniso = 4; }
-            break;
-        case GpuKind::Integrated:
-            c.quality = gpu.memory_bytes >= 2 * kGiB ? 1 : 0;
-            c.anti_alias = 0;
-            aniso = 2;
-            break;
-        case GpuKind::Other: break;  // Low, everything off
-    }
-    // Filtering the device cannot do is not recommended: the largest listed level at or under its limit.
-    if (!gpu.sampler_anisotropy) aniso = 0;
-    while (aniso > 0 && static_cast<float>(aniso) > gpu.max_anisotropy) aniso /= 2;
-    if (aniso < 2) aniso = 0;
-    ui::set_advanced_detail(c.advanced, ui::kQualityPresets[c.quality]);
-    c.advanced.soft_shadows = soft_shadows;
-    c.advanced.heat_distortion = true;
-    c.advanced.bloom = true;
-    c.advanced.ambient_occlusion = ao;
-    c.advanced.anisotropy = aniso;
-    return c;
-}
-
-void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c) {
-    p.advanced = c.advanced;
-    p.anti_alias = c.anti_alias;
-    sync_detail(p);
-}
-
 // modc t08: CreateProcessW on GetModuleFileNameW; `args` is already quoted (mod_picker.hpp windows_command_line). The
 // arguments came from main's narrow argv / the file system's narrow paths: the ANSI code page.
 bool relaunch_self(const std::string& args, std::string* err) {

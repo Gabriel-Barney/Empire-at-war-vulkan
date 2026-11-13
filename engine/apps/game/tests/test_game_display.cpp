@@ -326,50 +326,6 @@ void detail_mappings() {
     CHECK(dp.detail == 40);
 }
 
-void auto_detect() {
-    constexpr uint64_t kGiB = 1024ull * 1024ull * 1024ull;
-    const auto gpu = [](game::GpuKind k, uint64_t gib, float aniso) {
-        game::GpuClass g;
-        g.kind = k;
-        g.memory_bytes = gib * kGiB;
-        g.sampler_anisotropy = aniso > 1.0f;
-        g.max_anisotropy = aniso;
-        return g;
-    };
-    using game::GpuKind;
-    const game::AutoVideoChoice big = game::recommend_video(gpu(GpuKind::Discrete, 12, 16.0f));
-    CHECK(big.quality == 3 && big.advanced.anisotropy == 16 && big.advanced.ambient_occlusion && big.anti_alias == ui::kAntiAliasChoices[3].value);
-    CHECK(ui::quality_level(big.advanced) == 3);
-    const game::AutoVideoChoice mid = game::recommend_video(gpu(GpuKind::Discrete, 4, 16.0f));
-    CHECK(mid.quality == 2 && mid.advanced.anisotropy == 8 && !mid.advanced.ambient_occlusion && ui::quality_level(mid.advanced) == 2);
-    const game::AutoVideoChoice small = game::recommend_video(gpu(GpuKind::Discrete, 2, 16.0f));
-    CHECK(small.quality == 1 && small.advanced.anisotropy == 4 && !small.advanced.soft_shadows && ui::quality_level(small.advanced) == 1);
-    CHECK(game::recommend_video(gpu(GpuKind::Integrated, 8, 16.0f)).quality == 1);
-    const game::AutoVideoChoice weak = game::recommend_video(gpu(GpuKind::Integrated, 1, 16.0f));
-    CHECK(weak.quality == 0 && weak.anti_alias == 0 && weak.advanced.anisotropy == 2 && ui::quality_level(weak.advanced) == 0);
-    const game::AutoVideoChoice soft = game::recommend_video(gpu(GpuKind::Other, 16, 1.0f));
-    CHECK(soft.quality == 0 && soft.advanced.anisotropy == 0 && !soft.advanced.ambient_occlusion);
-    // Filtering never exceeds the device's limit, and is off without the feature.
-    CHECK(game::recommend_video(gpu(GpuKind::Discrete, 12, 4.0f)).advanced.anisotropy == 4);
-    CHECK(game::recommend_video(gpu(GpuKind::Discrete, 12, 0.0f)).advanced.anisotropy == 0);
-    // Every recommended anisotropy is a listed choice.
-    for (game::GpuKind k : {GpuKind::Other, GpuKind::Integrated, GpuKind::Discrete})
-        for (uint64_t gib : {0u, 1u, 2u, 4u, 8u})
-            for (float a : {0.0f, 2.0f, 8.0f, 16.0f}) {
-                const int32_t v = game::recommend_video(gpu(k, gib, a)).advanced.anisotropy;
-                bool listed = false;
-                for (int32_t c : ui::kAnisotropyChoices) listed = listed || c == v;
-                CHECK(listed);
-            }
-    // Stored in the profile: the options, the anti-aliasing strength and the Detail value; mode, v-sync and gamma stay.
-    game::VideoProfile p;
-    p.vsync = false;
-    p.gamma = 61;
-    p.mode = {1920, 1080, 144};
-    game::apply_auto_video(p, mid);
-    CHECK(p.advanced == mid.advanced && p.anti_alias == mid.anti_alias && p.detail == ui::kQualityPresets[2]);
-    CHECK(!p.vsync && p.gamma == 61 && p.mode.width == 1920);
-}
 // ui1 t02: the options file round trip and the game speed index.
 void options_round_trip() {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "alamo_game_display_tests";
@@ -419,7 +375,6 @@ int main() {
     profile_resolution_confirmation();
     detail_options();
     detail_mappings();
-    auto_detect();
     options_round_trip();
     std::printf(g_fail ? "alamo_game_display_tests: %d FAILED\n" : "alamo_game_display_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
