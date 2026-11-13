@@ -309,5 +309,10 @@ struct SpacePose {
 };
 // Hermite playback at `t` frames since the path start.
 SpacePose eval_space_path(std::span<const SpaceWaypoint> wps, float t);
+// [port: Gabriel, 2026-11-13] unit path lines (game HUD, display only - nothing in the sim reads it): positions along
+// the playback curve of `wps` (eval_space_path), so the line shows the turns the ship flies. Each waypoint pair is cut
+// into max(ceil(chord / step), ceil(heading change / 10 degrees)) pieces (1..32); the first point is wps.front().pos,
+// the last wps.back().pos, and a turn in place (same position) adds no point. Empty for an empty path.
+std::vector<V2> sample_space_path(std::span<const SpaceWaypoint> wps, float step);
 
 }  // namespace alamo::tactical::movement
