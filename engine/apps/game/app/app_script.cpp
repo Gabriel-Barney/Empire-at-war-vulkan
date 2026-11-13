@@ -1538,8 +1538,9 @@ void App::make_script() {
         }
         s.push_back(step_wait("galactic map", [](App& a) { return a.screen_ == Screen::Galactic; }, 600));
         s.push_back(step_ticks("galaxy runs", 30));
-        // GALACTIC_DIALOGS §2: no dialog opens at campaign start; the opening Story_Dialog event adds its chapter to the
-        // mission holocron (b_story_arc_g flashes). Clicking the holocron opens the story summary, which holds the ticks.
+        // GALACTIC_DIALOGS §2: the opening Story_Dialog event adds its chapter to the mission holocron (retail: b_story_arc_g
+        // flashes; [port: Gabriel] a new campaign opens the summary by itself). Clicking the holocron (re)opens the story
+        // summary, which holds the ticks.
         {
             auto n = std::make_shared<int>(0);
             s.push_back({"holocron updated", [n](App& a, ui::InputFrame&) { return a.holocron_updates_ > 0 || ++*n > 300; }, 400});

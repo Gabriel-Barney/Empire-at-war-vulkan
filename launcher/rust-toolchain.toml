@@ -1,0 +1,4 @@
+# Pinned to the version toolchain\12_rust.cmd installs.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"

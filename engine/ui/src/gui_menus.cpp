@@ -104,7 +104,7 @@ constexpr AdvCheck kAdvChecks[] = {
     {"IDC_BLOOM", &AdvancedVideoSettings::bloom},
 };
 constexpr const char* kGameplay = "IDD_GAMEPLAY_OPTIONS_DIALOG";
-constexpr float kAdvCheckWidth = 215.0f;  // QA D8 [port]: x 33 .. 248, clear of the combo columns at x 260 and 416
+constexpr float kAdvCheckWidth = 215.0f;  // QA D8 [port]: x 33 .. 248, clear of the combo columns at x 252 and 386
 constexpr const char* kPause = "IDD_GAME_OPTIONS_DIALOG";
 constexpr const char* kSave = "IDD_SAVE_GAME_DIALOG";
 constexpr const char* kLoad = "IDD_LOAD_GAME_DIALOG";
@@ -326,15 +326,15 @@ BEGIN
     COMBOBOX        IDC_PORT_SHADOW_DETAIL,230,208,251,66,CBS_DROPDOWNLIST | WS_TABSTOP
     COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,236,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "TEXT_ANTI_ALIASING",IDC_PORT_ANTI_ALIASING_TEXT,9,267,173,8
-    COMBOBOX        IDC_PORT_ANTI_ALIASING,230,264,251,270,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Upscaler",IDC_PORT_UPSCALER_TEXT,260,300,140,18
-    COMBOBOX        IDC_PORT_UPSCALER,260,318,140,64,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Upscaler Quality",IDC_PORT_UPSCALE_QUALITY_TEXT,416,300,140,18
-    COMBOBOX        IDC_PORT_UPSCALE_QUALITY,416,318,140,120,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,260,348,140,18
-    COMBOBOX        IDC_PORT_RENDER_SCALE,260,366,140,140,CBS_DROPDOWNLIST | WS_TABSTOP
-    LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,416,348,140,18
-    COMBOBOX        IDC_PORT_ANISOTROPY,416,366,140,120,CBS_DROPDOWNLIST | WS_TABSTOP
+    COMBOBOX        IDC_PORT_ANTI_ALIASING,230,264,251,145,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Upscaler",IDC_PORT_UPSCALER_TEXT,252,300,122,18
+    COMBOBOX        IDC_PORT_UPSCALER,252,318,122,88,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Upscaler Quality",IDC_PORT_UPSCALE_QUALITY_TEXT,386,300,170,18
+    COMBOBOX        IDC_PORT_UPSCALE_QUALITY,386,318,170,130,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Anisotropy",IDC_PORT_ANISOTROPY_TEXT,252,348,122,18
+    COMBOBOX        IDC_PORT_ANISOTROPY,252,366,122,120,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,386,348,170,18
+    COMBOBOX        IDC_PORT_RENDER_SCALE,386,366,170,140,CBS_DROPDOWNLIST | WS_TABSTOP
     CONTROL         "Ambient Occlusion",IDC_PORT_AMBIENT_OCCLUSION,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,33,385,215,23
 END
 )RC";
@@ -369,16 +369,28 @@ std::vector<std::u32string> level_items(const GuiManager& gui, std::span<const L
     for (const LevelChoice& c : choices) items.push_back(gui.port_text(c.label));
     return items;
 }
-// [port: Gabriel 2026-11-13] Graphics: AMD FSR is its own anti-aliasing and picks its own render size, so while the
-// Upscaler list says FSR the Anti-aliasing and Render Scale lists are greyed out (their choices are kept); while it says Off
-// the Upscaler Quality list is.
-void enable_upscale_rows(GuiDialog& d) {
+// [port: Gabriel 2026-11-13] The Upscaler Quality list's rows for an upscaler: each level's name and that upscaler's ratio
+// ("Quality (1.5x)" for FSR, "Quality (1.7x)" for XeSS); the bare names while the upscaler is Off.
+std::vector<std::u32string> upscale_quality_items(const GuiManager& gui, int32_t upscaler) {
+    std::vector<std::u32string> items = level_items(gui, kUpscaleQualityChoices);
+    if (upscaler != kUpscalerFsr && upscaler != kUpscalerXess) return items;
+    const auto& ratios = kUpscaleRatioLabels[upscaler == kUpscalerFsr ? 0 : 1];
+    for (size_t i = 0; i < items.size() && i < std::size(ratios); ++i) items[i] += U" (" + std::u32string(ratios[i]) + U")";
+    return items;
+}
+// [port: Gabriel 2026-11-13] Graphics: an upscaler (FSR or XeSS) is its own anti-aliasing and picks its own render size, so
+// while the Upscaler list names one the Anti-aliasing and Render Scale lists are greyed out (their choices are kept); while it
+// says Off the Upscaler Quality list is. The Quality rows show the picked upscaler's ratios.
+void enable_upscale_rows(const GuiManager& gui, GuiDialog& d) {
     const GuiControl* up = d.get("IDC_PORT_UPSCALER");
-    const bool fsr = up && up->selected >= 0 && static_cast<size_t>(up->selected) < std::size(kUpscalerChoices) &&
-                     kUpscalerChoices[static_cast<size_t>(up->selected)].value == kUpscalerFsr;
+    const int32_t type = up && up->selected >= 0 && static_cast<size_t>(up->selected) < std::size(kUpscalerChoices)
+                             ? kUpscalerChoices[static_cast<size_t>(up->selected)].value
+                             : kUpscalerOff;
+    const bool on = type != kUpscalerOff;
     for (const char* id : {"IDC_PORT_ANTI_ALIASING", "IDC_PORT_ANTI_ALIASING_TEXT", "IDC_PORT_RENDER_SCALE", "IDC_PORT_RENDER_SCALE_TEXT"})
-        d.enable(id, !fsr);
-    for (const char* id : {"IDC_PORT_UPSCALE_QUALITY", "IDC_PORT_UPSCALE_QUALITY_TEXT"}) d.enable(id, fsr);
+        d.enable(id, !on);
+    for (const char* id : {"IDC_PORT_UPSCALE_QUALITY", "IDC_PORT_UPSCALE_QUALITY_TEXT"}) d.enable(id, on);
+    if (const GuiControl* q = d.get("IDC_PORT_UPSCALE_QUALITY")) d.set_items("IDC_PORT_UPSCALE_QUALITY", upscale_quality_items(gui, type), q->selected);
 }
 // The advanced options the player is on now: the host's, else (a host with no advanced provider) the Detail value for all seven.
 AdvancedVideoSettings current_advanced(const MenuProviders& p, const VideoSettings& v) {
@@ -1183,7 +1195,7 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
     // [port: Gabriel 2026-11-13] the upscaler type and its quality level, two lists apart from Anti-aliasing
     const VideoSettings vs = p_.video ? p_.video() : VideoSettings{};
     d.set_items("IDC_PORT_UPSCALER", level_items(*gui_, kUpscalerChoices), static_cast<int32_t>(level_index(kUpscalerChoices, vs.upscaler)));
-    d.set_items("IDC_PORT_UPSCALE_QUALITY", level_items(*gui_, kUpscaleQualityChoices),
+    d.set_items("IDC_PORT_UPSCALE_QUALITY", upscale_quality_items(*gui_, vs.upscaler),
                 static_cast<int32_t>(level_index(kUpscaleQualityChoices, vs.upscale_quality)));
     use_ui_font(d, {"IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING", "IDC_PORT_UPSCALER", "IDC_PORT_UPSCALE_QUALITY"});
     for (const AdvLevel& l : kAdvLevels) {
@@ -1218,7 +1230,7 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
     d.set_items("IDC_PORT_RENDER_SCALE", std::move(rs), rs_sel);
     d.set_checked("IDC_PORT_AMBIENT_OCCLUSION", s.ambient_occlusion);
     use_ui_font(d, {"IDC_PORT_ANISOTROPY", "IDC_PORT_RENDER_SCALE"});
-    enable_upscale_rows(d);
+    enable_upscale_rows(*gui_, d);
     // QA D8 [port]: the check rows are widened up to the combo column, so "Heat Distortion" is not narrowed to fit 152 units.
     for (const AdvCheck& k : kAdvChecks)
         if (GuiControl* c = d.get(k.id); c && c->def->w > 0) c->scale.x = kAdvCheckWidth / static_cast<float>(c->def->w);
@@ -1576,7 +1588,7 @@ void FrontEnd::on_change(const GuiEvent& e, std::vector<MenuAction>& out) {
         } else if (std::any_of(std::begin(kAdvLevels), std::end(kAdvLevels), [&](const AdvLevel& l) { return e.control == l.combo; })) {
             d->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(quality_level(read_advanced_video(*d))));
         } else if (e.control == "IDC_PORT_UPSCALER") {
-            enable_upscale_rows(*d);
+            enable_upscale_rows(*gui_, *d);
         }
     } else if (keyboard_page(n) >= 0 && e.kind == GuiEvent::Kind::Checked && ascii_istarts_with(e.control, "IDC_KEYBOARD_OPTIONS_")) {
         const int32_t page = e.control.back() - '1';
@@ -1736,9 +1748,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
             VideoSettings v = p_.video ? p_.video() : VideoSettings{};
             const int32_t previous_resolution = v.resolution;  // the mode in use now (provider)
             if (const GuiControl* l = d->get("IDC_RESOLUTION_LIST")) v.resolution = l->selected;
-            auto chk = [&](const char* id, bool& o) {
-                if (const GuiControl* x = d->get(id)) o = x->checked;
-            };
             auto val = [&](const char* id, int32_t& o) {
                 if (const GuiControl* x = d->get(id)) o = x->value;
             };

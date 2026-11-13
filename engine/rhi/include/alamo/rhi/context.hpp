@@ -40,7 +40,8 @@ struct ContextDesc {
     // [port] FSR upscaling (render/src/fsr.cpp): also enable every optional feature the device supports in the core
     // 1.0-1.3 feature structs (except robustBufferAccess / robustImageAccess) and, when present, VK_KHR_cooperative_matrix,
     // VK_KHR_shader_bfloat16 and VK_EXT_shader_float8 with their features - what AMD's FSR 4 ML upscaler may use
-    // (fp16 / int8 / dot product / wave matrix). Rendering itself never relies on them. DeviceCaps::upscaler_features.
+    // (fp16 / int8 / dot product / wave matrix), and VK_EXT_mutable_descriptor_type for Intel's XeSS (render/src/xess.cpp).
+    // Rendering itself never relies on them. DeviceCaps::upscaler_features.
     bool upscaler_features = false;
 };
 
@@ -125,6 +126,7 @@ public:
     bool has_transfer_queue() const { return slot_transfer_ != 0; }
     bool presentation_enabled() const { return presentation_; }
     bool instance_extension_enabled(const char* name) const;
+    bool device_extension_enabled(const char* name) const;  // [port] XeSS checks its required device extensions
 
     bool validation_enabled() const { return validation_; }
     uint32_t validation_errors() const { return errors_.load(); }
@@ -182,6 +184,7 @@ private:
     bool debug_utils_ = false;
     std::atomic<uint32_t> errors_{0}, warnings_{0}, third_party_{0};
     std::vector<std::string> instance_extensions_;
+    std::vector<std::string> device_extensions_;
 
     std::mutex immediate_mutex_;
     VkCommandPool immediate_pool_ = VK_NULL_HANDLE;

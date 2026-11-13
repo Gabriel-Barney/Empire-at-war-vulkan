@@ -4,7 +4,9 @@
 // supports it, else FSR 3.1) reconstructs the display-resolution image from colour, depth and motion vectors. It
 // replaces TAA for that frame: the TAA jitter / camera-cut / object-motion bookkeeping (taa.hpp) is reused, the TAA
 // resolve is not run. When the runtime is missing or fails, the frame is drawn at full resolution with TAA instead.
-// The pure rules here need no GPU (alamo_render_fsr_tests check them without one).
+// [port: Gabriel 2026-11-13] Upscaler::Xess does the same with Intel's XeSS Super Resolution (XeSS SDK 3.0.2 Vulkan
+// runtime, libxess.dll; docs/DECISIONS.md "XeSS upscaling"): same inputs, same jitter sequence, XeSS's own preset ratios.
+// The pure rules here need no GPU (alamo_render_fsr_tests / alamo_render_xess_tests check them without one).
 #pragma once
 #include <cstdint>
 
@@ -15,26 +17,31 @@ namespace alamo::render {
 enum class Upscaler : uint8_t {
     None,  // full-resolution rendering (TAA per RecordOptions::taa)
     Fsr,   // AMD FSR (4.1 or 3.1, chosen by the runtime)
+    Xess,  // Intel XeSS Super Resolution (XMX path on Intel Arc, DP4a path elsewhere, chosen by the runtime)
 };
 
-// FSR's preset quality modes (same order and values as the SDK's FfxApiUpscaleQualityMode).
+// The preset quality modes (same order and values as FSR's FfxApiUpscaleQualityMode). XeSS uses its presets of the
+// same names (xess_quality_settings_t: AA, Quality, Balanced, Performance, Ultra Performance), whose ratios differ.
 enum class UpscaleQuality : uint8_t {
-    NativeAA = 0,          // 1.0x: render at display resolution, FSR as anti-aliasing
-    Quality = 1,           // 1.5x per dimension
-    Balanced = 2,          // 1.7x
-    Performance = 3,       // 2.0x
-    UltraPerformance = 4,  // 3.0x
+    NativeAA = 0,          // 1.0x: render at display resolution, the upscaler as anti-aliasing
+    Quality = 1,           // FSR 1.5x per dimension, XeSS 1.7x
+    Balanced = 2,          // FSR 1.7x, XeSS 2.0x
+    Performance = 3,       // FSR 2.0x, XeSS 2.3x
+    UltraPerformance = 4,  // 3.0x both
 };
 inline constexpr uint32_t kUpscaleQualityCount = 5;
 inline constexpr float kFsrDefaultSharpness = 0.2f;  // RecordOptions::fsr_sharpness default (RCAS, 0 = off)
 
-// Per-dimension ratio display / render of a mode (1.0, 1.5, 1.7, 2.0, 3.0; out-of-range modes: 1.0).
-float upscale_ratio(UpscaleQuality q);
-// Render size for a display size: each dimension display / ratio, truncated, at least 1 (the SDK's
-// GETRENDERRESOLUTIONFROMQUALITYMODE rule).
-void upscale_render_size(uint32_t display_w, uint32_t display_h, UpscaleQuality q, uint32_t& render_w, uint32_t& render_h);
+// Per-dimension ratio display / render of a mode (FSR 1.0, 1.5, 1.7, 2.0, 3.0; XeSS 1.0, 1.7, 2.0, 2.3, 3.0, the XeSS
+// 1.3+ fixed scaling table; out-of-range modes: 1.0). Upscaler::None counts as FSR.
+float upscale_ratio(UpscaleQuality q, Upscaler u = Upscaler::Fsr);
+// Render size for a display size: each dimension display / ratio, truncated, at least 1 (FSR's
+// GETRENDERRESOLUTIONFROMQUALITYMODE rule). XeSS frames use the runtime's xessGetOptimalInputResolution instead (the
+// XessPass); this rule is its estimate where no runtime is loaded.
+void upscale_render_size(uint32_t display_w, uint32_t display_h, UpscaleQuality q, uint32_t& render_w, uint32_t& render_h,
+                         Upscaler u = Upscaler::Fsr);
 // Jitter cycle length for a render / display width: 8 x (display / render)^2, truncated (the SDK's GETJITTERPHASECOUNT
-// rule: 8 at native, 18 at 1.5x, 32 at 2x, 72 at 3x). At least 1.
+// rule: 8 at native, 18 at 1.5x, 32 at 2x, 72 at 3x; XeSS asks for at least the same 8 x ratio^2). At least 1.
 uint32_t upscale_jitter_phases(uint32_t render_w, uint32_t display_w);
 // FSR jitter of frame `index` in render pixels, each in (-0.5, 0.5): Halton(2, 3) point (index % phases) + 1, minus 0.5
 // (the SDK's GETJITTEROFFSET sequence; never (0, 0)). Pixel space: +x right, +y DOWN - what ffxDispatchDescUpscale::

@@ -257,26 +257,31 @@ void detail_mappings() {
             CHECK(o.smaa == w.smaa && o.taa == w.taa && o.msaa == w.msaa && o.taa_weight < 0.0f && o.upscaler == render::Upscaler::None);
             CHECK(game::taa_active(w.mode) == w.taa && game::aa_msaa_samples(w.mode) == w.msaa);
             CHECK(game::parse_aa_mode(game::aa_mode_name(w.mode)) == w.mode);
-            // [port: Gabriel 2026-11-13] The upscaler, a list of its own: FSR at each quality replaces any anti-aliasing mode
-            // (TAA on as the fallback, no SMAA, one sample).
-            for (int32_t q = ui::kUpscaleNative; q <= ui::kUpscaleUltra; ++q) {
-                render::RecordOptions f;
-                game::apply_aa_options(f, w.mode, ui::kUpscalerFsr, q);
-                CHECK(f.upscaler == render::Upscaler::Fsr && f.upscale_quality == static_cast<render::UpscaleQuality>(q) && f.taa && !f.smaa &&
-                      f.msaa == 1);
-            }
+            // [port: Gabriel 2026-11-13] The upscaler, a list of its own: FSR or XeSS at each quality replaces any anti-aliasing
+            // mode (TAA on as the fallback, no SMAA, one sample).
+            for (const auto& [type, want] : {std::pair{ui::kUpscalerFsr, render::Upscaler::Fsr}, std::pair{ui::kUpscalerXess, render::Upscaler::Xess}})
+                for (int32_t q = ui::kUpscaleNative; q <= ui::kUpscaleUltra; ++q) {
+                    render::RecordOptions f;
+                    game::apply_aa_options(f, w.mode, type, q);
+                    CHECK(f.upscaler == want && f.upscale_quality == static_cast<render::UpscaleQuality>(q) && f.taa && !f.smaa && f.msaa == 1);
+                }
         }
         CHECK(!game::parse_aa_mode("high") && std::string(game::aa_mode_name(99)) == "off");
-        CHECK(!game::parse_aa_mode("fsr_quality"));  // FSR is not an anti-aliasing mode any more
+        CHECK(!game::parse_aa_mode("fsr_quality") && !game::parse_aa_mode("xess_quality"));  // not anti-aliasing modes any more
         // Upscaler and quality lists: one row per type / level, names round-trip.
-        CHECK(std::size(ui::kUpscalerChoices) == 2 && ui::kUpscalerChoices[1].value == ui::kUpscalerFsr &&
+        CHECK(std::size(ui::kUpscalerChoices) == 3 && ui::kUpscalerChoices[1].value == ui::kUpscalerFsr &&
+              ui::kUpscalerChoices[2].value == ui::kUpscalerXess &&
               std::size(ui::kUpscaleQualityChoices) == render::kUpscaleQualityCount);
         for (size_t i = 0; i < std::size(ui::kUpscaleQualityChoices); ++i)
             CHECK(ui::kUpscaleQualityChoices[i].value == static_cast<int32_t>(i) &&
                   game::parse_upscale_quality(game::upscale_quality_name(static_cast<int32_t>(i))) == static_cast<int32_t>(i));
         CHECK(game::parse_upscaler(game::upscaler_name(ui::kUpscalerFsr)) == ui::kUpscalerFsr && std::string(game::upscaler_name(7)) == "off");
-        CHECK(!game::fsr_quality(ui::kUpscalerOff, ui::kUpscaleUltra) &&
+        CHECK(game::parse_upscaler(game::upscaler_name(ui::kUpscalerXess)) == ui::kUpscalerXess);
+        CHECK(!game::fsr_quality(ui::kUpscalerOff, ui::kUpscaleUltra) && !game::fsr_quality(ui::kUpscalerXess, ui::kUpscaleUltra) &&
               game::fsr_quality(ui::kUpscalerFsr, 99) == render::UpscaleQuality::Quality);
+        CHECK(!game::xess_quality(ui::kUpscalerFsr, ui::kUpscaleUltra) &&
+              game::xess_quality(ui::kUpscalerXess, ui::kUpscaleBalanced) == render::UpscaleQuality::Balanced);
+        CHECK(game::aa_upscaler(ui::kUpscalerOff) == render::Upscaler::None && game::aa_upscaler(ui::kUpscalerXess) == render::Upscaler::Xess);
     }
     // The Video dialog's list sets the profile; older profiles still load: the TAA strength ("anti_alias" above 0 = TAA) and
     // the Advanced dialog's box ("anti_aliasing=taa"); "aa_mode" wins.
@@ -322,6 +327,8 @@ void detail_mappings() {
         CHECK(up.anti_alias == ui::kAaMsaa4 && up.upscaler == ui::kUpscalerFsr && up.upscale_quality == ui::kUpscalePerformance);
         up = load_up("aa_mode=fsr_balanced\n");
         CHECK(up.anti_alias == ui::kAaTaa && up.upscaler == ui::kUpscalerFsr && up.upscale_quality == ui::kUpscaleBalanced);
+        up = load_up("aa_mode=xess_performance\n");
+        CHECK(up.anti_alias == ui::kAaTaa && up.upscaler == ui::kUpscalerXess && up.upscale_quality == ui::kUpscalePerformance);
         up = load_up("aa_mode=fsr_ultra\nupscaler=off\n");  // the new key wins
         CHECK(up.anti_alias == ui::kAaTaa && up.upscaler == ui::kUpscalerOff && up.upscale_quality == ui::kUpscaleUltra);
         up = load_up("upscaler=dlss\nupscale_quality=max\n");  // unknown names: the defaults stay

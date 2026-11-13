@@ -8,6 +8,7 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 | Path | What |
 |---|---|
 | `engine/` | Engine. One static lib per module: Phase 2 `core`, `vfs`, `data`, `jobs`, `galactic`, `apps`; Phase 3 `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render` (Vulkan 1.3 renderer, `alamo_render.exe`); Phase 4 `objects` (game object model) |
+| `launcher/` | Command Center (Rust / egui): launcher and control panel for `alamo_game.exe`. Not part of `engine/` or the CMake build: `build_launcher.cmd`, toolchain `toolchain\rust` (`docs/DECISIONS.md`, "Command Center launcher") |
 | `docs/README.md` | **Index of all documentation (start here).** One place per kind: `DECISIONS.md` (binding decisions), `BUILD.md` (build / test / gate), `PERFORMANCE.md` (measurements), `PROBES.md` (in-game probe index), `ROADMAP_PROTOCOL.md` (roadmap rules); status lives only on the roadmap |
 | `docs/PHASE4.md` | Phase 4 step map (what each step is, where its code is) and the open per-step port choices. Finished-work notes: `docs/PHASE4_HISTORY.md` |
 | **Project roadmap** | **The one main roadmap: `roadmap-store/` in this folder (Gabriel, 2026-11-06: one location; before that the page was also tracked in this repo as `ROADMAP.html` and `docs/ROADMAP.html`, both removed). Open `roadmap-store/ROADMAP.html` in any browser; it needs no sign-in and is generated, so never edit it by hand.** Update it with `python roadmap-store/roadmap_store.py write <file>`; ordered stages, boxes and arrows, task groups, tasks, build records and the activity log live in `roadmap-store/data/`, the page layout in `roadmap-store/page_shell.html` (edit outside the `roadmap-data` markers, then `render`). Rules and field list: `docs/ROADMAP_PROTOCOL.md`. `roadmap-store/` is its own git repository (remote `Empire-Vulkan-Brenach`) and is not in worktrees; use the main checkout's copy. When the remote changed, run `python roadmap-store/roadmap_store.py sync` |
@@ -39,7 +40,7 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 
 ## Rules
 1. Zero warnings at MSVC `/W4 /permissive-` and clang `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`. Explicit narrowing casts; no shadowing.
-2. No third-party dependencies in `engine/` without asking Gabriel. Approved so far: Vulkan-Headers, DXC, VMA (Phase 3); Lua 5.0.2 (vendored, original semantics), miniaudio, FFmpeg's Bink decoder (2026-10-27); the reference SMAA (2026-11-13, `engine/render/third_party/smaa`); AMD FidelityFX SDK 2.4.0 Vulkan upscaler DLLs for FSR (2026-11-13); see `docs/DECISIONS.md`.
+2. No third-party dependencies in `engine/` without asking Gabriel. Approved so far: Vulkan-Headers, DXC, VMA (Phase 3); Lua 5.0.2 (vendored, original semantics), miniaudio, FFmpeg's Bink decoder (2026-10-27); the reference SMAA (2026-11-13, `engine/render/third_party/smaa`); AMD FidelityFX SDK 2.4.0 Vulkan upscaler DLLs for FSR (2026-11-13); Intel XeSS SDK 3.0.2 `libxess.dll` for XeSS (2026-11-13); see `docs/DECISIONS.md`.
 3. Determinism (saves, replays and parity checks rely on the per-tick CRC): results read by game logic
    must be bit-identical across thread counts, runs, and the MSVC and clang builds. Parallel jobs write per-index outputs; reductions
    run in index order; no FMA contraction (`/fp:precise`, `-ffp-contract=off`); no iteration over

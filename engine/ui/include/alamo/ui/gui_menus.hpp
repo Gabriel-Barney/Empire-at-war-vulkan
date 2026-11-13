@@ -105,7 +105,7 @@ inline constexpr int32_t kFrameCapCustomDefault = 60;  // the slider's place whi
 enum class WindowMode : uint8_t { Fullscreen, Borderless, Windowed };
 inline constexpr size_t kWindowModeCount = 3;
 // [port: Gabriel 2026-11-13] IDC_PORT_UI_SCALE rows: DPI-style UI scale in percent (HudCanvas::make). 100 % = the
-// original's size on a 1080p screen (kUiScaleUnitPixels per canvas unit), the same physical size on every resolution; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
+// original's size on a 1440p screen (kUiScaleUnitPixels per canvas unit), the same physical size on every resolution; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
 // The game starts at 100 % whatever the Windows display scale is (the process is per-monitor DPI aware).
 inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500};
 inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
@@ -113,7 +113,7 @@ inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
 inline constexpr int32_t kAaOff = 0, kAaSmaa = 1, kAaTaa = 2, kAaMsaa2 = 3, kAaMsaa4 = 4, kAaMsaa8 = 5;
 // [port: Gabriel 2026-11-13] Upscaler types (VideoSettings::upscaler; the list kUpscalerChoices below) and the upscaler's
 // quality levels (VideoSettings::upscale_quality, render::UpscaleQuality order; the list kUpscaleQualityChoices below).
-inline constexpr int32_t kUpscalerOff = 0, kUpscalerFsr = 1;
+inline constexpr int32_t kUpscalerOff = 0, kUpscalerFsr = 1, kUpscalerXess = 2;
 inline constexpr int32_t kUpscaleNative = 0, kUpscaleQuality = 1, kUpscaleBalanced = 2, kUpscalePerformance = 3, kUpscaleUltra = 4;
 struct VideoSettings {
     std::vector<std::u32string> resolutions;  // list items ("1920 x 1080")
@@ -170,15 +170,20 @@ inline constexpr LevelChoice kAntiAliasChoices[] = {{kAaOff, kAaOff, U"Off"},   
                                                     {kAaMsaa4, kAaMsaa4, U"MSAA 4x"}, {kAaMsaa8, kAaMsaa8, U"MSAA 8x"}};
 // [port: Gabriel 2026-11-13] Upscaling, two lists apart from Anti-aliasing: the upscaler type (VideoSettings::upscaler, profile
 // key "upscaler") and its quality level (VideoSettings::upscale_quality, key "upscale_quality"). AMD FSR (4.1 where the GPU
-// supports it, else 3.1) draws the scene at the level's lower resolution and upscales it; it is its own anti-aliasing, so
-// while it is on the Anti-aliasing and Render Scale lists are greyed out (and the Quality list while it is off). Where FSR
-// cannot run the frame is drawn at full resolution with TAA.
-inline constexpr LevelChoice kUpscalerChoices[] = {{kUpscalerOff, kUpscalerOff, U"Off"}, {kUpscalerFsr, kUpscalerFsr, U"AMD FSR"}};
-inline constexpr LevelChoice kUpscaleQualityChoices[] = {{kUpscaleNative, kUpscaleNative, U"Native AA (1x)"},
-                                                         {kUpscaleQuality, kUpscaleQuality, U"Quality (1.5x)"},
-                                                         {kUpscaleBalanced, kUpscaleBalanced, U"Balanced (1.7x)"},
-                                                         {kUpscalePerformance, kUpscalePerformance, U"Performance (2x)"},
-                                                         {kUpscaleUltra, kUpscaleUltra, U"Ultra Performance (3x)"}};
+// supports it, else 3.1) or Intel XeSS Super Resolution draws the scene at the level's lower resolution and upscales it; an
+// upscaler is its own anti-aliasing, so while one is on the Anti-aliasing and Render Scale lists are greyed out (and the
+// Quality list while it is off). Where the upscaler cannot run the frame is drawn at full resolution with TAA. The quality
+// levels have the same names for both; their ratios differ (kUpscaleRatioLabels).
+inline constexpr LevelChoice kUpscalerChoices[] = {
+    {kUpscalerOff, kUpscalerOff, U"Off"}, {kUpscalerFsr, kUpscalerFsr, U"AMD FSR"}, {kUpscalerXess, kUpscalerXess, U"Intel XeSS"}};
+inline constexpr LevelChoice kUpscaleQualityChoices[] = {{kUpscaleNative, kUpscaleNative, U"Native AA"},
+                                                         {kUpscaleQuality, kUpscaleQuality, U"Quality"},
+                                                         {kUpscaleBalanced, kUpscaleBalanced, U"Balanced"},
+                                                         {kUpscalePerformance, kUpscalePerformance, U"Performance"},
+                                                         {kUpscaleUltra, kUpscaleUltra, U"Ultra Perf."}};
+// The per-dimension ratio shown after each quality level, by upscaler (render::upscale_ratio): FSR, then XeSS.
+inline constexpr const char32_t* kUpscaleRatioLabels[2][5] = {{U"1x", U"1.5x", U"1.7x", U"2x", U"3x"},
+                                                              {U"1x", U"1.7x", U"2x", U"2.3x", U"3x"}};
 // The seven detail options. Four levels where the renderer has four steps (Shader) or a continuous scale (Particle, Mesh,
 // Environment); three where it has three (Texture: top mips skipped 2 / 1 / 0, Water: reflection targets 0 / 1 / 2);
 // Shadow is on or off (any value above 0 draws shadows). Each list ends at the value the old slider's Max stood for.

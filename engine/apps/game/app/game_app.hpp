@@ -543,6 +543,9 @@ public:
     std::vector<uint64_t> summary_rows_;
     bool holocron_flash_ = false;     // b_story_arc_g flashes until the summary is opened
     bool story_summary_open_ = false; // IDD_STORY_SUMMARY_DIALOG open: ticks held (the summary's galactic pause, §2.2)
+    // [port: Gabriel, 2026-11-13] a new campaign opens the mission holocron (story summary) by itself once its first
+    // chapter is added (retail only flashes b_story_arc_g). Cleared when it opens or when no chapter came early on.
+    bool summary_auto_open_ = false;
     // Screen-text lines (§2.1 transmission line, white; §3.1 auto-resolve result, red) [port: printed and kept until a ui
     // screen-text widget takes them].
     struct ScreenLine {

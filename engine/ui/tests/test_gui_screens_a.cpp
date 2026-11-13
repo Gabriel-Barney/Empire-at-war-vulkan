@@ -554,10 +554,14 @@ END
     // FSR greys Anti-aliasing and Render Scale out (FSR does both jobs). A change sends one ApplyVideo with all three.
     GuiControl* up = d->get("IDC_PORT_UPSCALER");
     GuiControl* uq = d->get("IDC_PORT_UPSCALE_QUALITY");
-    CHECK(up && uq && up->items.size() == std::size(kUpscalerChoices) && up->items[1] == U"AMD FSR" && up->selected == 0 &&
+    CHECK(up && uq && up->items.size() == std::size(kUpscalerChoices) && up->items[1] == U"AMD FSR" && up->items[2] == U"Intel XeSS" &&
+          uq->items[1] == U"Quality" && up->selected == 0 &&
           uq->items.size() == std::size(kUpscaleQualityChoices) && uq->selected == kUpscaleQuality && up->ui_font && uq->ui_font);
     CHECK(!uq->enabled && !d->get("IDC_PORT_UPSCALE_QUALITY_TEXT")->enabled && aa->enabled && d->get("IDC_PORT_RENDER_SCALE")->enabled);
+    changed("IDC_PORT_UPSCALER", 2);  // XeSS: its ratios
+    CHECK(uq->enabled && uq->items[1] == U"Quality (1.7x)" && uq->items[3] == U"Performance (2.3x)" && !aa->enabled);
     changed("IDC_PORT_UPSCALER", 1);
+    CHECK(uq->items[1] == U"Quality (1.5x)" && uq->items[3] == U"Performance (2x)" && uq->selected == kUpscaleQuality);
     CHECK(uq->enabled && d->get("IDC_PORT_UPSCALE_QUALITY_TEXT")->enabled && !aa->enabled && !d->get("IDC_PORT_ANTI_ALIASING_TEXT")->enabled &&
           !d->get("IDC_PORT_RENDER_SCALE")->enabled && !d->get("IDC_PORT_RENDER_SCALE_TEXT")->enabled);
     uq->selected = kUpscalePerformance;
@@ -652,7 +656,8 @@ END
     // [port: Gabriel 2026-11-13] FSR is not in the anti-aliasing list: it has the Upscaler / Upscaler Quality lists.
     CHECK(std::size(kAntiAliasChoices) == 6);
     for (size_t i = 0; i < std::size(kUpscaleQualityChoices); ++i) CHECK(level_index(kUpscaleQualityChoices, kUpscaleQualityChoices[i].value) == i);
-    for (size_t i = 0; i < std::size(kUpscalerChoices); ++i) CHECK(level_index(kUpscalerChoices, kUpscalerChoices[i].value) == i);
+    for (size_t i = 0; i < std::size(kUpscalerChoices); ++i)
+        CHECK(level_index(kUpscalerChoices, kUpscalerChoices[i].value) == i);
 }
 
 }  // namespace test_gui_screens_t

@@ -369,7 +369,7 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.ui_scale = std::clamp(v.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     p.detail = v.detail;
     p.anti_alias = v.anti_alias;
-    p.upscaler = v.upscaler == ui::kUpscalerFsr ? ui::kUpscalerFsr : ui::kUpscalerOff;
+    p.upscaler = v.upscaler >= ui::kUpscalerOff && v.upscaler <= ui::kUpscalerXess ? v.upscaler : ui::kUpscalerOff;
     p.upscale_quality = std::clamp(v.upscale_quality, ui::kUpscaleNative, ui::kUpscaleUltra);
     p.gamma = v.gamma;
     return true;
@@ -425,10 +425,12 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     if (auto it = kv.find("aa_mode"); it != kv.end()) {
         if (const std::optional<int32_t> m = parse_aa_mode(it->second)) {
             p.anti_alias = *m;
-        } else if (it->second.rfind("fsr_", 0) == 0) {  // FSR was in the Anti-aliasing list until 2026-11-13: "fsr_<quality>"
-            if (const std::optional<int32_t> q = parse_upscale_quality(std::string_view(it->second).substr(4))) {
+        } else {  // FSR / XeSS were in the Anti-aliasing list until 2026-11-13: "fsr_<quality>", "xess_<quality>"
+            const std::string& v = it->second;
+            const bool fsr = v.rfind("fsr_", 0) == 0, xess = v.rfind("xess_", 0) == 0;
+            if (const std::optional<int32_t> q = fsr || xess ? parse_upscale_quality(std::string_view(v).substr(fsr ? 4 : 5)) : std::nullopt) {
                 p.anti_alias = ui::kAaTaa;
-                p.upscaler = ui::kUpscalerFsr;
+                p.upscaler = fsr ? ui::kUpscalerFsr : ui::kUpscalerXess;
                 p.upscale_quality = *q;
             }
         }
@@ -595,7 +597,7 @@ uint32_t aa_msaa_samples(int32_t mode) {
 namespace {
 constexpr const char* kAaModeNames[] = {"off", "smaa", "taa", "msaa2", "msaa4", "msaa8"};  // by mode
 static_assert(std::size(kAaModeNames) == std::size(ui::kAntiAliasChoices));
-constexpr const char* kUpscalerNames[] = {"off", "fsr"};  // by ui::kUpscaler*
+constexpr const char* kUpscalerNames[] = {"off", "fsr", "xess"};  // by ui::kUpscaler*
 static_assert(std::size(kUpscalerNames) == std::size(ui::kUpscalerChoices));
 constexpr const char* kUpscaleQualityNames[] = {"native", "quality", "balanced", "performance", "ultra"};  // by ui::kUpscale*
 static_assert(std::size(kUpscaleQualityNames) == std::size(ui::kUpscaleQualityChoices) &&
@@ -619,21 +621,37 @@ std::optional<int32_t> parse_upscaler(std::string_view name) { return parse_name
 const char* upscale_quality_name(int32_t quality) { return name_of(kUpscaleQualityNames, quality); }
 std::optional<int32_t> parse_upscale_quality(std::string_view name) { return parse_name(kUpscaleQualityNames, name); }
 
-std::optional<render::UpscaleQuality> fsr_quality(int32_t upscaler, int32_t quality) {
-    if (upscaler != ui::kUpscalerFsr) return std::nullopt;
+namespace {
+render::UpscaleQuality upscale_level(int32_t quality) {
     if (quality < ui::kUpscaleNative || quality > ui::kUpscaleUltra) quality = ui::kUpscaleQuality;
     return static_cast<render::UpscaleQuality>(quality);
+}
+}  // namespace
+
+render::Upscaler aa_upscaler(int32_t upscaler) {
+    return upscaler == ui::kUpscalerFsr ? render::Upscaler::Fsr : upscaler == ui::kUpscalerXess ? render::Upscaler::Xess : render::Upscaler::None;
+}
+
+std::optional<render::UpscaleQuality> fsr_quality(int32_t upscaler, int32_t quality) {
+    if (upscaler != ui::kUpscalerFsr) return std::nullopt;
+    return upscale_level(quality);
+}
+
+std::optional<render::UpscaleQuality> xess_quality(int32_t upscaler, int32_t quality) {
+    if (upscaler != ui::kUpscalerXess) return std::nullopt;
+    return upscale_level(quality);
 }
 
 void apply_aa_options(render::RecordOptions& o, int32_t mode, int32_t upscaler, int32_t upscale_quality) {
     // [port: Gabriel 2026-11-13] One mode, one quality each: TAA keeps the renderer's tuned weight and sharpen. The upscaler,
-    // when on, replaces the mode: FSR at its quality, with TAA set for the frames the renderer cannot run FSR on.
-    const std::optional<render::UpscaleQuality> fsr = fsr_quality(upscaler, upscale_quality);
-    o.upscaler = fsr ? render::Upscaler::Fsr : render::Upscaler::None;
-    if (fsr) o.upscale_quality = *fsr;
-    o.taa = fsr.has_value() || taa_active(mode);
-    o.smaa = !fsr && mode == ui::kAaSmaa;
-    o.msaa = fsr ? 1u : aa_msaa_samples(mode);
+    // when on, replaces the mode: FSR or XeSS at its quality, with TAA set for the frames the renderer cannot run it on.
+    const render::Upscaler up = aa_upscaler(upscaler);
+    const bool on = up != render::Upscaler::None;
+    o.upscaler = up;
+    if (on) o.upscale_quality = upscale_level(upscale_quality);
+    o.taa = on || taa_active(mode);
+    o.smaa = !on && mode == ui::kAaSmaa;
+    o.msaa = on ? 1u : aa_msaa_samples(mode);
     o.taa_weight = -1.0f;
 }
 

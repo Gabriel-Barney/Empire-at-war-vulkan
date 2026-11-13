@@ -519,6 +519,23 @@ void test_real(Gpu& g, const std::string& src_dir) {
                 shoot(shot, [&](double) {});
                 list->open = false;
             }
+        // [port: Gabriel 2026-11-13] The Upscaler Quality list with XeSS picked (its rows carry the ratios: the longest), open.
+        if (ui::GuiDialog* gp = gui.top(); gp && gp->get("IDC_PORT_UPSCALER")) {
+            gp->set_selected("IDC_PORT_UPSCALER", 2);
+            std::vector<ui::GuiEvent> e(1);
+            e[0].kind = ui::GuiEvent::Kind::SelectionChanged;
+            e[0].dialog = "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG";
+            e[0].control = "IDC_PORT_UPSCALER";
+            e[0].value = 2;
+            fe2.update(e, ui::InputFrame{}, acts);
+            ui::GuiControl* q = gp->get("IDC_PORT_UPSCALE_QUALITY");
+            CHECK(q && q->enabled && q->items.size() == 5 && q->items[3] == U"Performance (2.3x)");
+            if (q) {
+                q->open = true;
+                shoot("advanced_video_upscale_quality_xess_open", [&](double) {});
+                q->open = false;
+            }
+        }
         gui.close_all();
         fe2.show_pause_menu();
         shoot("pause_menu", [&](double) {});
