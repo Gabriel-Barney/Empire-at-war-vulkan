@@ -30,14 +30,35 @@ Built from: @BUILD@.
 
 What to try
 -----------
-- NEW in this build: Options > Video > Advanced > Render Scale (50 / 60 / 67 / 75 / 85 / 100 %).
-  The percentage is the share of the window's PIXELS the 3D scene is drawn with, then scaled up
-  to the window; the HUD and menus stay sharp at full resolution. At 3840 x 2160, 75 % draws
-  3326 x 1871. After Apply the log (alamo_game_log.txt) prints the size, e.g.
-  "render scale 75% (3326x1871 of 3840x2160)". Please check where the list sits in the dialog
-  and how a scaled battle and galactic map look.
-- Menus and options (the biggest change since the last build): video options (Windowed off now
-  gives real full screen; Widescreen), key rebinding (Delete / Backspace
+NEW in this build (please check each one in game):
+- Options are now split into Display and Graphics pages. Display: a Display Mode list
+  (Fullscreen / Borderless fullscreen / Windowed) and a UI Scale (100 - 500 %) for big screens;
+  the galactic map keeps its height and shows more to the sides on wide screens. The Auto Detect
+  button is gone.
+- Graphics > Anti-Aliasing is now one list: Off, SMAA, TAA, MSAA 2x / 4x / 8x, and FSR (Native AA,
+  Quality 1.5x, Balanced 1.7x, Performance 2x, Ultra Performance 3x). FSR uses AMD's FSR runtime
+  (the two amd_fidelityfx_*.dll files next to the game); the log names the FSR version in use
+  ("FSR upscaling: ..."), and if FSR cannot start the game draws TAA instead and logs why.
+  Please compare the look and the frame rate of each mode, and check that the list shows all
+  11 rows. Older settings load as TAA.
+- Fighter and bomber squadrons have 12 ships (prices scaled to match). FIGHTERS / BOMBERS buttons
+  at the left edge of the space HUD, or F2 / F3, select a whole wing (Shift adds, a second press
+  centres the camera).
+- Fleet cohesion (space battles): O toggles Loose / Tight. Tight keeps your fleet together by
+  moving every ship at the slowest ship's speed; the HUD line shows the setting.
+- Camera and Controls > Show Unit Path Lines: dotted lines for your moving units (one per
+  squadron / company; cyan moves, red attacks). Off by default.
+- Galactic: name and rename your fleets and ships (double-click a pad in the fleet organiser;
+  the name shows as its tooltip).
+- Save / Load lists saves as a tree: map, faction (with emblem), playthrough, then each save with
+  its week and time.
+- Fleet groups (early, off unless started with --fleet-groups; e.g. set ALAMO_ARGS=--fleet-groups
+  before Play_Mod.cmd, or add it after Play.cmd): N groups the selected ships, U ungroups, Y locks
+  a group so it moves together. No on-screen frames yet.
+Still worth checking from earlier builds:
+- Render Scale (Graphics page, 50 - 100 %): the share of the window's pixels the 3D scene is
+  drawn with; the log prints the size after Apply.
+- Menus and options (from the 2026-11-13 builds): key rebinding (Delete / Backspace
   clears, conflict and "Apply?" prompts), gameplay options kept between runs, drop-down lists,
   scroll bars and text boxes (typing, selection, copy / paste).
 - The tactical HUD in land and space battles: order buttons and their hotkeys, retreat,
@@ -50,9 +71,18 @@ What to try
 - Thrawn's Revenge galactic conquest: winning and losing a campaign (victory conditions).
 - Land skirmish and galactic AI as in the 2026-11-12 build.
 
-Changes since test build 2026-11-12
------------------------------------
-- Render Scale option (Advanced video; see What to try). Added in the second 2026-11-13 build.
+Changes since the 2026-11-13 render scale build
+-----------------------------------------------
+- Options: Display and Graphics pages, display mode list, UI scale, galactic wide-screen view;
+  Auto Detect removed.
+- Anti-aliasing: one list with SMAA, TAA, MSAA 2x / 4x / 8x and five FSR modes.
+- Fighter / bomber squadrons of 12, wing select buttons and F2 / F3.
+- Fleet cohesion (O), unit path lines option, fleet and ship names, saved games tree.
+- Fleet groups, phase 1 (off by default, see What to try).
+
+Changes in the earlier 2026-11-13 builds (since 2026-11-12)
+-----------------------------------------------------------
+- Render Scale option.
 - Options: Windowed off switches to full screen; Windowed and Widescreen are kept and applied;
   the Hardware Mouse option is removed (the game always draws its own cursor); gameplay and advanced options are
   applied and saved; key rebinding works like the original (Tab bindable, zoom keys listed).
@@ -76,6 +106,8 @@ Changes since test build 2026-11-12
 
 Known gaps
 ----------
+- Save / Load tree (new): the automated save-and-load check could not select a save row after
+  the tree change. If picking or loading a save in the dialog misbehaves, please say how.
 - Saves made with earlier test builds may not load (the save format changed). Start new games.
 - Galactic AI is close to the original but not the same yet: the Underworld ends up with less
   money, and the Rebels attack Shola earlier than in the original.
