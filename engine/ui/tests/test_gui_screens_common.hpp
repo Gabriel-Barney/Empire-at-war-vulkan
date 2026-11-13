@@ -23,6 +23,7 @@
 #include "alamo/ui/gui_info_screens.hpp"
 #include "alamo/ui/mouse_cursor.hpp"
 #include "alamo/ui/picking.hpp"
+#include "alamo/ui/rename_prompt.hpp"
 #include "alamo/ui/gui_menus.hpp"
 #include "alamo/ui/gui_resource.hpp"
 #include "alamo/ui/gui_screens.hpp"

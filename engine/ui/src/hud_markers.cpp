@@ -104,7 +104,7 @@ Rgba8 queue_step_color(HudQueuedStep::Kind k) {
 QueueMarkerStats add_queue_markers(HudDrawList& dl, FontCache* fonts, const HudCanvas& canvas, const View& view,
                                    std::span<const HudOrderQueue> queues, uint32_t layer) {
     QueueMarkerStats st;
-    const int32_t font = fonts ? fonts->font(kFallbackFontFace, 7.0f, canvas.screen_height) : -1;
+    const int32_t font = fonts ? fonts->font(kFallbackFontFace, 7.0f, canvas.font_height()) : -1;
     for (const HudOrderQueue& q : queues) {
         float px = 0, py = 0;
         bool have_prev = project(view, q.position, px, py);

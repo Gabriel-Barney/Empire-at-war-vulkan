@@ -64,6 +64,7 @@
 #include "alamo/ui/mouse_cursor.hpp"
 #include "alamo/ui/orders.hpp"
 #include "alamo/ui/render_bridge.hpp"
+#include "alamo/ui/rename_prompt.hpp"
 #include "alamo/ui/targeting.hpp"
 #include "alamo/ui/window_input.hpp"
 #include "frame_overlay.hpp"
@@ -322,6 +323,8 @@ public:
     render::DrawStats draw_stats_;
     // OPT1 t07: the frame-time overlay and this frame's phase times (wall clock, presentation only).
     FrameOverlay overlay_;
+    // [port: Gabriel, 2026-11-13] fleet / ship rename prompt (HudAction::Rename opens it; app_frame.cpp feeds and draws it).
+    ui::RenamePrompt rename_;
     FrameTimes ft_;
     Clock::time_point frame_t0_{};
     bool smoke_ok_ = true;
@@ -433,7 +436,12 @@ public:
     bool tactical_fov_set_ = false;     // the player changed the tactical FOV (else TacticalCameras.xml's applies)
     std::vector<DisplayMode> display_modes_;  // the display's modes (primary display, game_display.hpp)
     std::vector<DisplayMode> shown_modes_;    // UI5 t01: the video options' resolution list (video_list_modes; Widescreen)
-    bool windowed_ = true;                    // UI5 t01: Options > Video > Windowed (false: full screen)
+    ui::WindowMode window_mode_ = ui::WindowMode::Windowed;  // UI5 t01 / [port: Gabriel] Options > Video > Display Mode
+    bool windowed() const { return window_mode_ == ui::WindowMode::Windowed; }
+    // [port: Gabriel] Options > Video > UI Scale in percent (live play: the profile's, 100 at first start); 0 in scripted /
+    // smoke / benchmark runs, which keep the original fitted UI so their captures do not depend on the window size.
+    int32_t ui_scale_ = 0;
+    void resize_ui();  // the GUI, both HUDs and the side panels to the window size at ui_scale_
     uint64_t video_applies_ = 0;
     bool menu_dialog_open() const;  // the in-game menu or one of its option / save / load / quit dialogs is open
     uint32_t reinforce_unit_ = 0;       // reinforcement chosen on the pad, waiting for its drop point (0 = none)

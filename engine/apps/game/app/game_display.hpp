@@ -3,6 +3,7 @@
 // <windows.h> stays in this one translation unit.
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,10 +43,17 @@ int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, ui
 // Windows restores the user's mode when the process ends; restore_display_mode() does it at once), then the window's
 // client area is resized (set_window_client_size). A rate the monitor does not offer at its current resolution leaves
 // the rate alone. `log` gets one line describing what changed. False when the window resize failed.
-// UI5 t01: `windowed` false (Options > Video, Windowed unchecked) is full screen [port: borderless, no exclusive mode]:
-// the monitor always takes the mode's resolution and rate and the window covers it without a frame (a refused mode
-// change leaves a borderless window of the mode's size centred on the monitor).
-bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr, bool windowed = true);
+// UI5 t01 / [port: Gabriel 2026-11-13] `mode` (Options > Video > Display Mode):
+//   Windowed   - as above;
+//   Fullscreen - [port: frameless, no exclusive mode] the monitor always takes the mode's resolution and rate and the window
+//                covers it without a frame (a refused mode change leaves a frameless window of the mode's size centred on
+//                the monitor);
+//   Borderless - the monitor keeps (or gets back) the user's desktop resolution, takes the mode's refresh rate when it is
+//                offered at that resolution, and a frameless window covers the whole monitor (the mode's size is unused).
+bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr, ui::WindowMode mode = ui::WindowMode::Windowed);
+// The profile / log name of a window mode ("fullscreen", "borderless", "windowed") and back (unknown text: nullopt).
+const char* window_mode_name(ui::WindowMode m);
+std::optional<ui::WindowMode> parse_window_mode(std::string_view s);
 // UI5 t01 [port]: Options > Video > Widescreen off lists only modes no wider than 4:3 (5:4 and 4:3); on, every mode. All
 // modes when none is that narrow.
 std::vector<DisplayMode> video_list_modes(const std::vector<DisplayMode>& modes, bool widescreen);
@@ -79,7 +87,11 @@ uint32_t game_speed_index(int32_t slider);
 struct VideoProfile {
     DisplayMode mode;
     bool vsync = true, hardware_mouse = false;
-    bool windowed = true, widescreen = true;  // UI5 t01 (the port starts windowed unless the profile says otherwise)
+    // UI5 t01 / [port: Gabriel 2026-11-13]: the port starts windowed unless the profile says otherwise. Key "window_mode"
+    // (window_mode_name); a profile from before it has "windowed=0|1" (0 = Fullscreen).
+    ui::WindowMode window_mode = ui::WindowMode::Windowed;
+    bool widescreen = true;
+    int32_t ui_scale = 100;  // [port: Gabriel] Options > Video > UI Scale, percent (kUiScaleMin .. kUiScaleMax; key "ui_scale")
     ui::VsyncMode vsync_mode = ui::VsyncMode::Fifo;
     int32_t frame_cap = 0;
     int32_t detail = 100, anti_alias = 0, gamma = 50;  // IDD_VIDEO_OPTIONS_DIALOG values 0..100 (anti_alias: TAA strength, 0 = off)

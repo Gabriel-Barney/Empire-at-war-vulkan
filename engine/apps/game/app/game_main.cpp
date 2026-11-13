@@ -64,7 +64,7 @@ bool App::init() {
                         : video_profile_.vsync_mode == ui::VsyncMode::Mailbox ? rhi::PresentMode::Mailbox : rhi::PresentMode::Fifo;
         if (!opt_.frame_cap_set) opt_.frame_cap = video_profile_.frame_cap;
         hardware_mouse_ = video_profile_.hardware_mouse;
-        windowed_ = video_profile_.windowed;
+        window_mode_ = video_profile_.window_mode;
         sync_detail(video_profile_);  // t43
         adv_video_ = video_profile_.advanced;
         std::printf("video options: %s\n", video_profile_path_.c_str());
@@ -178,15 +178,16 @@ bool App::init() {
         o.max_credits = std::max(o.min_credits, gc.get_int("Max_Skirmish_Credits", o.max_credits));
     }
     // Video options: the primary display's modes (the current window size selected, else the largest mode under it); the
-    // window is always windowed [port: no exclusive full screen]; v-sync = a FIFO or Mailbox present mode (the port's
+    // display mode list picks fullscreen / borderless / windowed [port: no exclusive full screen]; v-sync = a FIFO or Mailbox present mode (the port's
     // V-sync mode combo picks which; off = Immediate), plus the port's frame rate cap and display line.
     display_modes_ = display_modes(win_.native_handle());
     shown_modes_ = video_list_modes(display_modes_, video_profile_.widescreen);
-    if (have_video_profile_ && live_input() && ((video_profile_.mode.width && video_profile_.mode.height) || !windowed_)) {  // the saved mode
+    if (live_input()) ui_scale_ = video_profile_.ui_scale;  // 100 % without a profile
+    if (have_video_profile_ && live_input() && ((video_profile_.mode.width && video_profile_.mode.height) || !windowed())) {  // the saved mode
         std::string line;
         DisplayMode m = video_profile_.mode;  // full screen without a stored mode: the display's largest mode
         if ((!m.width || !m.height) && !display_modes_.empty()) m = display_modes_.back();
-        apply_display_mode(win_.native_handle(), m, &line, windowed_);
+        apply_display_mode(win_.native_handle(), m, &line, window_mode_);
         std::printf("video: %s\n", line.c_str());
         update_display_rate(true);
     }
@@ -198,7 +199,8 @@ bool App::init() {
         v.detail = video_profile_.detail;  // the original's sliders: saved with the profile, applied each frame (t11)
         v.anti_alias = video_profile_.anti_alias;
         v.gamma = video_profile_.gamma;
-        v.windowed = windowed_;
+        v.window_mode = window_mode_;
+        v.ui_scale = ui_scale_ > 0 ? ui_scale_ : video_profile_.ui_scale;
         v.widescreen = video_profile_.widescreen;
         v.vsync = opt_.mode != rhi::PresentMode::Immediate;
         v.vsync_mode = vsync_mode_;
@@ -244,7 +246,7 @@ bool App::init() {
         std::fprintf(stderr, "UI: %s\n", err.c_str());
         return false;
     }
-    ui_.resize(win_.width(), win_.height());
+    resize_ui();
     // OI host: the hotkey table's defaults (W A S D movement, arrows / numpad yaw-pitch-roll, Pause) and the queue
     // modifier drive the camera / order bindings from the first frame (before: ui::Bindings' own defaults until the
     // controls dialog was accepted).
@@ -327,6 +329,7 @@ bool App::init() {
         panel_drawer_.wait_uploads(gpu_.up);
         for (const ui::ShellSet::Shell& s : panel_shells_.shells()) panel_shells_.set_visible(s.component, false);
         for (ui::HudPanel* p : panels()) {
+            p->set_ui_scale(static_cast<float>(ui_scale_) / 100.0f);
             p->resize(win_.width(), win_.height());
             panel_shells_.apply(p->layout());
         }

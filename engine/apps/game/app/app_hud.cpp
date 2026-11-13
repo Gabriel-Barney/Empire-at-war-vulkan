@@ -570,6 +570,7 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
             gf.fleet = st.alive(fl.object) ? static_cast<uint32_t>(st.id(fl.object)) : 0u;
             gf.slot = fl.slot;
             gf.enemy = fl.owner != me;
+            gf.name = ui::utf8_to_utf32(gs->object_name(fl.object));  // [port: Gabriel] fleet / ship names
             bool all_stealth = true;
             for (const objects::ObjectHandle m : fl.contents) {
                 if (!st.alive(m)) continue;
@@ -579,7 +580,8 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
                     continue;
                 }
                 const objects::TypeIndex t = st.type(m);
-                gf.units.push_back({static_cast<uint32_t>(st.id(m)), t < types->size() ? (*types)[t].icon_name : std::string(), 1, false, t});
+                gf.units.push_back({static_cast<uint32_t>(st.id(m)), t < types->size() ? (*types)[t].icon_name : std::string(), 1, false, t,
+                                    ui::utf8_to_utf32(gs->object_name(m))});
             }
             if (gf.units.empty() || gf.fleet == 0 || (!own && all_stealth)) continue;
             out.push_back(std::move(gf));
