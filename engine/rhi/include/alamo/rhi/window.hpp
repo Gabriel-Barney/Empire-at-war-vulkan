@@ -39,6 +39,13 @@ public:
         resized_ = false;
         return r;
     }
+    // [port] Whether this application is the active one (WM_ACTIVATEAPP), and true once after every change.
+    bool app_active() const { return app_active_; }
+    bool take_activation_changed() {
+        const bool r = activation_changed_;
+        activation_changed_ = false;
+        return r;
+    }
     // Virtual-key state (VK_ESCAPE = 0x1B ...), updated by pump().
     bool key_down(uint32_t vk) const { return vk < 256 && keys_[vk]; }
     bool key_pressed(uint32_t vk) {  // edge-triggered
@@ -88,6 +95,8 @@ private:
     void* hinstance_ = nullptr;
     uint32_t width_ = 0, height_ = 0;
     bool resized_ = false;
+    bool app_active_ = true;
+    bool activation_changed_ = false;
     bool close_requested_ = false;
     bool keys_[256] = {};
     bool pressed_[256] = {};

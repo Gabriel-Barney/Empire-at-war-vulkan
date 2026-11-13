@@ -95,6 +95,7 @@ struct DeviceCaps {
     bool upscaler_features = false;      // ContextDesc::upscaler_features took effect
     bool cooperative_matrix = false;     // VK_KHR_cooperative_matrix enabled (with upscaler_features)
     bool shader_float8 = false;          // VK_EXT_shader_float8 enabled (with upscaler_features)
+    bool full_screen_exclusive = false;  // [port] VK_EXT_full_screen_exclusive enabled (presentation contexts that offer it)
     uint8_t pipeline_cache_uuid[VK_UUID_SIZE] = {};
 };
 

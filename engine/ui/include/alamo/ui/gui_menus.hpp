@@ -94,8 +94,8 @@ inline constexpr size_t kVsyncModeCount = 2;
 inline constexpr int32_t kFrameCapDisplay = -1;
 inline constexpr int32_t kFrameCapChoices[] = {0, kFrameCapDisplay, 30, 60, 90, 120, 144, 165, 240};
 // [port: Gabriel 2026-11-13] IDC_PORT_WINDOW_MODE rows (in this order), replacing the shipped "Run in window" check
-// (IDC_WINDOWED_MODE, hidden): Fullscreen = the monitor takes the picked resolution and a frameless window covers it
-// [port: no exclusive Vulkan full screen]; Borderless = a frameless window over the monitor at the desktop's own resolution
+// (IDC_WINDOWED_MODE, hidden): Fullscreen = the monitor takes the picked resolution, a frameless window covers it and
+// takes exclusive Vulkan full screen when the driver offers it (alt-tab minimizes it); Borderless = a frameless window over the monitor at the desktop's own resolution
 // (the picked resolution's refresh rate is still applied, its size is not); Windowed = a framed window of the picked size.
 enum class WindowMode : uint8_t { Fullscreen, Borderless, Windowed };
 inline constexpr size_t kWindowModeCount = 3;
