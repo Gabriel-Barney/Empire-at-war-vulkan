@@ -1335,6 +1335,11 @@ void CampaignBattles::story_begin(SimHost& host, GameMode& mode) {
         TacticalMode* tm = host_->tactical();
         return (battle_ && tm && tm->primary().exists(o)) ? battle_->representative_type(tm->primary().id(o)) : objects::kNone;
     };
+    // q6 t28 (TERRAIN_WATER_POST 1.6): Find_Hint / Get_Hint see the map objects' .ted hint names.
+    b.map_hint = [this](objects::ObjectHandle o) {
+        TacticalMode* tm = host_->tactical();
+        return (battle_ && tm && tm->primary().exists(o)) ? battle_->map_hint(tm->primary().id(o)) : std::string_view();
+    };
     // s78i t02: the Reinforce_Unit stand-in faces the owner's entry-facing record (TACTICAL_COMBAT §3.1.1 "other spawns").
     b.reinforce_facing = [this](int32_t player) { return battle_ ? battle_->player_drop_facing(player) : Vec3{1.0f, 0.0f, 0.0f}; };
     b.pipeline = &host.pipeline();

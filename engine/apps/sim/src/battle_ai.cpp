@@ -146,6 +146,10 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     br.representative_type = [bt, rep_store](objects::ObjectHandle o) {
         return rep_store->exists(o) ? bt->representative_type(rep_store->id(o)) : objects::kNone;
     };
+    // q6 t28: Find_Hint / Get_Hint see the map objects' .ted hint names.
+    br.map_hint = [bt, rep_store](objects::ObjectHandle o) {
+        return rep_store->exists(o) ? bt->map_hint(rep_store->id(o)) : std::string_view();
+    };
     // s78i t02: the Reinforce_Unit stand-in faces the owner's entry-facing record (TACTICAL_COMBAT §3.1.1 "other spawns").
     br.reinforce_facing = [bt](int32_t player) { return bt->player_drop_facing(player); };
     br.order_finished = [bt](objects::ObjectId id, uint32_t) {

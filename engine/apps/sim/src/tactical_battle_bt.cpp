@@ -487,6 +487,12 @@ void TacticalBattle::bt_battle_end() {
 
 // ---- battle host follow-up: TEAM containers (REMAINING_GAPS §3.4), landing reinforcement points (§3.3) --------------
 
+std::string_view TacticalBattle::map_hint(objects::ObjectId id) const {
+    const auto it = std::lower_bound(map_hints_.begin(), map_hints_.end(), id,
+                                     [](const std::pair<objects::ObjectId, std::string>& e, objects::ObjectId v) { return e.first < v; });
+    return it != map_hints_.end() && it->first == id ? std::string_view(it->second) : std::string_view();
+}
+
 objects::TypeIndex TacticalBattle::representative_type(objects::ObjectId id) const {
     if (id == objects::kNoObjectId) return objects::kNone;
     for (const Container& ct : containers_)  // container order; ids are unique
@@ -984,6 +990,17 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
                                          [](const std::pair<objects::ObjectId, int32_t>& e, objects::ObjectId v) { return e.first < v; });
         if (it == pad_levels_.end() || it->first != id) pad_levels_.insert(it, {id, level});
     };
+    // q6 t28 (TERRAIN_WATER_POST 1.6): the placement's 0x482 hint name goes on the object created for it (the GOM loader
+    // loads it into the object's hint holder). [port] A Map_Load_Spawn_Table pick does not inherit it (the placeholder that
+    // held it is removed; whether the original copies it over is not read).
+    map_hints_.clear();
+    auto note_hint = [&](const terrain::ObjectPlacement& p, objects::ObjectHandle h) {
+        if (p.hint.empty() || !mode.primary().exists(h)) return;
+        const objects::ObjectId id = mode.primary().id(h);
+        const auto it = std::lower_bound(map_hints_.begin(), map_hints_.end(), id,
+                                         [](const std::pair<objects::ObjectId, std::string>& e, objects::ObjectId v) { return e.first < v; });
+        if (it == map_hints_.end() || it->first != id) map_hints_.insert(it, {id, p.hint});
+    };
     const bool skirmish = skirmish_land() || skirmish_map();
     for (const terrain::ObjectPlacement& pl : map_.objects) {
         // bkg3 b0028: a skirmish's team-marker structures and its map placements with byte 0 spawn nothing from their
@@ -1009,6 +1026,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             }
             continue;
         }
+        bool picked = false;  // q6 t28: a Map_Load_Spawn_Table pick (no hint)
         if (const auto table = spawn_table(types, t); !table.empty()) {
             const float w = table.back().second;
             const float r1 = rng.range_float(0.0f, 1.0f);
@@ -1024,6 +1042,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
                     break;
                 }
             t = pick;
+            picked = true;
             bt_used_ = true;
             int32_t aff = -1;
             const std::span<const std::string_view> af = types.get_list(t, "Affiliation");
@@ -1054,6 +1073,7 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
         if (!mobile && s4_placement(mode, t, sp, pl.health_fraction, &placed)) {  // S4: capture points / garrison structures
             own_obstacles(pl, t, placed);
             note_pad(pl, placed);
+            if (!picked) note_hint(pl, placed);
             // a1f t07: a SELECTABLE one (Secondary_Abandoned_Sensor: Tactical_Health 700, Structure, Neutral at start) is a
             // combat object too, so Destroy_Structure / attack orders can kill it; whatever its map owner (the Is_Neutral
             // player's objects are skipped by the target scan, TACTICAL_COMBAT §2.2). [port] a third party: never decides
@@ -1072,12 +1092,14 @@ void TacticalBattle::bt_map_load(TacticalMode& mode, SimRng& rng) {
             const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
             own_obstacles(pl, t, h);
             note_pad(pl, h);
+            if (!picked) note_hint(pl, h);
             if (!bt_owner_neutral(owner)) bt_adopt_built(mode, h, owner, pl.health_fraction, &rng, true);
             continue;
         }
         const objects::ObjectHandle h = mode.spawn(sp, pl.health_fraction);
         own_obstacles(pl, t, h);
         note_pad(pl, h);
+        if (!picked) note_hint(pl, h);
         if (kMarker != objects::kNoBehavior && types.has_behavior(t, objects::BehaviorSet::Union, kMarker) && owner >= 0) {
             MapMarker m;
             m.id = mode.primary().exists(h) ? mode.primary().id(h) : objects::kNoObjectId;

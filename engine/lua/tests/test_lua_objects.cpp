@@ -237,6 +237,20 @@ static void test_find(const Db& db) {
     CHECK(contains(run_stop(vm, "Find_All_Objects_With_Hint(1)"), "invalid type for parameter 1. Expected string."));
     CHECK(run(vm, "gh = Find_Hint('Marker_Generic', 'spawnpoint').Get_Hint() gn = tostring(t1.Get_Hint())") == "");
     CHECK(gstr(vm, "gh") == "SpawnPoint" && gstr(vm, "gn") == "nil");
+    // q6 t28: map hints (.ted 0x482) come from the host's map_hint hook; a script-set hint wins over it.
+    {
+        const objects::ObjectId tank_id = s.store.id(s.tank), m1 = s.store.id(s.marker1);
+        s.bridge.map_hint = [&s, tank_id, m1](objects::ObjectHandle h) {
+            const objects::ObjectId id = s.store.id(h);
+            return id == tank_id ? std::string_view("falcongear1") : id == m1 ? std::string_view("mapname") : std::string_view();
+        };
+        CHECK(run(vm, "mh1 = Find_Hint('Tank', 'FalconGear1').Get_Object_ID() mh2 = tostring(Find_Hint('Trooper', 'falcongear1')) "
+                      "mh3 = tank.Get_Hint() mh4 = tostring(Find_Hint('Marker_Generic', 'mapname')) "
+                      "mh5 = table.getn(Find_All_Objects_With_Hint('falcongear1')) mh6 = Find_Hint('Marker_Generic', 'spawnpoint').Get_Object_ID()") == "");
+        CHECK(gnum(vm, "mh1") == static_cast<double>(tank_id) && gstr(vm, "mh2") == "nil" && gstr(vm, "mh3") == "falcongear1");
+        CHECK(gstr(vm, "mh4") == "nil" && gnum(vm, "mh5") == 1.0 && gnum(vm, "mh6") == 5.0);
+        s.bridge.map_hint = nullptr;
+    }
     // Find_First_Object: newest first, case-insensitive type name.
     CHECK(run(vm, "f1 = Find_First_Object('trooper').Get_Object_ID() f2 = tostring(Find_First_Object('Nope'))") == "");
     CHECK(gnum(vm, "f1") == 2.0 && gstr(vm, "f2") == "nil");

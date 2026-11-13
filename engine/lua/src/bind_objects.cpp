@@ -140,6 +140,12 @@ ScriptObjectState* edit_state(Call& c, ObjectId id) {
     return b ? &b->state(id) : nullptr;
 }
 ScriptObjectState* edit_self(Call& c) { return edit_state(c, c.self->id); }
+// q6 t28: an object's hint: the script-set one (ScriptObjectState::hint), else the host's map hint (.ted 0x482,
+// ObjectBridge::map_hint); "" without a bridge or a hint.
+std::string_view hint_of(const ObjectBridge& b, const objects::ObjectStore& st, ObjectHandle h) {
+    if (const ScriptObjectState* s = b.find_state(st.id(h)); s && !s->hint.empty()) return s->hint;
+    return b.map_hint ? b.map_hint(h) : std::string_view();
+}
 
 // ---------------------------------------------------------------- positions
 
@@ -617,8 +623,8 @@ int g_find_hint(Call& c) {
     if (!st || !b) return push_nil(c);
     for (const ObjectHandle h : st->objects_newest_first()) {
         if (!st->active(h) || !type_matches(c, h, t.name)) continue;
-        const ScriptObjectState* s = b->find_state(st->id(h));
-        if (s && ascii_iequals(s->hint, hint)) {
+        const std::string_view oh = hint_of(*b, *st, h);
+        if (!oh.empty() && ascii_iequals(oh, hint)) {
             detail::push_object(c.L, *c.vm, h);
             return 1;
         }
@@ -639,8 +645,8 @@ int g_find_all_with_hint(Call& c) {
     int n = 0;
     for (const ObjectHandle h : st->objects_newest_first()) {
         if (!st->active(h)) continue;
-        const ScriptObjectState* s = b->find_state(st->id(h));
-        if (!s || !ascii_iequals(s->hint, hint)) continue;
+        const std::string_view oh = hint_of(*b, *st, h);
+        if (oh.empty() || !ascii_iequals(oh, hint)) continue;
         detail::push_object(c.L, *c.vm, h);
         lua_rawseti(c.L, -2, ++n);
     }
@@ -1078,8 +1084,13 @@ int m_get_planet_location(Call& c) {
 
 int m_get_hint(Call& c) {
     const ScriptObjectState& s = state_of(c, c.self->id);
-    if (s.hint.empty()) return push_nil(c);
-    return push_str(c, s.hint);
+    if (!s.hint.empty()) return push_str(c, s.hint);
+    const ObjectBridge* b = bridge(c);
+    const objects::ObjectStore* st = store(c);
+    const ObjectHandle h = st ? st->find(c.self->id) : ObjectHandle{};
+    const std::string_view hint = b && b->map_hint && st && st->exists(h) ? b->map_hint(h) : std::string_view();
+    if (hint.empty()) return push_nil(c);
+    return push_str(c, hint);
 }
 
 int m_is_selectable(Call& c) {

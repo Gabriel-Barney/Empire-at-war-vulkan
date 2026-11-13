@@ -65,6 +65,9 @@ chunk `0x482` directly under the object chunk `0x44C` (sibling of `0x454` / `0x4
 so no map object gets a hint: `Find_Hint` reads `ScriptObjectState::hint` (`engine/lua/src/bind_objects.cpp:601-624`),
 which only `Create_Cinematic_Transport` sets (`engine/lua/src/bind_script_gaps.cpp:339`). Every `Find_Hint` on a map
 object returns nil, in every story mission that uses one (the UM01 script has 187 `Find_Hint` calls).
+Fixed in q6 t28 (2026-11-13): `ObjectPlacement::hint` (read and written), `TacticalBattle::map_hint` (set by the map
+load for the object created for each placement), `lua::ObjectBridge::map_hint` (the story / object-script and the
+tactical AI bridges).
 
 Consequence in UM01: nothing after line 249 of the Begin state runs: no bribe squad (retail frame 6), no
 `Register_Death_Event` on the consoles (the doors cannot open), no `Register_Prox`, no `CINE_Start_Mission_A`

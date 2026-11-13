@@ -600,6 +600,102 @@ void test_battle_ai_find_team() {
     CHECK(checked);
 }
 
+// q6 t28 (TERRAIN_WATER_POST 1.6): a map placement's .ted hint name (chunk 0x482) goes on the object the map load creates
+// for it, and the battle's Lua finders see it through ObjectBridge::map_hint: Find_Hint(type, hint) (case-insensitive),
+// Get_Hint, Find_All_Objects_With_Hint. [port] A Map_Load_Spawn_Table pick does not inherit its placeholder's hint.
+void test_battle_map_hints() {
+    auto d = make_data(false, false, false, false, false, true);  // the obstacle types (S10_Obst_Rock / _Spawner)
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 2026;
+    cfg.players = 4;
+    SimHost host(d->types, js, cfg);
+    galactic::GalacticSim* gs = host.start_galactic(d->rules, make_setup(*d, true));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 600;
+    CampaignBattles battles(host, d->crules, *d->catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "S10_Land_B") return false;
+                                m = land_map();
+                                auto add = [&m](const char* type, const char* hint, float x) {
+                                    terrain::ObjectPlacement p;
+                                    p.type_crc = name_crc(type);
+                                    p.owner = 2;  // the Neutral faction (as test_runtime_obstacles)
+                                    p.position[0] = x;
+                                    p.position[1] = 400.0f;
+                                    p.hint = hint;
+                                    m.objects.push_back(p);
+                                };
+                                add("S10_Obst_Rock", "FalconGear1", 300.0f);
+                                add("S10_Obst_Rock", "", 600.0f);
+                                add("S10_Obst_Rock_Spawner", "spawnedgear", 900.0f);
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach(nullptr));
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    ai::AiDefinitions defs;
+    ai::EquationSet eqs;
+    TacticalAiSetup ts;
+    ts.defs = &defs;
+    ts.equations = &eqs;
+    ts.files = d->files.get();
+    ts.ai_type = [](int32_t, const galactic::GalacticSim&) { return std::string(); };
+    const objects::TypeIndex rock = d->types.resolve_name("S10_Obst_Rock");
+    CHECK(rock != objects::kNone);
+    bool invaded = false, checked = false;
+    for (uint64_t t = 0; t < 2500 && !checked; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->frame() < 1) continue;
+        objects::ObjectStore& st = tm->primary();
+        std::vector<objects::ObjectId> rocks;  // creation order: the hinted one, the plain one, the spawn table's pick
+        for (const objects::ObjectHandle h : st.all_objects())
+            if (st.alive(h) && st.type(h) == rock) rocks.push_back(st.id(h));
+        std::sort(rocks.begin(), rocks.end());
+        CHECK(rocks.size() == 3);
+        if (rocks.size() != 3) {
+            std::printf("  map hints: %zu rocks\n", rocks.size());
+            break;
+        }
+        CHECK(b->map_hint(rocks[0]) == "FalconGear1" && b->map_hint(rocks[1]).empty() && b->map_hint(rocks[2]).empty());
+        BattleAi ai(*b, *tm, host, ts);
+        lua::ObjectBridge& br = ai.world().object_bridge();
+        CHECK(static_cast<bool>(br.map_hint));
+        lua::LuaHost lh;
+        lh.store = &st;
+        lh.types = &d->types;
+        lua::LuaVm vm(lh);
+        lua::attach_object_bridge(vm, &br);
+        std::string err;
+        const std::string code = "local g = Find_Hint('S10_OBST_ROCK', 'falcongear1') "
+                                 "if not g or g.Get_Object_ID() ~= " + std::to_string(rocks[0]) + " then error('Find_Hint') end "
+                                 "if g.Get_Hint() ~= 'FalconGear1' then error('Get_Hint') end "
+                                 "if table.getn(Find_All_Objects_With_Hint('FALCONGEAR1')) ~= 1 then error('Find_All') end "
+                                 "if Find_Hint('S10_Trooper', 'falcongear1') ~= nil then error('type filter') end "
+                                 "if Find_Hint('S10_Obst_Rock', 'spawnedgear') ~= nil then error('spawn table pick') end";
+        const bool ok = vm.run(code, "map_hints", &err);
+        if (!ok) std::printf("  map hints: %s\n", err.c_str());
+        CHECK(ok);
+        lua::attach_object_bridge(vm, nullptr);
+        checked = true;
+    }
+    CHECK(checked);
+}
+
 // q6: an attack ordered on a TEAM container (A1_READINGS §33.2.1 row 1: a TEAM container is a valid target on its own;
 // TACTICAL_COMBAT §2.8 B step 5, LOB_SOLVER §5.1: each shot takes the container's member nearest the shooter). Land battle
 // with team data: player 1's troopers attack one of player 0's squad containers. The AI host's Attack (BattleAi) and the
@@ -5257,6 +5353,8 @@ int main(int argc, char** argv) {
     test_battle_ai_land_mode(false, true);
     std::printf("refixf t03: Find_All_Objects_Of_Type('S10_Squad') finds the TEAM containers (representative type hook)\n");
     test_battle_ai_find_team();
+    std::printf("q6 t28: map hint names (.ted 0x482) reach Find_Hint / Get_Hint / Find_All_Objects_With_Hint\n");
+    test_battle_map_hints();
     std::printf("q6: an attack ordered on a TEAM container (AI host and human order; nearest member, order ends with the container)\n");
     test_battle_attack_team();
     std::printf("a1g t04 follow-up: BattleAi::land_drop_ok (impassable / fogged / movers / enabling radius)\n");
