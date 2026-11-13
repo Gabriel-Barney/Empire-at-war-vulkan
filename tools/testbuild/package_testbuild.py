@@ -1,4 +1,5 @@
-"""Packs a test build zip for Gabriel: alamo_game + alamo_mod_check from a Release build tree, the launchers in
+"""Packs a test build zip for Gabriel: alamo_game + alamo_mod_check (with the DXC, FFmpeg and FSR runtime DLLs) from a
+Release build tree, the launchers in
 tools/testbuild/launchers (Play.cmd for Forces of Corruption, Play_Mod.cmd for any installed mod),
 tools/testbuild/CHANGES.txt and THIRD_PARTY_NOTICES.txt (the license of every third-party component in the zip, read
 from toolchain/, plus where to get the exact FFmpeg source and build options the LGPL asks for).
@@ -27,7 +28,8 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 HERE = ROOT / "tools" / "testbuild"
 BINARIES = ["alamo_game.exe", "alamo_mod_check.exe", "avcodec-62.dll", "avformat-62.dll", "avutil-60.dll",
-            "dxcompiler.dll", "dxil.dll", "COPYING.LGPLv2.1"]
+            "dxcompiler.dll", "dxil.dll", "amd_fidelityfx_loader_vk.dll", "amd_fidelityfx_upscaler_vk.dll",
+            "COPYING.LGPLv2.1"]
 LAUNCHERS = ["Play.cmd", "Play_Mod.cmd", "find_game.cmd", "launcher.ps1"]
 SMOKE_MOD = "1125571106"  # Thrawn's Revenge (Steam workshop), the mod the smoke plays
 TOOLCHAIN = ROOT / "toolchain"
@@ -101,6 +103,11 @@ def third_party_notices():
          [vk / "LICENSE.md", vk / "LICENSES" / "MIT.txt", vk / "LICENSES" / "Apache-2.0.txt"]),
         ("DirectX Shader Compiler " + dxc, "dxcompiler.dll and dxil.dll, unmodified",
          [TOOLCHAIN / "dxc" / n for n in ("LICENSE-LLVM.txt", "LICENSE-MIT.txt", "LICENSE-MS.txt")]),
+        ("SMAA (reference implementation)", "shaders compiled into alamo_game.exe",
+         [ROOT / "engine" / "render" / "third_party" / "smaa" / "LICENSE.txt"]),
+        ("AMD FidelityFX SDK " + one_dir("fidelityfx-*").name.split("-", 1)[1],
+         "amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll (FSR upscaling), unmodified",
+         [one_dir("fidelityfx-*") / "license.md"]),
     ]
     ff_title = "FFmpeg %s: avcodec-62.dll, avformat-62.dll, avutil-60.dll" % ff_ver
     rule = "=" * 78
