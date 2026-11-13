@@ -42,7 +42,7 @@ ui::Rgba8 App::faction_rgba(const galactic::GalacticSim& g, int32_t player, bool
 // planet (surface and orbit), and one stack per fleet (count = members, 1..5) plus one land-force stack per owner.
 // GALAXY_MAP_PRESENTATION §1.4 (0x3d15b0): the representative unit of a fleet / land force - every unit competes on max
 // tactical health (Tactical_Health; a hero needs >=, a non-hero >); with the hero filter (b_filters3) on, the hero with the
-// lowest Ranking_In_Category wins. [port] the hero filter state is not fed to the host yet (off); transports'
+// lowest Ranking_In_Category wins (ui4 t03: GalacticHud::filter_bits fed back as hero_filter_); transports'
 // cargo is already in the fleet contents.
 std::string App::representative_icon(std::span<const objects::ObjectHandle> units, bool hero_filter) const {
     const galactic::GalacticSim* g = galaxy();
@@ -107,6 +107,7 @@ void App::planet_icons(const galactic::GalacticSim& g, PlanetIndex row, ui::Gala
             out.hero_rebel = out.hero_rebel || fx == 0;
             out.hero_empire = out.hero_empire || fx == 1;
             out.hero_underworld = out.hero_underworld || fx == 3;
+            if (!friendly(st.owner(h)) && out.enemy_hero < 0) out.enemy_hero = fx == 1 ? 1 : 0;  // ui4 t03 g_enemy_hero
             continue;
         }
         ++land[st.owner(h)];
@@ -134,7 +135,14 @@ void App::planet_icons(const galactic::GalacticSim& g, PlanetIndex row, ui::Gala
         s.owner_color = faction_rgba(g, owner, false, ui::Rgba8{});  // §1.4 secondary colour (white when the table has none)
         s.units = contents ? static_cast<uint32_t>(live.size()) : 1u;
         s.count = std::clamp<uint32_t>(s.units, 1, 5);
-        if (contents || most_powerful) s.icon = representative_icon(live);
+        if (contents || most_powerful) s.icon = representative_icon(live, hero_filter_);  // ui4 t03: b_filters3
+        // ui4 t03 g_enemy_hero: a seen enemy hero in orbit too [port] (Icon_Alternate 1 = i_icon_empire_hero).
+        if (contents && !friendly(owner) && out.enemy_hero < 0)
+            for (const objects::ObjectHandle m : live)
+                if (is_hero(st.type(m))) {
+                    out.enemy_hero = galactic_faction_icon(g, owner) == 1 ? 1 : 0;
+                    break;
+                }
         s.enemy = owner != me;
         s.stealth = all_stealth;
         s.raid = !s.stealth && cm && cm->raid_force(owner, live);
@@ -184,9 +192,41 @@ void App::planet_icons(const galactic::GalacticSim& g, PlanetIndex row, ui::Gala
             std::vector<objects::ObjectHandle> units;
             for (const objects::ObjectHandle h : ps.surface)
                 if (st.alive(h) && st.owner(h) == owner) units.push_back(h);
-            s.icon = representative_icon(units);
+            s.icon = representative_icon(units, hero_filter_);
         }
         out.stacks.push_back(std::move(s));
+    }
+}
+
+// ui4 t03 [port] (GALAXY_MAP_PRESENTATION §1.1): the status icons and the corruption line of planet `row` for the local
+// player. g_build: one of the planet's queues holds a local entry. g_smuggled: an income siphon runs on the planet and the
+// local player is its siphoner or the planet's owner. g_corruption_icon: corrupted (its owner or the corrupter sees it, or
+// the planet's CorruptionInfo is visible [port: the gate is the political-control one]). g_corruption_text: while a
+// corruption transition runs, (int)(fraction x 100) in TEXT_CORRUPTION_PERCENT / TEXT_CORRUPTION_REMOVE_PERCENT
+// (GALACTIC_REVEAL_CORRUPTION §4.6).
+void App::planet_status(const galactic::GalacticSim& g, PlanetIndex row, ui::GalacticPlanetInfo& out) const {
+    const galactic::PlanetState& ps = g.planets()[row];
+    const int32_t me = local_player();
+    for (uint32_t q = 0; q < 2 && !out.building; ++q)
+        for (const galactic::BuildEntry& b : g.queue_of(row, q))
+            if (b.player == me) out.building = true;
+    out.smuggled = ps.siphon_player != galactic::kNoPlayer && g.frame() < ps.siphon_until && (ps.siphon_player == me || ps.owner == me);
+    const bool seen = ps.owner == me || g.can_see_planet_info(me, row, galactic::GalacticSim::PlanetInfo::PoliticalControl);
+    out.corrupted = seen && g.corrupted(row);
+    if (seen && g.corruption_transition_active(row)) {
+        const auto pct = static_cast<int32_t>(g.corruption_transition_fraction(row) * 100.0f);
+        const char* key = ps.corruption_removing ? "TEXT_CORRUPTION_REMOVE_PERCENT" : "TEXT_CORRUPTION_PERCENT";
+        const std::u16string* t = ui_.text.find(key);
+        std::u32string line = t ? ui::utf16_to_utf32(*t) : std::u32string();
+        std::u32string num;
+        for (const char c : std::to_string(pct)) num.push_back(static_cast<char32_t>(c));
+        // The text carries a printf field (%d / %s) [M]; without one the number and '%' are appended.
+        size_t at = std::u32string::npos;
+        for (const std::u32string_view f : {std::u32string_view(U"%d"), std::u32string_view(U"%s"), std::u32string_view(U"%i")})
+            if (at == std::u32string::npos) at = line.find(f);
+        if (at != std::u32string::npos) line.replace(at, 2, num);
+        else line += (line.empty() ? U"" : U" ") + num + U"%";
+        out.corruption_text = std::move(line);
     }
 }
 
@@ -378,6 +418,12 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
         i.space_level = p.starbase_level > 0 ? p.starbase_level : -1;
         i.ground_level = p.ground_level > 0 ? p.ground_level : -1;
         i.conflict = (p.flags & render::kGalInBattle) != 0;
+        // ui4 t03 [port]: weather / ability icons from the planet type (b_filters2), the status icons and the corruption line.
+        if (p.type != objects::kNone && p.type < data_.types.size()) {
+            i.weather_icon = std::string(data_.types.get_string(p.type, "Encyclopedia_Weather_Icon"));
+            i.ability_icon = std::string(data_.types.get_string(p.type, "Planet_Ability_Icon"));
+        }
+        if (g && p.row < g->planets().size()) planet_status(*g, p.row, i);
         if (g && p.row < g->planets().size()) {  // OI host: REMAINING_GAPS §6.3 display gates for the local player
             i.starbase_info = g->can_see_starbase_info(local_player(), p.row);
             i.groundbase_info = g->can_see_groundbase_info(local_player(), p.row);
@@ -403,6 +449,15 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
         }
         planets.push_back(std::move(i));
     }
+    // ui4 t03 [port]: g_credit_bar level = the planet's credit value against the highest value on the map, 0..10.
+    {
+        int32_t top = 0;
+        for (const ui::GalacticPlanetInfo& i : planets) top = std::max(top, i.credits);
+        if (top > 0)
+            for (ui::GalacticPlanetInfo& i : planets)
+                if (i.credits >= 0) i.credit_level = static_cast<int32_t>(std::lround(10.0 * static_cast<double>(i.credits) / static_cast<double>(top)));
+    }
+    hero_filter_ = (ui_.galactic_hud.filter_bits() & ui::kFilterHero) != 0;  // read by planet_icons next frame
     f.planets = planets;
     hud_planet_ids_.clear();
     for (const ui::GalacticPlanetInfo& i : planets) hud_planet_ids_.push_back(i.planet);
@@ -523,29 +578,18 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
         }
     };
     // OI host: build bar = GalacticSim::buildable (type-index order) at the planet for the local player; cost =
-    // Build_Cost_Credits [port: no cost modifiers], enabled = affordable [port], structure = ground / orbital structure or
-    // starbase (b_Create_NN); production_disabled = the player's production-disabled list (REMAINING_GAPS §1.5).
+    // GalacticSim::build_cost_for at the planet (ui4 t02, A2K_T01 §1: planet / player price modifiers such as the Emperor's
+    // discount, the corruption price multiplier, the tech-upgrade multiplier), block = GalacticSim::can_enqueue's reason
+    // (queue full, pop cap, funds; const reads, no side effects), enabled = no block, queued = the local player's entries of
+    // the type in the planet's queues; structure = ground / orbital structure or starbase (b_Create_NN);
+    // production_disabled = the player's production-disabled list (REMAINING_GAPS §1.5).
     f.providers.build_options = [s, types](uint32_t planet, std::vector<ui::GalacticBuildOption>& out) {
         const galactic::GalacticSim* gs = s ? s->galaxy() : nullptr;
         if (!gs) return;
         const PlanetIndex pi = planet_index(*gs, planet);
         if (pi == kInvalidPlanet) return;
-        const int32_t me = s->local_player();
-        const float credits = gs->credits(me);
-        for (const uint32_t t : gs->buildable(pi, me)) {
-            if (t >= gs->rules().types.size() || t > 0xFFFFu) continue;
-            const galactic::TypeInfo& ti = gs->rules().types[t];
-            ui::GalacticBuildOption o;
-            o.type_index = static_cast<uint16_t>(t);
-            o.icon = t < types->size() ? (*types)[t].icon_name : std::string();
-            o.cost = ti.build_cost;
-            o.enabled = static_cast<float>(ti.build_cost) <= credits;
-            o.structure = galactic::is_ground_structure_type(ti) || galactic::is_orbital_structure_type(ti) || galactic::is_star_base_type(ti);
-            o.production_disabled = gs->production_disabled(me, t);
-            // GALACTIC_DIALOGS §5.1: the space tab = space-queue units, starbases and orbital structures.
-            o.space = gs->queue_kind(t) == galactic::kSpaceQueue || galactic::is_star_base_type(ti) || galactic::is_orbital_structure_type(ti);
-            out.push_back(std::move(o));
-        }
+        out = galactic_build_options(*gs, s->local_player(), pi,
+                                     [types](uint32_t t) { return t < types->size() ? (*types)[t].icon_name : std::string(); });
     };
     // GALACTIC_DIALOGS §5.2: the selected planet's build queues (the local player's entries, head first): space queue on
     // queue00..04, ground queue on queue05..09 (HudQueueEntry::land); the head's timer gives the dial. A click cancels

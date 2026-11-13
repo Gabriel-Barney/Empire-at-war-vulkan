@@ -358,6 +358,10 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                     submit(commands::ev::production(static_cast<uint16_t>(a.value), a.unit, true,
                                                     static_cast<uint8_t>(a.ids[0]), static_cast<uint8_t>(a.ids[1])));
                 break;
+            case ui::HudAction::Kind::BuildRefused:  // ui4 t02: a greyed galactic build pad: GUI negative feedback, no command
+                audio_.negative_feedback();
+                ++build_refusals_;
+                break;
             case ui::HudAction::Kind::HeroSelect:  // FIXPASS_GALACTIC §2.3 tactical single click: replace the selection
                 if (a.unit && screen_ == Screen::Battle) submit(commands::ev::select({a.unit}));
                 break;
@@ -599,9 +603,11 @@ void App::galactic_input() {
             static_cast<size_t>(e.component) < ui_.components.size() &&
             ui_.galactic_hud.buttons().visual(static_cast<uint32_t>(e.component)) != ui::ButtonVisual::Disabled)
             story_ui_.click_gui(ui_.components[static_cast<size_t>(e.component)].name);
-    // The galactic shell panels (the hero panel is tactical: input in the tactical update below). Only SlicePanel reads the wheel.
+    // The galactic shell panels and the hero roster (ui4 t01, FIXPASS_GALACTIC §2.2: a good slot's click focuses the hero's
+    // planet, a double click zooms; hover gives Mouse_Over_SFX, the tooltip and the encyclopedia pop-up). Only SlicePanel
+    // reads the wheel.
     for (ui::HudPanel* p : panels())
-        if (p != &hero_panel_ && p->open()) p->update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts, input_.wheel());
+        if (p->open()) p->update_input(routed_, input_.shift(), input_.ctrl(), now_s_, &acts, input_.wheel());
     for (const ui::HotkeyEvent& e : hk) {
         // FIXPASS_GALACTIC §4.2 (capture C2): the advisor key (Numpad -) opens the Droid Log, as the dome and "?" do.
         if (e.slot == ui::hk::kHolocron || e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);

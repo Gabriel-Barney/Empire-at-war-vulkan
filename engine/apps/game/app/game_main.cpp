@@ -369,6 +369,7 @@ int App::run() {
                     choices_, auto_resolves_, story_dialogs_, ency_shown_, retry_boxes_, reinforce_drops_, holo_.samples());
         std::printf("reveal: %" PRIu64 " planet-revealed sfx, %" PRIu64 " moves to unrevealed planets dropped\n", reveal_sfx_,
                     hidden_moves_dropped_);
+        std::printf("build pads: %" PRIu64 " refused clicks (greyed pads)\n", build_refusals_);  // ui4 t02
         std::printf("hud feeds: %" PRIu64 " reticle frames, %" PRIu64 " reticle orders, %" PRIu64 " Lua GUI calls, %zu galactic heroes, "
                     "reticle table %zu, buy bar hidden %" PRIu64 " frames (builder behind the camera)\n",
                     reticle_frames_, reticle_orders_, gui_calls_applied_, galactic_heroes_.size(), reticles_.size(), buy_bar_behind_camera_);

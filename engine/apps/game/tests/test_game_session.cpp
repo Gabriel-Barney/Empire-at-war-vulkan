@@ -1595,6 +1595,26 @@ void hero_roster_real_test() {
     for (const ui::HeroEntry& h : ranked) order += h.type_name + " ";
     std::printf("hero bar order (real data): %s\n", order.c_str());
     CHECK(order == "Emperor_Palpatine Boba_Fett General_Veers Grand_Moff_Tarkin Accuser_Star_Destroyer ");
+    // ui4 t02 (A2K_T01 §1): the build pads at Corellia price with build_cost_for - the Emperor's 25 % discount there - and
+    // carry can_enqueue's block reason.
+    {
+        const std::vector<ui::GalacticBuildOption> opts = game::galactic_build_options(*g, s.local_player(), corellia, icon);
+        size_t discounted = 0;
+        for (const ui::GalacticBuildOption& o : opts) {
+            const galactic::TypeInfo& ti = g->rules().types[o.type_index];
+            CHECK(o.cost == g->build_cost_for(s.local_player(), corellia, o.type_index));
+            CHECK(o.block == game::galactic_build_block(g->can_enqueue(s.local_player(), corellia, o.type_index)));
+            CHECK(o.enabled == (o.block == ui::HudBuildOption::Block::None));
+            if (ti.build_cost > 0 && o.cost < ti.build_cost) ++discounted;
+        }
+        std::printf("build pads at Corellia (real data): %zu options, %zu below Build_Cost_Credits\n", opts.size(), discounted);
+        CHECK(!opts.empty() && discounted > 0);
+    }
+    CHECK(game::galactic_build_block(commands::RejectReason::QueueFull) == ui::HudBuildOption::Block::QueueFull &&
+          game::galactic_build_block(galactic::kRejectPopulationCap) == ui::HudBuildOption::Block::PopCap &&
+          game::galactic_build_block(commands::RejectReason::CannotAfford) == ui::HudBuildOption::Block::Funds &&
+          game::galactic_build_block(commands::RejectReason::PrerequisitesUnmet) == ui::HudBuildOption::Block::Prerequisite &&
+          game::galactic_build_block(commands::RejectReason::None) == ui::HudBuildOption::Block::None);
     // The rule on the other factions' companies: a named transport wins, else the first member; plain types stay.
     const galactic::GalacticRules& rules = g->rules();
     const auto bar_of = [&rules](std::string_view company) {

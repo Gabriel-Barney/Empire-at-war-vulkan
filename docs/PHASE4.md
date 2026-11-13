@@ -967,3 +967,25 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   a non-hostile attackable unit is a land attack block with the host-only flag `kAttackBlockNoLock`; an object that is not
   a combat unit (story markers) still gets the plain move and follow. **t06** the line of fire's end G takes the order's C
   height. **t07** the land stand-in orders drive the battle's attacker and defender only; third parties idle (space: backlog).
+- ⬜ **OPEN** · ui4 t01 / t02 / t03 (2026-11-13, galactic HUD; specs `docs/re/FIXPASS_GALACTIC.md` §2, `docs/re/A2K_T01_BUILD_COST_RE.md` §1,
+  `docs/re/GALACTIC_DIALOGS.md` §5.1, `docs/re/GALAXY_MAP_PRESENTATION.md` §1.1 / §1.2, `docs/re/GALACTIC_REVEAL_CORRUPTION.md` §4.6):
+  **t01** the galactic input loop now hands the routed input to the hero roster too (it was skipped as "tactical"), so a good slot's
+  click focuses the hero's planet, a double click zooms, and hover gives Mouse_Over_SFX, the tooltip and the encyclopedia pop-up.
+  **t02** build pads price with `GalacticSim::build_cost_for` (`game::galactic_build_options`, hud_feeds) and are greyed by
+  `can_enqueue`'s reason (`galactic_build_block`): queue full, population cap, funds take Tooltip_Text entries 0 / 1 / 2 as the
+  tactical pads do; any other refusal is greyed with no tooltip [port]. A left click on a greyed pad is `HudAction::BuildRefused`
+  (GUI negative feedback, no command) [port: the original's refusal sound is the task's reading]. The pad's Text_Offset2 line
+  (Text_Color2) is the local player's queued count of the type at the planet, shown when > 0 [port, GALACTIC_DIALOGS §5.1 L]. The
+  cost text is red when the block is Funds (or the pad is disabled without a reason), else green. **t03** filters: `GalacticHud::filter_bits`
+  (b_filters0..3 = bits 1 / 2 / 4 / 8). b_filters0 credit: value text (as before) and g_credit_bar, level = round(10 × value /
+  the highest value on the map) [port], at its Default_Offset below the value text. b_filters1 base level: the g_ground_level /
+  g_space_level pips now need it [port: GALAXY_MAP_PRESENTATION §1.2 says the pips need a filter bit; the base-level button is
+  taken, its tooltip being TEXT_TOOLTIP_BASE_LEVEL_FILTER]. b_filters2: g_weather = the planet type's Encyclopedia_Weather_Icon,
+  g_planet_ability = its Planet_Ability_Icon, at the components' Offsets, not on fogged planets [port]. b_filters3: the fleet /
+  land buttons' representative icon prefers the hero (§1.4), fed back to the host one frame late. Status row (after the medals,
+  [port] order): g_build = a local queue entry at the planet; g_smuggled = an income siphon runs there and the local player is
+  the siphoner or the owner; g_corruption_icon = corrupted, seen by the owner or with the PoliticalControl info gate [port];
+  g_enemy_hero = a seen enemy hero on the surface or in orbit (alternate 1 i_icon_empire_hero for the Empire, else 0).
+  g_corruption_text = while a corruption transition runs, (int)(fraction × 100) put into TEXT_CORRUPTION_PERCENT /
+  _REMOVE_PERCENT (its %d / %s field, else appended with '%') [M: the text's field]. Not done (no spec): Text_Land_Fleet's
+  content, planet_bonus, Text_adv_help (planet map, t04) - RE gap filed on the backlog.

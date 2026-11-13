@@ -221,5 +221,39 @@ int32_t ar_result_magnitude(bool win, uint32_t n_own, uint32_t n_other) {
     return a > 3u * b ? 0 : a > b ? 1 : 2;
 }
 
+ui::HudBuildOption::Block galactic_build_block(commands::RejectReason why) {
+    using B = ui::HudBuildOption::Block;
+    if (why == commands::RejectReason::None) return B::None;
+    if (why == commands::RejectReason::QueueFull) return B::QueueFull;
+    if (why == galactic::kRejectPopulationCap) return B::PopCap;
+    if (why == commands::RejectReason::CannotAfford) return B::Funds;
+    return B::Prerequisite;
+}
+
+std::vector<ui::GalacticBuildOption> galactic_build_options(const galactic::GalacticSim& g, int32_t player, PlanetIndex planet,
+                                                            const std::function<std::string(uint32_t type)>& icon) {
+    std::vector<ui::GalacticBuildOption> out;
+    if (planet >= g.planets().size() || player < 0 || static_cast<size_t>(player) >= g.players().size()) return out;
+    for (const uint32_t t : g.buildable(planet, player)) {
+        if (t >= g.rules().types.size() || t > 0xFFFFu) continue;
+        const galactic::TypeInfo& ti = g.rules().types[t];
+        ui::GalacticBuildOption o;
+        o.type_index = static_cast<uint16_t>(t);
+        o.icon = icon ? icon(t) : std::string();
+        o.cost = g.build_cost_for(player, planet, t);
+        o.block = galactic_build_block(g.can_enqueue(player, planet, t));
+        o.enabled = o.block == ui::HudBuildOption::Block::None;
+        for (uint32_t q = 0; q < 2; ++q)
+            for (const galactic::BuildEntry& b : g.queue_of(planet, q))
+                if (b.player == player && b.type == t) ++o.queued;
+        o.structure = galactic::is_ground_structure_type(ti) || galactic::is_orbital_structure_type(ti) || galactic::is_star_base_type(ti);
+        o.production_disabled = g.production_disabled(player, t);
+        // GALACTIC_DIALOGS §5.1: the space tab = space-queue units, starbases and orbital structures.
+        o.space = g.queue_kind(t) == galactic::kSpaceQueue || galactic::is_star_base_type(ti) || galactic::is_orbital_structure_type(ti);
+        out.push_back(std::move(o));
+    }
+    return out;
+}
+
 }  // namespace alamo::game
 #endif

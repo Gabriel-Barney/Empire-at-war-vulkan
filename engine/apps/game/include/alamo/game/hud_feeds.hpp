@@ -23,6 +23,12 @@
 //                        ui::auto_resolve_text's argument) from the recorded combatant losses n_own / n_other of the
 //                        viewpoint player: loss MAJOR n_own > 3 n_other, REGULAR n_own > n_other; win the same swapped.
 //   is_named_hero        Is_Named_Hero of the type or of a company's first member.
+//   galactic_build_options ui4 t02 (GALACTIC_DIALOGS §5.1, A2K_T01 §1): the galactic build pads of a player at a planet -
+//                        GalacticSim::buildable in type order; cost = build_cost_for (planet / player price modifiers,
+//                        corruption and tech-upgrade multipliers), block = can_enqueue's reason (galactic_build_block),
+//                        queued = the player's entries of the type in the planet's two queues. Const reads only.
+//   galactic_build_block a can_enqueue RejectReason as a pad block: QueueFull, the population cap, CannotAfford (Funds),
+//                        anything else Prerequisite (greyed, no tooltip [port]); None stays None.
 // Needs engine/ui's alamo_ui_hud (ALAMO_GAME_HAVE_CONTROLS).
 #pragma once
 #ifdef ALAMO_GAME_HAVE_CONTROLS
@@ -34,6 +40,7 @@
 
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
+#include "alamo/ui/galactic_hud.hpp"
 #include "alamo/ui/hud_markers.hpp"
 #include "alamo/ui/hud_panels.hpp"
 #include "alamo/ui/tactical_hud.hpp"
@@ -93,6 +100,11 @@ BattleForceSummary battle_force_summary(const galactic::GalacticSim& g, std::spa
                                         const std::function<std::string(uint32_t type)>& icon, uint32_t ships_per_stack);
 
 int32_t ar_result_magnitude(bool win, uint32_t n_own, uint32_t n_other);
+
+ui::HudBuildOption::Block galactic_build_block(commands::RejectReason why);
+// `icon(type)` = the type's Icon_Name.
+std::vector<ui::GalacticBuildOption> galactic_build_options(const galactic::GalacticSim& g, int32_t player, PlanetIndex planet,
+                                                            const std::function<std::string(uint32_t type)>& icon);
 
 }  // namespace alamo::game
 #endif
