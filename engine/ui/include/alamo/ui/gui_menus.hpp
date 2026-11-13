@@ -99,8 +99,8 @@ inline constexpr int32_t kFrameCapChoices[] = {0, kFrameCapDisplay, 30, 60, 90, 
 // (the picked resolution's refresh rate is still applied, its size is not); Windowed = a framed window of the picked size.
 enum class WindowMode : uint8_t { Fullscreen, Borderless, Windowed };
 inline constexpr size_t kWindowModeCount = 3;
-// [port: Gabriel 2026-11-13] IDC_PORT_UI_SCALE rows: DPI-style UI scale in percent (HudCanvas::make). 100 % = one canvas
-// unit per physical pixel; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
+// [port: Gabriel 2026-11-13] IDC_PORT_UI_SCALE rows: DPI-style UI scale in percent (HudCanvas::make). 100 % = the
+// original's size on a 1080p screen (kUiScaleUnitPixels per canvas unit), the same physical size on every resolution; the UI never grows past the original's fit-the-screen-height size (a larger choice shows that).
 // The game starts at 100 % whatever the Windows display scale is (the process is per-monitor DPI aware).
 inline constexpr int32_t kUiScaleChoices[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450, 500};
 inline constexpr int32_t kUiScaleMin = 100, kUiScaleMax = 500;
