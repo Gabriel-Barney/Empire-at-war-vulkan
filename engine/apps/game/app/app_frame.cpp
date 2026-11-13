@@ -78,6 +78,8 @@ bool App::render_frame() {
         gview_.set_particle_detail(particle_detail(adv_video_.particle));
         bview_.set_particle_detail(particle_detail(adv_video_.particle));
     }
+    // [port: Gabriel] Render Scale (Advanced video): the share of the window's pixels the galactic / battle scene is drawn with.
+    gro.render_scale = bro.render_scale = render_scale_value(adv_video_.render_scale);
     gro.gpu_timer = bro.gpu_timer = bench_gpu_timer();  // bm2: the renderer's scopes (null outside a benchmark)
     if (galactic) {
         ui::CameraParams cp = gview_.camera_params(w, h);

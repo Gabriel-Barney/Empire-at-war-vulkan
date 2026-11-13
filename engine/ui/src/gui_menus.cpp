@@ -298,6 +298,8 @@ BEGIN
     COMBOBOX        IDC_PORT_ENVIRONMENT_DETAIL,230,255,251,108,CBS_DROPDOWNLIST | WS_TABSTOP
     LTEXT           "Anisotropic Filtering",IDC_PORT_ANISOTROPY_TEXT,297,360,218,18
     COMBOBOX        IDC_PORT_ANISOTROPY,297,380,218,120,CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Render Scale",IDC_PORT_RENDER_SCALE_TEXT,297,310,218,18
+    COMBOBOX        IDC_PORT_RENDER_SCALE,297,330,218,140,CBS_DROPDOWNLIST | WS_TABSTOP
     CONTROL         "Ambient Occlusion",IDC_PORT_AMBIENT_OCCLUSION,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,33,385,215,23
 END
 )RC";
@@ -1040,8 +1042,21 @@ void FrontEnd::fill_advanced_video(GuiDialog& d, const AdvancedVideoSettings& s)
         if (a == s.anisotropy) af_sel = static_cast<int32_t>(i);
     }
     d.set_items("IDC_PORT_ANISOTROPY", std::move(af), af_sel);
+    // [port: Gabriel] Render Scale: the listed percentages; a stored value that is not one of them is listed too (selected).
+    std::vector<std::u32string> rs;
+    int32_t rs_sel = -1;
+    for (size_t i = 0; i < std::size(kRenderScaleChoices); ++i) {
+        const int32_t r = kRenderScaleChoices[i];
+        rs.push_back(ascii32(std::to_string(r) + (r == 100 ? "% (native)" : "%")));
+        if (r == s.render_scale) rs_sel = static_cast<int32_t>(i);
+    }
+    if (rs_sel < 0) {
+        rs.push_back(ascii32(std::to_string(s.render_scale) + "%"));
+        rs_sel = static_cast<int32_t>(rs.size() - 1);
+    }
+    d.set_items("IDC_PORT_RENDER_SCALE", std::move(rs), rs_sel);
     d.set_checked("IDC_PORT_AMBIENT_OCCLUSION", s.ambient_occlusion);
-    use_ui_font(d, {"IDC_PORT_ANISOTROPY"});
+    use_ui_font(d, {"IDC_PORT_ANISOTROPY", "IDC_PORT_RENDER_SCALE"});
     // QA D8 [port]: the check rows are widened up to the combo column, so "Heat Distortion" is not narrowed to fit 152 units.
     for (const AdvCheck& k : kAdvChecks)
         if (GuiControl* c = d.get(k.id); c && c->def->w > 0) c->scale.x = kAdvCheckWidth / static_cast<float>(c->def->w);
@@ -1057,6 +1072,9 @@ AdvancedVideoSettings FrontEnd::read_advanced_video(const GuiDialog& d) const {
         if (const GuiControl* c = d.get(k.id)) s.*k.field = c->checked;
     if (const GuiControl* c = d.get("IDC_PORT_ANISOTROPY"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < std::size(kAnisotropyChoices))
         s.anisotropy = kAnisotropyChoices[static_cast<size_t>(c->selected)];
+    // The extra row of an unlisted stored value (past the choices) keeps that value.
+    if (const GuiControl* c = d.get("IDC_PORT_RENDER_SCALE"); c && c->selected >= 0 && static_cast<size_t>(c->selected) < std::size(kRenderScaleChoices))
+        s.render_scale = kRenderScaleChoices[static_cast<size_t>(c->selected)];
     if (const GuiControl* c = d.get("IDC_PORT_AMBIENT_OCCLUSION")) s.ambient_occlusion = c->checked;
     return s;
 }

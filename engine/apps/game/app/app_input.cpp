@@ -1187,15 +1187,18 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 }
                 break;
             }
-            case K::ApplyAdvancedVideo:  // AO goes into the next frame's RecordOptions; anisotropy latches next frame
+            case K::ApplyAdvancedVideo: {  // AO and render scale go into the next frame's RecordOptions; anisotropy latches next frame
                 adv_video_ = a.advanced;
                 gpu_.renderer.set_anisotropy(static_cast<uint32_t>(adv_video_.anisotropy));
-                std::printf("video: ambient occlusion %s, anisotropy %dx requested\n", adv_video_.ambient_occlusion ? "on" : "off",
-                            adv_video_.anisotropy);
+                const VkExtent2D scene = render::render_scale_extent({targets_.width, targets_.height}, render_scale_value(adv_video_.render_scale));
+                std::printf("video: ambient occlusion %s, anisotropy %dx requested, render scale %d%% (%ux%u of %ux%u)\n",
+                            adv_video_.ambient_occlusion ? "on" : "off", adv_video_.anisotropy, adv_video_.render_scale, scene.width,
+                            scene.height, targets_.width, targets_.height);
                 video_profile_.advanced = adv_video_;
                 sync_detail(video_profile_);  // t43: the Detail value follows
                 save_video_options();
                 break;
+            }
             case K::AutoDetectVideo: {  // gfxf t02: a quality level from the GPU; the open dialogs show it
                 const rhi::DeviceCaps& caps = ctx_.caps();
                 GpuClass gpu;

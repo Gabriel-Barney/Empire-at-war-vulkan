@@ -482,7 +482,7 @@ void test_advanced_video_port() {
     const size_t before = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 10 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
           rd->find("IDC_PORT_WATER_DETAIL") >= 0);
     CHECK(rd->find("IDC_PORT_ANTI_ALIASING") < 0);  // anti-aliasing is one list, in the Video dialog
     FrontEnd fe;
@@ -531,12 +531,18 @@ void test_advanced_video_port() {
     CHECK(d->get("IDC_PORT_ANISOTROPY")->selected == 3 && d->get("IDC_PORT_ANISOTROPY")->items.size() == std::size(kAnisotropyChoices) &&
           d->get("IDC_PORT_ANISOTROPY")->items[4] == U"16x" && !d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked);
     CHECK(!d->get("IDC_PARTICLE_DETAIL_SLIDER")->visible);
+    // [port: Gabriel] Render Scale: native by default, the listed percentages, 75 picked.
+    const GuiControl* rs = d->get("IDC_PORT_RENDER_SCALE");
+    CHECK(rs && rs->items.size() == std::size(kRenderScaleChoices) && rs->selected == static_cast<int32_t>(std::size(kRenderScaleChoices) - 1) &&
+          rs->items.back() == U"100% (native)" && rs->items[3] == U"75%" && rs->ui_font);
     d->set_selected("IDC_PORT_PARTICLE_DETAIL", 0);
     d->set_selected("IDC_PORT_ANISOTROPY", 4);
+    d->set_selected("IDC_PORT_RENDER_SCALE", 3);
     d->set_checked("IDC_PORT_AMBIENT_OCCLUSION", true);
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(acts.back().kind == MenuAction::Kind::ApplyAdvancedVideo && acts.back().advanced.particle == 0 && acts.back().advanced.mesh == 55 &&
-          acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion && acts.back().advanced.bloom);
+          acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion && acts.back().advanced.bloom &&
+          acts.back().advanced.render_scale == 75);
     // t43: Apply in Advanced moves the Detail Level list underneath to the level the seven make (Low amid Ultra: Custom) ...
     CHECK(quality->selected == static_cast<int32_t>(kQualityCustom));
     for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",
