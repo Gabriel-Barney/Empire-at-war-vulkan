@@ -5,10 +5,11 @@
 // Canvas units [H]: base 1024 x 768, origin at the screen centre. Aspect > 4:3: width = screenW * 768 / screenH
 // (height stays 768); aspect < 4:3: height = screenH * 1024 / screenW (width stays 1024). Scale = canvas size /
 // base size; units per pixel = canvas size / screen pixels.
-// [port: Gabriel 2026-11-13] UI scale (Options > Video > UI Scale, DPI style): at scale s one canvas unit is s physical
-// pixels, so the canvas is the screen size / s - but never smaller than the original's fitted canvas above (the layouts are
-// made for at most 1024 x 768 units on screen; a scale whose canvas would be smaller shows the original size). The canvas
-// keeps the screen's aspect; text is sized for the screen height the canvas stands for (font_height(): screen height x
+// [port: Gabriel 2026-11-13] UI scale (Options > Video > UI Scale, DPI style): at scale s one canvas unit is
+// s x kUiScaleUnitPixels physical pixels (Gabriel 2026-11-13, second pass: 100 % = the original's size on a 1080p screen,
+// the same physical size on every resolution), so the canvas is the screen size / that - but never smaller than the
+// original's fitted canvas above (the layouts are made for at most 1024 x 768 units on screen; a scale whose canvas would
+// be smaller shows the original size). The canvas keeps the screen's aspect; text is sized for the screen height the canvas stands for (font_height(): screen height x
 // fitted height / canvas height), so text shrinks with the rest of the UI. ui_scale 0 (the default) is the original: the
 // fitted canvas.
 // [port] axis convention: canvas +X right, +Y UP (the ortho camera's convention, like world space); pixel
@@ -22,6 +23,9 @@
 namespace alamo::ui {
 
 inline constexpr float kHudBaseWidth = 1024.0f, kHudBaseHeight = 768.0f;
+// [port: Gabriel 2026-11-13] Pixels per canvas unit at UI scale 100 %: the original's fitted size on a 1080-pixel-high
+// screen (1080 / 768).
+inline constexpr float kUiScaleUnitPixels = 1080.0f / 768.0f;
 
 struct Vec2f {
     float x = 0, y = 0;
