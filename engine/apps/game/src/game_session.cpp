@@ -13,7 +13,7 @@
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/terrain/ted.hpp"
-#include "alamo/vfs/vfs.hpp"  // q6: the mod layer decides the object-script switch
+#include "alamo/vfs/vfs.hpp"  // map candidates per layer
 #ifdef ALAMO_GAME_HAVE_UI
 #include "alamo/ui/orders.hpp"  // pause_event / read_pause_event
 #endif
@@ -193,13 +193,10 @@ bool GameSession::start(std::vector<std::string>* diag, const commands::CommandR
     sim::SimConfig cfg;
     cfg.seed = spec_.seed;
     cfg.players = sim::session_players(setup_.players.size());
-    // q6 (docs/re/OBJECT_SCRIPTS.md "Port status"): game-object Lua scripts. [port interim rule, Gabriel 2026-11-04] On only when a mod layer
-    // (MODPATH=) is loaded - mods such as Thrawn's Revenge need them (its company spawners) - so stock FoC sessions keep
-    // their behaviour and replays until the object scripts are checked against the shipped FoC scripts.
-    // modc t18: and always in the attract demo, so a map's DEMO_CONTROLLER runs its own Lua_Script (the shipped
-    // Demo_Attract_Controller.lua, MAIN_MENU_BACKGROUND.md §4) like every other scripted object of the demo. The demo is
-    // never saved, recorded or compared with a golden, so this moves no replay.
-    cfg.object_scripts = (d.vfs && !d.vfs->mod_dirs().empty()) || (spec_.attract && d.files);
+    // q6 (docs/re/OBJECT_SCRIPTS.md "Port status"): game-object Lua scripts, in every session that has the game's files
+    // (vanilla, mods and the attract demo alike). q6 t23 (2026-11-13): the retail probe (Q6_T15_RETAIL_RUN.md row 2b)
+    // showed vanilla objects run their Lua_Script, so the 2026-11-04 interim rule (on only with a mod layer) is gone.
+    cfg.object_scripts = d.files != nullptr;
     host_ = std::make_unique<sim::SimHost>(d.types, *js_, cfg);
     if (cfg.object_scripts) host_->set_object_script_files(d.files.get());
     if (replay) host_->replay_from(replay);

@@ -147,5 +147,12 @@ int main(int argc, char** argv) {
                 " rejected %" PRIu64 "\n",
                 s.ticks(), battle_ticks, battles, s.galactic_ai_orders(), s.host().commands_applied(), s.host().commands_rejected());
     print_galaxy(data, s, false);
+    if (const sim::ObjectScriptHost* os = s.host().object_scripts()) {  // q6 t23: object-script diagnostics
+        const sim::ObjectScriptHost::Stats& st = os->stats();
+        std::printf("object scripts: %" PRIu64 " attached, %" PRIu64 " load failures, %" PRIu64 " pumps, %" PRIu64
+                    " thread errors, %zu live, %" PRIu64 " errors\n",
+                    st.attached, st.load_failures, st.pumps, st.thread_errors, os->live(), os->error_total());
+        for (const auto& [text, n] : os->error_counts()) std::printf("object script error x%" PRIu64 ": %s\n", n, text.c_str());
+    }
     return 0;
 }

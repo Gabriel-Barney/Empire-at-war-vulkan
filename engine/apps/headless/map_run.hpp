@@ -40,9 +40,10 @@ struct MapRunOptions {
     // q6 t06 (--story, --galactic-ai): --scoring runs the GameConstants Game_Scoring_Script_Name script at the session start
     // (SimHost::set_scoring_script) as the game does. Off by default: its GlobalValue writes enter the frame CRC.
     bool scoring = false;
-    // q6 (--skirmish-ai): --object-scripts turns on SimConfig::object_scripts (game-object Lua scripts, OBJECT_SCRIPTS.md)
-    // and the GameScoring script (mods set GlobalValue MOD_ID there, which their object scripts read). Off by default.
-    bool object_scripts = false;
+    // q6 (--skirmish-ai): SimConfig::object_scripts (game-object Lua scripts, OBJECT_SCRIPTS.md) and the GameScoring script
+    // (mods set GlobalValue MOD_ID there, which their object scripts read). q6 t23 (2026-11-13): on by default, as the game
+    // (retail runs vanilla object scripts, Q6_T15_RETAIL_RUN.md row 2b); --no-object-scripts turns both off.
+    bool object_scripts = true;
     // ccpgt t02 (--skirmish-ai foc-land / skirmish on a land map): --control-points, the Capture Control Points game type
     // (BattleConfig::control_point_domination). Not recorded in saves.
     bool control_points = false;
