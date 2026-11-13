@@ -189,10 +189,15 @@ bool order_button_enabled(uint32_t button, const HudOrderButtons& s);  // button
 
 // Land b_special_weapon = the bombing-run button (HUD_GAPS §9.1 - §9.3, cu9g t03). Never hidden in land, only disabled
 // every frame (controls locked, no bombing-run record, run not available); alternate icon 3, tooltip 3
-// (TEXT_TOOLTIP_BOMBRUN_BUTTON); the Build_Texture_Name dial is the cooldown. `present` false (space, no tactical HUD
-// feed): the component keeps its data state (the space superweapon button is not modelled here).
+// (TEXT_TOOLTIP_BOMBRUN_BUTTON); the Build_Texture_Name dial is the cooldown. `present` false (no tactical HUD feed): the
+// component keeps its data state. ui1 t04: in space the same component is the special-weapon button (HUD_GAPS §9.1,
+// 0x317d00: icon 0..2 = the weapon's Special_Weapon_Index, a station 2; tooltip 0..2, or 4 TEXT_TOOLTIP_REQUIRES_COMM_ARRAY
+// while special weapons are not allowed); `hidden` [port] when the local player has no space special weapon.
 struct HudBombingRunButton {
-    bool present = false;       // a land battle: the HUD drives the button
+    bool present = false;       // a battle: the HUD drives the button
+    bool hidden = false;        // ui1 t04: space without a special weapon
+    int32_t icon = 3;           // Icon_Alternate_Texture_Name index (land 3)
+    int32_t tooltip = 3;        // Tooltip_Text index (land 3)
     bool disabled = true;       // !ready (0x312570)
     float dial = -1.0f;         // 0..1 radial dial (Build_Texture_Name); < 0: none. [port] none when ready (the 0x495250 value
                                 // 1.0 draws nothing, as the ability buttons; HUD_GAPS §9.9 item 1 is a probe question)

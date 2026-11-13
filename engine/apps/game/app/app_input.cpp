@@ -436,6 +436,11 @@ void App::handle_hud_actions(const std::vector<ui::HudAction>& acts) {
                     bombing_toggle();
                     break;
                 }
+                // ui1 t04 (HUD_GAPS §9.4: 0x346a80 in HUD mode 2 fires the space superweapon): aim the local special weapon.
+                if (screen_ == Screen::Battle && bview_.space() && ascii_iequals(a.name, "b_special_weapon") && a.button == ui::Button::Left) {
+                    space_weapon_toggle();
+                    break;
+                }
                 if (a.name == "advanced_planetary") {  // GALACTIC_DIALOGS §4: "Base Layout" enters / leaves the planet map
                     planet_map_open_ = !planet_map_open_ && selected_planet_ != 0 && gview_.camera().zoomed();
                     break;
@@ -724,6 +729,37 @@ void App::battle_input() {
             }
         }
     }
+    // ui1 t04 [port] (backlog b0238): while the space special weapon is aimed, a left click on an enemy object sends
+    // command 25 (weapon, target object) and ends the aim; on anything else the GUI negative SFX and the aim stays; a
+    // right click cancels. Orders and the drag box wait while it is on, as for the bombing run.
+    bool sw_click = false;
+    if (sw_weapon_ != objects::kNoObjectId) {
+        int32_t icon = -1;
+        float ready = 0.0f;
+        const objects::ObjectId aimed = space_weapon(icon, ready);
+        if (!bview_.space() || aimed != sw_weapon_ || ready < 1.0f) sw_weapon_ = objects::kNoObjectId;  // not ready any more: silent
+    }
+    if (sw_weapon_ != objects::kNoObjectId && !world_blocked) {
+        const sim::TacticalBattle* tb = battle();
+        if (input_.button(ui::Button::Right).click && !input_.button(ui::Button::Right).in_double_press) {
+            sw_weapon_ = objects::kNoObjectId;
+        } else if (input_.button(ui::Button::Left).click && tb) {
+            sw_click = true;
+            tactical::QueryContext qc;
+            const auto hit = ui::pick_world(tm->trees().all(), ctx.view, ui::pixel_ray(ctx.view, input_.mouse_x(), input_.mouse_y()),
+                                            tactical::kSkipDead, qc, ctx.pick_tests);
+            const int32_t me = local_player();
+            const int32_t owner = hit ? tb->combat().owner(static_cast<tactical::combat::ObjectId>(hit->id)) : -1;
+            if (hit && owner >= 0 && tb->combat().is_enemy(me, owner)) {
+                commands::EventData ev(commands::EventType::SpecialWeaponFire);
+                ev.set("weapon", static_cast<uint32_t>(sw_weapon_)).set("player", static_cast<uint32_t>(me)).set("at_position", 0u).set("target", hit->id);
+                cmds.push_back(std::move(ev));
+                sw_weapon_ = objects::kNoObjectId;
+            } else {
+                audio_.negative_feedback();
+            }
+        }
+    }
     // Int-final: the space reinforcement overlay (R5 fog palette 3) while a space drop point is being picked.
     bview_.set_space_reinforcement_overlay(bview_.space() && reinforce_unit_ != 0);
     // Targeted-ability pick (TargetingController, before the order translator: a frame whose click it used is not an
@@ -737,7 +773,9 @@ void App::battle_input() {
             cmds.push_back(std::move(o.event));
         }
     }
-    if (!drop_click && !targeted && !world_blocked && !bombing_click && !bombing_targeting_) orders_.update(input_, ui_.bindings, ctx);
+    if (!drop_click && !targeted && !world_blocked && !bombing_click && !bombing_targeting_ && !sw_click &&
+        sw_weapon_ == objects::kNoObjectId)
+        orders_.update(input_, ui_.bindings, ctx);
     // Orders carry their queued flag (shift: queueable actions) into the command stream; voice per command (UiOrder::voice).
     std::vector<uint8_t> voice(cmds.size(), 1);
     for (ui::UiOrder& o : orders_.take_orders()) {
@@ -786,6 +824,7 @@ void App::battle_input() {
         else if (e.slot == ui::hk::kGuard) orders_.arm_move_toggle(ui::MoveToggle::GuardMove);
         else if (e.slot == ui::hk::kWaypoint) orders_.arm_move_toggle(ui::MoveToggle::Waypoint);
         else if (e.slot == ui::hk::kSuperWeapon && !bview_.space() && bombing_run_ready()) bombing_toggle();  // 0x63f00 case 0x16 (land)
+        else if (e.slot == ui::hk::kSuperWeapon && bview_.space()) space_weapon_toggle();  // ui1 t04: 0x63f00 case 0x16 (space)
         else if (e.slot == ui::hk::kDroidAdvisor) open_holocron(ui::InfoPage::DroidLog);  // capture C2 (no galaxy in a skirmish: nothing)
     }
     std::vector<ui::HudAction> acts;
@@ -884,6 +923,8 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
     for (const ui::MenuAction& a : acts) {
         std::printf("menu: %s %s %s\n", ui::menu_action_name(a.kind), a.campaign.c_str(), a.map.c_str());
         switch (a.kind) {
+            case K::ShowCredits: show_credits(); break;  // ui1 t03
+            case K::StartTutorial:  // ui1 t03: a tutorial is a campaign of the tutorial set (CampaignSetInfo), started the same way
             case K::StartCampaign: {
                 SessionSpec s;
                 s.kind = SessionKind::Campaign;
@@ -891,6 +932,14 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 s.faction = a.faction;
                 s.ask_battle_choice = true;  // human conflicts: Fight / Auto-resolve / Retreat message box
                 s.difficulty = a.difficulty;
+                if (a.game_options.set) {  // ui1 t06: IDD_CAMPAIGN_ADVANCED_OPTIONS_DIALOG accepted
+                    s.game_options = true;
+                    s.start_credits = a.game_options.credits;
+                    s.start_tech = a.game_options.start_tech;
+                    s.max_tech = a.game_options.max_tech;
+                    s.auto_resolve_option = a.game_options.auto_resolve;
+                    s.random_events = a.game_options.random_events;
+                }
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;
                 s.battle_end_hold_frames = kBattleEndHoldFrames;
@@ -912,6 +961,8 @@ void App::handle_menu_actions(const std::vector<ui::MenuAction>& acts) {
                 if (s.skirmish.ai_faction.empty() || ascii_iequals(s.skirmish.ai_faction, s.skirmish.human_faction))  // [port] the AI needs a hostile faction
                     s.skirmish.ai_faction = game::default_skirmish_faction(data_.rules, true, s.skirmish.human_faction);
                 for (const int32_t c : a.colors) s.skirmish.colors.push_back(static_cast<uint8_t>(std::clamp(c, 0, 8)));
+                if (a.factions.size() > 2)  // ui1 t07: the staging rows take up to 8 players; the skirmish sim two (backlog b0240)
+                    notes_.push_back("skirmish: " + std::to_string(a.factions.size() - 2) + " extra AI slot(s) not played yet (two-player skirmish)");
                 s.skirmish.control_points = a.game_type == ui::kSkirmishGameControl;  // ccpgt t02
                 s.seed = opt_.seed;
                 s.battle_max_frames = opt_.battle_max_frames;

@@ -114,7 +114,7 @@ void GameScreens::close(std::string_view dialog) {
 
 void GameScreens::close_all() {
     if (!gui_) return;
-    for (const char* n : {dlg::kBattleEnd, dlg::kCampaignScore, dlg::kRetreat, dlg::kChat, dlg::kPlanetInfo, dlg::kSelectMap})
+    for (const char* n : {dlg::kBattleEnd, dlg::kCampaignScore, dlg::kRetreat, dlg::kChat, dlg::kPlanetInfo, dlg::kSelectMap, dlg::kRetry})
         gui_->close(n);
     if (!msg_dialog_.empty()) close(std::string(msg_dialog_));
 }
@@ -326,6 +326,13 @@ bool GameScreens::show_retreat_confirm() {
     return true;
 }
 
+bool GameScreens::show_retry() {
+    GuiDialog* d = open(dlg::kRetry);
+    if (!d) return false;
+    d->focus("IDC_RETRY_BUTTON");
+    return true;
+}
+
 bool GameScreens::open_chat(bool team_only) {
     GuiDialog* d = open(dlg::kChat);
     if (!d) return false;
@@ -422,6 +429,14 @@ void GameScreens::on_click(const GuiEvent& e, std::vector<ScreenAction>& out, st
             out.push_back(act(ScreenAction::Kind::LandInvade));
         } else if (is("IDC_SAVE_REPLAY_BUTTON")) {
             out.push_back(act(ScreenAction::Kind::SaveReplay));
+        }
+    } else if (iequals(n, dlg::kRetry)) {  // ui1 t05: the host's "retry" message-box handler takes it
+        if (is("IDC_RETRY_BUTTON") || is("IDC_QUIT_BUTTON")) {
+            gui_->close(n);
+            ScreenAction a = act(ScreenAction::Kind::MessageBoxResult);
+            a.tag = "retry";
+            a.button = is("IDC_RETRY_BUTTON") ? 0 : 1;
+            out.push_back(std::move(a));
         }
     } else if (iequals(n, dlg::kCampaignScore)) {
         if (is("IDC_QUIT_BUTTON")) {

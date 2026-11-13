@@ -33,6 +33,7 @@ add_library(alamo_ui_hud STATIC
   src/hud_components.cpp
   src/hud_font.cpp
   src/hud_draw.cpp
+  src/credits_roll.cpp
   src/hud_world.cpp
   src/hud_input.cpp
   src/hud_buttons.cpp

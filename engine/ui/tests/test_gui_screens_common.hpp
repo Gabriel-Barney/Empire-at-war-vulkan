@@ -494,6 +494,7 @@ void test_encyclopedia_fade_anchor();
 void test_panels();
 void test_info_screens();
 void test_cursor();
+void test_credits_roll();
 void test_anim_hack_drag();
 void test_controls();
 void test_camera_hotkeys();

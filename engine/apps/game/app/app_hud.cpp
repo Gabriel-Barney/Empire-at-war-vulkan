@@ -448,7 +448,7 @@ void App::build_galactic_hud(ui::GalacticHudFrame& f, std::vector<ui::GalacticPl
     // GALACTIC_DIALOGS §1 banner, §2.1 holocron flash, screen text ([port] each line 6 s, the last second fading).
     if (choice_open_) {
         f.battle.active = true;
-        f.battle.single = prompt_.story_pending;
+        f.battle.single = prompt_.story_pending || prompt_.no_autoresolve;
         f.battle.space = !prompt_.land;
         f.battle.planet = prompt_.planet_name;
         f.battle.left = {prompt_.left.icon, prompt_.left.units, static_cast<int32_t>(prompt_.left.stacks)};
@@ -818,9 +818,16 @@ void App::build_tactical_hud() {
         hf.order_buttons = order_buttons(st, local_player(), story_controls_locked());
     }
     // cu9g t03 (HUD_GAPS §9): the land b_special_weapon = the bombing-run button (disabled, icon 3, tooltip 3, cooldown dial).
-    if (const sim::TacticalBattle* tb = battle())
+    if (const sim::TacticalBattle* tb = battle()) {
         hf.bombing_run = bombing_run_button(!bview_.space(), story_controls_locked(), tb->bombing_run_available(local_player()),
                                             tb->bombing_run_cooldown_fraction(local_player()));
+        if (bview_.space()) {  // ui1 t04 (HUD_GAPS §9.1): the space special-weapon button
+            int32_t icon = -1;
+            float ready = 0.0f;
+            space_weapon(icon, ready);
+            hf.bombing_run = space_weapon_button(true, icon, tb->special_weapons_allowed(local_player()), story_controls_locked(), ready);
+        }
+    }
     hud_units_ = units;
     // FIXPASS_GALACTIC §4.2: the advisor *_LOOP Bink in Movie_tactical (the HUD's own component), only while it plays.
     hf.advisor_page = advisor_loop_shown() ? static_cast<int32_t>(kAdvisorPage) : -1;

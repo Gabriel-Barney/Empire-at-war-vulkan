@@ -238,6 +238,10 @@ bool call_global_function(LuaVm& vm, std::string_view name, const std::vector<Ai
 // the call succeeded and the first result is a Lua number.
 bool call_global_number(LuaVm& vm, std::string_view name, const std::vector<AiEventArg>& args, double& out,
                         std::string* err = nullptr);
+// ui1 t05 (GAME_SCORING.md §7, Get_Game_Stat_For_Control_ID 0x485760): the first result as a number (`is_number`) or a
+// string; false when the call failed or the result is neither.
+bool call_global_value(LuaVm& vm, std::string_view name, const std::vector<AiEventArg>& args, double& number, std::string& text,
+                       bool& is_number, std::string* err = nullptr);
 
 // Script pool support (AI_GALACTIC.md §1.9.1 "Script pool"): kills every thread of the VM, clears the
 // exit flag, the message / error logs and the GetEvent queue state the host owns. Owner thread only.

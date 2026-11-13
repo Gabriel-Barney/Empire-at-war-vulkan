@@ -877,6 +877,32 @@ bool call_global_number(LuaVm& vm, std::string_view name, const std::vector<AiEv
     return ok;
 }
 
+bool call_global_value(LuaVm& vm, std::string_view name, const std::vector<AiEventArg>& args, double& number, std::string& text,
+                       bool& is_number, std::string* err) {
+    lua_State* L = vm.state();
+    LuaVm::Impl* impl = impl_of(L);
+    if (!impl) return false;
+    const int top = lua_gettop(L);
+    if (!push_global_function(L, name)) return false;
+    for (const AiEventArg& a : args) push_arg(L, *impl, a);
+    const detail::ExecZone zone;  // OPT2 t08: lua.exec
+    const int st = lua_pcall(L, static_cast<int>(args.size()), 1, 0);
+    bool ok = false;
+    if (st != 0) {
+        if (err) *err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "error";
+    } else if (lua_type(L, -1) == LUA_TNUMBER) {
+        number = lua_tonumber(L, -1);
+        is_number = true;
+        ok = true;
+    } else if (lua_type(L, -1) == LUA_TSTRING) {
+        text.assign(lua_tostring(L, -1), lua_strlen(L, -1));
+        is_number = false;
+        ok = true;
+    }
+    lua_settop(L, top);
+    return ok;
+}
+
 void reset_script_threads(LuaVm& vm) {
     lua_State* L = vm.state();
     LuaVm::Impl* impl = impl_of(L);

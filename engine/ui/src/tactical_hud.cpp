@@ -936,10 +936,11 @@ void TacticalHud::apply_bombing_run_button(const HudBombingRunButton& s) {
     const auto ci = static_cast<uint32_t>(special_weapon_);
     const CommandBarComponent& c = (*table_)[ci];
     ButtonRuntime& r = buttons_.state(ci);
-    r.hidden = r.script_visible == 0;
+    r.hidden = r.script_visible >= 0 ? r.script_visible == 0 : s.hidden;
     r.disabled = r.script_enabled >= 0 ? r.script_enabled == 0 : s.disabled;
-    if (c.icon_alternate_texture.size() > 3) r.icon_override = c.icon_alternate_texture[3];
-    r.tooltip_index = c.tooltip_text.size() > 3 ? 3 : -1;
+    if (s.icon >= 0 && c.icon_alternate_texture.size() > static_cast<size_t>(s.icon))
+        r.icon_override = c.icon_alternate_texture[static_cast<size_t>(s.icon)];
+    r.tooltip_index = s.tooltip >= 0 && c.tooltip_text.size() > static_cast<size_t>(s.tooltip) ? s.tooltip : -1;
     r.build_fill = s.dial < 0.0f ? -1.0f : std::clamp(s.dial, 0.0f, 1.0f) * 100.0f;
 }
 

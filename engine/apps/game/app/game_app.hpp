@@ -68,6 +68,7 @@
 #include "alamo/ui/window_input.hpp"
 #include "frame_overlay.hpp"
 #include "game_display.hpp"
+#include "alamo/ui/credits_roll.hpp"
 #include "game_info.hpp"
 #include "game_render.hpp"
 #include "game_ui.hpp"
@@ -436,6 +437,14 @@ public:
     // cu9g t03 (HUD_GAPS §9.4 - §9.6): the land bombing-run targeting state (HUD +0x20b2): toggled by the b_special_weapon
     // click and the super-weapon hotkey; the world's next left click on a valid point sends command 28.
     bool bombing_targeting_ = false;
+    // ui1 t04: the space special weapon being aimed (b_special_weapon in space / hotkey 22; kNoObjectId = none) and its
+    // pointer index (POINTER_ATTACK_WITH_SPECIAL_WEAPON_n).
+    objects::ObjectId sw_weapon_ = objects::kNoObjectId;
+    int32_t sw_icon_ = 0;
+    // The local player's space special weapon (a ready one first): a SPECIAL_WEAPON object (icon = Special_Weapon_Index)
+    // or a station with a special-weapon hard point (icon 2); kNoObjectId when none.
+    objects::ObjectId space_weapon(int32_t& icon, float& readiness) const;
+    void space_weapon_toggle();
     std::optional<render::JamBlob> bombing_blob_;  // the green / red terrain blob under the cursor while targeting
     uint64_t bombing_commands_ = 0, bombing_cancels_ = 0, bombing_invalid_clicks_ = 0;
     bool bombing_run_ready() const;  // 0x312570's `ready`: controls not locked and the local run available
@@ -469,6 +478,7 @@ public:
         PlanetIndex planet = kInvalidPlanet;
         bool land = false;
         bool story_pending = false;   // §1.4 single-button shell (story lock): no Auto-Resolve
+        bool no_autoresolve = false;  // ui1 t06: the advanced options' auto-resolve "never": Begin only
         bool linked = false;          // story t13: a LINK_TACTICAL record's P13 banner (Begin = GameSession::begin_linked)
         std::u32string title;         // "<planet>: SPACE / PLANETARY BATTLE IMMINENT!" (log; the ui composes its own)
         std::u32string planet_name;
@@ -604,6 +614,9 @@ public:
     void show_auto_resolve_end(const galactic::ConflictLogEntry& e);  // ui ask 10: the battle-end screen after an auto-resolve
     void build_panels(std::vector<ui::HudDrawList>& lists);
     void update_cursor(ui::HudDrawList& dl);
+    ui::CreditsRoll credits_;            // ui1 t03: the front end's credits roll (ShowCredits)
+    uint32_t tooltip_trigger_fleet_ = 0;  // ui1 t03: the fleet / land stack whose fleet_tooltip / land_tooltip fired last
+    void show_credits();
     void fill_cursor_hover(ui::CursorContext& c);  // ui1 t01: hovered object -> cursor context (battle)
     void update_radar();
 

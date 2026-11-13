@@ -477,10 +477,17 @@ HolocronSummaryView holocron_summary(const GameSession& s, const StoryDialogCach
 
 // ---- campaign end -----------------------------------------------------------------------------------------------
 ui::CampaignScoreInfo campaign_score(const GameSession& s, const galactic::GalacticSim& g, const ui::TextDatabase& text, bool victory,
-                                     const BattleTally& tally) {
-    (void)text;
+                                     const BattleTally& tally, const ScoringStats& stats) {
     ui::CampaignScoreInfo c;
     c.victory = victory;
+    if (stats.ok) {
+        auto pct = [](double e) { return static_cast<int32_t>(std::lround(std::clamp(e * 100.0, 0.0, 100.0))); };
+        c.military = pct(stats.military);
+        c.conquest = pct(stats.conquest);
+        c.kill = pct(stats.kill);
+        if (!stats.title_key.empty()) c.rank_title = lookup(text, stats.title_key);
+        return c;
+    }
     const int32_t me = s.local_player();
     uint32_t fought = 0, won = 0;
     if (const sim::CampaignBattles* b = s.battles())
@@ -495,11 +502,6 @@ ui::CampaignScoreInfo campaign_score(const GameSession& s, const galactic::Galac
     c.conquest = planets ? static_cast<int32_t>(std::lround(100.0 * g.planets_owned(me) / planets)) : 0;
     const uint32_t all = tally.kills + tally.losses;
     c.kill = all ? static_cast<int32_t>(std::lround(100.0 * tally.kills / all)) : 0;
-    const int32_t mean = (c.military + c.conquest + c.kill) / 3;
-    c.rank_title = mean >= 80 ? U"Grand Admiral" : mean >= 60 ? U"Admiral" : mean >= 40 ? U"Commodore" : mean >= 20 ? U"Captain" : U"Commander";
-    c.list.push_back(U"Battles fought: " + number(fought) + U", won: " + number(won));
-    c.list.push_back(U"Planets controlled: " + number(g.planets_owned(me)) + U" / " + number(planets));
-    c.list.push_back(U"Enemy units destroyed: " + number(tally.kills) + U", units lost: " + number(tally.losses));
     return c;
 }
 

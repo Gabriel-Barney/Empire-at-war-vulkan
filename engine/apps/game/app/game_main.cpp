@@ -165,6 +165,17 @@ bool App::init() {
     mp.camera_settings = [this] { return camera_; };
     mp.gameplay = [this] { return gameplay_; };
     mp.audio = [this] { return audio_opts_; };  // ui1 t02
+    {  // ui1 t06: the advanced game options' defaults (GameConstants MP_Default_*) and the credits range
+        const data::GameConstants& gc = data_.db.constants();
+        ui::GameOptionsSetup& o = mp.game_option_defaults;
+        o.credits = gc.get_int("MP_Default_Credits", o.credits);
+        o.start_tech = gc.get_int("MP_Default_Start_Tech_Level", o.start_tech);
+        o.max_tech = gc.get_int("MP_Default_Max_Tech_Level", o.max_tech);
+        o.auto_resolve = std::clamp(gc.get_int("MP_Default_Allow_Auto_Resolve", o.auto_resolve), 0, 3);
+        o.random_events = gc.get_bool("MP_Default_Allow_Random_Events", o.random_events);
+        o.min_credits = gc.get_int("Min_Skirmish_Credits", o.min_credits);
+        o.max_credits = std::max(o.min_credits, gc.get_int("Max_Skirmish_Credits", o.max_credits));
+    }
     // Video options: the primary display's modes (the current window size selected, else the largest mode under it); the
     // window is always windowed [port: no exclusive full screen]; v-sync = a FIFO or Mailbox present mode (the port's
     // V-sync mode combo picks which; off = Immediate), plus the port's frame rate cap and display line.

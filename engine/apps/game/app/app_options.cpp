@@ -90,4 +90,84 @@ void App::queue_default_autofire(std::vector<commands::EventData>& cmds) {
     autofire_seen_ = std::move(merged);
 }
 
+// ui1 t04 (HUD_GAPS §9.1, SCRIPT_GAPS §1.1 steps 4 / 5): the local player's space special weapon - a SPECIAL_WEAPON object
+// (Special_Weapon_Index = the button icon and pointer index) or a station with a special-weapon hard point (icon 2,
+// "station turret"). [port] several: the first ready one in id order, else the first.
+objects::ObjectId App::space_weapon(int32_t& icon, float& readiness) const {
+    icon = -1;
+    readiness = 0.0f;
+    const sim::TacticalMode* tm = session_ ? session_->host().modes().top_tactical() : nullptr;
+    const sim::TacticalBattle* tb = session_ ? session_->battle() : nullptr;
+    const int32_t me = local_player();
+    if (!tm || !tb || !bview_.space() || me < 0 || static_cast<uint32_t>(me) >= tm->trees().player_count()) return objects::kNoObjectId;
+    tactical::QueryContext qc;
+    const tactical::Aabb all{{-1e9f, -1e9f, -1e9f}, {1e9f, 1e9f, 1e9f}};
+    std::vector<uint32_t> ids;
+    for (const tactical::EntityHandle id : tm->trees().player(static_cast<uint32_t>(me)).query_aabb(all, tactical::kSkipDead, qc))
+        ids.push_back(id);
+    std::sort(ids.begin(), ids.end());
+    const objects::ObjectStore& store = tm->primary();
+    objects::ObjectId best = objects::kNoObjectId;
+    for (const uint32_t u : ids) {
+        const auto id = static_cast<objects::ObjectId>(u);
+        int32_t ic = -1;
+        float r = -1.0f;
+        if ((tb->special_weapons().kinds(id) & tactical::abilities::kSwSpecialWeapon) != 0) {
+            const objects::ObjectHandle h = store.find(id);
+            if (!store.exists(h)) continue;
+            ic = std::clamp(data_.types.get_int(store.type(h), "Special_Weapon_Index"), 0, 2);
+            r = tb->special_weapons().readiness(id, tb->frame());
+        } else if (const float sr = tb->combat().special_weapon_readiness(static_cast<tactical::combat::ObjectId>(id)); sr >= 0.0f) {
+            ic = 2;
+            r = sr;
+        }
+        if (ic < 0) continue;
+        if (best == objects::kNoObjectId || (readiness < 1.0f && r >= 1.0f)) {
+            best = id;
+            icon = ic;
+            readiness = r;
+        }
+    }
+    return best;
+}
+
+// 0x346a80 / hotkey 22 in space: a second press cancels the aim; a ready weapon starts it (the button is disabled while
+// none is ready, the hotkey then does nothing).
+void App::space_weapon_toggle() {
+    if (sw_weapon_ != objects::kNoObjectId) {
+        sw_weapon_ = objects::kNoObjectId;
+        return;
+    }
+    const sim::TacticalBattle* tb = battle();
+    int32_t icon = -1;
+    float ready = 0.0f;
+    const objects::ObjectId w = space_weapon(icon, ready);
+    if (w == objects::kNoObjectId || ready < 1.0f || !tb || !tb->special_weapons_allowed(local_player()) || story_controls_locked()) return;
+    sw_weapon_ = w;
+    sw_icon_ = icon;
+    bombing_targeting_ = false;  // one modal pick at a time
+    reinforce_unit_ = 0;
+    targeting_.cancel();
+}
+
+// ui1 t03: IDC_MENU_CREDITS -> the credits roll (credits_roll.hpp) over the menu backdrop; the menu dialogs close while it
+// runs and the main menu comes back when it ends or is clicked away. CreditsText_<LANGUAGE>.DAT of the loaded text
+// language, else ENGLISH.
+void App::show_credits() {
+    if (screen_ != Screen::Menu || !data_.files) return;
+    std::vector<uint8_t> bytes;
+    const std::string lang = ui_.text.language.empty() ? std::string("ENGLISH") : ui_.text.language;
+    if (!data_.files->read(ui::credits_path(lang), bytes) && !data_.files->read(ui::credits_path("ENGLISH"), bytes)) {
+        notes_.push_back("credits: no CreditsText DAT");
+        return;
+    }
+    std::vector<ui::CreditsLine> lines;
+    if (!ui::parse_credits(bytes, lines) || lines.empty()) {
+        notes_.push_back("credits: CreditsText DAT not readable");
+        return;
+    }
+    ui_.gui.close_all();
+    credits_.start(std::move(lines), ui::credits_style(data_.db.constants()), now_s_);
+}
+
 }  // namespace alamo_game_app

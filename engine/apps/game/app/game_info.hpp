@@ -139,9 +139,18 @@ SpecialPanelData special_panel(const galactic::GalacticSim& g, const GameData& d
 struct BattleTally {
     uint32_t kills = 0, losses = 0;  // units destroyed by / of the local player (battle deaths)
 };
-// Campaign score [port formulas]: military = battles won / fought (conflict log), conquest = planets owned / all
-// planets, kill efficiency = kills / (kills + losses); rank title by their mean.
+// ui1 t05 (GAME_SCORING.md §7): the statistics dialog's values from the GameScoring script's
+// Get_Game_Stat_For_Control_ID (efficiencies 0..1+, title = a TEXT_*_TITLEnn key). ok = false: no script answer.
+struct ScoringStats {
+    bool ok = false;
+    double military = 0.0, conquest = 0.0, kill = 0.0;
+    std::string title_key;
+};
+// Campaign score. With `stats.ok` the script's values (efficiency x 100, clamped 0..100 as Update_GameSpy_Kill_Stats
+// shows them [port]; the title's text; the victory list is left empty: its retail content is not recovered, backlog).
+// Without a scoring script the [port] formulas stand in: military = battles won / fought (conflict log), conquest =
+// planets owned / all planets, kill efficiency = kills / (kills + losses), no title.
 ui::CampaignScoreInfo campaign_score(const GameSession& s, const galactic::GalacticSim& g, const ui::TextDatabase& text, bool victory,
-                                     const BattleTally& tally);
+                                     const BattleTally& tally, const ScoringStats& stats = {});
 
 }  // namespace alamo::game

@@ -5717,6 +5717,44 @@ cmd::RejectReason TacticalBattle::handle_command(TacticalMode& mode, uint8_t pla
         const objects::ObjectHandle wh = store.find(static_cast<objects::ObjectId>(ww));
         if (!store.alive(wh) || store.owner(wh) != static_cast<int32_t>(player)) return R::InvalidUnit;
         const objects::ObjectId wid = store.id(wh);
+        static const objects::BehaviorTypeId kDestroyAfter = objects::behavior_type_id("DUMMY_DESTROY_AFTER_SPECIAL_WEAPON_FIRED");
+        auto destroy_after = [&]() {
+            if (kDestroyAfter == objects::kNoBehavior) return;
+            const auto owned = store.owned_by(store.owner(wh));
+            const std::vector<objects::ObjectHandle> list(owned.begin(), owned.end());
+            for (const objects::ObjectHandle h : list)
+                if (store.alive(h) && store.has_behavior(h, kDestroyAfter)) bt_kill_silently(mode, h);
+        };
+        // ui1 t04 [port] (retail's human UI path is not traced, backlog b0238): the space special-weapon button sends
+        // command 25 with a target object for a SPECIAL_WEAPON object or a space station; it fires as Lua
+        // Fire_Special_Weapon does (SCRIPT_GAPS §1.1 steps 4 / 5): readiness >= 1, the SpecialWeaponsAllowed gate, begin
+        // targeting + fire at the object (0x491b40 / 0x491cd0), or the station's special-weapon hard point (can-fire test
+        // 0x386220 + assign); then the destroy-after sweep (step 6).
+        if (ev.u("at_position") == 0 && !(combat_ && combat_->fires_at_position(wid))) {
+            const uint32_t tw = ev.u("target");
+            const objects::ObjectHandle th = tw == cmd::kNoObject || tw > 0x7FFFFFFFu ? objects::ObjectHandle{} : store.find(static_cast<objects::ObjectId>(tw));
+            if (!store.alive(th)) return R::InvalidTarget;
+            const objects::ObjectId tid = store.id(th);
+            if ((l1_sw_.kinds(wid) & ta::kSwSpecialWeapon) != 0) {
+                if (l1_sw_.readiness(wid, frame_) < 1.0f) return R::AbilityNotReady;
+                if (!special_weapons_allowed(static_cast<int32_t>(player))) return R::NotAllowed;
+                if (!l1_sw_.targeting(wid) && !sw_begin_targeting(wid)) return R::NotAllowed;
+                if (!sw_fire_at_object(mode, wid, tid)) {
+                    if (l1_sw_.targeting(wid)) sw_begin_targeting(wid);  // a second begin clears the flag (0x491b40)
+                    return R::InvalidTarget;
+                }
+                destroy_after();
+                return R::None;
+            }
+            if (combat_ && combat_->special_weapon_readiness(wid) >= 0.0f) {
+                if (combat_->special_weapon_readiness(wid) < 1.0f) return R::AbilityNotReady;
+                if (!special_weapons_allowed(static_cast<int32_t>(player))) return R::NotAllowed;
+                if (!combat_->special_weapon_fire(wid, tid)) return R::InvalidTarget;
+                destroy_after();
+                return R::None;
+            }
+            return R::Unhandled;
+        }
         if (!combat_ || !combat_->fires_at_position(wid)) return R::Unhandled;
         if (l1_sw_.readiness(wid, frame_) < 0.99f) return R::AbilityNotReady;
         Vec3 at{ev.f("x"), ev.f("y"), ev.f("z")};
@@ -5726,13 +5764,7 @@ cmd::RejectReason TacticalBattle::handle_command(TacticalMode& mode, uint8_t pla
             if (store.alive(th)) at = store.position(th);
         }
         if (!sw_fire_lobbing_at(mode, wid, at)) return R::NotAllowed;
-        static const objects::BehaviorTypeId kDestroyAfter = objects::behavior_type_id("DUMMY_DESTROY_AFTER_SPECIAL_WEAPON_FIRED");
-        if (kDestroyAfter != objects::kNoBehavior) {
-            const auto owned = store.owned_by(store.owner(wh));
-            const std::vector<objects::ObjectHandle> list(owned.begin(), owned.end());
-            for (const objects::ObjectHandle h : list)
-                if (store.alive(h) && store.has_behavior(h, kDestroyAfter)) bt_kill_silently(mode, h);
-        }
+        destroy_after();
         return R::None;
     }
     // cu9g t02 (HUD_GAPS §9.7, command 28 execute 0x5246d0): land only (no bombing-run manager in space). The point is the

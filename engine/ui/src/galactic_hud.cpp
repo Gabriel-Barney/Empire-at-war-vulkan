@@ -911,6 +911,19 @@ const GalacticHud::StackHit* GalacticHud::stack_at(int32_t component, float px, 
     return best;
 }
 
+uint32_t GalacticHud::stack_under(float px, float py, bool& land) const {
+    land = false;
+    const Vec2f c = canvas_.pixel_to_canvas(px + 0.5f, py + 0.5f);
+    const StackHit* best = nullptr;
+    for (const StackHit& h : stack_hits_)  // last drawn wins (drawn on top)
+        if ((h.component == planet_fleet_ || h.component == planet_land_) && c.x >= h.min.x && c.x <= h.max.x && c.y >= h.min.y &&
+            c.y <= h.max.y)
+            best = &h;
+    if (!best) return 0;
+    land = best->component == planet_land_;
+    return best->fleet;
+}
+
 bool GalacticHud::takes_button(int32_t component, Button b) const {
     if (b == Button::Right && component >= 0 && (component == planet_fleet_ || component == planet_land_)) return false;
     return true;

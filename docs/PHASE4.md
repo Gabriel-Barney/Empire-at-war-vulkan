@@ -985,6 +985,29 @@ This list holds the [port] / [inferred] / [M] choices and per-step notes. Finish
   drag), a left double press off own units is the double-click order, a right click clears the selection (the
   alternate table's actions are not recovered: backlog b0235). Ask before auto-resolve and simplified faction colours
   are saved but have no rule yet (backlog b0233 / b0234).
+  **t03**: StartTutorial starts the tutorial set's campaign like StartCampaign. ShowCredits rolls
+  `CreditsText_<LANGUAGE>.DAT` (record order; HEADER / CENTER, `[TBL]` blank) with the GameConstants Credits_* values
+  (`credits_roll.hpp`: spacing = line pitch per screen height, margin = fade bands, the last Credits_Scroll_Rate in
+  screen heights per second) over a black backdrop with the menu dialogs closed; a click / Esc / Space / Enter or its
+  end brings the main menu back (backlog b0245). Galactic fleet hover: a transit fleet or a planet's fleet button shows
+  the pop-up of the fleet's representative unit (highest Tactical_Health); hovering a fleet / land-forces stack fires
+  the story GENERIC `fleet_tooltip` / `land_tooltip` once per stack (backlog b0246 for the retail summary layout).
+  **t04**: the space `b_special_weapon` is the local player's space special weapon (a SPECIAL_WEAPON object: icon /
+  tooltip / pointer = Special_Weapon_Index; a station with a special-weapon hard point: 2), hidden without one, disabled
+  while not ready / not allowed (tooltip 4) / controls locked, the dial = readiness. Click or hotkey 22 aims; a left
+  click on an enemy object sends command 25 with the target object (the sim fires it as Lua Fire_Special_Weapon does:
+  readiness, SpecialWeaponsAllowed, begin targeting + fire, destroy-after sweep; a station through its hard point);
+  elsewhere the negative SFX; right click cancels (backlog b0238 for the retail path; b0237: the engine spawn of ground
+  special weapons into ordinary space battles is missing). **t05**: the campaign score takes the efficiencies and the
+  title from the GameScoring script's Get_Game_Stat_For_Control_ID (galactic, efficiency x 100 clamped), the victory
+  list is empty (b0244); without a script the earlier formulas stand in, without title. Activate_Retry_Dialog opens
+  IDD_RETRY_DIALOG; Retry ("Load autosave") restarts the mission (no mission-start autosave in the port). **t06**: the
+  advanced options dialog fills from GameConstants MP_Default_*, credits Min/Max_Skirmish_Credits in steps of 1000, tech
+  1..5 (max >= start), the auto-resolve combo in option order; Accept keeps the values for the next custom campaign:
+  credits and tech levels replace every named player's, "always" auto-resolves an unlocked human battle without asking,
+  "never" offers Begin only; random events are carried only (b0250). **t07**: the skirmish staging shows one row per
+  player the map takes (2..8): slots 2.. Closed / AI, teams 1..N, colours for every row; StartSkirmish lists every
+  playing slot with its team; the host still plays slots 0 and 1 (two-player skirmish sim, backlog b0240).
 - 🟡 **PARTLY DONE** · UI5 (2026-11-13, front-end widgets and options; spec `docs/re/UI.md` §3-§5): [port] choices (marked
   "UI5" / [port] in `engine/ui/src/gui_dialog.cpp`). **t03** the closed combo field is the skin's
   `Combo_Box_Popdown_Button` height (25 units, UI.md §3.7.1; 15 when the art is missing) and the hit test uses the same;

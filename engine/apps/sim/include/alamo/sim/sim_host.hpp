@@ -182,6 +182,13 @@ public:
     void scoring_mode_started(ModeKind kind, std::string map_name);
     // q6 t09: Reset_Tactical_Stats() at auto-resolve begin (BATTLE_TRANSITIONS §"auto-resolve").
     void scoring_reset_tactical_stats();
+    // ui1 t05 (GAME_SCORING.md §7, 0x485760): the statistics dialog's value for `control_id`
+    // (IDC_MILITARY_EFFICIENCY_STATIC, IDC_CONQUEST_EFFICIENCY_STATIC, IDC_KILL_EFFICIENCY_STATIC, IDC_TITLE_STATIC, ...):
+    // Get_Game_Stat_For_Control_ID(PlayerWrapper, control_id, tactical) of the scoring script, its first result as a
+    // number or a string. False without a script / function or when the call fails. UI thread between ticks (the
+    // script's globals it writes are not hashed).
+    bool scoring_game_stat(int32_t player, std::string_view control_id, bool tactical, double& number, std::string& text,
+                           bool& is_number);
     // q6 t09 diagnostics: Services that pumped the threads this session, event calls made, releases (exit / error).
     uint64_t scoring_services() const { return scoring_services_; }
     uint64_t scoring_calls() const { return scoring_calls_; }

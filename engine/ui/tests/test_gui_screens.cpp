@@ -573,6 +573,7 @@ int main() {
     test_camera_hotkeys();
     test_info_screens();
     test_cursor();
+    test_credits_roll();
     test_anim_hack_drag();
     test_controls();
     test_targeting();

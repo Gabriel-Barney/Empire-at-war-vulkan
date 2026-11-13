@@ -243,13 +243,9 @@ void App::lua_presentation() {
             if (!slot.open(data_, audio_, name, &slot == &advisor_movie_, &err)) std::fprintf(stderr, "Lua movie %s: %s\n", name.c_str(), err.c_str());
         } else if (e.op == lua::PresentationOp::StopBinkMovie) {
             stop_movies();
-        } else if (e.op == lua::PresentationOp::ActivateRetryDialog) {  // mission lost: Retry / Quit message box
-            ui::MessageBoxSpec m;
-            m.tag = "retry";
-            m.caption = U"Mission failed";
-            m.lines = {U"Retry the mission from the start, or quit to the main menu."};
-            m.buttons = {U"Retry", U"Quit"};
-            if (screens_.show_message(m)) ++retry_boxes_;
+        } else if (e.op == lua::PresentationOp::ActivateRetryDialog) {  // mission lost: IDD_RETRY_DIALOG (ui1 t05)
+            // [port] its Retry ("Load autosave") restarts the mission: the port keeps no mission-start autosave.
+            if (screens_.show_retry()) ++retry_boxes_;
         }
         if (session_->battle()) {  // story t13: the battle's letterbox overlay and the P11 hand-over (story_ui.hpp)
             using Op = lua::PresentationOp;
@@ -532,6 +528,7 @@ void App::begin_battle() {
     reinforce_unit_ = 0;  // no drop point pending from an earlier battle
     bombing_targeting_ = false;  // nor a bombing-run pick
     autofire_seen_.clear();  // ui1 t02: the default autofire is sent for this battle's objects
+    sw_weapon_ = objects::kNoObjectId;  // ui1 t04: nor a space special-weapon aim
     bombing_blob_.reset();
     targeting_.cancel();  // nor a targeted ability
     // L1/S4 wave 1: the battle's tactical plots (loaded by CampaignBattles at the tactical push) for STORY_MISSION_LOST;
