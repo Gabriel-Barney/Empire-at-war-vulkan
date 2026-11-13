@@ -478,6 +478,17 @@ void test_real(Gpu& g, const std::string& src_dir) {
             const int32_t k = gui.top() ? gui.top()->find(id) : -1;
             CHECK(k >= 0 && gui.combo_rows(*gui.top(), static_cast<size_t>(k)) == static_cast<int32_t>(gui.top()->get(id)->items.size()));  // every level reachable
         }
+        // [port] The Anti-aliasing list open (11 modes since FSR): every row on screen.
+        if (ui::GuiDialog* aa_page = gui.top(); aa_page && aa_page->get("IDC_PORT_ANTI_ALIASING")) {
+            ui::GuiControl* aa = aa_page->get("IDC_PORT_ANTI_ALIASING");
+            aa->open = true;
+            shoot("advanced_video_aa_open", [&](double) {});
+            // The combo's resource rectangle holds the field and the open list.
+            const ui::GuiRect lr = aa_page->control_rect(static_cast<size_t>(aa_page->find("IDC_PORT_ANTI_ALIASING")));
+            const float py0 = gui.canvas().canvas_to_pixel(lr.min.x, lr.min.y).y, py1 = gui.canvas().canvas_to_pixel(lr.max.x, lr.max.y).y;
+            CHECK(std::min(py0, py1) >= 0.0f && std::max(py0, py1) <= static_cast<float>(H));
+            aa->open = false;
+        }
         // No two visible controls with a caption or a box overlap (the Render Scale list used to sit on Auto Detect).
         if (const ui::GuiDialog* gd_page = gui.top(); gd_page && fe2.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG") {
             uint32_t overlaps = 0;
