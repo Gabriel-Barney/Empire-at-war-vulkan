@@ -397,3 +397,263 @@ Not needed: the hypothesis holds, and nothing else sits between the type test an
 5. Global_Exclusions unchanged: +1 per listed type at Activate, −1 at Release.
 
 Tier 1 (which goals are proposed and accepted); it also changes the pass length and so the Commit cadence.
+
+---
+
+## Q5. Goal ETA at Resolve and planet-queue reservations
+
+Added 2026-11-12 (third pass, Ghidra decompile only; shipped XML for the data). Trace under test (Heart of the Maw,
+Rebel AI): retail starts Tank_Buster_Squad at Naboo at 156, Infantry_Squad at Naboo at 559 and only then the Naboo
+mining facility at 807; the port accepts `Build_Economic_Structure` @Naboo (ETA 24.0) in the same Commit as
+`Build_Ground_Forces` and starts the mine first (164).
+
+### Short answer
+
+- **Q5.1 [H].** "Plan can be activated" 0x6c4a50 is a **full re-solve** for a proposal (PP+0x100 == 0): it clears the
+  first-solve byte 0x140b3a524, runs the solver 0x6c3da0 and, when the PP is still valid, **copies PP+0x48 to goal
+  +0x7c (ETA) and PP+0x44 to goal +0x78 (net cost)**. Both Resolve phases then run 0x6129c0 (fund) and
+  `0 < AllowedTime < goal +0x7c` on those fresh values, and only then 0x6c2d60. For a PP that is already reserved
+  (PP+0x100 set: an old candidate taken from the pool) 0x6c4a50 is only the validity test 0x6c45e0; ETA and cost are
+  not touched.
+- The re-solve's queue time per planet and queue is 0x53bb20(Q, 1, 0) = **Q+0x50 + 0x53bda0(Q)**:
+  - Q+0x50 = the value the build market stored at that queue's **last run** (at most about 1 s old, not live):
+    0x401ba0 at that run (head's remaining time + the rest of the production queue) plus one term per task that
+    stayed in or was claimed into the queue's task list (pay-as-you-go owner: max(btime, fundsTime); otherwise btime
+    when fundsTime == 0, else nothing). It is only refreshed while the queue has a task list object (Q+0x10 ≠ 0).
+  - 0x53bda0 = Σ build time of every live slot with flag 0, **including the slots made by goals accepted earlier in
+    this same Commit**, in this or in an earlier category (their 0x6c2d60 ran already), and the slots of kept goals
+    that were re-asserted already. Slots of active goals whose category has not been resolved yet are still flag 1
+    (0x6c0be0, Commit step 4) and are left out.
+- **Category order [H]:** Commit 0x6c8710 copies the category enum list (0x140b31088, list order) and sorts it with
+  0x6c76f0, a std::sort over reverse iterators with "weight(a) < weight(b)" (0x612ee0, the normalised budget
+  weight). Forward order = **descending weight; equal weights keep the enum order** (always the insertion-sort
+  branch: at most 32 categories). This settles the [M] of AI_GALACTIC §1.6 step 3. Step 4 (0x6c0be0 for every active
+  goal with a PP) runs for all categories before the first Resolve.
+- **Q5.2 [H].** The first 0x6c2d60 of a PP makes one slot per selection i that is not a free-store entry (skip list
+  0x140b3a5d0) and whose PP+0x180[i] planet has a production object: 0x53b810(queue of that planet picked by the
+  type's selector (Q2), type, PP). PP+0x180[i] comes from the re-solve's ETA pass 0x6639f0:
+  - structure / generic type (0x5C / 0x5B / 0x5F / 0x60): the reach object's target planet. `Build_Economic_Structure`
+    @Naboo makes **one slot in Naboo's ground queue** (the mining facility is DUMMY_GROUND_STRUCTURE);
+  - any other type: the planet with the strict minimum of
+    (queue time + travel) × (1 + (base level − required level) × K), K = 1.0, over the reach list's planets that are
+    revealed and can build the type, first wins ties; the chosen entry's queue time then grows by the build time, so
+    later units of the same solve see it.
+  - `Build_Ground_Forces` has no target. 0x6bfcf0 then takes the reach object of the **first entry of the AI's
+    planet-target table** (goal system → context +0x38 → vf+0x40 → element 0) with level 5. The candidate list is that
+    object's level-5 list, and the **travel term is still added**: straight-line distance from that first planet to
+    the candidate / (speed × faction speed × FPS) [H code; M that element 0 is the galaxy's planet index 0: the same
+    table is indexed with 0x3f8500(planet) in 0x6955a0 / 0x695c90].
+- **Q5.3: rule (a) [H mechanism, M for this trace].** Nothing in the market orders by slot position or by arrival:
+  - the start pick (0x53cd60 step 5) is the **least slack** over the queue's whole task list (goal ETA − elapsed −
+    btime at this planet, strict <, first wins), limited to tasks that are buildable here and (pay-as-you-go or
+    fundsTime ≤ 0). Slots are not read. So (b) cannot put the tank buster before an already claimed mine: the mine's
+    slack (ETA ≤ 28.8 − elapsed − 24) is far below the ground units' (ETA ≥ 36 − elapsed − 12 or 8);
+  - a bound structure task (bid −1, planet = target, 0x6956f0) is claimed at the target's next market run whatever
+    the queue holds (step 3 tests only planet and queue index) and is always kept (step 2). There is no positional
+    wait, so (c) does not exist.
+  - Hence the retail order implies that the Naboo mine goal was **not active** at 156 and at 559. The code path that
+    gives that is the time stop: the mine's accept re-solve read Naboo's ground queue > 4.8 s, so ETA > AllowedTime
+    (24 × 1.2 = 28.8) and the proposal was rejected with an activation failure, in the greedy phase (which also ends
+    that phase) and again whenever the weighted phase drew it.
+- **Q5.4 [H].** An unbound task takes the lowest bid; a planet bids
+  (Q+0x50 + btime(T, planet) + travel) × (1 + level surplus × K) × cost(T, planet) / cost(T, none), travel only when
+  the task has a destination. The planet **does not bid when fundsTime < Q+0x50** (and drops its bid if it held the
+  task's choice). A funded task has fundsTime 0, so **any queue with something producing or claimed refuses it**;
+  Kamino with a mine (24 s) refuses. The port's `fundsTime < queueTime` test is the same rule.
+
+### Evidence
+
+- 0x6c4a50: PP+0x4c clear → false. PP+0x100 set → PP+0x4c := 0x6c45e0(), return. Otherwise 0x6c0e60, byte
+  0x140b3a524 := 0, 0x6c3da0(PP); when PP+0x4c is still set: goal +0x7c := PP+0x48, goal +0x78 := PP+0x44, and
+  PP+0x1a8 += 0x373500(type, mode) per selection (population). 0x6c47c0 has the same re-solve arm for a kept goal
+  whose PP was never reserved [H].
+- Resolve 0x6c8970, greedy loop, in this order: category credits (0x613af0) > 0; +0x2a0 empty; type enabled and not
+  excluded; not in the kept set / active set (0x721a50); **0x6c4a50; 0x6129c0; 0x692860(goal, 0) against goal +0x7c**;
+  0x6c2d60; remove from the pool (0x7227a0); insert into the kept set; activation success + Activate 0x693550 when
+  new; budget add 0x610d30 in galactic mode; lastOld / limit tests. A failure of the three bold tests records an
+  activation failure (0x58a5d0(…, 0)) and leaves the loop **without removing the goal from the pool** [H].
+- Weighted phase: the weight table takes pool entries passing 0x6129c0 (on the goal's current +0x78 / +0x7c), the
+  type tests, the two 0x721a50 tests and eff > 0. The drawn goal is removed from the pool, then 0x6c4a50, 0x6129c0
+  and the time test run again; a failure releases it (budget release + 0x693750 only when it was active) and records
+  an activation failure; the loop continues. A goal that failed the greedy phase can therefore be drawn and
+  **re-solved a second time** in the same Resolve (its own synced draws again) [H].
+- AllowedTime 0x692860(G, 0): no PP → `Time_Limit` (type +0x30); else 0x6c0450(PP) × `Build_Time_Delay_Tolerance`
+  (type +0x34). 0x6c0450 = Σ 0x371230(selection type, no planet) × the mode's build-time factor; it reads the
+  selection the re-solve just wrote [H].
+- 0x6639f0(reach, selection, level, out PP+0x180, flag): flag 0 → each pool entry starts at
+  0x53bb20(0x559b40(planet +0xd0, pool index), 1, 0); flag 1 → 0x401ba0. Structure arm: out[i] = reach target;
+  structureSum += btime(T, list[0]); when list[0] is the target, pool entry 0 is marked used and grows by the same
+  build time. ETA = max(used entries of both pools, structureSum). The travel term reads the reach object's target
+  (reach +0x10 → vf+0x30) with no "has a target" test [H].
+- 0x6bfcf0: goal +0x58 null → reach = (first element of the table returned by context +0x38 vf+0x40) vf+0x38, level
+  5; otherwise the target's reach object and the goal type's level (+0x2c) [H].
+- 0x53bb20(Q, extra, X = 0): `extra ? 0x53bda0(Q) + Q+0x50 : Q+0x50`. Q+0x50 writers: only 0x53cd60 (set to 0x401ba0
+  at each run, then += per kept task in step 2 and += for the one claim in step 3) [H].
+- 0x695c90 (bid): returns at once for bid < 0 (bound). Path test only when the task has a destination or its goal a
+  target. Company with no destination and no goal target: refused when the planet's ground slots are full
+  (0x3f9530 ≥ 0x140b168c8). wait = 0x53bb20(Q, 0, 0); `fundsTime (0x6490d0) < wait` → no bid, choice cleared if it
+  was this planet. A lower bid, or the same planet, replaces the choice [H].
+- Data: `Build_Ground_Forces` is category Offensive, Global, tolerance 2.0; `Build_Economic_Structure` is category
+  Infrastructure, tolerance 1.2. Build times 15 / 10 / 45 / 30 (tank buster, infantry, light tank, mine); the trace
+  shows × 0.8 (362 and 242 frames; mine 24 s).
+
+### The trace under these rules [M]
+
+1. Commit at ~97. Offensive is resolved before Infrastructure (needs weight(Offensive) ≥ weight(Infrastructure); a tie
+   also gives Offensive first). `Build_Ground_Forces` is accepted; 0x6c2d60 makes its three ground-queue slots, at
+   least one of them at Naboo.
+2. Infrastructure: the mine @Naboo re-solve reads Naboo's ground queue = Q+0x50 (0) + that slot (12 or 8 s, or both),
+   ETA ≥ 32 > 28.8 → rejected.
+3. Market: Kamino and MonCalimari (mines, 24 s) refuse the funded ground tasks; Naboo claims one task per run and then
+   refuses the next (its Q+0x50 > 0). The infantry waits on the pending list until the tank buster is done (518), then
+   bid, claim one run later, start: 559 (41 frames = one market period + offset).
+4. Later Commits: a slot at Naboo is cleared only when its unit starts **at Naboo** (market step 5, same type and PP).
+   Once the infantry produces there, Naboo's ground queue time is its remaining time; the mine can be accepted from
+   about frame 657 (remaining ≤ 4.8 s). Its bound task is then claimed behind the running item and starts at the
+   first market run after the queue is idle: 807, 6 frames after 801. A task accepted only after 801 could not start
+   that early (Commit, plan start, `Sleep(1)` in the plan script, claim), so the accept fell inside 657..~750, which
+   is what rule (a) predicts.
+
+Not excluded [L]: the mine goal failing 0x6129c0 (Infrastructure funds after two 500-credit mines) for the same
+period. It would not explain the start 6 frames after the infantry left.
+
+### Port against retail
+
+Already the same: `PlayerAi::plan_activatable` re-solves and copies cost / ETA / nominal time
+(`galactic_ai_impl.hpp`; the comment above `resolve_pp` in `galactic_pp.cpp` still says the goal keeps Init's ETA,
+which is stale); `GoalSystem::resolve` runs re-solve, fund, time, reserve in retail's order;
+`PlayerAi::category_order` is a stable descending sort; `reserve_pp_queues` makes slots at accept; the market's bid
+refusal and least-slack start match.
+
+Differences that can give the port ETA 24.0 for the Naboo mine in that Commit:
+
+1. **No-target source choice** (`GalPp::source_list` / `recompute_eta`, `galactic_pp.cpp`): the port uses the
+   player-level flood and adds **no travel term** without a target, so every idle planet costs 0 and the units go to
+   the first idle planets of that list. Retail uses the first planet-target's level-5 list and adds the travel time
+   from that planet, so the choice is "queue + distance to planet 0, scaled by the base-level surplus". A different
+   source planet means no slot at Naboo and the mine passes the time test. Port change: for a goal without a target
+   use `pa.stage_list(planet 0, 5)` and add the travel term measured from planet 0 (also in Setup C's 0x664210 list,
+   A2M_T04 Q2: "the player's default reach object").
+2. **Queue time on re-solves** (`GalacticAiWorld::Impl::planet_queue_time`): the port reads the production queue live
+   and adds btime per Queued task. Retail reads Q+0x50 as stored at the queue's last market run, with
+   max(btime, fundsTime) per listed task for a pay-as-you-go owner. Port change: keep a per-queue cached total written
+   by the market service (step 1 value 0x401ba0, then the step 2 / 3 terms, as `queue_time` in `galactic_build.cpp`
+   already computes) and return cached + unsuspended slots. Step 1 there should also be 0x401ba0 (head + rest), not
+   the head alone.
+3. **Category order in that Commit**: if the port's weights put Infrastructure first, the mine is accepted before the
+   ground forces' slots exist. The sort itself matches, so this would be a budget-weight difference, not a Resolve
+   one. Check first: log `category_order()` and the slots at Naboo's ground queue at the port's Commit at 99.
+
+No change is needed in the market for this trace: with the mine goal not accepted, its task does not exist.
+
+### Open
+
+- Which of differences 1-3 the port hits at frame 99 was not determined (no run in this pass) [L].
+- The value of the first planet-target entry for Heart of the Maw (which planet the no-target travel term measures
+  from) [M].
+- Retail's per-Commit weights for Offensive and Infrastructure at ~97 were not derived from the budget equations.
+
+---
+
+## Q6. Commit category order: the sort key and when it is written
+
+Added 2026-11-12 (fourth pass, Ghidra decompile only; shipped XML for the equations). Trace under test (Heart of the
+Maw, Rebel AI): the port's raw budget values at the passes ending at 56 and 99 are Offensive 7.53 and Infrastructure
+19.91 (3.30 if the structure tokens were read fresh at 99), so the port resolves Infrastructure first at 99. The
+question is whether retail can resolve Offensive first at its Commit near 97.
+
+### Short answer
+
+- **Q6.1 [H].** The key is the category's **normalised weight** (category +0x3C, read through 0x612ee0; a category
+  that is not a budget member reads 0.0). Not the raw value, not the pool A (+0x44), not P or the rates. Order =
+  **descending** weight. The sort is the insertion-sort arm of 0x6c76f0 (strict "<" on a reversed range), which is
+  stable: equal weights keep the base order. The base order is the node list of the `AIGoalCategoryType` enum
+  object (0x140b31088 +0x10), not the budget's member list and not the template's `<Budget>` order. That list
+  belongs to a hash map (value → name) [M: its node order is the map's, which need not be ascending enum value; it
+  only matters between categories of exactly equal weight, in shipped Rebel data the `Zero` ones and non-members].
+- **Q6.2 [H].** The weight is rewritten **every proposal pass**, by 0x614590, called from the goal service 0x6cacd0
+  in the same call and immediately before Commit 0x6c8710 (when the pass-complete byte +0x184 is set). The income
+  tick 0x614340 and the reset flag never touch +0x3C (they move money only, and copy +0x3C to the applied weight
+  +0x38). 0x614590 calls `Evaluate` on every member's equation every time, start value = that category's previous
+  normalised weight (kept only when the evaluation fails); negatives → 0; then w / Σw (1 / member count when Σw = 0).
+  "Fresh" stops at the leaf cache: every token inside the equation goes through its node's cache (Q6.3). Init
+  0x6137b0 is the same evaluation with start value = the field's initial content.
+  Normalising divides every member by the same Σ, so the order by normalised weight **is** the order by clamped raw
+  value of that same pass.
+- **Q6.3 [H].** Lifetimes are whole **seconds**; the test is in **global logic frames**:
+  hit ⇔ stamp ≠ 0 and (L = −1 or NOW ≤ stamp + L × FPS), NOW = 0x140b0a320, FPS = 0x140b0a340 = 30 (0x64d740 /
+  0x65a780). Not the mode frame, not the Lua clock, no float seconds. A store (0x64d990) sets value and stamp = NOW;
+  a hit does not restamp. Confirmed at the registrations:
+
+  | token | compute | node | L | valid through |
+  |---|---|---|---|---|
+  | player `StructureCount` | 0x66b3c0 | visible (0x665ec0) | 4 | stamp + 120 |
+  | player `HasStructure` | 0x668a30 | visible | 3 | stamp + 90 |
+  | player `NumStructure` | 0x66aa60 → 0x668490 | visible | 3 | stamp + 90 |
+  | target `StructureCount` | 0x65ebd0 | visible (0x659bd0) | 2 | stamp + 60 |
+  | target `HasStructure` | 0x65f3b0 | fogged, mask 0x200 (0x659ab0) | 13 | stamp + 390 |
+
+  - The player tokens loop over the context's planet table, keep the planets whose owner token equals Self, and read
+    `Target.<token>{caller's parameters}` through the normal path (0x4dd1d0), so each planet's own leaf cache is
+    read and written too. A stale player entry hides fresh planet entries; a fresh player read can still sum stale
+    planet entries.
+  - **Early invalidation:** none for visible leaves (all player tokens and target `StructureCount`). No entry is
+    ever removed, and nothing in the production, object-create or budget code touches a node's map: the only
+    writers are the store 0x64d990 and the 0xE recompute. Only the fogged target `HasStructure` can be refreshed
+    early: a signal 0xE on that planet for the system's own player whose mask contains 0x200 (the owner's mask is
+    −1) recomputes every entry of the node and restamps it (AI_GALACTIC_TOKENS §9.9). Raisers are the ones listed
+    there (presence refresh 0x3a51e0 of the planet for that player, conflicts). A production-queue change by itself
+    is not among the traced raisers [M: the 0x3a51e0 caller list is not complete].
+  - The proposal pass reads the same nodes with the same keys, so an entry stamped by a goal equation serves the
+    budget equation and the reverse.
+- **Q6.4: (c) [H for the mechanism, M for the trace].** Neither (a) nor (b) holds:
+  - (a) is out: the key is evaluated in every pass, also before the first income tick, and the pools are not read.
+  - (b) is out for a Commit near 97. `BasicRebelInfrastructureBudgetAllocation` is
+    1.1 × (…) × (1 + Maintenance) × (1 + 2 × (0.5 > mines / planets)) + 10 × (number of the three `HasStructure`
+    == 0). 19.91 = 3 × 3.30 + 10: the ×3 comes from player `StructureCount{mine}` (L = 4) and the +10 from
+    `HasStructure{mine}` (player L = 3 over the planets' L = 13). Whatever frame s first stored
+    `StructureCount{mine}` (Init, or with the stamp-0 rule the first later read, at the latest the reweight at 56),
+    it was before the first Commit could queue anything, and the entry stays a hit through s + 120 ≥ 120. So at 97
+    retail also has the ×3: Infrastructure ≥ 9.91 > Offensive 7.53, and 19.91 while the planet entries keep the +10
+    (through s + 390 unless a 0xE on the mine's planet). **Infrastructure sorts first at 97 in retail as in the
+    port** [M: assumes retail's inputs at Init equal the port's].
+  - Later passes: from s + 121 the ×3 can go (13.30 while a planet `HasStructure{mine}` entry is still the old 0),
+    and only after the planet entry is refreshed does it reach 3.30 and fall behind Offensive. This also fits retail
+    still funding large Infrastructure goals later: the weight is recomputed each pass.
+  - So if retail accepts `Build_Ground_Forces` and not the Naboo mine at that Commit, the cause is **inside Resolve
+    of the Infrastructure category** (resolved first), not the category order: the greedy phase's category-credits
+    gate (0x613af0: A ≤ 0 → nothing accepted), the fund test 0x6129c0, or the time stop of Q5 with a Naboo queue time
+    that does not come from this Commit's Offensive slots (Q+0x50 from the market's last run, or kept goals of
+    Infrastructure re-asserted before it). Which one is not decided here [L].
+
+### Evidence
+
+- 0x6cacd0: pass step 0x6cb120; when +0x184: 0x614590(goal system +0x190), 0x6c8710, +0x184 := 0, quota.
+- 0x6c8710: copies node +0x10 (int) of every node of the list at 0x140b31088 +0x10 into a vector, calls
+  0x6c76f0(end, begin, count, budget). 0x6c76f0 for ≤ 32 elements: walks from end − 2 down to begin; an element moves
+  towards the end only past neighbours with a strictly greater weight (two 0x612ee0 calls per compare). Result:
+  descending, stable.
+- 0x612ee0 returns category +0x3C; 0x613af0 returns "A (+0x44) ≤ 0" (true also for a non-member).
+- 0x614590: per member in list order, +0x3C := Evaluate(start = +0x3C), clamp, Σ; galactic only: A := P, R := I,
+  per goal A −= a, c := 0, re-add := 1; second loop +0x3C /= Σ. No test of the reset flag or of any clock.
+- 0x6137b0: same loop, then +0x38 := +0x3C, A := P := credits × w, I := R.
+- Registrations: planet evaluator 0x659ab0(node, ev, 0x200, ev, &0x65f3b0, 13), 0x659bd0(node, &0x65ebd0, 2); player
+  evaluator 0x665ec0(node, &0x668a30, 3), (&0x66b3c0, 4), (&0x66aa60, 3).
+
+### Port against retail
+
+- `PlayerAi::category_order` (stable sort, descending normalised weight) and `PlayerAi::budget_weights` (every
+  pass, start = previous weight, before Commit) match [H]. Only difference: the base order is the port's category
+  index, retail's is the enum map's node list [M]; visible only on exact ties.
+- `leaf()` in `galactic_ai_tokens.cpp` matches the hit rule, the stamp-0 rule and the frame unit [H]. The lifetimes
+  above are the ones to check at its call sites (4 / 3 / 3 / 2 / 13).
+- No change to the order or to the cache is supported by the code. Do not special-case Offensive before
+  Infrastructure. Look at the port's Resolve of Infrastructure at 99 instead: A after the reweight and after the
+  kept goals are re-added, the fund test for the Naboo mine, and the Naboo ground queue's stored time (Q5).
+
+### Open
+
+- Which Resolve test rejects (or never reaches) the Naboo mine in retail at that Commit. A retail trace of the
+  Infrastructure pool A and of the proposals drawn at the second Commit would settle it.
+- The node order of the `AIGoalCategoryType` map (tie order).
+- Whether starting a production item raises 0x3a51e0 → 0xE for the owner (early refresh of planet `HasStructure`).

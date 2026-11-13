@@ -379,6 +379,24 @@ Produce_Force, and the following Move_To takes it along). [port] a fleet "not be
 a live fleet with contents (the sim removes an emptied fleet at once). Test accessor
 `GalacticAiWorld::task_force_fleet_object`. No behaviour change: no golden moves.
 
+**2026-11-12 (bkg3): galactic tier-2 ports** (answers `docs/re/BKG3_RE_ANSWERS.md` Q1-Q4; marked "bkg3" in the code).
+- **Hop factor route (Q1).** `GalacticSim::depart_hop` takes the route factor from `GalacticRules::hop_routes`: the
+  TradeRoute with the lowest name CRC among all loaded routes joining the two planet types (Kashyyyk_NalHutta HS 6 beats
+  the campaign's listed NalHutta_Kashyyyk HS 5: 21 ticks instead of 25). The link test, path costs and the AI travel
+  estimate keep the campaign's listed route. [port] Rules built by hand (no table) use the listed route.
+- **Setup C queue time and selector (Q2).** `GalPp::queue_time` on the first solve = the head's live timer remaining +
+  the build times of the rest of the queue; selector 1 (space queue) when the build cost is below 1, else by
+  `queue_kind`.
+- **Skirmish garrison / hangar spawn byte (Q3).** `TacticalBattle::hg_spawn_off_`: carriers adopted for a skirmish
+  team-marker structure, a placement whose mini 0x29 is 0, and anything built or pre-built on a skirmish pad get hangar
+  spawning off (`set_spawn_enabled(false)`). [port] Campaign and story maps keep spawning on (their placement byte is not
+  read yet).
+- **Is_Like like-sets (Q4).** `GoalTypeDef::like_set` (self, listed types, types that list it); with
+  `GoalSystemConfig::like_sets` the slot 9 skip and Resolve's kept-or-active tests match any like type on the same
+  target, and the greedy lastOld test runs after the accept with the same-target condition. [port] On for the galactic
+  AI only: retail uses the same lookup in land and space (slot 9 0x6b8710 / 0x6b8900); the tactical AI keeps the exact
+  (type, target) test until its goldens are re-recorded by the lane that owns them.
+
 **2026-11-12 (bkg2): galactic task-force ports** (answers `docs/re/BKG1_RE_ANSWERS.md` §1-2 and §9-10; marked
 "bkg2" in `engine/ai/src/galactic_ai.cpp`, `galactic_build.cpp`, `engine/galactic/src/campaign.cpp`).
 - **b0097 FleetObject election is stored state.** `tf_join` (Add_Force) elects the unit's fleet while TF +0x120 is null;
