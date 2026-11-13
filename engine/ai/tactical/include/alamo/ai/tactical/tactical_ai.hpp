@@ -334,6 +334,11 @@ struct TacticalAiConfig {
     std::vector<TacticalAiPlayerConfig> players;
     std::vector<TacticalAiDifficulty> difficulties;
     std::vector<lua::LuaPlayerSetup> lua_players;   // players of the Lua player world (PlayerObject, ...)
+    // skai t12 (AI_GALACTIC §1.3 [H]): N of the goal quota's cap (int)(20 / max(1, N - H) + 0.5) is the whole PlayerList
+    // (session players, then one player per faction that has none), not the battle's players. Retail land skirmish:
+    // 7 players, one human -> cap 3, a proposal pass of about 430 frames on Utapau (SKAI_T06_LAND_RUNS §7).
+    // 0 = the perception world's players [port: hosts without a faction table].
+    int32_t player_list_size = 0;
     int32_t attacker = -1, defender = -1;           // conflict record (opponent preference, §1.2)
     bool campaign = false;                          // galactic parent (campaign battle)
     TacticalAiConstants constants;

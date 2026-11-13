@@ -314,6 +314,20 @@ function Q2P_Extra()
 	return s
 end
 
+-- skai t12 run 3: perception values at each plan start (PSTART only). Shipped equations the land skirmish goal system
+-- itself evaluates for this player every pass, with no target and no '#' draw: nsf = Non_Structure_Force_Unnormalized
+-- (Variable_Self.FriendlyForceUnnormalized minus its Structure part), ut = Skirmish_Upgrade_Tech, init =
+-- Is_Initial_Skirmish_State_Established, nr = Num_Refineries, sav = Is_Saving_For_Refineries_Land, burn =
+-- Should_Burn_Units_Land. ? = the call returned nothing.
+function Q2P_Perc()
+	return " nsf=" .. Q2P_Str(function() return EvaluatePerception("Non_Structure_Force_Unnormalized", PlayerObject) end) ..
+		" ut=" .. Q2P_Str(function() return EvaluatePerception("Skirmish_Upgrade_Tech", PlayerObject) end) ..
+		" init=" .. Q2P_Str(function() return EvaluatePerception("Is_Initial_Skirmish_State_Established", PlayerObject) end) ..
+		" nr=" .. Q2P_Str(function() return EvaluatePerception("Num_Refineries", PlayerObject) end) ..
+		" sav=" .. Q2P_Str(function() return EvaluatePerception("Is_Saving_For_Refineries_Land", PlayerObject) end) ..
+		" burn=" .. Q2P_Str(function() return EvaluatePerception("Should_Burn_Units_Land", PlayerObject) end)
+end
+
 
 function Q2P_Record(kind, tf, extra)
 	local n = "?"
@@ -368,7 +382,7 @@ function Q2P_Begin(tf)
 			Q2P_Set("tid " .. tostring(id), tf)
 		end
 	end
-	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_TName())
+	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_TName() .. Q2P_Perc())
 end
 
 function Q2P_Done(tf)

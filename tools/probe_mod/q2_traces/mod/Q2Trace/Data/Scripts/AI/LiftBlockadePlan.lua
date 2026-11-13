@@ -261,6 +261,10 @@ function Q2P_Extra()
 	return ""
 end
 
+function Q2P_Perc()
+	return ""
+end
+
 
 function Q2P_Record(kind, tf, extra)
 	local n = "?"
@@ -314,7 +318,7 @@ function Q2P_Begin(tf)
 			Q2P_Set("tid " .. tostring(id), tf)
 		end
 	end
-	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_TName())
+	Q2P_Safe("PSTART", tf, " prev=" .. prev .. " tname=" .. Q2P_TName() .. Q2P_Perc())
 end
 
 function Q2P_Done(tf)

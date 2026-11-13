@@ -55,6 +55,9 @@ struct PerceptionType {
     // some type's Squadron_Units, +0x21 Cinematic_Object_Only, or behaviour DUMMY_STAR_BASE / DUMMY_GROUND_BASE.
     bool pp_excluded = false;
     bool under_construction = false;       // behaviour 0x2A TACTICAL_UNDER_CONSTRUCTION (pad structures, UC_)
+    // skai t12: an under-construction type's Tactical_Buildable_Constructed type (index into the type table), -1 none.
+    // TacticalBuiltStructureCount names a structure being built by this type (host-filled, not hashed).
+    int32_t constructed_type = -1;
     bool generic_hero = false;             // +0x14
     bool special_weapon = false;           // Is_Special_Weapon_In_Space (+0x1E) or behaviour 0x37 (Hero Setup C)
     bool has_ai_script = false;            // a Lua script (Lua_Script) the Hero marshaller could load (§2.1 item 4) [M]
