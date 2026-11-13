@@ -78,6 +78,51 @@ int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, ui
     return same_size >= 0 ? same_size : best;
 }
 
+std::u32string clipboard_text() {
+    std::u32string out;
+    if (!OpenClipboard(nullptr)) return out;
+    if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* w = static_cast<const wchar_t*>(GlobalLock(h))) {
+            for (size_t k = 0; w[k] != 0; ++k) {
+                char32_t c = static_cast<char16_t>(w[k]);
+                if (c >= 0xD800 && c < 0xDC00 && w[k + 1] >= 0xDC00 && w[k + 1] < 0xE000) {
+                    c = 0x10000 + ((c - 0xD800) << 10) + (static_cast<char16_t>(w[k + 1]) - 0xDC00u);
+                    ++k;
+                }
+                out.push_back(c);
+            }
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return out;
+}
+
+void set_clipboard_text(std::u32string_view text) {
+    std::u16string w;
+    for (char32_t c : text) {
+        if (c >= 0x10000) {
+            w.push_back(static_cast<char16_t>(0xD800 + ((c - 0x10000) >> 10)));
+            w.push_back(static_cast<char16_t>(0xDC00 + ((c - 0x10000) & 0x3FF)));
+        } else {
+            w.push_back(static_cast<char16_t>(c));
+        }
+    }
+    if (!OpenClipboard(nullptr)) return;
+    EmptyClipboard();
+    if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (w.size() + 1) * sizeof(char16_t))) {
+        if (auto* p = static_cast<char16_t*>(GlobalLock(h))) {
+            std::copy(w.begin(), w.end(), p);
+            p[w.size()] = 0;
+            GlobalUnlock(h);
+            if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
+        } else {
+            GlobalFree(h);
+        }
+    }
+    CloseClipboard();
+}
+
 bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log) {
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || m.width == 0 || m.height == 0) return false;

@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "alamo/ui/gui_menus.hpp"
@@ -44,6 +45,10 @@ int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, ui
 bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log = nullptr);
 // Puts back the monitor mode apply_display_mode changed (no-op when it changed nothing).
 void restore_display_mode();
+// UI5 t04: the Windows clipboard as UTF-32 text for the dialog edit boxes (GuiManager::set_clipboard). Empty when it
+// holds no text or cannot be opened.
+std::u32string clipboard_text();
+void set_clipboard_text(std::u32string_view text);
 
 // ui1 t02 [port] The other options kept between runs (the original keeps them in its registry profile with the video
 // options): audio volumes and subtitles (IDD_AUDIO_OPTIONS_DIALOG), the gameplay dialog's values, the port's camera
