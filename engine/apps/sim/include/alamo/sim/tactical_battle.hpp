@@ -1293,6 +1293,12 @@ public:
     static const char* save_part_name(SavePart p);  // "battle.state", "battle.movement", ...
     void write_part(SavePart p, ByteWriter& w) const;
     bool read_part(SavePart p, ByteReader& r);
+    // q6 t28 integration: "battle.types", read before the module parts. The rebuilt battle has only the setup's types; a
+    // game-object script may have added more (script_add_types), and Combat / Abilities check their table sizes. Writes
+    // types_used_; the read checks the rebuilt list is its prefix and adds the tail through script_add_types (same append
+    // order -> the same descriptor indices and ability types as the saving run).
+    void write_types(ByteWriter& w) const;
+    bool read_types(ByteReader& r);
 
     // refix t03 (S9_DEATH_CLONE_SHIELDS.md §1.6 [L]): true when the death clone of a dying_type unit takes the infantry
     // corpse path (no clone object; the dying unit's corpse row plays the clone type) instead of a store object.

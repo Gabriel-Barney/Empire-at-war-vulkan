@@ -193,6 +193,24 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
     }
 }
 
+void TacticalBattle::write_types(ByteWriter& w) const {
+    w.u32(static_cast<uint32_t>(types_used_.size()));
+    for (const uint32_t t : types_used_) w.u32(t);
+}
+
+bool TacticalBattle::read_types(ByteReader& r) {
+    uint32_t n = 0;
+    if (!r.count(n, 4)) return false;
+    std::vector<uint32_t> saved(n);
+    for (uint32_t& t : saved) t = r.u32();
+    if (!r.ok() || !r.done() || saved.size() < types_used_.size() ||
+        !std::equal(types_used_.begin(), types_used_.end(), saved.begin()))
+        return false;
+    if (saved.size() > types_used_.size())
+        script_add_types(std::span<const uint32_t>(saved.data() + types_used_.size(), saved.size() - types_used_.size()));
+    return types_used_ == saved;
+}
+
 bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
     const uint32_t version = r.u32();
     if (!r.ok()) return false;

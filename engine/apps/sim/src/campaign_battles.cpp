@@ -470,6 +470,13 @@ void CampaignBattles::register_battle_chunks() {
     remove_battle_chunks();
     if (!battle_) return;
     using Part = TacticalBattle::SavePart;
+    SaveParticipant ty;  // q6 t28 integration: first, so the module parts meet the script-extended tables
+    ty.name = "battle.types";
+    ty.write = [this](ByteWriter& w) {
+        if (battle_) battle_->write_types(w);
+    };
+    ty.read = [this](ByteReader& r) { return battle_ && battle_->read_types(r); };
+    host_->add_save_participant(std::move(ty));
     for (const Part p : {Part::Movement, Part::Combat, Part::Abilities, Part::Garrison, Part::Hangar, Part::Fog, Part::Damage}) {
         SaveParticipant sp;
         sp.name = TacticalBattle::save_part_name(p);
@@ -508,6 +515,7 @@ void CampaignBattles::remove_battle_chunks() {
     for (uint8_t p = 0; p < static_cast<uint8_t>(TacticalBattle::SavePart::Count); ++p)
         host_->remove_save_participant(TacticalBattle::save_part_name(static_cast<TacticalBattle::SavePart>(p)));
     host_->remove_save_participant("battle.ai");
+    host_->remove_save_participant("battle.types");
 }
 
 // battle.state, second section: this object's battle-level state.
