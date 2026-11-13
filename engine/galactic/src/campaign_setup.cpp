@@ -5,6 +5,7 @@
 #include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/victory.hpp"
 
 namespace alamo::galactic {
 
@@ -121,6 +122,9 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
         }
         s.forces.push_back({player_of[f], p, t});
     }
+    // q6 t22: the victory conditions; the Human_ list goes to the human's faction (Starting_Active_Player, or the
+    // faction the player picked).
+    s.victory = load_victory_rules(db, campaign, s.map, nullptr, human);  // diagnostics: not collected (as before)
     return s;
 }
 

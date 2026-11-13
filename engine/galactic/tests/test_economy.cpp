@@ -1113,85 +1113,190 @@ void test_a2_population_terrain() {
     CHECK(terrain_id("desert") == 2 && terrain_id("Space") == 7 && terrain_id("Moon") == -1);
 }
 
+// q6 t21 / t22 (Q6_T15_RETAIL_RUN.md "ELIM C", "q6 t25"; STRATEGIC_GAPS 1.4): the victory records and the event-driven tests.
+VictoryRules vic_rules() {
+    VictoryRules r;
+    r.starting_active_faction = "Empire";
+    r.ai.conditions = {VictoryCondition::CyclesElapsed};  // a non-empty AI list: the AI also gets the implicit type 1
+    r.ai.cycle_limit = 1000;
+    return r;
+}
+
+bool has_claim(const GalacticSim& s, int32_t player, VictoryCondition k) {
+    const VictoryClaim* d = s.victory_declared();
+    return d && d->player == player && d->type == static_cast<uint8_t>(k);
+}
+
+const VictorySide& no_filter() {
+    static const VictorySide s;
+    return s;
+}
+
 void test_a2_victory() {
-    World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
-    GalacticSim& s = w.sim;
     CHECK(parse_victory_condition("galactic_cycles_elapsed") == VictoryCondition::CyclesElapsed &&
           parse_victory_condition("x") == VictoryCondition::Unknown);
-    VictoryRules r;
-    r.human.conditions = {VictoryCondition::SuperWeaponDestruction, VictoryCondition::ControlNamedPlanets};
-    r.human.planets = {rA, rB, rC};
-    r.ai.conditions = {VictoryCondition::AllPlanetsControlled, VictoryCondition::CyclesElapsed};
-    r.ai.cycle_limit = 3;
-    CHECK(!check_victory(s, r).finished() && victory_outcome(s, r, pEmpire) == 0);
-    // Empire takes C (named planets A, B, C).
-    s.change_owner(w.planet(rC).object, pEmpire);
-    VictoryResult v = check_victory(s, r);
-    CHECK(v.winner == pEmpire && v.how == VictoryCondition::ControlNamedPlanets && victory_outcome(s, r, pEmpire) == 1 &&
-          victory_outcome(s, r, pUnder) == -1);
-    // The AI wins on the cycle limit (the human's named planets lost again).
-    s.change_owner(w.planet(rC).object, pNeutral);
-    while (s.galactic_day() <= 3) w.run(1);  // Cycles_Elapsed: cycles > limit (SG 1.4)
-    v = check_victory(s, r);
-    CHECK(v.winner == pUnder && v.how == VictoryCondition::CyclesElapsed);
-    // Elimination: Underworld loses E and everything on it.
-    r.ai.conditions.clear();
-    const std::vector<ObjectHandle> kill(w.planet(rE).structures.begin(), w.planet(rE).structures.end());
-    for (ObjectHandle h : kill) s.destroy_object(h);
-    s.destroy_object(w.planet(rE).starbase);
-    s.change_owner(w.planet(rE).object, pNeutral);  // the leaning would keep it otherwise
-    w.run(1);
-    CHECK(player_eliminated(s, pUnder) && !player_eliminated(s, pEmpire));
-    v = check_victory(s, r);
-    CHECK(!v.finished() && v.eliminated == std::vector<int32_t>{pUnder} && victory_outcome(s, r, pUnder) == -1);
-    // q6 [port] EliminationLatch: a player the latch never saw own anything is not eliminated (Thrawn's Revenge starts
-    // the human with nothing); one it saw is, as before.
+    // t22 records: the Human_ list for the Starting_Active_Player faction, the AI_ list + the implicit type 1 for the
+    // others, nothing for an Is_Neutral faction; countdown 30 each. An empty AI list gets no implicit record.
     {
-        EliminationLatch fresh;
-        CHECK(victory_outcome(s, r, pUnder, &fresh) == 0 && !fresh.armed(pUnder) && fresh.armed(pEmpire));
-        CHECK(check_victory(s, r, &fresh).eliminated.empty());
-        EliminationLatch seen;
-        seen.arm(pUnder);
-        CHECK(victory_outcome(s, r, pUnder, &seen) == -1 && check_victory(s, r, &seen).eliminated == std::vector<int32_t>{pUnder});
+        World w({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        VictoryRules r = vic_rules();
+        r.human.conditions = {VictoryCondition::ControlNamedPlanets};
+        w.sim.set_victory_rules(r);
+        const std::span<const VictoryRecord> rec = w.sim.victory_records();
+        CHECK(rec.size() == 3);
+        if (rec.size() == 3) {
+            CHECK(rec[0].player == pEmpire && rec[0].type == VictoryCondition::ControlNamedPlanets && rec[0].human_side && !rec[0].implicit);
+            CHECK(rec[1].player == pUnder && rec[1].type == VictoryCondition::CyclesElapsed && !rec[1].human_side);
+            CHECK(rec[2].player == pUnder && rec[2].type == VictoryCondition::OpponentControlsNoPlanets && rec[2].implicit &&
+                  rec[2].countdown == kGalacticVictoryCountdown && kGalacticVictoryCountdown == 30);
+        }
+        CHECK(w.sim.victory_side(pEmpire) == 1 && w.sim.victory_side(pUnder) == 2 && w.sim.victory_side(pNeutral) == 0);
+        CHECK(!w.sim.victory_test(pNeutral, VictoryCondition::OpponentControlsNoPlanets));  // neutral: no record
+        r.ai.conditions.clear();
+        w.sim.set_victory_rules(r);
+        CHECK(w.sim.victory_records().size() == 1 && w.sim.victory_side(pUnder) == 2);
+        CHECK(!w.sim.victory_test(pUnder, VictoryCondition::OpponentControlsNoPlanets));
     }
-    // All planets: every planet's owner the Empire or allied with it (SG 1.4: neutral-owned planets block).
-    r.human.conditions = {VictoryCondition::AllPlanetsControlled};
-    CHECK(check_victory(s, r).winner == kNoPlayer);
-    for (PlanetIndex p : {rC, rD, rE}) s.change_owner(w.planet(p).object, pEmpire);
-    CHECK(check_victory(s, r).winner == pEmpire);
-    // story t11 (BT §3.1a item 3 on the galactic monitor): ENABLE_VICTORY 0 holds every result (the elimination is still
-    // reported), extra releases are no-ops, the story VICTORY releases every level and wins for its player (even one whose
-    // side lists nothing) once its countdown ran out; until then nobody wins. Hashed only once used.
-    StateHasher h0;
-    s.hash_state(h0);
-    s.victory_hold_raise();
-    s.victory_hold_raise();
-    CHECK(s.victory_hold() == 2 && check_victory(s, r).winner == kNoPlayer && check_victory(s, r).eliminated == std::vector<int32_t>{pUnder});
-    StateHasher h1;
-    s.hash_state(h1);
-    CHECK(h0.digest() != h1.digest());
-    s.victory_hold_release();
-    CHECK(s.victory_hold() == 1 && check_victory(s, r).winner == kNoPlayer);
-    s.victory_hold_release();
-    s.victory_hold_release();  // not held: nothing
-    CHECK(s.victory_hold() == 0 && check_victory(s, r).winner == pEmpire);
-    StateHasher h2;
-    s.hash_state(h2);
-    CHECK(h2.digest() == h0.digest());
-    s.victory_hold_raise();
-    CHECK(!s.story_victory(-1, false) && s.victory_hold() == 1);  // unknown player: nothing
-    CHECK(s.story_victory(pNeutral, false) && s.victory_hold() == 0);
-    CHECK(s.victory_claims().back().type == GalacticSim::kVictoryStoryClaim && s.victory_claims().back().countdown == 210);
-    CHECK(check_victory(s, r).winner == kNoPlayer && victory_outcome(s, r, pEmpire) == 0);  // declared, counting down
-    w.run(209);
-    CHECK(check_victory(s, r).winner == kNoPlayer);
-    w.run(1);
-    v = check_victory(s, r);
-    CHECK(v.winner == pNeutral && v.how == VictoryCondition::StoryTriggered && victory_outcome(s, r, pEmpire) == -1);
-    s.victory_hold_raise();  // a hold raised after the declaration delays the result (0x342d80)
-    CHECK(check_victory(s, r).winner == kNoPlayer);
-    s.victory_hold_release();
-    CHECK(check_victory(s, r).winner == pNeutral);
+    // ELIM C + first owner assignment: the human owns nothing from the start and the rules come with the setup (the
+    // first ownership pass and the first services assign owners, which tests nothing). No owner change, no end.
+    GalacticRules rules = make_rules();
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store{objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids};
+    SimRng rng{7u};
+    GalacticSim s{rules, store, rng};
+    GalacticSetup setup = make_setup({{pUnder, rE, tSB1}, {pUnder, rE, tBarracks}, {pUnder, rC, tBarracks}});
+    setup.victory = vic_rules();
+    CHECK(s.start(setup) && s.victory_records().size() == 2);
+    CHECK(s.planets_owned(pEmpire) == 0 && s.planets_owned(pUnder) == 2);
+    CHECK(victory_condition_met(s, no_filter(), VictoryCondition::OpponentControlsNoPlanets, pUnder));  // it would pass
+    for (int i = 0; i < 300; ++i) s.update();
+    CHECK(s.victory_claims().empty() && !check_victory(s).finished() && victory_outcome(s, pEmpire) == 0);
+    // A change to the current owner is no owner change.
+    CHECK(!s.change_owner(s.planets()[rE].object, pUnder) && s.victory_claims().empty());
+    // ELIM D: an owner change while the human owns nothing: the AI's implicit Opponent_Controls_No_Planets passes and
+    // the AI wins 30 frames later (Defeat for the human).
+    CHECK(s.change_owner(s.planets()[rB].object, pUnder));
+    CHECK(has_claim(s, pUnder, VictoryCondition::OpponentControlsNoPlanets) && !check_victory(s).finished());
+    for (int i = 0; i < 29; ++i) s.update();
+    CHECK(!check_victory(s).finished());
+    s.update();
+    CHECK(check_victory(s).winner == pUnder && check_victory(s).how == VictoryCondition::OpponentControlsNoPlanets);
+    CHECK(victory_outcome(s, pEmpire) == -1 && victory_outcome(s, pUnder) == 1);
+    // Once declared, nothing else is: another test answers false and adds no claim.
+    CHECK(!s.victory_test(pUnder, VictoryCondition::CyclesElapsed) && s.victory_claims().size() == 1);
+
+    // ELIM E: units do not count. The human holds A and has a fleet at B; an owner change elsewhere while it holds A
+    // ends nothing; once A goes neutral the human's live fleet does not save it.
+    {
+        World w({{pEmpire, rA, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
+        w.sim.set_victory_rules(vic_rules());
+        const ObjectHandle frigate = w.sim.spawn_unit(pEmpire, rB, tFrigate);
+        w.run(2);
+        CHECK(w.sim.planets_owned(pEmpire) == 1 && w.planet(rB).owner == pNeutral);
+        CHECK(w.sim.change_owner(w.planet(rC).object, pUnder) && w.sim.victory_claims().empty());  // the human holds A
+        CHECK(w.sim.change_owner(w.planet(rA).object, pNeutral) && w.store.alive(frigate) && w.sim.planets_owned(pEmpire) == 0);
+        CHECK(has_claim(w.sim, pUnder, VictoryCondition::OpponentControlsNoPlanets));
+        w.run(30);
+        CHECK(victory_outcome(w.sim, pEmpire) == -1);
+    }
+    // Type 1 skips planets whose owner and the tested player are both AI non-humans; the Starting_Active_Player slot
+    // counts as human even when an AI plays it ([port] headless AI-vs-AI).
+    {
+        World w({{pEmpire, rA, tBarracks}, {pUnder, rE, tBarracks}}, true);
+        VictoryRules r = vic_rules();
+        r.starting_active_faction = "Underworld";  // the AI Empire gets the AI list
+        w.sim.set_victory_rules(r);
+        CHECK(w.sim.victory_ai_player(pEmpire) && !w.sim.victory_ai_player(pUnder));
+        CHECK(!victory_condition_met(w.sim, no_filter(), VictoryCondition::OpponentControlsNoPlanets, pUnder));  // a human P
+        r.starting_active_faction = "Neutral";  // nobody on the Human_ side: both AI
+        w.sim.set_victory_rules(r);
+        CHECK(w.sim.victory_ai_player(pUnder) && victory_condition_met(w.sim, no_filter(), VictoryCondition::OpponentControlsNoPlanets, pUnder));
+    }
+    // Control_Named_Planets (human list) at the owner change that completes the list.
+    {
+        World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
+        VictoryRules r = vic_rules();
+        r.human.conditions = {VictoryCondition::SuperWeaponDestruction, VictoryCondition::ControlNamedPlanets};
+        r.human.planets = {rA, rB, rC};
+        w.sim.set_victory_rules(r);
+        w.sim.change_owner(w.planet(rC).object, pEmpire);
+        CHECK(has_claim(w.sim, pEmpire, VictoryCondition::ControlNamedPlanets));
+        w.run(30);
+        CHECK(victory_outcome(w.sim, pEmpire) == 1 && victory_outcome(w.sim, pUnder) == -1);
+    }
+    // Cycles_Elapsed at the week rollover (cycles > limit); Credits_Accrued in add_credits for that player.
+    {
+        World w({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        VictoryRules r = vic_rules();
+        r.ai.cycle_limit = 2;
+        r.human.conditions = {VictoryCondition::CreditsAccrued};
+        r.human.credit_target = 1000000;
+        w.sim.set_victory_rules(r);
+        bool early = false;
+        while (w.sim.galactic_day() <= 2) {
+            early = early || !w.sim.victory_claims().empty();
+            w.run(1);
+        }
+        CHECK(!early && has_claim(w.sim, pUnder, VictoryCondition::CyclesElapsed));
+        World c({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        r.human.credit_target = 6000;
+        c.sim.set_victory_rules(r);
+        CHECK(c.sim.credits(pEmpire) < 6000.0f && c.sim.victory_claims().empty());
+        c.sim.add_credits(pEmpire, 2000.0f);
+        CHECK(has_claim(c.sim, pEmpire, VictoryCondition::CreditsAccrued));
+    }
+    // story t11 + q6 t21 (BT §3.1a item 3): ENABLE_VICTORY 0 defers the tests ({type, player}, no duplicates; saved and
+    // hashed once used); the last release replays them against the state then, first pass wins.
+    {
+        World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
+        VictoryRules r = vic_rules();
+        r.human.conditions = {VictoryCondition::ControlNamedPlanets};
+        r.human.planets = {rA, rC};
+        w.sim.set_victory_rules(r);
+        StateHasher h0;
+        w.sim.hash_state(h0);
+        w.sim.victory_hold_raise();
+        w.sim.victory_hold_raise();
+        w.sim.change_owner(w.planet(rC).object, pEmpire);
+        w.sim.change_owner(w.planet(rD).object, pEmpire);
+        CHECK(w.sim.victory_claims().empty());
+        CHECK(w.sim.victory_deferred().size() == 2);  // {Empire, 9}, {Underworld, 1}; the second change adds no duplicate
+        StateHasher h1;
+        w.sim.hash_state(h1);
+        CHECK(h0.digest() != h1.digest());
+        ByteWriter bw;
+        w.sim.write(bw);
+        w.sim.victory_hold_release();
+        CHECK(w.sim.victory_hold() == 1 && w.sim.victory_claims().empty() && w.sim.victory_deferred().size() == 2);
+        w.sim.victory_hold_release();
+        CHECK(w.sim.victory_hold() == 0 && has_claim(w.sim, pEmpire, VictoryCondition::ControlNamedPlanets) &&
+              w.sim.victory_deferred().empty());
+        w.sim.victory_hold_release();  // not held: nothing
+        CHECK(w.sim.victory_claims().size() == 1);
+        ByteReader br(bw.bytes());
+        CHECK(w.sim.read(br) && w.sim.victory_deferred().size() == 2 && w.sim.victory_hold() == 2 && w.sim.victory_claims().empty());
+    }
+    // The story VICTORY: releases every level (no replay) and wins for its player (even one whose side lists nothing) once
+    // its countdown ran out; a hold raised after the declaration delays the result (0x342d80).
+    {
+        World w({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        w.sim.set_victory_rules(vic_rules());
+        w.sim.victory_hold_raise();
+        CHECK(!w.sim.story_victory(-1, false) && w.sim.victory_hold() == 1);  // unknown player: nothing
+        CHECK(w.sim.story_victory(pNeutral, false) && w.sim.victory_hold() == 0);
+        CHECK(w.sim.victory_claims().back().type == GalacticSim::kVictoryStoryClaim && w.sim.victory_claims().back().countdown == 210);
+        CHECK(!check_victory(w.sim).finished() && victory_outcome(w.sim, pEmpire) == 0);  // declared, counting down
+        w.run(209);
+        CHECK(!check_victory(w.sim).finished());
+        w.run(1);
+        CHECK(check_victory(w.sim).winner == pNeutral && check_victory(w.sim).how == VictoryCondition::StoryTriggered &&
+              victory_outcome(w.sim, pEmpire) == -1);
+        w.sim.victory_hold_raise();
+        CHECK(!check_victory(w.sim).finished());
+        w.sim.victory_hold_release();
+        CHECK(check_victory(w.sim).winner == pNeutral);
+    }
 }
 
 void test_a2_prerequisites_and_market_hook() {
@@ -1245,15 +1350,15 @@ void test_diplomacy_and_build_locks() {
     CHECK(!s.player_view(pEmpire).held_by_ally.test(rE) && s.player_view(pEmpire).held_by_ally.test(rA));
     VictoryRules vr;
     vr.human.conditions = {VictoryCondition::AllPlanetsControlled};
-    CHECK(check_victory(s, vr).winner == kNoPlayer);  // Underworld still holds E
+    CHECK(!victory_condition_met(s, vr.human, VictoryCondition::AllPlanetsControlled, pEmpire));  // Underworld still holds E
     // Make_Ally: both directions; no blockade, E counts as held by an ally, no hostile planet left.
     s.set_relation(pEmpire, pUnder, Relation::Ally);
     CHECK(s.relation(pUnder, pEmpire) == Relation::Ally && !s.is_hostile(pUnder, pEmpire) && s.allied(pEmpire, pUnder));
     CHECK(s.relation(pEmpire, pNeutral) == Relation::Neutral);  // untouched pairs keep their defaults
     CHECK(!s.blockaded(rE, pEmpire) && s.player_view(pEmpire).held_by_ally.test(rE));
-    CHECK(check_victory(s, vr).winner == kNoPlayer);  // C and D are neutral-owned (SG 1.4: owner self or ally)
+    CHECK(!victory_condition_met(s, vr.human, VictoryCondition::AllPlanetsControlled, pEmpire));  // C and D are neutral-owned (SG 1.4: owner self or ally)
     s.set_relation(pEmpire, pNeutral, Relation::Ally);
-    CHECK(check_victory(s, vr).winner == pEmpire);
+    CHECK(victory_condition_met(s, vr.human, VictoryCondition::AllPlanetsControlled, pEmpire));
     s.set_relation(pEmpire, pNeutral, Relation::Neutral);
     CHECK(!s.diplomacy_state_default() && digest() != fresh);
     // Ignored: self, Self relation, invalid players.
@@ -1901,9 +2006,10 @@ void test_oi_victory() {
     CHECK(s.victory_claims().size() == 1 && s.victory_claims()[0].type == 3 && s.victory_claims()[0].countdown == 5);
     VictoryRules vr;
     vr.ai.conditions = {VictoryCondition::SuperWeaponDestruction};
-    CHECK(check_victory(s, vr).winner == kNoPlayer);
+    s.set_victory_rules(vr);  // q6 t22: the claim counts once the player has a record of its type
+    CHECK(check_victory(s).winner == kNoPlayer);
     w.run(5);
-    CHECK(check_victory(s, vr).winner == pUnder && check_victory(s, vr).how == VictoryCondition::SuperWeaponDestruction);
+    CHECK(check_victory(s).winner == pUnder && check_victory(s).how == VictoryCondition::SuperWeaponDestruction);
     // 6: no killer, the weapon owner's playable enemies hold no undestroyed planet.
     OiWorld w6({{pEmpire, rA, tSB1}, {pEmpire, rC, tDeathStar}, {pUnder, rE, tSB1}});
     CHECK(!w6.sim.resolve_battle_super_weapon(rC, pEmpire) && w6.sim.victory_claims().empty());

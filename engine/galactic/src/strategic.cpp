@@ -528,7 +528,7 @@ bool GalacticSim::tsw_destroy_planet(PlanetIndex planet, int32_t tsw_owner, bool
 // ---- CRC tail --------------------------------------------------------------------------------------------------------------
 
 bool GalacticSim::oi_state_default() const {
-    if (!claims_.empty() || linked_battle_pending_ || victory_hold_ != 0) return false;
+    if (!claims_.empty() || linked_battle_pending_ || victory_hold_ != 0 || !victory_deferred_.empty()) return false;
     for (int32_t id : stealthed_)
         if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) return false;
     for (int32_t id : ground_shy_)  // cu8f t04b
@@ -556,6 +556,14 @@ void GalacticSim::hash_oi(StateHasher& h) const {
     if (victory_hold_ != 0) {  // story t11 (only once used, so older captures keep their CRC)
         h.u32(0x56484C44u);  // "VHLD"
         h.i32(victory_hold_);
+    }
+    if (!victory_deferred_.empty()) {  // q6 t21: deferred victory tests (only once used, so older captures keep their CRC)
+        h.u32(0x56444652u);  // "VDFR"
+        h.u32(static_cast<uint32_t>(victory_deferred_.size()));
+        for (const auto& e : victory_deferred_) {
+            h.i32(e.first);
+            h.u8(e.second);
+        }
     }
     {  // cu8f t04b: live units with Prefer_Ground_Over_Space false (only once used, so older captures keep their CRC)
         uint32_t shy = 0;

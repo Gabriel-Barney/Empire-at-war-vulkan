@@ -30,6 +30,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <span>
 #include <string>
 #include <string_view>
@@ -49,6 +50,7 @@
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/galactic/planet_graph.hpp"
 #include "alamo/galactic/special_systems.hpp"  // P4 sim
+#include "alamo/galactic/victory_rules.hpp"    // q6 t21
 #include "alamo/galactic/visibility.hpp"       // GRC 2
 #include "alamo/objects/object_store.hpp"
 
@@ -100,6 +102,9 @@ struct GalacticSetup {
     // GALACTIC_REVEAL_CORRUPTION (GRC) 0: campaign Planet_Auto_Reveal (CampaignDataClass +0xCB, ctor true) -> galactic
     // mode +0x340.
     bool planet_auto_reveal = true;
+    // q6 t22: the campaign's victory conditions (load_victory_rules); start() builds the per-player records from them.
+    // Empty for skirmish and hand-built setups (no records: only story claims can end the game).
+    VictoryRules victory;
 };
 
 struct CampaignOptions {
@@ -1005,15 +1010,40 @@ public:
     // != 0 -> release one level, only while held. While held, check_victory (victory.hpp) reports no winner (0x342d80:
     // the result needs hold <= 0). VICTORY (0x462b70) releases every level and claims type 0x10 (kVictoryStoryClaim,
     // SUB_TACTICAL_STORY_MODE_TRIGGERED_VICTORY) for `player`, countdown 7 s (1 s when short_silent), granted whatever
-    // the side's conditions (the reward adds its own record). [port] no deferred queue: the polled tests run on every
-    // check, so after a release they pass at the next one. Saved; hashed in the "OIG1" tail once non-zero.
+    // the side's conditions (the reward adds its own record). q6 t21: tests made while held are deferred
+    // (victory_test) and replayed when the hold reaches 0. Saved; hashed in the "OIG1" tail once non-zero.
     static constexpr uint8_t kVictoryStoryClaim = 0x10;
     void victory_hold_raise() { victory_hold_ = victory_hold_ < 0 ? 1 : victory_hold_ + 1; }
-    void victory_hold_release() {
-        if (victory_hold_ > 0) --victory_hold_;
-    }
+    // Release one level; when the hold reaches 0 the deferred tests are replayed in order (0x3440a0 replay 1) and the
+    // first declaration stops the replay. [port] the queue is emptied by the replay.
+    void victory_hold_release();
     bool story_victory(int32_t player, bool short_silent);  // false: invalid player (nothing changes)
     int32_t victory_hold() const { return victory_hold_; }
+
+    // ---- q6 t21 / t22: the galactic victory monitor's records and event-driven tests (victory.cpp) ----------------
+    // Records (setup 0x289a90, per player): none for an Is_Neutral faction; the Human_ list for the
+    // starting_active_faction's player(s); every other player the AI_ list plus one implicit Opponent_Controls_No_Planets
+    // (no faction filter) when that list is non-empty. Every record has countdown 30 frames. Built from the rules and
+    // the current player list (start() calls it with setup.victory; tests and hosts may call it after start()). Not
+    // saved: start() rebuilds it from the same setup before a load.
+    void set_victory_rules(VictoryRules rules);
+    const VictoryRules& victory_rules() const { return victory_rules_; }
+    std::span<const VictoryRecord> victory_records() const { return victory_records_; }
+    // 0 = no records (neutral), 1 = Human_ list, 2 = AI_ list.
+    uint8_t victory_side(int32_t player) const {
+        return valid_player(player) && static_cast<size_t>(player) < victory_side_.size() ? victory_side_[static_cast<size_t>(player)] : 0;
+    }
+    // [port] (headless AI-vs-AI): a player counts as AI for the type 1 "both AI" skip only when it is AI-controlled, not
+    // human and not on the Human_ side, so the Starting_Active_Player slot an AI plays stays "the human".
+    bool victory_ai_player(int32_t player) const;
+    // Test wrapper 0x28f570: false when `player` has no record of `type`; while the monitor is held, queue {type,
+    // player} (no duplicates) and answer false; once something is declared, true only for the declared {type, player};
+    // else run the test and, when it passes, declare it (claim with the record's countdown). True = passed.
+    bool victory_test(int32_t player, VictoryCondition type);
+    // The declared claim: the first claim whose {type, player} is registered (a record, or a story claim), else null.
+    const VictoryClaim* victory_declared() const;
+    // Deferred {player, type} tests (monitor +0x60), queue order. Saved (v6), hashed in the "OIG1" tail once non-empty.
+    std::span<const std::pair<int32_t, uint8_t>> victory_deferred() const { return victory_deferred_; }
 
     // ---- CRC ----------------------------------------------------------------------------------------------
     // Ordered digest of every S3 data pack (players, planets incl. queues and income lists, fleets, cycle).
@@ -1054,6 +1084,8 @@ private:
     void set_income_entry(PlanetState& p, uint8_t kind, float value);
     void remove_income_entry(PlanetState& p, uint8_t kind);
 
+    // q6 t21: every player in player order, `types` in order per player; the first pass stops the walk.
+    void victory_tests(std::initializer_list<VictoryCondition> types);
     // ownership
     void apply_ownership(PlanetIndex planet, int32_t derived);
     void on_owner_change(PlanetIndex planet, int32_t old_owner);
@@ -1190,6 +1222,11 @@ private:
     std::vector<int32_t> ground_shy_;     // cu8f t04b: ObjectIds with Prefer_Ground_Over_Space false, ascending
     std::vector<VictoryClaim> claims_;    // declaration order
     int32_t victory_hold_ = 0;            // story t11: galactic monitor hold (+0x5c)
+    std::vector<std::pair<int32_t, uint8_t>> victory_deferred_;  // q6 t21: {player, type}, monitor +0x60
+    // q6 t21 / t22: from set_victory_rules (definition-derived, not saved, not hashed)
+    VictoryRules victory_rules_;
+    std::vector<VictoryRecord> victory_records_;  // player order, then the side's list order, implicit last
+    std::vector<uint8_t> victory_side_;           // per player: 0 none, 1 human, 2 AI
     // GRC reveal / corruption transitions (src/reveal.cpp; hashed in the "RVC1" tail once non-default)
     int32_t local_player_ = kNoPlayer;
     bool auto_reveal_ = true;   // galactic mode +0x340

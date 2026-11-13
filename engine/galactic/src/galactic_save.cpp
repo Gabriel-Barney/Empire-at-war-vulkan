@@ -16,7 +16,8 @@
 //         queue phases)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
 //   u32 + i32 stealthed ids; u32 + victory claims; i32 victory hold; u32 + pending S4 events (GalacticEvent,
-//   emission order); u32 + i32 ids with Prefer_Ground_Over_Space false (v5)
+//   emission order); u32 + i32 ids with Prefer_Ground_Over_Space false (v5); u32 + {i32 player, u8 type} deferred
+//   victory tests (v6)
 // Object references: a handle whose object exists (live or dead-not-flushed) is written as its ObjectId and resolved
 // with ObjectStore::find on read (the store is restored first; an unknown id fails the read). A handle that refers to
 // no object any more (stale, or null) is written as kNoObjectId + its raw value, which read keeps as the same stale
@@ -35,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "alamo/galactic/campaign.hpp"
@@ -46,9 +48,10 @@ namespace {
 
 // v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects; v4 (A2k t04 /
 // t01): + i32 x 2 build queue phases per planet, - the two PlanetState build bonus floats (the production modifiers are
-// derived, GalacticSim::production_bonus); v5 (cu8f t04b): + the Prefer_Ground_Over_Space false ids. Only the current
+// derived, GalacticSim::production_bonus); v5 (cu8f t04b): + the Prefer_Ground_Over_Space false ids; v6 (q6 t21): + the
+// deferred victory tests. Only the current
 // version is read.
-constexpr uint32_t kGalacticSaveVersion = 5;
+constexpr uint32_t kGalacticSaveVersion = 6;
 constexpr uint32_t kConflictSaveVersion = 3;  // v2: BattleRequest::linked (story t10); v3: BattleRequest::sandbox (q6)
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& s, ObjectHandle h) {
@@ -231,6 +234,8 @@ void GalacticSim::write(ByteWriter& w) const {
     }
     w.u32(static_cast<uint32_t>(ground_shy_.size()));  // cu8f t04b (v5)
     for (int32_t id : ground_shy_) w.i32(id);
+    w.u32(static_cast<uint32_t>(victory_deferred_.size()));  // q6 t21 (v6)
+    for (const auto& e : victory_deferred_) w.i32(e.first).u8(e.second);
 }
 
 bool GalacticSim::read(ByteReader& r) {
@@ -505,6 +510,17 @@ bool GalacticSim::read(ByteReader& r) {
     for (int32_t& id : ground_shy) id = r.i32();
     for (size_t i = 1; i < ground_shy.size(); ++i)
         if (ground_shy[i] <= ground_shy[i - 1]) return false;  // ascending, unique
+    std::vector<std::pair<int32_t, uint8_t>> deferred;  // q6 t21 (v6)
+    {
+        uint32_t nd = 0;
+        if (!r.count(nd, 5)) return false;
+        deferred.resize(nd);
+        for (auto& e : deferred) {
+            e.first = r.i32();
+            e.second = r.u8();
+            if (!r.ok() || !player_ok(e.first)) return false;
+        }
+    }
     if (!r.ok() || !r.done()) return false;
 
     // ---- commit ----
@@ -529,6 +545,7 @@ bool GalacticSim::read(ByteReader& r) {
     ground_shy_ = std::move(ground_shy);
     claims_ = std::move(claims);
     victory_hold_ = hold;
+    victory_deferred_ = std::move(deferred);
     events_ = std::move(events);
     // Rebuilt caches: store slot -> fleet / planet (creation order, so a reused slot maps to the newest fleet as
     // create_fleet left it), the per-tick owner derivation scratch, the spawn payload latch.

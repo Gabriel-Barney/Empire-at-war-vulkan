@@ -134,7 +134,7 @@ SpecialPanelData special_panel(const galactic::GalacticSim& g, const GameData& d
                                std::span<const ui::HudTypeInfo> hud_types, int32_t player, uint32_t kind, PlanetIndex planet,
                                uint32_t hero_id);
 
-// Campaign end (Int-verify): the host calls galactic::victory_outcome with the campaign's VictoryRules (victory.hpp)
+// Campaign end (Int-verify): the host calls galactic::victory_outcome (victory.hpp; q6 t21: the sim holds the records)
 // instead of the former campaign_outcome stand-in.
 struct BattleTally {
     uint32_t kills = 0, losses = 0;  // units destroyed by / of the local player (battle deaths)

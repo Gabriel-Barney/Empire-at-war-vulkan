@@ -754,8 +754,13 @@ void test_queue_phases() {
 
         // cu8f t04b: v5 adds the Prefer_Ground_Over_Space false ids at the end; a v4 image is refused (only the current
         // version is read, cu6). The flag is saved and enters the hash only once a live unit has it false.
-        CHECK(bytes.size() >= 4 && bytes[0] == 5 && bytes[bytes.size() - 4] == 0 && bytes[bytes.size() - 1] == 0);
-        std::vector<uint8_t> v4(bytes.begin(), bytes.end() - 4);
+        // q6 t21: v6 adds the deferred victory tests after them (u32 count 0 here); a v5 image is refused.
+        CHECK(bytes.size() >= 8 && bytes[0] == 6 && bytes[bytes.size() - 8] == 0 && bytes[bytes.size() - 1] == 0);
+        std::vector<uint8_t> v5(bytes.begin(), bytes.end() - 4);
+        v5[0] = 5;
+        ByteReader r5(v5);
+        CHECK(!o.read(r5));
+        std::vector<uint8_t> v4(bytes.begin(), bytes.end() - 8);
         v4[0] = 4;
         ByteReader r4(v4);
         CHECK(!o.read(r4));

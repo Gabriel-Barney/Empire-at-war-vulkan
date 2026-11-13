@@ -482,8 +482,6 @@ public:
     bool summary_completed_ = false;
     BattleTally tally_;
     bool campaign_over_ = false;
-    galactic::VictoryRules victory_rules_;  // Int-verify: the campaign's victory conditions (start_session)
-    galactic::EliminationLatch elimination_latch_;  // q6 [port]: no elimination before the player has owned something
     bool choice_open_ = false;
     // GALACTIC_DIALOGS §1 battle prompt: the banner (pending_battle_shell / story_pending_battle_shell) fed through
     // GalacticHudFrame::battle while choice_open_; its clicks are HudAction BattleBegin / BattleAutoResolve.

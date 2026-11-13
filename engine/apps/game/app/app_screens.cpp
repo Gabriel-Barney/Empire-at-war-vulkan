@@ -695,7 +695,7 @@ void App::galactic_screens() {
         }
     }
     if (session_->spec().kind == SessionKind::Campaign && !campaign_over_)
-        if (const int32_t o = galactic::victory_outcome(*g, victory_rules_, local_player(), &elimination_latch_); o != 0) show_campaign_end(o > 0);  // Int-verify
+        if (const int32_t o = galactic::victory_outcome(*g, local_player()); o != 0) show_campaign_end(o > 0);  // Int-verify
 }
 
 void App::show_campaign_end(bool victory) {

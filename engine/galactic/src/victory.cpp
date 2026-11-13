@@ -1,7 +1,8 @@
-// Galactic victory monitor (victory.hpp; docs/re/STRATEGIC_GAPS.md §1.4).
+// Galactic victory monitor (victory.hpp; docs/re/STRATEGIC_GAPS.md §1.4, Q6_T15_RETAIL_RUN.md "ELIM C" / "q6 t25").
 #include "alamo/galactic/victory.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include "alamo/data/game_database.hpp"
 #include "alamo/core/ascii.hpp"
@@ -72,6 +73,23 @@ bool type_on_a_planet(const GalacticSim& sim, uint32_t type) {
     return false;
 }
 
+const VictorySide& no_filter_side() {
+    static const VictorySide s;
+    return s;
+}
+
+const VictorySide& side_of(const GalacticSim& sim, const VictoryRecord& r) {
+    if (r.implicit) return no_filter_side();  // the implicit type 1: no faction filter
+    return r.human_side ? sim.victory_rules().human : sim.victory_rules().ai;
+}
+
+bool registered(const GalacticSim& sim, int32_t player, uint8_t type) {
+    if (type == GalacticSim::kVictoryStoryClaim) return true;  // the VICTORY reward adds its own record
+    for (const VictoryRecord& r : sim.victory_records())
+        if (r.player == player && static_cast<uint8_t>(r.type) == type) return true;
+    return false;
+}
+
 }  // namespace
 
 bool victory_condition_met(const GalacticSim& sim, const VictorySide& side, VictoryCondition k, int32_t player) {
@@ -86,9 +104,13 @@ bool victory_condition_met(const GalacticSim& sim, const VictorySide& side, Vict
         }
         return any;
     }
-    case VictoryCondition::OpponentControlsNoPlanets:
+    case VictoryCondition::OpponentControlsNoPlanets: {
+        // q6 t22 (Q6_T15 "ELIM C", 0x2814d0) [H]: a planet whose owner and the tested player are both AI-controlled
+        // non-humans does not block; in single player an AI's type 1 means "no human enemy owns a planet".
+        const bool p_ai = sim.victory_ai_player(player);
         for (const PlanetState& p : sim.planets()) {
             if (!p.is_planet || !sim.is_hostile(player, p.owner) || !playable(sim, p.owner)) continue;
+            if (p_ai && sim.victory_ai_player(p.owner)) continue;
             if (!side.faction_names.empty()) {
                 const FactionRules* f = faction(sim, p.owner);
                 if (!f || std::none_of(side.faction_names.begin(), side.faction_names.end(),
@@ -98,6 +120,7 @@ bool victory_condition_met(const GalacticSim& sim, const VictorySide& side, Vict
             return false;
         }
         return true;
+    }
     case VictoryCondition::CreditsAccrued:
         return sim.credits(player) >= static_cast<float>(side.credit_target);
     case VictoryCondition::PercentageControl: {
@@ -162,80 +185,115 @@ VictoryCondition parse_victory_condition(std::string_view name) {
 }
 
 VictoryRules load_victory_rules(const data::GameDatabase& db, std::string_view campaign, const GalaxyMap& map,
-                                std::vector<std::string>* diagnostics) {
+                                std::vector<std::string>* diagnostics, std::string_view starting_active_faction) {
     VictoryRules r;
     const data::CampaignDef* c = db.find_campaign(campaign);
     if (!c) return r;
     r.human = load_side(*c, "Human", map, diagnostics);
     r.ai = load_side(*c, "AI", map, diagnostics);
+    r.starting_active_faction = std::string(data::trim(starting_active_faction.empty() ? std::string_view(c->starting_active_player)
+                                                                                         : starting_active_faction));
     return r;
 }
 
-bool player_eliminated(const GalacticSim& sim, int32_t player) {
-    if (player < 0 || static_cast<size_t>(player) >= sim.players().size()) return false;
-    if (sim.planets_owned(player) > 0) return false;
-    const objects::ObjectStore& st = sim.store();
-    for (const FleetState& f : sim.fleets())
-        if (f.alive)
-            for (ObjectHandle m : f.contents)
-                if (st.alive(m) && st.owner(m) == player) return false;
-    for (const PlanetState& p : sim.planets()) {
-        if (!p.is_planet) continue;
-        for (ObjectHandle u : p.surface)
-            if (st.alive(u) && st.owner(u) == player) return false;
-        for (ObjectHandle s : p.structures)
-            if (st.alive(s) && st.owner(s) == player) return false;
-        if (st.alive(p.starbase) && st.owner(p.starbase) == player) return false;
-    }
-    return true;
-}
-
-void EliminationLatch::arm(int32_t player) {
-    if (player < 0) return;
-    const size_t i = static_cast<size_t>(player);
-    if (seen_.size() <= i) seen_.resize(i + 1, 0);
-    seen_[i] = 1;
-}
-
-VictoryResult check_victory(const GalacticSim& sim, const VictoryRules& rules, EliminationLatch* latch) {
+VictoryResult check_victory(const GalacticSim& sim) {
     VictoryResult out;
-    // story t11: a story claim is declared at once (0x343b90); it decides the result once its countdown ran out.
-    bool decided = sim.victory_hold() > 0;
-    for (const VictoryClaim& c : sim.victory_claims()) {
-        if (c.type != GalacticSim::kVictoryStoryClaim) continue;
-        if (!decided && sim.frame() >= c.frame + c.countdown) {
-            out.winner = c.player;
-            out.how = VictoryCondition::StoryTriggered;
-        }
-        decided = true;
-        break;
-    }
-    for (size_t i = 0; i < sim.players().size(); ++i) {
-        const int32_t p = static_cast<int32_t>(i);
-        if (!playable(sim, p)) continue;
-        const bool gone = player_eliminated(sim, p);
-        if (latch && !gone) latch->arm(p);
-        if (gone && (!latch || latch->armed(p))) {
-            out.eliminated.push_back(p);
-            continue;
-        }
-        if (decided || out.winner != kNoPlayer) continue;
-        const VictorySide& side = sim.players()[i].human ? rules.human : rules.ai;
-        for (VictoryCondition k : side.conditions)
-            if (victory_condition_met(sim, side, k, p)) {
-                out.winner = p;
-                out.how = k;
-                break;
-            }
+    if (sim.victory_hold() > 0) return out;  // 0x342d80: the result needs hold <= 0
+    const VictoryClaim* d = sim.victory_declared();
+    if (d && sim.frame() >= d->frame + d->countdown) {
+        out.winner = d->player;
+        out.how = static_cast<VictoryCondition>(d->type);
     }
     return out;
 }
 
-int32_t victory_outcome(const GalacticSim& sim, const VictoryRules& rules, int32_t player, EliminationLatch* latch) {
-    const VictoryResult r = check_victory(sim, rules, latch);
-    if (r.winner == player) return 1;
-    if (r.finished() || std::find(r.eliminated.begin(), r.eliminated.end(), player) != r.eliminated.end()) return -1;
-    return 0;
+int32_t victory_outcome(const GalacticSim& sim, int32_t player) {
+    const VictoryResult r = check_victory(sim);
+    if (!r.finished()) return 0;
+    return r.winner == player ? 1 : -1;
+}
+
+// ---- GalacticSim: the monitor's records and event-driven tests (campaign.hpp, q6 t21 / t22) ------------------------
+
+void GalacticSim::set_victory_rules(VictoryRules rules) {
+    victory_rules_ = std::move(rules);
+    victory_records_.clear();
+    victory_side_.assign(players_.size(), 0);
+    for (size_t i = 0; i < players_.size(); ++i) {
+        const int32_t p = static_cast<int32_t>(i);
+        const uint32_t f = players_[i].faction;
+        const FactionRules* fr = f < rules_->factions.size() ? &rules_->factions[f] : nullptr;
+        if (!fr || fr->is_neutral) continue;  // 0x289a90: no records for an Is_Neutral faction (+0x108)
+        const bool human = victory_rules_.starting_active_faction.empty()
+                               ? players_[i].human  // [port] hand-built rules without a Starting_Active_Player
+                               : ascii_iequals(fr->name, victory_rules_.starting_active_faction);
+        victory_side_[i] = human ? 1 : 2;
+        const VictorySide& side = human ? victory_rules_.human : victory_rules_.ai;
+        for (VictoryCondition k : side.conditions) {
+            if (k == VictoryCondition::Unknown) continue;
+            VictoryRecord r;
+            r.player = p;
+            r.type = k;
+            r.human_side = human;
+            victory_records_.push_back(r);
+        }
+        if (!human && !side.conditions.empty()) {  // the implicit type 1, only when the AI list is non-empty
+            VictoryRecord r;
+            r.player = p;
+            r.type = VictoryCondition::OpponentControlsNoPlanets;
+            r.implicit = true;
+            victory_records_.push_back(r);
+        }
+    }
+}
+
+bool GalacticSim::victory_ai_player(int32_t player) const {
+    if (!valid_player(player)) return false;
+    const PlayerState& ps = players_[static_cast<size_t>(player)];
+    return ps.ai && !ps.human && victory_side(player) != 1;
+}
+
+const VictoryClaim* GalacticSim::victory_declared() const {
+    for (const VictoryClaim& c : claims_)
+        if (registered(*this, c.player, c.type)) return &c;
+    return nullptr;
+}
+
+bool GalacticSim::victory_test(int32_t player, VictoryCondition type) {
+    const uint8_t t = static_cast<uint8_t>(type);
+    if (!valid_player(player) || !registered(*this, player, t) || type == VictoryCondition::StoryTriggered) return false;
+    if (victory_hold_ > 0) {  // 0x344710 gate: defer {type, player}, no duplicates (0x341f40)
+        const std::pair<int32_t, uint8_t> e{player, t};
+        if (std::find(victory_deferred_.begin(), victory_deferred_.end(), e) == victory_deferred_.end()) victory_deferred_.push_back(e);
+        return false;
+    }
+    if (const VictoryClaim* d = victory_declared()) return d->player == player && d->type == t;
+    // [port] a player with two records of the type (an AI list that names type 1 and the implicit one): any passing
+    // record declares, with that record's countdown (both 30).
+    for (const VictoryRecord& r : victory_records_) {
+        if (r.player != player || r.type != type) continue;
+        if (!victory_condition_met(*this, side_of(*this, r), type, player)) continue;
+        claim_victory(player, t, r.countdown);
+        return true;
+    }
+    return false;
+}
+
+void GalacticSim::victory_tests(std::initializer_list<VictoryCondition> types) {
+    if (victory_records_.empty()) return;
+    for (size_t i = 0; i < players_.size(); ++i)
+        for (VictoryCondition k : types)
+            if (victory_test(static_cast<int32_t>(i), k)) return;  // first pass wins
+}
+
+void GalacticSim::victory_hold_release() {
+    if (victory_hold_ <= 0) return;
+    if (--victory_hold_ > 0) return;
+    // 0x3440a0 replay 1: the deferred tests, in queue order, against the state now; the first declaration stops.
+    const std::vector<std::pair<int32_t, uint8_t>> queue = std::move(victory_deferred_);
+    victory_deferred_.clear();
+    for (const auto& e : queue)
+        if (victory_test(e.first, static_cast<VictoryCondition>(e.second))) break;
 }
 
 }  // namespace alamo::galactic

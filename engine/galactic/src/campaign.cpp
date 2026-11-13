@@ -231,6 +231,9 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
     slot_choices_ = false;
     claims_.clear();
     victory_hold_ = 0;  // story t11
+    victory_deferred_.clear();  // q6 t21
+    victory_records_.clear();   // q6 t22: built from setup.victory once the players exist (below)
+    victory_side_.clear();
     frame_ = pause_ = last_cycle_frame_ = next_cycle_frame_ = cycle_counter_ = 0;
     linked_battle_pending_ = false;
     local_player_ = kNoPlayer;  // GRC: pinned below
@@ -335,6 +338,9 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
     last_cycle_frame_ = 0;
     next_cycle_frame_ = econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
     cycle_counter_ = 1;
+    // q6 t22: the victory records (setup 0x289a90, per player) once the galaxy is built: the first ownership pass above
+    // tests nothing anyway (a planet's first owner assignment never does, Q6_T15 "ELIM C").
+    set_victory_rules(setup.victory);
     return true;
 }
 
@@ -345,6 +351,9 @@ float GalacticSim::add_credits(int32_t player, float amount, bool notify_ai) {
     PlayerState& p = players_[static_cast<size_t>(player)];
     const float applied = econ::add_credits(p.account, amount, p.ai, credit_multiplier(player));
     if (notify_ai) notify_ai_credits(player, applied);  // GE 1.1 step 5 -> 0x4b0310 (A2K_T10_CREDIT_NOTIFY_RE)
+    // q6 t21 (Q6_T15 "ELIM C") [H]: Add_Credits 0x27f370 tests Credits_Accrued for this player. [port] after the AI
+    // notification (the order inside 0x27f370 is not recorded; the notification only reads).
+    victory_test(player, VictoryCondition::CreditsAccrued);
     return applied;
 }
 
@@ -524,6 +533,9 @@ void GalacticSim::fiscal_cycle() {
     last_cycle_frame_ = next_cycle_frame_;
     next_cycle_frame_ += econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
     ++cycle_counter_;
+    // q6 t21 (Q6_T15 "ELIM C") [H]: Cycles_Elapsed is tested at each week rollover, every player in order, first pass
+    // wins. [port] right after the counter increments (before the black-market reroll and the day event).
+    victory_tests({VictoryCondition::CyclesElapsed});
     // Black-market reroll, planet order, one draw per qualifying planet. OPEN ITEM [M] (GE 7 item 2): the
     // original draws from the LCG at 0x140a13e24; MAIN_LOOP 3.x calls it "a per-planet random value from the
     // synchronized RNG", so the port uses the session's synced SimRng.
@@ -741,6 +753,11 @@ void GalacticSim::on_owner_change(PlanetIndex planet, int32_t old_owner) {
     g.erase(std::remove_if(g.begin(), g.end(), [now_owner](const BuildEntry& e) { return e.player != now_owner; }),
             g.end());
     if (head_gone && !g.empty()) restart_head(g[0]);
+    // q6 t21 (Q6_T15 "ELIM C", 0x3fb040 tail) [H]: the planet's derived owner changed (never at its first assignment,
+    // apply_ownership's `initialised` branch): types 0 / 1 / 4 / 5 / 9 for every player in player order, first pass wins.
+    victory_tests({VictoryCondition::AllPlanetsControlled, VictoryCondition::OpponentControlsNoPlanets,
+                   VictoryCondition::PercentageControl, VictoryCondition::ConquerEnemyHomeworldAndLeader,
+                   VictoryCondition::ControlNamedPlanets});
 }
 
 // ---- production -----------------------------------------------------------------------------------------------
@@ -1649,6 +1666,9 @@ void GalacticSim::update() {
     if (conflicts_) conflicts_->on_service_tail();
     // 4. fiscal cycle [H].
     if (next_cycle_frame_ <= frame_) fiscal_cycle();
+    // q6 t21 (Q6_T15 "ELIM C", galactic tick 0x4b2ef0) [H]: Kill_Enemy_Leader every 30 frames, every player in order,
+    // first pass wins. [port] on frames that are multiples of 30, after the fiscal cycle (the phase is not recorded).
+    if (frame_ % 30 == 0) victory_tests({VictoryCondition::KillEnemyLeader});
     // 5. T12: the mode frame advances.
     ++frame_;
 }

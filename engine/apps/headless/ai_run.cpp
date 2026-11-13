@@ -23,6 +23,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/victory.hpp"  // q6 t21: campaign end report
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
@@ -457,6 +458,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         for (const galactic::PlanetState& ps : gs->planets()) owner_prev.push_back(ps.owner);
         std::string owner_log;
         uint32_t owner_changes = 0;
+        bool campaign_end = false;  // q6 t21: the galactic victory monitor's result (reported once; the run goes on)
         if (trace.is_open()) trace.start(*gs, cfg.seed);
         while (n < opt.ticks && host.tick_once()) {
             ++n;
@@ -476,6 +478,16 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
                              " -> " + std::to_string(o) + "\n";
                 owner_prev[i] = o;
                 ++owner_changes;
+            }
+            if (!campaign_end) {
+                const galactic::VictoryResult v = galactic::check_victory(*gs);
+                if (v.finished()) {
+                    campaign_end = true;
+                    const std::string l = std::to_string(gs->frame()) + " campaign end: winner p" + std::to_string(v.winner) + " type " +
+                                          std::to_string(static_cast<int>(v.how)) + " (tick " + std::to_string(n) + ")";
+                    owner_log += l + "\n";
+                    if (print) std::printf("galactic-ai: %s\n", l.c_str());
+                }
             }
             if (n % 1800 == 0 || n == opt.ticks) {
                 char line[256];

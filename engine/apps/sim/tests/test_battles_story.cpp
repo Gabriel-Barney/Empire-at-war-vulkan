@@ -637,8 +637,9 @@ void test_story_victory_rewards(const Data& d) {
 // story t11: the galactic plot set's ENABLE_VICTORY / VICTORY act on the galactic monitor (GalacticSim::victory_hold,
 // galactic::check_victory): two holds at 0 s, one release and a Param1-less no-op at 1 s, an unknown faction at 2 s
 // (logged), VICTORY Underworld at 3 s: the hold is released and the campaign ends for the Underworld 210 frames later. The
-// human Empire's Credits_Accrued 0 would win at once without the hold. A prereq-less ELAPSED 0 fires at its second T9
-// (tick 2, StoryModel::tick_timer, A2I_T01_FRAME_ORDER.md §6), so the monitor is polled from the tick the holds are up.
+// human Empire's Credits_Accrued 0 would win at its next credit change without the hold (q6 t21: tested in add_credits);
+// under the hold the test is deferred, and VICTORY releases every level without replaying it. A prereq-less ELAPSED 0
+// fires at its second T9 (tick 2, StoryModel::tick_timer, A2I_T01_FRAME_ORDER.md §6).
 void test_galactic_story_victory(const Data& d) {
     const fs::path x = d.root / "Data/XML";
     write_file(x / "Story_Plots_GVic.xml", "<Story_Mode_Plots><Active_Plot>Story_GVic.xml</Active_Plot></Story_Mode_Plots>\n");
@@ -662,14 +663,15 @@ void test_galactic_story_victory(const Data& d) {
     if (!gs) return;
     galactic::VictoryRules rules;
     rules.human.conditions = {galactic::VictoryCondition::CreditsAccrued};
-    CHECK(galactic::check_victory(*gs, rules).winner == 0);  // nothing held yet: the Empire's credits win
+    gs->set_victory_rules(rules);
+    CHECK(!galactic::check_victory(*gs).finished());  // q6 t21: nothing is polled; no credit change yet
     StoryStart st;
     st.files = &files;
     st.plot_sets = {{0, "Story_Plots_GVic.xml"}};
     CHECK(host.start_story(st, nullptr));
     int32_t max_hold = 0, hold_after_release = -1;
     int32_t victory_frame = -1, end_frame = -1;
-    bool won_early = false;
+    bool won_early = false, deferred = false;
     for (uint64_t t = 0; t < 600 && end_frame < 0; ++t) {
         host.tick_once();
         max_hold = std::max(max_hold, gs->victory_hold());
@@ -678,7 +680,12 @@ void test_galactic_story_victory(const Data& d) {
             CHECK(t < 2);  // the 0 s holds are up by tick 2
             continue;
         }
-        const galactic::VictoryResult v = galactic::check_victory(*gs, rules);
+        if (!deferred) {  // a credit change under the hold: Credits_Accrued is queued, nothing is declared
+            gs->add_credits(0, 0.0f, false);
+            deferred = gs->victory_deferred().size() == 1 && gs->victory_claims().empty();
+            CHECK(deferred);
+        }
+        const galactic::VictoryResult v = galactic::check_victory(*gs);
         if (victory_frame < 0 && !gs->victory_claims().empty()) victory_frame = gs->victory_claims()[0].frame;
         if (v.finished()) {
             if (v.winner != 1 || v.how != galactic::VictoryCondition::StoryTriggered) won_early = true;
@@ -693,7 +700,8 @@ void test_galactic_story_victory(const Data& d) {
     CHECK(max_hold == 2 && hold_after_release == 1 && !won_early && gs->victory_hold() == 0);
     CHECK(victory_frame > 0 && end_frame == victory_frame + 210 && gs->victory_claims().size() == 1 &&
           gs->victory_claims()[0].type == galactic::GalacticSim::kVictoryStoryClaim && gs->victory_claims()[0].player == 1);
-    CHECK(galactic::victory_outcome(*gs, rules, 0) == -1 && galactic::victory_outcome(*gs, rules, 1) == 1);
+    CHECK(galactic::victory_outcome(*gs, 0) == -1 && galactic::victory_outcome(*gs, 1) == 1);
+    CHECK(gs->victory_deferred().size() == 1);  // VICTORY released the holds without the replay
     CHECK(lua.find("Unable to find faction Nobody to force victory") != std::string::npos);
 }
 

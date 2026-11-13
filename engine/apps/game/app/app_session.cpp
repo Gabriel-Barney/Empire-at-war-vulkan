@@ -480,10 +480,6 @@ void App::session_started(const std::vector<std::string>& diag) {
     story_scripts_.clear();  // the new session's plots ask for their dialog scripts again (sync_story_scripts)
     story_loads_ = {};
     screen_lines_.clear();
-    elimination_latch_.reset();
-    victory_rules_ = {};  // Int-verify: galactic victory conditions of the campaign (none for a skirmish)
-    if (const galactic::GalacticSim* vg = session_->galaxy(); vg && spec.kind == SessionKind::Campaign)
-        victory_rules_ = galactic::load_victory_rules(data_.db, vg->map().campaign_name, vg->map());
     orders_ = ui::OrderTranslator{};
     orders_.set_selection({});
     last_submit_frame_ = 0;
