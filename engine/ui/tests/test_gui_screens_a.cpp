@@ -349,7 +349,7 @@ void test_video_vsync_mode() {
     const size_t before = env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 10 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
           rd->w == 570 && rd->has_style("DS_CENTER"));  // the shipped header is kept
     FrontEnd fe;
     MenuProviders p;
@@ -363,9 +363,13 @@ void test_video_vsync_mode() {
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_OPTIONS_DIALOG", "IDC_MAIN_OPTIONS_VIDEO")}, InputFrame{}, acts);
     GuiDialog* d = fe.top() == "IDD_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(d && d->get("IDC_PORT_VSYNC_MODE")->selected == 2 && d->get("IDC_PORT_VSYNC_MODE")->items.size() == kVsyncModeCount + 1 &&
-          d->get("IDC_PORT_DISPLAY_INFO")->text == U"160 Hz, Mailbox" && d->get("IDC_PORT_FRAME_CAP")->selected == 6 &&
-          d->get("IDC_PORT_FRAME_CAP")->items[1] == U"Display refresh rate" && d->get("IDC_PORT_FRAME_CAP")->items[3] == U"60 fps");
+          d->get("IDC_PORT_DISPLAY_INFO")->text == U"160 Hz, Mailbox" && d->get("IDC_PORT_FRAME_CAP")->selected == kFrameCapRowCustom &&
+          d->get("IDC_PORT_FRAME_CAP")->items.size() == 3 && d->get("IDC_PORT_FRAME_CAP")->items[1] == U"Display refresh rate" &&
+          d->get("IDC_PORT_FRAME_CAP")->items[2] == U"Custom");
     if (!d) return;
+    // [port: Gabriel 2026-11-13] the custom frame cap is a slider (20 .. 500 fps) under the list, its value beside it.
+    CHECK(d->get("IDC_PORT_FRAME_CAP_SLIDER")->value == 144 && d->get("IDC_PORT_FRAME_CAP_SLIDER")->range_min == kFrameCapCustomMin &&
+          d->get("IDC_PORT_FRAME_CAP_SLIDER")->range_max == kFrameCapCustomMax && d->get("IDC_PORT_FRAME_CAP_VALUE")->text == U"144 fps");
     // U9 (Gabriel 2026-11-13): the mode list is the one v-sync setting; the shipped check box is hidden.
     auto changed = [&](GuiEvent::Kind k, const char* id, int32_t value) {
         GuiEvent e = event(k, "IDD_VIDEO_OPTIONS_DIALOG", id);
@@ -391,7 +395,18 @@ void test_video_vsync_mode() {
     // Apply leaves the dialog open: the status line picks up the mode the host switched to on the next frame.
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
     CHECK(acts.size() == 1 && acts[0].video.vsync && acts[0].video.vsync_mode == VsyncMode::Fifo);
-    CHECK(acts[0].video.window_mode == WindowMode::Borderless && acts[0].video.ui_scale == 200);
+    CHECK(acts[0].video.window_mode == WindowMode::Borderless && acts[0].video.ui_scale == 200 && acts[0].video.frame_cap == 144);
+    acts.clear();
+    // Off, then moving the slider: the list goes back to Custom and Apply takes the slider's value.
+    d->set_selected("IDC_PORT_FRAME_CAP", kFrameCapRowOff);
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
+    CHECK(acts.size() == 1 && acts[0].video.frame_cap == 0);
+    acts.clear();
+    d->set_value("IDC_PORT_FRAME_CAP_SLIDER", 237);
+    changed(GuiEvent::Kind::ValueChanged, "IDC_PORT_FRAME_CAP_SLIDER", 237);
+    CHECK(d->get("IDC_PORT_FRAME_CAP")->selected == kFrameCapRowCustom && d->get("IDC_PORT_FRAME_CAP_VALUE")->text == U"237 fps");
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
+    CHECK(acts.size() == 1 && acts[0].video.frame_cap == 237);
     cur.display_info = U"160 Hz, FIFO";
     acts.clear();
     fe.update({}, InputFrame{}, acts);
@@ -404,7 +419,7 @@ void test_video_vsync_mode() {
     acts.clear();
     d->set_selected("IDC_PORT_VSYNC_MODE", 1);
     changed(GuiEvent::Kind::SelectionChanged, "IDC_PORT_VSYNC_MODE", 1);
-    d->set_selected("IDC_PORT_FRAME_CAP", 1);
+    d->set_selected("IDC_PORT_FRAME_CAP", kFrameCapRowDisplay);
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_OK")}, InputFrame{}, acts);
     CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.vsync && acts[0].video.vsync_mode == VsyncMode::Fifo &&
           acts[0].video.frame_cap == kFrameCapDisplay);

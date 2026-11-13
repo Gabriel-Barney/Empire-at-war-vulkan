@@ -89,10 +89,15 @@ struct AudioVolumes {  // audio::AudioBus Master / Sfx / Speech / Music, 0..1
 // FIFO (waits for the display's refresh) or Mailbox (no tearing, the newest finished frame is shown: lower latency, the GPU never waits).
 enum class VsyncMode : uint8_t { Fifo, Mailbox };
 inline constexpr size_t kVsyncModeCount = 2;
-// [port: Gabriel] IDC_PORT_FRAME_CAP rows: frames per second, 0 = no cap, kFrameCapDisplay = the monitor's refresh rate.
+// [port: Gabriel] VideoSettings::frame_cap: frames per second, 0 = no cap, kFrameCapDisplay = the monitor's refresh rate.
 // The cap holds with v-sync on too (e.g. 60 fps on a 144 Hz display with FIFO, or Mailbox capped at the refresh rate).
+// Gabriel 2026-11-13: the IDC_PORT_FRAME_CAP list is Off / Display refresh rate / Custom (kFrameCapRow*), and the slider
+// under it (IDC_PORT_FRAME_CAP_SLIDER, kFrameCapCustomMin .. kFrameCapCustomMax fps in steps of 1, its value shown in
+// IDC_PORT_FRAME_CAP_VALUE) sets the Custom cap; moving the slider picks Custom.
 inline constexpr int32_t kFrameCapDisplay = -1;
-inline constexpr int32_t kFrameCapChoices[] = {0, kFrameCapDisplay, 30, 60, 90, 120, 144, 165, 240};
+inline constexpr int32_t kFrameCapRowOff = 0, kFrameCapRowDisplay = 1, kFrameCapRowCustom = 2;
+inline constexpr int32_t kFrameCapCustomMin = 20, kFrameCapCustomMax = 500;
+inline constexpr int32_t kFrameCapCustomDefault = 60;  // the slider's place while the cap is Off / Display refresh rate
 // [port: Gabriel 2026-11-13] IDC_PORT_WINDOW_MODE rows (in this order), replacing the shipped "Run in window" check
 // (IDC_WINDOWED_MODE, hidden): Fullscreen = the monitor takes the picked resolution, a frameless window covers it and
 // takes exclusive Vulkan full screen when the driver offers it (alt-tab minimizes it); Borderless = a frameless window over the monitor at the desktop's own resolution
@@ -116,7 +121,7 @@ struct VideoSettings {
     bool vsync = true;
     VsyncMode vsync_mode = VsyncMode::Fifo;  // [port: Gabriel] IDC_PORT_VSYNC_MODE
     bool mailbox_available = true;           // false: the Mailbox row says the driver lacks it (FIFO is used)
-    int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP: one of kFrameCapChoices
+    int32_t frame_cap = 0;                   // [port: Gabriel] IDC_PORT_FRAME_CAP (+ slider): 0, kFrameCapDisplay or fps
     std::u32string display_info;             // [port: Gabriel] IDC_PORT_DISPLAY_INFO ("160 Hz, Mailbox"); empty = blank
     int32_t detail = 100, gamma = 50;  // 0..100: Detail is picked from a list (kQualityPresets), Gamma is a slider
     int32_t anti_alias = kAaOff;       // [port: Gabriel] the Anti-aliasing list's mode (kAntiAliasChoices: kAaOff .. kAaMsaa8)
@@ -240,7 +245,7 @@ extern const char* const kPortDialogsRc;
 inline constexpr const char* kPortControlsDialog = "IDD_PORT_CAMERA_CONTROLS_DIALOG";
 inline constexpr const char* kPortModsDialog = "IDD_PORT_MODS_DIALOG";
 // [port: Gabriel] controls the port adds to shipped dialogs: IDD_VIDEO_OPTIONS_DIALOG gets the V-sync mode combo
-// (IDC_PORT_VSYNC_MODE), the frame rate cap combo (IDC_PORT_FRAME_CAP), a live 0..100 value beside the Gamma slider
+// (IDC_PORT_VSYNC_MODE), the frame rate cap list and slider (IDC_PORT_FRAME_CAP, IDC_PORT_FRAME_CAP_SLIDER), a live 0..100 value beside the Gamma slider
 // (IDC_PORT_GAMMA_VALUE; the shipped Low / Max captions only name the slider's ends) and a display line
 // (IDC_PORT_DISPLAY_INFO: refresh rate and the swap mode in use), the display mode list (IDC_PORT_WINDOW_MODE,
 // WindowMode) in place of the hidden IDC_WINDOWED_MODE check and the UI scale list (IDC_PORT_UI_SCALE, kUiScaleChoices).
