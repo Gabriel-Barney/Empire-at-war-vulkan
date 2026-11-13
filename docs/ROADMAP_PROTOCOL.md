@@ -164,8 +164,8 @@ leave the group.
   - Unchanged: a tier-3 finding is still dropped or filed in the backlog as S3 (`--tier 3` keeps it there; current focus), and the
     triage still decides whether a finding is worth recording at all. A finding that is not Stage 6 work (for example a movement bug
     a mod test happens to show) can still be filed in its own box's backlog by naming the box: `--node <box>`.
-  - Open backlog entries filed from Stage 6 groups before 2026-11-12 (b0014-b0017 from modc; b0018 is tier 3 and stays) are left in
-    the backlog until someone promotes them back (`backlog promote <ids> --to <group>`).
+  - The open backlog entries filed from Stage 6 groups before this rule were moved back on 2026-11-12: b0014-b0017 are modc
+    t35-t38 (`backlog promote ... --to modc`); b0018 (tier 3) stays in the backlog.
 - **Parity tier** (2026-11-10). A task or backlog entry that is a difference from retail carries `tier` (`1`, `2` or `3`, as in
   `docs/DECISIONS.md`, "Parity tiers"); work that is not about matching retail (tools, UI of the port, Gabriel's runs) has none. The
   tier says how the difference is judged and what it is worth: **1** exact, spec and unit test, a difference is a bug (S1 when a
