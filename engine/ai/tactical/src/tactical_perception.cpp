@@ -457,11 +457,6 @@ struct Eval {
             for (const int32_t id : p.grid().player_objects(q)) {
                 const PerceptionObject* o = w.object(id);
                 if (!o) continue;
-                // skai t12 [H, two retail traces: SKAI_T06_LAND_RUNS s7]: the base structures (DUMMY_GROUND_STRUCTURE:
-                // Command Center, Barracks, factories, turbolaser towers) are not in the per-player list this sum walks,
-                // although their types list UNIT_AI: Variable_Self.FriendlyForceUnnormalized > 400 is false with 290 of
-                // units beside 2100 of base structures, and > 3000 false with 1010 of units beside 2950 of structures.
-                if (o->dummy_ground_structure) continue;
                 const PerceptionType* t = w.type_of(*o);
                 if (!t || (t->category & cat) == 0) continue;
                 sum += o->combat_power * (1.0f - (1.0f - o->health) * a);
