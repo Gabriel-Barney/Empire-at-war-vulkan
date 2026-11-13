@@ -1105,6 +1105,14 @@ void test_menus() {
     kb = open_keys();
     step(env.click(*kb, "IDC_OK"));
     CHECK(fe.top() != "IDD_KEYBOARD_OPTIONS_DIALOG" && fe.top() != "IDD_DIALOG_BOX_QUIT_CONFIRM");
+    // UI5 t07: Esc in the tutorial list goes where its Cancel goes (the main menu, which opened it).
+    {
+        std::vector<GuiEvent> e(1);
+        e[0].kind = GuiEvent::Kind::Cancel;
+        e[0].dialog = "IDD_SELECT_TUTORIAL_DIALOG";
+        step(e);
+        CHECK(fe.top() == "IDD_MAIN_MENU_DIALOG");
+    }
 }
 
 void test_load_screen() {

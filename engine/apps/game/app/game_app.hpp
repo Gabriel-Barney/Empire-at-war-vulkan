@@ -431,7 +431,9 @@ public:
     uint64_t pause_toggles_ = 0;
     ui::CameraSettings camera_;         // FOVs / queue modifier from the options (camera and controls dialog)
     bool tactical_fov_set_ = false;     // the player changed the tactical FOV (else TacticalCameras.xml's applies)
-    std::vector<DisplayMode> display_modes_;  // the video options' resolution list (primary display, game_display.hpp)
+    std::vector<DisplayMode> display_modes_;  // the display's modes (primary display, game_display.hpp)
+    std::vector<DisplayMode> shown_modes_;    // UI5 t01: the video options' resolution list (video_list_modes; Widescreen)
+    bool windowed_ = true;                    // UI5 t01: Options > Video > Windowed (false: full screen)
     uint64_t video_applies_ = 0;
     bool menu_dialog_open() const;  // the in-game menu or one of its option / save / load / quit dialogs is open
     uint32_t reinforce_unit_ = 0;       // reinforcement chosen on the pad, waiting for its drop point (0 = none)
@@ -646,6 +648,10 @@ public:
     ui::CreditsRoll credits_;            // ui1 t03: the front end's credits roll (ShowCredits)
     uint32_t tooltip_trigger_fleet_ = 0;  // ui1 t03: the fleet / land stack whose fleet_tooltip / land_tooltip fired last
     void show_credits();
+    // UI5 t02: with Hardware Mouse on, the current pointer's frame becomes the Windows cursor (same art, hot spot and
+    // context cursors as the drawn one); off: the arrow class cursor (the drawn cursor hides it).
+    void sync_os_cursor();
+    std::map<std::string, void*> hw_cursors_;  // frame texture -> HCURSOR (null: could not be made; the arrow is used)
     void fill_cursor_hover(ui::CursorContext& c);  // ui1 t01: hovered object -> cursor context (battle)
     void update_radar();
 
@@ -749,7 +755,8 @@ public:
     // QA t11 / t16: the battle load screen, filled from the planet's text, is on screen before the blocking loads.
     std::u32string battle_place_name(PlanetIndex planet) const;
     void planet_type_info(ui::PlanetInfoData& d, objects::TypeIndex t) const;
-    bool open_battle_load(PlanetIndex planet, bool space);
+    // UI5 t07: `mission` (a story-linked LINK_TACTICAL battle) opens IDD_LAND / SPACE_MISSION_LOAD_DIALOG (UI.md §5.1).
+    bool open_battle_load(PlanetIndex planet, bool space, bool mission = false);
     void end_load_intro_frame();
     void post_tick();
     void step_sim();

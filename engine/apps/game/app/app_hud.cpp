@@ -1,6 +1,8 @@
 // alamo_game App: galactic / tactical HUD frame building (split from game_main.cpp).
 #include "game_app.hpp"
 
+#include "alamo/assets/texture.hpp"
+
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ HUD frames
@@ -302,7 +304,7 @@ std::u32string App::battle_place_name(PlanetIndex planet) const {
 // QA t16 (UI.md §5.1 step 1, §5.2): fills the load dialog from the planet type's text, as IDD_PLANET_INFO (GALACTIC_DIALOGS
 // §9.2) [inferred: the same fields; the fill function of the load dialog is not traced field by field]. QA t11: the sim
 // is held until it has been presented (end_load_intro_frame); no load moved off this thread.
-bool App::open_battle_load(PlanetIndex planet, bool space) {
+bool App::open_battle_load(PlanetIndex planet, bool space, bool mission) {
     if (ui_.load.is_open()) return true;
     if (!session_) return false;
     const bool skirmish = session_->spec().kind == SessionKind::Skirmish;
@@ -349,7 +351,13 @@ bool App::open_battle_load(PlanetIndex planet, bool space) {
     info.map_icon = std::move(d.map_icon);
     info.native_icon = std::move(d.native_icon);
     info.begin_button = !session_->spec().attract;  // OI host: the attract demo starts as soon as it is loaded
-    const ui::LoadScreenKind kind = skirmish ? ui::LoadScreenKind::Skirmish : space ? ui::LoadScreenKind::SpaceBattle : ui::LoadScreenKind::LandBattle;
+    // UI.md §5.1 step 1 names five dialogs; [port] UI5 t07: a story mission (LINK_TACTICAL battle) takes the Mission pair,
+    // a skirmish the skirmish dialog, every other battle the Battle pair (which battles retail sends to the Mission dialogs
+    // is an RE gap).
+    const ui::LoadScreenKind kind = skirmish ? ui::LoadScreenKind::Skirmish
+                                    : mission ? (space ? ui::LoadScreenKind::SpaceMission : ui::LoadScreenKind::LandMission)
+                                    : space   ? ui::LoadScreenKind::SpaceBattle
+                                              : ui::LoadScreenKind::LandBattle;
     screens_.close_planet_info();  // GALACTIC_DIALOGS §9.4: IDD_PLANET_INFO never survives into a battle
     ui_.load.set_progress_source([this] { return bview_.active() ? bview_.load_progress() : 0.0f; });
     if (!ui_.load.open(ui_.gui, kind, info)) return false;
@@ -1040,6 +1048,39 @@ void App::hud_hit_dump(const char* where, int32_t component, int32_t px, int32_t
     hud_hit_last_ = component;
     const char* name = component >= 0 && static_cast<size_t>(component) < ui_.components.size() ? ui_.components[static_cast<size_t>(component)].name.c_str() : "-";
     std::printf("hud hit (%s): %d %s at %d,%d\n", where, component, name, px, py);
+}
+
+void App::sync_os_cursor() {
+    void* want = nullptr;
+    if (hardware_mouse_ && cursor_ok_ && !opt_.hidden) {
+        const std::string tex = cursor_.texture(now_s_);
+        const ui::CursorDef* def = cursor_.current_def();
+        if (!tex.empty() && def) {
+            auto it = hw_cursors_.find(tex);
+            if (it == hw_cursors_.end()) {
+                void* made = nullptr;
+                std::vector<uint8_t> bytes;
+                for (const std::string& c : assets::texture_candidates(tex)) {
+                    if (!data_.files->read(c, bytes)) continue;
+                    assets::TextureAsset t;
+                    if (assets::decode_texture(std::move(bytes), t) && !t.levels.empty() &&
+                        (t.format == assets::TextureFormat::BGRA8 || t.format == assets::TextureFormat::RGBA8)) {
+                        const std::span<const uint8_t> px = t.level_bytes(t.levels[0]);
+                        std::vector<uint8_t> bgra(px.begin(), px.end());
+                        if (t.format == assets::TextureFormat::RGBA8)
+                            for (size_t k = 0; k + 3 < bgra.size(); k += 4) std::swap(bgra[k], bgra[k + 2]);
+                        if (bgra.size() >= static_cast<size_t>(t.width) * t.height * 4u)
+                            made = create_os_cursor(bgra.data(), t.width, t.height, def->hot_x, def->hot_y);
+                    }
+                    break;
+                }
+                if (!made) std::printf("hardware mouse: no cursor from %s (arrow)\n", tex.c_str());
+                it = hw_cursors_.emplace(tex, made).first;
+            }
+            want = it->second;
+        }
+    }
+    set_os_cursor_image(win_.native_handle(), want);
 }
 
 }  // namespace alamo_game_app

@@ -1271,7 +1271,11 @@ void FrontEnd::on_cancel(const GuiEvent& e, std::vector<MenuAction>& out) {
         go(kMain);
         return;
     }
-    if (ascii_iequals(n, kCampaignSelect) || ascii_iequals(n, kCustomStaging) || ascii_iequals(n, kSkirmish) || ascii_iequals(n, kTutorial)) {
+    if (ascii_iequals(n, kTutorial)) {  // UI5 t07: Esc = its Cancel button (opened from the main menu)
+        go(kMain);
+        return;
+    }
+    if (ascii_iequals(n, kCampaignSelect) || ascii_iequals(n, kCustomStaging) || ascii_iequals(n, kSkirmish)) {
         go(kSingle);
         return;
     }
