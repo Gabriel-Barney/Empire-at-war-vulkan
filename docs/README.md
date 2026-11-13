@@ -15,12 +15,13 @@ its kind below and add it there instead of starting a second copy.
 | In-game probes: which kit asks what, where findings go | [`PROBES.md`](PROBES.md) | Kit READMEs under `tools/probe_mod/` say how to run; findings go in `docs/re/` |
 | Roadmap rules and field list | [`ROADMAP_PROTOCOL.md`](ROADMAP_PROTOCOL.md) | The roadmap itself is `roadmap-store/` |
 | Behaviour of the original game (specs recovered from the binary) | [`re/`](re/) | Clean-room: engine code is written from these, never from decompiled output. `re/AUDIT_2026-10-30.md` is the status of each file |
-| Mod loading: what makes a mod loadable, file resolution, mechanisms, load reports, the no-mod-specific-code rule | [`MODS.md`](MODS.md) | The decision is in `DECISIONS.md`; status of each part on the roadmap (group `modc`) |
+| Mod loading: what makes a mod loadable, file resolution, mechanisms, load reports, the no-mod-specific-code rule, the compatibility target (near-full, checklist, reference mods: §10) | [`MODS.md`](MODS.md) | The decision is in `DECISIONS.md`; status of each part on the roadmap (group `modc`) |
 | Phase 4 (the game): step map and open per-step port choices | [`PHASE4.md`](PHASE4.md) | Finished-work notes and old build / fix logs: [`PHASE4_HISTORY.md`](PHASE4_HISTORY.md) |
 | Phase 3 (renderer): results, assumptions, reference | [`PHASE3.md`](PHASE3.md) | Details of finished work: `archive/` |
 | Phase 2 (architecture, headless core): results and design notes (determinism contract, file resolution order) | [`PHASE2.md`](PHASE2.md) | |
 | Game asset catalog, file formats, shader catalog and porting notes | [`assets/`](assets/), [`formats/`](formats/), [`shaders/`](shaders/) | Generated catalogs: do not edit by hand |
 | Mod compatibility: hard-coded names in `engine/` (audit, replacements, the name lint) | [`status/modc-audit.md`](status/modc-audit.md) | The mod-loading contract is `MODS.md` (PR #92); the audit becomes its section 9 when that lands |
+| Command Center launcher (`launcher/`, Rust): why it is here, its dependencies, how to build it | [`DECISIONS.md`](DECISIONS.md) "Command Center launcher", [`BUILD.md`](BUILD.md) | Code: `launcher/src/` |
 | Playtest QA notes | [`qa/`](qa/) | |
 | Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md), [`PERF_AUDIT_2026-11-07.md`](PERF_AUDIT_2026-11-07.md) (CPU / GPU performance audit and research, input for the deferred side goals) | History, not kept current |
 | Old versions of moved or trimmed documents | [`archive/`](archive/) | Zips |

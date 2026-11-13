@@ -15,8 +15,10 @@ Status labels used below:
 
 ## 1. The rule
 
-A mod works in the port when it uses the same data mechanisms as base Forces of Corruption. Thrawn's Revenge (roadmap Q6)
-is the first and hardest test case, but it is a test case, not a target the engine is shaped around.
+A mod works in the port when it uses the same data mechanisms as base Forces of Corruption. The goal is near-full
+compatibility with FoC mods (Gabriel, 2026-11-13): what plays in retail plays in the port; the checklist, the allowed
+failures and the reference set of mods are in §10. Thrawn's Revenge (roadmap Q6) is the first and hardest test case, but it
+is a test case, not a target the engine is shaped around.
 
 1. **No mod-specific code paths in `engine/`.** Engine code (every module, sim and presentation alike) contains no mod name,
    no workshop id, no faction, unit, planet, campaign or map name that changes behaviour, and no branch of the form "if this
@@ -488,3 +490,54 @@ game.
 about 26 ms a sim tick); **t34** the two front-end stops above. The picker names a mod without `modinfo.json` by its
 workshop id only (both mods here). The Lua C sources are built without frame pointers in sanitizer builds, so crash
 stacks stop inside Lua (a debugging aid only, not filed).
+
+## 10. Compatibility target (Gabriel, 2026-11-13)
+
+The goal is **near-full compatibility with Forces of Corruption mods**: a mod that uses the original's data mechanisms (§4)
+plays in the port as it does in retail. Decision: [`DECISIONS.md`](DECISIONS.md), "Mod compatibility target". The roadmap
+group `modc` closes when every mod in the reference set below passes the checklist; whether it does is on the roadmap only.
+
+### 10.1 What "plays" means
+
+A mod passes when all of these hold (the headless runs are the ones §9 used):
+
+1. **Load.** `alamo_mod_check` reports no errors. Every warning is something retail also rejects or skips (§5), or is filed as
+   a `modc` task.
+2. **Front end.** `alamo_game` with the mod reaches its main menu, its skirmish staging and its campaign selection; the hidden
+   skirmish smoke (`alamo_game --smoke skirmish --hidden --audio null STEAMMOD=<id>`) gets into a running skirmish.
+3. **Skirmish.** A space and a land skirmish on the mod's own maps run 3000 ticks AI against AI in `alamo_headless` with AI
+   orders and decisions and no Lua error the port causes, and one skirmish is played to a result in the game.
+4. **Galactic conquest.** Every campaign the mod's menus offer starts (none without planets, unless it is menu-only, §9), and
+   one runs 9000 ticks with `--story --scoring --object-scripts` with AI decisions, orders and no Lua error the port causes.
+5. **Story.** For a mod with story campaigns, one starts and reaches its first story events (objectives, handouts).
+6. **Stable and deterministic.** No crash or hang in any of the above; the same mod and command line give the same per-tick
+   CRC on every worker count and both compilers (§1 rule 5); the base-FoC goldens do not move.
+
+Speed is not in the checklist while tier-3 work is paused (`DECISIONS.md`, "Current focus"); a mod whose sim is too slow to
+play is filed as a `modc` task (as t33).
+
+### 10.2 What may still fail ("near")
+
+- What retail also rejects or fails on: copied 32-bit Lua bytecode, a script with a UTF-8 BOM, an error in the mod's own
+  script (an undefined function it calls, a wrong argument retail also refuses), a listed file the mod does not ship.
+- What is out of scope for every mod (§4): multiplayer and the original game's save files.
+- Mods that change the game executable or load native code (DLLs) instead of data: they are outside the data mechanisms the
+  port reads.
+
+Anything else a mod needs is a gap in the port, fixed as a general mechanism (§1 rule 6).
+
+### 10.3 Reference set
+
+The mods installed on Gabriel's PC that §9 picked or that are the Q6 target; a submod is checked with its parent loaded, a
+second copy of the same mod is not a separate entry. The set grows when Gabriel installs more mods; a new mod is added here
+with its id and why it adds coverage.
+
+| Mod | Workshop id | Why it is in the set |
+|---|---|---|
+| Thrawn's Revenge | 1125571106 | Q6: the largest and hardest; heavy Lua framework, own GC menu and victory handling |
+| Fall of the Republic | 1976399102 | Same team and script framework as TR, different era and content |
+| EAW-Remake | 1770851727 | Total conversion by another team: replaces base MEGs, 93 own effects, 30 factions, `Basic_AI` |
+| Star Wars: Age of Legends (New Jedi Order) | 2858787558 | Mostly loose XML, own root tags, planet variants, 169 campaigns, no TR framework |
+
+The synthetic fixture mod (`engine/apps/game/testdata/mod_fixture`, modc t07) keeps the agnostic loading route covered in ctest without game
+data; it is not a substitute for the set.
