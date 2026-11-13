@@ -1,4 +1,4 @@
-Alamo engine test build, 2026-11-12
+Alamo engine test build, 2026-11-13
 ====================================
 
 How to run
@@ -30,37 +30,42 @@ Built from: @BUILD@.
 
 What to try
 -----------
-- Forces of Corruption land skirmish (any faction): how squads and vehicles move, keep formation,
-  get round each other and attack. This is the biggest change since the last build.
-- Land skirmish "Capture Control Points": capturing, the announcer, the AI building on its pads.
-- Galactic conquest against the AI (Rebel, Empire, Underworld): what the AI builds, when and where
-  it attacks, auto-resolved battles.
-- Abilities: Bribe, the vehicle thief, Saber Throw, bombing runs (the new tactical button),
-  hero-vs-hero clashes on land.
-- Thrawn's Revenge and the other mods, as in the 2026-11-07 build (Play_Mod.cmd).
+- Menus and options (the biggest change since the last build): video options (Windowed off now
+  gives real full screen; Widescreen and Hardware Mouse), key rebinding (Delete / Backspace
+  clears, conflict and "Apply?" prompts), gameplay options kept between runs, drop-down lists,
+  scroll bars and text boxes (typing, selection, copy / paste).
+- The tactical HUD in land and space battles: order buttons and their hotkeys, retreat,
+  reinforcements, the space special-weapon button, tooltips, the battle-end screen and score /
+  retry dialog.
+- Galactic conquest screens: hero roster, build pad prices and why a build is blocked, map
+  filters, planet-label icons, on-screen messages, the announcer and the Droid Log.
+- Story missions and the tutorial: the Mission load dialogs, Esc in the tutorial, skipping
+  movies, the credits roll.
+- Thrawn's Revenge galactic conquest: winning and losing a campaign (victory conditions).
+- Land skirmish and galactic AI as in the 2026-11-12 build.
 
-Changes since test build 2026-11-07
+Changes since test build 2026-11-12
 -----------------------------------
-- Land movement rebuilt to follow the original closely: an infantry squad moves as one group with
-  its members in their slots (rows or a spread), a formation walks one shared path with each unit
-  on its own lane, units wait for, pass or go round each other the way the original does, and
-  turning, cornering and stopping speeds match it.
-- Walkers that deploy (Destroyer Droid) can walk deployed; hover units rise and settle on the
-  ground; a squad enters and leaves a garrison as a whole, and occupants of a destroyed building
-  come out where it stood.
-- Land attacks: units close in on their target, keep in range and guard a target like the
-  original; Attack_Move works on non-hostile units.
-- Land skirmish: start forces stand at the map's spawn points; Capture Control Points game type;
-  the AI uses its build pads and respects the per-player unit limit.
-- Combat details: Bribe and ability ranges, vehicle-thief takeover, Saber Throw, bombing runs,
-  hero clashes on land, diminishing firepower, Combat_Bonus auras, Cancel_Special, energy drain.
-- Galactic AI: much more of the original's budget, production, task-force and free-store rules;
-  every AI starts on the same frame; auto-resolve pays the Underworld's bounty; the Rebel home
-  fleet defence at Yavin; AI units skip planets they cannot land on.
-- Campaign and story: space fleet placement and the start fleet's hyperspace arrival, Esc in
-  story missions, one player per faction, galactic auto-land, weather picked when a map loads.
-- A large internal clean-up of the whole engine. Please report anything that worked in the
-  2026-11-07 build and no longer does.
+- Options: Windowed off switches to full screen; Windowed, Widescreen and Hardware Mouse are kept
+  and applied (Hardware Mouse uses the game's own cursor art); gameplay and advanced options are
+  applied and saved; key rebinding works like the original (Tab bindable, zoom keys listed).
+- Dialog controls: combo boxes, list scroll bars (drag, auto-repeat, Home / End), edit boxes with
+  caret, selection and the Windows clipboard.
+- Tactical HUD: order buttons, hotkeys, retreat and reinforcement controls, battle end, tooltips,
+  the space special-weapon button, score and retry dialog; the cursor reacts to what it is over.
+- Galactic: hero roster input, build pad prices and block reasons, map filters, planet-label
+  icons, on-screen messages and announcer events, readable Droid Log battle reports.
+- Story and tutorial: Mission load dialogs, tutorial start and Esc, movies skip on Esc / Space
+  only, credits roll, fleet hover triggers, skirmish staging rows.
+- Galactic victory is now checked the way the original does (event-driven), which fixes campaign
+  wins in mods such as Thrawn's Revenge; base-game objects run their own Lua scripts; map hint
+  names reach the scripts (Find_Hint and friends).
+- Galactic AI: build tasks with no target planet consider every planet, Underworld blockade
+  waits and free-store moves restored, planet conflict state set at battle end, trade-route
+  distance and "like" unit sets as the original.
+- Land skirmish AI: tactical goals run at the original's rate and limits; structures under
+  construction count toward its structure totals.
+- Saves: script-added battle types load correctly.
 
 Known gaps
 ----------
