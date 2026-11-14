@@ -95,7 +95,8 @@
 //       must give the original's per-tick CRCs.
 // SP5: any mode takes --svc-mode serial|parallel|reverse (the battle services graph; same results, reverse = order check)
 // and --svc-check (debug write check of the services' declared sets; violations printed to stderr), and
-// --svc-streams hangar|none (SP5 t03: those services draw from counter-based streams; this MOVES per-seed outcomes).
+// --svc-streams hangar|none (SP5 t03: those services draw from counter-based streams; this MOVES per-seed outcomes), and
+// --svc-parallel-min N (the per-unit service loops fork from N units, default 256; same results, a check of the forks).
 // BM1 benchmark (bench_run.hpp; scenario format alamo/sim/bench_scenario.hpp):
 //   alamo_headless --bench SCENARIO.abench [--runs R] [--warmup W] [--workers N] [--ticks K] [--bench-json FILE|-]
 //                  [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]
@@ -1331,6 +1332,10 @@ int main(int argc, char** argv) {
                 }
                 at = end + 1;
             }
+            alamo::sim::TacticalBattle::set_service_run_defaults(d);
+        } else if (a == "--svc-parallel-min" && i + 1 < argc) {  // SP5: per-unit service loops fork from this many units
+            auto d = alamo::sim::TacticalBattle::service_run_defaults();
+            d.parallel_min = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
             alamo::sim::TacticalBattle::set_service_run_defaults(d);
         } else if (a == "--svc-check") {
             auto d = alamo::sim::TacticalBattle::service_run_defaults();

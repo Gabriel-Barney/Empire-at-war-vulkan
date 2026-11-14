@@ -576,6 +576,21 @@ if(_alamo_sim)
           TIMEOUT 1800 SLOW)
     endif()
   endforeach()
+  # SP5 (docs/SIM_PARALLEL_DESIGN.md §5): the same check with the services' per-unit loops forced wide (--svc-parallel-min 1;
+  # land_battle has ~200 units, below the 256-unit default) and, on the space scene, with the hangar services on counter-based
+  # streams too (--svc-streams hangar: moves draws, so its fingerprint only prints "not comparable"). Slow, FoC data.
+  if(EXISTS ${CMAKE_SOURCE_DIR}/tests/benchmark/land_battle.abench)
+    alamo_add_worker_count_check(alamo_headless_bench_land_battle_svc
+        COMMAND alamo_headless --bench ${CMAKE_SOURCE_DIR}/tests/benchmark/land_battle.abench --runs 1 --warmup 0 --quiet --bench-allow-changed
+                --svc-parallel-min 1
+        TIMEOUT 1800 SLOW)
+  endif()
+  if(EXISTS ${_bm_scenario})
+    alamo_add_worker_count_check(alamo_headless_bench_space_battle_svc_streams
+        COMMAND alamo_headless --bench ${_bm_scenario} --runs 1 --warmup 0 --quiet --bench-allow-changed --svc-parallel-min 1
+                --svc-streams hangar
+        TIMEOUT 1800 SLOW)
+  endif()
   find_program(ALAMO_BENCH_PYTHON NAMES python PATHS ${CMAKE_SOURCE_DIR}/toolchain/venv/Scripts NO_DEFAULT_PATH)
   find_program(ALAMO_BENCH_PYTHON NAMES python python3)
   if(ALAMO_BENCH_PYTHON)
