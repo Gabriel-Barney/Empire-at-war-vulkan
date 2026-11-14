@@ -16,6 +16,11 @@ ScriptStep step_wait(std::string name, std::function<bool(App&)> cond, uint32_t 
 ScriptStep step_click_control(std::string dialog, std::string control);
 // Selects list row `row` like a player: click the first row (selects + focuses the list), then Down until it is reached.
 ScriptStep step_select_row(std::string dialog, std::string control, std::function<size_t(App&)> row);
+// After a new campaign reaches the galactic map: closes the mission holocron it opens by itself (the summary holds the
+// ticks), or does nothing when the campaign added no chapter.
+void close_auto_holocron(std::vector<ScriptStep>& s);
+// Clicks list row `row` itself (scrolled into view first), never another row on the way.
+ScriptStep step_click_row(std::string dialog, std::string control, std::function<int32_t(App&)> row);
 // A PNG of the next settled frame into --png-dir (the sim held meanwhile: presentation only).
 ScriptStep step_shot(std::string file);
 // Done once the session ran `n` more ticks.

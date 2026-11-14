@@ -625,6 +625,22 @@ bool GuiManager::scroll_list_to(GuiDialog& d, std::string_view control, int32_t 
     return true;
 }
 
+bool GuiManager::list_row_point(const GuiDialog& d, std::string_view control, int32_t row, Vec2f& out) const {
+    const int32_t i = d.find(control);
+    if (i < 0 || static_cast<size_t>(i) >= d.controls_.size()) return false;
+    const GuiControl& c = d.controls_[static_cast<size_t>(i)];
+    if (c.type != GuiGadgetType::ListBox || row < 0 || row >= static_cast<int32_t>(c.items.size())) return false;
+    const size_t ui = static_cast<size_t>(i);
+    if (row < c.top || row >= c.top + visible_rows(d, ui)) return false;
+    // the inverse of the press hit test in update(): row = top + (r.max.y - 2 - y) / row height
+    const GuiRect r = d.control_rect(ui);
+    const float rh = row_height(d, ui);
+    const ScrollBar sb = scroll_bar(d, ui);
+    const float right = sb.active ? sb.col.min.x : r.max.x;
+    out = {0.5f * (r.min.x + right), r.max.y - 2.0f - (static_cast<float>(row - c.top) + 0.5f) * rh};
+    return true;
+}
+
 void GuiManager::trim_dialog_height(GuiDialog& d, float units) {
     d.height_trim_ = std::max(0.0f, units);
     place(d);

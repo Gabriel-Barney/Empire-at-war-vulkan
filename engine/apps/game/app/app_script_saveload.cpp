@@ -212,13 +212,15 @@ void open_save_dialog(std::vector<ScriptStep>& s) {
     }, 120));
 }
 
-// Selects save `name` in the open Save / Load dialog's list (click the first row, Down to it) and checks the selection.
+// Selects save `name` in the open Save / Load dialog's list (a click on its own row: the list is a tree whose group rows
+// open / close on a click, so the first-row click and Down of step_select_row would close the save's group) and checks
+// the selection.
 void select_save(std::vector<ScriptStep>& s, const char* dialog, const char* name) {
     s.push_back(step_wait(std::string("list shows ") + name, [dialog, name](App& a) {
         if (list_row(a, dialog, name) >= 0) return true;
         return stop(a, dialog, std::string(name) + " not listed: " + list_text(a, dialog));
     }, 10));
-    s.push_back(step_select_row(dialog, kList, [dialog, name](App& a) { return static_cast<size_t>(std::max(0, list_row(a, dialog, name))); }));
+    s.push_back(step_click_row(dialog, kList, [dialog, name](App& a) { return list_row(a, dialog, name); }));
     s.push_back(step_wait(std::string(name) + " selected", [dialog, name](App& a) {
         const ui::GuiControl* c = control(a, dialog, kList);
         if (!c || c->selected != list_row(a, dialog, name)) return stop(a, dialog, std::string("selection is not on ") + name);
@@ -372,6 +374,7 @@ void add_saveload_steps(std::vector<ScriptStep>& s) {
     s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_CUSTOM_CAMPAIGN_BUTTON"));
     s.push_back(step_click_control("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_PLAY_BUTTON"));
     s.push_back(step_wait("galactic map", [](App& a) { return a.screen_ == Screen::Galactic; }, 600));
+    close_auto_holocron(s);
     s.push_back(step_ticks("galaxy runs", 30));
     open_game_menu(s, "b_option_g", true);
     s.push_back(step_shot(png + "game_menu.png"));

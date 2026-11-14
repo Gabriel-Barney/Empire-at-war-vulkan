@@ -340,6 +340,9 @@ public:
     bool scroll_to_end(GuiDialog& d, std::string_view control);
     // Scrolls a list so `row` is its first visible row, or as near as the list's length allows (no empty rows at the end).
     bool scroll_list_to(GuiDialog& d, std::string_view control, int32_t row);
+    // The canvas point a mouse press on list row `row` of `control` hits (the row's centre, left of the scroll column),
+    // false when there is no such list box or the row is not visible (scroll it into view first). Scripted input uses it.
+    bool list_row_point(const GuiDialog& d, std::string_view control, int32_t row, Vec2f& out) const;
     // [port] Takes `units` off the dialog's bottom edge and centres it again (controls keep their .rc positions).
     void trim_dialog_height(GuiDialog& d, float units);
     // [port] word-wraps a list box's items to its text width (the control's font; the scroll column is reserved):
