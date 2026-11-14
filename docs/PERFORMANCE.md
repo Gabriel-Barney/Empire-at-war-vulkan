@@ -1171,3 +1171,28 @@ keeps 4096 (`kGameAudioLogLimit`, `GameAudioHost::set_log_limit`).
 Same final CRC before and after (`4d1f861208999872`); `water_battle` unchanged (no hitches either way). The one hitch left idle is a
 single sim tick at measured frame 536 (battle tick 1291): `tac.movement` 20.7 ms, nearly all of it the sim thread waiting on one slow
 `parallel_for` chunk (`jobs.for_wait` 19.8 ms), filed on the backlog.
+
+## Worker-count sweep on the bench scenes (2026-11-14)
+
+`alamo_headless --bench tests/benchmark/<scene>.abench --runs 1 --warmup 0 --workers W` for W = 0, 1, 3, 7, 15, interleaved, two
+rounds, MSVC Release at dev `e0342ed8` (bo3), Ryzen 7 7800X3D. **Not a quiet machine**: other sessions were active (CPU 0-64 %
+busy before each run, most under 20 %), so read the shape, not the absolute numbers; both rounds agree on it. All runs passed the
+scenes' fingerprints. Analysis and what to do about it: [`PERF_SERIAL_2026-11-14.md`](PERF_SERIAL_2026-11-14.md).
+
+Median tick (ms), round 1 / round 2:
+
+| Scene | W0 | W1 | W3 | W7 | W15 |
+|---|---|---|---|---|---|
+| `space_battle` | 1.20 / 1.20 | 1.10 / 1.00 | 1.03 / 0.98 | 1.05 / 1.00 | 1.04 / 1.00 |
+| `land_battle` | 3.48 / 3.46 | 3.00 / 3.34 | 3.06 / 3.39 | 2.97 / 3.26 | 2.94 / 2.87 |
+| `nebula_battle` | 2.54 / 2.04 | 1.97 / 1.96 | 1.65 / 1.79 | 1.81 / 1.65 | 1.82 / 1.71 |
+| `water_battle` | 3.02 / 2.99 | 2.85 / 2.84 | 2.30 / 2.55 | 2.22 / 2.40 | 2.31 / 2.46 |
+| `space_battle_game` | 2.09 / 2.12 | 1.78 / 1.94 | 1.61 / 1.72 | 1.61 / 1.77 | 1.69 / 1.84 |
+| `galactic_late` | 0.63 / 0.65 | 0.74 / 0.67 | 0.66 / 0.64 | 0.69 / 0.68 | 0.83 / 0.71 |
+
+p99 follows the medians (land 7.5-9.3 ms at every count; nebula 22-31 ms, from `tac.movement`).
+
+- Workers save 5-25 % of the battle median; W3 already gets all of it. `galactic_late` is fastest at W0.
+- Biggest zones at W0 (share of tick time): land `tac.ai.perception` 40 %, `crc.battle.ai` 19 %, `ai.goals` 9 %; water
+  `tac.ai.perception` 46 %, `crc.battle.ai` 16 %; space_battle_game `tac.ai` 32 %, `tac.movement` 31 %; nebula `tac.movement` 69 %
+  (p99 24 ms, one 190 ms `ai.planning` tick); galactic_late `ai.goals` 69 % (p99 4.4 ms, max 22 ms). All serial.

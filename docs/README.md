@@ -25,7 +25,7 @@ its kind below and add it there instead of starting a second copy.
 | Golden CRC files: the `ALAMO_CRC 2` checkpoint format and the regen workflow | [`status/golden-checkpoints.md`](status/golden-checkpoints.md) | Regenerate with `tools\regen_goldens.cmd` (`BUILD.md`) |
 | Command Center launcher (`launcher/`, Rust): why it is here, its dependencies, how to build it | [`DECISIONS.md`](DECISIONS.md) "Command Center launcher", [`BUILD.md`](BUILD.md) | Code: `launcher/src/` |
 | Playtest QA notes | [`qa/`](qa/) | |
-| Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md), [`PERF_AUDIT_2026-11-07.md`](PERF_AUDIT_2026-11-07.md) (CPU / GPU performance audit and research, input for the deferred side goals) | History, not kept current |
+| Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md), [`PERF_AUDIT_2026-11-07.md`](PERF_AUDIT_2026-11-07.md) (CPU / GPU performance audit and research, input for the deferred side goals), [`PERF_SERIAL_2026-11-14.md`](PERF_SERIAL_2026-11-14.md) (CPU gains beyond parallelism, from a worker-count sweep) | History, not kept current |
 | Old versions of moved or trimmed documents | [`archive/`](archive/) | Zips |
 
 ## Where a new fact goes
