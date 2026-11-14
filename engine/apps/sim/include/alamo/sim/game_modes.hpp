@@ -225,6 +225,9 @@ public:
     // team list's box is not modelled; no FoC TEAM type is projectile-collidable] and without a source (synthetic
     // runs without model files). Serial callers only (it fills the per-type model cache).
     tactical::Aabb bounds_of(ObjectHandle h) const;
+    // SP5: fills exactly the model-cache entry bounds_of(h) would fill (serial); afterwards bounds_of(h) only reads, so it
+    // may run in a parallel loop until the next spawn of a new type.
+    void prepare_bounds(ObjectHandle h) const;
     // The pre-t07 box: the per-type half extent (max Custom_Hard_X/YExtent, else 40 (space) / 10 (land) x Scale_Factor)
     // around the position. [port] Still the model box stand-in of the fog (FogObject) and the garrison holder.
     tactical::Aabb extent_box(ObjectHandle h) const;

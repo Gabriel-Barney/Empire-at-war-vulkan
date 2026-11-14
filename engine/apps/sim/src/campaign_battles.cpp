@@ -793,6 +793,7 @@ void CampaignBattles::push_battle(SimHost& host) {
 #endif
     BattleConfig bc = opt_.battle;
     bc.map_battle = direct_;  // start_map_battle: no branched-map discard
+    bc.session_seed = host.session_seed();  // SP5 t03: the services' counter-based streams
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
     if (opt_.tactical_ai) bc.order_interval = bc.reinforce_interval = 0;  // A1: the tactical AI orders and reinforces
 #endif

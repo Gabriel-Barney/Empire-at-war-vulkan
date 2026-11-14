@@ -161,6 +161,20 @@ void FogGrid::reveal_dense(float x, float y, float r_normal, float r_dense, Cell
     }
 }
 
+void FogGrid::dense_cells(float x, float y, float r_normal, float r_dense, CellList& out) const {
+    const auto take = [&](float r, bool unmasked_ok, bool masked_ok) {
+        circle(x, y, r, [&](uint32_t i) {
+            if (mask_ok(i, unmasked_ok, masked_ok)) out.push_back(i);
+        });
+    };
+    if (r_normal > r_dense) {  // as reveal_dense
+        take(r_normal, true, false);
+        take(r_dense, false, true);
+    } else {
+        take(r_dense, true, true);
+    }
+}
+
 void FogGrid::collect_circle(float x, float y, float radius, CellList& out, bool unmasked_ok, bool masked_ok) {
     reveal(x, y, radius, &out, RevealFlags{false, unmasked_ok, masked_ok, false}, 0);
 }

@@ -62,6 +62,8 @@ inline uint32_t g_squadron_size = alamo::objects::GameObjectTypes::kPortSquadron
 // s78n t20 review: an edit make_data applies to the S10Types.xml text it writes (null: none). A test that sets it also
 // sets its own g_temp_prefix (the edited data gets its own folder) and resets both.
 inline std::string (*g_types_patch)(std::string) = nullptr;
+// SP5 t03: the same for the fighter data's S10BayHardPoints.xml (null: none).
+inline std::string (*g_bay_patch)(std::string) = nullptr;
 
 namespace battle_fixture {
 
@@ -775,8 +777,10 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
                                                       : "<Hard_Point_Files><File>S10HardPoints.xml</File></Hard_Point_Files>\n");
     write_file(x / "S10HardPoints.xml", kHardpoints);
     if (fighters)  // S7 t24: the carrier's fighter bay
-        write_file(x / "S10BayHardPoints.xml", "<HardPoints><HardPoint Name=\"HP_S10_Bay\"><Type>HARD_POINT_FIGHTER_BAY</Type><Health>200</Health>"
-                                               "<Fighter_Bay_Flyout_Distance>100</Fighter_Bay_Flyout_Distance></HardPoint></HardPoints>\n");
+        write_file(x / "S10BayHardPoints.xml",
+                   [](std::string t) { return g_bay_patch ? g_bay_patch(std::move(t)) : t; }(
+                       "<HardPoints><HardPoint Name=\"HP_S10_Bay\"><Type>HARD_POINT_FIGHTER_BAY</Type><Health>200</Health>"
+                       "<Fighter_Bay_Flyout_Distance>100</Fighter_Bay_Flyout_Distance></HardPoint></HardPoints>\n"));
     write_file(x / "FactionFiles.xml", "<FactionFiles><File>S10Factions.xml</File></FactionFiles>\n");
     std::string factions = kFactions;
     // S10 map owners: Hostile (3), a native faction (4) and a playable faction without a player (5). modc t03: the first
@@ -824,7 +828,7 @@ inline std::unique_ptr<Data> make_data(bool fog = false, bool anim = false, bool
     CHECK(galactic::load_conflict_rules(*d->files, d->db, d->types, d->rules, d->crules, &diag));
     d->catalog = std::make_unique<BattleCatalog>(d->types, d->files.get(), &d->db.constants(), &diag);
     CHECK(d->crules.contrast.size() == 3);
-    CHECK(d->catalog->hardpoint_records() == (fighters ? 3u : 2u));
+    CHECK(d->catalog->hardpoint_records() == (fighters ? 3u : 2u) + (fighters && g_bay_patch ? 1u : 0u));
     {
         std::vector<uint32_t> idx;
         const auto cd = d->catalog->build({static_cast<uint32_t>(d->types.resolve_name("S10_Frigate")), static_cast<uint32_t>(d->types.resolve_name("S10_Trooper"))}, idx);

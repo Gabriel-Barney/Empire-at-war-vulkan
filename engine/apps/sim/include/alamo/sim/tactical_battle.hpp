@@ -87,6 +87,7 @@
 #include "alamo/tactical/hangar/engine_loops.hpp"         // hangars / engine loops (STATION_HANGARS_SOUND.md)
 #include "alamo/tactical/hangar/hangar_system.hpp"
 #include "alamo/tactical/hangar/contents.hpp"            // station contents / tactical production
+#include "alamo/tactical/services/service_graph.hpp"  // SP5: the tick as a services phase graph
 #include "alamo/terrain/ted.hpp"
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
 #include "alamo/ai/tactical/damage_tracking.hpp"
@@ -156,6 +157,8 @@ struct BattleConfig {
     float land_capture_countdown = 30.0f, space_capture_countdown = 30.0f;
     // cu9 t13: garrison holders / occupants / capture points are always registered (the `garrisons` switch is gone).
     // --- end S4 ---
+    // SP5 t03: the host's session seed (SimHost::session_seed), the first input of the services' counter-based streams.
+    uint32_t session_seed = 0;
 };
 
 struct BattleStats {
@@ -1647,6 +1650,7 @@ private:
     std::vector<objects::ObjectId> enqueue(std::span<const objects::ObjectId> ids, const QueuedOrder& o);  // -> run now
     void advance_queues(TacticalMode& mode, SimRng& rng);
     void late_swap_back_signals();  // S7 t27: signal 0x29 for a jetpack swap back after the combat_pre loop
+    void combat_sync(const objects::ObjectStore& store);  // SP5 / S10: positions, facings, movement flags into combat
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
     // s78n t20: `no_destination_check` - the move stands for an object-goal block (MOVEMENT §4.3.1 item 2: no destination
     // check; an object goal implies it)
@@ -1866,6 +1870,9 @@ private:
     std::unique_ptr<tactical::garrison::CapturePointSystem> captures_;
     bool s4_used_ = false;  // some garrison / capture state exists (CRC section on from then)
     objects::ObjectStore* s4_store_ = nullptr;  // the battle mode's primary store (capture rule b)
+    // SP5: Influences_Capture_Point per type (-1 not looked up yet), filled on first use by the serial capture pass;
+    // type data does not change in a battle, so this is a pure cache (never saved or hashed)
+    std::vector<int8_t> s4_capture_influence_;
     // --- end S4 ---
     Vec3 anchor_[2]{}, facing_[2]{};
     Vec3 drop_facing_[2]{};  // a1h t06: the sides' entry-facing records (mode +0x288; zero = yaw 0), see drop_yaw
@@ -2303,6 +2310,58 @@ private:
     uint32_t hg_launches_ = 0;
     bool hg_used_ = false;                       // hashed once a carrier / upgrade existed
     // --- end hangars ---
+
+    // ---- SP5: the tick as a services phase graph (tactical_battle_services.cpp; docs/SIM_PARALLEL_DESIGN.md §5) ----
+    // Every step of tick() is a service with declared read / write components; tick() runs the graph. The run mode and the
+    // debug write check never change results when the declarations are right (the checks prove them), so they are
+    // process-wide defaults read when a battle is built (headless --svc-mode / --svc-check, tests).
+public:
+    struct ServiceRunDefaults {
+        tactical::services::RunMode mode = tactical::services::RunMode::Parallel;
+        // Debug write check (serial; a violation is counted and printed). On by default in debug builds (NDEBUG unset),
+        // where a violation also asserts.
+#ifdef NDEBUG
+        bool check = false;
+#else
+        bool check = true;
+#endif
+        // A per-unit service loop forks through the tick's ParallelFor only with at least this many units (below it the
+        // fork costs more than the loop). Wall clock only: results do not depend on it (tests set 1 to force the forks).
+        uint32_t parallel_min = 256;
+        // SP5 t03 (docs/SIM_PARALLEL_DESIGN.md §4.4): bit (1 << StreamId) set = that service draws from counter-based
+        // streams (stream_rng(BattleConfig::session_seed, frame, id, entity)) instead of the synced RNG. Unlike the fields
+        // above this CHANGES per-seed outcomes (draw order, tier 3): set it per run, the same for a save and its load
+        // (headless --svc-streams). 0 = every service on the synced RNG (retail order; the goldens). A default is switched
+        // only after the Q4 harness A/B (DECISIONS "Parallel sim redesign").
+        uint32_t streams = 0;
+    };
+    static void set_service_run_defaults(const ServiceRunDefaults& d);
+    static ServiceRunDefaults service_run_defaults();
+    void set_service_mode(tactical::services::RunMode m) { svc_mode_ = m; }
+    void set_service_check(bool on);
+    uint64_t service_violations() const;
+    static uint64_t service_violations_total();  // every battle of the process (tests)
+    const tactical::services::ServiceGraph* service_graph() const { return svc_graph_.get(); }
+
+private:
+    static constexpr uint32_t kSvcParallelGrain = 64;  // units per chunk of a per-unit service loop (wall clock only)
+    void build_service_graph();
+    uint64_t service_digest(uint32_t component) const;
+    struct TickContext {
+        TacticalMode* mode = nullptr;
+        SimRng* rng = nullptr;
+        const ParallelFor* pf = nullptr;
+        double sim_time = 0.0;
+        uint64_t global_frame = 0;
+    };
+    TickContext tick_{};
+    std::unique_ptr<tactical::services::ServiceGraph> svc_graph_;
+    const TacticalBattle* svc_owner_ = nullptr;  // the graph's lambdas capture this; rebuilt if the object moved
+    tactical::services::RunMode svc_mode_ = service_run_defaults().mode;
+    uint32_t svc_parallel_min_ = service_run_defaults().parallel_min;
+    uint32_t svc_streams_ = service_run_defaults().streams;  // SP5 t03: services on counter-based streams (bit per StreamId)
+    std::unique_ptr<tactical::services::Checker> svc_check_;
+    // --- end SP5 ---
 };
 
 // --- P4 tactical: campaign Black Market gate (ABILITIES_HARDPOINTS 2.4, P4_SIM_SYSTEMS 1.5) ---

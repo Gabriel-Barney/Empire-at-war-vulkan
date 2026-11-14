@@ -348,6 +348,10 @@ private:
     lua::LaneAbilityView lane_abilities_;
     void capture_lane_abilities();
     void queue_lane_write(const lua::LaneWrite& w);
+    // sp3 slice 4d: unload records of lane Reinforce applies that spawned their units at once (or were refused: no units),
+    // handed to the AI with the battle's own at the next AI slot (the same tick: never pending at a save).
+    std::vector<ai::tactical::ReinforcementsUnloaded> lane_unloaded_;
+    bool landing_in_flight(int32_t player, int32_t key) const;  // the battle's timed landing of `key` (live)
     void apply_lane_write(const commands::Command& c);  // a kLaneWriteSubtype command of the batch
     static bool lane_write_command(const commands::EventData& ev);
     std::vector<int32_t> weather_category_;  // per type: index into weather_categories_ (-1: none)

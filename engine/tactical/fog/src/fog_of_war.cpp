@@ -272,6 +272,92 @@ void FogOfWar::source_service(int32_t id, const FogObject& o, bool contained, bo
     reveal_for_allies(*s, o);
 }
 
+void FogOfWar::service_sources(std::span<const SourceOp> ops, const ParallelFor& pf) {
+    // 1. Plan (serial, op order): create the missing sources (as source_service does first) and decide each op's work.
+    //    Each op's decision reads only its own source, which no other op touches.
+    enum : uint8_t { kNone, kRemove, kUndo, kReveal };
+    const auto n = static_cast<uint32_t>(ops.size());
+    std::vector<uint8_t> work(n, kNone);
+    for (uint32_t i = 0; i < n; ++i) {
+        const SourceOp& op = ops[i];
+        if (op.remove) {
+            work[i] = kRemove;
+            continue;
+        }
+        if (!started_) continue;
+        Source* s = find_source(op.id);
+        if (!s) {
+            auto it = std::lower_bound(sources_.begin(), sources_.end(), op.id, [](const Source& a, int32_t v) { return a.id < v; });
+            Source ns;
+            ns.id = op.id;
+            ns.owner = op.obj.owner;
+            s = &*sources_.insert(it, std::move(ns));
+        }
+        if (setup_ || op.setup_only) continue;
+        if (op.contained) {
+            work[i] = kUndo;
+            continue;
+        }
+        if (!s->dirty) {
+            const float dx = op.obj.x - s->x0, dy = op.obj.y - s->y0;
+            if (dx * dx + dy * dy < threshold_) continue;
+        }
+        work[i] = kReveal;
+    }
+    // 2. The re-reveals' cell lists, one per allied player with a grid (players_ order), in parallel (const reads only).
+    std::vector<uint32_t> reveals;
+    for (uint32_t i = 0; i < n; ++i)
+        if (work[i] == kReveal) reveals.push_back(i);
+    std::vector<std::vector<CellList>> lists(reveals.size());
+    const auto fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t k = b; k < e; ++k) {
+            const FogObject& o = ops[reveals[k]].obj;
+            for (const FogPlayer& p : players_) {
+                const FogGrid* g = grid(p.id);
+                if (!g || !allied(p.id, o.owner)) continue;
+                float cx = 0.0f, cy = 0.0f, r = 0.0f, rd = 0.0f;
+                sight_radii(p.id, o, false, cx, cy, r, rd);
+                lists[k].emplace_back();
+                g->dense_cells(cx, cy, r, rd, lists[k].back());
+            }
+        }
+    };
+    const auto nr = static_cast<uint32_t>(reveals.size());
+    if (nr >= 16) pf(nr, 8, fill);
+    else fill(0, nr);
+    // 3. Apply (serial, op order): exactly the grid operations of source_remove / source_service.
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (work[i] == kRemove) {
+            source_remove(ops[i].id);
+        } else if (work[i] == kUndo) {
+            Source* s = find_source(ops[i].id);
+            undo_for_allies(*s, s->owner);
+            s->cells.clear();
+        } else if (work[i] == kReveal) {
+            Source* s = find_source(ops[i].id);
+            const FogObject& o = ops[i].obj;
+            CellList last;
+            size_t j = 0;
+            for (const FogPlayer& p : players_) {  // reveal_for_allies: undo the stored list, count the fresh one
+                FogGrid* g = grid(p.id);
+                if (!g || !allied(p.id, o.owner)) continue;
+                g->undo(s->cells);
+                g->count_cells(lists[k][j], frame_);
+                last = std::move(lists[k][j]);
+                ++j;
+            }
+            s->cells = std::move(last);
+            s->x0 = o.x;
+            s->y0 = o.y;
+            s->owner = o.owner;
+            s->dirty = false;
+            s->revealed = true;
+            ++k;
+        }
+    }
+}
+
 void FogOfWar::source_change_owner(int32_t id, int32_t old_owner, const FogObject& o) {
     Source* s = find_source(id);
     if (!s) return;

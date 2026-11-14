@@ -37,6 +37,7 @@
 #include <span>
 #include <vector>
 
+#include "alamo/core/parallel.hpp"
 #include "alamo/tactical/fog/fog_grid.hpp"
 
 namespace alamo {
@@ -205,6 +206,17 @@ public:
     void source_service(int32_t id, const FogObject& o, bool contained = false, bool setup_only = false);
     void source_change_owner(int32_t id, int32_t old_owner, const FogObject& o);  // vf18
     void source_remove(int32_t id);                                               // vf15
+    // SP5 (docs/SIM_PARALLEL_DESIGN.md §4.3): a frame's source services as one batch, the same result as calling
+    // source_remove / source_service for `ops` in order. The re-reveals' cell lists (sight radii, circles, dense mask:
+    // const) are computed in parallel through `pf`; every grid change (undo, count) is then applied serially in op order,
+    // so the clamped undo and the per-cell first-reveal state see exactly the serial sequence. An id appears at most once.
+    struct SourceOp {
+        int32_t id = -1;
+        bool remove = false;  // true: source_remove(id); false: source_service(id, obj, contained, setup_only)
+        bool contained = false, setup_only = false;
+        FogObject obj;
+    };
+    void service_sources(std::span<const SourceOp> ops, const ParallelFor& pf);
     // Fired hook (REVEAL vf26 0x537390 from the post-shot hook 0x3a06a0, TACTICAL_GAPS §5.1): every shot flashes
     // the SHOOTER's footprint on the TARGET OWNER's grid only (not its allies); no damage-side caller.
     void source_fired(const FogObject& shooter, int32_t target_owner);

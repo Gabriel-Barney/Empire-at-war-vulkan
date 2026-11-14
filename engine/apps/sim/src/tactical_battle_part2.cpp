@@ -1648,41 +1648,72 @@ void TacticalBattle::apply_speed_factors() {
     // squad value; this replaces s78j t03's stand-in that gave members the team value). The container's engines / list 5
     // are not modelled (the port's containers take neither), so its factor is the Mod_Multiplier alone. One value per
     // team per tick (sorted (team, value) pairs, probed only).
+    // SP5 (per-index writes): team_mod_multiplier is a const function of the combat state, which this service does not
+    // change, so every needed team's value is computed up front (in parallel, one team per index) instead of lazily; then
+    // each unit's factors are computed and written to its own movement entry in parallel (set_speed_factor / _override /
+    // set_team touch only that unit; modifier() fills only that unit's combat cache), its "squad has a target" bit into its
+    // own slot, gathered in unit order. Same values, same writes as the serial loop.
+    const auto in_team_of = [this](const Unit& u) {
+        return u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed;
+    };
     std::vector<std::pair<uint32_t, float>> team_speed;
+    for (const Unit& u : units_)
+        if (u.alive && !u.retreated && u.movable && in_team_of(u)) team_speed.push_back({static_cast<uint32_t>(containers_[u.container].id), 1.0f});
+    if (!space_)
+        for (const Container& c : containers_)
+            if (c.team && !c.removed && movement_->has_unit(c.id)) team_speed.push_back({static_cast<uint32_t>(c.id), 1.0f});
+    std::sort(team_speed.begin(), team_speed.end());
+    team_speed.erase(std::unique(team_speed.begin(), team_speed.end(),
+                                 [](const std::pair<uint32_t, float>& a, const std::pair<uint32_t, float>& b) { return a.first == b.first; }),
+                     team_speed.end());
+    const ParallelFor serial = serial_for;
+    const ParallelFor& pf = tick_.pf ? *tick_.pf : serial;
+    const auto nt = static_cast<uint32_t>(team_speed.size());
+    const auto team_fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) team_speed[i].second = combat_->team_mod_multiplier(team_speed[i].first, tc::ModKind::Speed);
+    };
+    if (nt >= 8 && units_.size() >= svc_parallel_min_) pf(nt, 1, team_fill);
+    else team_fill(0, nt);
+    const auto team_mult = [&](uint32_t team) {
+        const auto it = std::lower_bound(team_speed.begin(), team_speed.end(), team,
+                                         [](const std::pair<uint32_t, float>& e, uint32_t t) { return e.first < t; });
+        return it->second;  // every team asked for is in the list
+    };
     // s78n t14 (FIGHTER_FLYING §7.3 item 6): the land squads with a current target (0x397a40(K, 0) [M]: the container's,
     // else a member's - members read their head's target), ascending container id.
-    std::vector<mv::ObjectId> targeted;
-    const auto team_mult = [&](uint32_t team) {
-        auto it = std::lower_bound(team_speed.begin(), team_speed.end(), team,
-                                   [](const std::pair<uint32_t, float>& e, uint32_t t) { return e.first < t; });
-        if (it == team_speed.end() || it->first != team)
-            it = team_speed.insert(it, {team, combat_->team_mod_multiplier(team, tc::ModKind::Speed)});
-        return it->second;
-    };
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !u.movable) continue;
-        float f = combat_->mod_multiplier(u.id, tc::ModKind::Speed);
-        if (u.engines_offline || l1_engines_off(u.id)) f = f * engines;  // L1 systems: + timed engine disables
-        f = f * (1.0f + combat_->modifier(u.id, tc::ModList::MaxSpeed));
-        // OI follow-up t03 (A1_READINGS §28.9): the movement lock does not slow the unit (no speed-0 freeze); its users
-        // stop it first and new move orders skip it (movement_locked).
-        if (combat_->stunned(u.id, frame_)) f = 0.0f;  // OI abilities: land stun suspends the locomotor (0x647290)
-        movement_->set_speed_factor(u.id, f);
-        movement_->set_speed_override(u.id, abilities_->speed_override(u.id));  // OI host: Berserker_Speed (-1 = none)
-        const bool in_team = u.container < containers_.size() && containers_[u.container].team && !containers_[u.container].removed;
-        const auto team = in_team ? static_cast<uint32_t>(containers_[u.container].id) : 0u;
-        // s78l t01 (MOVEMENT §3.4 "Team cap, exact"): the container type's raw Max_Speed is in the team minimum (-1: no
-        // tag / not in a team). [port] the container's further chain factors have no host state here (fleeing is the movement
-        // layer's, s78n t14 part B).
-        float cmax = -1.0f;
-        if (in_team && containers_[u.container].type < catalog_->types().size()) {
-            const auto ct = static_cast<objects::TypeIndex>(containers_[u.container].type);
-            if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
+    const auto n = static_cast<uint32_t>(units_.size());
+    std::vector<uint8_t> targets(n, 0);
+    const auto unit_fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated || !u.movable) continue;
+            float f = combat_->mod_multiplier(u.id, tc::ModKind::Speed);
+            if (u.engines_offline || l1_engines_off(u.id)) f = f * engines;  // L1 systems: + timed engine disables
+            f = f * (1.0f + combat_->modifier(u.id, tc::ModList::MaxSpeed));
+            // OI follow-up t03 (A1_READINGS §28.9): the movement lock does not slow the unit (no speed-0 freeze); its users
+            // stop it first and new move orders skip it (movement_locked).
+            if (combat_->stunned(u.id, frame_)) f = 0.0f;  // OI abilities: land stun suspends the locomotor (0x647290)
+            movement_->set_speed_factor(u.id, f);
+            movement_->set_speed_override(u.id, abilities_->speed_override(u.id));  // OI host: Berserker_Speed (-1 = none)
+            const bool in_team = in_team_of(u);
+            const auto team = in_team ? static_cast<uint32_t>(containers_[u.container].id) : 0u;
+            // s78l t01 (MOVEMENT §3.4 "Team cap, exact"): the container type's raw Max_Speed is in the team minimum (-1: no
+            // tag / not in a team). [port] the container's further chain factors have no host state here (fleeing is the
+            // movement layer's, s78n t14 part B).
+            float cmax = -1.0f;
+            if (in_team && containers_[u.container].type < catalog_->types().size()) {
+                const auto ct = static_cast<objects::TypeIndex>(containers_[u.container].type);
+                if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
+            }
+            movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f, cmax);
+            if (in_team && !space_ && combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) targets[i] = 1;
         }
-        movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f, cmax);
-        if (in_team && !space_ && combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject)
-            targeted.push_back(containers_[u.container].id);
-    }
+    };
+    if (n >= svc_parallel_min_) pf(n, kSvcParallelGrain, unit_fill);
+    else unit_fill(0, n);
+    std::vector<mv::ObjectId> targeted;
+    for (uint32_t i = 0; i < n; ++i)
+        if (targets[i]) targeted.push_back(containers_[units_[i].container].id);
     std::sort(targeted.begin(), targeted.end());
     // s78n t03: a movement-backed land squad container walks at the team speed - the same value its members' set_team
     // carries (the members' minimum with its own Max_Speed, x its factor).
@@ -1720,10 +1751,24 @@ void TacticalBattle::feed_pair_gates() {
     const auto host_of = [](tg::ObjectId h) { return h == tg::kNoObject ? mv::ObjectId{-1} : static_cast<mv::ObjectId>(h); };
     std::vector<tg::ObjectId> link(containers_.size(), tg::kNoObject);
     std::vector<uint8_t> outside(containers_.size(), 0), inside(containers_.size(), 0);
-    for (const Unit& u : units_) {
+    // SP5 (per-index writes): each unit's gate goes to its own movement entry and its holders to its own slot, in parallel;
+    // the containers' aggregates are then built serially in unit order, as before.
+    const auto n = static_cast<uint32_t>(units_.size());
+    std::vector<std::pair<tg::ObjectId, tg::ObjectId>> held(n, {tg::kNoObject, tg::kNoObject});
+    const auto gate = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated) continue;
+            held[i] = {garrison_.holder_of(u.id), garrison_.pending_holder(u.id)};
+            if (u.movable && movement_->has_unit(u.id)) (void)movement_->set_pair_gate(u.id, host_of(held[i].second), false);
+        }
+    };
+    if (tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, gate);
+    else gate(0, n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const Unit& u = units_[i];
         if (!u.alive || u.retreated) continue;
-        const tg::ObjectId in = garrison_.holder_of(u.id), pend = garrison_.pending_holder(u.id);
-        if (u.movable && movement_->has_unit(u.id)) (void)movement_->set_pair_gate(u.id, host_of(pend), false);
+        const tg::ObjectId in = held[i].first, pend = held[i].second;
         if (u.container >= containers_.size()) continue;
         const Container& c = containers_[u.container];
         if (!c.team || c.removed) continue;
@@ -1764,13 +1809,21 @@ void TacticalBattle::feed_collision_info(const objects::ObjectStore& store) {
         ci.target_pos = {tp.x, tp.y};
         ci.target_radius = movement_->collision_radius(ci.target);
     };
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
-        Info ci;
-        fill(u.id, ci);
-        ci.hero_clash = combat_->has_unit(u.id) && (combat_->flags(u.id) & tc::kUnitHeroClash) != 0;
-        (void)movement_->set_collision_info(u.id, ci);
-    }
+    // SP5 (per-index writes): each unit's record is built from const reads (its own combat cache aside) and written to its
+    // own movement entry, so the units run in parallel; the containers below stay serial.
+    const auto n = static_cast<uint32_t>(units_.size());
+    const auto unit_fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
+            Info ci;
+            fill(u.id, ci);
+            ci.hero_clash = combat_->has_unit(u.id) && (combat_->flags(u.id) & tc::kUnitHeroClash) != 0;
+            (void)movement_->set_collision_info(u.id, ci);
+        }
+    };
+    if (tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, unit_fill);
+    else unit_fill(0, n);
     std::vector<objects::ObjectId> first(containers_.size(), objects::kNoObjectId), aiming(containers_.size(), objects::kNoObjectId);
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || u.container >= containers_.size()) continue;
@@ -1791,23 +1844,31 @@ void TacticalBattle::feed_collision_info(const objects::ObjectStore& store) {
 }
 
 // REMAINING_GAPS §4.4 / §4.7: flying units strafe and fighters run at their combat target (ordered, else auto).
+// SP5 (per-index writes): on land every unit writes only its own movement entry from const reads, so the units run in
+// parallel; space keeps the serial loop (feed_fighter_target updates the host's formation records).
 void TacticalBattle::feed_attack_targets(const objects::ObjectStore& store) {
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
-        const mv::LocomotorKind k = movement_->view(u.id).locomotor;
-        if (k == mv::LocomotorKind::Fighter && space_) {
-            feed_fighter_target(u, store);  // FIGHTER_FLYING §4.3: the formation attack target (no point target)
-            continue;
+    const auto body = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated || !u.movable || !movement_->has_unit(u.id)) continue;
+            const mv::LocomotorKind k = movement_->view(u.id).locomotor;
+            if (k == mv::LocomotorKind::Fighter && space_) {
+                feed_fighter_target(u, store);  // FIGHTER_FLYING §4.3: the formation attack target (no point target)
+                continue;
+            }
+            if (k != mv::LocomotorKind::Flying && k != mv::LocomotorKind::Fighter) continue;
+            const Unit* t = unit_by_id(combat_->current_target(u.id));
+            if (t && t->alive && store.alive(t->h)) {
+                const Vec3 p = store.position(t->h);
+                movement_->set_attack_target(u.id, true, {p.x, p.y}, p.z);
+            } else {
+                movement_->set_attack_target(u.id, false);
+            }
         }
-        if (k != mv::LocomotorKind::Flying && k != mv::LocomotorKind::Fighter) continue;
-        const Unit* t = unit_by_id(combat_->current_target(u.id));
-        if (t && t->alive && store.alive(t->h)) {
-            const Vec3 p = store.position(t->h);
-            movement_->set_attack_target(u.id, true, {p.x, p.y}, p.z);
-        } else {
-            movement_->set_attack_target(u.id, false);
-        }
-    }
+    };
+    const auto n = static_cast<uint32_t>(units_.size());
+    if (!space_ && tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, body);
+    else body(0, n);
 }
 
 // Serial, before the movement tick: every fighter gets its XML values once (set_fighter_params), and every live TEAM

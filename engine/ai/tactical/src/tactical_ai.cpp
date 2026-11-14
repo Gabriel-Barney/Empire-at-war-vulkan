@@ -1596,7 +1596,7 @@ void TacticalAiWorld::Impl::units_lost(TfRec& t) {
         if (counted_entry_type(type)) return;
     // a1j t01: a company still in its landing (0x6ee010 put its type entries on the TF +0x60 vector at the order, 0x5f9fd0).
     for (const auto& [id, s] : statuses)
-        if (s.kind == StatusKind::Reinforce && !s.finished && s.tf == t.id)
+        if ((s.kind == StatusKind::Reinforce || s.kind == StatusKind::SpaceReinforce) && !s.finished && s.tf == t.id)
             for (const auto& [key, type] : s.landings)
                 if (counted_entry_type(type)) return;
     decide(t.player, "tf " + t.name + " no units remaining");
@@ -3207,7 +3207,9 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
             return false;
         // a1j t01 (A1_READINGS §36): the company is inside a landing object that unloads it over the next seconds; the
         // status listens for its signal 0x19 (in-flight count + 1) and the units join the TF then (0x6a1440).
-        if (host.reinforce_in_flight(t->player, r.key)) {
+        // sp3 slice 4d: with the AI lane every accepted drop waits so - the order is applied k_ai ticks later and the host
+        // reports its units (or none, when the apply refused it) as an unload record.
+        if (cfg.ai_lane || host.reinforce_in_flight(t->player, r.key)) {
             in_flight.emplace_back(r.key, r.type);
             return true;
         }
@@ -3248,7 +3250,9 @@ void TacticalAiWorld::Impl::reinforcements_unloaded(const std::vector<Reinforcem
         StatusRec* s = nullptr;
         size_t at = 0;
         for (auto& [id, st] : statuses) {
-            if (st.kind != StatusKind::Reinforce || st.finished || script_player(st.plan) != rec.player) continue;
+            if ((st.kind != StatusKind::Reinforce && st.kind != StatusKind::SpaceReinforce) || st.finished ||
+                script_player(st.plan) != rec.player)
+                continue;  // sp3 slice 4d: a space status waits for its lane drops too
             const auto it = std::find_if(st.landings.begin(), st.landings.end(), [&rec](const std::pair<int32_t, int32_t>& e) { return e.first == rec.key; });
             if (it == st.landings.end()) continue;
             s = &st;
@@ -3270,7 +3274,7 @@ void TacticalAiWorld::Impl::reinforcements_unloaded(const std::vector<Reinforcem
             decide(t->player, "tf " + t->name + ": reinforcements unloaded " + type_name(type) + " (" + std::to_string(rec.units.size()) +
                                   " units, " + std::to_string(s->landings.size()) + " in flight)");
         }
-        if (s->landings.empty()) {
+        if (s->landings.empty() && s->kind == StatusKind::Reinforce) {  // a space status finishes in its poll
             s->finished = true;
             if (const auto pit = plans.find(s->plan); pit != plans.end()) pit->second.non_removable = !s->saved_removable;
         }
@@ -3348,9 +3352,13 @@ void TacticalAiWorld::Impl::space_reinforce_poll(StatusRec& s) {
                                                      " (tf " + t->name + ")") == cmd::RejectReason::None) {
                             placed = true;
                             t->pending.pop_back();
-                            const auto owned = store.owned_by(t->player);
-                            for (size_t i = before; i < owned.size(); ++i)
-                                if (store.active(owned[i]) && store.has_behavior(owned[i], objects::beh::Locomotor)) t->units.push_back(owned[i]);
+                            if (cfg.ai_lane) {  // sp3 slice 4d: the units join at their unload record (applied k_ai later)
+                                s.landings.emplace_back(r.key, r.type);
+                            } else {
+                                const auto owned = store.owned_by(t->player);
+                                for (size_t i = before; i < owned.size(); ++i)
+                                    if (store.active(owned[i]) && store.has_behavior(owned[i], objects::beh::Locomotor)) t->units.push_back(owned[i]);
+                            }
                             s.ring = s.prevent ? 1000.0f : 0.0f;
                             break;
                         }
@@ -3365,7 +3373,8 @@ void TacticalAiWorld::Impl::space_reinforce_poll(StatusRec& s) {
         }
     }
     const bool timed_out = s.timeout >= 0 && s.timeout <= now;
-    if (timed_out || t->pending.empty()) done(t->pending.empty());
+    // sp3 slice 4d: with the AI lane the status also waits for its drops' unload records (empty otherwise)
+    if (timed_out || (t->pending.empty() && s.landings.empty())) done(t->pending.empty());
 }
 
 int32_t TacticalAiWorld::Impl::tf_build_all(int32_t tf) {

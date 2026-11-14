@@ -394,6 +394,38 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   live / movable, the teams, per player the retreat gate `retreat_block == 0`, tactical production on / off, the pad checks).
   Predictions: Retreat = the gate; Production = production on and a valid builder id (credits and buildability are not
   predicted); TacticalBuild = the AI's `build_pad_check` (cost and type are not); ability commands = an owned live unit among
-  them. Reinforce still runs live from `execute` (slice 4d: the AI reads the spawned units in the same call). `start()` with
+  them. Reinforce (slice 4d) is queued too, predicted from the view (in the pool, can-reinforce, land population room, a finite
+  point); the AI no longer reads the spawned units in the same call - with the lane on both reinforce sites (the land
+  ReinforceBlockStatus and the space poll) record the drop as a landing in flight, and the apply hands the units to the AI
+  as a signal-0x19 unload record at the next AI slot (the battle's own record when the drop is a timed landing; an empty
+  one when the apply refused it, so no status waits forever). A space status then also waits for its landings before it
+  finishes (a timeout still ends it). `start()` with
   the lane on captures the view first, refreshes the snapshot store, and collects what the start scripts queued (before this,
   the first update dropped it). **Tier 2**: these commands act k_ai ticks later and their answers are predictions.
+
+## 12. P5 implementation notes (sp5, simp-svc, 2026-11-14)
+
+How P5 is built; status and open items are on the roadmap (group `sp5`), checks in [`BUILD.md`](BUILD.md) ("Services graph checks").
+- **Graph** (`engine/tactical/services`, `tactical_battle_services.cpp`): every step of `TacticalBattle::tick` is a service declared in
+  the old order with component sets (rng, store, state = the State save part, movement, combat, abilities, garrison, hangar, fog,
+  damage, trees, signals, hooks, host). A service conflicting with an earlier one goes into a later phase; the old `tac.*` laps are
+  barriers. Services whose sets are not narrowed yet declare everything, so today nearly every phase holds one service: the
+  coarse `state` component (most services write units / containers / stats) is what keeps phases narrow. Each service is timed as
+  sp0's `tac.s.<step>` zone.
+- **Where the parallelism is today**: inside services, not between them. The per-unit loops (combat sync = S10, speed factors,
+  collision feed, attack targets, pair gates, swap-back signals, engine loops, tree boxes, fog sources) compute per unit in
+  parallel and write only the unit's own slot (movement / combat entry, a per-index output); shared state (EngineLoops, the fog
+  grids, the trees, the signal lists) is changed afterwards serially in unit order. Fog: `FogOfWar::service_sources` computes the
+  re-reveal cell lists in parallel (`FogGrid::dense_cells`, const) and applies every undo / count in unit order (the clamped undo
+  makes order matter). Golden-neutral by construction; the forks start at 256 units (`ServiceRunDefaults::parallel_min`).
+- **Lazy caches** are the hazard of read-only parallel loops: `TacticalMode::model_ref` fills a per-type cache on first use, so the
+  loops fill exactly the entries the serial code would have filled first (`prepare_bounds`, the fog pre-pass); filling more would
+  change later `model_ref(t, false)` readers.
+- **Streams** ([port] draw order, tier 3): `ServiceRunDefaults::streams` (headless `--svc-streams`), a bit per `StreamId`; first
+  service: hangars (entry / bay picks per carrier from `stream_rng(session_seed, frame, Hangar, carrier)`). Default off (no golden
+  moved); a default is switched only after the Q4 harness A/B (DECISIONS "Parallel sim redesign"). The hangar loop itself stays
+  serial: `pending_delivery(.., true)` takes a skirmish delivery from shared state.
+- **Stress scene** ([port] bench only): `foc-land-army4` = 24x the foc-land company lists with `Max_Ground_Forces_On_Planet` x4 and
+  no tactical AI (the AI's land population cap would keep the extra companies in reserve; the stand-in deploys them all): ~700 live
+  units against land_battle's ~200. Made on demand by `tools/benchmark/stress_land4.cmd` (its save is over the repository's size
+  limit); `tools/benchmark/services_zone.py` sums the services zones (all `tac.s.*` but movement, combat and the stand-in orders).

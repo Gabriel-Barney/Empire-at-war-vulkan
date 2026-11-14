@@ -778,6 +778,62 @@ void test_tree_set() {
     std::printf("tree set: %zu objects across %u player trees + all/obstacle/space\n", objs.size(), players);
 }
 
+// SP5: update_batch leaves every tree as the same updates one by one would (0 / 4 / 8 threads), skipping invalid boxes and
+// unknown ids the way update() does.
+void test_tree_set_update_batch() {
+    const uint32_t players = 4;
+    const auto hash_of = [](const TreeSet& ts) {
+        uint64_t h = 1469598103934665603ull;
+        ts.hash_state([&h](const void* p, size_t n) {
+            const auto* b = static_cast<const unsigned char*>(p);
+            for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
+        });
+        return h;
+    };
+    const auto run = [&](int threads) {
+        Rng r(777);
+        World w;
+        TreeSet ts(players);
+        std::vector<EntityHandle> ids;
+        for (EntityHandle id = 1; id <= 600; ++id) {
+            TreeMembership m;
+            m.owner = static_cast<int32_t>(r.below(players + 1)) - 1;
+            m.projectile_collidable = r.chance(0.8f);
+            m.obstacle = r.chance(0.3f);
+            m.space_avoidance = r.chance(0.5f);
+            CHECK(ts.add(id, random_box(r, w), random_mask(r), m));
+            ids.push_back(id);
+        }
+        ts.rebuild_all();
+        uint32_t applied = 0;
+        for (int round = 0; round < 12; ++round) {
+            std::vector<TreeSet::BoxUpdate> ups;
+            for (const EntityHandle id : ids) {
+                if (!r.chance(0.7f)) continue;
+                ups.push_back({id, random_box(r, w)});
+                if (r.chance(0.05f)) ups.push_back({id, random_box(r, w)});  // the same id twice: the later box wins
+            }
+            ups.push_back({9999, random_box(r, w)});                       // unknown id: skipped
+            ups.push_back({ids[3], Aabb{{1, 1, 1}, {0, 0, 0}}});           // invalid box: skipped
+            if (threads < 0) {
+                for (const auto& u : ups) applied += ts.update(u.id, u.box) ? 1u : 0u;
+            } else if (threads == 0) {
+                applied += ts.update_batch(ups);
+            } else {
+                applied += ts.update_batch(ups, ::alamo::test::make_thread_parallel_for(static_cast<unsigned>(threads)));
+            }
+            ts.maintain(static_cast<double>(round) * 0.6);
+        }
+        for (uint32_t tr = 0; tr < players; ++tr) CHECK(ts.player(tr).validate());
+        CHECK(ts.all().validate() && ts.obstacle().validate() && ts.space_avoidance().validate());
+        return std::pair<uint64_t, uint32_t>{hash_of(ts), applied};
+    };
+    const auto serial = run(-1);
+    CHECK(serial.second > 0);
+    for (const int threads : {0, 4, 8}) CHECK(run(threads) == serial);
+    std::printf("tree set update_batch: %u updates, same trees at 0 / 4 / 8 threads as one by one\n", serial.second);
+}
+
 void test_maintain_cadence() {    SpatialTreeConfig cfg;  // 1 s, 20%
     SpatialTree t(cfg);
     for (uint32_t i = 0; i < 100; ++i) t.insert(i, {{float(i) * 10, 0, 0}, {float(i) * 10 + 1, 1, 1}}, 1);
@@ -801,6 +857,7 @@ int main() {
     test_maintain_cadence();
     test_oversize();
     test_tree_set();
+    test_tree_set_update_batch();
     test_random_streams();
     test_battle_scene();
     test_history_and_thread_independence();
