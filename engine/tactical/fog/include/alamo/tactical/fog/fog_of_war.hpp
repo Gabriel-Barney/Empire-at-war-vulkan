@@ -208,8 +208,9 @@ public:
     void source_remove(int32_t id);                                               // vf15
     // SP5 (docs/SIM_PARALLEL_DESIGN.md §4.3): a frame's source services as one batch, the same result as calling
     // source_remove / source_service for `ops` in order. The re-reveals' cell lists (sight radii, circles, dense mask:
-    // const) are computed in parallel through `pf`; every grid change (undo, count) is then applied serially in op order,
-    // so the clamped undo and the per-cell first-reveal state see exactly the serial sequence. An id appears at most once.
+    // const) are computed in parallel through `pf`; then each grid applies its own changes (undo, count) in op order, the
+    // grids side by side, so the clamped undo and the per-cell first-reveal state see exactly the serial sequence. An id
+    // appears at most once.
     struct SourceOp {
         int32_t id = -1;
         bool remove = false;  // true: source_remove(id); false: source_service(id, obj, contained, setup_only)
