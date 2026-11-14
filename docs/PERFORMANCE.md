@@ -1052,7 +1052,9 @@ What changed: `host_fs.hpp` (new; `DirectoryProvider`, path / long-path helpers,
 `*_partN.cpp` plus a shared `*_common.hpp` / `*_internal.hpp` in the same CMake target (test names unchanged; one `main` per exe), so an
 edit rebuilds a 120 KB part and the parts compile in parallel. Not done: forward-declaring `game_object_types.hpp` / `game_database.hpp` /
 `campaign.hpp` (their types are used by value), splitting the public `combat_system.hpp` / `movement_system.hpp` / `tactical_battle.hpp`
-(150-200 KB of class body each), unity builds (t04: no PCH measurement from bo1 yet). Wall-clock effect is not measured here.
+(150-200 KB of class body each). Wall-clock effect of the splits and diet is not measured here.
+
+**Unity builds (t04), rejected.** `UNITY_BUILD` (batch 8) on the stable leaf libraries `alamo_data`, `alamo_vfs`, `alamo_assets` (the only leaf libraries with sizeable sources; `core`, `jobs` and the rest are smaller or share anonymous-namespace names), MSVC Release, cache off, shared PCH warmed, `cmake --build --target alamo_data alamo_vfs alamo_assets` from a fresh tree, two runs each, 7800X3D: plain 5.6 s and 5.7 s, unity 5.6 s and 5.4 s. No gain (the three libraries compile in about 6 s wall on 16 threads), and unity would make each edit recompile a batch, so the CMake option was not kept. The gate for revisiting: a library whose sources take over 30 s to compile serially. Also with `game_object_types_fwd.hpp` (new): `garrison_types`, `bounty`, `radar_feed`, `world_pick`, `type_params` and `sim_anim_driver` headers no longer include the 16 KB `game_object_types.hpp`; 8 `.cpp` files include it directly.
 
 ## Compiler-cache hits across worktrees (bo2 t01, 2026-11-14)
 

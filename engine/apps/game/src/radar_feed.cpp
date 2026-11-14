@@ -1,4 +1,5 @@
 #include "alamo/game/radar_feed.hpp"
+#include "alamo/objects/game_object_types.hpp"
 
 #include <algorithm>
 

@@ -1,5 +1,6 @@
 // refixf t08: host side of the tactical world pick (HUD_GAPS §2.2). See world_pick.hpp.
 #include "alamo/game/world_pick.hpp"
+#include "alamo/objects/game_object_types.hpp"
 
 #include <cmath>
 

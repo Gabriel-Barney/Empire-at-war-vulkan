@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/game_object_types_fwd.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/tactical/abilities/space_fields.hpp"

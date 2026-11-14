@@ -26,7 +26,7 @@
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/parallel.hpp"
 #include "alamo/core/sim_rng.hpp"
-#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/game_object_types_fwd.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/render/anim/anim_pose_cache.hpp"
 

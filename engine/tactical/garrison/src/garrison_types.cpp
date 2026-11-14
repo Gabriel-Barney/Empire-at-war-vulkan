@@ -1,4 +1,5 @@
 #include "alamo/tactical/garrison/garrison_types.hpp"
+#include "alamo/objects/game_object_types.hpp"
 
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/enums.hpp"

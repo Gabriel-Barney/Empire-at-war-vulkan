@@ -8,6 +8,7 @@
 
 #include "alamo/core/ascii.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/enums.hpp"
 #include "alamo/objects/type_fields.hpp"
 

@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/game_object_types_fwd.hpp"
 
 namespace alamo::data {
 struct GameConstants;

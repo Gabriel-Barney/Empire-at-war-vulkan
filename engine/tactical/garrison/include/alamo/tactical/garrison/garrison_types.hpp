@@ -7,7 +7,7 @@
 //             REINFORCEMENT_POINT behaviour or Ownership_Sticks; Influences_Capture_Point (default true) on the units.
 // The host fills HolderDesc::extent_len (and the bones) from its own bounds / model data.
 #pragma once
-#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/game_object_types_fwd.hpp"
 #include "alamo/tactical/garrison/capture.hpp"
 #include "alamo/tactical/garrison/garrison.hpp"
 
