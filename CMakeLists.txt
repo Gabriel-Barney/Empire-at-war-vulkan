@@ -21,9 +21,17 @@ if(ALAMO_COMPILER_CACHE AND NOT "$ENV{ALAMO_COMPILER_CACHE}" STREQUAL "OFF" AND 
   # source path: entries then match only inside one checkout, and all its build trees still share them. No object changes.
   string(MD5 _alamo_src_id "${CMAKE_SOURCE_DIR}")
   string(SUBSTRING "${_alamo_src_id}" 0 12 _alamo_src_id)
-  file(WRITE "${CMAKE_BINARY_DIR}/alamo_cache_scope.h" "#pragma once
+  # Only rewritten when the content changes: a new mtime would rebuild every object after each reconfigure.
+  set(_alamo_scope_text "#pragma once
 using alamo_cache_scope_${_alamo_src_id} = int;
 ")
+  set(_alamo_scope_old "")
+  if(EXISTS "${CMAKE_BINARY_DIR}/alamo_cache_scope.h")
+    file(READ "${CMAKE_BINARY_DIR}/alamo_cache_scope.h" _alamo_scope_old)
+  endif()
+  if(NOT _alamo_scope_old STREQUAL _alamo_scope_text)
+    file(WRITE "${CMAKE_BINARY_DIR}/alamo_cache_scope.h" "${_alamo_scope_text}")
+  endif()
   if(MSVC)
     add_compile_options("/FI${CMAKE_BINARY_DIR}/alamo_cache_scope.h")
   else()
