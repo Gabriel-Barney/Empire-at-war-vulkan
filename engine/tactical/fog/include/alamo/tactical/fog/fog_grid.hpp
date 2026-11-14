@@ -92,6 +92,9 @@ public:
     void reveal(float x, float y, float radius, CellList* out, const RevealFlags& f, uint32_t frame);
     // 0x4c0ec0: ordinary cells within rNormal, dense cells within rDense (one list, passes never overlap).
     void reveal_dense(float x, float y, float r_normal, float r_dense, CellList& out, uint32_t frame);
+    // SP5: the cells reveal_dense would count, in the same order, without counting (const: safe in a parallel loop).
+    // reveal_dense == dense_cells then count_cells of the list.
+    void dense_cells(float x, float y, float r_normal, float r_dense, CellList& out) const;
     void collect_circle(float x, float y, float radius, CellList& out, bool unmasked_ok = true, bool masked_ok = true);
     void flash(float x, float y, float radius);            // state := 0xFF over the circle, counts untouched
     void count_cell(uint32_t cell, uint32_t frame);        // §2.3

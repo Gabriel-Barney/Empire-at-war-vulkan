@@ -221,9 +221,26 @@ void TacticalBattle::build_service_graph() {
         TacticalMode& mode = *tick_.mode;
         objects::ObjectStore& store = mode.primary();
         mode.resolve_models();  // refixf t07: after a load, before the boxes and the parallel sweeps read the model cache
+        // SP5 (read old, write new, commit in index order): the boxes are computed per unit in parallel (const reads; the
+        // model-cache entries bounds_of fills lazily are filled first, serially: prepare_bounds), the trees updated in unit
+        // order.
+        const auto n = static_cast<uint32_t>(units_.size());
+        const auto want = [&](const Unit& u) { return u.alive && !u.retreated && u.movable && store.alive(u.h); };
         for (const Unit& u : units_)
-            if (u.alive && !u.retreated && u.movable && store.alive(u.h))
-                mode.trees().update(static_cast<tactical::EntityHandle>(u.id), mode.bounds_of(u.h));
+            if (want(u)) mode.prepare_bounds(u.h);
+        std::vector<tactical::Aabb> box(n);
+        std::vector<uint8_t> has(n, 0);
+        const auto fill = [&](uint32_t b, uint32_t e) {
+            for (uint32_t i = b; i < e; ++i)
+                if (want(units_[i])) {
+                    box[i] = mode.bounds_of(units_[i].h);
+                    has[i] = 1;
+                }
+        };
+        if (n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, fill);
+        else fill(0, n);
+        for (uint32_t i = 0; i < n; ++i)
+            if (has[i]) mode.trees().update(static_cast<tactical::EntityHandle>(units_[i].id), box[i]);
         mode.trees().maintain(tick_.sim_time, *tick_.pf);
     });
     lap("tac.trees");

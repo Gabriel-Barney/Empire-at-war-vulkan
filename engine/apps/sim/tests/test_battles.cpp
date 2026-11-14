@@ -3092,12 +3092,15 @@ void test_service_modes(const Data& d) {
             int32_t workers;
             const char* name;
         };
+        // parallel_min 1: the per-unit service loops (fog sources, speed factors, collision info, combat sync) fork even
+        // in these small battles, so the per-index writes are compared too (fog is not in the CRC: fog_hash is).
         const Mode modes[] = {{RunMode::Serial, false, 0, "serial"},
                               {RunMode::Reverse, false, 0, "reverse"},
                               {RunMode::Parallel, false, 4, "parallel w4"},
+                              {RunMode::Parallel, false, 15, "parallel w15"},
                               {RunMode::Serial, true, 4, "write check"}};
         for (const Mode& m : modes) {
-            TacticalBattle::set_service_run_defaults({m.mode, m.check});
+            TacticalBattle::set_service_run_defaults({m.mode, m.check, 1});
             const uint64_t v0 = TacticalBattle::service_violations_total();
             const Run r = run_campaign(d, land, true, m.workers, ticks);
             const auto dv = first_divergence(ref.crc, r.crc);

@@ -61,7 +61,7 @@ struct ServiceInfo {
     bool barrier = false;
     uint32_t phase = 0;                 // set by build()
     ComponentSet observed_writes = 0;   // components a checked run saw this service change
-    uint16_t zone = 0xFFFF;             // profile zone "svc.<name>" (wall clock only)
+    uint16_t zone = 0xFFFF;             // profile zone "svc.<name>" (wall clock only; none for a barrier)
 };
 
 class ServiceGraph {
@@ -94,6 +94,7 @@ public:
     std::string describe() const;
 
 private:
+    ServiceId add_impl(std::string name, ComponentSet reads, ComponentSet writes, Fn fn, bool barrier);
     void run_one(ServiceId s, Checker* check);
 
     std::vector<ServiceInfo> info_;

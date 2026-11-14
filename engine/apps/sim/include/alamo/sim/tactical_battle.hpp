@@ -2314,6 +2314,9 @@ public:
     struct ServiceRunDefaults {
         tactical::services::RunMode mode = tactical::services::RunMode::Parallel;
         bool check = false;  // debug write check (serial; a violation is counted and printed)
+        // A per-unit service loop forks through the tick's ParallelFor only with at least this many units (below it the
+        // fork costs more than the loop). Wall clock only: results do not depend on it (tests set 1 to force the forks).
+        uint32_t parallel_min = 256;
     };
     static void set_service_run_defaults(const ServiceRunDefaults& d);
     static ServiceRunDefaults service_run_defaults();
@@ -2324,6 +2327,7 @@ public:
     const tactical::services::ServiceGraph* service_graph() const { return svc_graph_.get(); }
 
 private:
+    static constexpr uint32_t kSvcParallelGrain = 64;  // units per chunk of a per-unit service loop (wall clock only)
     void build_service_graph();
     uint64_t service_digest(uint32_t component) const;
     struct TickContext {
@@ -2337,6 +2341,7 @@ private:
     std::unique_ptr<tactical::services::ServiceGraph> svc_graph_;
     const TacticalBattle* svc_owner_ = nullptr;  // the graph's lambdas capture this; rebuilt if the object moved
     tactical::services::RunMode svc_mode_ = service_run_defaults().mode;
+    uint32_t svc_parallel_min_ = service_run_defaults().parallel_min;
     std::unique_ptr<tactical::services::Checker> svc_check_;
     // --- end SP5 ---
 };

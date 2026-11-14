@@ -939,60 +939,82 @@ void TacticalBattle::expire_objects(TacticalMode& mode) {
 
 // The combat_pre sync (S10, PERF_AUDIT_2026-11-07): each movable unit's position, facing and the movement-derived combat
 // flags into the combat system, before the combat tick (SP5: the services graph's "combat_sync" service).
+// SP5 (per-index writes): every write goes to the unit's own combat entry and every read is const (movement views, the
+// store, abilities, the animation models, fighter records), so the units run in parallel; the swap-back signals (0x29) are
+// marked per unit and appended in unit order afterwards, as the serial loop appended them.
 void TacticalBattle::combat_sync(const objects::ObjectStore& store) {
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !u.movable) continue;
-        combat_->set_position(u.id, tv(store.position(u.h)));
-        const mv::UnitView mvv = movement_->view(u.id);
-        combat_->set_facing(u.id, tv(facing_of_yaw(mvv.yaw)));
-        // S7 t14 (MOVEMENT §3.1.1 step 6): the locomotor swap disables TARGETING / WEAPON / SPECIAL_WEAPON for the jetpack
-        // flight and enables them on the swap back. The swap runs inside MovementSystem (orders, the JET_PACK ability, the
-        // jetpack's state 0x16), so the flag mirrors the active locomotor here, before every combat tick.
-        // S7 t15 A1: the swap back then raises "unit ability finished" (signal 0x29: task-force event 19, the blocking
-        // Activate_Ability); the flag still set from the previous tick marks it.
-        if (!mvv.secondary_locomotor && (combat_->flags(u.id) & tc::kUnitWeaponsSuspended) != 0) ability_finished_.push_back(u.id);
-        combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, mvv.secondary_locomotor);
-        // S8 t11 (TACTICAL_COMBAT §3.1.1 "Gate details" step 6): fighter Idle (0x1C), and Walk Stopped (0x16) on a locomotor
-        // whose vf +0x240 is true (Flying, JetPack, LandBomber; [port] Starship: the port's space locomotors keep no 0x16).
-        // ROCKET_ATTACK in any Unit_Abilities_Data entry ("ROCKET_ATTACK detection").
-        const bool air = mvv.locomotor == mv::LocomotorKind::Flying || mvv.locomotor == mv::LocomotorKind::Jetpack ||
-                         mvv.locomotor == mv::LocomotorKind::LandBomber;
-        combat_->set_flag(u.id, tc::kUnitFighterIdle, mvv.loco_state == mv::LocoState::FighterIdle);
-        combat_->set_flag(u.id, tc::kUnitHoverRest, air && mvv.loco_state == mv::LocoState::WalkStopped);
-        // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full"): a Hover_Height unit raised (state 1) - melee attackers refuse it
-        combat_->set_flag(u.id, tc::kUnitHoverRaised, movement_->hover_state(u.id) == 1);
-        combat_->set_flag(u.id, tc::kUnitRocketAttack, abilities_ && abilities_->is_active(u.id, 11));
-        // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the locomotor is moving (an order in progress or speed), and
-        // the model has an Attack clip (0x397ae0(obj, 5)): a moving land unit without TURRET fires only without one.
-        combat_->set_flag(u.id, tc::kUnitMoving, mvv.has_goal || mvv.speed > 0.0f);
-        bool attack_clip = false;
+    const auto n = static_cast<uint32_t>(units_.size());
+    std::vector<uint8_t> swapped_back(n, 0);
+    const auto body = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated || !u.movable) continue;
+            combat_->set_position(u.id, tv(store.position(u.h)));
+            const mv::UnitView mvv = movement_->view(u.id);
+            combat_->set_facing(u.id, tv(facing_of_yaw(mvv.yaw)));
+            // S7 t14 (MOVEMENT §3.1.1 step 6): the locomotor swap disables TARGETING / WEAPON / SPECIAL_WEAPON for the jetpack
+            // flight and enables them on the swap back. The swap runs inside MovementSystem (orders, the JET_PACK ability, the
+            // jetpack's state 0x16), so the flag mirrors the active locomotor here, before every combat tick.
+            // S7 t15 A1: the swap back then raises "unit ability finished" (signal 0x29: task-force event 19, the blocking
+            // Activate_Ability); the flag still set from the previous tick marks it.
+            if (!mvv.secondary_locomotor && (combat_->flags(u.id) & tc::kUnitWeaponsSuspended) != 0) swapped_back[i] = 1;
+            combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, mvv.secondary_locomotor);
+            // S8 t11 (TACTICAL_COMBAT §3.1.1 "Gate details" step 6): fighter Idle (0x1C), and Walk Stopped (0x16) on a locomotor
+            // whose vf +0x240 is true (Flying, JetPack, LandBomber; [port] Starship: the port's space locomotors keep no 0x16).
+            // ROCKET_ATTACK in any Unit_Abilities_Data entry ("ROCKET_ATTACK detection").
+            const bool air = mvv.locomotor == mv::LocomotorKind::Flying || mvv.locomotor == mv::LocomotorKind::Jetpack ||
+                             mvv.locomotor == mv::LocomotorKind::LandBomber;
+            combat_->set_flag(u.id, tc::kUnitFighterIdle, mvv.loco_state == mv::LocoState::FighterIdle);
+            combat_->set_flag(u.id, tc::kUnitHoverRest, air && mvv.loco_state == mv::LocoState::WalkStopped);
+            // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full"): a Hover_Height unit raised (state 1) - melee attackers refuse it
+            combat_->set_flag(u.id, tc::kUnitHoverRaised, movement_->hover_state(u.id) == 1);
+            combat_->set_flag(u.id, tc::kUnitRocketAttack, abilities_ && abilities_->is_active(u.id, 11));
+            // s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states"): the locomotor is moving (an order in progress or speed), and
+            // the model has an Attack clip (0x397ae0(obj, 5)): a moving land unit without TURRET fires only without one.
+            combat_->set_flag(u.id, tc::kUnitMoving, mvv.has_goal || mvv.speed > 0.0f);
+            bool attack_clip = false;
 #ifdef ALAMO_SIM_HAVE_ANIM
-        if (const anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr)
-            if (const anim::AnimModel* m = w->contains(u.id) ? w->model(u.id) : nullptr) attack_clip = m->variant_count(anim::kAnimAttack) > 0;
+            if (const anim::AnimWorld* w = hooks_ ? hooks_->world() : nullptr)
+                if (const anim::AnimModel* m = w->contains(u.id) ? w->model(u.id) : nullptr) attack_clip = m->variant_count(anim::kAnimAttack) > 0;
 #endif
-        combat_->set_flag(u.id, tc::kUnitAttackClip, attack_clip);
-        // S8 t17 (FIGHTER_FLYING §4.10 A / B): a squadron member shares its squadron's team target; a fighter whose
-        // formation record exists scans R + Rr (fighter_scan_range).
-        if (space_) {
-            const bool member = u.container < containers_.size() && movement_->fighter_squad(containers_[u.container].id);
-            combat_->set_share_group(u.id, member ? containers_[u.container].id : tc::kNoObject);
-            combat_->set_flag(u.id, tc::kUnitScanQuery,
-                              mvv.locomotor == mv::LocomotorKind::Fighter && fighter_formation(fighter_key(u)) != nullptr);
+            combat_->set_flag(u.id, tc::kUnitAttackClip, attack_clip);
+            // S8 t17 (FIGHTER_FLYING §4.10 A / B): a squadron member shares its squadron's team target; a fighter whose
+            // formation record exists scans R + Rr (fighter_scan_range).
+            if (space_) {
+                const bool member = u.container < containers_.size() && movement_->fighter_squad(containers_[u.container].id);
+                combat_->set_share_group(u.id, member ? containers_[u.container].id : tc::kNoObject);
+                combat_->set_flag(u.id, tc::kUnitScanQuery,
+                                  mvv.locomotor == mv::LocomotorKind::Fighter && fighter_formation(fighter_key(u)) != nullptr);
+            }
         }
-    }
+    };
+    if (tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, body);
+    else body(0, n);
+    for (uint32_t i = 0; i < n; ++i)
+        if (swapped_back[i]) ability_finished_.push_back(units_[i].id);
 }
 
 // S7 t27 (MOVEMENT §3.1.1 step 6): the swap back raises signal 0x29 at once. The combat_pre loop sees the swaps of the
 // movement tick; a swap back later in the tick (after that loop: ability events, orders, queues) is reported here, in the
 // same tick, and the flag cleared so the next combat_pre loop does not report it again.
+// SP5 (per-index writes): each unit's flag is its own combat entry; the signals are appended in unit order afterwards.
 void TacticalBattle::late_swap_back_signals() {
     if (!movement_ || !combat_) return;
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !u.movable || !combat_->has_unit(u.id)) continue;
-        if ((combat_->flags(u.id) & tc::kUnitWeaponsSuspended) == 0 || movement_->view(u.id).secondary_locomotor) continue;
-        ability_finished_.push_back(u.id);
-        combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, false);
-    }
+    const auto n = static_cast<uint32_t>(units_.size());
+    std::vector<uint8_t> back(n, 0);
+    const auto body = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated || !u.movable || !combat_->has_unit(u.id)) continue;
+            if ((combat_->flags(u.id) & tc::kUnitWeaponsSuspended) == 0 || movement_->view(u.id).secondary_locomotor) continue;
+            back[i] = 1;
+            combat_->set_flag(u.id, tc::kUnitWeaponsSuspended, false);
+        }
+    };
+    if (tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, body);
+    else body(0, n);
+    for (uint32_t i = 0; i < n; ++i)
+        if (back[i]) ability_finished_.push_back(units_[i].id);
 }
 
 // ---- S7 t31: signal 0xb (AI_TACTICAL §7.3.3 item 2, A1_READINGS §33.3) ----------------------------------------------

@@ -52,7 +52,7 @@ namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 constexpr int kExitNotComparable = 3;
-constexpr uint32_t kTopZones = 24;
+constexpr uint32_t kTopZones = profile::kMaxZones;  // SP5: every zone (the services sum needs the small svc.* ones)
 
 double ms_between(Clock::time_point a, Clock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();

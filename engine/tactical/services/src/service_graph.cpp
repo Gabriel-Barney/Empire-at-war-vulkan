@@ -15,23 +15,25 @@ const std::string& ServiceGraph::component_name(uint32_t c) const {
     return c < names_.size() ? names_[c] : unnamed;
 }
 
-ServiceId ServiceGraph::add(std::string name, ComponentSet reads, ComponentSet writes, Fn fn) {
+ServiceId ServiceGraph::add_impl(std::string name, ComponentSet reads, ComponentSet writes, Fn fn, bool barrier) {
     ServiceInfo s;
     s.name = std::move(name);
     s.reads = reads | writes;  // a writer also sees what it writes (read-modify-write); keeps conflict() symmetric
     s.writes = writes;
-    s.zone = profile::register_zone(("svc." + s.name).c_str());
+    s.barrier = barrier;
+    // Barriers get no zone (the profiler's zone table is small; a barrier is usually a profile lap itself).
+    if (!barrier) s.zone = profile::register_zone(("svc." + s.name).c_str());
     info_.push_back(std::move(s));
     fn_.push_back(std::move(fn));
     built_ = false;
     return static_cast<ServiceId>(info_.size() - 1);
 }
 
-ServiceId ServiceGraph::barrier(std::string name, Fn fn) {
-    const ServiceId id = add(std::move(name), kEverything, kEverything, std::move(fn));
-    info_[id].barrier = true;
-    return id;
+ServiceId ServiceGraph::add(std::string name, ComponentSet reads, ComponentSet writes, Fn fn) {
+    return add_impl(std::move(name), reads, writes, std::move(fn), false);
 }
+
+ServiceId ServiceGraph::barrier(std::string name, Fn fn) { return add_impl(std::move(name), kEverything, kEverything, std::move(fn), true); }
 
 void ServiceGraph::order(ServiceId before, ServiceId after) {
     if (before >= after || after >= info_.size()) throw std::invalid_argument("ServiceGraph::order: before must be declared first");

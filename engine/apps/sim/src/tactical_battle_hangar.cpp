@@ -333,16 +333,35 @@ void TacticalBattle::hg_unit_removed(objects::ObjectId id) {
     if (hangars_->carrier_of(id) != tc::kNoObject) hangars_->squadron_removed(id, frame_);
 }
 
+// SP5 (read old, write new, commit in index order): the per-unit inputs (which service, speed / hyperspace or moving) come
+// from const reads and are gathered in parallel into per-unit slots; EngineLoops (sorted records, an op list) is then
+// serviced serially in unit order, as before.
 void TacticalBattle::hg_engine_service() {
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated) continue;
-        if (hg_engine_unit(u)) {
-            engine_loops_.locomotor_service(u.id, movement_->view(u.id).speed, l1_jumps_.departing(u.id), frame_);
-        } else if (hg_walk_engine_unit(u)) {
-            // cu8g t01 [port]: the Walk "moving" test is untraced (§3.3 [M]); an order in progress or speed, as kUnitMoving.
-            const mv::UnitView v = movement_->view(u.id);
-            engine_loops_.walk_service(u.id, v.has_goal || v.speed > 0.0f, frame_);
+    struct In {
+        uint8_t kind = 0;  // 0 none, 1 SimpleSpace locomotor service, 2 land Walk service
+        bool flag = false;  // kind 1: in hyperspace (departing); kind 2: moving
+        float speed = 0.0f;
+    };
+    const auto n = static_cast<uint32_t>(units_.size());
+    std::vector<In> in(n);
+    const auto fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated) continue;
+            if (hg_engine_unit(u)) {
+                in[i] = {1, l1_jumps_.departing(u.id), movement_->view(u.id).speed};
+            } else if (hg_walk_engine_unit(u)) {
+                // cu8g t01 [port]: the Walk "moving" test is untraced (§3.3 [M]); an order in progress or speed, as kUnitMoving.
+                const mv::UnitView v = movement_->view(u.id);
+                in[i] = {2, v.has_goal || v.speed > 0.0f, 0.0f};
+            }
         }
+    };
+    if (tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, fill);
+    else fill(0, n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (in[i].kind == 1) engine_loops_.locomotor_service(units_[i].id, in[i].speed, in[i].flag, frame_);
+        else if (in[i].kind == 2) engine_loops_.walk_service(units_[i].id, in[i].flag, frame_);
     }
 }
 
