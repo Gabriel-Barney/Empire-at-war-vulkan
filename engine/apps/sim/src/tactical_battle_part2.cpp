@@ -1679,6 +1679,19 @@ void TacticalBattle::apply_speed_factors() {
                                          [](const std::pair<uint32_t, float>& e, uint32_t t) { return e.first < t; });
         return it->second;  // every team asked for is in the list
     };
+    // SP5: the container types' raw Max_Speed (-1: no tag), looked up once per type (type data does not change in a battle)
+    // instead of twice per unit and once per container per tick; filled here, serially, for every type the loops below read.
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (sp_type_max_speed_.size() < types.size()) sp_type_max_speed_.resize(types.size(), kMaxSpeedUnread);
+    for (const Container& c : containers_) {
+        if (!c.team || c.removed || c.type >= types.size()) continue;
+        float& m = sp_type_max_speed_[c.type];
+        if (m == kMaxSpeedUnread) {
+            const auto ct = static_cast<objects::TypeIndex>(c.type);
+            m = types.get_string(ct, "Max_Speed").empty() ? -1.0f : types.get_float(ct, "Max_Speed");
+        }
+    }
+    const auto container_max = [&](const Container& c) { return c.type < types.size() ? sp_type_max_speed_[c.type] : -1.0f; };
     // s78n t14 (FIGHTER_FLYING §7.3 item 6): the land squads with a current target (0x397a40(K, 0) [M]: the container's,
     // else a member's - members read their head's target), ascending container id.
     const auto n = static_cast<uint32_t>(units_.size());
@@ -1700,11 +1713,7 @@ void TacticalBattle::apply_speed_factors() {
             // s78l t01 (MOVEMENT §3.4 "Team cap, exact"): the container type's raw Max_Speed is in the team minimum (-1: no
             // tag / not in a team). [port] the container's further chain factors have no host state here (fleeing is the
             // movement layer's, s78n t14 part B).
-            float cmax = -1.0f;
-            if (in_team && containers_[u.container].type < catalog_->types().size()) {
-                const auto ct = static_cast<objects::TypeIndex>(containers_[u.container].type);
-                if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
-            }
+            const float cmax = in_team ? container_max(containers_[u.container]) : -1.0f;
             movement_->set_team(u.id, in_team ? containers_[u.container].id : mv::ObjectId{-1}, in_team ? team_mult(team) : 1.0f, cmax);
             if (in_team && !space_ && combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) targets[i] = 1;
         }
@@ -1717,21 +1726,23 @@ void TacticalBattle::apply_speed_factors() {
     std::sort(targeted.begin(), targeted.end());
     // s78n t03: a movement-backed land squad container walks at the team speed - the same value its members' set_team
     // carries (the members' minimum with its own Max_Speed, x its factor).
-    for (const Container& c : containers_) {
-        if (space_ || !c.team || c.removed || !movement_->has_unit(c.id)) continue;
-        float cmax = -1.0f;
-        if (c.type < catalog_->types().size()) {
-            const auto ct = static_cast<objects::TypeIndex>(c.type);
-            if (!catalog_->types().get_string(ct, "Max_Speed").empty()) cmax = catalog_->types().get_float(ct, "Max_Speed");
+    // SP5: each container writes only its own movement entry, so the containers run side by side.
+    const auto nc = static_cast<uint32_t>(containers_.size());
+    const auto container_fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Container& c = containers_[i];
+            if (space_ || !c.team || c.removed || !movement_->has_unit(c.id)) continue;
+            movement_->set_team(c.id, c.id, team_mult(static_cast<uint32_t>(c.id)), container_max(c));
+            // s78n t14 (FIGHTER_FLYING §7.2 / §7.3): the squad's SPREAD_OUT state (a change re-lays its slots) and whether it
+            // has a target (its members then do not recover to their slots).
+            (void)movement_->set_team_spread_out(c.id, abilities_ && abilities_->spread_out(c.id));
+            const bool tgt = (combat_ && combat_->has_unit(c.id) && combat_->current_target(c.id) != tc::kNoObject) ||
+                             std::binary_search(targeted.begin(), targeted.end(), c.id);
+            (void)movement_->set_team_target(c.id, tgt);
         }
-        movement_->set_team(c.id, c.id, team_mult(static_cast<uint32_t>(c.id)), cmax);
-        // s78n t14 (FIGHTER_FLYING §7.2 / §7.3): the squad's SPREAD_OUT state (a change re-lays its slots) and whether it has
-        // a target (its members then do not recover to their slots).
-        (void)movement_->set_team_spread_out(c.id, abilities_ && abilities_->spread_out(c.id));
-        const bool tgt = (combat_ && combat_->has_unit(c.id) && combat_->current_target(c.id) != tc::kNoObject) ||
-                         std::binary_search(targeted.begin(), targeted.end(), c.id);
-        (void)movement_->set_team_target(c.id, tgt);
-    }
+    };
+    if (n >= svc_parallel_min_) pf(nc, kSvcParallelGrain / 4, container_fill);
+    else container_fill(0, nc);
     feed_pair_gates();
 }
 
