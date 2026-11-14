@@ -1355,6 +1355,10 @@ and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched 
   (O(teams x units)): 1.07 of 1.26 ms. `a5600d5e` / `baa131c6` find the members and team slots by team value first (same
   members, same order; Empire-Underworld seed 2's final CRC unchanged): combat 1.26 -> 0.63-0.64 ms per tick at W0 (one run each,
   10 % and 65 % other-process CPU). The window has no shots (no projectiles): damage records (sp5 t08) do not touch this cost.
+- **Where damage would go** (sp5 t08, W0, one run each, 42-46 % other-process CPU, fingerprints OK): `land_battle` combat 0.147 ms
+  per tick (unit walk `cmb.d_units` 0.096, projectile commit `cmb.f_projectiles` 0.004), `space_battle` 0.361 ms (projectile
+  sweep `cmb.e_sweep` 0.277, already parallel; walk 0.064; commit 0.007). The serial commit that deferred damage records would
+  parallelise is under 0.01 ms per tick on every bench scene, so t08 is not worth its draw-order change today.
 
 ## Tree-hash checksum, slice 1: movement, combat, objects (SIMP sp6, 2026-11-14)
 
