@@ -125,6 +125,12 @@ Header-only INTERFACE targets; link them from a test exe, never from an engine l
   `eaw_data_root`, `print_skip`, `write_file` / `read_file` and `kSkipReturnCode` (77); `alamo/test/thread_parallel_for.hpp`
   is the pool above. A test file includes it and puts `using ::alamo::test::g_fail;` where its counter was; main() keeps its
   own summary line and exit code. The counters are inline variables: one per exe, whichever TUs include the header.
+  `CHECK` prints the file's basename (`std::source_location`, 2026-11-14), never `__FILE__`; a test file with its own check macro
+  uses `ALAMO_TEST_FILE()` from the same header, so the macro text does not change with the checkout path.
+  Test exes stay one per scenario family (Gabriel, 2026-11-14, bo2): merging them into runners was measured and dropped, since relinking
+  all 135 exes takes 4.5-8.1 s and merging saves nothing on compiling (`docs/PERFORMANCE.md`, "Test executables: inventory";
+  `python tools/analysis/exe_inventory.py` redoes the table). To add a test: new `alamo_add_test`-style exe in the module's CMake file
+  with its own `add_test`, as the neighbouring ones.
 - `alamo_render_test_support` (`engine/render/test_support`): `alamo/render/test/gpu.hpp` has `GpuCore` (ctx / alloc / up /
   ring; derive to add a renderer, HUD or timer) and `OffscreenWithDepth` / `OffscreenColorOnly` over
   `alamo/render/offscreen.hpp` (the render library's offscreen target, also used by the `alamo_render` sub-mains through
