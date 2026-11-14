@@ -84,6 +84,11 @@ A change to `engine/core` public headers or the top-level CMake goes through the
   the roadmap. Use ONE build tree per worktree (`build_agent.cmd msvc "<modules>"` gives `build-wt-msvc`: the tree name defaults to `wt` since 2026-11-08). After the branch is
   on `dev`, `tools\clean_worktrees.cmd` (dry run; `--apply --only <name>`; `--trees` for idle build trees) removes merged (into
   `origin/dev` or `origin/main`), clean, pushed, idle worktrees, unlinking junctions first. Engine: `tools/worktree/worktree_tool.py` (`--selftest`).
+- Speed habits (Gabriel, 2026-11-13; default for every session, full record `docs/WORKFLOW_TIPS.md`, agent form in `.claude/agents/lane.md`):
+  `/start-group` sets `/goal` from the group's `exit` test; after a large edit use the `green-fast-tier` skill (`/loop /green-fast-tier <modules>`
+  unattended; it never regenerates goldens, stops on golden drift, never polls CI); check `/context` at the start and `/compact` between tasks
+  or groups above half full (or start a fresh session); side questions go to `/btw`; fixed commands run in shell mode (`!`); long builds can be
+  watched from Remote Control. Read build summaries, not logs.
 - Claims (2026-11-06): `python roadmap-store/roadmap_store.py claim <group> --by <session>` before starting a group (24 h, `release` when
   done), `claims` lists them, `batch [N]` prints ready groups whose `touches` do not overlap, for handing out a parallel batch.
   Build records are batched: `record-build` no longer pushes by itself; `write`, `sync` and `flush` do. See `docs/ROADMAP_PROTOCOL.md`.
