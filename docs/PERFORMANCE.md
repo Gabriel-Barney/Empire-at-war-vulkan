@@ -1350,3 +1350,33 @@ and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched 
   machine stayed loaded by other lanes; the re-run is an open sp5 task for the coordinator's quiet window.
 - The whole tick (median 10.3-10.6 ms at W0, 9.1-9.3 at W7) is dominated by movement and combat (`tac.s.abilities_combat` ~1.3 ms at
   W0 and W7: combat's own phases, not a service).
+
+## Tree-hash checksum, slice 1: movement, combat, objects (SIMP sp6, 2026-11-14)
+
+Step P6 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (4.5 "as built, second half"). The `objects`, `battle.movement` and
+`battle.combat` hashes are now trees: blocks of 256 items, hashed in parallel during the capture. Sim-only
+`alamo_headless --bench <scene> --runs 1 --warmup 0 --profile`, MSVC Release. Before = the sp2 build `8f9d8cf3`; the hash code of
+these three systems and of core did not change between that build and this slice's base. After = sp6 slice 1. Runs are interleaved,
+2 rounds per scene and worker count. Each run started after the machine was under 35 % busy or after 60 s; other processes then
+took 2-26 % of the CPU (two runs took 35 % and 93 %, see the second galactic_late value). Zone means in ms per profiled tick, round 1 / round 2:
+
+| Scene, workers | `crc.objects` before → after | `crc.battle.movement` before → after | `crc.battle.combat` before → after | `T13.end_tick` (all capture) before → after | `crc.battle.ai` (not converted) |
+|---|---|---|---|---|---|
+| `land_battle` W0 | 0.043 / 0.042 → 0.028 / 0.028 | 0.027 / 0.027 → 0.027 / 0.027 | 0.011 / 0.011 → 0.012 / 0.012 | 1.09 / 0.85 → 0.85 / 0.82 | 0.68-0.93 |
+| `land_battle` default | 0.047 / 0.048 → 0.033 / 0.032 | 0.031 / 0.031 → 0.032 / 0.032 | 0.013 / 0.013 → 0.014 / 0.014 | 0.84 / 0.83 → 0.82 / 0.82 | 0.79-0.80 |
+| `water_battle` W0 | 0.039 / 0.040 → 0.026 / 0.027 | 0.017 / 0.017 → 0.017 / 0.017 | 0.008 / 0.008 → 0.009 / 0.009 | 0.63 / 0.64 → 0.60 / 0.61 | 0.49-0.51 |
+| `water_battle` default | 0.042 / 0.046 → 0.029 / 0.029 | 0.018 / 0.018 → 0.019 / 0.018 | 0.009 / 0.009 → 0.010 / 0.010 | 0.61 / 0.60 → 0.60 / 0.59 | 0.56-0.58 |
+| `space_battle_game` W0 | 0.020 / 0.020 → 0.014 / 0.016 | 0.065 / 0.066 → 0.066 / 0.068 | 0.016 / 0.016 → 0.017 / 0.018 | 0.35 / 0.36 → 0.35 / 0.37 | 0.16-0.17 |
+| `space_battle_game` default | 0.021 / 0.022 → 0.032 / 0.027 | 0.073 / 0.079 → 0.076 / 0.074 | 0.018 / 0.021 → 0.021 / 0.020 | 0.21 / 0.23 → 0.22 / 0.21 | 0.18-0.19 |
+| `galactic_late` W0 | 0.031 / 0.045 → 0.022 / 0.031 | - | - | 0.075 / 0.117 → 0.066 / 0.093 | - |
+| `galactic_late` default | 0.037 / 0.035 → 0.019 / 0.018 | - | - | 0.061 / 0.060 → 0.044 / 0.043 | - |
+
+- **`crc.objects` is 30-50 % cheaper** wherever the scene has several blocks of objects, at W0 too (the per-block hasher stays in
+  registers). It is 0.01 ms slower on `space_battle_game` at default workers, where the fork over a few blocks costs more than it saves.
+- **Movement and combat are unchanged or about 0.001 ms slower.** A battle here has fewer than 256 units, so each is one block (the
+  same work plus one more digest). The tree pays off on larger battles.
+- **The capture is still `crc.battle.ai`:** 85-95 % of `T13.end_tick` in every battle. This slice cannot reach the sp6 exit
+  (capture at most 25 % of today's at default workers). That needs the `battle.ai` slice, which comes after sp3.
+- **Same outcome.** Every after run matched its regenerated fingerprint, and the before runs fail only the fingerprint, as expected.
+  All goldens and fingerprints moved once (commit "sp6 goldens"), identically on MSVC and clang. The movement / gaps determinism
+  checks passed at 1 / 4 / 16 threads, and the worker-count ctest entries passed at every count.
