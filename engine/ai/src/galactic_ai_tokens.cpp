@@ -889,16 +889,13 @@ struct GalacticSimTokenResolver::Impl {
     int32_t force_inst = -1;
     template <class F>
     bool leaf(std::string_view key, int32_t inst, int32_t life, std::span<const Param> params, F&& compute, double& out) const {
-        CacheKey k;
+        std::string pk;  // sp4a: the lookup builds only the parameter key (empty for no parameters); the leaf name is a view
         if (life != 0) {
-            k.leaf = std::string(key);
-            k.inst = inst;
-            k.self = ctx.self;
-            k.params = param_key(params, key.substr(0, 3) == "PF:", r.categories_);
-            const bool forced = force_leaf != nullptr && *force_leaf == k.leaf && force_inst == inst;
+            if (!params.empty()) pk = param_key(params, key.substr(0, 3) == "PF:", r.categories_);
+            const bool forced = force_leaf != nullptr && *force_leaf == key && force_inst == inst;
             if (!forced) {
                 std::lock_guard<std::mutex> lock(r.mu_);
-                const auto it = r.cache_.find(k);
+                const auto it = r.cache_.find(CacheKeyView{key, inst, ctx.self, pk});
                 if (it != r.cache_.end() && it->second.stamp != 0 &&
                     (life == kLifeForever ||
                      static_cast<int64_t>(r.frame_) <= static_cast<int64_t>(it->second.stamp) + static_cast<int64_t>(life) * kAiFps)) {
@@ -911,7 +908,7 @@ struct GalacticSimTokenResolver::Impl {
         if (!compute(out)) return false;  // failures are never cached
         if (life != 0) {
             std::lock_guard<std::mutex> lock(r.mu_);
-            const auto [it, inserted] = r.cache_.try_emplace(std::move(k));
+            const auto [it, inserted] = r.cache_.try_emplace(CacheKey{std::string(key), inst, ctx.self, std::move(pk)});
             it->second.value = out;
             it->second.stamp = r.frame_;
             if (inserted) it->second.params.assign(params.begin(), params.end());
@@ -2173,10 +2170,14 @@ void GalacticSimTokenResolver::visibility_event(PlanetIndex planet, int32_t play
 
 bool GalacticSimTokenResolver::resolve(const EvalContext& ctx, const TokenRef& token, double& out) const {
     if (!token.tokens) return false;
-    std::string key;
-    for (const TokenId id : token.path) {
-        if (!key.empty()) key += '.';
-        key += ai_upper_copy(token.tokens->name(id));
+    std::string built;  // sp4a (S7): only for a token without the parser's key
+    std::string_view key = token.key;
+    if (key.empty()) {
+        for (const TokenId id : token.path) {
+            if (!built.empty()) built += '.';
+            built += ai_upper_copy(token.tokens->name(id));
+        }
+        key = built;
     }
     if (key.empty()) return false;
     switch (token.root) {

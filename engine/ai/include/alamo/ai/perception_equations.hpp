@@ -119,6 +119,9 @@ struct ExprNode {
     uint32_t param_begin = 0, param_count = 0;  // Token/Function/Script: into Expression::params
     uint32_t ref = 0;         // Function: equation index after link (kUnresolved before / if missing)
     std::string name;         // Function: equation name; Script: script name
+    // Token, sp4a (S7) [port]: the path as one upper-case dotted key ("ENEMYFORCE.SPACETOTALUNNORMALIZED"), built once by the
+    // parser and handed to the resolver as TokenRef::key. Empty for a node not made by the parser.
+    std::string path_key;
 };
 inline constexpr uint32_t kUnresolved = 0xFFFFFFFFu;
 
@@ -256,6 +259,9 @@ struct TokenRef {
     std::span<const TokenId> path;
     std::span<const Param> params;
     const TokenTable* tokens = nullptr;
+    // sp4a (S7): ExprNode::path_key when the parser built one (the path's names upper-cased, joined by '.'); empty = the
+    // resolver builds it from `path` if it needs it.
+    std::string_view key;
 };
 
 // Resolves token leaves (the exe's *PerceptualEvaluatorClass family). Must be thread-safe for

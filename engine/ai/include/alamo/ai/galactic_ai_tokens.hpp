@@ -36,6 +36,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "alamo/ai/galactic_perception.hpp"
@@ -359,6 +360,24 @@ public:
         friend auto operator<=>(const CacheKey&, const CacheKey&) = default;
         friend bool operator==(const CacheKey&, const CacheKey&) = default;
     };
+    // sp4a: a lookup key that owns no strings, and the transparent order of the cache (the same order as CacheKey's: leaf,
+    // inst, self, params, strings compared by char_traits), so a hit allocates nothing and the saved key order is unchanged.
+    struct CacheKeyView {
+        std::string_view leaf;
+        int32_t inst = -1;
+        int32_t self = -1;
+        std::string_view params;
+    };
+    struct CacheLess {
+        using is_transparent = void;
+        using Tied = std::tuple<std::string_view, int32_t, int32_t, std::string_view>;
+        static Tied tie(const CacheKey& k) { return {k.leaf, k.inst, k.self, k.params}; }
+        static Tied tie(const CacheKeyView& k) { return {k.leaf, k.inst, k.self, k.params}; }
+        template <class A, class B>
+        bool operator()(const A& a, const B& b) const {
+            return tie(a) < tie(b);
+        }
+    };
 
     struct Impl;  // evaluation helpers (galactic_ai_tokens.cpp)
 
@@ -406,7 +425,11 @@ private:
         std::vector<Param> params;  // the bindings copy (0x64c840): what the 0xE recompute evaluates with
     };
     mutable std::mutex mu_;
-    mutable std::map<CacheKey, Entry> cache_;
+public:
+    using LeafCache = std::map<CacheKey, Entry, CacheLess>;  // sp4a: transparent lookups (CacheLess)
+
+private:
+    mutable LeafCache cache_;
     mutable uint64_t hits_ = 0;
 };
 
