@@ -64,9 +64,10 @@ Presets: `fable`, `xhigh`, `high`, `re2ui`, `sonnet`, `tools`, `gab` (defined in
 A preset is the recommended model and effort level for a group: `fable` Fable 5.2 · high, `xhigh` Opus 5.5 · xhigh,
 `high` Opus 5.5 · high, `re2ui` Opus 5.5 · high then Sonnet 5.5 · high, `sonnet` Sonnet 5.5 · high,
 `tools` Sonnet 5.5 · medium, `gab` Gabriel + Opus 5.5 · medium.
-`fable` (Gabriel, 2026-11-12) is for open-ended parity diagnosis, where the cause of a retail difference is still unknown and
-spans several modules and many seeds (skai, q4, bkg3); fixes already pinned by an RE answer stay on Opus 5.5. Run one Fable
-group at a time; start at effort high and raise it only where a gain is measured.
+`fable` (Gabriel, 2026-11-12) was for open-ended parity diagnosis (skai, q4, bkg3). Gabriel, 2026-11-13: Opus 5.5 does that
+work better, so skai and q4 moved to `xhigh` and no group uses `fable`; give new groups an Opus preset (`xhigh` for open-ended
+diagnosis across modules and seeds, `high` for fixes already pinned by an RE answer). The `fable` preset stays defined only so
+old records still render.
 
 ## Common edits
 
