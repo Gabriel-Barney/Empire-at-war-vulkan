@@ -488,11 +488,11 @@ void JobSystem::worker_main(uint32_t slot) {
 // ---------------------------------------------------------------------------------------------
 // parallel_for
 
-void JobSystem::run_for_chunks(ForState& st) {
+void JobSystem::run_for_chunks(ForState& st, bool helper) {
     // Once chunk f threw, chunks above f are pointless (the serial loop would have stopped at f)
     // and are skipped - checked before and after claiming. Chunks below f are always run, so the
     // lowest failing chunk is still found deterministically.
-    const bool yield_to_critical = st.prio != Priority::Critical;
+    const bool yield_to_critical = helper && st.prio != Priority::Critical;
     bool counted = false;
     while (st.first_failed.load(std::memory_order_relaxed) == kNoFail) {
         // Fast exit for a late helper: it never shows up in in_flight, so a preemption here cannot
@@ -522,7 +522,7 @@ void JobSystem::run_for_chunks(ForState& st) {
             }
         }
         release_for_chunk(st);
-        // sp1 strict priority: between two chunks of an AI / background loop, queued critical work goes first.
+        // sp1 strict priority: between two chunks of an AI / background loop, a helper takes queued critical work first.
         if (yield_to_critical && fg_queued_.load(std::memory_order_relaxed) > 0) run_critical(my_slot());
     }
 }
@@ -535,7 +535,7 @@ void JobSystem::release_for_chunk(ForState& st) {
 
 void JobSystem::for_helper_job(void* ctx, uint32_t, uint32_t) {
     auto* st = static_cast<ForState*>(ctx);
-    st->js->run_for_chunks(*st);
+    st->js->run_for_chunks(*st, true);
     st->js->release_for_ref(st);
 }
 
@@ -634,10 +634,10 @@ void JobSystem::parallel_for_ref(uint32_t count, uint32_t grain, RangeRef fn, ui
         if (per_item >= 0.0f) {
             const double est = static_cast<double>(per_item) * static_cast<double>(count);
             if (est < static_cast<double>(kInlineWorkNs)) {
+                inline_forks_.fetch_add(1, std::memory_order_relaxed);
                 const int64_t t0 = profile::now_ns();
                 run_inline();  // throws like the serial loop: the lowest failing chunk, nothing after it
                 update_estimate(cost->ns_per_item, static_cast<double>(profile::now_ns() - t0), count);
-                inline_forks_.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
             const auto threads = static_cast<uint64_t>(est / static_cast<double>(kMinThreadWorkNs));
@@ -659,7 +659,7 @@ void JobSystem::parallel_for_ref(uint32_t count, uint32_t grain, RangeRef fn, ui
         // Nothing was queued: run every chunk on this thread.
         st->refs.fetch_sub(helpers);  // the caller's own reference stays
     }
-    run_for_chunks(*st);
+    run_for_chunks(*st, false);
     // Every chunk is claimed now: helpers still queued have nothing to do, take them back.
     if (const uint32_t n = cancel_queued_helpers(my_slot(), *st)) st->refs.fetch_sub(n);  // ours keeps it above 0
     if (!st->finished()) {

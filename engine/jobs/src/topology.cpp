@@ -133,6 +133,10 @@ PoolPlan plan_pool(const CpuTopology& topo, uint32_t reserved) {
     p.cores = static_cast<uint32_t>(chosen.size());
     for (const auto& [number, id] : chosen) p.cpu_set_ids.push_back(id);
     p.workers = p.cores > reserved ? p.cores - reserved : 1u;
+    // [port] A hybrid part with few performance cores (e.g. 2 P + 8 E) still gets up to 3 workers from its other cores
+    // (unpinned then: the pool does not fit the P-core set).
+    const uint32_t others = p.physical_total > reserved ? p.physical_total - reserved : 1u;
+    p.workers = std::max(p.workers, std::min(others, 3u));
     return p;
 }
 

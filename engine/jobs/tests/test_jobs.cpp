@@ -869,6 +869,12 @@ static void test_scratch() {
 }
 
 // sp1: strict priorities, critical work between chunks of an AI loop, inline small forks, pool plan.
+static void busy_us(int us) {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::microseconds(us);
+    while (std::chrono::steady_clock::now() < end) {
+    }
+}
+
 static void test_priority_order() {
     section("sp1: critical > AI > background");
     JobSystem js({1});
@@ -917,29 +923,48 @@ static void test_priority_order() {
     CHECK(ai_ran_on == std::this_thread::get_id());
     go = true;
     js.wait(busy);
+
+    // Serial mode: AI jobs and AI loops run on the waiter; the destructor drains queued AI jobs.
+    {
+        JobSystem serial({0});
+        ScopedPriority p(serial, Priority::Ai);
+        std::atomic<uint32_t> n{0};
+        JobCounter c2;
+        serial.spawn(c2, [&] { n.fetch_add(1); });
+        serial.parallel_for(32, 1, [&](uint32_t b, uint32_t e) { n.fetch_add(e - b); });
+        serial.wait(c2);
+        CHECK(n.load() == 33);
+    }
+    std::atomic<bool> drained{false};
+    {
+        JobCounter c3;  // outlives the system (header: counters of queued jobs must)
+        JobSystem two({2});
+        two.spawn(c3, [&] { drained = true; }, Priority::Ai);
+    }  // never waited on: the destructor runs it
+    CHECK(drained.load());
 }
 
 static void test_critical_between_ai_chunks() {
     section("sp1: critical jobs run between chunks of an AI loop");
     JobSystem js({2});
-    std::atomic<bool> loop_done{false}, crit_done_before_loop{false};
-    std::atomic<uint32_t> chunks{0};
+    constexpr uint32_t kChunks = 400;
+    std::atomic<uint32_t> chunks{0}, chunks_at_critical{kChunks};
     std::thread ai([&] {
         ScopedPriority p(js, Priority::Ai);
-        js.parallel_for(400, 1, [&](uint32_t, uint32_t) {
+        js.parallel_for(kChunks, 1, [&](uint32_t, uint32_t) {
             chunks.fetch_add(1);
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            busy_us(200);  // busy, not sleep: Windows rounds short sleeps up to ~15 ms
         });
-        loop_done = true;
     });
     while (chunks.load() < 10) std::this_thread::yield();
     JobCounter c;
-    js.spawn(c, [&] { crit_done_before_loop = !loop_done.load(); });
-    // Poll, not wait (a wait would run the job here): a thread that finishes an AI chunk must take it before the next one.
+    js.spawn(c, [&] { chunks_at_critical = chunks.load(); });
+    // Poll, not wait (a wait would run the job here): a helper that finishes an AI chunk must take it before its next
+    // one, long before the loop ends (the loop's owner, the AI thread, does not yield: see the header).
     while (!c.done()) std::this_thread::yield();
-    CHECK(crit_done_before_loop.load());
+    CHECK(chunks_at_critical.load() < kChunks / 2);
     ai.join();
-    CHECK(chunks.load() == 400);
+    CHECK(chunks.load() == kChunks);
 }
 
 static void test_inline_small_forks() {
@@ -972,19 +997,31 @@ static void test_inline_small_forks() {
         CHECK(js.inline_forks() == 0);
     }
     {
-        // An inline loop still throws the lowest failing chunk and runs nothing after it (serial semantics).
+        // An inline loop still throws the lowest failing chunk and runs nothing after it (serial semantics). The site is
+        // warmed without a throw first (a failed loop does not update the estimate), so the throwing calls run inline.
         JobSystem js({4});
+        bool fail = false;
+        std::atomic<uint32_t> highest{0};
+        const auto body = [&](uint32_t b, uint32_t) {
+            uint32_t h = highest.load();
+            while (b > h && !highest.compare_exchange_weak(h, b)) {}
+            if (fail && b == 3) throw std::runtime_error("3");
+        };
+        for (int r = 0; r < 3; ++r) js.parallel_for(16, 1, body);
+        const uint64_t warm = js.inline_forks();
+        CHECK(warm >= 1);
+        fail = true;
         for (int r = 0; r < 5; ++r) {
+            highest = 0;
             bool caught = false;
             try {
-                js.parallel_for(16, 1, [&](uint32_t b, uint32_t) {
-                    if (b == 3) throw std::runtime_error("3");
-                });
+                js.parallel_for(16, 1, body);
             } catch (const std::runtime_error& e) {
                 caught = std::string(e.what()) == "3";
             }
-            CHECK(caught);
+            CHECK(caught && highest.load() == 3);
         }
+        CHECK(js.inline_forks() == warm + 5);
     }
 }
 
@@ -1028,6 +1065,14 @@ static void test_pool_plan() {
         t.l3.push_back({0, 0xFFFF0000ull, 96ull << 20});
         const PoolPlan p = plan_pool(t);
         CHECK(p.domains == 2 && p.cores == 8 && p.cpu_set_ids.size() == 8 && p.cpu_set_ids[0] == 272);
+    }
+    {
+        CpuTopology t;  // hybrid laptop, 2 P-cores + 8 E-cores: 3 workers (P-cores alone would leave 1)
+        t.cpus = make(2, 2, 1, 0, 0, 256);
+        const auto e = make(8, 1, 0, 0, 2, 260);
+        t.cpus.insert(t.cpus.end(), e.begin(), e.end());
+        const PoolPlan p = plan_pool(t);
+        CHECK(p.hybrid && p.cores == 2 && p.workers == 3);
     }
     {
         CpuTopology t;  // two cores: still one worker

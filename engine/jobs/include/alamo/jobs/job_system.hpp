@@ -30,8 +30,11 @@
 // Three priorities (SIMP sp1, design 4.1): Critical (= Normal: the tick's phase jobs) > Ai > Background, strict.
 //   - Critical jobs go to the per-slot deques above; Ai and Background jobs each to one shared FIFO (the helpers of a
 //     parallel_for at that priority jump to its front). A worker always takes critical work first, then AI, then
-//     background (capped). A worker running chunks of an Ai or Background parallel_for runs any queued critical job
-//     between two chunks, so AI and background work only fill gaps in the tick.
+//     background (capped). A helper running chunks of an Ai or Background parallel_for runs any queued critical job
+//     between two chunks, so AI and background work only fill gaps in the tick. The loop's owner does not: its stack
+//     may hold the very job a critical job waits for (review of sp1: a self-wait deadlock).
+//   - Rule: a critical job must not wait on an AI or background counter (it may run on a thread whose stack holds
+//     that job, see the DEADLOCK RULE below); the sim thread waits on such counters outside any job.
 //   - Priority is inherited like background always was: anything submitted from inside an Ai job (or a thread inside a
 //     ScopedPriority) is at least Ai. A thread waits by helping with work of its own priority or higher: a critical
 //     thread never runs AI or background jobs, an AI thread runs critical and AI jobs, a background thread any.
@@ -235,7 +238,8 @@ private:
     void finish_background_capped();
     bool background_startable() const noexcept;
     // parallel_for internals (job_system.cpp).
-    void run_for_chunks(ForState& st);
+    // helper: called from a helper job (only helpers yield to queued critical work between chunks, sp1).
+    void run_for_chunks(ForState& st, bool helper);
     void release_for_chunk(ForState& st);
     uint32_t cancel_queued_helpers(uint32_t self, const ForState& st);
     static void for_helper_job(void* ctx, uint32_t, uint32_t);
