@@ -154,6 +154,15 @@ All of this is golden-neutral: results already do not depend on the worker count
   in parallel waves with the serial chain's parameters for the best progress known so far; a speculative try is used only when its
   parameters equal the serial ones bit for bit, else a new wave starts there. Same result as the serial loop (tested and
   stress-tested); it costs extra CPU when tries are rerun (10-15 % of speculative tries on `nebula_battle`).
+- **As built, second half, slice 1 (sp6, 2026-11-14):** `hash_blocks(h, count, fn[, cache])` in `alamo/core/sim_crc.hpp`. It splits
+  items into fixed blocks of `kCrcBlockItems` = 256 and gives each block its own `StateHasher`. Blocks run in parallel through the
+  capture's `ParallelFor` (`StateHasher::set_parallel`, set by `CrcRegistry::capture`). The system's hasher then receives `u32(count)`
+  and each block's digest (u64) in block order, so the digest is the same for any worker count and split. `CrcBlockCache` is the
+  dirty bit per block: a block nobody marked since the last capture reuses its digest, and a new count re-hashes every block. Nothing
+  uses it yet, because no system tracks its changes. Converted so far: `battle.movement` and `battle.combat` (per-unit loops) and
+  `objects` (the per-object loop). `galactic.state` is left as it is (its planets fit in one block). `battle.abilities` is in
+  simp-svc's file and costs 0.04-0.08 ms. `battle.ai` (`crc.battle.ai`, the largest at 0.5-0.9 ms on land) converts after sp3, in
+  simp-ai's code. Goldens moved once for this slice; the `battle.ai` slice moves them again.
 
 ## 5. System by system
 

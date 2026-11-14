@@ -408,25 +408,28 @@ void ObjectStore::hash_state(StateHasher& hs) const {
     std::sort(slots.begin(), slots.end(), [this](uint32_t a, uint32_t b) { return id_[a] < id_[b]; });
     auto id_of = [this](ObjectHandle r) { return exists(r) ? id_[r.slot()] : kNoObjectId; };
     hs.i32(ids_->next());
-    hs.u32(static_cast<uint32_t>(slots.size()));
-    for (uint32_t s : slots) {
-        hs.i32(id_[s]);
-        hs.i32(parent_mode_id_[s]);
-        hs.u32(type_[s]);
-        hs.i32(owner_[s]);
-        hs.f32(position_[s].x);
-        hs.f32(position_[s].y);
-        hs.f32(position_[s].z);
-        hs.f32(facing_[s].x);
-        hs.f32(facing_[s].y);
-        hs.f32(facing_[s].z);
-        hs.f32(health_[s]);
-        hs.u8(flags_[s]);
-        hs.i32(id_of(container_[s]));
-        hs.i32(id_of(attach_parent_[s]));
-        hs.u32(static_cast<uint32_t>(behaviors_[s].size()));
-        for (BehaviorTypeId b : behaviors_[s]) hs.u8(b);
-    }
+    // SIMP sp6: tree hash, blocks of kCrcBlockItems hashed in parallel (same digest for any worker count)
+    hash_blocks(hs, static_cast<uint32_t>(slots.size()), [&](StateHasher& bh, uint32_t blk_first, uint32_t blk_last) {
+        for (uint32_t blk_i = blk_first; blk_i < blk_last; ++blk_i) {
+            const uint32_t s = slots[blk_i];
+            bh.i32(id_[s]);
+            bh.i32(parent_mode_id_[s]);
+            bh.u32(type_[s]);
+            bh.i32(owner_[s]);
+            bh.f32(position_[s].x);
+            bh.f32(position_[s].y);
+            bh.f32(position_[s].z);
+            bh.f32(facing_[s].x);
+            bh.f32(facing_[s].y);
+            bh.f32(facing_[s].z);
+            bh.f32(health_[s]);
+            bh.u8(flags_[s]);
+            bh.i32(id_of(container_[s]));
+            bh.i32(id_of(attach_parent_[s]));
+            bh.u32(static_cast<uint32_t>(behaviors_[s].size()));
+            for (BehaviorTypeId b : behaviors_[s]) bh.u8(b);
+        }
+    });
     hs.u32(static_cast<uint32_t>(delayed_.size()));
     for (const Delayed& d : delayed_) {
         hs.u32(d.due);
