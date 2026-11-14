@@ -3965,6 +3965,7 @@ std::vector<std::string> TacticalAiWorld::lua_errors() const {
 }
 uint64_t TacticalAiWorld::orders_issued() const { return impl_->orders; }
 bool TacticalAiWorld::ai_lane() const { return impl_->cfg.ai_lane; }
+const objects::ObjectStore& TacticalAiWorld::view_store() const { return impl_->store; }
 uint32_t TacticalAiWorld::k_ai() const { return impl_->cfg.k_ai; }
 uint64_t TacticalAiWorld::orders_rejected() const { return impl_->rejected; }
 size_t TacticalAiWorld::pending_order_results() const { return impl_->pipeline.events().pending().size(); }

@@ -155,6 +155,7 @@ public:
     const galactic::ContrastTable* contrast() override;
     // --- A2 tactical: build pads (L1_S4_REMAINING §3.6 on TacticalBattle's pads) ---
     std::vector<ai::tactical::TacticalPad> build_pads(int32_t player) override;
+
     ai::tactical::PadCheck build_pad_check(int32_t player, int32_t pad, int32_t type) override;
     bool can_build_now(int32_t player, int32_t type) override;
     std::vector<int32_t> tactical_builders(int32_t player, int32_t type) override;  // skirmish station production
@@ -227,6 +228,7 @@ private:
         bool squadron_member = false, company_member = false;
         bool indigenous = false, dummy_ground_structure = false, dummy_ground_base = false;  // behaviour union 0x20 / 0x5F / 0x5B
         bool dummy_orbital_structure = false, dummy_star_base = false;                      // behaviour union 0x60 / 0x5C
+        bool influences_capture = false;  // Influences_Capture_Point (in-range types only)
         int32_t base_level = 0;
         int32_t additional_population_capacity = 0;
         float reinforcement_enabling_radius = 0.0f;
@@ -245,10 +247,12 @@ private:
         int32_t owner = -1;
         Vec3 position;
     };
-    std::vector<uint8_t> influences_capture_;
-    bool influences_capture(objects::TypeIndex t);
-    std::vector<CaptureInfluencer> capture_influencers();
-    ai::tactical::PadCheck pad_check(int32_t player, int32_t pad, const std::vector<CaptureInfluencer>& influencers);
+    bool influences_capture(objects::TypeIndex t) const;
+    // sp3 t02: the pad checks read the battle, or (lane view) the snapshot store and the captured pad state / relations
+    struct PadEnv;
+    std::vector<CaptureInfluencer> capture_influencers(const objects::ObjectStore& st) const;
+    ai::tactical::PadCheck pad_check(const PadEnv& env, int32_t player, int32_t pad, const std::vector<CaptureInfluencer>& influencers) const;
+    std::vector<ai::tactical::TacticalPad> build_pads_in(const PadEnv& env, int32_t player) const;
     float allow_reinforcement_fraction_ = 0.0f;  // A2 tactical: Allow_Reinforcement_Percentage_Normalized
     bool use_reinforcement_points_ = true;       // a1g t04 follow-up: Use_Reinforcement_Points (GC +0x118a0)
     void standin_orders();
@@ -294,6 +298,37 @@ private:
     // sp3 t04: the AI lane's queued orders (header: player, source AI, sequence, scheduled_tick = due frame), in issue
     // order; hashed and saved with the lane on.
     std::vector<commands::Command> lane_batch_;
+    // sp3 t02: the TacticalAiHost answers think() reads, captured on the critical lane at each AI slot (capture_lane_view,
+    // before TacticalAiWorld::publish) with the lane on; the overrides answer from it while `valid` (a load clears it: the
+    // relink's fill reads the battle). Per player: index = player id.
+    struct LaneView {
+        bool valid = false;
+        std::vector<std::vector<ai::tactical::TacticalReinforcement>> pool;
+        std::vector<uint8_t> can_reinforce;
+        std::vector<float> pop_cap, pop_used;
+        std::vector<ai::tactical::SpaceDropFrame> drop_frame;
+        std::vector<uint8_t> drop_frame_ok;
+        std::vector<uint8_t> enemy;  // players x players: CombatSystem::is_enemy
+        uint32_t frame = 0;                    // the battle frame
+        int32_t allied_n = 0;                  // galactic players
+        std::vector<uint8_t> allied;           // allied_n x allied_n: TacticalBattle::bt_allied
+        std::vector<std::string> faction;      // per galactic player: faction name
+        std::vector<int32_t> live_units;       // live, not retreated battle unit ids, ascending
+        struct Pad {
+            objects::ObjectId pad = objects::kNoObjectId, contents = objects::kNoObjectId;  // contents: built, else UC
+            uint32_t cooldown_end = 0;
+        };
+        std::vector<Pad> pads;  // TacticalBattle::pads_ (ascending pad id)
+        std::vector<int32_t> locked;                         // movement_locked object ids, ascending
+        std::vector<std::pair<int32_t, int32_t>> in_flight;  // reinforce_in_flight (owner, key), ascending
+        std::vector<float> weather_sight;                    // per weather_categories_ index
+        ai::tactical::DamageTrackingStore damage;
+    };
+    LaneView view_;
+    std::vector<int32_t> weather_category_;  // per type: index into weather_categories_ (-1: none)
+    std::vector<std::string> weather_categories_;
+    void capture_lane_view();
+    bool lane_view() const { return view_.valid; }
     struct LaneJob {
         bool pending = false;
         uint64_t frame = 0;   // global frame of the update

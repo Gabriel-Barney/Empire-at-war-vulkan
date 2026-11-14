@@ -471,6 +471,8 @@ public:
     std::vector<std::string> lua_errors() const;
     uint64_t orders_issued() const;
     bool ai_lane() const;    // sp3: TacticalAiConfig::ai_lane
+    // sp3 t02: the store the world reads - the snapshot store with the lane on (as of the last publish()), else the battle's.
+    const objects::ObjectStore& view_store() const;
     uint32_t k_ai() const;   // sp3: TacticalAiConfig::k_ai (a load keeps the saved value)
     uint64_t orders_rejected() const;
     // Results left on the AI pipeline's event bus: 0 after every update().
