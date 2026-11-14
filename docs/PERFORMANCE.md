@@ -1291,3 +1291,25 @@ remains is `jobs.for_wait` 0.03-0.04 ms per tick (the per-system CRC capture for
 - The battles' W0 medians are also 5-35 % below the morning sweep: most of that is sp3 t01 (`TypeFacts`, landed on dev between the two),
   not sp1; the like-for-like quiet-PC comparison is sp6 t04.
 - Not measured here: a hybrid or dual-CCD CPU (pool choice is unit-tested on synthetic topologies), and the effect of the OS hints alone.
+
+## Services graph on the 4x land stress scene (SIMP sp5, 2026-11-14)
+
+Step P5 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (section 12). Scene `foc-land-army4` (~700 live units, no tactical AI;
+`tools/benchmark/stress_land4.cmd <W>`), MSVC Release at `130f2ab6` (sp5 merged with sp1 / sp3 slice 4b), Ryzen 7 7800X3D, 400 ticks per
+run, W0 and W7 interleaved in 3 rounds (`--runs 1 --warmup 0`). Services zone = sum of the `tac.s.*` zones without movement, combat
+and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched its fingerprint.
+
+| Round | W0 services mean / sum of medians (ms per tick) | W7 | W7 / W0 mean | W7 / W0 sum of medians | other-process CPU W0 / W7 |
+|---|---|---|---|---|---|
+| 0 | 1.747 / 1.717 | 1.108 / 1.037 | 0.634 | 0.604 | 3 % / 4 % |
+| 1 | 1.722 / 1.692 | 1.107 / 1.036 | 0.643 | 0.612 | 2 % / 4 % |
+| 2 | 1.742 / 1.709 | 1.337 / 1.179 | (0.768) | (0.690) | 2 % / **42 %** (another lane's build; not counted) |
+
+- **Just above the exit bar (0.6)** in the quiet rounds. What does not scale at W7 (round 1): `trees` 0.106 -> 0.111 ms, `garrisons`
+  0.077 -> 0.078, `victory` 0.04, `swap_back` 0.036, `reinforce` 0.03; the converted per-unit services went to 0.31-0.60 of W0 (combat
+  sync 0.31, attack targets 0.45, engine loops 0.51, speed factors 0.55, collision feed 0.56, fog 0.60).
+- After this run `c97fb194` applies the tree boxes tree by tree in parallel (`TreeSet::update_batch`) and caches
+  `Influences_Capture_Point` per type in the capture pass (two string lookups per unit per tick before). **Not measured yet**: the
+  machine stayed loaded by other lanes; the re-run is an open sp5 task for the coordinator's quiet window.
+- The whole tick (median 10.3-10.6 ms at W0, 9.1-9.3 at W7) is dominated by movement and combat (`tac.s.abilities_combat` ~1.3 ms at
+  W0 and W7: combat's own phases, not a service).
