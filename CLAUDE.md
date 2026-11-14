@@ -79,11 +79,27 @@ Real work is done per roadmap group by a `lane` agent (`.claude/agents/lane.md`;
 own worktree. Lanes own a group, not a folder: two lanes must not edit the same files, and a landing commit names any golden that changed.
 A change to `engine/core` public headers or the top-level CMake goes through the integrating agent. Single-module
 `engine-module` agents remain for narrow side tasks. Definitions live in `.claude/agents/`.
+Project skills (`.claude/skills/`; triggers in each description): `start-group` / `finish-group` / `build` / `phase-status`
+(the loop), `green-fast-tier` (build, summary, fix iteration after a large edit; speed habits below), `determinism-check` and `regen-goldens` (sim and goldens), `diagnosing-bugs` (an unexplained failure: loop first),
+`research` (cited report in its `docs/` home), `probe-kit` (retail checks), `writing-for-agents` (editing any file agents read),
+`retro` (Gabriel-invoked review of how sessions went; lanes end with a one-line friction note for it).
+Skills reach every worker (Gabriel, 2026-11-13): a subagent does not inherit the main session's skills, so each agent in
+`.claude/agents/` lists `Skill` in `tools` (it can invoke any project skill whose description matches its task) and preloads
+the ones it always needs in `skills:` (`lane`: determinism-check, diagnosing-bugs; `reviewer`: determinism-check; `engine-module`:
+determinism-check, diagnosing-bugs; `integrator`: build, phase-status, regen-goldens, diagnosing-bugs). A new agent gets `Skill` plus
+its preloads; a new skill's `description` must say when to use it, and only `retro` sets `disable-model-invocation` (Gabriel runs
+it). Agents spawned by the `Agent` tool as `general-purpose` / `claude` already have every tool, `Skill` included; name the skill
+in the prompt if it matters.
 - Worktrees (2026-11-06): `tools\new_worktree.cmd <name> [--base origin/dev]` creates `.claude\worktrees\<name>` on `claude/<name>`
   from `origin/dev` (default since 2026-11-06), with junctions to `Data`, `extracted`, `toolchain` and `roadmap-store`, and syncs
   the roadmap. Use ONE build tree per worktree (`build_agent.cmd msvc "<modules>"` gives `build-wt-msvc`: the tree name defaults to `wt` since 2026-11-08). After the branch is
   on `dev`, `tools\clean_worktrees.cmd` (dry run; `--apply --only <name>`; `--trees` for idle build trees) removes merged (into
   `origin/dev` or `origin/main`), clean, pushed, idle worktrees, unlinking junctions first. Engine: `tools/worktree/worktree_tool.py` (`--selftest`).
+- Speed habits (Gabriel, 2026-11-13; default for every session, full record `docs/WORKFLOW_TIPS.md`, agent form in `.claude/agents/lane.md`):
+  `/start-group` sets `/goal` from the group's `exit` test; after a large edit use the `green-fast-tier` skill (`/loop /green-fast-tier <modules>`
+  unattended; it never regenerates goldens, stops on golden drift, never polls CI); check `/context` at the start and `/compact` between tasks
+  or groups above half full (or start a fresh session); side questions go to `/btw`; fixed commands run in shell mode (`!`); long builds can be
+  watched from Remote Control. Read build summaries, not logs.
 - Claims (2026-11-06): `python roadmap-store/roadmap_store.py claim <group> --by <session>` before starting a group (24 h, `release` when
   done), `claims` lists them, `batch [N]` prints ready groups whose `touches` do not overlap, for handing out a parallel batch.
   Build records are batched: `record-build` no longer pushes by itself; `write`, `sync` and `flush` do. See `docs/ROADMAP_PROTOCOL.md`.

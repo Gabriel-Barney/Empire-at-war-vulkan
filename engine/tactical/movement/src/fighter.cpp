@@ -1,4 +1,5 @@
 #include "alamo/tactical/movement/fighter.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <cmath>

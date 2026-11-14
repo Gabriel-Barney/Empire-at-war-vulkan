@@ -26,7 +26,7 @@
 #include <vector>
 
 #include "alamo/core/galaxy.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/tactical/garrison/garrison.hpp"
 
 namespace alamo::tactical::garrison {

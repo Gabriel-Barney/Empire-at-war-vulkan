@@ -135,7 +135,7 @@
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/parallel.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/collision.hpp"
 #include "alamo/tactical/movement/constants.hpp"

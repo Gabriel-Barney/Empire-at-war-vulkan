@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/shaderxlat/shaderxlat.hpp"
 #include "fx2_reader.hpp"

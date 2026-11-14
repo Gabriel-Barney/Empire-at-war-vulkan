@@ -11,6 +11,7 @@
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/parallel.hpp"

@@ -15,6 +15,7 @@
 
 #include "alamo/commands/recording.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/galactic_rules.hpp"

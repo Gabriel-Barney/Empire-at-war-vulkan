@@ -1,5 +1,6 @@
 // bm2: BM1 scenario files in alamo_game, the render-free half (benchmark_scenario.hpp).
 #include "alamo/game/benchmark_scenario.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <filesystem>

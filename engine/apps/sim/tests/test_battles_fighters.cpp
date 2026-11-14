@@ -2,6 +2,7 @@
 // Split out of test_battles.cpp (WF1b t01); the fixture (synthetic data, maps, run_campaign) is battle_test_fixture.hpp.
 
 #include "battle_test_fixture.hpp"
+#include "alamo/core/host_fs.hpp"
 
 
 // S7 t12 (FIGHTER_FLYING §2 step 6 / §4.3, TACTICAL_COMBAT §2.8 Formation_Attack_Target): a fighter squadron moved past

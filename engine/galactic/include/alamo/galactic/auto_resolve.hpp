@@ -46,7 +46,7 @@
 #include <string_view>
 #include <vector>
 
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/core/sim_rng.hpp"
 
 namespace alamo::galactic {

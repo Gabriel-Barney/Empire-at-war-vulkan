@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/materials/effect_audit.hpp"
 #include "alamo/materials/effect_loader.hpp"
 #include "alamo/shaderxlat/dxc.hpp"

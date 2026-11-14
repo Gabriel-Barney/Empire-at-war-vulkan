@@ -1030,3 +1030,26 @@ Repeat with `python tools/benchmark/build_times.py [--tree NAME] [--steps clean,
 | t05 gate scope | `tools/lint/gate_scope.py`: clang runs only when sim code changed, ASan only when engine/jobs / engine/core / a changed file mentioning threading primitives, any doubt (build, CMake, script, toolchain file, unknown code path, no diff, git failure) runs both; `ALAMO_GATE_ALL=1` forces both. A docs-only or render-only change gates on MSVC alone. | Kept (saves the clang and ASan builds, about 2/3 of the gate, on those changes) |
 | t06 landing check | `verified_build.py` stamps carry a hash of every tracked build-relevant file; `land-check` accepts a stamp whose hash equals HEAD's, so merging a docs / roadmap-only `origin/dev` does not rebuild. `clean_worktrees --trees` keeps `build-wt-msvc` of every kept worktree warm however idle. | Kept |
 | t07 lld-link | `-DCMAKE_LINKER=lld-link` relinks all 135 exes in **4.5 s vs 8.1 s** (-3.6 s whole tree, about 0.3 s for a typical edit). CMake takes the linker per tree, not per target, so "test exes only" would need a wrapper. Release trees already have no IPO / LTCG and no `/DEBUG` (`/INCREMENTAL:NO` only). | Rejected: gain too small to justify a second linker for the shipped exes |
+
+## Build speed C: header diet and big-file splits (bo3, 2026-11-14)
+
+Static include-closure scan, no compiler: `python tools/analysis/include_cost.py [--top N] [--json f]` (follows project includes under
+`engine/`, std headers by name). Numbers are translation units (TUs) that reach a header, transitively.
+
+| Measure | Before | After |
+|---|---|---|
+| `.cpp` files | 549 | 568 (19 new parts of split files) |
+| TUs reaching `<filesystem>` | 369 | 265 |
+| TUs reaching `sim_crc.hpp` (15 KB) | 269 | 218 |
+| TUs reaching `file_provider.hpp` | 307 | 307 + 19 parts (the header itself fell from 5.1 to 1.8 KB and no longer pulls `<filesystem>`, `<unordered_map>`, `<memory>`) |
+| Project-header bytes over the unchanged TUs | 244.5 MB | 243.5 MB |
+| Largest `.cpp` | 387 KB (`test_movement_gaps`), then 369, 365, 363, 327, 305, 294, 287 | 251 KB (`tactical_ai.cpp`; the eight biggest are now 3-4 parts of at most about 135 KB) |
+
+Widest headers before: `file_provider` 307, `ascii` 309, `bytes` 293, `sim_crc` 269, `galaxy` 263, `xml` 262, `sim_rng` 258; by header bytes parsed
+over all TUs: `combat_system.hpp` 14.9 MB (99 TUs), `movement_system.hpp` 11.3 MB, `tactical_battle.hpp` 11.1 MB, `campaign.hpp` 11.0 MB.
+What changed: `host_fs.hpp` (new; `DirectoryProvider`, path / long-path helpers, host directory ops) split out of `file_provider.hpp`;
+`sim_crc_fwd.hpp` (new) replaces `sim_crc.hpp` in 14 public headers. Test exes and three sim sources were split by position into
+`*_partN.cpp` plus a shared `*_common.hpp` / `*_internal.hpp` in the same CMake target (test names unchanged; one `main` per exe), so an
+edit rebuilds a 120 KB part and the parts compile in parallel. Not done: forward-declaring `game_object_types.hpp` / `game_database.hpp` /
+`campaign.hpp` (their types are used by value), splitting the public `combat_system.hpp` / `movement_system.hpp` / `tactical_battle.hpp`
+(150-200 KB of class body each), unity builds (t04: no PCH measurement from bo1 yet). Wall-clock effect is not measured here.

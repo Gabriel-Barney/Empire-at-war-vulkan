@@ -49,6 +49,7 @@
 
 #include "alamo/assets/asset_cache.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/game_database.hpp"

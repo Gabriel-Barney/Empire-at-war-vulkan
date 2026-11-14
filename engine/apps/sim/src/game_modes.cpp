@@ -1,4 +1,5 @@
 #include "alamo/sim/game_modes.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/tactical/movement/common.hpp"
 #include "alamo/tactical/movement/space_path.hpp"
 

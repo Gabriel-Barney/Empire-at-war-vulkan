@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/video/video.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN

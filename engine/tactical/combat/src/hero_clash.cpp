@@ -471,6 +471,7 @@ void HeroClashManager::end(Clash& c, ObjectId winner, uint32_t frame, HeroClashH
     ev.loser = winner == c.hero1 ? c.hero2 : c.hero1;
     ev.frame = frame;
     ev.by_removal = by_removal;
+    ev.first_won = winner == c.hero1;
     ended_.push_back(ev);
 }
 

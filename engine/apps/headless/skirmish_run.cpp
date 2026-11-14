@@ -16,9 +16,11 @@
 
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
 #include "alamo/ai/ai_definitions.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"

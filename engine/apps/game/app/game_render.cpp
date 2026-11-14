@@ -5,6 +5,7 @@
 #include <cstdio>
 
 #include "alamo/core/ascii.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/render/galactic/galactic_session.hpp"
 #include "alamo/render/pipelines.hpp"

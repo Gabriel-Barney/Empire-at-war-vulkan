@@ -6,6 +6,7 @@
 #include <array>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"

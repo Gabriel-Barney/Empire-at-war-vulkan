@@ -19,6 +19,7 @@
 //     battle units go through change_owner();
 //   * a host without a garrison behaviour that dies kills its occupants (CombatSystem::kill_unit, no killer credit).
 #include "alamo/sim/tactical_battle.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include "alamo/core/dmath.hpp"
 #include "alamo/objects/game_object_types.hpp"

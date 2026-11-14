@@ -1,5 +1,6 @@
 // alamo_vfs implementation. See include/alamo/vfs/vfs.hpp for the resolution rules.
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/vfs/steam_workshop.hpp"
 
 #include <algorithm>

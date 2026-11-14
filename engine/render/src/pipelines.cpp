@@ -10,6 +10,7 @@
 
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/materials/programs.hpp"

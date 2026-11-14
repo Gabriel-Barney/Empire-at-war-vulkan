@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/galactic/campaign.hpp"

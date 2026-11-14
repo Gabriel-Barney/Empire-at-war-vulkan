@@ -194,6 +194,17 @@ void GameAudio::enter_tactical(const TacticalSetup& setup) {
     audio_->resume_mode_based_music(true);  // [port] forced, see enter_galactic
 }
 
+void GameAudio::set_super_weapon_present(bool present, bool restart_music) {
+    const bool changed = present != super_weapon_;
+    super_weapon_ = present;
+    if (!changed || !restart_music || !tactical_ || battle_over_) return;
+    const uint8_t m = audio_->music_mode();
+    if (m == music_mode::kTacticalAmbient || m == music_mode::kTacticalBattle) {
+        const std::string music = resolve_music(m);
+        if (!music.empty()) audio_->play_music(music, m);
+    }
+}
+
 void GameAudio::battle_end(const BattleResult& result) {
     battle_over_ = true;
     const FactionAudio* f = data_->find_faction(faction_);

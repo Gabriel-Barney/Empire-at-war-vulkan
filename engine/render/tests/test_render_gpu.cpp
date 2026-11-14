@@ -1,5 +1,6 @@
 // test_render: tests split from test_render.cpp (PAF t08).
 #include "test_render_common.hpp"
+#include "alamo/core/host_fs.hpp"
 
 namespace test_render_t {
 

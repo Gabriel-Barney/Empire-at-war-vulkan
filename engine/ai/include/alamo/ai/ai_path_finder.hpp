@@ -31,7 +31,7 @@
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/parallel.hpp"
 #include "alamo/ai/latency_job.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/galactic/all_pairs.hpp"
 #include "alamo/galactic/bitset.hpp"
 #include "alamo/galactic/cadence.hpp"

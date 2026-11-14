@@ -11,6 +11,7 @@
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/fog_bridge.hpp"
 #include "alamo/lua/lua_vm.hpp"

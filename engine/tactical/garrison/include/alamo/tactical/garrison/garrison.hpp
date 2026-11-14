@@ -68,7 +68,7 @@
 #include <vector>
 
 #include "alamo/core/galaxy.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 
 namespace alamo {
 class ByteWriter;

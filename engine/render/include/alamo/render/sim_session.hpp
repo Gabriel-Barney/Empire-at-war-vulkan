@@ -9,6 +9,7 @@
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
