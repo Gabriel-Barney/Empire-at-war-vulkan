@@ -610,6 +610,27 @@ void test_state_machine() {
         a.update(0.01);
         CHECK(a.live_instances() == 0);
     }
+    {  // b0282 (§1.7, §5): a missing sample is skipped before a voice is taken - it never steals a playing voice and
+       // takes no slot (the backend is never started for it).
+        MemoryProvider tree = make_tree();
+        tree.add("Data\\XML\\SFXEventsTest.xml",
+                 R"(<SFXEvents><SFXEvent Name="Low"><Is_3D>No</Is_3D><Priority>5</Priority><Samples>LOW.WAV</Samples></SFXEvent>)"
+                 R"(<SFXEvent Name="M"><Is_3D>No</Is_3D><Priority>1</Priority><Samples>MISSING.WAV</Samples></SFXEvent></SFXEvents>)");
+        AudioDatabase db;
+        db.load(tree);
+        NullBackend nb{test_duration};
+        SimRng rng{1};
+        AudioConfig cfg;
+        cfg.max_voices_2d = 1;
+        AudioSystem a(db, nb, rng, cfg);
+        const uint32_t low = a.play_sfx("Low");
+        a.update(0.0);
+        CHECK(voice_of(a, low) != 0);
+        const uint32_t m = a.play_sfx("M");
+        a.update(0.0);
+        CHECK(m != 0 && last_op(a, LogOp::SfxVoice)->reason == "sample_missing" && last_op(a, LogOp::SfxSteal) == nullptr);
+        CHECK(voice_of(a, low) != 0 && a.active_voices(Bus::Sfx2D) == 1 && nb.active_count() == 1);
+    }
     {  // Localized samples take the language suffix (captured at instance creation).
         AudioConfig cfg;
         cfg.language = "German";
@@ -712,6 +733,20 @@ void test_voices() {
         });
         a.update(0.0);
         CHECK(a.sfx_live(o) && rig.backend.voice(voice_of(a, o))->params.gain == 0.0f);
+        // b0280 (§1.6): a cinematic skips only the fog test - a fogged object is heard, a hidden / stealthed one is not.
+        a.set_cinematic(true);
+        a.update(0.0);
+        CHECK(rig.backend.voice(voice_of(a, o))->params.gain > 0.0f);
+        a.set_object_query([](uint64_t id) -> std::optional<AudioSystem::ObjectAudio> {
+            if (id != 77) return std::nullopt;
+            AudioSystem::ObjectAudio oa;
+            oa.audible = false;
+            oa.hidden = true;
+            return oa;
+        });
+        a.update(0.0);
+        CHECK(rig.backend.voice(voice_of(a, o))->params.gain == 0.0f);
+        a.set_cinematic(false);
         a.set_3d_scale(0.0f);  // battle-load screen
         a.update(0.0);
         CHECK(rig.backend.voice(voice_of(a, g))->params.gain == 0.0f);

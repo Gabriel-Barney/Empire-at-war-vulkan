@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/terrain/chunk.hpp"

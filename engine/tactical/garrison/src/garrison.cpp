@@ -1,4 +1,5 @@
 #include "alamo/tactical/garrison/garrison.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <bit>

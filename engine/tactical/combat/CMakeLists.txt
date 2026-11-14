@@ -11,6 +11,8 @@ add_library(alamo_tactical_combat STATIC
   src/formulas.cpp
   src/tables.cpp
   src/combat_system.cpp
+  src/combat_system_part2.cpp  # bo3 t03: split by position, shared code in combat_system_internal.hpp
+  src/combat_system_part3.cpp
   src/weather.cpp  # L1 systems
   src/combat_save.cpp  # N1 stage 2: CombatSystem / ModifierSet / WeatherSystem write + read
   src/rocket.cpp  # refixf t01: ROCKET / MPTL_ROCKET spline flight
@@ -24,7 +26,7 @@ target_link_libraries(alamo_tactical_combat PUBLIC alamo_tactical alamo_core ala
 # (CRC log identical for 1/4/N threads; golden file shared by MSVC and clang), per-tick
 # allocation count, modifier-aggregation micro-benchmark (printed). Data checks use ALAMO_FOC_DATA.
 # Regenerate the golden: alamo_tactical_combat_tests --write-golden <file>.
-add_executable(alamo_tactical_combat_tests tests/test_combat.cpp)
+add_executable(alamo_tactical_combat_tests tests/test_combat.cpp tests/test_combat_part1.cpp tests/test_combat_part2.cpp tests/test_combat_part3.cpp)
 target_link_libraries(alamo_tactical_combat_tests PRIVATE alamo_tactical_combat alamo_data alamo_objects alamo_test_support)
 # FoC data through the VFS (Data\XML lives in Config.meg in the shipped game).
 if(TARGET alamo_vfs)

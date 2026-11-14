@@ -9,6 +9,7 @@
 
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/sim/save_session.hpp"
 #include "alamo/terrain/chunk.hpp"

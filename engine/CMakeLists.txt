@@ -70,6 +70,25 @@ target_compile_features(alamo_engine_flags INTERFACE cxx_std_20)
 
 find_package(Threads REQUIRED)
 
+# Shared precompiled header (roadmap bo1 t02). alamo_pch is a tiny static library that owns the PCH; every engine target
+# created below reuses it (CMAKE_PRECOMPILE_HEADERS_REUSE_FROM), so the standard headers are parsed once per tree instead of
+# once per target (the loop at the end of this file points every target at it). -DALAMO_PCH=OFF builds without it. A target whose flags differ (vendored Lua) opts out in its own file.
+# Default: ON only when no compiler cache is active. sccache cannot cache a compile that uses /Fp (measured 2026-11-13:
+# 519 of ~880 compiles uncacheable), so with the cache on the PCH costs more in cross-tree cache hits than it saves.
+if(CMAKE_CXX_COMPILER_LAUNCHER)
+  set(_alamo_pch_default OFF)
+else()
+  set(_alamo_pch_default ON)
+endif()
+option(ALAMO_PCH "Use the shared precompiled header (engine/pch)" ${_alamo_pch_default})
+if(ALAMO_PCH)
+  add_library(alamo_pch STATIC pch/pch_host.cpp)
+  target_include_directories(alamo_pch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+  target_link_libraries(alamo_pch PRIVATE alamo_engine_flags Threads::Threads)
+  target_precompile_headers(alamo_pch PRIVATE pch/pch.hpp)
+  set(CMAKE_PRECOMPILE_HEADERS_REUSE_FROM alamo_pch)
+endif()
+
 # Test tiers: tests that take more than a few seconds carry the ctest label "slow". The inner loop runs the fast tier
 # (ctest -LE slow, what build_agent.cmd / build_module.cmd do by default); the gate scripts run everything. Call from the
 # directory that created the tests (set_property(TEST) only sees tests of the current directory). Labels a test that
@@ -133,3 +152,26 @@ foreach(m core vfs data jobs galactic objects anim commands tactical lua ai asse
     add_subdirectory(${m})
   endif()
 endforeach()
+
+# Point every engine library / executable at the shared PCH (roadmap bo1 t02). Done here, after all subdirectories, so no
+# module file needs to know about it. Targets that opted out (DISABLE_PRECOMPILE_HEADERS) or already have their own PCH stay.
+if(ALAMO_PCH)
+  function(_alamo_collect_targets dir out)
+    get_property(_t DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
+    get_property(_s DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
+    foreach(_d IN LISTS _s)
+      _alamo_collect_targets(${_d} _sub)
+      list(APPEND _t ${_sub})
+    endforeach()
+    set(${out} ${_t} PARENT_SCOPE)
+  endfunction()
+  _alamo_collect_targets(${CMAKE_CURRENT_SOURCE_DIR} _alamo_all_targets)
+  foreach(_t IN LISTS _alamo_all_targets)
+    get_target_property(_type ${_t} TYPE)
+    get_target_property(_off ${_t} DISABLE_PRECOMPILE_HEADERS)
+    get_target_property(_own ${_t} PRECOMPILE_HEADERS)
+    if(NOT _t STREQUAL alamo_pch AND NOT _off AND NOT _own AND _type MATCHES "^(STATIC_LIBRARY|EXECUTABLE|OBJECT_LIBRARY)$")
+      set_property(TARGET ${_t} PROPERTY PRECOMPILE_HEADERS_REUSE_FROM alamo_pch)
+    endif()
+  endforeach()
+endif()

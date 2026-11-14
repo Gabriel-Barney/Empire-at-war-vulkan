@@ -68,7 +68,7 @@
 
 #include "alamo/commands/command.hpp"
 #include "alamo/commands/events.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/sim/battle_catalog.hpp"

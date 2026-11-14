@@ -74,7 +74,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/tactical/movement/constants.hpp"
 #include "alamo/tactical/movement/heap.hpp"
 

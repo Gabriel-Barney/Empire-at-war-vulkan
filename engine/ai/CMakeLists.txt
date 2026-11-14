@@ -70,7 +70,7 @@ if(TARGET alamo_lua AND TARGET alamo_lua_vm AND TARGET alamo_galactic_sim)
                                        src/galactic_ai_save.cpp)
   target_link_libraries(alamo_ai_galactic PUBLIC alamo_ai_lua alamo_ai alamo_galactic_sim alamo_lua alamo_objects
                                                  alamo_commands alamo_data alamo_engine_flags PRIVATE alamo_lua_vm)
-  add_executable(alamo_ai_galactic_tests tests/test_ai_galactic.cpp)
+  add_executable(alamo_ai_galactic_tests tests/test_ai_galactic.cpp tests/test_ai_galactic_part1.cpp tests/test_ai_galactic_part2.cpp tests/test_ai_galactic_part3.cpp)
   target_link_libraries(alamo_ai_galactic_tests PRIVATE alamo_ai_galactic Threads::Threads alamo_test_support)
   target_compile_definitions(alamo_ai_galactic_tests PRIVATE
                              "ALAMO_AI_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/golden\""

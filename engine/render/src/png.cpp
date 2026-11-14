@@ -4,6 +4,7 @@
 #include <fstream>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 
 namespace alamo::render {

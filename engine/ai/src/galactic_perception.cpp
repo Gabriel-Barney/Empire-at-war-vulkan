@@ -1,6 +1,7 @@
 // Galactic AI perception: interim EnemyForce model, the four consumer paths, Node_Weight inputs,
 // PlayerView fill, CRC (see the header).
 #include "alamo/ai/galactic_perception.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include "alamo/ai/ai_path_finder.hpp"
 #include "alamo/core/profile.hpp"

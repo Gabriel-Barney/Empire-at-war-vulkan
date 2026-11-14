@@ -1,4 +1,5 @@
 #include "alamo/tactical/garrison/capture.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 

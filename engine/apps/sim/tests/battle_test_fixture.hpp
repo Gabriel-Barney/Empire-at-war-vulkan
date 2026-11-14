@@ -19,6 +19,7 @@
 
 #include "alamo/core/bytes.hpp"  // FOW t01: fog save round trip
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"  // S4: name_crc for map placements
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"

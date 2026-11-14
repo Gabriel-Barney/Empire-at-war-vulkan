@@ -45,6 +45,9 @@ struct UnitSounds;
 namespace alamo::sim {
 class TacticalBattle;
 }
+namespace alamo::tactical::combat {
+struct HeroClashData;
+}
 namespace alamo::lua {
 struct PresentationEvent;
 }
@@ -66,6 +69,7 @@ struct GameAudioStats {
     uint64_t tsw_activations = 0, tsw_fires = 0, tsw_planet_deaths = 0;  // refix t06: tsw_audio cues played
     uint64_t lob_chargeups = 0, lob_charged = 0;                         // S8 t31: lobbing charge-up / charged cues
     uint64_t control_point_lines = 0;                                    // ccpgu t01: control point countdown lines
+    uint64_t garrison_lines = 0, clash_win_speech = 0;                   // aud4: SFXEvent_Bunker_Garrisoned / clash win speech
 };
 
 class GameAudioHost {
@@ -135,6 +139,19 @@ public:
     // value is the mark or one frame below it (the arm and the first countdown step can fall in the same tick).
     static std::string_view control_point_line(int32_t prev, int32_t timer, int32_t leader, int32_t local_player, bool leader_is_enemy);
 
+    // aud4 (battle_tick's presentation rules, public for the tests; both builds):
+    // L1_S4_REMAINING §4.1 (b0289): a unit that actually entered a garrison -> the local faction's SFXEvent_Bunker_Garrisoned
+    // [M: for the local player's own units only], else "". SFXEvent_Bunker_Vacated has no traced trigger (backlog).
+    static std::string_view garrison_line(int32_t unit_owner, int32_t local_player);
+    // HERO_CLASH §3.8 (b0300): the clash winner's speech event, First_Hero_Win_Speech when hero 1 (First_Hero_Type) won,
+    // else Second_Hero_Win_Speech; "" for an unknown entry. (Attack_SFXEvent belongs to Clash_Actions, i.e. the
+    // action-driven clash that shipped data never reaches, HERO_CLASH §4.)
+    static std::string_view clash_win_speech(const tactical::combat::HeroClashData* data, uint32_t entry, bool first_won);
+    // AUDIO.md §2.3 (b0286): this tick's "any player has its faction super weapon on the map". The first report after
+    // battle_reset re-picks the mode's music (the start forces are known one tick after the Battle scene began); later
+    // reports only set the flag that the next mode switch reads.
+    void super_weapon_report(bool present);
+
     // Mode / music scene with the local faction ("" keeps the previous); `space` / `environment` for battles.
     void music(MusicScene scene, std::string_view faction = {}, bool space = true, std::string_view environment = {});
 
@@ -177,6 +194,10 @@ private:
     std::set<objects::ObjectId> spawned_;                                      // battle units already announced
     std::map<objects::ObjectId, bool> moving_;                                 // ascending id
     std::unordered_set<uint64_t> inaudible_;  // lookup only (never iterated): hidden / stealthed / fogged for the local player
+    std::unordered_set<uint64_t> hidden_;     // lookup only: the stealthed / Lua-hidden part of inaudible_ (muted in cinematics too)
+    std::vector<objects::TypeIndex> super_weapon_types_;  // b0286: every faction's Faction_Super_Weapon type (resolved once)
+    bool super_weapon_types_ready_ = false, battle_reported_ = false;
+    size_t clash_ends_seen_ = 0;  // b0300: HeroClashManager::ended() entries already voiced  // battle_reported_: a battle_tick ran since battle_reset
     size_t upgrades_seen_ = 0;                // TacticalBattle::station_upgrades() announced so far
     int32_t cp_timer_ = -1;                   // ccpgu t01: TacticalBattle::control_point_timer() at the last battle_tick
     MusicScene scene_ = MusicScene::None;

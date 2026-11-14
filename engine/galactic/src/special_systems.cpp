@@ -11,6 +11,7 @@
 #include <climits>
 
 #include "alamo/commands/event_types.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/galactic/campaign.hpp"

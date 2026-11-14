@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "alamo/commands/fleet_group.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/game/battle_orders.hpp"
 #include "alamo/game/story_ui.hpp"
 #include "alamo/galactic/campaign.hpp"

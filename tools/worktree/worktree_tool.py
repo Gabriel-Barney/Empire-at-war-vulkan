@@ -41,6 +41,9 @@ from pathlib import Path
 
 LINKED = ("Data", "extracted", "toolchain", "roadmap-store")
 MAIN_TREES_KEPT = {"build-msvc", "build-clang", "build-asan"}
+# The tree build_agent.cmd uses by default (bo1 t06): every kept worktree keeps it warm however long it has been idle, so the
+# next task there starts from an incremental build, not a clean one. Other trees (per-task, bench, clang) are pruned by age.
+WARM_TREE = "build-wt-msvc"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REPARSE_ATTR = 0x400
 DIR_ATTR = 0x10
@@ -475,8 +478,8 @@ def _prune_trees(wt: Worktree, days: float, apply: bool, out, result: dict):
             continue
         age = (time.time() - newest_activity(full)) / DAY
         size = tree_scan(full)[0]
-        stale = age >= days
-        label = "DELETE" if stale and apply else ("stale " if stale else "recent")
+        stale = age >= days and not (e == WARM_TREE and not wt.is_main)
+        label = "warm  " if e == WARM_TREE and age >= days and not wt.is_main else "DELETE" if stale and apply else ("stale " if stale else "recent")
         out(f"  {label} {wt.name}/{e}  {gb(size):.2f} GB  idle {age:.1f} d")
         if stale and apply:
             try:

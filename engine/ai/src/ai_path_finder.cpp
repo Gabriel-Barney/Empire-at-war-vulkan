@@ -1,4 +1,5 @@
 #include "alamo/ai/ai_path_finder.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 namespace alamo::ai {
 

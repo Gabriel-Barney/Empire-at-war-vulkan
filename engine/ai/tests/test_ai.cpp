@@ -22,12 +22,14 @@
 #include <vector>
 
 #include "alamo/ai/ai_free_store_path.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/ai/ai_path_finder.hpp"
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/ai/galactic_seed.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: '#' reseed CRC
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"

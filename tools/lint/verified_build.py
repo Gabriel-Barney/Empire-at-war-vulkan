@@ -15,6 +15,7 @@ land_on_dev.cmd then asks:
 Selftest: verified_build.py --selftest
 """
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -26,7 +27,7 @@ from pathlib import Path
 PENDING = 'verify_pending.json'
 VERIFIED = 'verified.json'
 # Paths that cannot change what the MSVC build or its tests do. Anything else needs a build.
-NO_BUILD_PREFIXES = ('docs/', '.claude/')
+NO_BUILD_PREFIXES = ('docs/', '.claude/', 'launcher/')
 NO_BUILD_SUFFIXES = ('.md',)
 GOOD_TESTS = ('', 'all')  # fast tier (no filter) or every test; a regex run proves too little
 
@@ -44,6 +45,20 @@ def head_state(cwd):
     return sha, bool(st) or rc != 0
 
 
+def source_hash(cwd, rev='HEAD'):
+    """Hash of every tracked file of <rev> that can affect the build (bo1 t06): a docs-only / roadmap-only merge changes
+    HEAD but not this, so a stamp for the same source hash still counts. None when git fails (then only the sha matches)."""
+    rc, out = git(cwd, 'ls-tree', '-r', rev)
+    if rc:
+        return None
+    h = hashlib.sha256()
+    for line in out.splitlines():
+        meta, _, path = line.partition(chr(9))
+        if needs_build([path]):
+            h.update(f'{path} {meta.split()[2]}\n'.encode('utf8'))
+    return h.hexdigest()
+
+
 def cmd_begin(tree: Path, modules: str, tests: str, cwd) -> int:
     tree.mkdir(parents=True, exist_ok=True)
     for name in (PENDING, VERIFIED):
@@ -52,7 +67,7 @@ def cmd_begin(tree: Path, modules: str, tests: str, cwd) -> int:
         except FileNotFoundError:
             pass
     sha, dirty = head_state(cwd)
-    rec = {'sha': sha, 'dirty': dirty, 'modules': modules.strip(), 'tests': tests.strip(),
+    rec = {'sha': sha, 'dirty': dirty, 'src': source_hash(cwd), 'modules': modules.strip(), 'tests': tests.strip(),
            'started': time.strftime('%Y-%m-%dT%H:%M:%S')}
     (tree / PENDING).write_text(json.dumps(rec, indent=1) + '\n', encoding='utf8')
     return 0
@@ -78,7 +93,7 @@ def needs_build(paths) -> bool:
     return False
 
 
-def stamp_ok(tree: Path, sha: str):
+def stamp_ok(tree: Path, sha: str, src=None):
     f = tree / VERIFIED
     if not f.is_file():
         return False, f'{tree.name}: no passing build recorded'
@@ -86,13 +101,13 @@ def stamp_ok(tree: Path, sha: str):
         rec = json.loads(f.read_text(encoding='utf8'))
     except ValueError:
         return False, f'{tree.name}: unreadable {VERIFIED}'
-    if rec.get('sha') != sha:
+    if rec.get('sha') != sha and not (src and rec.get('src') == src):
         return False, f'{tree.name}: last pass was on {str(rec.get("sha"))[:10]}, not HEAD {sha[:10]}'
     if rec.get('modules') != 'all':
         return False, f'{tree.name}: last pass built only "{rec.get("modules")}", not all modules'
     if rec.get('tests') not in GOOD_TESTS:
         return False, f'{tree.name}: last pass ran only tests matching "{rec.get("tests")}"'
-    return True, f'{tree.name}: passed on HEAD {sha[:10]} at {rec.get("passed")} (tests: {rec.get("tests") or "fast tier"})'
+    return True, f'{tree.name}: passed on {'HEAD ' + sha[:10] if rec.get('sha') == sha else 'the same build sources as HEAD ' + sha[:10] + ' (commit ' + str(rec.get('sha'))[:10] + ')'} at {rec.get("passed")} (tests: {rec.get("tests") or "fast tier"})'
 
 
 def cmd_land_check(base: str, head: str, trees, cwd) -> int:
@@ -105,8 +120,9 @@ def cmd_land_check(base: str, head: str, trees, cwd) -> int:
         print(f'land-check: {head} changes no build input against {base} (docs / *.md / .claude only); no build needed')
         return 0
     reasons = []
+    src = source_hash(cwd, sha)
     for t in trees:
-        ok, why = stamp_ok(Path(cwd) / t, sha)
+        ok, why = stamp_ok(Path(cwd) / t, sha, src)
         if ok:
             print('land-check: ' + why)
             return 0
@@ -172,6 +188,10 @@ def selftest() -> int:
         cmd_begin(repo / 'build-msvc', 'all', 'all', repo)
         cmd_pass(repo / 'build-msvc')
         check(cmd_land_check(base, 'HEAD', ['build-wt-msvc', 'build-msvc'], repo) == 0, 'build-msvc stamp should pass')
+        # a docs-only commit on top of a stamped one keeps the stamp valid (same build-source hash)
+        (repo / 'docs' / 'x.md').write_text('z\n')
+        g('commit', '-q', '-am', 'docs again')
+        check(cmd_land_check(base, 'HEAD', ['build-wt-msvc', 'build-msvc'], repo) == 0, 'docs commit after a stamp should keep it')
         # new commit makes the stamp stale
         (repo / 'a.cpp').write_text('int d;\n')
         g('commit', '-q', '-am', 'more')

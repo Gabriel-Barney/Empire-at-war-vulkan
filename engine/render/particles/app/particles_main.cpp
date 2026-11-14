@@ -29,6 +29,7 @@
 #include "alamo/assets/asset_cache.hpp"
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/particles/particle_attach.hpp"
 #include "alamo/render/particles/particle_data.hpp"

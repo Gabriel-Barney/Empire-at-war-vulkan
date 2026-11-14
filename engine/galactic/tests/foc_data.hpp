@@ -10,6 +10,7 @@
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/objects/object_types.hpp"
 #ifdef ALAMO_GALACTIC_TESTS_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"

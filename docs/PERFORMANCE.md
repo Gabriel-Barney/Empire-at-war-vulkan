@@ -1014,6 +1014,46 @@ scenes' fingerprints (the rendered runs' CRC logs).
 The medians sit near the rendered runs' `sim_ms` in BM3's 2026-11-06 table (1.0 / 1.0 / 2.9 ms, also noisy; the quiet baseline above has 1.6 / 1.6 / 2.9 ms); the p99 and worst ticks here are the
 busy machine. Rerun on a quiet PC before using any of it as a reference.
 
+## Build times (roadmap group bo1, 2026-11-13)
+
+Repeat with `python tools/benchmark/build_times.py [--tree NAME] [--steps clean,cpp,header] [--cache on|off] [--configure-extra=-D...]` (throw-away tree `build-bench-NAME`, MSVC Release, no tests; prints the slowest .ninja_log steps). Machine: 7800X3D, 16 threads, **other lanes were building at the same time**, so times carry +-20 % noise; the compiler cache was OFF unless stated.
+
+**Baseline (t01, cache off):** clean build 209.6 s (configure 4.4 s); one-line edit of `engine/vfs/src/vfs.cpp` 8.9 s (91 ninja steps, almost all relinks of the test exes that use vfs); one-line edit of `engine/core/include/alamo/core/hash.hpp` 75.1 s (298 steps). Slowest single compiles are test and app TUs: `test_render_gpu.cpp` 23.8 s, `app_options.cpp` 23.6 s, `test_ai_galactic.cpp` 21.3 s, `game_main.cpp` 20.8 s, `test_combat.cpp` 20.2 s (top 15 all 17-24 s; no single file is the bottleneck, the 549 files x ~1-2 s of std headers are).
+
+| Item | Result | Kept? |
+|---|---|---|
+| t02 shared PCH (`engine/pch/pch.hpp`, std headers only, every engine target reuses `alamo_pch`) | cache off: clean **209.6 -> 157.0 s (-25 %)**, .cpp edit 8.9 -> 7.8 s, core-header edit 75.1 -> 61.2 s | **Kept, but `ALAMO_PCH` defaults ON only when no compiler cache is active.** sccache cannot cache a compile that uses `/Fp` (519 of ~880 compiles uncacheable), so with the cache on the PCH loses more cache hits than it saves; the build scripts use the cache whenever sccache is installed, so for them it stays off. `-DALAMO_PCH=ON` forces it. |
+| t02 variant: core headers in the PCH | `bytes.hpp` makes `alamo::ByteReader` ambiguous with `formats_io::ByteReader` in tools/formats; with `hash.hpp` inside, a core-header edit costs 133.7 s (705 steps) instead of 75 s | Rejected: std headers only |
+| t03 `/Z7` | Release objects carry no debug info at all (`/O2 /Ob2 /DNDEBUG`, no `/Zi`, no PDB), so they are already cacheable | Nothing to change |
+| t03 stale header deps | Found: with the cache on, sccache replays the `/showIncludes` output of the compile that filled the entry, so a hit from another checkout path wrote that checkout's header paths (`../../<other-worktree>/engine/core/...`) into this tree's `.ninja_deps`. Missing files made ninja rebuild and relink ~350 targets on **every** no-op build (40 s each); existing files meant header edits were ignored (the 2026-10-31 stale-object crashes). sccache keys on the preprocessed text, so an unused `-D` does not separate checkouts. | **Fixed:** with the cache on, a forced-include header (`<build>/alamo_cache_scope.h`) declares `using alamo_cache_scope_<hash of source path> = int;`, so entries match only inside one checkout (its build trees still share). Verified: fresh tree has no foreign paths in `.ninja_deps`, no-op build is "no work to do", header edits rebuild. Second tree in the same checkout 76 s vs 259 s cold. Cross-worktree hits (which produced the poisoned deps) are gone; that costs a cold first build per worktree. The old advice "build worktrees with the cache off" no longer applies. |
+| t04 drop `-U ALAMO_ENGINE_MODULES` | Reconfigure costs 0.9-2.6 s and, once the cache-scope header is written only when changed, a reconfigure followed by a build is "no work to do" (the 350-step rebuilds seen while measuring were the stale-deps bug above, and an always-rewritten scope header, now fixed). Module scope: `build_agent` / `build_module` already configure only the requested modules, so only their targets and test exes exist. | Rejected (no gain); `-U` stays |
+| t05 gate scope | `tools/lint/gate_scope.py`: clang runs only when sim code changed, ASan only when engine/jobs / engine/core / a changed file mentioning threading primitives, any doubt (build, CMake, script, toolchain file, unknown code path, no diff, git failure) runs both; `ALAMO_GATE_ALL=1` forces both. A docs-only or render-only change gates on MSVC alone. | Kept (saves the clang and ASan builds, about 2/3 of the gate, on those changes) |
+| t06 landing check | `verified_build.py` stamps carry a hash of every tracked build-relevant file; `land-check` accepts a stamp whose hash equals HEAD's, so merging a docs / roadmap-only `origin/dev` does not rebuild. `clean_worktrees --trees` keeps `build-wt-msvc` of every kept worktree warm however idle. | Kept |
+| t07 lld-link | `-DCMAKE_LINKER=lld-link` relinks all 135 exes in **4.5 s vs 8.1 s** (-3.6 s whole tree, about 0.3 s for a typical edit). CMake takes the linker per tree, not per target, so "test exes only" would need a wrapper. Release trees already have no IPO / LTCG and no `/DEBUG` (`/INCREMENTAL:NO` only). | Rejected: gain too small to justify a second linker for the shipped exes |
+
+## Build speed C: header diet and big-file splits (bo3, 2026-11-14)
+
+Static include-closure scan, no compiler: `python tools/analysis/include_cost.py [--top N] [--json f]` (follows project includes under
+`engine/`, std headers by name). Numbers are translation units (TUs) that reach a header, transitively.
+
+| Measure | Before | After |
+|---|---|---|
+| `.cpp` files | 549 | 568 (19 new parts of split files) |
+| TUs reaching `<filesystem>` | 369 | 265 |
+| TUs reaching `sim_crc.hpp` (15 KB) | 269 | 218 |
+| TUs reaching `file_provider.hpp` | 307 | 307 + 19 parts (the header itself fell from 5.1 to 1.8 KB and no longer pulls `<filesystem>`, `<unordered_map>`, `<memory>`) |
+| Project-header bytes over the unchanged TUs | 244.5 MB | 243.5 MB |
+| Largest `.cpp` | 387 KB (`test_movement_gaps`), then 369, 365, 363, 327, 305, 294, 287 | 251 KB (`tactical_ai.cpp`; the eight biggest are now 3-4 parts of at most about 135 KB) |
+
+Widest headers before: `file_provider` 307, `ascii` 309, `bytes` 293, `sim_crc` 269, `galaxy` 263, `xml` 262, `sim_rng` 258; by header bytes parsed
+over all TUs: `combat_system.hpp` 14.9 MB (99 TUs), `movement_system.hpp` 11.3 MB, `tactical_battle.hpp` 11.1 MB, `campaign.hpp` 11.0 MB.
+What changed: `host_fs.hpp` (new; `DirectoryProvider`, path / long-path helpers, host directory ops) split out of `file_provider.hpp`;
+`sim_crc_fwd.hpp` (new) replaces `sim_crc.hpp` in 14 public headers. Test exes and three sim sources were split by position into
+`*_partN.cpp` plus a shared `*_common.hpp` / `*_internal.hpp` in the same CMake target (test names unchanged; one `main` per exe), so an
+edit rebuilds a 120 KB part and the parts compile in parallel. Not done: forward-declaring `game_object_types.hpp` / `game_database.hpp` /
+`campaign.hpp` (their types are used by value), splitting the public `combat_system.hpp` / `movement_system.hpp` / `tactical_battle.hpp`
+(150-200 KB of class body each), unity builds (t04: no PCH measurement from bo1 yet). Wall-clock effect is not measured here.
+
 ## Compiler-cache hits across worktrees (bo2 t01, 2026-11-14)
 
 Full MSVC build (595 compile requests) in a fresh worktree at another path, sccache v0.19.0 with a warm shared cache:

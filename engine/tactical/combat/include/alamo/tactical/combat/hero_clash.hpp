@@ -153,6 +153,7 @@ public:
         ObjectId winner = kNoObject, loser = kNoObject;
         uint32_t frame = 0;
         bool by_removal = false;  // a hero left (§3.8 object-removed handler) instead of dying from the exchange
+        bool first_won = false;   // the winner is hero 1 (First_Hero_Type): First_Hero_Win_Speech, else Second_ (audio)
     };
 
     // The entries and their First / Second hero types resolved by the host (-1 unknown: the entry never starts).
@@ -172,6 +173,8 @@ public:
         return c;
     }
     std::vector<EndEvent> take_ended() { return std::exchange(ended_, {}); }
+    // Every end since the last clear / load / take_ended, end order (the audio host reads new ones by count, b0300).
+    const std::vector<EndEvent>& ended() const { return ended_; }
     uint32_t started_total() const { return started_; }
 
     void clear();

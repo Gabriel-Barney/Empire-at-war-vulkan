@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "alamo/game/benchmark.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/game/benchmark_save.hpp"
 #include "alamo/game/benchmark_scenario.hpp"
 #include "alamo/test/support.hpp"

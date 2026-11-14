@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/shaderxlat/bytecode.hpp"
 #include "fx2_reader.hpp"

@@ -22,4 +22,8 @@ worktree name). Follow the `lane` agent loop (`.claude/agents/lane.md`):
    or a `probe-kit` (Gabriel runs probes), the second a `research` report, the third a `diagnosing-bugs` loop; plan them before the
    code tasks they feed.
    Print the plan: the tasks you will do in order, the modules and docs they touch, which builds apply (MSVC fast tier; clang when
-   sim code changes; ASan for `engine/jobs`), and whether goldens may move. Then begin with the first task.
+   sim code changes; ASan for `engine/jobs`), and whether goldens may move.
+6. **Goal.** Set the session goal from the group's `exit` field, so the lane has a stop condition: `/goal <exit test as a checkable
+   sentence> and python roadmap-store\roadmap_store.py lint is clean`. Where `/goal` is not available, write the same sentence at
+   the top of the plan and check it before finishing. Check context size now (`/context`): a lane that starts above half full
+   should `/compact` before the first task. Then begin with the first task.

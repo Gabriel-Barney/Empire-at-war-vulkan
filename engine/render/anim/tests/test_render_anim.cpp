@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/render/anim/anim_pose_cache.hpp"
 #include "alamo/render/anim/sim_anim_driver.hpp"
 #include "alamo/test/support.hpp"

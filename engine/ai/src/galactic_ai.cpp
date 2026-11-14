@@ -2,6 +2,7 @@
 // free stores (see galactic_ai.hpp). PotentialPlan: galactic_pp.cpp; build tasks + market: galactic_build.cpp.
 // [port] / [L] marks behaviour the RE docs do not fix.
 #include "alamo/ai/galactic_ai.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <cassert>
 #include <charconv>

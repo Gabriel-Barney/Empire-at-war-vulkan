@@ -45,3 +45,6 @@ Finish roadmap group `$ARGUMENTS` in this worktree. Work through the checklist a
    again, say so and suggest Gabriel runs `/retro <id>`; do not run it yourself.
 8. **Release.** If you are stopping with tasks left: `python roadmap-store\roadmap_store.py release <id> --by <session>`.
    Once the work is on `dev`, the worktree goes with `tools\clean_worktrees.cmd --apply --only <name>`.
+8. **Context.** A session that goes on to another group in the same worktree runs `/compact` first, keeping the landed commit, the
+   open items and the next group's id, and dropping build logs and diffs; or starts a fresh session (preferred when the next group
+   touches other modules). Clear the `/goal` set by `start-group` once the exit test has passed.

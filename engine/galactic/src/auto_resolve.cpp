@@ -1,4 +1,5 @@
 #include "alamo/galactic/auto_resolve.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 

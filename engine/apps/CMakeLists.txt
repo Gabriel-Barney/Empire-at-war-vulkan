@@ -58,6 +58,8 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     add_library(alamo_sim_battle STATIC
       sim/src/battle_catalog.cpp
       sim/src/tactical_battle.cpp
+      sim/src/tactical_battle_part2.cpp  # bo3 t03: split by position, shared code in tactical_battle_internal.hpp
+      sim/src/tactical_battle_part3.cpp
       # Fog of war (tactical_battle_fog.cpp) and S4 garrisons + structure capture (tactical_battle_garrison.cpp).
       sim/src/tactical_battle_fog.cpp
       sim/src/tactical_battle_garrison.cpp
@@ -125,6 +127,9 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
       add_test(NAME ${_exe} COMMAND ${_exe})
       set_tests_properties(${_exe} PROPERTIES TIMEOUT 900)
     endforeach()
+    # bo3 t03: test_battles_ai.cpp is split into parts (same exe, same test): main in test_battles_ai.cpp, shared code in
+    # test_battles_ai_common.hpp.
+    target_sources(alamo_sim_battle_ai_tests PRIVATE sim/tests/test_battles_ai_part1.cpp sim/tests/test_battles_ai_part2.cpp)
     # s78n t06 review: the hero-clash land battle per worker count (alamo_add_worker_count_check; the exe's --hero-clash
     # mode writes / compares its per-tick battle digests; each count has its own fixture folder).
     alamo_add_worker_count_check(alamo_sim_battle_ai_hero_clash

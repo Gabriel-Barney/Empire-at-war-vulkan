@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/game/game_data.hpp"
 #include "alamo/meg/meg.h"
 #include "alamo/terrain/ted.hpp"
