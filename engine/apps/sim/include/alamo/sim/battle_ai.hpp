@@ -332,11 +332,14 @@ private:
             int32_t owner = -1;
             uint32_t container = 0xFFFFFFFFu;  // index into teams
             uint8_t live = 0, movable = 0;     // alive and not retreated; movable
+            uint8_t mv = 0, has_goal = 0, arrived = 0;  // slice 4e: the movement system has it; its UnitView
+            float gx = 0.0f, gy = 0.0f;                 // the move goal
         };
         std::vector<Unit> units;
         struct Team {
             objects::ObjectId id = objects::kNoObjectId;
             uint8_t removed = 0, target = 0;
+            objects::TypeIndex rep_type = objects::kNone;  // slice 4e: TacticalBattle::representative_type
         };
         std::vector<Team> teams;
         std::vector<uint8_t> retreat_ok;
@@ -367,7 +370,11 @@ private:
         uint64_t frame = 0;   // global frame of the update
         uint64_t digest = 0;  // StateHasher digest of the world after think()
         std::vector<commands::Command> batch;  // the orders it queued (execute() appends while it runs)
+        std::vector<lua::ScriptLockFact> locks;  // slice 4e: the AI bridge's movement-lock facts after think()
     };
+    // slice 4e: the movement-lock facts the battle's movement reads with the lane on (the last collected job's; at start
+    // the start scripts'); hashed and saved.
+    std::vector<lua::ScriptLockFact> lane_locks_;
     LaneJob lane_job_;
     uint64_t lane_digest_ = 0;  // digest of the last collected job (hashed and saved)
     void lane_collect();

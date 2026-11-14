@@ -155,6 +155,7 @@ struct LaneWrite {
 std::vector<uint8_t> encode_lane_write(const LaneWrite& w);
 bool decode_lane_write(std::span<const uint8_t> bytes, LaneWrite& out);  // false on malformed bytes
 class ObjectBridge;
+struct ScriptLockFact;  // sp3: below ObjectBridge
 // The host's two halves (with ALAMO_LUA_HAVE_ABILITIES; without, an empty view and nothing applied): the capture of every
 // object of `a` and of its combat system at `frame` (on the critical lane, at the AI slot), and the apply of a queued
 // write at the due tick's `frame` through the calls the binding makes live. `host` = the VMs' bridge (its
@@ -413,6 +414,8 @@ public:
             it = store.find(it->first) ? std::next(it) : ability_signals_.erase(it);
     }
     size_t state_count() const { return states_.size(); }
+    // sp3: every object with a script lock or a Divert (ascending id; struct ScriptLockFact below).
+    std::vector<ScriptLockFact> script_lock_facts() const;
 
     // ---- diagnostics ----
     uint32_t orders_issued = 0;  // events built by the bindings (also counted without a pipeline)
@@ -437,6 +440,24 @@ private:
     uint32_t next_reinforcement_ = 1;
     std::map<objects::ObjectId, uint32_t> ability_signals_;  // S7 t15 A1: watched units' signal 0x29 counts
 };
+
+// sp3 (AI lane): script_movement_locked's inputs for one object - Lock_Current_Orders, and a Divert with its goal. A host
+// whose VMs run off the critical lane publishes these (ObjectBridge::script_lock_facts, ascending id) with the AI's batch
+// and answers its movement lock from the copy.
+struct ScriptLockFact {
+    objects::ObjectId id = objects::kNoObjectId;
+    uint8_t locked = 0, diverted = 0;
+    Vec3 goal{};
+};
+inline bool script_movement_locked(std::span<const ScriptLockFact> facts, objects::ObjectId id,
+                                   const std::function<bool(objects::ObjectId, Vec3&)>& goal) {
+    const auto it = std::lower_bound(facts.begin(), facts.end(), id, [](const ScriptLockFact& f, objects::ObjectId v) { return f.id < v; });
+    if (it == facts.end() || it->id != id) return false;
+    if (it->locked) return true;
+    if (!it->diverted || !goal) return false;
+    Vec3 g{};
+    return goal(id, g) && g.x == it->goal.x && g.y == it->goal.y;
+}
 
 // OI follow-up t03 (A1_READINGS §28.9): this bridge's shares of the obj +0x3a8 movement lock (0x39ad40) - a script
 // Lock_Current_Orders, or the locomotor's forced-move term while the unit's current move is the one a Divert started

@@ -148,10 +148,21 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     br.abilities = &b_->abilities();
     TacticalBattle* bt = b_;
     br.ability_frame = [bt] { return bt->frame(); };
-    br.is_enemy = [bt](int32_t x, int32_t y) { return bt->combat().is_enemy(x, y); };
+    br.is_enemy = [this, bt](int32_t x, int32_t y) {  // sp3 slice 4e: the view with the lane on
+        if (!lane_view()) return bt->combat().is_enemy(x, y);
+        return x >= 0 && x < 256 && view_hostile(static_cast<uint8_t>(x), y);
+    };
     // refixf t03: Find_All_Objects_Of_Type / Find_Nearest match TEAM containers on their company / team type.
     const objects::ObjectStore* rep_store = &mode.primary();
-    br.representative_type = [bt, rep_store](objects::ObjectHandle o) {
+    br.representative_type = [this, bt, rep_store](objects::ObjectHandle o) {
+        if (lane_view()) {  // sp3 slice 4e: the AI's handles are the snapshot store's
+            const objects::ObjectStore& vs = world_->view_store();
+            if (!vs.exists(o)) return objects::kNone;
+            const objects::ObjectId id = vs.id(o);
+            for (const LaneView::Team& t : view_.teams)
+                if (t.id == id) return t.rep_type;
+            return objects::kNone;
+        }
         return rep_store->exists(o) ? bt->representative_type(rep_store->id(o)) : objects::kNone;
     };
     // q6 t28: Find_Hint / Get_Hint see the map objects' .ted hint names.
@@ -160,18 +171,27 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     };
     // s78i t02: the Reinforce_Unit stand-in faces the owner's entry-facing record (TACTICAL_COMBAT §3.1.1 "other spawns").
     br.reinforce_facing = [bt](int32_t player) { return bt->player_drop_facing(player); };
-    br.order_finished = [bt](objects::ObjectId id, uint32_t) {
+    br.order_finished = [this, bt](objects::ObjectId id, uint32_t) {
+        if (lane_view()) {  // sp3 slice 4e
+            const LaneView::Unit* u = view_unit(id);
+            return !u || !u->mv || !u->has_goal;
+        }
         return !bt->movement_->has_unit(id) || !bt->movement_->view(id).has_goal;
     };
     // OI follow-up t03 (A1_READINGS §28.9): this bridge's shares of the movement lock - Lock_Current_Orders, and the
     // locomotor's forced-move term while a Divert is the unit's current move (goal unchanged, not yet arrived).
-    bt->set_script_movement_lock(this, [bt, &br](objects::ObjectId id) { return lua::script_movement_locked(br, id, [bt](objects::ObjectId u, Vec3& g) {
-        if (!bt->movement_->has_unit(u)) return false;
-        const auto v = bt->movement_->view(u);
-        if (!v.has_goal || v.arrived) return false;
-        g = Vec3{v.goal.x, v.goal.y, 0.0f};
-        return true;
-    }); });
+    // sp3 slice 4e: with the lane on, from the facts published with the AI's batch (the bridge belongs to the AI lane).
+    bt->set_script_movement_lock(this, [this, bt, &br](objects::ObjectId id) {
+        const auto goal = [bt](objects::ObjectId u, Vec3& g) {
+            if (!bt->movement_->has_unit(u)) return false;
+            const auto v = bt->movement_->view(u);
+            if (!v.has_goal || v.arrived) return false;
+            g = Vec3{v.goal.x, v.goal.y, 0.0f};
+            return true;
+        };
+        if (world_->ai_lane()) return lua::script_movement_locked(std::span<const lua::ScriptLockFact>(lane_locks_), id, goal);
+        return lua::script_movement_locked(br, id, goal);
+    });
     // OI host (L1/S4 wave 1 integrator ask 2): Change_Owner of the AI VMs goes through the battle (store + TreeSet::set_owner
     // + the battle systems), as the story VMs' bridge (CampaignBattles::change_owner); before, the binding set the store only.
     TacticalMode* owner_mode = &mode;
@@ -199,7 +219,14 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     remaining_.release_hero_clash_lock = [bt, ast](objects::ObjectHandle u) {  // s78n t06 review: a TEAM Unlock
         return ast->alive(u) && bt->release_hero_clash_lock(ast->id(u));
     };
-    remaining_.move_goal = [bt, ast](objects::ObjectHandle u, Vec3& goal) {
+    remaining_.move_goal = [this, bt, ast](objects::ObjectHandle u, Vec3& goal) {
+        if (lane_view()) {  // sp3 slice 4e
+            const objects::ObjectStore& vs = world_->view_store();
+            const LaneView::Unit* v = vs.alive(u) ? view_unit(vs.id(u)) : nullptr;
+            if (!v || !v->mv || !v->has_goal) return false;
+            goal = Vec3{v->gx, v->gy, 0.0f};
+            return true;
+        }
         if (!ast->alive(u) || !bt->movement_->has_unit(ast->id(u))) return false;
         const mv::UnitView v = bt->movement_->view(ast->id(u));
         if (!v.has_goal) return false;
@@ -330,6 +357,7 @@ bool BattleAi::start(std::vector<std::string>* diag) {
     const bool ok = world_->start(diag);
     for (cmd::Command& c : lane_job_.batch) lane_batch_.push_back(std::move(c));
     lane_job_.batch.clear();
+    lane_locks_ = world_->object_bridge().script_lock_facts();  // slice 4e
     return ok;
 }
 
@@ -348,6 +376,7 @@ void BattleAi::update() {
         lane_job_.frame = host_->frame();
         lane_job_.batch.clear();
         world_->think();  // inline: the AI lane's job (t03: on the AI thread)
+        lane_job_.locks = world_->object_bridge().script_lock_facts();  // slice 4e: published at collect
         StateHasher h;
         world_->hash(h);
         lane_job_.digest = h.digest();
@@ -440,13 +469,27 @@ void BattleAi::capture_lane_view() {
         view_.units.resize(b_->units_.size());
         for (size_t i = 0; i < b_->units_.size(); ++i) {
             const TacticalBattle::Unit& u = b_->units_[i];
-            view_.units[i] = {u.id, st.owner(u.h), u.container, static_cast<uint8_t>(u.alive && !u.retreated ? 1 : 0),
-                              static_cast<uint8_t>(u.movable ? 1 : 0)};
+            LaneView::Unit& v = view_.units[i];
+            v = {};
+            v.id = u.id;
+            v.owner = st.owner(u.h);
+            v.container = u.container;
+            v.live = static_cast<uint8_t>(u.alive && !u.retreated ? 1 : 0);
+            v.movable = static_cast<uint8_t>(u.movable ? 1 : 0);
+            if (b_->movement_ && b_->movement_->has_unit(u.id)) {  // slice 4e
+                const mv::UnitView m = b_->movement_->view(u.id);
+                v.mv = 1;
+                v.has_goal = m.has_goal ? 1 : 0;
+                v.arrived = m.arrived ? 1 : 0;
+                v.gx = m.goal.x;
+                v.gy = m.goal.y;
+            }
         }
         view_.teams.resize(b_->containers_.size());
         for (size_t i = 0; i < b_->containers_.size(); ++i) {
             const TacticalBattle::Container& c = b_->containers_[i];
-            view_.teams[i] = {c.id, static_cast<uint8_t>(c.removed ? 1 : 0), static_cast<uint8_t>(c.team && !c.removed && c.alive > 0 ? 1 : 0)};
+            view_.teams[i] = {c.id, static_cast<uint8_t>(c.removed ? 1 : 0), static_cast<uint8_t>(c.team && !c.removed && c.alive > 0 ? 1 : 0),
+                              c.team && c.type != 0xFFFFFFFFu ? static_cast<objects::TypeIndex>(c.type) : objects::kNone};
         }
         view_.retreat_ok.assign(np, 0);
         for (int32_t p = 0; p < players; ++p) view_.retreat_ok[static_cast<size_t>(p)] = b_->retreat_block(p) == 0 ? 1 : 0;
@@ -496,6 +539,8 @@ void BattleAi::lane_collect() {
     for (cmd::Command& c : lane_job_.batch) lane_batch_.push_back(std::move(c));
     lane_job_.batch.clear();
     lane_digest_ = lane_job_.digest;
+    lane_locks_ = std::move(lane_job_.locks);  // slice 4e
+    lane_job_.locks.clear();
 }
 
 void BattleAi::end() { world_->end_battle(); }
@@ -528,6 +573,14 @@ void BattleAi::hash(StateHasher& h) const {
     }
     if (world_->ai_lane()) {  // sp3 t04: the queued orders (canonical command bytes) and the sequence counter
         h.u32(lane_seq_);
+        h.u32(static_cast<uint32_t>(lane_locks_.size()));  // slice 4e
+        for (const lua::ScriptLockFact& f : lane_locks_) {
+            h.i32(f.id);
+            h.u8(static_cast<uint8_t>(f.locked | (f.diverted << 1)));
+            h.f32(f.goal.x);
+            h.f32(f.goal.y);
+            h.f32(f.goal.z);
+        }
         h.u32(static_cast<uint32_t>(lane_batch_.size()));
         for (const cmd::Command& c : lane_batch_) {
             const std::vector<uint8_t> bytes = cmd::encode_command(c);
@@ -540,7 +593,26 @@ void BattleAi::hash(StateHasher& h) const {
 namespace {
 // 2: UnitAI re-projection stamps; 3: a1h t02 object-goal follow records; 4: s78n t25.4 ObjectFollow::guard
 constexpr uint32_t kBattleAiSaveVersion = 4;
-constexpr uint32_t kBattleAiLaneSaveVersion = 5;  // sp3 t04: version 4 + the AI lane's queued orders (lane on only)
+constexpr uint32_t kBattleAiLaneSaveVersion5 = 5;  // sp3 t04: version 4 + the AI lane's queued orders (lane on only)
+constexpr uint32_t kBattleAiLaneSaveVersion = 6;   // sp3 slice 4e: version 5 + the movement-lock facts (published, job)
+void put_locks(ByteWriter& w, const std::vector<lua::ScriptLockFact>& v) {
+    w.u32(static_cast<uint32_t>(v.size()));
+    for (const lua::ScriptLockFact& f : v) w.i32(f.id).u8(f.locked).u8(f.diverted).f32(f.goal.x).f32(f.goal.y).f32(f.goal.z);
+}
+bool get_locks(ByteReader& r, std::vector<lua::ScriptLockFact>& v) {
+    uint32_t n = 0;
+    if (!r.count(n, 18)) return false;
+    v.resize(n);
+    for (lua::ScriptLockFact& f : v) {
+        f.id = r.i32();
+        f.locked = r.u8();
+        f.diverted = r.u8();
+        f.goal = Vec3{r.f32(), 0.0f, 0.0f};
+        f.goal.y = r.f32();
+        f.goal.z = r.f32();
+    }
+    return r.ok();
+}
 template <class A, class F>
 void follow_fields(A& a, F& f) {
     a(f.units, f.target, f.gx, f.gy, f.r, f.threat, f.next, f.guard);
@@ -571,13 +643,16 @@ void BattleAi::write(ByteWriter& w) const {
     w.u64(lane_job_.frame);
     w.u64(lane_job_.digest);
     put_batch(lane_job_.batch);
+    put_locks(w, lane_locks_);  // version 6
+    put_locks(w, lane_job_.locks);
 }
 
 bool BattleAi::read(ByteReader& r) {
     // sp3 t04: version 5 (lane block) only into an AI-lane world; version 4 into either (an AI-lane world then starts with
     // an empty batch)
     const uint32_t version = r.u32();
-    if (!r.ok() || !(version == kBattleAiSaveVersion || (version == kBattleAiLaneSaveVersion && world_->ai_lane()))) return false;
+    const bool lane_version = version == kBattleAiLaneSaveVersion5 || version == kBattleAiLaneSaveVersion;
+    if (!r.ok() || !(version == kBattleAiSaveVersion || (lane_version && world_->ai_lane()))) return false;
     const std::span<const uint8_t> world = r.raw(r.u32());
     std::vector<uint8_t> side;
     uint32_t stale = 0;
@@ -592,7 +667,8 @@ bool BattleAi::read(ByteReader& r) {
     uint64_t lane_digest = 0;
     std::vector<cmd::Command> lane_batch;
     LaneJob job;
-    if (version == kBattleAiLaneSaveVersion) {
+    std::vector<lua::ScriptLockFact> lane_locks;
+    if (lane_version) {
         const auto get_batch = [&r](std::vector<cmd::Command>& out) {
             uint32_t n = 0;
             if (!r.count(n, 4)) return false;
@@ -612,6 +688,7 @@ bool BattleAi::read(ByteReader& r) {
         job.frame = r.u64();
         job.digest = r.u64();
         if (!get_batch(job.batch)) return false;
+        if (version == kBattleAiLaneSaveVersion && (!get_locks(r, lane_locks) || !get_locks(r, job.locks))) return false;
     }
     if (!r.ok() || !r.done() || side != ai_side_) return false;  // the AI players are rebuilt by start()
     const std::map<objects::ObjectId, int32_t> stamps_before = unit_ai_stamps_;
@@ -635,6 +712,8 @@ bool BattleAi::read(ByteReader& r) {
     lane_batch_ = std::move(lane_batch);
     lane_digest_ = lane_digest;
     lane_job_ = std::move(job);
+    // slice 4e: a version-5 save (no facts) takes the loaded bridge's (its world was saved after the job)
+    lane_locks_ = version == kBattleAiLaneSaveVersion ? std::move(lane_locks) : world_->object_bridge().script_lock_facts();
     view_.valid = false;  // sp3 t02: captured again at the next AI slot
     world_->object_bridge().lane_abilities = nullptr;  // sp3 slice 4b: likewise the ability records
     lane_unloaded_.clear();  // sp3 slice 4d: consumed within the tick of its apply

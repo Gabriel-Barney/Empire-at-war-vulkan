@@ -402,3 +402,11 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   finishes (a timeout still ends it). `start()` with
   the lane on captures the view first, refreshes the snapshot store, and collects what the start scripts queued (before this,
   the first update dropped it). **Tier 2**: these commands act k_ai ticks later and their answers are predictions.
+- Bridge reads and the script movement lock (slice 4e, part 1): with the lane on the AI bridge's `is_enemy`,
+  `representative_type` (Find_Nearest / Find_All_Objects_Of_Type on TEAM containers), `order_finished` (every blocking
+  order poll) and `move_goal` (Is_On_Diversion) answer from the view (per battle unit: movement unit, has goal, arrived, goal;
+  per container: its team type). `map_hint` and `reinforce_facing` read data fixed at map setup. The movement lock the
+  battle's movement reads (Lock_Current_Orders, a Divert's forced move) no longer reads the AI bridge: each job's
+  `ObjectBridge::script_lock_facts` is published when the job is collected (`start()`: the start scripts'), hashed, and
+  saved (`battle.ai` version 6 = 5 + the published and the pending facts; a version-5 save takes the loaded bridge's).
+  **Tier 2**: a script lock or Divert reaches the movement at the collect, one AI slot after the script ran.

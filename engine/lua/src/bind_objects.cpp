@@ -3436,6 +3436,23 @@ bool decode_lane_write(std::span<const uint8_t> bytes, LaneWrite& out) {
     return true;
 }
 
+std::vector<ScriptLockFact> ObjectBridge::script_lock_facts() const {
+    std::vector<ScriptLockFact> out;
+    for (const auto& [id, st] : states_)
+        if (st.orders_locked) out.push_back({id, 1, 0, Vec3{}});
+    for (const auto& [id, r] : remaining_states_) {
+        if (!r.diverted) continue;
+        const auto it = std::lower_bound(out.begin(), out.end(), id, [](const ScriptLockFact& f, ObjectId v) { return f.id < v; });
+        if (it != out.end() && it->id == id) {
+            it->diverted = 1;
+            it->goal = r.divert_goal;
+        } else {
+            out.insert(it, ScriptLockFact{id, 0, 1, r.divert_goal});
+        }
+    }
+    return out;
+}
+
 void ObjectBridge::hash(StateHasher& h) const {
     h.u32(orders_issued);
     h.u32(static_cast<uint32_t>(states_.size()));
