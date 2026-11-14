@@ -11,6 +11,8 @@ add_library(alamo_tactical_combat STATIC
   src/formulas.cpp
   src/tables.cpp
   src/combat_system.cpp
+  src/combat_system_part2.cpp  # bo3 t03: split by position, shared code in combat_system_internal.hpp
+  src/combat_system_part3.cpp
   src/weather.cpp  # L1 systems
   src/combat_save.cpp  # N1 stage 2: CombatSystem / ModifierSet / WeatherSystem write + read
   src/rocket.cpp  # refixf t01: ROCKET / MPTL_ROCKET spline flight

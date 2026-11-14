@@ -58,6 +58,8 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     add_library(alamo_sim_battle STATIC
       sim/src/battle_catalog.cpp
       sim/src/tactical_battle.cpp
+      sim/src/tactical_battle_part2.cpp  # bo3 t03: split by position, shared code in tactical_battle_internal.hpp
+      sim/src/tactical_battle_part3.cpp
       # Fog of war (tactical_battle_fog.cpp) and S4 garrisons + structure capture (tactical_battle_garrison.cpp).
       sim/src/tactical_battle_fog.cpp
       sim/src/tactical_battle_garrison.cpp

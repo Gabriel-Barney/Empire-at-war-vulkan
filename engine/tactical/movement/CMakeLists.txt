@@ -21,6 +21,8 @@ add_library(alamo_tactical_movement STATIC
   src/formation.cpp
   src/unit_params.cpp
   src/movement_system.cpp
+  src/movement_system_part2.cpp  # bo3 t03: split by position, shared code in movement_system_internal.hpp
+  src/movement_system_part3.cpp
   src/hyperspace.cpp  # L1 systems
   src/corridor.cpp            # REMAINING_GAPS 4.1
   src/special_locomotors.cpp  # REMAINING_GAPS 4.3-4.7 (pure rules)

@@ -167,6 +167,7 @@ def main():
     ap.add_argument('file')
     ap.add_argument('--part-kb', type=int, default=120)
     ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--source', action='store_true', help='implementation file (no main): move Class::member definitions to parts')
     a = ap.parse_args()
     path = a.file
     raw = open(path, encoding='utf-8', newline='').read()
@@ -174,6 +175,16 @@ def main():
     text = raw.replace('\r\n', '\n')
     stem = os.path.splitext(os.path.basename(path))[0]
     d = os.path.dirname(path)
+    prefix = suffix = ''
+    outer = None
+    if a.source:
+        mo = re.search(r'^namespace ([\w:]+) \{[ \t]*\n', text, re.M)
+        if mo:
+            close = text.rstrip().rfind('\n}')
+            outer = mo.group(1)
+            prefix = text[:mo.start()]
+            suffix = text[close + 1:]
+            text = text[mo.end():close + 1]
     chunks = scan(text)
     assert ''.join(text[s:e] for s, e, _ in chunks) == text
 
@@ -201,9 +212,24 @@ def main():
         items.append(it)
 
     # find main
-    main_idx = next(i for i, it in enumerate(items) if it['kind'] == 'code' and re.match(r'^int\s+main\s*\(', it['h']))
+    if a.source:
+        main_idx = len(items)
+    else:
+        main_idx = next(i for i, it in enumerate(items) if it['kind'] == 'code' and re.match(r'^int\s+main\s*\(', it['h']))
     movable = []
+    member_defs = set()
+    if a.source:
+        for i, it in enumerate(items):
+            if it['kind'] != 'code' or it['cond'] and any(isinstance(c, tuple) for c in it['cond']):
+                continue
+            h = it['h']
+            pre = h.split('=')[0]
+            if ('(' in pre and ('::' in pre.split('(')[0] or not re.match(chr(94)+'(static|inline|constexpr|template|extern)'+chr(92)+'b', h)) and '{' in strip_comments(it['t']) and not h.startswith('template')
+                    and not re.match(r'^(struct|class|enum|union|namespace)\b', h) and not re.search(r'\boperator\b', pre.split('(')[0])):
+                member_defs.add(i)
     for i, it in enumerate(items):
+        if a.source:
+            break
         if it['kind'] != 'code' or i >= main_idx:
             continue
         h = it['h']
@@ -263,6 +289,13 @@ def main():
         if it['kind'] == 'code' and re.match(r'^void\s*\*?\s*operator\b', it['h']):
             mainonly.append(t)
             continue
+        if i in member_defs:
+            add_part(t, it['cond'])
+            continue
+        if (a.source and it['kind'] == 'code' and '::' in it['h'].split('(')[0] and i not in member_defs
+                and not re.match(chr(94) + '(namespace|using|struct|class|enum|union|typedef|static_assert|extern|template)' + chr(92) + 'b', it['h'])):
+            mainonly.append(t)  # static data member definitions etc.: one TU
+            continue
         if i in movable:
             code = t
             # strip `static ` from the first code occurrence
@@ -285,6 +318,29 @@ def main():
             continue
         hdr.append(inline_top(t, it))
     main_text = ''.join(it['t'] for it in items[main_idx:])
+    if a.source:
+        hdr_text = ''.join(hdr)
+        ns_open = f'namespace {outer} {{\n' if outer else ''
+        ns_close = f'}}  // namespace {outer}\n' if outer else ''
+        iname = stem + '_internal.hpp'
+        outs = {iname: '#pragma once\n// Shared includes, helpers and types of ' + stem + '.cpp (bo3 t03 split); its member definitions are in '
+                + stem + '.cpp and ' + stem + '_partN.cpp.\n' + prefix + ns_open + hdr_text.rstrip('\n') + '\n' + ns_close}
+        for k, pp in enumerate(parts, 1):
+            body = '\n'.join(x.strip('\n') + '\n' for x in pp)
+            if k == 1:
+                body = ''.join(mainonly) + '\n' + body
+            nm = stem + '.cpp' if k == 1 else f'{stem}_part{k}.cpp'
+            outs[nm] = f'// {stem}: part {k} (bo3 t03 split; shared code in {iname}).\n#include "{iname}"\n\n' + ns_open + body + ns_close + (suffix if k == 1 and not outer else '')
+        for nme, body in outs.items():
+            print(f'  {nme}: {len(body)//1024} KB')
+        if a.dry_run:
+            return
+        for nme, body in outs.items():
+            if crlf:
+                body = body.replace('\n', '\r\n')
+            open(os.path.join(d, nme), 'w', encoding='utf-8', newline='').write(body)
+        print('parts:', len(parts), ' add to CMake:', ' '.join(f'{stem}_part{k}.cpp' for k in range(2, len(parts) + 1)))
+        return
     hdr_text = ''.join(hdr)
     guard_note = f'// Split out of {stem}.cpp (bo3 t03): shared includes, types and helpers; the tests live in {stem}_partN.cpp.\n'
     header = '#pragma once\n' + guard_note + hdr_text.rstrip('\n') + '\n\n// Test functions (defined in the part files)\n' + ''.join(decls)
