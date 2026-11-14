@@ -139,6 +139,7 @@ enum class LaneWriteOp : uint8_t {
     PriorityOverride = 8, // CombatSystem::set_priority_override(ids[0], value)
     Stickiness = 9,       // CombatSystem::set_stickiness_override(id, seconds) for each combat unit of ids
     OrderReplaced = 10,   // ObjectBridge::raise_order_replaced(id) for each of ids
+    HostFirst = 64,       // 64..255: the host's own hook writes (apply_lane_write leaves them to the host)
 };
 inline constexpr uint16_t kLaneWriteSubtype = 0x4157;  // "AW"
 struct LaneWrite {
@@ -151,6 +152,7 @@ struct LaneWrite {
     objects::ObjectId target = objects::kNoObjectId;
     Vec3 p{};
     std::vector<objects::ObjectId> ids;
+    Vec3 q{};  // a second point (host writes: a facing)
 };
 std::vector<uint8_t> encode_lane_write(const LaneWrite& w);
 bool decode_lane_write(std::span<const uint8_t> bytes, LaneWrite& out);  // false on malformed bytes

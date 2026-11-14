@@ -3314,12 +3314,13 @@ uint8_t unit_ability_id(std::string_view name) {
 
 std::string_view unit_ability_name(uint8_t id) { return id < std::size(kAbilityNames) ? kAbilityNames[id] : std::string_view(); }
 
-// sp3: u8 op | u8 type | u8 on | i32 owner | i32 value | f32 seconds | i32 target | f32 x y z | u32 n | n x i32 id.
+// sp3: u8 op | u8 type | u8 on | i32 owner | i32 value | f32 seconds | i32 target | f32 x y z | u32 n | n x i32 id | f32 qx qy qz.
 std::vector<uint8_t> encode_lane_write(const LaneWrite& lw) {
     ByteWriter w;
     w.u8(static_cast<uint8_t>(lw.op)).u8(lw.type).u8(lw.on).i32(lw.owner).i32(lw.value).f32(lw.seconds).i32(lw.target);
     w.f32(lw.p.x).f32(lw.p.y).f32(lw.p.z).u32(static_cast<uint32_t>(lw.ids.size()));
     for (const ObjectId id : lw.ids) w.i32(id);
+    w.f32(lw.q.x).f32(lw.q.y).f32(lw.q.z);
     return w.bytes();
 }
 #if ALAMO_LUA_HAVE_ABILITIES
@@ -3401,8 +3402,8 @@ int32_t apply_lane_write(ab::AbilitySystem& a, uint32_t frame, const LaneWrite& 
             for (const ObjectId id : w.ids)
                 if (host.raise_order_replaced) host.raise_order_replaced(id);
             return -1;
+        default: return -1;  // a host write (HostFirst..)
     }
-    return -1;
 }
 #else
 void capture_lane_abilities(const tactical::abilities::AbilitySystem&, uint32_t frame, LaneAbilityView& v) {
@@ -3416,7 +3417,9 @@ bool decode_lane_write(std::span<const uint8_t> bytes, LaneWrite& out) {
     ByteReader r(bytes);
     LaneWrite lw;
     const uint8_t op = r.u8();
-    if (op < static_cast<uint8_t>(LaneWriteOp::SetAutofire) || op > static_cast<uint8_t>(LaneWriteOp::OrderReplaced)) return false;
+    if (op < static_cast<uint8_t>(LaneWriteOp::SetAutofire) ||
+        (op > static_cast<uint8_t>(LaneWriteOp::OrderReplaced) && op < static_cast<uint8_t>(LaneWriteOp::HostFirst)))
+        return false;
     lw.op = static_cast<LaneWriteOp>(op);
     lw.type = r.u8();
     lw.on = r.u8();
@@ -3431,6 +3434,9 @@ bool decode_lane_write(std::span<const uint8_t> bytes, LaneWrite& out) {
     if (!r.count(n, 4)) return false;
     lw.ids.resize(n);
     for (ObjectId& id : lw.ids) id = r.i32();
+    lw.q.x = r.f32();
+    lw.q.y = r.f32();
+    lw.q.z = r.f32();
     if (!r.ok() || !r.done()) return false;
     out = std::move(lw);
     return true;

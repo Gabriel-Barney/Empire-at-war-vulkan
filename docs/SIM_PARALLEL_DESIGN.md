@@ -410,6 +410,19 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   `ObjectBridge::script_lock_facts` is published when the job is collected (`start()`: the start scripts'), hashed, and
   saved (`battle.ai` version 6 = 5 + the published and the pending facts; a version-5 save takes the loaded bridge's).
   **Tier 2**: a script lock or Divert reaches the movement at the collect, one AI slot after the script ran.
+- L1 hooks (slice 4e, part 2): with the lane on `BattleAi::wrap_lane_hooks` keeps the live `RemainingScriptHooks` /
+  `TacticalScriptHooks` and puts lane-aware ones on the AI bridge. Reads answer from the view: per battle unit and container
+  rate of damage, time till dead, current projectile and projectile types, engines, energy, hero clash, `object_in_field`
+  for the four field kinds; per player bombing run / bombardment availability and result, special weapons allowed, retreat
+  increment; the final-blow list; a copy of the `SpecialWeaponSystem` (readiness, TSW state); build pad contents from the
+  pads. `point_in_field` / `nearest_field` and `ground_height` read data fixed at map setup. Writes (Divert, Build,
+  Lock_Build_Pad, strikes and their switches, Force_Weather, hero-clash release, special weapon begin / fire / lob, TSW fire,
+  teleport, first lock, hyperspace out, set environment) are queued as host ops (`lua::LaneWriteOp::HostFirst..`) and the
+  apply calls the kept live hook. Predictions: Divert = a live movable unit; Build = an empty pad; strikes = available;
+  begin_targeting / TSW fire = the dry run on the copy; fire at object = readiness >= 1 and a valid target; lobbing = a lobbing
+  pack with an owner. `spawn` from an AI VM is refused with the lane on (no shipped AI script spawns; counted). Not yet off
+  the live battle (slice 4e part 3): the shield-side queries, the fog hooks and FogOfWar, GlobalValue, Prevent_AI_Usage.
+  Capture cost on `land_battle` grew to ~0.30 ms p50 (`tac.ai.capture`; the per-unit facts are serial for now).
 
 ## 12. P5 implementation notes (sp5, simp-svc, 2026-11-14)
 
