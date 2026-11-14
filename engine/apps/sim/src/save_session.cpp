@@ -146,7 +146,15 @@ std::string SessionDescriptor::mismatch(const SessionDescriptor& s, const Sessio
     for (size_t i = 0; i < s.setup.size(); ++i)
         if (!(s.setup[i] == c.setup[i])) return "player " + std::to_string(i) + " setup differs (" + s.setup[i].faction + ")";
     if (s.difficulty != c.difficulty) return "difficulty '" + s.difficulty + "' != '" + c.difficulty + "'";
-    if (sorted(s.options) != sorted(c.options)) return "session options differ";
+    // sp3: the AI-lane options (ai_lane, k_ai) are not compared: a lane-off save also loads into an AI-lane session (bench,
+    // harness), and the battle.ai chunk refuses a lane save in a lane-off session itself.
+    const auto compared = [](const std::vector<std::pair<std::string, std::string>>& o) {
+        std::vector<std::pair<std::string, std::string>> v;
+        for (const auto& kv : o)
+            if (kv.first != "ai_lane" && kv.first != "k_ai") v.push_back(kv);
+        return sorted(std::move(v));
+    };
+    if (compared(s.options) != compared(c.options)) return "session options differ";
     if (s.data_fingerprint != c.data_fingerprint)
         return "game data differs (fingerprint " + hex64(s.data_fingerprint) + " != " + hex64(c.data_fingerprint) + ")";
     return {};

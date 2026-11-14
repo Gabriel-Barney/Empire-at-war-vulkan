@@ -519,7 +519,10 @@ void CampaignBattles::register_battle_chunks() {
         SaveParticipant ap;
         ap.name = "battle.ai";
         ap.write = [this](ByteWriter& w) {
-            if (ai_) ai_->write(w);
+            if (ai_) {
+                ai_->lane_sync();  // sp3: the AI lane's running job collected first
+                ai_->write(w);
+            }
         };
         ap.read = [this](ByteReader& r) { return ai_ && ai_->read(r); };
         host_->add_save_participant(std::move(ap));

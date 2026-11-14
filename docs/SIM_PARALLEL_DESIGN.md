@@ -348,3 +348,12 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   `before_commands` hook ahead of the players' commands, in `drain_order_less` order, through the unchanged `execute_order`.
   The AI's same-call answer is `BattleAi::predict_order` (the rejections that depend on the order and the state alone);
   a predicted rejection is not queued. **Tier 2**: the order acts two ticks later and its result is a prediction.
+- Publish / think (t02, inline so far): with the lane on, the AI slot of tick N runs `TacticalAiWorld::publish()` on the
+  critical lane (the host's fill, the tick's host event lists, the snapshot store: a copy-assigned `ObjectStore` the world and
+  its Lua VMs read) and then `think()` as a job. A job's queued orders and the digest of the AI world after it become visible
+  only when the job is collected (at the next AI slot, or at T2 of its due tick when k_ai = 1); the `battle.ai` CRC hashes the
+  digest of the last collected job, so with the lane on the world's hash is computed inside the job (off the critical lane)
+  and a capture never reads the world while a job may run. A save keeps a finished, uncollected job as it is (`battle.ai` v5).
+  The session descriptor's `ai_lane` / `k_ai` options are not compared when a save is loaded (a lane-off save loads into an
+  AI-lane session). Inline cost on `land_battle` (busy PC): `tac.ai.publish` 0.20 ms p50 (fill 0.17, store copy ~0.03) against
+  `tac.ai` 0.56 + `crc.battle.ai` 0.97 ms with the lane off.

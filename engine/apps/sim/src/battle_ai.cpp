@@ -332,8 +332,28 @@ bool BattleAi::controls(int32_t player) const {
 void BattleAi::update() {
     if (b_->finished_) return;
     follow_service();
-    world_->update(static_cast<int64_t>(host_->frame()), b_->frame_);
+    if (world_->ai_lane()) {  // sp3 t02
+        lane_collect();
+        world_->publish(static_cast<int64_t>(host_->frame()), b_->frame_);
+        lane_job_.pending = true;
+        lane_job_.frame = host_->frame();
+        lane_job_.batch.clear();
+        world_->think();  // inline: the AI lane's job (t03: on the AI thread)
+        StateHasher h;
+        world_->hash(h);
+        lane_job_.digest = h.digest();
+    } else {
+        world_->update(static_cast<int64_t>(host_->frame()), b_->frame_);
+    }
     standin_orders();
+}
+
+void BattleAi::lane_collect() {
+    if (!lane_job_.pending) return;
+    lane_job_.pending = false;
+    for (cmd::Command& c : lane_job_.batch) lane_batch_.push_back(std::move(c));
+    lane_job_.batch.clear();
+    lane_digest_ = lane_job_.digest;
 }
 
 void BattleAi::end() { world_->end_battle(); }
@@ -350,7 +370,8 @@ std::string BattleAi::summary() const {
 }
 
 void BattleAi::hash(StateHasher& h) const {
-    world_->hash(h);
+    if (world_->ai_lane()) h.u64(lane_digest_);  // sp3 t02: the last collected job's world digest
+    else world_->hash(h);
     h.u32(static_cast<uint32_t>(follows_.size()));  // a1h t02
     for (const ObjectFollow& f : follows_) {
         h.u32(static_cast<uint32_t>(f.units.size()));
@@ -392,13 +413,22 @@ void BattleAi::write(ByteWriter& w) const {
     o(ai_side_, stale_, executed_, opp_prev_, unit_ai_stamps_);
     o.seq(follows_, [](save_io::Out& a, const ObjectFollow& f) { follow_fields(a, f); });
     if (!lane) return;
+    // sp3: the host waited for the running job (lane_sync); a finished job not yet collected is saved as it is
+    const auto put_batch = [&w](const std::vector<cmd::Command>& batch) {
+        w.u32(static_cast<uint32_t>(batch.size()));
+        for (const cmd::Command& c : batch) {
+            const std::vector<uint8_t> bytes = cmd::encode_command(c);
+            w.u32(static_cast<uint32_t>(bytes.size()));
+            w.raw(bytes);
+        }
+    };
+    w.u64(lane_digest_);
     w.u32(lane_seq_);
-    w.u32(static_cast<uint32_t>(lane_batch_.size()));
-    for (const cmd::Command& c : lane_batch_) {
-        const std::vector<uint8_t> bytes = cmd::encode_command(c);
-        w.u32(static_cast<uint32_t>(bytes.size()));
-        w.raw(bytes);
-    }
+    put_batch(lane_batch_);
+    w.boolean(lane_job_.pending);
+    w.u64(lane_job_.frame);
+    w.u64(lane_job_.digest);
+    put_batch(lane_job_.batch);
 }
 
 bool BattleAi::read(ByteReader& r) {
@@ -417,18 +447,29 @@ bool BattleAi::read(ByteReader& r) {
     std::vector<ObjectFollow> follows;
     in.seq(follows, [](save_io::In& a, ObjectFollow& f) { follow_fields(a, f); });
     uint32_t lane_seq = 0;
+    uint64_t lane_digest = 0;
     std::vector<cmd::Command> lane_batch;
+    LaneJob job;
     if (version == kBattleAiLaneSaveVersion) {
+        const auto get_batch = [&r](std::vector<cmd::Command>& out) {
+            uint32_t n = 0;
+            if (!r.count(n, 4)) return false;
+            for (uint32_t i = 0; i < n && r.ok(); ++i) {
+                const std::span<const uint8_t> bytes = r.raw(r.u32());
+                size_t pos = 0;
+                cmd::Command c;
+                if (!r.ok() || cmd::decode_command(bytes, pos, c) != cmd::DecodeError::None || pos != bytes.size()) return false;
+                out.push_back(std::move(c));
+            }
+            return r.ok();
+        };
+        lane_digest = r.u64();
         lane_seq = r.u32();
-        uint32_t n = 0;
-        if (!r.count(n, 4)) return false;
-        for (uint32_t i = 0; i < n && r.ok(); ++i) {
-            const std::span<const uint8_t> bytes = r.raw(r.u32());
-            size_t pos = 0;
-            cmd::Command c;
-            if (!r.ok() || cmd::decode_command(bytes, pos, c) != cmd::DecodeError::None || pos != bytes.size()) return false;
-            lane_batch.push_back(std::move(c));
-        }
+        if (!get_batch(lane_batch)) return false;
+        job.pending = r.boolean();
+        job.frame = r.u64();
+        job.digest = r.u64();
+        if (!get_batch(job.batch)) return false;
     }
     if (!r.ok() || !r.done() || side != ai_side_) return false;  // the AI players are rebuilt by start()
     const std::map<objects::ObjectId, int32_t> stamps_before = unit_ai_stamps_;
@@ -450,6 +491,8 @@ bool BattleAi::read(ByteReader& r) {
     opp_prev_ = std::move(opp);
     lane_seq_ = lane_seq;
     lane_batch_ = std::move(lane_batch);
+    lane_digest_ = lane_digest;
+    lane_job_ = std::move(job);
     return true;
 }
 
@@ -1074,7 +1117,7 @@ cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
             c.header.issue_tick = host_->frame();
             c.header.scheduled_tick = host_->frame() + world_->k_ai();
             c.payload = ev;
-            lane_batch_.push_back(std::move(c));
+            lane_job_.batch.push_back(std::move(c));  // visible when the job is collected
         }
         return p;
     }
@@ -1170,6 +1213,7 @@ cmd::RejectReason BattleAi::predict_order(uint8_t player, const cmd::EventData& 
 }
 
 void BattleAi::apply_lane_batch(uint64_t frame) {
+    if (lane_job_.pending && lane_job_.frame + world_->k_ai() <= frame) lane_collect();  // k_ai = 1: due before the next update
     if (lane_batch_.empty()) return;
     std::vector<cmd::Command> due, later;
     for (cmd::Command& c : lane_batch_) (c.header.scheduled_tick <= frame ? due : later).push_back(std::move(c));

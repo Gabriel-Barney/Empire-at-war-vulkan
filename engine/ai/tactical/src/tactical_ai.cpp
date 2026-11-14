@@ -234,13 +234,18 @@ struct PlayerAi;
 struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHost {
     Impl(objects::ObjectStore& st, const objects::GameObjectTypes* ty, const FileProvider* fp, GameRandom& r, const AiDefinitions& d,
          const EquationSet& e, TacticalAiHost& h, TacticalAiConfig c)
-        : store(st), types(ty), files(fp), own_rng(lane_rng(c)), rng(c.ai_lane ? own_rng : r), defs(d), eqs(e), host(h),
-          cfg(std::move(c)) {}
+        : snap_store(c.ai_lane ? std::make_unique<objects::ObjectStore>(st) : nullptr), live_store(&st),
+          store(snap_store ? *snap_store : st), types(ty), files(fp), own_rng(lane_rng(c)), rng(c.ai_lane ? own_rng : r), defs(d),
+          eqs(e), host(h), cfg(std::move(c)) {}
     static GameRandom lane_rng(const TacticalAiConfig& c) {
         const auto [synced, free] = ai_lane_seeds(c.game_seed);
         return c.ai_lane ? GameRandom(synced, free) : GameRandom();
     }
 
+    // sp3 t02: with the lane on, `store` is the snapshot store (a copy of the battle store taken at each publish());
+    // live_store is the battle store it copies (read only by publish()).
+    std::unique_ptr<objects::ObjectStore> snap_store;
+    const objects::ObjectStore* live_store;
     objects::ObjectStore& store;
     const objects::GameObjectTypes* types;
     const FileProvider* files;
@@ -255,6 +260,14 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     // perception
     PerceptionWorld w;
     std::vector<TacticalAiObject> facts;
+    // sp3 t02: the host event lists publish() captured for think()
+    struct LaneInputs {
+        std::vector<OpportunityTargetEvent> opportunity;
+        std::vector<AttackStateSignal> attack_states;
+        std::vector<int32_t> ability_finished;
+        std::vector<ReinforcementsUnloaded> unloaded;
+        std::vector<TacticalAiHost::ProductionCompleted> produced;
+    } lane_in;
     std::vector<std::pair<int32_t, int32_t>> prev;  // (id, owner) of the last snapshot, ascending id
     // q6 (OBJECT_SCRIPTS §10.1): ids a script took out of the AI before this world perceived them (ascending); their
     // first admission (the add path of refresh) is skipped once.
@@ -572,7 +585,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     }
 
     // ---- object signals / free store ----
-    void refresh();
+    void refresh(bool fill = true);  // sp3 t02: fill false = publish() already filled w / facts
     void admit(PlayerAi& p, size_t index, bool call_lua);
     // A task force releases `u` (TaskForce vf49 0x5ff610): 0x6c27d0 with the plan's PP `pp` (-1 none), re-admission.
     void release_to_free_store(int32_t player, ObjectHandle u, int32_t pp);
@@ -1446,9 +1459,9 @@ void TacticalAiWorld::Impl::release_to_free_store(int32_t player, ObjectHandle u
     if (readmit && o->alive && o->owner == player) host.unit_released(player, o->id, TacticalAiHost::UnitRelease::TaskForce);
 }
 
-void TacticalAiWorld::Impl::refresh() {
+void TacticalAiWorld::Impl::refresh(bool fill) {
     profile::Steps steps;  // sp0: tac.ai.perception split (wall-clock only)
-    host.fill(w, facts);
+    if (fill) host.fill(w, facts);
     ALAMO_PROFILE_STEP(steps, "tac.perc.fill");
     if (facts.size() != w.objects.size()) facts.resize(w.objects.size());
     // refix t01: dying / removing objects (death clones: +0x3a0 |= 0xc0, S9_DEATH_CLONE_SHIELDS.md §1.6) are not
@@ -3797,10 +3810,45 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
     return any;
 }
 
+namespace {
+// update()'s body; lane = think() (publish() filled w / facts and lane_in, and set now / mode_frame).
+void run_update(TacticalAiWorld::Impl& w, bool lane);
+}  // namespace
+
 void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
+    Impl& w = *impl_;
+    if (w.cfg.ai_lane) {  // sp3 t02
+        publish(now, mode_frame);
+        think();
+        return;
+    }
+    w.now = now;
+    w.mode_frame = mode_frame;
+    run_update(w, false);
+}
+
+void TacticalAiWorld::publish(int64_t now, uint32_t mode_frame) {
     Impl& w = *impl_;
     w.now = now;
     w.mode_frame = mode_frame;
+    {
+        ALAMO_PROFILE_SCOPE("tac.ai.publish");  // sp3: the critical lane's share (fill, event lists, snapshot store)
+        if (w.snap_store) *w.snap_store = *w.live_store;
+        w.host.fill(w.w, w.facts);
+        w.lane_in.opportunity = w.host.opportunity_targets();
+        w.lane_in.attack_states = w.host.attack_state_signals();
+        w.lane_in.ability_finished = w.host.ability_finished();
+        w.lane_in.unloaded = w.host.reinforcements_unloaded();
+        w.lane_in.produced = w.host.production_completed();
+    }
+}
+
+void TacticalAiWorld::think() { run_update(*impl_, true); }
+
+namespace {
+void run_update(TacticalAiWorld::Impl& w, bool lane) {
+    const int64_t now = w.now;
+    const uint32_t mode_frame = w.mode_frame;
     for (auto& pa : w.ai)  // OPT2 t02: background land path recomputes due on this mode frame
         if (pa) pa->publish_paths(static_cast<int64_t>(mode_frame));
     {  // OPT2 t04: staggered scheduled Lua collections, once per update before any script of this world runs
@@ -3815,13 +3863,14 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     }
     {
         ALAMO_PROFILE_SCOPE("tac.ai.perception");  // OPT2 t08: snapshot, threat grid, signals
-        w.refresh();
+        w.refresh(!lane);
         profile::Steps steps;  // sp0: the signal passes after refresh()
-        w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
-        w.target_in_range_events(w.host.attack_state_signals());  // s78f t08: signal 0x1E
-        w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
-        w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
-        w.production_completed(w.host.production_completed());        // q6 t19: signal 0x22 (land builds to the pool)
+        // sp3 t02: with the lane on, the lists publish() captured (same calls, same order)
+        w.opportunity_events(lane ? w.lane_in.opportunity : w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
+        w.target_in_range_events(lane ? w.lane_in.attack_states : w.host.attack_state_signals());  // s78f t08: signal 0x1E
+        w.ability_signals(lane ? w.lane_in.ability_finished : w.host.ability_finished());       // S7 t15 A1: signal 0x29
+        w.reinforcements_unloaded(lane ? w.lane_in.unloaded : w.host.reinforcements_unloaded());  // a1j t01: signal 0x19
+        w.production_completed(lane ? w.lane_in.produced : w.host.production_completed());        // q6 t19: signal 0x22
         w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
         ALAMO_PROFILE_STEP(steps, "tac.perc.signals");
     }
@@ -3840,6 +3889,7 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     // or the queue grows for the whole battle. Sim code never reads it (events.hpp), so no CRC or saved state depends on it.
     w.pipeline.events().deliver();
 }
+}  // namespace
 
 void TacticalAiWorld::end_battle() {
     Impl& w = *impl_;
@@ -4566,6 +4616,9 @@ void TacticalAiWorld::write(ByteWriter& w) const {
 
 bool TacticalAiWorld::read(ByteReader& r) {
     Impl& m = *impl_;
+    // sp3 t02: the snapshot store is refreshed from the restored battle store (battle.ai is read last), so the saved
+    // handles resolve against it; it is not saved state (every publish() copies it again).
+    if (m.snap_store) *m.snap_store = *m.live_store;
     const objects::ObjectStore& st = m.store;
     const size_t lib = m.library.plans.size();
     const size_t goal_types = m.defs.goals.size();

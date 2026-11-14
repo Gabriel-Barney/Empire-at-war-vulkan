@@ -423,6 +423,14 @@ public:
     bool start(std::vector<std::string>* diagnostics = nullptr);
     // One AI frame (see the header comment). `now` = global frame (service clocks), `mode_frame` = F.
     void update(int64_t now, uint32_t mode_frame);
+    // sp3 t02 (AI lane, docs/SIM_PARALLEL_DESIGN.md 5.1): update() split at the lane boundary, used with ai_lane on (there
+    // update() = publish() + think()). publish() runs on the critical lane at the end of tick N: the host's fill
+    // (PerceptionWorld + facts), this tick's host event lists (opportunity targets, attack states, ability ends, landings,
+    // production) and the snapshot store - a copy of the battle store taken now, which the world and its Lua VMs read
+    // (and, until t05 turns them into commands, the Lua bindings that create objects write) with the lane on. think() runs
+    // the rest of update() from those inputs. Lane off: unused, update() is unchanged.
+    void publish(int64_t now, uint32_t mode_frame);
+    void think();
     // Battle end (slot 7 / context teardown): every running plan ends (released by the goal system).
     void end_battle();
     // OPT3 t11: closes every Lua VM of this world (running plans, free stores, evaluators, plan pools) instead of one by

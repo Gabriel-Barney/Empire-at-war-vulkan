@@ -123,6 +123,13 @@ public:
     // commands) and executes every queued order due by then in (due, player, sequence) order with the same rules as
     // before (execute_order), signals included. The other AI writes stay immediate until t05. Lane off: nothing queued.
     void apply_lane_batch(uint64_t frame);
+    // sp3 t02: with the lane on, update() runs the world as TacticalAiWorld::publish() (critical lane) + think() (the AI
+    // lane; inline until t03 moves it to the AI thread). Each think() is a job whose outputs - the orders it queued and
+    // the digest of the AI world after it - become visible only when the job is collected: at the next update(), or at
+    // the start of the tick its orders are due (k_ai = 1), whichever comes first; the battle.ai CRC hashes the digest of
+    // the last collected job, so the CRC never reads the world while a job may run. lane_sync() waits until the running
+    // job has finished (saves; inline until t03), without collecting it: the save keeps it as the pending job.
+    void lane_sync() {}
     size_t lane_pending() const { return lane_batch_.size(); }
     uint32_t lane_mismatches() const { return lane_mismatch_; }  // applied with another result than predicted [diagnostic]
     ai::tactical::TacticalAiWorld& world() { return *world_; }
@@ -287,6 +294,15 @@ private:
     // sp3 t04: the AI lane's queued orders (header: player, source AI, sequence, scheduled_tick = due frame), in issue
     // order; hashed and saved with the lane on.
     std::vector<commands::Command> lane_batch_;
+    struct LaneJob {
+        bool pending = false;
+        uint64_t frame = 0;   // global frame of the update
+        uint64_t digest = 0;  // StateHasher digest of the world after think()
+        std::vector<commands::Command> batch;  // the orders it queued (execute() appends while it runs)
+    };
+    LaneJob lane_job_;
+    uint64_t lane_digest_ = 0;  // digest of the last collected job (hashed and saved)
+    void lane_collect();
     uint32_t lane_seq_ = 0;
     uint32_t lane_mismatch_ = 0;  // not saved, not hashed
     static bool lane_batched(const commands::EventData& ev);
