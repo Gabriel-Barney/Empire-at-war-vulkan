@@ -1104,9 +1104,25 @@ void set_stickiness(Call& c, ObjectHandle u, float seconds) {
     if (RemainingObjectState* s = edit_state(c, store(c)->id(u))) s->stickiness = seconds;
 #if ALAMO_LUA_HAVE_ABILITIES
     ObjectBridge* b = bridge(c);
+    const objects::ObjectStore* st = store(c);
+    if (b && b->lane_abilities) {  // sp3 (AI lane): the combat units among them, queued
+        LaneWrite w;
+        w.op = LaneWriteOp::Stickiness;
+        w.owner = st->owner(u);
+        w.seconds = seconds;
+        auto add = [&w, b, st](ObjectHandle h) {
+            const LaneObject* o = b->lane_abilities->find(st->id(h));
+            if (o && o->combat) w.ids.push_back(o->id);
+        };
+        add(u);
+        if (st->has_behavior(u, objects::beh::Team))
+            for (const ObjectHandle m : st->all_objects())
+                if (st->alive(m) && st->container(m) == u) add(m);
+        if (!w.ids.empty() && b->lane_write) b->lane_write(w);
+        return;
+    }
     if (!b || !b->abilities) return;
     tactical::combat::CombatSystem& cs = b->abilities->combat();
-    const objects::ObjectStore* st = store(c);
     auto write = [&cs, st, seconds](ObjectHandle h) {
         const ObjectId id = st->id(h);
         if (cs.has_unit(id)) cs.set_stickiness_override(id, seconds);

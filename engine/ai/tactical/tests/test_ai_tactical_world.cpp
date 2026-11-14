@@ -1277,6 +1277,7 @@ using RunHook = std::function<void(int32_t frame, MockHost& host, TacticalAiWorl
 const std::vector<TacticalAiDifficulty>* g_difficulties = nullptr;
 // The SynType object types for the store (variant 7: Syn_Corvette lists SPRINT in Unit_Abilities_Data).
 bool g_hero_frigate = false;  // S7 t26: Syn_Frigate is Is_Named_Hero (test_no_units_remaining_heroes)
+bool g_ai_lane = false;  // sp3: TacticalAiConfig::ai_lane of the SaveSession worlds (test_ai_lane_save)
 bool g_original_timing = false;  // a1k t01: TacticalAiConfig::stagger / pp_streams off (the original's planning timing)
 bool syn_object_types(MemoryFiles& tf, objects::ObjectTypeDatabase& raw, objects::GameObjectTypes& types, bool abilities) {
     const char* names[] = {"Syn_Frigate", "Syn_Corvette", "Syn_Station", "Syn_Pad", "UC_Syn_Turret"};
@@ -2325,6 +2326,7 @@ struct SaveSession {
         host.add_pool(1, 2002, tFrigate, 2.0f);
         TacticalAiConfig cfg;
         cfg.mode = g_land ? TacticalMode::Land : TacticalMode::Space;
+        cfg.ai_lane = g_ai_lane;  // sp3
         cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
         cfg.difficulties = {{"Easy_Default", 15.0f, 15.0f, 0.67f, 0.75f}, {"Normal_Default", 0.0f, 0.0f, 1.0f, 1.0f}};
         lua::LuaPlayerSetup a, b;
@@ -2387,6 +2389,54 @@ struct SaveSession {
 };
 
 std::string decision_line(const TacticalAiDecision& d) { return std::to_string(d.frame) + " p" + std::to_string(d.player) + " " + d.text; }
+
+void test_save_load(int variant, int32_t save_at, int32_t frames);
+uint32_t first_u32(const std::vector<uint8_t>& b) {
+    return b.size() < 4 ? 0u : static_cast<uint32_t>(b[0]) | (static_cast<uint32_t>(b[1]) << 8) | (static_cast<uint32_t>(b[2]) << 16) |
+                                   (static_cast<uint32_t>(b[3]) << 24);
+}
+
+// sp3 (TacticalAiConfig::ai_lane): an AI-lane world draws from its own stream, not the session's, and saves it (version 13)
+// so a load continues identically; a lane-off save (version 12) loads into a lane-on world; a lane-on save does not load
+// into a lane-off world; the lane-off bytes keep version 12.
+void test_ai_lane_save() {
+    const int32_t save_at = 30 * 35;
+    g_ai_lane = false;
+    std::vector<uint8_t> off_image;
+    uint64_t off_session_draws = 0;
+    {
+        SaveSession a(0);
+        for (int32_t f = 1; f <= save_at; ++f) a.step(f);
+        off_image = a.ai_bytes();
+        off_session_draws = a.rng.synced().draws();
+    }
+    CHECK(first_u32(off_image) == 12u);
+    g_ai_lane = true;
+    test_save_load(1, 30 * 30, 30 * 60);  // round trip and continuation with the lane on (variant 0's corruption offsets are v12's)
+    SaveSession a(0);
+    for (int32_t f = 1; f <= save_at; ++f) a.step(f);
+    const std::vector<uint8_t> on_image = a.ai_bytes();
+    CHECK(first_u32(on_image) == 13u);
+    // The AI's own draws left the session stream (what remains are the host's).
+    CHECK(a.rng.synced().draws() < off_session_draws);
+    {
+        SaveSession b(0);  // a lane-off image into a lane-on world
+        g_ai_lane = false;
+        SaveSession from(0);
+        for (int32_t f = 1; f <= save_at; ++f) from.step(f);
+        CHECK(b.restore_host(from) && b.load_ai(off_image));
+        CHECK(first_u32(b.ai_bytes()) == 13u);
+    }
+    {
+        g_ai_lane = false;
+        SaveSession c(0);  // a lane-on image is refused by a lane-off world
+        CHECK(c.restore_host(a) && !c.load_ai(on_image, true));
+    }
+    g_ai_lane = false;
+    std::printf("sp3 ai_lane save: lane-off image %zu bytes (v12), lane-on %zu bytes (v13); session draws %llu off, %llu on\n",
+                off_image.size(), on_image.size(), static_cast<unsigned long long>(off_session_draws),
+                static_cast<unsigned long long>(a.rng.synced().draws()));
+}
 
 // A battle saved mid-fight (plans running with Lua threads suspended in their task-force loops, task forces holding
 // units, free stores, PotentialPlan reservations, the threat grid and leaf cache filled; variant 1 adds opportunity-fire
@@ -3172,6 +3222,7 @@ int main(int argc, char** argv) {
     test_save_load(1, 30 * 30, 30 * 60);   // opportunity-fire subscriptions, HIJACK spawns
     test_save_load(3, 30 * 40, 30 * 80);   // Script_ evaluator VMs
     test_pp_pending_save();               // OPT2 t10
+    test_ai_lane_save();                  // sp3
     test_order_results_bounded(0, 30 * 120);
     test_order_results_bounded(1, 30 * 60);  // with the opportunity-fire and HIJACK plans
     // S7 t20 / t21 / t15 A1

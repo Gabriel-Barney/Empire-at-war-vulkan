@@ -158,6 +158,15 @@ struct Session {
     }
 };
 
+// sp3: an AI-lane session (--ai-lane) records it (options "ai_lane", "k_ai"; absent = off, so other descriptors are unchanged).
+void record_ai_lane([[maybe_unused]] sim::SessionDescriptor& d) {
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    if (!sim::ai_lane_defaults().on) return;
+    d.set_option("ai_lane", "1");
+    d.set_option("k_ai", std::to_string(sim::ai_lane_defaults().k_ai));
+#endif
+}
+
 // N1 stage 2: what a harness builds beyond its kind (recorded in the descriptor's options; --load reads them back).
 struct HarnessOptions {
     std::string campaign;  // galactic: the campaign; skirmish: synthetic | foc | foc-land
@@ -712,6 +721,7 @@ public:
         d.set_option("battles", ho_.battles);
         if (ho_.anim) d.set_option("anim", "1");  // N1 stage 2 (absent = off: stage-1 descriptors unchanged)
         if (ho_.story) d.set_option("story", "1");
+        record_ai_lane(d);  // sp3
         d.data_fingerprint = fingerprint_;
         host.set_session(std::move(d));
         return s;
@@ -773,6 +783,7 @@ public:
         d.set_option("map", skirmish_save_map(*data_));
         d.set_option("battles", "fight-all");
         if (ho_.anim) d.set_option("anim", "1");
+        record_ai_lane(d);  // sp3
         d.data_fingerprint = skirmish_save_fingerprint(*data_);
         s->host->set_session(std::move(d));
         return s;
@@ -986,6 +997,12 @@ std::unique_ptr<Harness> harness_for_save(const sim::SessionDescriptor& d, const
     }
     ho.anim = d.option("anim") == "1";
     if (d.kind == "skirmish") ho.map = d.option("map");
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    if (d.option("ai_lane") == "1") {  // sp3: a save of an AI-lane session loads into one (its worlds keep the saved k_ai)
+        sim::ai_lane_defaults().on = true;
+        if (const std::string k = d.option("k_ai"); !k.empty()) sim::ai_lane_defaults().k_ai = static_cast<uint32_t>(std::stoul(k));
+    }
+#endif
     return make_harness(kind, ho, skip, err);
 }
 

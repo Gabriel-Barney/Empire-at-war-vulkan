@@ -783,6 +783,12 @@ AbilitySystem::SpecialState* AbilitySystem::special_by_crc(Obj& o, uint32_t crc)
         if (data_->specials[sp.desc].name_crc == crc) return &sp;
     return nullptr;
 }
+const AbilitySystem::SpecialState* AbilitySystem::special_by_crc(const Obj& o, uint32_t crc) const {
+    if (crc == 0) return nullptr;
+    for (const SpecialState& sp : o.specials)
+        if (data_->specials[sp.desc].name_crc == crc) return &sp;
+    return nullptr;
+}
 
 bool AbilitySystem::allowed(const SpecialAbilityDesc& s) const {
     return cfg_.abilities_enabled && style_allowed(s.style, cfg_.mode, cfg_.skirmish);
@@ -1504,6 +1510,48 @@ bool AbilitySystem::saber_params(ObjectId id, int32_t& projectile, float& catch_
 bool AbilitySystem::can_activate(ObjectId id, uint8_t type, bool check_recharge, bool check_nebula, uint32_t frame) const {
     const Obj* o = obj(id);
     return o && can(*o, type, check_recharge, check_nebula, frame) && bm_ok(*o, type);  // P4 tactical: BM gate
+}
+void AbilitySystem::object_ids(std::vector<ObjectId>& out) const {
+    out.clear();
+    out.reserve(objs_.size());
+    for (const Obj& o : objs_) out.push_back(o.id);
+}
+void AbilitySystem::lane_types(ObjectId id, uint32_t frame, std::vector<std::pair<uint8_t, uint8_t>>& out) const {
+    out.clear();
+    const Obj* o = obj(id);
+    if (!o) return;
+    // Candidates (a superset of the listed types): the object's own slots and autofire bytes, a team's members' slots (a
+    // member that is itself a container: every type).
+    std::array<uint8_t, kAbilitySlots> cand{};
+    for (uint32_t t = 1; t < kAbilitySlots; ++t) cand[t] = (o->record[t] >= 0 || o->autofire[t] != 0) ? 1 : 0;
+    if (o->is_container)
+        for (const ObjectId m : o->members)
+            if (const Obj* mo = obj(m))
+                for (uint32_t t = 1; t < kAbilitySlots; ++t) cand[t] |= (mo->is_container || mo->record[t] >= 0) ? 1 : 0;
+    for (uint32_t t = 1; t < kAbilitySlots; ++t) {
+        if (!cand[t]) continue;
+        const bool h = has(*o, t);
+        if (!h && o->autofire[t] == 0) continue;
+        const bool bm = bm_ok(*o, t);
+        const bool can_on = can(*o, t, true, true, frame) && bm;  // can_activate(t, true, true)
+        const bool active = active_state(*o, t);
+        uint8_t b = 0;
+        if (h) b |= kLaneHas;
+        if (h && bm && (can_on || o->pending_type == static_cast<int32_t>(t))) b |= kLaneReady;  // is_ready
+        if (can_on) b |= kLaneCan;
+        if (active) b |= kLaneActive;
+        if (o->autofire[t] != 0) b |= kLaneAutofire;
+        // set_unit_ability_mode gates 1-3: on - can + BM, not active, a zero counter; off - can(false, false), active
+        if (can_on && !active && !(desc(*o).countdown && !o->cd.counter_zero(t))) b |= kLaneModeOn;
+        if (active && can(*o, t, false, false, frame)) b |= kLaneModeOff;
+        // targeted_ability's per-user checks without the target's (alive_unit, accepts)
+        if (can_on && !o->dead && o->container == kNoObject) {
+            const UnitAbilityRecord* r = record_of(*o, t);
+            const SpecialState* sp = r ? special_by_crc(*o, r->gui_name_crc) : nullptr;
+            if (sp && allowed(data_->specials[sp->desc]) && enabled(*o, data_->specials[sp->desc])) b |= kLaneTargeted;
+        }
+        out.emplace_back(static_cast<uint8_t>(t), b);
+    }
 }
 bool AbilitySystem::is_ready(ObjectId id, uint8_t type, uint32_t frame) const {
     const Obj* o = obj(id);

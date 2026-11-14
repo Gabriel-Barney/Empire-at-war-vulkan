@@ -43,10 +43,12 @@
 // AnimWorld::play (blend 0.33 s, speed 1: ANIM_PARTICLES §A.4); Get_Bone_Position(bone) ->
 // AnimWorld::bone_world_position with object_to_world (default [port]: position, facing yaw, Scale_Factor).
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <iterator>
 #include <map>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -87,6 +89,79 @@ enum class LuaOrder : uint8_t {
     CancelHyperspace = 6,  // Cancel_Hyperspace (L1/S4 wave 2a; the locomotor / reinforcement host handles it)
 };
 inline constexpr size_t kLuaOrderPayloadBytes = 24;
+
+// ---- sp3 (AI lane, docs/SIM_PARALLEL_DESIGN.md 5.1 / 11.6): the ability / combat state the bindings read off the
+// critical lane, and the writes they queue there ----
+// One ability type of a captured object (AbilitySystem answers at the capture frame): has_ability, is_ready,
+// can_activate(t, true, true), is_active, is_autofire, and the dry runs the lane's same-call answers predict from
+// (set_unit_ability_mode on / off gates 1-3, targeted_ability's per-user checks).
+struct LaneAbility {
+    uint8_t type = 0;
+    uint8_t has = 0, ready = 0, can = 0, active = 0, autofire = 0, mode_on = 0, mode_off = 0, targeted = 0;
+};
+// One object of the battle's ability or combat system as captured at the AI slot.
+struct LaneObject {
+    objects::ObjectId id = objects::kNoObjectId;
+    objects::ObjectId container = objects::kNoObjectId;  // AbilitySystem::container_of
+    uint8_t abilities = 0;  // the ability system knows it (the bindings' ability_system() answers)
+    uint8_t combat = 0;     // the combat system has the unit (Get_Hull / Get_Shield / Set_Targeting_Priorities)
+    uint8_t tractored = 0, ion_stunned = 0;
+    uint8_t engine_hardpoints = 0, engines_live = 0;  // any ENGINE hard point; any of them functioning
+    int32_t immobilize = 0;
+    float hull = 0.0f, shield = 0.0f;  // CombatSystem::script_hull / shield_fraction
+    uint32_t first = 0, count = 0;    // its LaneAbility entries (LaneAbilityView::types, ascending type)
+};
+struct LaneAbilityView {
+    uint32_t frame = 0;                 // the ability frame of the capture
+    std::vector<LaneObject> objects;    // ascending id
+    std::vector<LaneAbility> types;
+    const LaneObject* find(objects::ObjectId id) const {
+        const auto it = std::lower_bound(objects.begin(), objects.end(), id, [](const LaneObject& o, objects::ObjectId v) { return o.id < v; });
+        return it != objects.end() && it->id == id ? &*it : nullptr;
+    }
+    const LaneAbility* ability(const LaneObject& o, uint8_t type) const {
+        for (uint32_t i = o.first; i < o.first + o.count; ++i)
+            if (types[i].type == type) return &types[i];
+        return nullptr;
+    }
+};
+// A queued write: applied by the host at the start of the due tick, in its batch order, through the same calls the
+// binding makes on the critical lane (ObjectBridge::lane_write). PortExtension subtype kLaneWriteSubtype, payload
+// encode_lane_write.
+enum class LaneWriteOp : uint8_t {
+    SetAutofire = 1,      // AbilitySystem::set_autofire(ids, type, on)
+    AbilityMode = 2,      // set_unit_ability_mode(ids, type, on, frame, target)
+    Targeted = 3,         // targeted_ability(ids, type, target, -1, frame)
+    DummyAbility = 4,     // spawn_ability_target(p, owner), then on the dummy: mode on (jet = on) or targeted
+    ForceRecharge = 5,    // force_recharge(ids[0], type, seconds)
+    ResetCounter = 6,     // reset_counter(ids[0], type)
+    UnlockMovement = 7,   // lock_movement(ids[0], false, frame)
+    PriorityOverride = 8, // CombatSystem::set_priority_override(ids[0], value)
+    Stickiness = 9,       // CombatSystem::set_stickiness_override(id, seconds) for each combat unit of ids
+    OrderReplaced = 10,   // ObjectBridge::raise_order_replaced(id) for each of ids
+};
+inline constexpr uint16_t kLaneWriteSubtype = 0x4157;  // "AW"
+struct LaneWrite {
+    LaneWriteOp op = LaneWriteOp::SetAutofire;
+    uint8_t type = 0;
+    uint8_t on = 0;  // AbilityMode / SetAutofire; DummyAbility: 1 = jet pack (mode on)
+    int32_t owner = -1;  // the first object's owner (the batch's player); DummyAbility: the dummy's owner
+    int32_t value = -1;  // PriorityOverride: the set index; AbilityMode / Targeted / DummyAbility: the predicted count
+    float seconds = -1.0f;
+    objects::ObjectId target = objects::kNoObjectId;
+    Vec3 p{};
+    std::vector<objects::ObjectId> ids;
+};
+std::vector<uint8_t> encode_lane_write(const LaneWrite& w);
+bool decode_lane_write(std::span<const uint8_t> bytes, LaneWrite& out);  // false on malformed bytes
+class ObjectBridge;
+// The host's two halves (with ALAMO_LUA_HAVE_ABILITIES; without, an empty view and nothing applied): the capture of every
+// object of `a` and of its combat system at `frame` (on the critical lane, at the AI slot), and the apply of a queued
+// write at the due tick's `frame` through the calls the binding makes live. `host` = the VMs' bridge (its
+// spawn_ability_target and raise_order_replaced). apply returns the count of a write with a predicted answer (compare
+// LaneWrite::value), else -1.
+void capture_lane_abilities(const tactical::abilities::AbilitySystem& a, uint32_t frame, LaneAbilityView& out);
+int32_t apply_lane_write(tactical::abilities::AbilitySystem& a, uint32_t frame, const LaneWrite& w, const ObjectBridge& host);
 
 struct AbilityState {
     bool active = false;
@@ -250,6 +325,12 @@ public:
     // the host spawns at the point (an object id is consumed). Returns its id, or kNoObjectId to refuse. Unset:
     // the SetUnitAbilityMode event with the position goes to the pipeline instead [port].
     std::function<objects::ObjectId(Vec3 position, int32_t owner)> spawn_ability_target;
+    // sp3 (AI lane): set by a host whose VMs run off the critical lane (BattleAi with TacticalAiConfig::ai_lane). The
+    // ability / combat bindings then read the object's record in `lane_abilities` (captured at the AI slot; an object
+    // missing from it is unknown to both systems) instead of `abilities`, and hand their writes to `lane_write`, which
+    // queues them for the due tick; a write's same-call answer is predicted from the record's dry runs. Null: live.
+    const LaneAbilityView* lane_abilities = nullptr;
+    std::function<void(const LaneWrite&)> lane_write;
     // R3 animation world of the mode (rows by store id). Used only with ALAMO_LUA_HAVE_ANIM.
     anim::AnimWorld* anim = nullptr;
     // Global frame for AnimWorld::play. Unset: the VM frame.

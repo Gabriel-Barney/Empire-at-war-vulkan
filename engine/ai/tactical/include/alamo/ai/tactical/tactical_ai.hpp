@@ -313,6 +313,7 @@ public:
 
 // OPT2 t10: frames from a proposal slice to the apply of its PotentialPlan solves (TacticalAiConfig::pp_latency).
 inline constexpr uint32_t kDefaultPpLatency = 1;
+inline constexpr uint32_t kDefaultAiLaneLatency = 2;  // sp3: k_ai (SIM_PARALLEL_DESIGN 5.1 "Why k_ai = 2")
 
 struct TacticalAiPlayerConfig {
     int32_t player = -1;
@@ -369,7 +370,16 @@ struct TacticalAiConfig {
     // pp_latency frames after the slice. false = the original synced draws in proposal order (pp_latency unused).
     bool pp_streams = true;
     uint32_t pp_latency = kDefaultPpLatency;
+    // sp3 (docs/SIM_PARALLEL_DESIGN.md 5.1, 11.3): the AI lane. On, the world's own draws (goals, plan picks, FindTarget,
+    // Script_ evaluators, Guard / "Random" hard point, Most_Defended, the AI Lua VMs' GameRandom) come from an AI-owned
+    // GameRandom seeded from game_seed (ai_lane_seeds) and saved with the world, not from the session's streams; k_ai is the
+    // number of ticks between an AI update and the apply of its command batch (saved per world, a load keeps the saved
+    // value). Off = today's behaviour; a world saved with the lane on loads only into a world with it on, and vice versa.
+    bool ai_lane = false;
+    uint32_t k_ai = kDefaultAiLaneLatency;
 };
+// sp3: the AI-owned stream's (synced, free) seeds of an AI-lane world (splitmix64 of the session seed and a lane salt).
+std::pair<uint32_t, uint32_t> ai_lane_seeds(uint32_t game_seed);
 
 struct TacticalAiDecision {
     int64_t frame = 0;
@@ -413,6 +423,14 @@ public:
     bool start(std::vector<std::string>* diagnostics = nullptr);
     // One AI frame (see the header comment). `now` = global frame (service clocks), `mode_frame` = F.
     void update(int64_t now, uint32_t mode_frame);
+    // sp3 t02 (AI lane, docs/SIM_PARALLEL_DESIGN.md 5.1): update() split at the lane boundary, used with ai_lane on (there
+    // update() = publish() + think()). publish() runs on the critical lane at the end of tick N: the host's fill
+    // (PerceptionWorld + facts), this tick's host event lists (opportunity targets, attack states, ability ends, landings,
+    // production) and the snapshot store - a copy of the battle store taken now, which the world and its Lua VMs read
+    // (and, until t05 turns them into commands, the Lua bindings that create objects write) with the lane on. think() runs
+    // the rest of update() from those inputs. Lane off: unused, update() is unchanged.
+    void publish(int64_t now, uint32_t mode_frame);
+    void think();
     // Battle end (slot 7 / context teardown): every running plan ends (released by the goal system).
     void end_battle();
     // OPT3 t11: closes every Lua VM of this world (running plans, free stores, evaluators, plan pools) instead of one by
@@ -452,6 +470,10 @@ public:
     const std::vector<TacticalAiDecision>& decision_log() const;
     std::vector<std::string> lua_errors() const;
     uint64_t orders_issued() const;
+    bool ai_lane() const;    // sp3: TacticalAiConfig::ai_lane
+    // sp3 t02: the store the world reads - the snapshot store with the lane on (as of the last publish()), else the battle's.
+    const objects::ObjectStore& view_store() const;
+    uint32_t k_ai() const;   // sp3: TacticalAiConfig::k_ai (a load keeps the saved value)
     uint64_t orders_rejected() const;
     // Results left on the AI pipeline's event bus: 0 after every update().
     size_t pending_order_results() const;
