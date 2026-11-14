@@ -224,7 +224,7 @@ void TacticalBattle::build_service_graph() {
         objects::ObjectStore& store = mode.primary();
         mode.resolve_models();  // refixf t07: after a load, before the boxes and the parallel sweeps read the model cache
         // SP5 (read old, write new, commit in index order): the boxes are computed per unit in parallel (const reads; the
-        // model-cache entries bounds_of fills lazily are filled first, serially: prepare_bounds), the trees updated in unit
+        // model-cache entries bounds_of fills lazily are filled first, serially: prepare_bounds), each tree updated in unit
         // order.
         const auto n = static_cast<uint32_t>(units_.size());
         const auto want = [&](const Unit& u) { return u.alive && !u.retreated && u.movable && store.alive(u.h); };
@@ -241,8 +241,13 @@ void TacticalBattle::build_service_graph() {
         };
         if (n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, fill);
         else fill(0, n);
+        // the boxes go to each tree in unit order, the trees side by side (TreeSet::update_batch)
+        std::vector<tactical::TreeSet::BoxUpdate> ups;
+        ups.reserve(n);
         for (uint32_t i = 0; i < n; ++i)
-            if (has[i]) mode.trees().update(static_cast<tactical::EntityHandle>(units_[i].id), box[i]);
+            if (has[i]) ups.push_back({static_cast<tactical::EntityHandle>(units_[i].id), box[i]});
+        if (n >= svc_parallel_min_) mode.trees().update_batch(ups, *tick_.pf);
+        else mode.trees().update_batch(ups);
         mode.trees().maintain(tick_.sim_time, *tick_.pf);
     });
     lap("tac.trees");

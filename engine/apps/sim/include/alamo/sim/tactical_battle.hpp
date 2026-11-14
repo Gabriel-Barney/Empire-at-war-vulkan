@@ -1870,6 +1870,9 @@ private:
     std::unique_ptr<tactical::garrison::CapturePointSystem> captures_;
     bool s4_used_ = false;  // some garrison / capture state exists (CRC section on from then)
     objects::ObjectStore* s4_store_ = nullptr;  // the battle mode's primary store (capture rule b)
+    // SP5: Influences_Capture_Point per type (-1 not looked up yet), filled on first use by the serial capture pass;
+    // type data does not change in a battle, so this is a pure cache (never saved or hashed)
+    std::vector<int8_t> s4_capture_influence_;
     // --- end S4 ---
     Vec3 anchor_[2]{}, facing_[2]{};
     Vec3 drop_facing_[2]{};  // a1h t06: the sides' entry-facing records (mode +0x288; zero = yaw 0), see drop_yaw
