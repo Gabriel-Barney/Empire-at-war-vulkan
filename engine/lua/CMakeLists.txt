@@ -186,6 +186,8 @@ endif()
 set_source_files_properties(${_lua_sources} PROPERTIES LANGUAGE CXX)
 
 add_library(alamo_lua_vm STATIC ${_lua_sources})
+set_property(TARGET alamo_lua_vm PROPERTY PRECOMPILE_HEADERS_REUSE_FROM)
+set_property(TARGET alamo_lua_vm PROPERTY DISABLE_PRECOMPILE_HEADERS ON)  # 'register=' define
 target_include_directories(alamo_lua_vm SYSTEM PUBLIC "${ALAMO_LUA_DIR}/include")
 target_compile_features(alamo_lua_vm PRIVATE cxx_std_20)
 # 'register' is gone in C++17; Lua 5.0 still spells it.
