@@ -1355,6 +1355,19 @@ and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched 
   (O(teams x units)): 1.07 of 1.26 ms. `a5600d5e` / `baa131c6` find the members and team slots by team value first (same
   members, same order; Empire-Underworld seed 2's final CRC unchanged): combat 1.26 -> 0.63-0.64 ms per tick at W0 (one run each,
   10 % and 65 % other-process CPU). The window has no shots (no projectiles): damage records (sp5 t08) do not touch this cost.
+- **Quiet-window re-run (sp5 t09, 2026-11-14, exe at `40a2bac1`)**: the coordinator held the other lanes (machine ~8 % busy before
+  the run), 5 interleaved rounds of 400 ticks, stress save remade with this exe (the sp6 tree hash changed the fingerprint):
+
+  | Round | W0 services mean / sum of medians | W7 | W7 / W0 mean | W7 / W0 sum of medians | other CPU W0 / W7 |
+  |---|---|---|---|---|---|
+  | 0 | 1.683 / 1.646 | 1.004 / 0.928 | 0.597 | 0.564 | 3 % / 5 % |
+  | 1 | 1.677 / 1.644 | 1.012 / 0.940 | 0.604 | 0.572 | 3 % / 3 % |
+  | 2 | 1.661 / 1.637 | 1.024 / 0.948 | 0.617 | 0.580 | 4 % / 3 % |
+  | 3 | 1.685 / 1.639 | 1.021 / 0.945 | 0.606 | 0.576 | 4 % / 5 % |
+  | 4 | 1.710 / 1.651 | 1.077 / 0.989 | 0.630 | 0.599 | 10 % / 11 % |
+
+  **Sum of medians: 0.564-0.599 in every round (exit bar 0.6: passed); mean: 0.597-0.630 (rounds 0-3 pooled 0.605, marginal).**
+  The tick median fell from ~10.5 / 9.2 ms (W0 / W7, first run) to 9.7-9.9 / 8.3-8.8 ms, mostly the combat fix below.
 - **Where damage would go** (sp5 t08, W0, one run each, 42-46 % other-process CPU, fingerprints OK): `land_battle` combat 0.147 ms
   per tick (unit walk `cmb.d_units` 0.096, projectile commit `cmb.f_projectiles` 0.004), `space_battle` 0.361 ms (projectile
   sweep `cmb.e_sweep` 0.277, already parallel; walk 0.064; commit 0.007). The serial commit that deferred damage records would
