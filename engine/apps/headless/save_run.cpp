@@ -2,6 +2,7 @@
 #include "save_run.hpp"
 #include "crc_out.hpp"
 
+#include <optional>
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
@@ -56,8 +57,6 @@ namespace {
 
 using namespace alamo;
 
-constexpr int kExitPending = 77;  // ctest SKIP_RETURN_CODE: the check ran as far as the landed chunks allow
-
 std::string env_text(const char* name) {
 #ifdef _MSC_VER
     char* v = nullptr;
@@ -78,10 +77,6 @@ std::string join(const std::vector<std::string>& v, const char* sep = ",") {
     std::string out;
     for (const std::string& s : v) out += (out.empty() ? "" : sep) + s;
     return out;
-}
-
-bool contains(const std::vector<std::string>& v, std::string_view s) {
-    return std::find(v.begin(), v.end(), s) != v.end();
 }
 
 // In-memory Data\ tree (the synthetic session needs no files on disk).
@@ -163,6 +158,15 @@ struct Session {
     }
 };
 
+// sp3: an AI-lane session (--ai-lane) records it (options "ai_lane", "k_ai"; absent = off, so other descriptors are unchanged).
+void record_ai_lane([[maybe_unused]] sim::SessionDescriptor& d) {
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    if (!sim::ai_lane_defaults().on) return;
+    d.set_option("ai_lane", "1");
+    d.set_option("k_ai", std::to_string(sim::ai_lane_defaults().k_ai));
+#endif
+}
+
 // N1 stage 2: what a harness builds beyond its kind (recorded in the descriptor's options; --load reads them back).
 struct HarnessOptions {
     std::string campaign;  // galactic: the campaign; skirmish: synthetic | foc | foc-land
@@ -215,6 +219,7 @@ const char* const kTypesXml =
 const char* const kPlots =
     "<Story_Mode_Plots><Lua_Script>Story_Save_Test</Lua_Script><Active_Plot>Story_Save_Test.xml</Active_Plot>"
     "<Suspended_Plot /></Story_Mode_Plots>\n";
+// [name-ok-begin: synthetic save-test data of the headless test host (factions below), not a rule]
 const char* const kPlot =
     "<Story>\n"
     " <Event Name=\"Begin\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>0</Event_Param1></Event>\n"
@@ -280,14 +285,17 @@ GalacticRules rules() {
     GalacticRules r;
     FactionRules emp;
     emp.name = "Empire";
+    emp.basic_ai = "BasicEmpire";
     emp.can_control_planets = emp.is_playable = true;
     FactionRules und;
     und.name = "Underworld";
+    und.basic_ai = "AI_Player_Underworld";
     und.can_control_planets = und.is_playable = und.benefits_from_corruption = true;
     FactionRules neu;
     neu.name = "Neutral";
     neu.is_neutral = true;
     r.factions = {emp, und, neu};
+    // [name-ok-end]
     r.difficulties = {{"Normal", 1.0f, 1.0f}};
     r.types.resize(tCount);
     const char* names[] = {"PlanetA", "PlanetB", "PlanetC", "PlanetD"};
@@ -485,7 +493,7 @@ public:
         for (const galactic::PlayerSetup& ps : setup_.players) d.setup.push_back(session_player(rules_, ps, ps.ai ? "stand-in" : ""));
         d.set_option("story", story_ ? "1" : "0");
         d.set_option("scripts", story_ ? "scoring,object" : "none");  // q6 t19
-        d.set_option("orders", "empire-production,underworld-invade");
+        d.set_option("orders", "empire-production,underworld-invade");  // [name-ok: label of the test host's scripted orders]
         d.data_fingerprint = fingerprint_;
         host.set_session(std::move(d));
         return s;
@@ -526,14 +534,12 @@ public:
         root_ = game_dir.empty() ? env_text("ALAMO_FOC_DATA") : game_dir;
         if (root_.empty()) return 0;
         args_ = game_args;
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root_;
+        std::optional<std::string> eaw_root;  // nullopt = auto-detect
         if (game_dir.empty()) {  // as ai_run.cpp: the EaW tier from ALAMO_EAW_DATA on the environment route
             const std::string eaw = env_text("ALAMO_EAW_DATA");
-            if (!eaw.empty()) vcfg.eaw_root = eaw;
+            if (!eaw.empty()) eaw_root = eaw;
         }
-        vfs::parse_command_line(args_, vcfg);
-        files_ = vfs::Vfs::create(vcfg, &err);
+        files_ = vfs::mount_game(root_, args_, &err, eaw_root);
         if (!files_) return -1;
         std::vector<std::string> diag;
         if (!db_.load(*files_, {}, &diag) || !raw_.load(*files_, &diag) || !types_.build(raw_, files_.get(), &diag) ||
@@ -552,7 +558,7 @@ public:
         ai::load_equation_files(*files_, files_->list(ai::kPerceptionEquationGlob), eqs_);
         plan_files_ = ai::list_plan_files(lister);
         tinfo_ = ai::make_galactic_ai_type_info(types_);
-        campaign_ = campaign.empty() ? std::string("Sandbox_Heart_Of_The_Maw_Underworld") : campaign;
+        campaign_ = campaign.empty() ? std::string("Sandbox_Heart_Of_The_Maw_Underworld") : campaign;  // [name-ok: test default campaign]
         setup_ = galactic::build_campaign_setup(db_, rules_, campaign_, {}, &diag);
         if (setup_.map.planets.size() == 0) {
             err = "galactic: campaign '" + campaign_ + "' has no planets";
@@ -567,12 +573,12 @@ public:
         const data::CampaignDef* cdef = db_.find_campaign(campaign_);
         const std::vector<std::string> no_pairs;
         const std::vector<std::string>& control = cdef ? cdef->ai_player_control : no_pairs;
-        const std::map<std::string, std::string> basic_ai = ai::load_faction_basic_ai(*files_);
+        const std::map<std::string, std::string> basic_ai = ai::load_faction_basic_ai(rules_.factions);
         ai_types_.assign(setup_.players.size(), std::string());
         for (size_t p = 0; p < setup_.players.size(); ++p) {
             galactic::PlayerSetup& ps = setup_.players[p];
             const std::string fac = ps.faction < rules_.factions.size() ? rules_.factions[ps.faction].name : std::string();
-            std::string type = ai::campaign_ai_type(control, basic_ai, fac, true);
+            std::string type = ai::campaign_ai_type(control, basic_ai, fac, ps.named);  // bkc1 t03 (as ai_run.cpp)
             if (!type.empty() && !defs_.find_player(type)) type.clear();
             if (type.empty() || (ps.faction < rules_.factions.size() && rules_.factions[ps.faction].is_neutral)) continue;
             ps.human = false;
@@ -641,6 +647,10 @@ public:
         bo.tactical_ai = tai_;
 #endif
         sim::load_tactical_systems(*files_, rules_, &db_.constants(), bo);
+        // cu8f t03: the random map picker's candidate table (CU8F_T03_T05_RE §1.1), built on the first pick [port].
+        bo.map_candidate_source = sim::map_candidate_source(*files_, [v = files_.get()](std::string_view g, bool mod) {
+            return v->list(g, mod ? vfs::Vfs::kLayerMod : vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg);
+        });
 #ifdef ALAMO_SIM_HAVE_ANIM
         if (ho_.anim) {
             s->anim = std::make_unique<sim::SimAnimation>(types_, *files_);
@@ -697,8 +707,8 @@ public:
         // N1: the galactic AI's chunk (GalacticAiWorld::write / read; pending while those are stubs).
         sim::SaveParticipant ai_part;
         ai_part.name = "ai";
-        ai_part.write = [sp](ByteWriter& w) { sim::write_if_saveable(*sp->world, w); };
-        ai_part.read = [sp](ByteReader& r) { return sim::read_if_saveable(*sp->world, r); };
+        ai_part.write = [sp](ByteWriter& w) { sim::write_system(*sp->world, w); };
+        ai_part.read = [sp](ByteReader& r) { return sim::read_system(*sp->world, r); };
         host.add_save_participant(std::move(ai_part));
         sim::SessionDescriptor d;
         d.kind = "galactic";
@@ -711,6 +721,7 @@ public:
         d.set_option("battles", ho_.battles);
         if (ho_.anim) d.set_option("anim", "1");  // N1 stage 2 (absent = off: stage-1 descriptors unchanged)
         if (ho_.story) d.set_option("story", "1");
+        record_ai_lane(d);  // sp3
         d.data_fingerprint = fingerprint_;
         host.set_session(std::move(d));
         return s;
@@ -772,6 +783,7 @@ public:
         d.set_option("map", skirmish_save_map(*data_));
         d.set_option("battles", "fight-all");
         if (ho_.anim) d.set_option("anim", "1");
+        record_ai_lane(d);  // sp3
         d.data_fingerprint = skirmish_save_fingerprint(*data_);
         s->host->set_session(std::move(d));
         return s;
@@ -935,26 +947,6 @@ commands::SavePoint save_point(const SaveFile& f) {
     return {f.tick, commands::save_digest(bytes)};
 }
 
-// The chunks a CRC system's hash depends on (pending mode compares a system only when all of them loaded). Systems not
-// listed here (galactic AI, ...) are compared by the full check only.
-// `chunks`: the chunks of the save.
-std::vector<std::string> crc_dependencies(const std::string& system, const std::vector<std::string>& chunks) {
-    if (system == "commands") return {"frame"};  // batch digest: frame chunk
-    if (system == "spatial")                     // stage 2: the tactical trees ("spatial" only while a battle runs)
-        return contains(chunks, "spatial") ? std::vector<std::string>{"objects", "spatial"} : std::vector<std::string>{"frame"};
-    if (system == "story") return {"story", "story.bridge", "story.players"};
-    if (system == "anim") return {"objects", "anim"};
-    if (system.rfind("galactic.", 0) == 0 && contains(chunks, system)) return {"objects", "galactic.state", system};
-    if (system.rfind("battle.", 0) == 0) {  // stage 2: a battle's hashes span its chunks; no battle: the "battles" chunk
-        std::vector<std::string> deps = {"objects", "battles"};
-        for (const std::string& c : chunks)
-            if (c.rfind("battle.", 0) == 0) deps.push_back(c);
-        return deps;
-    }
-    if (contains(chunks, system)) return {system};
-    return {};
-}
-
 // --save-session KIND --save-at T FILE [--ticks K] [--crc-out F] [--record-orders F]
 int save_mode(Harness& hz, const SaveRunOptions& opt) {
     std::string err;
@@ -1005,6 +997,12 @@ std::unique_ptr<Harness> harness_for_save(const sim::SessionDescriptor& d, const
     }
     ho.anim = d.option("anim") == "1";
     if (d.kind == "skirmish") ho.map = d.option("map");
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    if (d.option("ai_lane") == "1") {  // sp3: a save of an AI-lane session loads into one (its worlds keep the saved k_ai)
+        sim::ai_lane_defaults().on = true;
+        if (const std::string k = d.option("k_ai"); !k.empty()) sim::ai_lane_defaults().k_ai = static_cast<uint32_t>(std::stoul(k));
+    }
+#endif
     return make_harness(kind, ho, skip, err);
 }
 
@@ -1086,7 +1084,7 @@ int run_child(const SaveRunOptions& opt, const std::string& crc_path) {
     return std::system(cmd.c_str());
 }
 
-// --save-session KIND --save-check --save-at T FILE --ticks K [--expect-pending a,b]
+// --save-session KIND --save-check --save-at T FILE --ticks K
 int check_mode(Harness& hz, const SaveRunOptions& opt) {
     std::string err;
     bool ok = true;
@@ -1156,8 +1154,6 @@ int check_mode(Harness& hz, const SaveRunOptions& opt) {
     if (!(b->host->random().synced() == rng_save)) fail("B: the synced RNG after the load differs from the original's at the save tick");
     else std::printf("B load: synced RNG equals the original's at the save tick (state %08x, %" PRIu64 " draws)\n", rng_save.state(),
                      rng_save.draws());
-    std::vector<std::string> saved_chunks;
-    for (const SaveChunk& c : save.chunks()) saved_chunks.push_back(c.name);
     std::printf("B load: %s\n", rep.text().c_str());
     if (!rep.descriptor_error.empty()) {
         fail("load refused its own save: " + rep.descriptor_error);
@@ -1166,45 +1162,18 @@ int check_mode(Harness& hz, const SaveRunOptions& opt) {
     std::vector<std::string> failing = rep.failed;
     failing.insert(failing.end(), rep.missing.begin(), rep.missing.end());
     failing.insert(failing.end(), rep.unexpected.begin(), rep.unexpected.end());
-    std::vector<std::string> unexpected, pending, now_loading;
-    for (const std::string& c : failing) (contains(opt.expect_pending, c) ? pending : unexpected).push_back(c);
-    for (const std::string& c : opt.expect_pending)
-        if (contains(rep.loaded, c)) now_loading.push_back(c);
-    if (!unexpected.empty()) fail("chunks failed to load (not in --expect-pending): " + join(unexpected));
+    if (!failing.empty()) fail("chunks failed to load: " + join(failing));
 
     if (!loaded) {
-        // Pending: verify, at the save tick, every CRC system whose chunks all loaded.
+        fail("load failed: " + load_err);
+        // Diagnostic: the CRC systems whose loaded state already differs from the original's at the save tick.
         const CrcRegistry& reg = b->host->crc_registry();
-        std::vector<std::string> verified, unverified;
-        for (CrcRegistry::SystemId i = 0; i < reg.size(); ++i) {
-            const std::string& name = reg.name(i);
-            const std::vector<std::string> deps = crc_dependencies(name, saved_chunks);
-            const bool all = !deps.empty() && std::all_of(deps.begin(), deps.end(), [&rep](const std::string& c) { return contains(rep.loaded, c); });
-            if (!all || i >= at_save.systems.size()) {
-                unverified.push_back(name);
-                continue;
-            }
-            const uint64_t got = reg.hash_system(i);
-            if (got != at_save.systems[i]) {
-                char m[256];
-                std::snprintf(m, sizeof m, "loaded system %s differs at tick %" PRIu64 ": %016" PRIx64 " != saved %016" PRIx64, name.c_str(), T,
-                              got, at_save.systems[i]);
-                fail(m);
-            } else {
-                verified.push_back(name);
-            }
-        }
-        std::printf("tick %" PRIu64 " CRC systems matching the save: %s\n", T, verified.empty() ? "(none)" : join(verified, " ").c_str());
-        std::printf("not verifiable until the pending chunks load: %s\n", unverified.empty() ? "(none)" : join(unverified, " ").c_str());
-        if (!now_loading.empty()) std::printf("note: --expect-pending lists chunks that load now: %s (remove them)\n", join(now_loading).c_str());
-        if (!ok) {
-            std::printf("save check (%s): FAILED\n", opt.session.c_str());
-            return 1;
-        }
-        std::printf("PENDING: %s (their write/read has not landed; the continue-from-save CRC comparison runs once every chunk "
-                    "loads)\n",
-                    join(pending).c_str());
-        return kExitPending;
+        std::vector<std::string> differing;
+        for (CrcRegistry::SystemId i = 0; i < reg.size() && i < at_save.systems.size(); ++i)
+            if (reg.hash_system(i) != at_save.systems[i]) differing.push_back(reg.name(i));
+        std::printf("tick %" PRIu64 " CRC systems differing from the save: %s\n", T, differing.empty() ? "(none)" : join(differing, " ").c_str());
+        std::printf("save check (%s): FAILED\n", opt.session.c_str());
+        return 1;
     }
 
     // Every chunk loaded: B continues to T+K recording its orders as a stream continuing the save.
@@ -1254,7 +1223,6 @@ int check_mode(Harness& hz, const SaveRunOptions& opt) {
     replay_check("D load + replay of the stream recorded after the load", rec_b);
     replay_check("E load + replay of the original's tick-0 stream", rec_a);
 
-    if (!now_loading.empty()) std::printf("note: --expect-pending lists chunks that load now: %s (remove them)\n", join(now_loading).c_str());
     std::printf("save check (%s, save at %" PRIu64 ", +%" PRIu64 " ticks): %s\n", opt.session.c_str(), T, opt.ticks, ok ? "OK" : "FAILED");
     return ok ? 0 : 1;
 }

@@ -1,27 +1,14 @@
 #include "alamo/galactic/auto_resolve.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/objects/type_fields.hpp"
 
 namespace alamo::galactic {
 
 namespace {
-
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
 
 // Items of a Lua table constructor "{a, b, c}" on one line: quoted strings or numbers, as written.
 std::vector<std::string> table_items(std::string_view line) {
@@ -33,7 +20,7 @@ std::vector<std::string> table_items(std::string_view line) {
     while (i < body.size()) {
         const size_t comma = body.find(',', i);
         const size_t end = comma == std::string_view::npos ? body.size() : comma;
-        std::string_view item = trim(body.substr(i, end - i));
+        std::string_view item = ascii_trim(body.substr(i, end - i));
         if (item.size() >= 2 && (item.front() == '"' || item.front() == '\'')) item = item.substr(1, item.size() - 2);
         if (!item.empty()) out.emplace_back(item);
         i = end + 1;
@@ -62,9 +49,30 @@ float ContrastTable::contrast(size_t row, std::string_view type_name, uint64_t c
     if (row >= rows.size()) return 0.0f;
     for (const ContrastRow::Entry& e : rows[row].friendly) {
         if ((e.mask & categories) != 0) return e.weight;
-        if (!type_name.empty() && iequal(e.name, type_name)) return e.weight;
+        if (!type_name.empty() && ascii_iequals(e.name, type_name)) return e.weight;
     }
     return 0.0f;
+}
+
+float ContrastTable::ai_weight(size_t row, std::string_view type_name, uint64_t categories) const {
+    if (row >= rows.size()) return 0.0f;
+    float sum = 0.0f;
+    int32_t count = 0;
+    bool matched = false;
+    for (const ContrastRow::Entry& e : rows[row].friendly) {
+        if (e.mask == 0) {
+            if (!type_name.empty() && ascii_iequals(e.name, type_name)) return e.weight;
+            continue;
+        }
+        if ((e.mask & categories) == 0) continue;
+        matched = true;
+        if (e.weight != 1.0f) {
+            sum += e.weight;
+            ++count;
+        }
+    }
+    if (count > 0) return sum / static_cast<float>(count);
+    return matched ? 1.0f : 0.0f;
 }
 
 bool ContrastTable::parse_lua(std::string_view src, const std::function<uint64_t(std::string_view)>& category_mask,
@@ -83,7 +91,7 @@ bool ContrastTable::parse_lua(std::string_view src, const std::function<uint64_t
         std::string_view line = src.substr(i + 1, e - i - 1);
         const size_t comment = line.find("--");
         if (comment != std::string_view::npos) line = line.substr(0, comment);
-        const std::string_view t = trim(line);
+        const std::string_view t = ascii_trim(line);
         i = e;
         if (t == "end") break;  // end of the function (column-0 "end" in the shipped script)
         if (t.rfind("EnemyContrastTypes[", 0) == 0) {
@@ -252,7 +260,8 @@ AutoResolveResult auto_resolve(const AutoResolveInput& in, const ContrastTable& 
         for (size_t j = 0; j < K; ++j) {
             const double Rj = R[2 + j];
             if (!(Rj > 0.0)) continue;
-            const float c = ct.contrast(j, p.name, p.categories);
+            // 0x5f1f90 keyed by row j's enemy category mask (A2L_T03_RE_ANSWERS Q6.3) [H]: ContrastTable::ai_weight.
+            const float c = ct.ai_weight(j, p.name, p.categories);
             if (!(c > 0.0f)) continue;
             const double pc = static_cast<double>(pw) * static_cast<double>(c);
             const double m = std::max(Rj, pc);

@@ -2,18 +2,6 @@
 
 namespace alamo::ui {
 
-const char* pointer_target_name(PointerTarget t) {
-    switch (t) {
-        case PointerTarget::Overlay: return "overlay";
-        case PointerTarget::Targeting: return "targeting";
-        case PointerTarget::Dialog: return "dialog";
-        case PointerTarget::Chat: return "chat";
-        case PointerTarget::Hud: return "hud";
-        case PointerTarget::World: return "world";
-        default: return "none";
-    }
-}
-
 void InputRouter::route(const InputFrame& raw, const RouteHooks& h, RoutedInput& out) {
     out.world = raw;
     out.hud.clear();

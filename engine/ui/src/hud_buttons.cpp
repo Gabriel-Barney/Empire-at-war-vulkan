@@ -6,6 +6,7 @@
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/hud_font.hpp"
+#include "ui_strings.hpp"
 
 namespace alamo::ui {
 
@@ -34,12 +35,6 @@ Rgba8 with_alpha(Rgba8 c, float a) {
 Rgba8 mul(Rgba8 a, Rgba8 b) {
     auto m = [](uint8_t x, uint8_t y) { return static_cast<uint8_t>((static_cast<uint32_t>(x) * y + 127u) / 255u); };
     return {m(a.r, b.r), m(a.g, b.g), m(a.b, b.b), m(a.a, b.a)};
-}
-
-std::u32string ascii32(std::string_view s) {
-    std::u32string o;
-    for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
-    return o;
 }
 
 }  // namespace
@@ -135,7 +130,7 @@ namespace {
 // A raw Yes / True / 1 flag (fields CommandBarComponent does not model).
 bool raw_flag(const CommandBarComponent& c, std::string_view upper_tag) {
     const std::string_view v = c.raw_value(upper_tag);
-    return !v.empty() && (v[0] == 'T' || v[0] == 't' || v[0] == 'Y' || v[0] == 'y' || v[0] == '1');
+    return data::parse_flag_char(v);
 }
 }  // namespace
 
@@ -220,12 +215,16 @@ Vec2f HudButtons::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache* fo
         if (const std::string* fl = pick(c.flash_texture, alt))
             if ((static_cast<int64_t>(std::floor(now / 0.25)) % 2) == 0)
                 add_atlas_quad(dl, layer, HudList::Alpha, atlas, *fl, center, {}, c.scale, base);
-    // Build / recharge dials (radial wipe lists).
+    // Build / recharge dials (radial wipe lists). cu9h t03 (CU9H_T02_BOMBING_HUD_RUN item 1b): a dial at value v leaves the
+    // first v % clockwise from 12 o'clock uncovered and draws the texture over the rest, so the wipe gets 100 - v (v = 100:
+    // nothing drawn).
     if (const std::string* bt = pick(c.build_texture, 0)) {
         if (r.build_fill >= 0.0f)
-            add_atlas_quad(dl, layer, HudList::Alpha, atlas, *bt, offset_down(center, c.build_dial_offset), {}, c.scale, base, {}, std::clamp(r.build_fill, 0.0f, 100.0f));
+            add_atlas_quad(dl, layer, HudList::Alpha, atlas, *bt, offset_down(center, c.build_dial_offset), {}, c.scale, base, {},
+                           100.0f - std::clamp(r.build_fill, 0.0f, 100.0f));
         if (r.build_fill2 >= 0.0f)
-            add_atlas_quad(dl, layer, HudList::Additive, atlas, *bt, offset_down(center, c.build_dial2_offset), {}, c.scale, base, {}, std::clamp(r.build_fill2, 0.0f, 100.0f));
+            add_atlas_quad(dl, layer, HudList::Additive, atlas, *bt, offset_down(center, c.build_dial2_offset), {}, c.scale, base, {},
+                           100.0f - std::clamp(r.build_fill2, 0.0f, 100.0f));
     }
     if (r.overlay)
         if (const std::string* ov = pick(c.overlay_texture, 0))
@@ -240,7 +239,7 @@ Vec2f HudButtons::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache* fo
     if (fonts && (!r.text.empty() || !r.text2.empty())) {
         HudTextStyle st;
         st.font = fonts->font(c.font_name.empty() ? std::string(kFallbackFontFace) : c.font_name,
-                              c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas.screen_height);
+                              c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas.font_height());
         st.color = with_alpha(r.text_color_set ? r.text_color : c.has_text_color ? c.text_color : Rgba8{}, blink);
         st.outline = c.text_outline;
         st.emboss = c.text_emboss;
@@ -307,7 +306,9 @@ TooltipConfig tooltip_config_from(const data::XmlNode& root) {
 void TooltipState::update(const HudButtons& buttons, const ComponentTable& table, const TooltipConfig& cfg, double now) {
     component_ = -1;
     const int32_t h = buttons.hover();
-    if (h < 0 || static_cast<size_t>(h) >= table.size() || table[static_cast<size_t>(h)].tooltip_text.empty()) return;
+    if (h < 0 || static_cast<size_t>(h) >= table.size()) return;
+    const ButtonRuntime* r = buttons.find_state(static_cast<uint32_t>(h));
+    if (table[static_cast<size_t>(h)].tooltip_text.empty() && (!r || (r->tooltip_key.empty() && r->tooltip_text.empty()))) return;
     if (buttons.pressed() >= 0) return;  // no tooltip while a button is held
     if (now - buttons.hover_since() + 1e-9 < cfg.delay) return;
     component_ = h;
@@ -316,10 +317,11 @@ void TooltipState::update(const HudButtons& buttons, const ComponentTable& table
 std::string TooltipState::key(const HudButtons& buttons, const ComponentTable& table) const {
     if (component_ < 0 || static_cast<size_t>(component_) >= table.size()) return {};
     const CommandBarComponent& c = table[static_cast<size_t>(component_)];
-    if (c.tooltip_text.empty()) return {};
     const ButtonRuntime* r = buttons.find_state(static_cast<uint32_t>(component_));
     const int32_t i = r ? r->tooltip_index : 0;
     if (i < 0) return {};
+    if (r && !r->tooltip_key.empty()) return r->tooltip_key;  // ui3 t07: ability / unit text
+    if (c.tooltip_text.empty()) return {};
     return *pick(c.tooltip_text, i);
 }
 
@@ -327,8 +329,26 @@ bool TooltipState::draw(HudDrawList& dl, const TextureAtlas& atlas, FontCache& f
                         const ComponentTable& table, const HudButtons& buttons, const TextDatabase* text, Vec2f cursor_px,
                         int32_t faction_alt, const TooltipConfig& cfg) const {
     const std::string k = key(buttons, table);
-    if (k.empty()) return false;
-    const std::u32string body = text ? utf16_to_utf32(text->text(k)) : ascii32(k);
+    const ButtonRuntime* rt = component_ >= 0 ? buttons.find_state(static_cast<uint32_t>(component_)) : nullptr;
+    const std::u32string literal = rt ? rt->tooltip_text : std::u32string();  // [port] a player-given name
+    if (k.empty() && literal.empty()) return false;
+    // ui3 t07: a runtime tooltip_key may list several keys separated by spaces (ability name + description): one line each.
+    std::u32string body;
+    size_t at = 0;
+    while (at < k.size()) {
+        size_t e = k.find(' ', at);
+        if (e == std::string::npos) e = k.size();
+        if (e > at) {
+            const std::string one = k.substr(at, e - at);
+            if (!body.empty()) body += U'\n';
+            body += text ? utf16_to_utf32(text->text(one)) : ascii32(one);
+        }
+        at = e + 1;
+    }
+    if (!literal.empty()) {
+        if (!body.empty()) body += U'\n';
+        body += literal;
+    }
     return draw_text(dl, atlas, fonts, canvas, table, body, cursor_px, faction_alt, cfg);
 }
 
@@ -341,7 +361,7 @@ bool TooltipState::draw_text(HudDrawList& dl, const TextureAtlas& atlas, FontCac
     const uint32_t layer = back ? static_cast<uint32_t>(back->base_layer) : 10u;
     HudTextStyle st;
     st.font = fonts.font(font_c && !font_c->font_name.empty() ? font_c->font_name : std::string("Arial"),
-                         font_c && font_c->font_point_size > 0 ? font_c->font_point_size : 7.0f, canvas.screen_height);
+                         font_c && font_c->font_point_size > 0 ? font_c->font_point_size : 7.0f, canvas.font_height());
     // [port] the tooltip text uses the frame's light colour: tooltip_left_text's Color is a dark blue meant for the
     // encyclopedia panel; white keeps it readable on i_tooltip_back.
     st.color = Rgba8{230, 230, 230, 255};

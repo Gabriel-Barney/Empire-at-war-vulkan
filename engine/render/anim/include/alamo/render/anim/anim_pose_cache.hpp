@@ -36,7 +36,6 @@ public:
     // empty when every bone is visible (nothing to hide). For SimInstanceBuilder::set_visibility_source.
     std::span<const uint8_t> visibility(objects::ObjectId id, size_t bones) const;
     const AnimPoseStats& stats() const { return stats_; }
-    std::span<const objects::ObjectId> ids() const { return ids_; }  // rows of the last update, ascending
 
 private:
     std::vector<assets::Mat3x4> data_;

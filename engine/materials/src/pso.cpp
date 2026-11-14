@@ -27,23 +27,15 @@ constexpr LayoutName kLayouts[] = {
     {VertexLayout::Terrain, "Terrain"},
 };
 
-bool iequal(const char* a, const char* b) {
-    for (; *a && *b; ++a, ++b) {
-        char x = *a, y = *b;
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return *a == *b;
-}
-
 bool is_default(const StateSlot& s) { return s.origin == StateOrigin::Default; }
 }  // namespace
 
 VertexLayout vertex_layout_from_name(const char* n) {
     if (!n) return VertexLayout::Unknown;
+    // Layout names hold no '/' or '\\', so iequals' slash folding cannot change a match.
+    const std::string_view name(n);
     for (const auto& e : kLayouts)
-        if (iequal(e.name, n)) return e.l;
+        if (alamo::iequals(e.name, name)) return e.l;
     return VertexLayout::Unknown;
 }
 

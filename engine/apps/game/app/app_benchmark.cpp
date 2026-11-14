@@ -14,12 +14,16 @@
 //   Phases: Loading (the save loads, its load screen) -> Settling (gameplay frames, the sim holds until settle_frames
 //   settled frames in a row) -> Measuring (the measured ticks) -> Done. Real-time: the original pacing
 //   (GameSession::loop_iteration, 30 ticks/s on the wall clock), every gameplay frame measured. Fixed frames: one tick per
-//   K counted frames, the presentation clock on the counted frames, alpha (sub + 1) / K, TAA off, blocking models; a
-//   frame counts only when present_settled(), else it is drawn again. Frames outside gameplay (load screens, dialogs
-//   holding the sim) are excluded in both modes.
+//   K counted frames, the presentation clock on the counted frames, alpha (sub + 1) / K, blocking models; a frame counts
+//   only when present_settled(), else it is drawn again. Frames outside gameplay (load screens, dialogs holding the sim)
+//   are excluded in both modes. TAA (BM2b): the preset's in both modes. In fixed frames the TAA history restarts with the
+//   measurement and every measured frame is drawn TAA-provisional: one that counts is kept, any other (unsettled,
+//   excluded, a forced --bench-redraw-every redraw) is taken back (Renderer::discard_taa_frame), so the history and the
+//   jitter cycle only ever see counted frames.
 //   At the end: the report (stdout and --bench-report), the CRC log (--bench-crc-out) and, unless --bench-no-verify, the
 //   presentation on/off check (crc_check: the save replayed with the run's recorded commands gives the same CRC log).
 #include <filesystem>
+#include <map>
 
 #include "game_app.hpp"
 
@@ -43,13 +47,15 @@ void App::bench_apply_window() {
     opt_.audio = p.audio == BenchAudio::Off ? AudioBackendKind::Off : AudioBackendKind::Null;
 }
 
+static_assert(ui::kAaOff == 0 && ui::kAaTaa == 2, "benchmark.cpp's anti-aliasing modes");
+
 void App::bench_apply_video() {
     const BenchPreset& p = *find_bench_preset(opt_.bench.preset);
     VideoProfile v;
     v.vsync = opt_.mode != rhi::PresentMode::Immediate;
     v.frame_cap = opt_.frame_cap;
     v.detail = p.detail;
-    v.anti_alias = bench_fixed() ? 0 : p.anti_alias;  // TAA's history would carry the redrawn unsettled frames
+    v.anti_alias = p.anti_alias;  // fixed frames too: redrawn frames are discarded from the TAA history (BM2b)
     v.gamma = p.gamma;
     ui::set_advanced_detail(v.advanced, p.detail);
     v.advanced.soft_shadows = p.soft_shadows;
@@ -60,9 +66,7 @@ void App::bench_apply_video() {
     video_profile_ = v;
     adv_video_ = v.advanced;
     detail_options_ = true;
-    hardware_mouse_ = false;
-    std::printf("benchmark: preset %s (%s)%s\n", std::string(p.name).c_str(), std::string(p.description).c_str(),
-                bench_fixed() && p.anti_alias ? ", TAA off in fixed-frames mode" : "");
+    std::printf("benchmark: preset %s (%s)\n", std::string(p.name).c_str(), std::string(p.description).c_str());
 }
 
 bool App::bench_start() {
@@ -76,7 +80,9 @@ bool App::bench_start() {
     }
     if (!bench_scenario_start()) return true;  // bm2: the scenario's orders and the GPU timer (a failure is in the report)
     if (!load_save_file(opt_.bench.save, bench_replay())) {
-        bench_fail("the save " + opt_.bench.save + " did not load");
+        // A scenario's own save that no longer loads (older format) is a changed scenario, as in alamo_headless --bench.
+        bscen_.not_comparable = opt_.bench.scenario_data && !opt_.bench.make;
+        bench_fail(std::string(bscen_.not_comparable ? "scenario changed, not comparable: " : "") + "the save " + opt_.bench.save + " did not load");
         return true;  // init succeeded: run() writes the failed report
     }
     bench_.retry_boxes = retry_boxes_;
@@ -140,6 +146,36 @@ void App::bench_step_sim() {
         bench_.ticked = true;
         post_tick();
     }
+}
+
+// BM3 --bench-trace N: every Nth measured tick one line per owner of the drawn battle's objects (count, centroid and the box they
+// span, world units). Scene authoring only: where the fleets are, so a camera path can frame the fight.
+void App::bench_trace() {
+    if (opt_.bench.trace_every == 0 || !bench_measuring() || !bench_.ticked || !bview_.active()) return;
+    const uint64_t ran = bench_fixed() ? bench_.clock.ticks() : bench_.rt_ticks;
+    if (ran % opt_.bench.trace_every != 0) return;
+    struct Acc {
+        uint32_t n = 0;
+        double c[3] = {0, 0, 0};
+        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+    };
+    std::map<int32_t, Acc> by_owner;
+    for (const render::SnapshotObject& o : bview_.frame().objects) {
+        if (o.owner < 0 || (o.flags & render::kSnapDrawable) == 0) continue;
+        Acc& a = by_owner[o.owner];
+        const float p[3] = {o.position.x, o.position.y, o.position.z};
+        ++a.n;
+        for (int k = 0; k < 3; ++k) {
+            a.c[k] += static_cast<double>(p[k]);
+            a.lo[k] = std::min(a.lo[k], p[k]);
+            a.hi[k] = std::max(a.hi[k], p[k]);
+        }
+    }
+    for (const auto& [owner, a] : by_owner)
+        std::printf("trace: tick %" PRIu64 " (run %" PRIu64 ") owner %d: %u objects, centroid %.0f %.0f %.0f, box %.0f..%.0f x %.0f..%.0f x %.0f..%.0f\n",
+                    session_->host().frame(), ran, owner, a.n, a.c[0] / a.n, a.c[1] / a.n, a.c[2] / a.n, static_cast<double>(a.lo[0]),
+                    static_cast<double>(a.hi[0]), static_cast<double>(a.lo[1]), static_cast<double>(a.hi[1]), static_cast<double>(a.lo[2]),
+                    static_cast<double>(a.hi[2]));
 }
 
 void App::bench_autopilot() {
@@ -209,7 +245,11 @@ void App::bench_frame_end() {
             b.phase = P::Measuring;
             b.clock = FixedFrameClock(opt_.bench.frames_per_tick);
             b.start_tick = session_->host().frame();
+            // BM2b: the warm-up's frame count varies from run to run; the measured frames start from an empty history and
+            // the first jitter point.
+            if (bench_fixed()) gpu_.renderer.reset_taa_history();
             b.t_start = b.t_progress = Clock::now();
+            b.load_ms = ms_since(b.t_load);
             std::printf("benchmark: measuring from tick %" PRIu64 " (%s) after %" PRIu64 " warm-up frames, %.1f s\n", b.start_tick,
                         screen_name(screen_), b.warmup_frames, ms_since(b.t_load) / 1000.0);
         } else if (ms_since(b.t_load) > kSettleLimitMs) {
@@ -220,7 +260,10 @@ void App::bench_frame_end() {
     }
     bool counted = false;
     if (bench_fixed()) {
-        if (settled) {
+        // --bench-redraw-every N: every Nth settled frame is drawn again as if it were unsettled (tests the redraw path).
+        const bool forced = settled && opt_.bench.redraw_every && ++b.settled_seen % opt_.bench.redraw_every == 0;
+        if (forced) ++b.forced;
+        if (settled && !forced) {
             b.clock.frame_counted();
             counted = true;
             b.unsettled_run = 0;
@@ -231,11 +274,15 @@ void App::bench_frame_end() {
             if (++b.unsettled_run > opt_.bench.max_unsettled)
                 bench_fail(std::to_string(b.unsettled_run) + " unsettled frames in a row at tick " + std::to_string(session_->host().frame()));
         }
+        // BM2b: only a counted frame enters the TAA history and advances the jitter cycle.
+        if (counted) gpu_.renderer.keep_taa_frame();
+        else if (gpu_.renderer.discard_taa_frame()) ++b.taa_discarded;
     } else {
         counted = gameplay && b.drawn;
         if (!counted) ++b.excluded;
     }
     b.counted = counted;
+    bench_trace();  // BM3
     bench_gpu_counted(counted);  // bm2: this frame's GPU timer scopes count only when the frame does
     if (counted) b.t_progress = Clock::now();
     else if (ms_since(b.t_progress) > kStallLimitMs) bench_fail("no measured frame for 60 s at tick " + std::to_string(session_->host().frame()));
@@ -273,13 +320,18 @@ int App::bench_finish() {
     r.warmup_frames = b.warmup_frames;
     r.unsettled_frames = b.unsettled;
     r.excluded_frames = b.excluded;
+    r.forced_redraws = b.forced;
+    r.taa_discarded = b.taa_discarded;
     r.wall_seconds = b.wall;
     r.frame_ms = frame_time_stats(b.frame_ms);
     r.render_ms = frame_time_stats(b.render_ms);
     r.sim_ms = frame_time_stats(b.sim_ms);
+    r.load_ms = b.load_ms;  // bm3
+    bench_hitches(b.frame_ms, r);
     r.screen = screen_name(screen_);
     r.autopilot = b.autopilot;
     if (session_) {
+        session_->host().capture_crc_now();  // sp2: the end tick on demand (checkpoint cadence)
         r.end_tick = session_->host().frame();
         r.final_crc = final_crc(session_->host().crc_log());
         if (!opt_.bench.crc_out.empty()) {

@@ -1,65 +1,139 @@
-Alamo engine test build, 2026-11-04
+Alamo engine test build, 2026-11-13
 ====================================
 
 How to run
 ----------
-- Play.cmd                  Forces of Corruption, as before. Log: alamo_game_log.txt.
-- Play_ThrawnsRevenge.cmd   Thrawn's Revenge 3.3 on Forces of Corruption. Log: alamo_game_tr_log.txt.
-- Check_ThrawnsRevenge.cmd  Loads Thrawn's Revenge without a window and opens a report
-                            (mod_check_tr.txt): which files the mod replaces, every load step, the
-                            campaigns and skirmish maps it found. Run it first if the game will not start.
+- Play.exe       Double-click to play: Forces of Corruption, no mod, without a console window. Pick
+                 a mod in the game (main menu, Mods), or drop a mod folder onto Play.exe. Only an
+                 error shows a window, offering the log (alamo_game_log.txt).
+- Play.cmd       The same with a console window. Log: alamo_game_log.txt.
+- Play_Mod.cmd   Any mod. Double-click it for a menu of every mod installed on this PC:
+                 Steam workshop items (subscribed mods) and folders in corruption\Mods.
+                   type a number      play that mod (Enter alone plays your last pick again)
+                   C and a number     check a mod without playing: loads it the way the game does and
+                                      opens a report (mod_check.txt): missing files, campaigns, scripts,
+                                      shaders. Run this first if a mod will not start.
+                   a+b (e.g. 7+1)     play mod a on top of mod b (a submod on the mod it needs).
+                                      Submods whose modinfo.json names the mod they need are stacked on
+                                      their own; the menu shows "(on top of 1)".
+                   F                  a mod folder somewhere else
+                 Or drag a mod folder (the one holding its Data folder) onto Play_Mod.cmd.
+- command-center.exe   The Command Center launcher (new): profiles, mods and Steam Workshop
+                 items, saves, graphics options, unit data, the campaign map and diagnostics in one
+                 window. It starts alamo_game.exe from this folder. Subscribing, unsubscribing and
+                 updating open the item in the Steam client; searching the Workshop opens in Steam
+                 too, unless you add your own Steam Web API key under Settings.
+- In the game: the main menu's Mods button lists the same mods, checks the one you select and
+  restarts the game with it.
 
-The Thrawn's Revenge launchers find the mod on their own in the Steam workshop folder next to the game
-(steamapps\workshop\content\32470\1125571106; subscribe to the mod on Steam if it is missing). If your
-game or the mod is elsewhere, edit GAME / TR in tr_paths.cmd. Thrawn's Revenge saves go to saves_tr next
-to these files, so they never mix with Forces of Corruption saves (%LOCALAPPDATA%\alamo\Saves).
-The first start of each launcher builds its shader cache (cache, cache_tr), so it is slower.
+The launchers find the game through Steam on their own. If they cannot, they ask once for the
+"corruption" folder and remember it in game_path.txt.
 
-Built from: @BUILD@ (PR #69). MSVC and clang 177/177 tests, UBSan 56/56, 0 warnings.
+Each mod gets its own folder under mod_runs (named after the mod: ws<workshop id> or local_<folder>)
+with its shader cache, its saves, log.txt and mod_check.txt, so mods never mix saves. Please send
+that log.txt with any report. The first start of a mod builds its shader cache, so it is slower.
+The base game keeps its saves in %LOCALAPPDATA%\alamo\Saves.
 
-Thrawn's Revenge: what to try
------------------------------
-- Galactic conquest: Single Player -> Custom Campaign. The default Rebel campaign (GCMenu) starts you
-  with no planets or fleets, as the mod intends. The AI plays: it builds, moves fleets and attacks.
-- Skirmish, land and space (Blood Gulch is the land map the port has been tested on). Land skirmishes
-  end now: in the port's AI-vs-AI test the Rebels win Blood Gulch after about 10 minutes.
-- Save and load during a campaign and during a battle. The mod's Lua scripts (company spawners,
-  story scripts, scoring) are saved with the game now.
-- Select All (Ctrl+A) in battle, heroes and companies, building on pads, reinforcements by landing craft.
+Built from: @BUILD@.
 
-Please check
-- Anything that looks or plays differently from the real mod: send the log, a screenshot and what you did.
-- How the galactic AI plays: it now starts many more battles than before (the AI reads enemy strength
-  values that are up to 15 seconds old, as the original does). Too aggressive?
-- Land battles: does the AI build its base, attack your companies, and does the battle end?
-- Saves made with this build reload; saves from older builds that had the mod's scripts running
-  will not load (the save now carries the script state).
+What to try
+-----------
+NEW in this build (please check each one in game):
+- Command Center (command-center.exe): start the game from it with and without a mod, and check
+  that it finds alamo_game.exe here and your game folder on its own.
+- Options are now split into Display and Graphics pages. Display: a Display Mode list
+  (Fullscreen / Borderless fullscreen / Windowed) and a UI Scale (100 - 500 %) for big screens;
+  the galactic map keeps its height and shows more to the sides on wide screens. The Auto Detect
+  button is gone.
+- Graphics > Anti-Aliasing is now one list: Off, SMAA, TAA, MSAA 2x / 4x / 8x, and FSR (Native AA,
+  Quality 1.5x, Balanced 1.7x, Performance 2x, Ultra Performance 3x). FSR uses AMD's FSR runtime
+  (the two amd_fidelityfx_*.dll files next to the game); the log names the FSR version in use
+  ("FSR upscaling: ..."), and if FSR cannot start the game draws TAA instead and logs why.
+  Please compare the look and the frame rate of each mode, and check that the list shows all
+  11 rows. Older settings load as TAA.
+- Fighter and bomber squadrons have 12 ships (prices scaled to match). FIGHTERS / BOMBERS buttons
+  at the left edge of the space HUD, or F2 / F3, select a whole wing (Shift adds, a second press
+  centres the camera).
+- Fleet cohesion (space battles): O toggles Loose / Tight. Tight keeps your fleet together by
+  moving every ship at the slowest ship's speed; the HUD line shows the setting.
+- Camera and Controls > Show Unit Path Lines: dotted lines for your moving units (one per
+  squadron / company; cyan moves, red attacks). Off by default.
+- Galactic: name and rename your fleets and ships (double-click a pad in the fleet organiser;
+  the name shows as its tooltip).
+- Save / Load lists saves as a tree: map, faction (with emblem), playthrough, then each save with
+  its week and time.
+- Fleet groups (early, off unless started with --fleet-groups; e.g. set ALAMO_ARGS=--fleet-groups
+  before Play_Mod.cmd, or add it after Play.cmd): N groups the selected ships, U ungroups, Y locks
+  a group so it moves together. No on-screen frames yet.
+Still worth checking from earlier builds:
+- Render Scale (Graphics page, 50 - 100 %): the share of the window's pixels the 3D scene is
+  drawn with; the log prints the size after Apply.
+- Menus and options (from the 2026-11-13 builds): key rebinding (Delete / Backspace
+  clears, conflict and "Apply?" prompts), gameplay options kept between runs, drop-down lists,
+  scroll bars and text boxes (typing, selection, copy / paste).
+- The tactical HUD in land and space battles: order buttons and their hotkeys, retreat,
+  reinforcements, the space special-weapon button, tooltips, the battle-end screen and score /
+  retry dialog.
+- Galactic conquest screens: hero roster, build pad prices and why a build is blocked, map
+  filters, planet-label icons, on-screen messages, the announcer and the Droid Log.
+- Story missions and the tutorial: the Mission load dialogs, Esc in the tutorial, skipping
+  movies, the credits roll.
+- Thrawn's Revenge galactic conquest: winning and losing a campaign (victory conditions).
+- Land skirmish and galactic AI as in the 2026-11-12 build.
 
-Known gaps (Thrawn's Revenge)
-- Nobody has played the mod by hand in the port yet; all of the above comes from automated runs.
-- Its GameScoring script stops on its own error (BootanaHutta.lua line 15 reads a player that does not
-  exist); scores and battle statistics may be missing.
-- The Rebel refinery stall in galactic conquest comes from the mod's data.
-- Behaviour has not been compared with the real game yet (retail probe runs are prepared, not run).
+Changes since the 2026-11-13 render scale build
+-----------------------------------------------
+- Options: Display and Graphics pages, display mode list, UI scale, galactic wide-screen view;
+  Auto Detect and the Widescreen check removed (the resolution list always shows every mode).
+- Anti-aliasing: one list with SMAA, TAA, MSAA 2x / 4x / 8x and five FSR modes.
+- Fighter / bomber squadrons of 12, wing select buttons and F2 / F3.
+- Fleet cohesion (O), unit path lines option, fleet and ship names, saved games tree.
+- Fleet groups, phase 1 (off by default, see What to try).
+- Command Center launcher (command-center.exe) is part of the zip.
 
-Changes since test build 2026-10-30
------------------------------------
-- Thrawn's Revenge loads and plays (mod layer, the mod's Lua scripts on game objects, story text and
-  holocron, GameScoring, the skirmish buy list from the mod's multiplayer list). Mod-only rules stay
-  off for plain Forces of Corruption.
-- Land skirmish: the skirmish base, income and skirmish victory rules; the AI builds on its own pads
-  only (nobody builds on neutral pads); units with no team arrive by landing craft; attacks on companies
-  work; land skirmishes end.
-- Galactic AI: installments, goal timing, contrast and budget rules from the original; the 15 second
-  perception cache.
-- Battles: fighter blocks, targeting states, garrisons, giant-vehicle push, landing unloads, station
-  targeting, ambushes; all land and station battles end.
-- Story campaigns: shared story flags, event parameters, tactical victory monitor, linked tactical
-  missions, Story_Dialog text and the holocron.
-- Menus: skirmish setup matches the original (colour combos, game types, map list from loose, MEG and
-  mod folders, map preview and description); fleet organiser panes; tech-tree arrows.
-- Speed: staggered and parallel AI thinking, parallel Lua garbage collection, cheaper worst ticks
-  (battle end 27 -> 5 ms). F11 shows a frame-time overlay.
-- Hidden objects (scripts' Hide) are not drawn, heard, shown on the radar or clickable. Box select
-  also skips garrisoned units now.
-- The pre-battle skirmish buy screen stays as a port feature (the original has none).
+Changes in the earlier 2026-11-13 builds (since 2026-11-12)
+-----------------------------------------------------------
+- Render Scale option.
+- Options: Windowed off switches to full screen; Windowed and Widescreen are kept and applied;
+  the Hardware Mouse option is removed (the game always draws its own cursor); gameplay and advanced options are
+  applied and saved; key rebinding works like the original (Tab bindable, zoom keys listed).
+- Dialog controls: combo boxes, list scroll bars (drag, auto-repeat, Home / End), edit boxes with
+  caret, selection and the Windows clipboard.
+- Tactical HUD: order buttons, hotkeys, retreat and reinforcement controls, battle end, tooltips,
+  the space special-weapon button, score and retry dialog; the cursor reacts to what it is over.
+- Galactic: hero roster input, build pad prices and block reasons, map filters, planet-label
+  icons, on-screen messages and announcer events, readable Droid Log battle reports.
+- Story and tutorial: Mission load dialogs, tutorial start and Esc, movies skip on Esc / Space
+  only, credits roll, fleet hover triggers, skirmish staging rows.
+- Galactic victory is now checked the way the original does (event-driven), which fixes campaign
+  wins in mods such as Thrawn's Revenge; base-game objects run their own Lua scripts; map hint
+  names reach the scripts (Find_Hint and friends).
+- Galactic AI: build tasks with no target planet consider every planet, Underworld blockade
+  waits and free-store moves restored, planet conflict state set at battle end, trade-route
+  distance and "like" unit sets as the original.
+- Land skirmish AI: tactical goals run at the original's rate and limits; structures under
+  construction count toward its structure totals.
+- Saves: script-added battle types load correctly.
+
+Known gaps
+----------
+- Save / Load tree (new): the automated save-and-load check could not select a save row after
+  the tree change. If picking or loading a save in the dialog misbehaves, please say how.
+- Saves made with earlier test builds may not load (the save format changed). Start new games.
+- Galactic AI is close to the original but not the same yet: the Underworld ends up with less
+  money, and the Rebels attack Shola earlier than in the original.
+- Land skirmish AI: its economy runs ahead of the original's (it builds its Mineral Processor
+  sooner) and it rarely lands a hero, so its army mix differs.
+- Land skirmish Empire against Underworld: on some maps the AI's main force gets an invalid
+  destination ("not a valid destination for TaskForce MainForce" in the log) and the battle can
+  stall without ending. Known bug, being fixed.
+- EAW-Remake: Single Player in its main menu does nothing yet (its menu draws Single Player as a
+  heading); its space skirmish on Geonosis runs slowly (huge asteroid fields).
+- Age of Legends: the skirmish setup's game-type list stops the skirmish start.
+- Mods that ship shader sources (.fx) without compiled files (Thrawn's Revenge's AlamoEngine.fx,
+  Fall of the Republic's terrain effect) draw those effects with the fallback, because this build
+  does not compile .fx sources at run time yet; the check report lists them as shader warnings.
+- Mods without a modinfo.json show their workshop id in the in-game Mods list (the Play_Mod.cmd
+  menu knows the names of EAW-Remake and Age of Legends).
+- Mods with 32-bit precompiled Lua scripts lose those scripts (the original 64-bit game has the
+  same limit).

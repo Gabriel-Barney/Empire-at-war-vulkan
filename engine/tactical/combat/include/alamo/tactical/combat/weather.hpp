@@ -3,7 +3,9 @@
 // Weather_Category). WeatherSystem is the global weather state of one land battle (0x140b30b40):
 //   * init (0x468a50) with the map environment's scenario: phase 0 current, phase 1 next (phase 0 when alone), type /
 //     intensity of phase 0, then START PHASE (0x468980): timer length = synced float(0.3 x Duration, Duration) x FPS
-//     frames (one draw), lightning / fog alpha / emitter intensity of the phase. No scenario or 0 phases: weather off.
+//     frames (one draw), lightning / fog alpha / emitter intensity of the phase; after the emitter swap START PHASE
+//     again (a second draw replaces the timer; cu8g t02, CU8G_T02_ENV_PICK_RE §4: an init costs 2 draws). No scenario
+//     or 0 phases: weather off, no draw.
 //   * service (0x46a0c0) per land frame: while transitioning t = min(1, (now - start) / length), lightning, emitter
 //     intensity I and fog alpha = lerp(current, next) (I -> the intensity +0x448); I crossing 0.5 either way raises
 //     FowDirty (every REVEAL object recomputes its sight). Timer over: not transitioning -> transitioning with timer
@@ -84,7 +86,7 @@ struct WeatherEvent {
 class WeatherSystem {
 public:
     static constexpr uint32_t kFps = 30;
-    // Starts (or turns off with null / no phases) the weather at `frame` (one synced draw when it starts).
+    // Starts (or turns off with null / no phases) the weather at `frame` (two synced draws when it starts).
     void start(const WeatherScenario* scenario, const WeatherData* data, uint32_t frame, SimRng& rng);
     void service(uint32_t frame, SimRng& rng);
     bool force_weather(uint32_t frame, SimRng& rng);  // one advance; false when off
@@ -115,6 +117,7 @@ public:
 
 private:
     void start_phase(uint32_t frame, SimRng& rng);
+    void phase_timer(uint32_t frame, SimRng& rng);  // 0x468980's draw: the phase timer of the current phase
     void advance(uint32_t frame, SimRng& rng);
     void set_intensity(float v, uint32_t frame);
     const WeatherTypeModifiers* mods() const;

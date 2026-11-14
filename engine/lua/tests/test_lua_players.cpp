@@ -20,6 +20,7 @@
 
 #include "alamo/lua/bindings.hpp"
 #include "alamo/lua/lua_vm.hpp"
+#include "alamo/test/support.hpp"
 
 #if defined(ALAMO_LUA_PLAYERS)
 #include "alamo/ai/ai_path_finder.hpp"
@@ -27,6 +28,7 @@
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/commands/pipeline.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/galactic/campaign.hpp"
@@ -44,14 +46,7 @@
 using namespace alamo;
 using namespace alamo::lua;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 #if defined(ALAMO_LUA_PLAYERS)
 
@@ -196,6 +191,9 @@ struct Galaxy {
                   "<GroundInfantry Name=\"Crew_T\"><CategoryMask>Infantry</CategoryMask></GroundInfantry>\n"
                   "<HeroCompany Name=\"Smuggler_Team_T\"><Company_Units>Smuggler_T, Crew_T, Smuggler_T</Company_Units>"
                   "<Company_Transport_Unit>Frigate_T</Company_Transport_Unit></HeroCompany>\n"
+                  // cu8f t04b: a unit with UNIT_AI (Set_Prefer_Ground_Over_Space refuses objects without it).
+                  "<GroundInfantry Name=\"Ai_Trooper_T\"><Behavior>UNIT_AI</Behavior><CategoryMask>Infantry</CategoryMask>"
+                  "</GroundInfantry>\n"
                   "</R>");
         CHECK(raw.load(files));
         CHECK(types.build(raw));
@@ -846,6 +844,30 @@ void test_invade_local_player() {
 
 // L1/S4 wave 1: galactic containment, Assemble_Fleet, Change_Owner (GalacticSim::change_owner), Invade,
 // base waits / next base types, planet usability, heroes, Destroy_Contained_Objects, StringCompare.
+// cu8f t04b (CU8F_T04_T06_RE §2.1): Set_Prefer_Ground_Over_Space on a galactic object writes the GalacticSim's flag (default
+// true; the galactic AI's auto-land reads it); an object without UNIT_AI is refused (script error, nothing written).
+void test_prefer_ground_over_space() {
+    Galaxy g({{1, 2, "Ai_Trooper_T"}});
+    galactic::GalacticSim& sim = *g.sim;
+    objects::ObjectHandle at{}, tr{};
+    for (const objects::ObjectHandle u : sim.planets()[2].surface) {
+        if (g.store->type(u) == g.raw.find("Ai_Trooper_T")) at = u;
+        if (g.store->type(u) == g.raw.find("Trooper_T")) tr = u;
+    }
+    CHECK(static_cast<bool>(at) && static_cast<bool>(tr));
+    if (!at || !tr) return;
+    LuaVm vm(g.host());
+    attach_player_world(vm, &g.world);
+    vm.set_object_global("AT", at);
+    vm.set_object_global("Tr", tr);
+    CHECK(sim.prefer_ground_over_space(at) && sim.prefer_ground_over_space(tr));
+    CHECK(run(vm, "AT.Set_Prefer_Ground_Over_Space(false)") == "" && !sim.prefer_ground_over_space(at));
+    CHECK(run(vm, "AT.Set_Prefer_Ground_Over_Space(true)") == "" && sim.prefer_ground_over_space(at));
+    CHECK(run(vm, "AT.Set_Prefer_Ground_Over_Space(false)") == "" && !sim.prefer_ground_over_space(at));
+    run(vm, "Tr.Set_Prefer_Ground_Over_Space(false)");
+    CHECK(last_message_has(vm, "missing Unit_AI behavior") && sim.prefer_ground_over_space(tr));
+}
+
 void test_galactic_ops() {
     Galaxy g({{0, 0, "Frigate_T"}, {0, 0, "Hero_Ship_T"}, {1, 1, "Frigate_T"}});
     galactic::GalacticSim& sim = *g.sim;
@@ -979,7 +1001,13 @@ public:
     bool tf_valid(int32_t tf) override { return tf == 3; }
     int32_t tf_force_count(int32_t) override { return static_cast<int32_t>(units.size()); }
     void tf_set_flag(int32_t, AiTfFlag, bool) override {}
-    int32_t tf_produce_force(int32_t, const AiArg&, bool) override { return -1; }
+    // a2m t05: Produce_Force calls that reached the host; a stage object other than `planet` is not a planet.
+    objects::ObjectHandle planet;
+    std::vector<std::pair<bool, bool>> produced;  // (stage present, sync)
+    int32_t tf_produce_force(int32_t, const AiArg& stage, bool sync) override {
+        produced.emplace_back(stage.present, sync);
+        return stage.present && stage.object != planet ? kAiNotAPlanet : 9;
+    }
     int32_t tf_get_stage(int32_t) override { return -1; }
     bool tf_all_on_free_store(int32_t) override { return false; }
     int32_t tf_order(int32_t, AiTfOrder o, const AiArg&) override {
@@ -1114,12 +1142,12 @@ uint64_t special_session() {
     attach_object_bridge(tvm, &tbridge);
     attach_player_world(tvm, &g.world);
     tvm.set_object_global("T", ts);
-    CHECK(run(tvm, "T.Activate_Ability('STEALTH') a1 = T.Is_Ability_Active('STEALTH') T.Activate_Ability('SPRINT') "
+    CHECK(run(tvm, "T.Activate_Ability('STEALTH', true) a1 = T.Is_Ability_Active('STEALTH') T.Activate_Ability('SPRINT', true) "
                    "a2 = T.Is_Ability_Active('SPRINT')") == "");
     CHECK(!gtrue(tvm, "a1") && gtrue(tvm, "a2"));
     CHECK(sim.bm_give_item(1, "Stealth_Item"));
     CHECK(run(vm, "r3 = S.Is_Ability_Ready('STEALTH')") == "" && gtrue(vm, "r3"));
-    CHECK(run(tvm, "T.Activate_Ability('STEALTH') a3 = T.Is_Ability_Active('STEALTH')") == "" && gtrue(tvm, "a3"));
+    CHECK(run(tvm, "T.Activate_Ability('STEALTH', true) a3 = T.Is_Ability_Active('STEALTH')") == "" && gtrue(tvm, "a3"));
 
     // Galactic Activate_Ability -> ground_activated_trigger; returns nothing (L1P4_LUA_GAPS 1.2). The halt ability must
     // be bought: nothing yet.
@@ -1161,6 +1189,23 @@ uint64_t special_session() {
     CHECK(ai.orders.size() == 3 && ai.orders[0] == AiTfOrder::LandUnits && ai.orders[1] == AiTfOrder::ActivateAbility &&
           ai.orders[2] == AiTfOrder::ActivateAbility && ai.abilities.size() == 2 && ai.abilities[0].empty() &&
           ai.abilities[1] == "Halter_T" && g.store->alive(h[1]) && g.store->alive(h[2]) && sim.respawns_pending(0).size() == 1);
+    // a2m t05 (A2M_T04_RE_ANSWERS Q4.1) [H]: Produce_Force's argument 1, when present (a Lua nil counts), must resolve to a
+    // planet, else the script error stops the script with nothing created; argument 2, when present, must be a bool.
+    {
+        ai.planet = sim.planets()[0].object;
+        vm.set_object_global("PA", ai.planet);
+        const std::string not_planet = "SCRIPT ERROR: TaskForceClass::Produce_Force -- Expected a planet object for parameter 1\n";
+        CHECK(run(vm, "TF.Produce_Force(nil)") == not_planet && ai.produced.empty());
+        CHECK(run(vm, "TF.Produce_Force(true)") == not_planet && ai.produced.empty());  // argument 1 cannot be skipped
+        CHECK(run(vm, "TF.Produce_Force(3)") == not_planet && ai.produced.empty());
+        CHECK(run(vm, "TF.Produce_Force(UFleet)") == not_planet && ai.produced.size() == 1);  // the host finds no planet
+        CHECK(run(vm, "TF.Produce_Force(PA, 1)").find("invalid type for parameter 2.  Expected bool") != std::string::npos &&
+              ai.produced.size() == 1);
+        CHECK(run(vm, "pf0 = TF.Produce_Force() pf1 = TF.Produce_Force(PA, true) pf2 = TF.Produce_Force(PA) "
+                      "pfok = pf0 ~= nil and pf1 ~= nil and pf2 ~= nil") == "" && gtrue(vm, "pfok"));
+        CHECK(ai.produced.size() == 4 && !ai.produced[1].first && !ai.produced[1].second && ai.produced[2].first &&
+              ai.produced[2].second && ai.produced[3].first && !ai.produced[3].second);
+    }
     attach_ai_host(vm, nullptr, 0);
     // The fleet itself with a matching type name: every carried unit of that type (content order) tries its abilities -
     // both remaining saboteurs apply.
@@ -1377,6 +1422,7 @@ int main() {
     test_sliceable_unlock();  // OI lua
     test_setup_players();
     test_galactic_ops();
+    test_prefer_ground_over_space();  // cu8f t04b
     const BindingCoverage cov = binding_coverage();
     std::printf("  coverage: globals implemented %u/%u, methods implemented %u/%u, RE call sites %llu/%llu\n",
                 cov.globals_implemented, cov.globals, cov.methods_implemented, cov.methods,

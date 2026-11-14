@@ -6,8 +6,8 @@
 // `quota` evaluations; when the pass completes: budget weights (hook), Commit, then
 //   quota = clamp(min(ceil(evalsLastPass / (FPS*5)), (int)(20 / max(1, players - activeHumans) + 0.5)), >= 1)
 // and countdown = the difficulty's Goal_Cycle_Sleep frames.
-// [port] The quota of the very first pass is the cap term (no previous pass exists; the original's initial
-// value is not traced).
+// First pass: GoalSystemConfig::retail_cadence (galactic, a2m r2) seeds it from sources x targets; otherwise [port] the
+// quota of the very first pass is the cap term.
 //
 // PROPOSAL CURSOR (0x6cb120, §1.5): sources = the player type's (goal type, function) pairs in
 // GoalProposalFunctionSets order, filtered by the context's mode. For each proposable source (block list
@@ -125,6 +125,8 @@ public:
     virtual void suspend_reservations(Goal& g) = 0;
     virtual bool uses_budget() = 0;                    // galactic context
     virtual bool can_fund(const Goal& g) = 0;          // 0x6129c0 (true when no budget)
+    // Accept-time gross test 0x6139f0 (slot 10 only; A2M_R3_RE_A §1.1): P / I instead of A / R. Default: can_fund.
+    virtual bool can_fund_accept(const Goal& g) { return can_fund(g); }
     virtual float category_credits(int32_t category) = 0;  // cat+0x44 (positive when no budget)
     virtual void budget_add(Goal& g) = 0;
     virtual void budget_release(Goal& g) = 0;
@@ -182,6 +184,18 @@ struct GoalSystemConfig {
     // Build_Time_Delay_Tolerance, and nominal_time is hashed. The galactic AI (A2f t09) and the tactical AI (A2g t06,
     // Land_ / Space_Build_Time_Multiplier) set it; off keeps the PP ETA x tolerance base.
     bool nominal_allowed_time = false;
+    // a2m r2 (A2M_R2_RE_A §2.1) [H], set by the galactic AI: the goal-system Init 0x6ca1f0 seeds evalsLastPass with
+    // sources x max(1, targets), the first quota comes from that seed, and the seed is not cleared, so pass 1's
+    // evaluations add to it; a slice ends as soon as its counter reaches the quota (a pass of E evaluations at quota q
+    // takes floor(E / q) + 1 frames). Off (the tactical AI, not re-checked): first quota = the cap term, a slice scans on
+    // to the next counted candidate.
+    bool retail_cadence = false;
+    // bkg3 (BKG3_RE_ANSWERS Q4, 0x721a50 / 0x6b83c0) [H], set by the galactic AI: 'the goal is already active' (slot 9, and
+    // Resolve's kept-or-active test) holds when a goal on the same target has a type whose like-set (GoalTypeDef::like_set)
+    // contains the candidate's type, not only for the exact (type, target); the greedy lastOld rule accepts the goal first
+    // and needs the same target. Retail uses the same lookup in land and space; [port] off there until the tactical lanes
+    // re-record their goldens (exact (type, target) test, lastOld stop before the accept).
+    bool like_sets = false;
 };
 
 class GoalSystem {
@@ -216,6 +230,8 @@ public:
     void purge(int32_t keep_running);
     Goal* find_active_by_running(int32_t running);
     Goal* find_active(uint32_t goal_type, int32_t target);
+    // bkg3: 0x721a50 on the active set: a goal on `target` (any category) whose type's like-set holds `goal_type`.
+    bool active_like(uint32_t goal_type, int32_t target) const;
     // Block list +0x2a0 (AI_GALACTIC_2 §5.1) [H]: TaskForce.Block_Goal_Proposal clears the proposed set and
     // appends the plan's goal (key = goal serial); Unblock removes every occurrence. While non-empty nothing
     // is proposed or activated.
@@ -256,7 +272,6 @@ private:
     std::vector<std::vector<Goal>> active_, proposed_;
     std::vector<int32_t> exclusion_;  // per goal type (+0x260)
     std::vector<uint32_t> block_list_;  // +0x2a0 (goal serials)
-    bool blocked_ = false;              // = !block_list_.empty()
     // OPT2 t03: one slice's candidates (visit order) and their batched values; scratch, rebuilt every slice
     struct Candidate {
         uint32_t source = 0;

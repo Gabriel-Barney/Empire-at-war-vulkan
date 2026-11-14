@@ -132,7 +132,6 @@ struct SystemState {
     SystemPtr def;
     Mat3x4 cur, prev;
     Float3 velocity;
-    bool has_transform = false;
     bool visible = true;    // drawing gate (hidden proxies, B.3); updating continues
     float fade = 1.0f;      // parent model fade (submit skipped at <= 0.01)
     bool water = false;     // system flag +0x338: bucket 7 instead of 8
@@ -184,8 +183,6 @@ public:
     void set_visible(Handle h, bool visible);
     void set_fade(Handle h, float fade);
     void set_water(Handle h, bool water);
-    // Both scales snapped (no smoothing): set_scalar(Emission / Detail, value, 0).
-    void set_scales(Handle h, float emission, float detail);
     // The scalar setter (0x173220): `value` = 1 float (Detail, Emission), 2 (Immediate) or 4 (Color RGBA); smoothing
     // seconds s: the spring rate is 1 / s, s <= 0 -> 0.01 and the value snaps to the target. Detail re-evaluates the
     // emitters' active slots whenever their count changes. Callers (STRATEGIC_GAPS §6.2): planet corruption, weather

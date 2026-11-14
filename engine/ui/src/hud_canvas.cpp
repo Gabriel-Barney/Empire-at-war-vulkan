@@ -1,5 +1,6 @@
 #include "alamo/ui/hud_canvas.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace alamo::ui {
@@ -16,15 +17,34 @@ std::array<std::array<float, 4>, 4> HudOrthoCamera::view_proj() const {
     return m;
 }
 
-HudCanvas HudCanvas::make(uint32_t screen_w, uint32_t screen_h) {
+HudCanvas HudCanvas::make(uint32_t screen_w, uint32_t screen_h, float ui_scale) {
     HudCanvas c;
     c.screen_width = screen_w ? screen_w : 1;
     c.screen_height = screen_h ? screen_h : 1;
+    c.ui_scale = ui_scale > 0.0f ? ui_scale : 0.0f;
+    c.text_height = c.screen_height;
     const auto sw = static_cast<double>(c.screen_width), sh = static_cast<double>(c.screen_height);
+    double fw = kHudBaseWidth, fh = kHudBaseHeight;  // the fitted (original) canvas
     if (c.wider_than_4_3()) {
-        c.width = static_cast<float>(sw * 768.0 / sh);
+        fw = sw * 768.0 / sh;
     } else if (c.taller_than_4_3()) {
-        c.height = static_cast<float>(sh * 1024.0 / sw);
+        fh = sh * 1024.0 / sw;
+    }
+    // UI scale: one canvas unit is ui_scale x kUiScaleUnitPixels pixels; the canvas is the screen / that when it is larger
+    // than the fitted one (same aspect, so one factor).
+    const double unit_px = static_cast<double>(c.ui_scale) * static_cast<double>(kUiScaleUnitPixels);
+    const double raw = c.ui_scale > 0.0f ? sh / (unit_px * fh) : 1.0;
+    const double k = std::max(1.0, raw);
+    c.width = static_cast<float>(fw * k);
+    c.height = static_cast<float>(fh * k);
+    if (k > 1.0) {
+        c.text_height = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(sh / k)));
+    } else if (raw < 1.0) {
+        // Past the original size: the layout stays fitted, only the text grows, by the scale over the one that reaches the
+        // original size (100 % when a smaller one already does, so 100 % never enlarges text), at most kUiScaleMaxTextGrowth.
+        const double fit_scale = std::max(1.0, sh / (static_cast<double>(kUiScaleUnitPixels) * fh));
+        const double grow = std::min(static_cast<double>(c.ui_scale) / fit_scale, static_cast<double>(kUiScaleMaxTextGrowth));
+        if (grow > 1.0) c.text_height = static_cast<uint32_t>(std::lround(sh * grow));
     }
     c.scale_x = c.width / kHudBaseWidth;
     c.scale_y = c.height / kHudBaseHeight;

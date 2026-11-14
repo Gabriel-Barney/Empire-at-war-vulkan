@@ -14,32 +14,23 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/meg/meg.h"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 
 namespace fs = std::filesystem;
 using alamo::vfs::Vfs;
 using alamo::vfs::VfsConfig;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
 using Files = std::vector<std::pair<std::string, std::string>>;  // name, content
 
-void write_file(const fs::path& p, const std::string& content) {
-    fs::create_directories(p.parent_path());
-    std::ofstream f(p, std::ios::binary);
-    f.write(content.data(), static_cast<std::streamsize>(content.size()));
-}
+using ::alamo::test::write_file;
 
 void put_u16(std::string& s, uint32_t v) {
     s.push_back(static_cast<char>(v & 0xFFu));
@@ -179,7 +170,7 @@ int main() {
     // ================= Scenario 1: two mods, two fallback dirs, auto-detected EaW =================
     VfsConfig cfg;
     cfg.foc_root = u8(FOC);
-    cfg.mod_paths = {u8(MODA), u8(MODB)};
+    cfg.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(MODA)}, {alamo::vfs::ModSearchEntry::Kind::Path, u8(MODB)}};
     cfg.fallback_paths = {u8(FB1), u8(FB2)};
     std::string err;
     auto v = Vfs::create(cfg, &err);
@@ -300,7 +291,7 @@ int main() {
     {
         VfsConfig c2;
         c2.foc_root = u8(FOC);
-        c2.mod_paths = {u8(MEGMOD)};
+        c2.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(MEGMOD)}};
         auto v2 = Vfs::create(c2, &err);
         CHECK(v2 != nullptr);
         if (v2) {
@@ -321,7 +312,7 @@ int main() {
     {
         VfsConfig c2;
         c2.foc_root = u8(FOC);
-        c2.mod_paths = {u8(CFGMOD)};
+        c2.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(CFGMOD)}};
         auto v2 = Vfs::create(c2, &err);
         CHECK(v2 != nullptr);
         if (v2) {
@@ -339,6 +330,27 @@ int main() {
             CHECK(cfg_mounts == 1);
             CHECK(v2->mounts()[5].path.find("CfgMod") != std::string::npos);  // first FoC list entry
         }
+    }
+
+    // ================= CU2 t10: mount_game == foc_root + parse_command_line + create =================
+    {
+        std::string merr;
+        CHECK(alamo::vfs::mount_game(u8(T / "no such dir"), {}, &merr) == nullptr);
+        CHECK(merr.rfind("VFS: FoC root is not a directory", 0) == 0);
+        const std::vector<std::string> margs = {"MODPATH=Mods\\ModA", "FALLBACKPATH=", "unknown"};
+        VfsConfig mc;
+        mc.foc_root = u8(FOC);
+        alamo::vfs::parse_command_line(margs, mc);
+        auto ref = Vfs::create(mc, &err);
+        auto got = alamo::vfs::mount_game(u8(FOC), margs, &merr);
+        CHECK(ref != nullptr && got != nullptr);
+        if (ref && got) {
+            CHECK(got->mod_dirs() == ref->mod_dirs());
+            CHECK(got->eaw_root() == ref->eaw_root() && !got->eaw_root().empty());  // auto-detected sibling GameData
+            CHECK(got->mounts().size() == ref->mounts().size());
+        }
+        auto no_eaw = alamo::vfs::mount_game(u8(FOC), {}, &merr, std::string());
+        CHECK(no_eaw != nullptr && no_eaw->eaw_root().empty());
     }
 
     // ================= Scenario 3: no EaW (eaw_root = "") and no MEGs =================
@@ -383,7 +395,7 @@ int main() {
                                                "NOARTPROCESS",
                                                "MODPATH="};
         CHECK(!alamo::vfs::parse_command_line(args, c));  // empty MODPATH= reported
-        CHECK(c.mod_search.size() == 3 && c.fallback_paths.size() == 2 && c.mod_paths.empty());
+        CHECK(c.mod_search.size() == 3 && c.fallback_paths.size() == 2);
         CHECK(c.mod_search[2].kind == alamo::vfs::ModSearchEntry::Kind::SteamWorkshop && c.mod_search[2].value == "1234567");
         CHECK(alamo::vfs::parse_command_line(std::vector<std::string>{"MODPATH=mods\\moda"}, c));
         CHECK(c.mod_search.size() == 4);
@@ -428,12 +440,12 @@ int main() {
             CHECK(r && r->layer == Vfs::Resolution::Mod && r->layer_index == 1);
             CHECK(va->describe().find("STEAMMOD=111") != std::string::npos);
         }
-        // MODPATH(Mod B) before STEAMMOD(ModA): Mod B wins; mod_paths come after mod_search.
+        // MODPATH(Mod B) before STEAMMOD(ModA): Mod B wins; the later entry (ModA again) is searched last.
         VfsConfig d;
         d.foc_root = u8(FOC);
         d.steam_resolver = resolver;
-        d.mod_paths = {u8(MODA)};
         CHECK(alamo::vfs::parse_command_line(std::vector<std::string>{"MODPATH=Mods\\Mod B", "STEAMMOD=111"}, d));
+        d.mod_search.push_back({alamo::vfs::ModSearchEntry::Kind::Path, u8(MODA)});
         auto vb = Vfs::create(d, &err);
         CHECK(vb != nullptr);
         if (vb) {
@@ -491,7 +503,7 @@ int main() {
 
         VfsConfig cl;
         cl.foc_root = u8(LFOC);
-        cl.mod_paths = {u8(LMOD)};
+        cl.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(LMOD)}};
         auto vl = Vfs::create(cl, &err);
         CHECK(vl != nullptr);
         if (!vl) std::printf("  deep create failed: %s\n", err.c_str());
@@ -537,7 +549,7 @@ int main() {
         write_file(BX / MAPS / "Fb_Only.ted", "F");
         VfsConfig cx;
         cx.foc_root = u8(FX);
-        cx.mod_paths = {u8(MX)};
+        cx.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, u8(MX)}};
         cx.fallback_paths = {u8(BX)};
         cx.eaw_root = std::string();  // no EaW
         std::string errx;

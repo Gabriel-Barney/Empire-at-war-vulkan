@@ -76,7 +76,6 @@ uint32_t AnimWorld::insert_row(ObjectId id) {
     insert_at(last_time_, at, 0.0);
     insert_at<uint8_t>(frozen_, at, 0);
     insert_at<uint8_t>(lock_, at, 0);
-    insert_at<uint8_t>(frame_changed_, at, 0);
     insert_at<uint8_t>(near_end_, at, 0);
     insert_at<uint8_t>(berserk_, at, 0);
     insert_at<uint64_t>(idle_timer_, at, 0);
@@ -105,7 +104,6 @@ bool AnimWorld::remove(ObjectId id) {
     erase_at(last_time_, r);
     erase_at(frozen_, r);
     erase_at(lock_, r);
-    erase_at(frame_changed_, r);
     erase_at(near_end_, r);
     erase_at(berserk_, r);
     erase_at(idle_timer_, r);
@@ -130,7 +128,7 @@ void AnimWorld::add(ObjectId id, const AnimModel* model, uint64_t frame) {
     model_[r] = model;
     model_crc_[r] = model ? name_crc(model->model) : 0u;  // cached for hash_state
     last_time_[r] = sim_time(frame);
-    frozen_[r] = lock_[r] = frame_changed_[r] = near_end_[r] = berserk_[r] = 0;
+    frozen_[r] = lock_[r] = near_end_[r] = berserk_[r] = 0;
     idle_timer_[r] = 0;
     for (int s = 0; s < kSlotCount; ++s) clear_slot(r, static_cast<Slot>(s));
     fade_active_[r] = 0;
@@ -261,7 +259,6 @@ PlayResult AnimWorld::play_row(uint32_t r, const PlayRequest& req_in, SimRng* rn
     timed_left_[kPrimary][r] = req.timed_seconds > 0.0f ? req.timed_seconds : 0.0f;
     if (req.start_frame > 0.0f) frame_[kPrimary][r] = c->clip->frame_count < 2 ? 0.0f : req.start_frame;
     last_time_[r] = sim_time(frame);
-    frame_changed_[r] = 1;
     near_end_[r] = 0;
     return PlayResult::Played;
 }
@@ -393,7 +390,6 @@ void AnimWorld::advance_row(uint32_t r, double t) {
     if (frozen_[r]) return;
     const float dt = static_cast<float>(t - last_time_[r]);
     last_time_[r] = t;
-    frame_changed_[r] = 0;
     const ClipRef* clips[kSlotCount] = {slot_clip(r, kPrimary), slot_clip(r, kPrevious), slot_clip(r, kOverlay)};
     for (int si = 0; si < kSlotCount; ++si) {
         const ClipRef* c = clips[si];
@@ -421,7 +417,6 @@ void AnimWorld::advance_row(uint32_t r, double t) {
             }
         }
         if (s == kPrimary) {
-            if (frame_[s][r] != before) frame_changed_[r] = 1;
             if (count > 0 && frame_[s][r] >= static_cast<float>(count) - 2.5f) near_end_[r] = 1;
         }
     }
@@ -435,7 +430,6 @@ void AnimWorld::advance_row(uint32_t r, double t) {
         } else {
             fade_weight_[r] = 1.0f - fade_remaining_[r] / fade_duration_[r];
         }
-        frame_changed_[r] = 1;
     }
 }
 
@@ -446,11 +440,6 @@ void AnimWorld::advance(uint64_t frame, const ParallelFor& pf, uint32_t grain) {
     pf(n, grain == 0 ? 1u : grain, [&](uint32_t begin, uint32_t end) {
         for (uint32_t r = begin; r < end; ++r) advance_row(r, t);
     });
-}
-
-void AnimWorld::advance_one(ObjectId id, uint64_t frame) {
-    const uint32_t r = row(id);
-    if (r != kNoRow) advance_row(r, sim_time(frame));
 }
 
 // ---- queries -----------------------------------------------------------------------------------------
@@ -478,11 +467,6 @@ bool AnimWorld::crossfading(ObjectId id) const {
 float AnimWorld::crossfade_weight(ObjectId id) const {
     const uint32_t r = row(id);
     return r == kNoRow || !fade_active_[r] ? 1.0f : fade_weight_[r];
-}
-
-bool AnimWorld::frame_changed(ObjectId id) const {
-    const uint32_t r = row(id);
-    return r != kNoRow && frame_changed_[r] != 0;
 }
 
 bool AnimWorld::near_end(ObjectId id) const {

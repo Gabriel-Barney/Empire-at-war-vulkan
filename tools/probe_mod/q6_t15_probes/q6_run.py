@@ -35,6 +35,8 @@ import time
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
+from probe_run import say, running, set_state, scan_once  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'a1_tactical'))
 import build_q6_mod  # noqa: E402
 import q6_cleanup  # noqa: E402
@@ -53,7 +55,8 @@ STEPS = {
  B) Galactic Conquest > "Q6 PROBE: ELIM A (OWN NOTHING)" > EMPIRE > Start. Click nothing for 3 minutes (until "170 s
     passed" or the campaign ends by itself). Note what happened and when (screenshot of any end screen). Quit.
  C) Same for "Q6 PROBE: ELIM B (OWN, THEN LOSE)" (Abregado Rae is yours from 20 s to 50 s) and
-    "Q6 PROBE: ELIM C (CONTROL)" (expected to end at once).
+    "Q6 PROBE: ELIM C (CONTROL)" (expected to end at once). Optional (q6 t25): "Q6 PROBE: ELIM D (AI GAINS A PLANET)"
+    and "Q6 PROBE: ELIM E (FLEET, NO PLANET)", the same way.
  D) Skirmish > LAND, map Geonosis: slot 1 you EMPIRE team 1, slot 2 AI REBEL team 2, all other slots closed. Start.
     No orders. About 5 s in: "selection test set (land) is next to your units". Press Ctrl+A, take a screenshot of the
     whole screen (selection brackets + the selected-units panel). After "tactical part done" (2 min) press Ctrl+A again,
@@ -74,22 +77,6 @@ STEPS = {
 }
 
 
-def say(*a):
-    print(*a, flush=True)
-
-
-def running(name):
-    r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq %s' % name, '/NH'], capture_output=True, text=True)
-    return name.lower() in r.stdout.lower()
-
-
-def set_state(where, **kv):
-    with open(os.path.join(where, 'run_status.txt'), 'w') as f:
-        for k, v in kv.items():
-            f.write('%s=%s\n' % (k, v))
-        f.write('time=%s\n' % time.strftime('%Y-%m-%d %H:%M:%S'))
-
-
 def modpath_args(session, corr, tr, steammod=False):
     """Mod arguments. TR: the overlay first (MODPATH / STEAMMOD items are searched in command-line order, earlier wins,
     docs/PHASE2.md "file resolution order"), then TR by a relative MODPATH (default) or by STEAMMOD=1125571106."""
@@ -102,23 +89,6 @@ def modpath_args(session, corr, tr, steammod=False):
     except ValueError:  # another drive
         rel = tr
     return ['MODPATH=Mods\\' + build_q6_mod.TR_MOD_NAME, 'MODPATH=' + rel]
-
-
-def scan_once(proc, seen, log):
-    hits, stats = proc.scan([NEEDLE])
-    new = 0
-    for _, tail in hits[NEEDLE]:
-        m = RECORD_RE.match(tail)
-        if not m:
-            continue
-        text = m.group(0).decode('ascii')
-        if text in seen:
-            continue
-        seen.add(text)
-        log.write(text + '\n')
-        new += 1
-    log.flush()
-    return new, stats
 
 
 def main():
@@ -196,7 +166,7 @@ def main():
         seen = set()
         with open(records_log, 'w') as log:
             while proc.alive():
-                new, st = scan_once(proc, seen, log)
+                new, st = scan_once(proc, NEEDLE, RECORD_RE, seen, log)
                 info['scans'] += 1
                 if new:
                     say('  +%d records (%d total, %.0f MB scanned)' % (new, len(seen), st['bytes'] / 1e6))

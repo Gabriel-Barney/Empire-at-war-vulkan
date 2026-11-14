@@ -64,6 +64,10 @@ public:
     // ground at the jammer's x, y); null = space (the jammer's own z). Returns the number of instances appended.
     uint32_t build(Renderer& renderer, const TextureSource& textures, const InterpolatedFrame& frame,
                    const std::function<float(float, float)>& ground, std::vector<Instance>& out);
+    // The same for explicit blobs (cu9g: the tactical bombing-run targeting blob, HUD_GAPS §9.5): material by name,
+    // colour, half_size, centre; `center.z` is replaced by the ground height when `ground` is set.
+    uint32_t build_blobs(Renderer& renderer, const TextureSource& textures, std::span<const JamBlob> blobs,
+                         const std::function<float(float, float)>& ground, std::vector<Instance>& out);
     void shutdown(Renderer& renderer);
     size_t model_count() const { return models_.size(); }
 

@@ -7,6 +7,7 @@
 #include <exception>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/formats/alo.hpp"
 #include "alamo/formats/particle.hpp"
@@ -14,12 +15,6 @@
 namespace alamo::render::particles {
 
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
 
 Shape to_shape(const particle::SpawnShape& s) {
     Shape o;
@@ -120,25 +115,9 @@ bool EmitterDef::sorted() const {
     return depth_sort && (blend_mode == 0 || blend_mode == 2 || blend_mode == 5 || blend_mode == 11);
 }
 
-bool SystemDef::has_heat() const {
-    return std::any_of(emitters.begin(), emitters.end(), [](const EmitterDef& e) { return e.heat; });
-}
-bool SystemDef::has_non_heat() const {
-    return std::any_of(emitters.begin(), emitters.end(), [](const EmitterDef& e) { return !e.heat; });
-}
-
 std::string texture_base_name(std::string_view name) {
     const size_t p = name.find_last_of("\\/");
-    return upper(p == std::string_view::npos ? name : name.substr(p + 1));
-}
-
-float sample_track(const TrackTable& t, float f) {
-    const float x = std::clamp(f, 0.0f, 1.0f) * static_cast<float>(kTrackSamples - 1);
-    const auto i = static_cast<uint32_t>(x);
-    if (i >= kTrackSamples - 1) return t.v[kTrackSamples - 1];
-    if (t.interpolation == 2) return t.v[i];
-    const float w = x - static_cast<float>(i);
-    return t.v[i] + (t.v[i + 1] - t.v[i]) * w;
+    return ascii_upper(p == std::string_view::npos ? name : name.substr(p + 1));
 }
 
 uint32_t emitter_pool(const EmitterDef& e) {
@@ -215,11 +194,8 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
         }
         const particle::ParticleSystem& ps = f.particles;
         SystemDef s;
-        std::string n = upper(name);
-        const size_t slash = n.find_last_of("\\/");
-        if (slash != std::string::npos) n = n.substr(slash + 1);
-        if (n.size() > 4 && n.compare(n.size() - 4, 4, ".ALO") == 0) n.resize(n.size() - 4);
-        s.name = n;
+        const size_t slash = name.find_last_of("\\/");  // the directory is cut here, not in system_key
+        s.name = system_key(slash == std::string_view::npos ? name : name.substr(slash + 1));
         s.leave_particles = ps.leave_particles != 0;
         s.emitters.reserve(ps.emitters.size());
         for (size_t i = 0; i < ps.emitters.size(); ++i) {
@@ -229,7 +205,6 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
             e.name = pe.name;
             e.color_texture = pe.color_texture.empty() ? std::string() : texture_base_name(pe.color_texture);
             e.bump_texture = pe.bump_texture.empty() ? std::string() : texture_base_name(pe.bump_texture);
-            e.index = static_cast<uint32_t>(i);
             e.blend_mode = d.blend_mode;
             e.geometry = d.geometry;
             e.texture_cells = std::max<uint32_t>(d.texture_cells, 1u);
@@ -277,10 +252,7 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
             e.weather_camera_distance = d.weather_camera_distance;
             if (pe.velocity_shape()) e.velocity = to_shape(*pe.velocity_shape());
             if (pe.position_shape()) e.position = to_shape(*pe.position_shape());
-            // Lifetime shape recomputed from 0x0F / 0x13 (SPEC 3.2): a box [L(1-r), L] on x.
-            e.life.kind = 1;
-            e.life.box_min[0] = e.lifetime * (1.0f - e.random_lifetime);
-            e.life.box_max[0] = e.lifetime;
+            // e.index and the lifetime shape (SPEC 3.2) are derived by finalize_system.
             // Weather cube: the position shape is a cube of half the edge (SPEC 3.1 0x3E).
             if (e.weather) {
                 e.position.kind = 2;
@@ -305,7 +277,7 @@ bool load_system(std::span<const uint8_t> bytes, std::string_view name, SystemDe
 
 ProxyName parse_proxy_name(std::string_view name) {
     ProxyName p;
-    const std::string u = upper(name);
+    const std::string u = ascii_upper(name);
     auto index_after = [&](const char* tag, size_t& at) {
         at = u.find(tag);
         if (at == std::string::npos) return -1;
@@ -326,9 +298,14 @@ ProxyName parse_proxy_name(std::string_view name) {
     return p;
 }
 
-SystemPtr ParticleLibrary::get(std::string_view name) {
-    std::string key = upper(name);
+std::string system_key(std::string_view name) {
+    std::string key = ascii_upper(name);
     if (key.size() > 4 && key.compare(key.size() - 4, 4, ".ALO") == 0) key.resize(key.size() - 4);
+    return key;
+}
+
+SystemPtr ParticleLibrary::get(std::string_view name) {
+    const std::string key = system_key(name);
     {
         std::lock_guard<std::mutex> l(mutex_);
         const auto it = cache_.find(key);
@@ -364,7 +341,7 @@ SystemPtr ParticleLibrary::get(std::string_view name) {
 void ParticleLibrary::add(SystemPtr system) {
     if (!system) return;
     std::lock_guard<std::mutex> l(mutex_);
-    cache_[upper(system->name)] = std::move(system);
+    cache_[ascii_upper(system->name)] = std::move(system);
 }
 
 ParticleLibrary::Stats ParticleLibrary::stats() const {

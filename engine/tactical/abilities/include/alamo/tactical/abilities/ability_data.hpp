@@ -38,14 +38,21 @@ struct UnitAbilityRecord {
     float effective_radius = 0.0f;       // Effective_Radius
     float recharge_seconds = 0.0f;       // Recharge_Seconds
     float expiration_seconds = 0.0f;     // Expiration_Seconds (<= 0: no active phase)
+    // LURE pulses (cu8f t06, CU8F_T04_T06_RE §3.1 [H]): every int(FPS x Pulse_Frequency_Secs) frames up to
+    // Max_Number_Of_Pulses, then the behaviour suspends (AbilitySystem lure service).
+    // Is_Pulsing (+0x2c) is parsed but has no reader in the original ([M]: LURE always pulses; the tag is even
+    // registered as a float), so nothing reads it here either.
     bool is_pulsing = false;
-    float pulse_frequency_secs = 0.0f;
-    int32_t max_pulses = 0;
+    float pulse_frequency_secs = 0.0f;  // Pulse_Frequency_Secs (+0x30)
+    int32_t max_pulses = 0;             // Max_Number_Of_Pulses (+0x34)
     std::string alternate_icon_name;         // Alternate_Icon_Name: button art instead of the type's (GUI only, t42)
     std::string gui_activated_ability_name;  // special ability this forwards to (2.5)
     uint32_t gui_name_crc = 0;               // name_crc of it (+0x88)
     std::string spawned_object_type;
-    int32_t max_spawned_objects = 0;
+    // Max_Num_Spawned_Objects (+0xa0, cu8f t06, CU8F_T04_T06_RE §3.2 [H]): DEPLOY_TROOPERS only - Can_Activate(38) is
+    // false while the unit's live deployed squads reach it. [port] -1 = tag absent: no cap (the record ctor's default
+    // was not read [L]; every vanilla DEPLOY_TROOPERS user sets 2).
+    int32_t max_spawned_objects = -1;
     float bomb_countdown_seconds = 0.0f;
     float area_effect_decal_distance = 0.0f;
     std::vector<std::string> projectile_override_names;  // Projectile_Types_Override
@@ -61,7 +68,9 @@ struct UnitAbilityRecord {
     // ---- OI abilities ----
     int32_t spawned_type = -1;        // Spawned_Object_Type as a host TypeIndex (resolver.object_type), -1 unknown
     int32_t spawned_projectile = -1;  // ... as a ProjectileDesc index when it is a projectile type (resolver.projectile)
-    std::vector<int32_t> target_types;  // Target_Types (LURE)
+    // Target_Types (+0x38, host TypeIndex, XML order; -1 unknown): read only by the LURE pulse (exact type match,
+    // cu8f t06, CU8F_T04_T06_RE §3.1).
+    std::vector<int32_t> target_types;
     // REMAINING_GAPS §5.2: Owner_Attachment_Bone (+0x110), DEPLOY_TROOPERS spawn bones in list order (comma lists and
     // repeated tags both append).
     std::vector<std::string> owner_attachment_bones;
@@ -86,7 +95,7 @@ struct SpecialAbilityDesc {
     int32_t stacking_category = 0;
     float damage_per_frame = 0.0f;               // energy weapon
     float duration_secs = 0.0f;                  // Duration_In_Secs (jamming fallback)
-    float stealth_transition_time = 0.0f;
+    float stealth_transition_time = 0.0f;  // parsed, not read by the sim: render-only fade (ABILITY_VISUALS §1.1)
     bool must_be_bought_on_black_market = false;
     // laser defense
     float defense_duration = 0.0f, protection_radius = 0.0f, zap_recharge = 0.0f, dist_travelled = 0.0f;
@@ -115,15 +124,27 @@ struct SpecialAbilityDesc {
     std::array<float, combat::kModListCount> bonus{};
     bool apply_to_all_allies = false;     // Apply_To_All_Allies / Affects_All_Allies
     bool reverse_logic = false;           // Reverse_Application_Logic
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3a): Combat_Bonus Specific_Faction (+0x1a0, resolved into +0x1c0), as written;
+    // "" = unset. AbilitySystem::set_host resolves it through AbilityHost::faction_index (unknown = unset, a warning).
+    std::string specific_faction;
     // Battlefield_Modifier (§2.3.11)
     float fow_reveal_multiplier = 1.0f, reinforcement_time_multiplier = 1.0f, stealth_duration_multiplier = 1.0f,
           capture_time_multiplier = 1.0f, reinforcement_deploy_multiplier = 1.0f;
+    // Enable_Bombing_Runs (+0x191) / Enable_Special_Weapons (+0x192) / Enable_Planetary_Bombardment (+0x193) (cu8f t06,
+    // CU8F_T04_T06_RE §3.3 [H]): the apply pushes a `true` entry (keyed by this source) onto each affected player's bool
+    // list (AbilitySystem::player_gate), the remove deletes them; Reverse_Application_Logic swaps the two.
     bool enable_bombing_runs = false, enable_bombardment = false, enable_special_weapons = false;
     // Force_Healing (§2.3.1)
     float heal_range = 0.0f, heal_percent = 0.0f, heal_amount = 0.0f, heal_interval = 0.0f;
     bool single_target_heal = false;
     // Berserker (§2.3.2)
     float berserker_speed = 0.0f, berserker_damage = 0.0f, berserker_damage_range = 0.0f, berserker_duration = 0.0f;
+    // Saber_Throw (cu8i t01, CU8F_T01_T02_T07_RE §2.6): Catch_Dist (+0x180) and the Saber_Name projectile type's Max_Speed
+    // (per frame; 0 = unknown), for the thrown-saber flight stand-in (saber_flight_frames).
+    float catch_dist = 0.0f;
+    float saber_speed = 0.0f;
+    float saber_max_flight = 0.0f;  // cu8j t03: the Saber_Name type's Projectile_Max_Flight_Distance (0 = unknown)
+    int32_t saber_projectile = -1;  // cu8k t01: the Saber_Name type's ProjectileDesc (the thrown saber), -1 unknown
     // Proximity_Mines (§2.3.3) / Buzz_Droids / Summon / Spawn / Radioactive (Object_Type, Mine_Type, ...)
     float activation_time = 0.0f;         // Activation_Time_In_Seconds
     float trigger_radius = 0.0f;          // Trigger_Radius
@@ -151,8 +172,12 @@ struct SpecialAbilityDesc {
     float health_per_victim = 0.0f;
     // Super_Laser (§2.3.9)
     int32_t fire_frame = 0;
+    // cu8f t06 (CU8F_T04_T06_RE §3.4 [H]; ctor defaults Turn_Rate 10, Firing_Cone 45): Face_Target with
+    // TACTICAL_SUPER_WEAPON turns the owner's yaw toward the target by at most Turn_Rate degrees per update (<= 0: the
+    // type's turn rate) and starts the attack clip once |yaw error| <= Firing_Cone (>= 90 reads as 0.01); Fire_Continuation:
+    // after the target is dropped the beam runs until now + int(FPS x value) with no damage.
     bool face_target = false;
-    float turn_rate = 0.0f, firing_cone = 0.0f, fire_delay = 0.0f, fire_continuation = 0.0f;
+    float turn_rate = 10.0f, firing_cone = 45.0f, fire_delay = 0.0f, fire_continuation = 0.0f;
     // Drain_Life / Leech_Shields / Blast / Corrupt_Systems / Flame thrower (§2.3.10, §2.3.12)
     float damage_per_second = 0.0f;       // Damage_Per_Second / Shield_Damage_Per_Second / Shield_Drain_Per_Second
     float charging_time = 0.0f;           // Charging_Time_In_Seconds / Charge_Up_Seconds
@@ -163,7 +188,9 @@ struct SpecialAbilityDesc {
     // Infection (refix t02; Damage_Per_Second above, Duration_Of_Infection -> duration_secs)
     float distance_to_infect = 0.0f;      // Distance_To_Infect
     float seconds_to_infect = 0.0f;       // Seconds_To_Infect
-    uint64_t infection_categories = 0;    // Infection_CategoryMask
+    // Infection_CategoryMask (cu8f t06, CU8F_T04_T06_RE §3.5 [H]): the spread's victim filter only (candidate type
+    // CategoryMask & mask != 0; 0 = nothing catches it by proximity); a direct Causes_Infection hit is not filtered.
+    uint64_t infection_categories = 0;
     // Enable_Ability / Cancel_Special
     uint32_t ability_name_crc = 0;        // Ability_Name / Special_Ability_Name
     // Permanent_Weapon_Swap
@@ -206,6 +233,16 @@ struct AbilityObjectDesc {
     float bribe_modifier_uncorrupted = 1.0f;  // Bribe_Modifier_On_Uncorrupted_Planets (+0x23e0) [inferred default 1]
     float friendly_damage_amount = 0.0f;      // Friendly_Damage_Amount (+0x23ec): > 0 cannot be bribed
     bool proximity_mine = false;              // has the PROXIMITY_MINE behaviour (0x55): cannot be bribed
+    // cu8f t06 (CU8F_T04_T06_RE §3.4): has TACTICAL_SUPER_WEAPON (0x2c, slot +0x35e) - a Face_Target Super_Laser turns
+    // through it; without it the attack clip starts at the apply.
+    bool tactical_super_weapon = false;
+    // s78m t05 (TACTICAL_COMBAT §5.4.3 item 4): Unique_Ground_Unit (type +0x1b60) / Unique_Space_Unit (+0x1b50) as host
+    // TypeIndex, -1 none. A Combat_Bonus aura of this type never applies to units of those types.
+    int32_t unique_ground_type = -1;
+    int32_t unique_space_type = -1;
+    // s78n t04 (TACTICAL_COMBAT §5.4.4 item 3b): Apply_Special_Ability_To_Self_On_Creation (type +0xe8): a Combat_Bonus
+    // source of this type also offers its aura to itself at its creation. No shipped type sets it.
+    bool apply_self_on_creation = false;
 };
 
 struct AbilityData {
@@ -223,7 +260,28 @@ struct AbilityResolvers {
     // type name is a projectile type (Spawned_Object_Type resolution; unset: names starting "Proj" [port]).
     std::function<uint16_t(std::string_view)> damage;
     std::function<bool(std::string_view)> is_projectile;
+    // cu8i t01: a type's Max_Speed by name (Saber_Throw's Saber_Name), without registering it as a ProjectileDesc; < 0
+    // unknown.
+    std::function<float(std::string_view)> type_max_speed;
+    // cu8j t03: a type's Projectile_Max_Flight_Distance by name (Saber_Throw's Saber_Name); < 0 unknown.
+    std::function<float(std::string_view)> type_max_flight_distance;
 };
+
+// cu8j t03 (CU8F_T01_T02_T07_RE §2.7 item 4) [port stand-in for the LIGHT_SABER projectile, no path jitter]: the thrown
+// saber's frames counted from the throw. Ltot = |T - P0| + |L - T| (3D: T the target point at the apply, P0 the spawn
+// point, L the thrower), B = max travel = MFD + R(target) + |T.z - P0.z| (MFD <= 0: no limit), v = speed per frame:
+// k_c = floor((Ltot - catch_dist) / v) + 1; v k_c < min(Ltot, B): caught at step k_c, the ability ends 11 frames later
+// (SWORD_CATCH, 30 frames at speed 3); else no catch: the saber dies at min(ceil(Ltot / v), ceil(B / v)) and the ability
+// ends then (epsilon 0 [M]). Luke (v 8, Catch_Dist 15, MFD 250): 150 units, B 275 -> no catch, end 35 (retail 35); 120
+// units -> catch 29, end 40 (retail 43, the jitter detour). v <= 0: no flight (end 0).
+struct SaberFlight {
+    uint32_t catch_step = 0;  // 0 = no catch
+    uint32_t end = 0;         // the ability's end (SAP +0x2e8 cleared), frames after the throw; 0 = no flight
+};
+SaberFlight saber_flight(float out_dist, float back_dist, float max_travel, float speed, float catch_dist);
+// cu8j t03 [M]: the throw (anim 0x6c SWORD_THROW past its half, +3 frames a tick) comes 7 (or 8) frames after the apply.
+// cu8k t01: also the delay of the real throw (the host spawns the Saber_Name projectile then).
+inline constexpr uint32_t kSaberThrowDelay = 7;
 
 // "WEAPON_DELAY_MULTIPLIER" / "Weapon_Delay" -> 1..12, 0 unknown (case-insensitive, suffix optional).
 uint8_t mod_kind_from_name(std::string_view name);
@@ -247,8 +305,6 @@ SpecialAbilityDesc parse_special_ability(const data::XmlNode& e, const AbilityRe
 std::vector<uint32_t> parse_special_abilities(const data::XmlNode& type_element, AbilityData& data, const AbilityResolvers& r,
                                               std::vector<std::string>* diag = nullptr);
 
-// The record of `type` in a type's list: a later entry of the same Type replaces an earlier one (2.3).
-const UnitAbilityRecord* find_record(const AbilityObjectDesc& d, uint8_t type);
 // Fills UnitDesc::abilities (the first two Unit_Abilities_Data entries, Mod_Multiplier system B)
 // by appending their combat descriptors to `cd.abilities`.
 void link_combat_abilities(const AbilityObjectDesc& d, combat::CombatData& cd, combat::UnitDesc& ud);

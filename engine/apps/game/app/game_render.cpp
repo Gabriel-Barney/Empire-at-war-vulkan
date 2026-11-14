@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdio>
 
+#include "alamo/core/ascii.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/render/galactic/galactic_session.hpp"
 #include "alamo/render/pipelines.hpp"
@@ -29,19 +31,23 @@ data::XmlDocument read_xml(const FileProvider& files, const char* path) {
     return data::XmlDocument::parse(bytes, path);
 }
 
-ui::UiConstants ui_constants(const FileProvider& files) {
-    const data::XmlDocument doc = read_xml(files, "Data\\XML\\GameConstants.xml");
-    return doc.ok() ? ui::parse_ui_constants(doc.root()) : ui::UiConstants{};
+// cu5 t03: every GameConstants reader of alamo_game takes the <GameConstants> root GameData already parsed
+// (GameDatabase::constants().element, null when the file is missing or has no root): GameConstants.xml is read once.
+const data::XmlNode& game_constants(const GameData& gd) { return gd.db.constants().element; }
+
+ui::UiConstants ui_constants(const GameData& gd) {
+    const data::XmlNode& root = game_constants(gd);
+    return root ? ui::parse_ui_constants(root) : ui::UiConstants{};
 }
 
 // --- OI render: R2 galactic light record (STRATEGIC_GAPS §6.1: GameConstants Galactic_Zoom_*_Light_*), read once per
-// file provider (frame thread only) ---
-const render::GalacticLightSettings& galactic_light_settings(const FileProvider* files) {
-    static const FileProvider* loaded_for = nullptr;
+// game data (frame thread only) ---
+const render::GalacticLightSettings& galactic_light_settings(const GameData* gd) {
+    static const GameData* loaded_for = nullptr;
     static render::GalacticLightSettings settings;
-    if (files && files != loaded_for) {
-        settings = render::load_galactic_light_settings(*files);
-        loaded_for = files;
+    if (gd && gd != loaded_for) {
+        settings = render::load_galactic_light_settings(game_constants(*gd));
+        loaded_for = gd;
     }
     return settings;
 }
@@ -143,25 +149,20 @@ void GalacticView::init(GpuCore& gpu, const GameData& data, std::vector<render::
     gpu_ = &gpu;
     colors_ = std::move(colors);
     style_ = style;
-    // FIXPASS_GALACTIC §3: the corruption path settings and the evil side name (GameConstants).
-    corruption_path_ = render::load_corruption_path_settings(*data.files);
-    {
-        const data::XmlDocument gc = read_xml(*data.files, "Data\\XML\\GameConstants.xml");
-        if (gc.ok())
-            if (const std::string_view evil = gc.root().child_text("Evil_Side_Name"); !evil.empty()) evil_side_name_ = std::string(evil);
-    }
+    // FIXPASS_GALACTIC §3: the corruption path settings (GameConstants; the evil side name is in the galactic rules).
+    corruption_path_ = render::load_corruption_path_settings(game_constants(data));
     types_.build(data.types);
     models_ = std::make_unique<render::GalacticModels>(gpu.renderer, gpu.streamer.get(), gpu.cache.get(), data.files.get());
     portrait_models_ = std::make_unique<render::GalacticModels>(gpu.renderer, gpu.streamer.get(), gpu.cache.get(), data.files.get());
     portraits_ = std::make_unique<render::PlanetPortraits>(gpu.renderer, gpu.alloc, gpu.ring, *portrait_models_, types_);
-    portraits_->set_lighting(render::galactic_lighting(galactic_light_settings(data.files.get()), 1.0f));
+    portraits_->set_lighting(render::galactic_lighting(galactic_light_settings(&data), 1.0f));
     ropt.threads = gpu.js->worker_count();
     ropt.space = true;     // background list = the galactic background scene
     ropt.galactic = true;  // no bloom / heat
     ropt.shadows = false;
-    const ui::UiConstants uc = ui_constants(*data.files);
+    const ui::UiConstants uc = ui_constants(data);
     camera_ = ui::GalacticCameraController(uc.galactic, uc.strategic);
-    corruption_ = render::load_galactic_corruption_settings(*data.files);
+    corruption_ = render::load_galactic_corruption_settings(game_constants(data));
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     pworld_ = std::make_unique<render::particles::ParticleWorld>(1u << 18);  // [port] capacity: corruption smoke only
     plib_ = std::make_unique<render::particles::ParticleLibrary>(data.files.get());
@@ -177,7 +178,7 @@ void GalacticView::init(GpuCore& gpu, const GameData& data, std::vector<render::
 
 void GalacticView::attach(const galactic::GalacticSim& sim, int32_t local_player) {
     palette_ = render::make_galactic_palette(sim, colors_);
-    render::GalacticViewOptions vo = render::galactic_view_options(sim, evil_side_name_);
+    render::GalacticViewOptions vo = render::galactic_view_options(sim);
     vo.viewpoint = local_player;
     vo.corruption_path = corruption_path_;
     vo.multiplayer = false;  // [port] multiplayer is deferred: every session is single-player
@@ -235,7 +236,6 @@ void GalacticView::prepare(float alpha, double now_s, uint32_t selected_planet, 
     // animates while paused too [port]).
     corruption_fx_.clear();
     render::galactic_corruption_effects(frame_, corruption_, corruption_fx_);
-    corruption_live_ = 0;
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     if (pattach_) {
         pattach_->begin();
@@ -247,7 +247,6 @@ void GalacticView::prepare(float alpha, double now_s, uint32_t selected_planet, 
             if (!def) continue;
             pattach_->sync_effect(e.key, std::move(def), e.transform, 1.0f);
             if (e.scalars) pattach_->set_effect_scalars(e.key, e.brightness, e.scale, e.energy);  // GRC 4.5 transition ramp
-            ++corruption_live_;
         }
         pattach_->end();
         const double dt = now_s >= 0.0 && last_frame_s_ >= 0.0 ? std::clamp(now_s - last_frame_s_, 0.0, 0.1) : 1.0 / 30.0;
@@ -261,7 +260,7 @@ void GalacticView::use_scene(GpuCore& gpu) {
     // --- OI render: the galactic light record from GameConstants; R2 t03: the planet-zoom lerp (STRATEGIC_GAPS §6.1,
     // 0x3c3bf0: intensity -> Galactic_Zoom_Light_Level, angles -> Galactic_Zoom_In_Light_Angle over GMC_ZoomTime of wall
     // time, linear in the progress) follows the camera's zoom blend: 0 zoomed out, p zooming in, 1 - p zooming out. ---
-    gpu.renderer.set_lighting(render::galactic_lighting(galactic_light_settings(gpu.data && gpu.data->files ? gpu.data->files.get() : nullptr),
+    gpu.renderer.set_lighting(render::galactic_lighting(galactic_light_settings(gpu.data && gpu.data->files ? gpu.data : nullptr),
                                                         camera_.zoom_blend()));
     // --- end OI render ---
     gpu.renderer.set_object_fade(-1.0f, -1.0f);  // SPACE_AND_OPEN.md B.8: no distance fade on the galactic map
@@ -374,8 +373,12 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     scene_->set_objects_enabled(false);  // the battle's objects replace the placements
     scene_->set_runtime_decals_enabled(!space_);
     std::string e;
-    if (!scene_->load(*data.files, map, gpu.resolver.get(), jobs::make_parallel_for(*gpu.js), &e) ||
-        !scene_->start(gpu.renderer, *gpu.streamer, *gpu.cache, {}, &e)) {
+    bool ok = scene_->load(*data.files, map, gpu.resolver.get(), jobs::make_parallel_for(*gpu.js), &e);
+    // cu8g t02 (CU8G_T02_ENV_PICK_RE §1 / §2): the battle's environment (the map-load pick; a loaded save: the map's start
+    // index) before start(), which applies its lighting, clouds and skydomes.
+    env_wanted_ = b->environment_index();
+    if (ok) scene_->set_environment(env_wanted_);
+    if (!ok || !scene_->start(gpu.renderer, *gpu.streamer, *gpu.cache, {}, &e)) {
         if (err) *err = "battle map " + map + ": " + e;
         scene_.reset();
         return false;
@@ -404,13 +407,15 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
         return false;
     }
     prender_.set_sort_range(render::MapScene::kFar);
+    // cu8f t05 (CU8F_T03_T05_RE §2.2): the scene wind at map load (land: the active environment's, space: zero); cu8g t03:
+    // rewritten by apply_environment after Set_New_Environment.
+    prender_.set_wind(scene_->scene_wind());
     pattach_ = std::make_unique<render::particles::ProxyAttachments>(*pworld_, *plib_);
 #endif
     // R5: fog colours (GameConstants), land decorations (tracks, scorch marks).
     {
-        std::vector<uint8_t> gc;
         render::FogColors fc;
-        if (data.files->read("Data\\XML\\GameConstants.xml", gc)) render::parse_fog_colors(gc, fc);
+        render::parse_fog_colors(game_constants(data), fc);
         fog_.set_colors(fc);
     }
     // --- R3/R5 render: decorations on every map (space: no terrain - only spin-away explosions) ---
@@ -421,11 +426,10 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     // --- R5 render: ability beams (ABILITY_VISUALS 2 / 4): GameConstants fallbacks, LightningEffectTypes, per-special styles ---
     {
         render::BeamConstants beam_gc;
-        std::vector<uint8_t> xml;
-        if (data.files->read("Data\\XML\\GameConstants.xml", xml)) render::parse_beam_constants(xml, beam_gc);
+        render::parse_beam_constants(game_constants(data), beam_gc);
         beam_styles_.build(data.types, beam_gc);
         render::LightningLibrary lightning = render::LightningLibrary::builtin();
-        xml.clear();
+        std::vector<uint8_t> xml;
         if (data.files->read("Data\\XML\\LightningEffectTypes.xml", xml)) lightning.load(xml);
         const render::TextureSource beam_tex = [&gpu](std::string_view n, assets::TextureRole role) { return gpu.cache->texture(n, role); };
         beams_on_ = gpu.renderer.init_beams(beam_tex, &lightning);
@@ -434,8 +438,7 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
     // --- end R5 render ---
     // Laser projectiles (Projectile_Custom_Render 1 / 2, PROJECTILE_NEBULA_DRAW.md 1): procedural beams / kites.
     {
-        std::vector<uint8_t> xml;
-        if (data.files->read("Data\\XML\\GameConstants.xml", xml)) render::parse_laser_constants(xml, laser_k_);
+        render::parse_laser_constants(game_constants(data), laser_k_);
         if (!gpu.renderer.init_lasers([&gpu](std::string_view n, assets::TextureRole role) { return gpu.cache->texture(n, role); }))
             std::fprintf(stderr, "battle: laser projectiles not drawn (PrimAdditive / textures unavailable)\n");
     }
@@ -450,7 +453,7 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
         const data::XmlDocument doc = read_xml(*data.files, "Data\\XML\\TacticalCameras.xml");
         if (doc.ok()) ui::parse_tactical_cameras(doc.root(), cams);
         const ui::TacticalCameraConstants* c = ui::find_camera(cams, space_ ? "Space_Mode" : "Land_Mode");
-        const ui::UiConstants uc = ui_constants(*data.files);
+        const ui::UiConstants uc = ui_constants(data);
         camera_ = ui::TacticalCameraController(c ? *c : (space_ ? ui::space_mode_defaults() : ui::land_mode_defaults()), uc.tactical);
         const tactical::Aabb& bb = tm->bounds();
         if (bb.max.x - bb.min.x < 1.0e5f) camera_.set_bounds({bb.min.x, bb.min.y, bb.max.x, bb.max.y});
@@ -504,18 +507,9 @@ bool BattleView::start(GpuCore& gpu, const GameData& data, const GameSession& se
 bool BattleView::spawn_move_ack(std::string_view type, ui::Vec3 p, float scale, bool normal) {
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     if (!pworld_ || !plib_ || type.empty()) return false;
-    const auto ieq = [](std::string_view a, std::string_view b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i) {
-            const char x = a[i] >= 'a' && a[i] <= 'z' ? static_cast<char>(a[i] - 32) : a[i];
-            const char y = b[i] >= 'a' && b[i] <= 'z' ? static_cast<char>(b[i] - 32) : b[i];
-            if (x != y) return false;
-        }
-        return true;
-    };
     std::string model(type);  // a particle file name when no type of that name exists
     for (size_t t = 0; t < table_.size(); ++t)
-        if (ieq(table_[static_cast<objects::TypeIndex>(t)].name, type)) {
+        if (ascii_iequals(table_[static_cast<objects::TypeIndex>(t)].name, type)) {
             model = table_[static_cast<objects::TypeIndex>(t)].model;
             break;
         }
@@ -531,7 +525,6 @@ bool BattleView::spawn_move_ack(std::string_view type, ui::Vec3 p, float scale, 
     if (h == 0) return false;
     std::erase_if(acks_, [this](const MoveAckFx& a) { return !pworld_->valid(a.handle); });
     acks_.push_back({h, p, normal});
-    ++acks_spawned_;
     return true;
 #else
     (void)type, (void)p, (void)scale, (void)normal;
@@ -627,9 +620,11 @@ void BattleView::capture(const GameSession& session) {
     const sim::SimHost& host = session.host();
     auto snap = std::make_shared<render::SimSnapshot>();
     const ParallelFor pf = jobs::make_parallel_for(*gpu_->js);
-    if (const sim::TacticalBattle* b = session.battle())  // S8 t31: every tick's cues, also when no snapshot is made
+    if (const sim::TacticalBattle* b = session.battle()) {  // S8 t31: every tick's cues, also when no snapshot is made
         if (const sim::TacticalMode* tm = host.modes().top_tactical())
             track_lob_chargeups(lob_chargeups_, tsw_cues(b->special_weapon_events(), tm->primary()));
+        env_wanted_ = b->environment_index();  // cu8g t03: Set_New_Environment (applied by prepare)
+    }
     if (!render::capture_snapshot(host, table_, *snap, pf)) return;
     if (const sim::TacticalBattle* b = session.battle()) {
         render::apply_battle_state(*b, *snap, &table_, &beam_styles_);  // R5: + the ability beam records
@@ -641,18 +636,14 @@ void BattleView::capture(const GameSession& session) {
         render::apply_contained(*snap, [b](const render::SnapshotObject& o) { return b->contained_by(o.id) != objects::kNoObjectId; });
         // q6 t19 (OBJECT_SCRIPTS §10.3): Lua Hide(true) - no model, particles, ghost or surface FX (presentation only).
         render::apply_script_hidden(*snap, [&session](const render::SnapshotObject& o) { return session.script_hidden(o.id); });
-#ifdef ALAMO_SIM_HAVE_FOG
         // R5: the local player's FOW grid + HideWhenFogged marks. Not in the attract demo (GameSession::view_draws_fog): the
         // original's cinematic camera clears the FOW render option at every shot start, so the demo never draws fog, with or
         // without a DEMO_CONTROLLER reveal (MAIN_MENU_BACKGROUND.md §4a). Presentation only: the demo's sim fog is unchanged.
         if (session.view_draws_fog()) render::apply_battle_fog(*b, local_, *snap);
-#endif
         // --- OI render: space reinforcement overlay cells (TACTICAL_GAPS §5.5) while the overlay is shown; Lua
         // Attach_Particle_Effect requests of the story VMs (lua::PresentationLog::particle_effects, made since this
         // battle's first frame [port: the request frame is the VM's sim frame]) as attached effects ---
-#ifdef ALAMO_SIM_HAVE_FOG
         if (space_ && fog_.space_reinforce()) render::apply_battle_fog_reinforce(*b, local_, *snap);
-#endif
 #ifdef ALAMO_SIM_HAVE_STORY
         if (const sim::StorySession* story = host.story())
             if (const sim::TacticalMode* tm = host.modes().top_tactical())
@@ -757,12 +748,32 @@ void BattleView::prepare(GpuCore& gpu, float alpha) {
         }
         jam_models_.build(gpu.renderer, jam_tex, frame_, ground, main);
     }
+    // cu9g (HUD_GAPS §9.5): the bombing-run targeting blob at the ground point under the cursor (land only; green / red).
+    if (scene_ && bombing_blob_ && !space_) {
+        const render::TextureSource blob_tex = [&gpu](std::string_view n, assets::TextureRole role) { return gpu.cache->texture(n, role); };
+        const terrain::MapData* map = &scene_->map();
+        const std::function<float(float, float)> ground = [map](float x, float y) { return map->terrain.sample_height(x, y); };
+        jam_models_.build_blobs(gpu.renderer, blob_tex, std::span<const render::JamBlob>(&*bombing_blob_, 1), ground, main);
+    }
     if (scene_) {
+        apply_environment();  // cu8g t03: before update(), which re-applies it on the GPU side
         scene_->update(gpu.renderer, *gpu.streamer);
         if (p.curr) scene_->set_sim_tick(p.curr->tick);
         sky.assign(scene_->sky().begin(), scene_->sky().end());
     }
     sky.insert(sky.end(), bg_.begin(), bg_.end());
+}
+
+// cu8g t03 (CU8G_T02_ENV_PICK_RE §5): the battle's environment changed (Set_New_Environment): lighting / fog / bloom /
+// shadow colour and land clouds through MapScene (GPU side on its next update; the skydomes stay), the particle wind from
+// the new environment (land; space stays zero).
+// use_scene() hands the new lighting to the renderer each frame as well.
+void BattleView::apply_environment() {
+    if (!scene_ || env_wanted_ == scene_->environment_index()) return;
+    if (!scene_->set_environment(env_wanted_)) return;
+#ifdef ALAMO_PARTICLES_HAVE_SIM
+    if (prender_.initialized()) prender_.set_wind(scene_->scene_wind());
+#endif
 }
 
 // R5 fog of war: the latest snapshot's copy of the local player's grid (an empty input disables the world's fog).

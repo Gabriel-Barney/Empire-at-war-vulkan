@@ -16,8 +16,10 @@ Related: `AI_TACTICAL.md` §7, `L1_S4_REMAINING.md` §3.6 / §4.2, `STATION_HANG
   +0x20 flags (0x140b154bc): 0x1 heroes, 0x2 "free starting units" (IDC_ALLOW_STARTING_UNIT_PURCHASE /
   TEXT_FREE_STARTING_UNITS), 0x4 super weapons, 0x8 pre-built bases, 0x10 random events, 0x20 record valid. [H]
 - Defaults from GameConstants MP_Default_* (GC+0x590..+0x5b4) in 0x4acc60 / 0x4acf00. The default win
-  condition is chosen by a game-kind enum (not the mode type): kind 2 takes the land default (GC+0x5b8),
-  other kinds the space default (GC+0x5bc), kind 4 forces 0x15. [M]
+  condition is chosen by the lobby / staging **game type** (the `IDC_GAME_TYPE_LIST` enum, UI.md §9.7; not the mode
+  type) in 0x4acf00(options, type, keep): type 1 (campaign) leaves it, type 2 takes the land default (GC+0x5b8),
+  type 4 forces 0x15, any other type the space default (GC+0x5bc). 0x4ad000(options, type) then steps an invalid
+  value to the next valid one: type 2 accepts 0x12..0x14, type 3 0x12 / 0x16, type 4 only 0x15. [H] (ccpgt t01)
 - Has-AI 0x2814d0 = player+0x360 non-null. 0x28b060 = GMM+0x18 == 3 and GMM+0x20 != 1. [H]
   0x140b15490 is a global that skips pre-built pads, the income tick and selects the MP buildable list;
   its meaning is not settled [L].
@@ -227,6 +229,15 @@ Enqueue 0x496a20(manager, type, builder, queue) [H]:
 - Pay-as-you-go test 0x289050: an AI player always counts as PAYG; a human uses GC Pay_As_You_Go
   (+0x320, false in FoC). Not PAYG (FoC humans): fail if credits < cost, else deduct the full cost at
   enqueue. PAYG: no charge at enqueue. [H]
+- **Correction (bkg1 b0001, `BKG1_RE_ANSWERS.md` 7.3) [H]:** "PAYG" for the AI does not mean the AI pays per
+  frame. 0x289050 returns 1 for every player whose is-human byte +0x62 is 0, and the service 0x498170 only advances
+  the timer for such a player: **the build manager never charges an AI player** (only a PAYG human pays
+  slice / total × cost per frame, 0x498ec0, and stalls when broke). The AI pays in the AI layer instead: 0x6c2d60 at
+  plan instantiation takes the plan's whole net cost (PP+0x44) in one Add_Credits step and holds it as escrow
+  (PP+0x1A4); each accepted order and pad reservation draws the escrow down (0x6c1e80, base price 0x3743f0, clamped
+  at 0); plan end 0x5f6a50 refunds the rest (× Credit_Multiplier for an AI). Cancel refund 0x499000: full cost for a
+  non-PAYG payer, the paid fraction clamp(1 − remaining / total) × cost for a PAYG one, so an AI auto-cancel hands the
+  AI progress × cost [M effect].
 - Entry (ObjectUnderConstruction): type, total time, timer, remaining, player, queue, cost, builder id
   (0x3fffff if none). Local player: queue SFX (type +0x1490 / +0x1450) or speech (+0x1570).
 
@@ -350,8 +361,12 @@ Evaluator 0x344710 (E wins when no blocker is left) [H unless marked]:
 - 0x13: behaviour 0x62 objects enemy to E, Victory_Relevant, alive.
 - 0x14: behaviour 0x5F (DUMMY_GROUND_STRUCTURE) objects enemy to E with HQ_Win_Condition_Relevant (+0x61),
   alive. No Victory_Relevant test.
-- 0x15: CAPTURE_POINT (0x3d) objects whose type has Control_Point_Domination_Condition_Relevant (+0x62);
-  the rest of the body was not read [L].
+- 0x15 (ccpgt t01) [H]: no win unless E's faction is `Is_Playable` (+0x20a8). Candidates: every CAPTURE_POINT
+  (0x3d) object of the GOM's full list (gom +0x38, any owner, E included) whose type has
+  Control_Point_Domination_Condition_Relevant (+0x62). No Victory_Relevant, alive / dying (+0x3a0) or behaviour test.
+  None found: no win. Else E wins when **every** candidate is allied with E (0x39a2c0: relation(E → object owner
+  +0x58) == 0, so E itself or a team ally). A Neutral- or Hostile-owned point (relation 2) blocks like an enemy one.
+  Symmetric for humans and AIs (no "if E is not human" clause as in 0x16). Trigger and timer: §4.2.
 - 0x16 (and campaign 0xf), space only: DUMMY_STAR_BASE objects enemy to E, ignoring dead (0x40), flag
   0x80, non-Victory_Relevant and non-playable-owner ones. None left: E wins. If E is not human, E wins
   only when no remaining starbase is allied (0x39a2c0) with a human player.
@@ -393,7 +408,75 @@ Re-read of 0x344710 cases 0x12–0x14 and of the readers in OBJECT_SCRIPTS §10.
 - Run the check only when a Victory_Relevant object leaves a player (death / removal / owner change), not on spawns,
   and apply the 210-frame declaration countdown.
 - The win condition that is registered is the lobby option's (§2 step 4): 0x12 alone, or 0x13 / 0x14 when the base /
-  HQ option is chosen; 0x12 is still evaluated first on every trigger.
+  HQ option is chosen; 0x12 is still evaluated first on every trigger. (ccpgt t01: 0x344710 only looks at records
+  whose {type, player} equals the request, and 0xeed80 registers exactly one record per player, of the option's type.
+  So a test of a type that was not registered answers "no": in a 0x13 / 0x14 / 0x15 game the 0x12 test never wins.)
+
+### 4.2 Control point domination (ccpgt t01, 2026-11-08) [H unless tagged]
+
+Sources: 0x344710 case 0x15, 0x360d90 (arm), 0x3639d0 (tactical tick), 0x3611f0 (announcer), 0x500e30 / 0x501980
+(capture service), 0x2c0340, 0xeed80, 0x3464b0, 0x39a2c0 / 0x2823e0; FoC MARKERS.XML, GAMECONSTANTS.XML, FACTIONS.XML.
+- **Relevant objects (data):** only `Reinforcement_Point` (MARKERS.XML: CAPTURE_POINT, REINFORCEMENT_POINT, transition
+  10 s, radius 100) sets `Control_Point_Domination_Condition_Relevant Yes`; its six `Reinforcement_Point_PlusN_Cap`
+  variants inherit it. Default false: build pads (also CAPTURE_POINT) never count, and the faction-fixed
+  `Reinforcement_Point_Rebel / _Empire / _Underworld` have neither CAPTURE_POINT nor the flag. Map owner of the
+  shipped points not read [M: Neutral by the §2.1 remap].
+- **Not tested from object loss.** 0x2c0340 never tests 0x15, and its 0x12 / 0x13 / 0x14 / 0x16 tests find no record in
+  a 0x15 game (§4.1 last port note). **Elimination cannot win a 0x15 game**, and a map without a relevant point never
+  ends by victory.
+- **Arm / disarm** (0x360d90(mode, point, old owner, new owner)): its only caller is the capture service 0x501980 via
+  0x500e30, when a capture transition **completes**, before the owner is written (0x38e5a0). Ignored unless the mode is
+  tactical, the monitor exists, the point's type has +0x62 and some player has a {0x15, player} record (0x3464b0).
+  Then: new owner's faction not `Is_Playable` (a point turning Neutral) → disarm. Else collect the relevant points as in
+  0x344710 and skip the changing point itself; if every other one is allied with the new owner (0x39a2c0) → arm:
+  mode +0x2b0 := 1, +0x2b4 := round-half-away(FPS × `Control_Point_Domination_Victory_Time_In_Secs`, GC+0x11b30, 30.0
+  in FoC) = **900 frames**, +0x2b8 := new owner id, announce once; otherwise disarm (+0x2b0 := 0, +0x2b4 / +0x2b8 := −1).
+  An enemy capture always passes through Neutral (L1_S4_REMAINING §4.2), so it disarms on its first transition.
+  Owner changes outside the capture service (Lua `Change_Owner`, 0x501050 resets) do not re-check [M: from the single
+  caller of 0x500e30].
+- **Countdown** (tactical tick 0x3639d0, every tick, not gated by 0x140b15490): while +0x2b0 is set, +0x2b4 −= 1, then
+  the announcer; when +0x2b4 ≤ 0, the monitor exists and no result is ready (0x342dc0), test 0x15 for player +0x2b8
+  (0x346460, hold → queued as usual) and disarm. The test re-checks every relevant point (now with the new owner).
+  A pass declares with the record's 210-frame countdown, so the battle ends ~900 + 210 frames after the last capture.
+  [M: ±1 frame for the order of the capture service and the mode tick in one frame.]
+- **Announcer** 0x3611f0 (presentation): when +0x2b4 equals 60 / 30 / 15 / 5 s × FPS, the local player's faction plays
+  `SFXEvent_HUD_Reinforcement_Point_Owned_*` (local player dominates), `_Ally_Owned_*` (relation 0) or `_Enemy_Owned_*`
+  (relation 1) for that mark; Neutral observers hear nothing. With 30 s the lines are 30 s (at arming), 15 s, 5 s.
+- Shipped `_MP_LAND_*` mini 0A tags (effective file after the patches; UI.md §9.4): `control` in any case on 18 of 24
+  (Bespin, Bothawui, Corellia, Dagobah, Dantooine, Endor, Felucia, Geonosis, Honoghr, Hoth, Hypori, Kamino, Kessel,
+  Mandalore, Naboo, Saleucami, Tatooine, Yavin); empty or blank on Alderaan, Dathomir, Polus, Ryloth, Shola, Utapau.
+  Which maps place `Reinforcement_Point` objects was not checked [M].
+- Mode +0x2b0..+0x2b8 in saves not read [L].
+
+**Port notes**
+- 0x15: count CAPTURE_POINT objects whose type has the flag, any owner, no alive / Victory_Relevant / script-flag test;
+  win for E only if E's faction is playable, at least one point exists and every point is relation 0 to E.
+- Run the check only from the domination timer, never from object loss; register only {0x15, player} records, so no
+  elimination win. Arm / disarm on each completed capture transition of a relevant point (the changing point is
+  skipped, it is about to become the new owner's), timer round(FPS × GC time) = 900, minus 1 per tick, test at ≤ 0,
+  then the usual 210-frame declaration countdown. Keep the timer state in the battle state (sim, CRC-relevant).
+- The announcer is presentation only.
+- Port status (ccpgt t02, 2026-11-08): `BattleConfig::control_point_domination` (alamo_game: the staging screen's Capture
+  Control Points row on a land map; alamo_headless `--skirmish-ai foc-land|skirmish --control-points`) registers only
+  {0x15, player} (skirmish slots; [port] attacker and defender in alamo_game's hop battle), arms / disarms on each completed
+  capture event, counts down per battle tick in the victory check and tests 0x15 at <= 0 (`tactical_battle_victory.cpp`);
+  the timer is in the battle hash (while armed) and the battle save (state version 9). `TacticalBattle::control_point_timer()` /
+  `control_point_leader()` expose the timer for the host.
+- Port status (ccpgu, 2026-11-12): alamo_game plays the announcer (`GameAudioHost::control_point_line`, called from
+  `battle_tick`): the leader's relation to the local player picks `_Owned_` (the local player leads), `_Ally_Owned_` (relation
+  0) or `_Enemy_Owned_` (relation 1); a line plays on the tick the timer reaches 1800 / 900 / 450 / 150 frames and on an arm
+  or re-arm at that value (the shipped 900-frame timer gives the 30 s line at arming, then 15 s and 5 s); a Neutral observer
+  hears nothing. Test `alamo_game_audio_host_tests`.
+- AI in a type-4 game (ccpgu t03, 2026-11-12): `Game.IsLandControlGame` (AI_GALACTIC_TOKENS 0x6e2060: GameModeManager +0x20 ==
+  4) was never set in the port, so the skirmish AI ignored the points. [port] it is true in a land skirmish with
+  `control_point_domination` (`BattleAi::fill`). The shipped data has no other type-4 rule: `May_Lose_Land_Control_Game` (=
+  owns no Reinforcement_Point and IsLandControlGame) doubles `Should_Secure_Victory_Control_Point` (goal
+  Secure_Victory_Control_Point, plan SecureVictoryControlPoint.lua: Produce_Force infantry + vehicle / hero escort, Move_To,
+  Guard_Target), forces `Should_Build_Infantry_Emergency` and blocks unit / structure builds, tech and early upgrades and
+  bunker garrisons until a point is held. Port run `alamo_headless --skirmish-ai foc-land --map _MP_LAND_ENDOR
+  --control-points --ticks 12000`: 0 SecureVictoryControlPoint plans before the fix; after it both AIs start them (first at
+  frame 499; 29 ended, 5 in success) and each holds one or two of the five Reinforcement_Points through the run. Test
+  `test_battle_ai_land_mode` (alamo_sim_battles_ai_tests).
 
 ## 5. Income streams (item 4)
 
@@ -432,6 +515,13 @@ Re-read of 0x344710 cases 0x12–0x14 and of the readers in OBJECT_SCRIPTS §10.
 - Interpolator vf2 0x2c8660: points sorted by x on first use; piecewise linear between points; x below the
   first point or above the last gives 0; fewer than two points gives 0.
 - FoC data: N = 2 gives 9.29, cap 9; N = 4 gives 7; N = 8 gives 5; N > 8 gives 0.
+- **What "used" counts (bkg1 b0001, `BKG1_RE_ANSWERS.md` 7.1) [H]:** 0x2aba70 is not a company count. Each
+  registered company member holds Population_Value / its company's Company_Units count and the float sum is rounded
+  up. Start forces (0x2a4fc0 → 0x29e960 with the population flag off) never count; a landing transport counts the
+  full company from the drop to the unload; Droids_Team has Population_Value 0, heroes 1, structures and pool entries
+  0. Capacity +0x404 is at least 100 (the owned REINFORCEMENT_POINT), so the curve is the limit. TF.Reinforce reads
+  the remaining room once, so one call can drop several companies past the cap. This is why retail fields 13-14
+  companies under a cap of 9, and why pool drops stop when used reaches 9 (frame 15422 in SKAI_T06).
 
 ## 7. Lua build list and Find_Nearest (item 6) [H]
 
@@ -455,7 +545,8 @@ allied with the pad owner), and the structure belongs to its builder, not to the
 - ~~The pre-game buy-units dialog: what it buys and how the 2000 budget is spent.~~ §2.7 (q6, 2026-11-04). Still open:
   which command-bar button / key opens it in battle (0x37760 / 0x36250) [L], and whether the reinforcement placement it
   starts charges credits [M].
-- Body of victory type 0x15 (control point domination). [L]
+- ~~Body of victory type 0x15 (control point domination).~~ §4 / §4.2 (ccpgt t01, 2026-11-08). Still open: which
+  shipped maps place `Reinforcement_Point` objects and their start owner [M]; whether the domination timer is saved [L].
 - Meaning of player+0x180, global 0x140b15490 and predicate 0x35f790. [L]
 - Sort key slot+0xa0 for slots when GMM+0x20 != 1. [M]
 - Whether retail space maps carry PLAYER_<k>_SPAWN_POINT_MARKER objects: the two fighter squadrons per side
@@ -514,3 +605,16 @@ drops or vehicles count apart), and does retail pre-empt those plans for an atta
 `tools/probe_mod/q2_traces/run_skirmish_land_attack.cmd` (Utapau, idle Empire vs Rebel Medium, 36000 ticks), read with
 `analysis/land_attack.py`. Port run to compare: `alamo_headless --skirmish-ai skirmish --map _MP_LAND_UTAPAU --human EMPIRE
 --ticks 36000`.
+
+skai t07-t11 (2026-11-12) port status: §2.6 pre-built pads = every active pad whose type keeps the default
+Respects_Skirmish_Pre_Build_Bases_Option (only the five generic `<FACTION>_BUILD_PAD`s set it false) starts built with the
+owner's first UC type of its faction row ([port] proxy for the map-saved pre-placed type, vf13 not decoded); Utapau gets 10
+structures per slot, as retail's frame 0. Land start companies stand on the last TEAM_tt spawn marker in map order. The
+skirmish AI pays pad builds (Tactical_Build_Cost_Multiplayer) when it starts one; campaign land battles keep the free AI
+pad builds of L1_S4 §3.6 [port]. Build_Limit_Current_Per_Player: 0 refuses, > 0 refuses at live + queued >= limit
+(STRATEGIC_GAPS 23). A survivor company (Destruction_Survivors) spawns its Company_Units. Imperial Command Center self repair
+and E_Magnetically_Sealed_Structure (Initially_Enabled No) were already as retail.
+
+Answered by the retail runs of 2026-11-08 (skai t06): `SKAI_T06_LAND_RUNS.md` (retail does not take the base in 36000 frames:
+the Command Center survives; pre-built base of 9 structures per slot; default forces on the last TEAM_tt spawn marker; the AI
+pays production at enqueue and pad builds at UC creation; Neutral pads change owner 150 frames after the first unit arrives).

@@ -373,6 +373,14 @@ Expected visibility (bone indices from the ALO; meshes carry ALO hidden = false 
   proxies `p_RB_Station_Damage` (bones 41, 42 under `HP01_LC_EmitDamage`) hidden → shown; breakoff
   `Hardpoint_Breakoff_Empire_Station_One_Weapon_LC`.
 
+> **Retail run 2026-11-09 (r1 t01, run 20261108-235419, `R1_T01_HARDPOINT_RUN.md`) contradicts two points above.**
+> (1) Answer 4 / SD `Weapon_FL` example: when `HP_Star_Destroyer_Shield_Generator` died, its attached dome
+> (`EV_StarDestroyer_HP00_M-C`) disappeared from the tower while its breakoff prop flew off. So `Model_To_Attach` is
+> not left as is, at least for a hardpoint with a `Death_Breakoff_Prop` [M: one hardpoint, top view; the path that
+> removes it is not found yet]. (2) SD `Engines` example: the engine glow `pe_stardestroyerengines` **goes out** when
+> the engine hardpoint dies [H visual], so a path outside this rule turns it off (candidate: ENGINE offline →
+> `Locomotor_Set_Engines` 0x5545a0, TACTICAL_COMBAT §5.1). Decal and fire at the kill, sticky, no repair: confirmed.
+
 **Tags the renderer/sim needs to parse for this rule:** `Type`, `Is_Destroyable`, `Health`, `Model_To_Attach`,
 `Attachment_Bone`, `Damage_Decal`, `Damage_Particles`, `Engine_Particles`,
 `Engine_Death_Hide_Engine_Particles` (bool, default true), plus for effects `Death_Explosion_Particles`,

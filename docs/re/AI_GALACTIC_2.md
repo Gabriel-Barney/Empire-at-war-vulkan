@@ -94,6 +94,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 
 **Candidates are object types, not objects.** A type can be selected many times; each selection is one unit. The candidate list (PP+0xD0) is filled by 0x6c1fb0, which deduplicates through a set:
 - a generic type with behaviour flag 0x5C or 0x5B is first replaced by the planet-specific variant (0x3f8fd0 / 0x3f8c40 on the target planet's surface);
+  - 0x3f8fd0 (corrected a2m r3, `A2M_R3_RE_A.md` §1.2): keyed on the **planet owner's** faction. No starbase: Rebel_Star_Base_1 / Empire_Star_Base_1 for those factions, nothing for any other. A starbase: its Next_Level_Base, returned only when its Base_Level ≤ the allowed level (0 when a starbase item is queued at the planet; else level + 1, 0 when above the planet's Max_Space_Base). No can-build test here. The goal's target planet is used, IgnoreTarget plans included; all expanded 0x5C types dedupe into one candidate [H];
 - candidate order = order of first insertion.
 
 **Fields used below:**
@@ -169,6 +170,9 @@ Every marshaller call runs over the list in this order. This includes commit, so
   - clamp t to Time_Limit when 0 ≤ TL ≤ t;
   - available = PP+0x38 + t × PP+0x34.
 - Otherwise available = PP+0x38 and c = cost(T, none).
+- **Corrected 2026-11-06 (A2K_T01_BUILD_COST_RE §3.1) [H]:** the two ETA = 0 cases above are swapped. With no
+  target **or a type with none of** 0x60/0x5F/0x5C/0x5B (any ordinary unit): t = 0.5 × btime(T, none), c = cost(T, none).
+  Only a structure / generic type with a target uses cost(T, target) and btime(T, target).
 - **Veto (1e18, non-permanent)** if available < c + PP+0x44. Otherwise 0.
 
 *Commit* 0x7284f0: unless MagicPlan, PP+0x40 += cost(T, none) and PP+0x44 += cost(T, none) [H].
@@ -241,7 +245,7 @@ Every marshaller call runs over the list in this order. This includes commit, so
 - !MagicPlan:
   - if pop cap is enabled and the type's pop (0x373500) > remaining pop (0x140b3a530) → rec.prodScore = 1e18 (veto);
   - return rec.prodScore. Production's IsPermanentVeto is true, so a pop or slot veto erases the candidate.
-- MagicPlan (galactic): veto when the type is not spawnable (+0x2A or +0x29; non-hero with cost < 1; behaviour 5 (TRANSPORT); tech > 5; 0x375270; a hero already present 0x3729f0; player 0x282550 / 0x282510 locks; unique +0xC1 without 0x282580; generic 0x5C/0x5B; +0xF60 / +0xF80 counts; or not a company/fleet unit and not a 0x5F/0x60 structure). Otherwise return **one synced float draw in [0,1]** (0x5324d0).
+- MagicPlan (galactic): veto when the type is not spawnable (+0x2A or +0x29; non-hero with cost < 1; behaviour 5 (TRANSPORT); tech > 5; 0x375270; a named hero (+0x13) with a space model 0x3729f0(T, 2) (type +0x2a8, from Space_Model_Name; not "a hero already present": bkg1 b0117, `BKG1_RE_ANSWERS.md` 2); player 0x282550 / 0x282510 locks; unique +0xC1 without 0x282580; generic 0x5C/0x5B; +0xF60 / +0xF80 counts; or not a company/fleet unit and not a 0x5F/0x60 structure). Otherwise return **one synced float draw in [0,1]** (0x5324d0).
 
 *Commit* 0x726390: for a produced unit, remaining pop −= pop(T); the structure counters 0x140b3a534 (0x5F) and 0x140b3a540 (0x60) += 1 [H].
 
@@ -340,9 +344,9 @@ Called from 0x6bfcf0 after each solver commit. Inputs: the selection with free-s
 - Two pools, each entry = {used flag, queue time}:
   - pool A (queue 0, ground/structures): types with cost > 0 and (+0xF0C ≠ 0 or behaviour 0x5F);
   - pool B (queue 1): the rest.
-  - The initial queue time comes from the planet's AIPlanetBuildQueue 0x53bb20(…, 1, 0) (§2.3).
+  - The initial queue time comes from the planet's AIPlanetBuildQueue 0x53bb20(…, 1, 0) (§2.3) on the re-solves; on the first solve (byte 0x140b3a524 = 1, Init at proposal) it is 0x401ba0, the planet production queue's own time (current item's remaining time + the rest's build times) (corrected 2026-11-12, A2M_R2_RE_A §1.5) [H].
 - For each selected unit, in selection order:
-  - **Structure or generic type** (0x5C/0x5B/0x5F/0x60): source = target planet; structureSum += btime(T, target). If the first planet of the list is the target, its queue time also grows.
+  - **Structure or generic type** (0x5C/0x5B/0x5F/0x60): source = target planet; structureSum += btime(T, list[0]'s planet). If the first planet of the list is the target (always so for a target the player holds), that pool entry is **marked used** and its queue time grows by the same build time, so the ETA includes the target's queue wait (corrected 2026-11-12, A2M_R2_RE_A §1.5: the used flag was missing here and is missing in the port) [H].
   - **Other types:** over the pool's planets in list order, a planet is eligible if 0x3fa420 (`Is_Planet_Revealed`: the local reveal state, always true in multiplayer; GALACTIC_REVEAL_CORRUPTION §1.1, A2GAL_READINGS §2.3; formerly misread here as "surface usable") and 0x2804d0(player, T, planet) (can build T there). Then:
     - c = queueTime + |pos(target) − pos(planet)| / (speed × factionSpeed (faction +0x3B0) × FPS), where speed = type +0x648 (first variant's for behaviour 0x5D), and the travel term is added only if speed > 0;
     - c ×= 1 + (planetBaseLevel − requiredLevel) × K, using starbase level 0x3f8b30 − type +0xF10 when +0xF0C == 0, else ground base level 0x3f8aa0 − +0xF0C, with K = 0x140b16c8c;
@@ -391,6 +395,11 @@ Each run:
 **Claiming the produced unit** [H]
 - The queue listens to its planet's signals 3 / 4 / 0xE (0x53c4f0).
 - On 3 or 4 (production done) with the matching queue id: if the task is gone or MagicPlan, and an object was produced, the new object (or its fleet head) goes to the player's galactic free store (vf+0x98).
+- **Corrected 2026-11-12 (`A2M_R2_RE_B.md` §1) [H]:** a production whose task **ended** (+0xA8, 0x64ad00) usually never reaches signal 3 / 4.
+  - At the planet's next AI queue service (0x53cd60 → 0x53ba60), a PAYG owner's head entry is cancelled with the
+    paid-fraction refund (0x403900, Add_Credits notify 1).
+  - The exception is a task taken by the PAYG reclaim (+0xD9, §3.4 Release). Only those, and productions of non-PAYG
+    owners, finish to the free store as above.
 - The task's FSM PRODUCTION_END (6) re-binds the object signals, pays (0x5f9f90) unless prepaid, and continues through FREESTORE_ALLOC / PATHING_DEST / WAIT_FOR_ALL / TRANSPORTS_TO_ORBIT / READY_TO_MERGE / JOIN_TASK_FORCE / PRODUCTION_FINISHED.
   - It moves the unit to the destination with a MovementBlockStatus (id 0x808, mode 0, or 3 if +0xDA, or 5 for a fleet object).
   - A landed ground unit at the destination with a usable orbit is launched first (0x647b90 ops, below).
@@ -469,6 +478,11 @@ Called from 0x4b2ef0 inside the fiscal cycle's payment loop, per player right af
   - Used by the build market (§2.3).
 - **Release 0x614880:** A += c + a; delete the struct.
   - If c + a > 0 and the player is PAYG (AI): r = 0x5f7d40(goal's plan, c + a) (committed spend reclaimed from unfinished production) [M]; A −= r, P −= r, budget +0x80 += r.
+    - [H, `A2M_R2_RE_B.md` §1.3]: the reclaim needs the goal's plan (goal +0x60). It flags +0xD9 on the plan's started
+      builds that fit greedily. The flagged builds keep producing, and every other ended build is cancelled with a refund
+      (0x53ba60).
+    - Only the goal system's releases (0x722a30, 0x6c8970) reach it with the plan still attached. A plan that ends by
+      its own script (0x5f8310) reclaims nothing.
   - So +0x80 accumulates reclaimed spend, enters Σ every tick, and the drift term offsets it. Port it as is.
 - **Spend:** `Allocate_Resources(n)` and the build-task charge 0x6110e0: req −= n, alloc += n.
 - **Installment 0x53b900(Q, n)** (pay-as-you-go production, GALACTIC_ECONOMY §2.5; q2f t01) [H]. Q = the planet's

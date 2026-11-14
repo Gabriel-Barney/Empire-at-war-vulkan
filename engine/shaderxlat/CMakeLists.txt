@@ -4,7 +4,8 @@
 # Tests additionally use alamo_fx2 (FXO parsing), alamo_vfs (real-install corpus, ALAMO_FOC_DATA /
 # ALAMO_EAW_DATA) and alamo_rhi (GPU differential test); the library does not.
 
-add_library(alamo_shaderxlat STATIC
+# One source list for the library and its bounds-checked test copy (alamo_shaderxlat_checked below).
+set(_xlat_sources
   src/bytecode.cpp
   src/translate.cpp
   src/interpreter.cpp
@@ -12,6 +13,7 @@ add_library(alamo_shaderxlat STATIC
   src/cache.cpp
   src/shaderxlat.cpp
 )
+add_library(alamo_shaderxlat STATIC ${_xlat_sources})
 add_library(alamo::shaderxlat ALIAS alamo_shaderxlat)
 target_include_directories(alamo_shaderxlat PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_shaderxlat PUBLIC alamo_core)
@@ -54,20 +56,13 @@ endif()
 # links against the unhardened core/fx2/vfs/rhi) turns any out-of-range std::array / vector / span /
 # string_view index in the parser, emitter or interpreter into an immediate abort.
 set(_xlat_checked_defs _MSVC_STL_HARDENING=1 _GLIBCXX_ASSERTIONS=1)
-add_library(alamo_shaderxlat_checked STATIC EXCLUDE_FROM_ALL
-  src/bytecode.cpp
-  src/translate.cpp
-  src/interpreter.cpp
-  src/dxc.cpp
-  src/cache.cpp
-  src/shaderxlat.cpp
-)
+add_library(alamo_shaderxlat_checked STATIC EXCLUDE_FROM_ALL ${_xlat_sources})
 target_include_directories(alamo_shaderxlat_checked PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_shaderxlat_checked PUBLIC alamo_core)
 target_compile_definitions(alamo_shaderxlat_checked PUBLIC ${_xlat_checked_defs})
 
 add_executable(alamo_shaderxlat_tests tests/test_shaderxlat.cpp tests/mini_asm.cpp tests/corpus.cpp tests/gpu_diff.cpp)
-target_link_libraries(alamo_shaderxlat_tests PRIVATE alamo_shaderxlat_checked alamo_fx2)
+target_link_libraries(alamo_shaderxlat_tests PRIVATE alamo_shaderxlat_checked alamo_fx2 alamo_test_support)
 target_include_directories(alamo_shaderxlat_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 target_compile_definitions(alamo_shaderxlat_tests PRIVATE
   "ALAMO_SHADERXLAT_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/golden\"")

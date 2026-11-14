@@ -18,7 +18,7 @@ if(TARGET alamo_render_app)
 endif()
 
 add_executable(alamo_render_anim_tests tests/test_render_anim.cpp)
-target_link_libraries(alamo_render_anim_tests PRIVATE alamo_core alamo_render_anim alamo_engine_flags)
+target_link_libraries(alamo_render_anim_tests PRIVATE alamo_core alamo_render_anim alamo_engine_flags alamo_test_support)
 target_compile_definitions(alamo_render_anim_tests PRIVATE "ALAMO_RENDER_ANIM_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\"")
 if(TARGET alamo_jobs)
   target_link_libraries(alamo_render_anim_tests PRIVATE alamo_jobs)

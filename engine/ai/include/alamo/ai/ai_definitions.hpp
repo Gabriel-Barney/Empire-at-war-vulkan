@@ -8,6 +8,7 @@
 // inside one element: the last write wins [L]; repeated list tags append [port: not checked, Â§1.4].
 // Duplicate element names across files: the first definition wins (later ones are reported) [port].
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -18,6 +19,10 @@
 
 #include "alamo/ai/ai_types.hpp"
 #include "alamo/core/file_provider.hpp"
+
+namespace alamo::galactic {
+struct FactionRules;
+}
 
 namespace alamo::ai {
 
@@ -31,6 +36,10 @@ struct GoalTypeDef {
     float time_limit = -1.0f;          // Time_Limit s (+0x30), -1 = none
     float build_time_delay_tolerance = 1.0f;  // (+0x34)
     std::vector<uint32_t> is_like;     // Is_Like (+0x38), goal type indices
+    // bkg3 (BKG3_RE_ANSWERS Q4, 0x6b7fa0) [H]: the resolved like-set (+0x50), sorted: the type itself, every type it lists
+    // and every type that lists it (symmetric, not transitive). Built by link().
+    std::vector<uint32_t> like_set;
+    bool like(uint32_t other) const { return std::binary_search(like_set.begin(), like_set.end(), other); }
     std::vector<uint32_t> exclusions;  // Global_Exclusions (+0x90)
     std::vector<std::string> is_like_names, exclusion_names;  // as written (resolved by link())
     float tracking_duration = 0.0f;    // (+0xa8)
@@ -126,9 +135,10 @@ std::string file_base_name(std::string_view path);
 // ai_player_control_type: the Type of the first pair naming `faction` (case-insensitive, trimmed), empty when no pair
 // names it. "Human" means no AI (Set_AI_Type deletes the AIPlayer); "None" is a real AIPlayerType (PLAYER_NONE.XML).
 std::string ai_player_control_type(const std::vector<std::string>& pairs, std::string_view faction);
-// Faction.Basic_AI of every <Faction> in the files Data\XML\FactionFiles.xml lists (first definition wins; upper-cased
-// faction name -> AIPlayerType name, factions without Basic_AI omitted).
-std::map<std::string, std::string> load_faction_basic_ai(const FileProvider& files);
+// Faction.Basic_AI of every <Faction> definition (galactic::load_factions: the files Data\XML\FactionFiles.xml lists, list
+// order; the first definition with a Basic_AI wins; upper-cased faction name -> AIPlayerType name, factions without
+// Basic_AI omitted). cu5 t01: from the one faction parse, not a second read of the XML.
+std::map<std::string, std::string> load_faction_basic_ai(const std::vector<galactic::FactionRules>& factions);
 // The AIPlayerType for a campaign player of `faction`: the AI_Player_Control pair, else (with `fill_unassigned`, for
 // AI-vs-AI hosts [port]) the faction's Basic_AI; empty = no AI ("Human" or nothing found).
 std::string campaign_ai_type(const std::vector<std::string>& pairs, const std::map<std::string, std::string>& basic_ai,

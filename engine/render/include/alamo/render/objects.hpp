@@ -15,6 +15,9 @@ namespace alamo::render {
 
 // "" when the type is not found or has no model name. The result is the model name as written
 // (e.g. "W_STARS_LOW.ALO"); pass it to AssetCache / ModelStreamer.
+// Tool-only fast fallback: a raw-text scan of Data\XML for the type's first model tag. It does not follow variant
+// chains or the game database; the game and sim paths resolve types through GameTypeResolver instead. Kept for
+// alamo_render's non-map sky choice and its test, which avoid loading the whole GameDatabase (cu11 t09).
 std::string find_object_model(const FileProvider& files, std::string_view object_type);
 
 }  // namespace alamo::render

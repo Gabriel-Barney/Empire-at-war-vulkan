@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/hash.hpp"
 #include "alamo/video/video.hpp"
 #if defined(ALAMO_VIDEO_HAVE_VFS)
 #include "alamo/vfs/vfs.hpp"
@@ -42,16 +43,7 @@ void check(bool ok, const char* what) {
     }
 }
 
-// ---- minimal PNG writer (stored deflate) -----------------------------------------------------------------
-uint32_t crc32(const uint8_t* p, size_t n, uint32_t c = 0) {
-    c = ~c;
-    for (size_t i = 0; i < n; ++i) {
-        c ^= p[i];
-        for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
-    }
-    return ~c;
-}
-
+// ---- minimal PNG writer (stored deflate; chunk CRC = alamo::crc32, CRC-32/IEEE as PNG needs) ------------
 void put32(std::vector<uint8_t>& v, uint32_t x) {
     v.push_back(static_cast<uint8_t>(x >> 24));
     v.push_back(static_cast<uint8_t>(x >> 16));
@@ -64,7 +56,7 @@ void chunk(std::vector<uint8_t>& out, const char* type, const std::vector<uint8_
     std::vector<uint8_t> td(type, type + 4);
     td.insert(td.end(), data.begin(), data.end());
     out.insert(out.end(), td.begin(), td.end());
-    put32(out, crc32(td.data(), td.size()));
+    put32(out, alamo::crc32(td.data(), td.size()));
 }
 
 bool write_png(const std::string& path, const uint8_t* rgba, int w, int h) {
@@ -473,7 +465,7 @@ void test_real_data() {
         std::vector<uint8_t> xml;
         check(vfs->read("Data\\XML\\Movies.xml", xml), "Movies.xml reads");
         const alamo::data::XmlDocument doc =
-            alamo::data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), "Movies.xml");
+            alamo::data::XmlDocument::parse(xml, "Movies.xml");
         const std::vector<MovieEntry> db = parse_movies(doc.root());
         size_t alpha_entries = 0, alpha_ok = 0, alpha_open = 0;
         const MovieEntry* sample_alpha = nullptr;

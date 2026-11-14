@@ -35,8 +35,6 @@ public:
 
     uint32_t damage_count() const { return static_cast<uint32_t>(damage_names_.size()); }
     uint32_t armor_count() const { return static_cast<uint32_t>(armor_names_.size()); }
-    const std::string& damage_name(uint16_t i) const { return damage_names_[i]; }
-    const std::string& armor_name(uint16_t i) const { return armor_names_[i]; }
 
     // GameConstants loader: Damage_Types, Armor_Types, every Damage_To_Armor_Mod occurrence in
     // document order (a later line overwrites a cell). Names in a mod line that are not in the

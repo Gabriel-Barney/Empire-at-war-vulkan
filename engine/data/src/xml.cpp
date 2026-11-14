@@ -11,9 +11,12 @@ namespace {
 
 inline bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f'; }
 
+// Unlike XML 1.0, a digit may start an element name: the original loads `<80s_Visor_Man>` / `<181st>` root elements
+// and the types inside them (modc t14 probe, docs/re/MODC_LOADER.md section 3). So "<5" is markup, "< 5" stays text.
 inline bool is_name_start(char c) {
     const auto u = static_cast<unsigned char>(c);
-    return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') || u == '_' || u == ':' || u >= 0x80;
+    return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') || (u >= '0' && u <= '9') || u == '_' || u == ':' ||
+           u >= 0x80;
 }
 
 inline bool is_name_char(char c) {
@@ -425,7 +428,7 @@ XmlDocument XmlDocument::parse(std::string_view bytes, std::string file) {
     return d;
 }
 
-XmlDocument XmlDocument::parse(const std::vector<uint8_t>& bytes, std::string file) {
+XmlDocument XmlDocument::parse(std::span<const uint8_t> bytes, std::string file) {
     return parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), std::move(file));
 }
 
@@ -501,12 +504,6 @@ std::string_view XmlNode::attribute(std::string_view attr_name, std::string_view
     for (const XmlAttribute* a = attributes_begin(); a != attributes_end(); ++a)
         if (iequals(a->name, attr_name)) return a->value;
     return fallback;
-}
-
-bool XmlNode::has_attribute(std::string_view attr_name) const {
-    for (const XmlAttribute* a = attributes_begin(); a != attributes_end(); ++a)
-        if (iequals(a->name, attr_name)) return true;
-    return false;
 }
 
 XmlChildRange XmlNode::children(std::string_view filter) const {

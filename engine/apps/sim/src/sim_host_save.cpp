@@ -18,6 +18,9 @@ namespace alamo::sim {
 namespace {
 
 constexpr uint32_t kChunkVersion = 1;  // envelope version of every host chunk (sub-systems version their own bytes)
+// "frame" chunk version (chunk header and its leading u32). 2 (cu9f t01): GalacticMode::write_state no longer carries the
+// pre-S3 income cadence (u32 interval, u64 next income frame, u64 income events); a version-1 save is refused.
+constexpr uint32_t kFrameChunkVersion = 2;
 constexpr uint32_t kMaxCount = 1u << 24;
 
 // Host chunk names in save / load order (a story session adds its four after "globals").
@@ -105,18 +108,18 @@ bool SimHost::save_allowed(std::string* why) const {
 
 // ---------------------------------------------------------------------------------------- host chunks
 void SimHost::write_frame(ByteWriter& w) const {
-    w.u32(kChunkVersion);
+    w.u32(kFrameChunkVersion);
     w.u64(frame_).u64(batch_crc_).u64(applied_).u64(rejected_);
     const auto depth = static_cast<uint32_t>(modes_.depth());
     w.u32(depth);
     for (uint32_t i = depth; i-- > 0;) {  // bottom -> top
         const GameMode& m = modes_.at(i);
-        write_section(w, [&m](ByteWriter& sub) { m.write_state(sub); });
+        put_section(w, [&m](ByteWriter& sub) { m.write_state(sub); });
     }
 }
 
 bool SimHost::read_frame(ByteReader& r) {
-    if (r.u32() != kChunkVersion) return false;
+    if (r.u32() != kFrameChunkVersion) return false;
     const uint64_t frame = r.u64(), batch = r.u64(), applied = r.u64(), rejected = r.u64();
     const uint32_t depth = r.u32();
     const auto have = static_cast<uint32_t>(modes_.depth());
@@ -124,7 +127,7 @@ bool SimHost::read_frame(ByteReader& r) {
     if (!r.ok() || (load_base_depth_ ? (depth < load_base_depth_ || have != load_base_depth_) : depth != have)) return false;
     for (uint32_t k = 0; k < have; ++k) {  // bottom -> top
         GameMode& m = modes_.at(have - 1 - k);
-        if (!read_section(r, [&m](ByteReader& sub) { return m.read_state(sub); })) return false;
+        if (!get_section(r, [&m](ByteReader& sub) { return m.read_state(sub); })) return false;
     }
     if (!r.ok() || (!load_base_depth_ && !r.done())) return false;
     frame_ = frame;
@@ -142,7 +145,7 @@ void SimHost::write_objects(ByteWriter& w) const {
     for (uint32_t i = depth; i-- > 0;) {
         const GameMode& m = modes_.at(i);
         w.u8(static_cast<uint8_t>(m.kind()));
-        write_section(w, [&m](ByteWriter& sub) { m.primary().write(sub); });  // secondary stores: cosmetic, not saved
+        put_section(w, [&m](ByteWriter& sub) { m.primary().write(sub); });  // secondary stores: cosmetic, not saved
     }
 }
 
@@ -155,7 +158,7 @@ bool SimHost::read_objects(ByteReader& r) {
     for (uint32_t k = 0; k < have; ++k) {  // bottom -> top
         GameMode& m = modes_.at(have - 1 - k);
         if (r.u8() != static_cast<uint8_t>(m.kind())) return false;
-        if (!read_section(r, [&m](ByteReader& sub) { return m.primary().read(sub); })) return false;
+        if (!get_section(r, [&m](ByteReader& sub) { return m.primary().read(sub); })) return false;
     }
     if (!r.ok() || (!load_base_depth_ && !r.done())) return false;
     modes_.ids().set_next(next);
@@ -176,7 +179,7 @@ void SimHost::write_spatial(ByteWriter& w) const {
     for (uint32_t i = depth; i-- > 0;) {
         const auto* tm = dynamic_cast<const TacticalMode*>(&modes_.at(i));
         w.boolean(tm != nullptr);
-        if (tm) write_section(w, [tm](ByteWriter& sub) { write_if_saveable(tm->trees(), sub); });
+        if (tm) put_section(w, [tm](ByteWriter& sub) { write_system(tm->trees(), sub); });
     }
 }
 
@@ -187,7 +190,7 @@ bool SimHost::read_spatial(ByteReader& r) {
     for (uint32_t i = depth; i-- > 0;) {
         auto* tm = dynamic_cast<TacticalMode*>(&modes_.at(i));
         if (r.boolean() != (tm != nullptr) || !r.ok()) return false;
-        if (tm && !read_section(r, [tm](ByteReader& sub) { return read_if_saveable(tm->trees(), sub); })) return false;
+        if (tm && !get_section(r, [tm](ByteReader& sub) { return read_system(tm->trees(), sub); })) return false;
     }
     return r.ok() && r.done();
 }
@@ -197,7 +200,7 @@ void SimHost::write_galactic(ByteWriter& w) const {
     const GalacticMode* g = modes_.empty() ? nullptr : dynamic_cast<const GalacticMode*>(&modes_.at(modes_.depth() - 1));
     const galactic::GalacticSim* s = g ? g->sim() : nullptr;
     w.boolean(s != nullptr);
-    if (s) write_section(w, [s](ByteWriter& sub) { s->write(sub); });
+    if (s) put_section(w, [s](ByteWriter& sub) { s->write(sub); });
 }
 
 bool SimHost::read_galactic(ByteReader& r) {
@@ -206,7 +209,7 @@ bool SimHost::read_galactic(ByteReader& r) {
     galactic::GalacticSim* s = g ? g->sim() : nullptr;
     const bool has = r.boolean();
     if (!r.ok() || has != (s != nullptr)) return false;
-    if (s && !read_section(r, [s](ByteReader& sub) { return s->read(sub); })) return false;
+    if (s && !get_section(r, [s](ByteReader& sub) { return s->read(sub); })) return false;
     return r.ok() && r.done();
 }
 
@@ -241,8 +244,8 @@ void SimHost::write_globals(ByteWriter& w) const {
     w.u32(kChunkVersion);
 #ifdef ALAMO_SIM_HAVE_STORY
     w.boolean(true);
-    write_section(w, [this](ByteWriter& sub) { global_values_.write(sub); });
-    write_section(w, [](ByteWriter& sub) { lua::process_global_values().write(sub); });  // VMs without a session table
+    put_section(w, [this](ByteWriter& sub) { global_values_.write(sub); });
+    put_section(w, [](ByteWriter& sub) { lua::process_global_values().write(sub); });  // VMs without a session table
 #else
     w.boolean(false);
 #endif
@@ -255,8 +258,8 @@ bool SimHost::read_globals(ByteReader& r) {
     if (!r.ok() || !has) return false;
     // Parsed into scratch tables first: the chunk loads both or neither.
     lua::GlobalValueStore session, process;
-    if (!read_section(r, [&session](ByteReader& sub) { return session.read(sub); })) return false;
-    if (!read_section(r, [&process](ByteReader& sub) { return process.read(sub); })) return false;
+    if (!get_section(r, [&session](ByteReader& sub) { return session.read(sub); })) return false;
+    if (!get_section(r, [&process](ByteReader& sub) { return process.read(sub); })) return false;
     if (!r.done()) return false;
     global_values_ = std::move(session);
     lua::process_global_values() = std::move(process);
@@ -295,7 +298,7 @@ bool SimHost::write_scoring(ByteWriter& w, std::string* err) const {
         w.u32(static_cast<uint32_t>(block.size())).raw(block.bytes());
 #if defined(ALAMO_LUA_PLAYERS)
         w.boolean(scoring_players_ != nullptr);
-        if (scoring_players_) write_section(w, [this](ByteWriter& sub) { scoring_players_->write(sub); });
+        if (scoring_players_) put_section(w, [this](ByteWriter& sub) { scoring_players_->write(sub); });
 #else
         w.boolean(false);
 #endif
@@ -424,7 +427,7 @@ bool SimHost::save(SaveFile& out, std::string* err) const {
         else if (n == "rng") random_.write(w);
         else if (n == "commands") pipeline_->write(w);
         else if (n == "globals") write_globals(w);
-        add(name, kChunkVersion, w);
+        add(name, n == "frame" ? kFrameChunkVersion : kChunkVersion, w);
         if (n == "objects" && has_tactical_mode()) {
             ByteWriter sw;
             write_spatial(sw);
@@ -491,7 +494,7 @@ void SimHost::read_chunks(const SaveFile& in, LoadReport& rep) {
         const SaveParticipant* part = nullptr;
         for (const SaveParticipant& p : participants_)
             if (p.name == name) part = &p;
-        const uint32_t version = part ? part->version : kChunkVersion;
+        const uint32_t version = part ? part->version : name == "frame" ? kFrameChunkVersion : kChunkVersion;
         bool ok = c->version == version;
         if (ok) {
             ByteReader r(c->data);
@@ -554,7 +557,7 @@ bool SimHost::load(const SaveFile& in, std::string* err, LoadReport* report) {
     // TAKEN DURING A BATTLE"): pass 1 restores the bottom modes and the systems' own state, the participants rebuild the
     // upper modes, pass 2 reads everything.
     uint32_t saved_depth = 0;
-    if (const SaveChunk* fc = in.find("frame"); fc && fc->version == kChunkVersion) {
+    if (const SaveChunk* fc = in.find("frame"); fc && fc->version == kFrameChunkVersion) {
         ByteReader r(fc->data);
         (void)r.u32();
         for (int i = 0; i < 4; ++i) (void)r.u64();
@@ -594,7 +597,7 @@ bool SimHost::load(const SaveFile& in, std::string* err, LoadReport* report) {
                                                               std::to_string(in.tick);
     if (!rep.ok()) return finish(false);
     // The CRC log restarts at the loaded frame: the next tick first records the loaded state (tick_once).
-    recorder_ = std::make_unique<jobs::CrcRecorder>(sched_, registry_, cfg_.parallel_crc);
+    make_recorder();
     if (story_) story_->set_command_pipeline(pipeline_.get());
     return finish(true);
 }

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
@@ -48,6 +49,7 @@ struct TypeInfo {
     int32_t required_ground_base = 0;   // Required_Ground_Base_Level
     int32_t required_star_base = 0;     // Required_Star_Base_Level
     int32_t base_level = 0;             // Base_Level (starbases)
+    uint32_t next_level_base = kNoIndex;  // Next_Level_Base (starbases, type +0x8c0; kNoIndex = none / unresolved)
     int32_t advances_tech = 0;          // Build_Advances_Tech_Level (tech upgrades)
     int32_t squadron_capacity = 0;      // Squadron_Capacity
     bool hyperspace = false;            // Hyperspace
@@ -79,6 +81,12 @@ struct TypeInfo {
     bool surface_accessible = true;      // Planet_Surface_Accessible
     ForceSide the_force = ForceSide::Neutral;  // The_Force
     float force_strength = 0.0f;         // Force_Strength
+    // bkg2 b0125 (BKG1_RE_ANSWERS 9) [H]: political control inputs. Political_Control (+0x79C) of a planet (its leaning),
+    // a unit in orbit (capital ships / enemy fleets) or a structure (its own breakdown group); Political_Faction (+0x7A0)
+    // of a planet; Planet_Max_Political_Control_For_Faction (+0x830) pairs (faction index, maximum). All 0 / empty in FoC.
+    int32_t political_control = 0;
+    uint32_t political_faction = kNoIndex;
+    std::vector<std::pair<uint32_t, int32_t>> max_political_control;
 
     // ---- OI galactic (docs/re/STRATEGIC_GAPS.md = SG) -----------------------------------------------------------
     // Defaults are the hand-built-rules values (tests): no dummy behaviour, no limits, unlimited slots. The data path
@@ -156,11 +164,28 @@ struct GalacticRules {
     std::vector<DifficultyRules> difficulties; // DifficultyAdjustments.xml order
     std::vector<TypeInfo> types;               // index = objects::TypeIndex
     SpecialRules special;                      // P4 sim: black market, sabotage, hack, income abilities, corruption choices
+    // bkg3 b0115 (BKG1_RE_ANSWERS 11 [H]): the fleet hop factor R (0x397470 -> 0x471470) does not read the campaign's
+    // listed route: it walks the global TradeRoute table in ascending unsigned CRC-32 of the upper-cased route name and
+    // takes the first route whose endpoint planet types match (either orientation). Links, path costs and the AI travel
+    // estimate keep the listed route. One entry per unordered planet-name-CRC pair (lo <= hi), sorted by (lo, hi): the
+    // lowest-CRC route's HS_Speed_Factor. Empty when the rules are built by hand (then the listed route is used).
+    struct HopRoute {
+        uint32_t lo = 0, hi = 0;   // name_crc of the two planet type names, lo <= hi
+        uint32_t route_crc = 0;    // the winning route's name CRC
+        float hs = 1.0f;           // its HS_Speed_Factor
+    };
+    std::vector<HopRoute> hop_routes;
+    const HopRoute* find_hop_route(uint32_t planet_crc_a, uint32_t planet_crc_b) const;  // nullptr if none
 
     uint32_t find_faction(std::string_view name) const;     // case-insensitive, kNoIndex if absent
     uint32_t find_difficulty(std::string_view name) const;
     uint32_t find_type(std::string_view name) const;        // first definition
     uint32_t neutral_faction() const;                       // first Is_Neutral faction, kNoIndex if none
+    // modc t03 [port, inferred from the S10 probe, REMAINING_GAPS 3.3]: the faction whose player owns a tactical map's
+    // native objects when their own faction has no player: the first faction (FactionFiles.xml order) that is neither
+    // Is_Playable nor Is_Neutral nor Can_Control_Planets (FoC: Hostile). kNoIndex if none. Retail holds a player per
+    // faction instead (campaign_setup.cpp); this picks the one native player the port adds, by data, not by name.
+    uint32_t native_owner_faction() const;
 };
 
 // GameConstants -> EconomyConstants (fields absent from the XML keep the vanilla defaults).

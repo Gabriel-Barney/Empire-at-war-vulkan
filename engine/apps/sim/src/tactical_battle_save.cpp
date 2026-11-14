@@ -5,36 +5,28 @@
 #include "alamo/sim/save_session.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #include "save_io.hpp"
-#ifdef ALAMO_SIM_HAVE_GARRISON
 #include "alamo/tactical/garrison/capture.hpp"
 #include "alamo/tactical/garrison/garrison.hpp"
-#endif
 
 namespace alamo::sim {
 
 namespace {
 
-constexpr uint32_t kBattleStateVersion = 8;  // 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged
-constexpr uint32_t kBattlePartVersion = 1;
+constexpr uint32_t kBattleStateVersion = 13;  // 13: [port] fleet cohesion per player; 2: S7 t22 fighter formations; 3: S7 t24 formation follow_next / a1i t04 landing objects (two branches); 4: S7 t37 follow_next dropped (the follow is in the movement layer); 5: both merged (formations + landing objects); 6: story t06 victory monitor (replaces the end-hold fields); 7: q6 attacks on TEAM containers / s78f t02 FighterFormationRecord::pushed dropped (the auto blocks are in the movement save) (two branches); 8: both merged; 9: ccpgt t02 domination timer; 10: cu8k t01 Saber_Throw thrower machines; 11: cu8l t03 start fleet arrivals; 12: s78n t20 land attack blocks (exact: older versions are refused)
+constexpr uint32_t kBattlePartVersion = 2;  // 2: s78n t06 running hero clashes in the Combat part (1 still read: none)
 
-// One module system in a part: presence flag + a section with its own write (nothing when it has no write / read).
+// One module system in a part: presence flag + a section with its own write.
 template <class T>
 void put_system(ByteWriter& w, const T* s) {
     w.boolean(s != nullptr);
-    if (s) write_section(w, [s](ByteWriter& sub) { write_if_saveable(*s, sub); });
+    if (s) put_section(w, [s](ByteWriter& sub) { write_system(*s, sub); });
 }
 
 template <class T>
 bool get_system(ByteReader& r, T* s) {
     const bool has = r.boolean();
     if (!r.ok() || has != (s != nullptr)) return false;
-    return !s || read_section(r, [s](ByteReader& sub) { return read_if_saveable(*s, sub); });
-}
-
-// A part loads only when every system in it has write / read (a pending one fails the part before anything is read).
-template <class... T>
-constexpr bool all_saveable(const T*...) {
-    return (SaveableSystem<T> && ...);
+    return !s || get_section(r, [s](ByteReader& sub) { return read_system(*s, sub); });
 }
 
 }  // namespace
@@ -82,6 +74,7 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     // story t06: victory monitor
     a(b.vm_declared_, b.vm_decl_.type, b.vm_decl_.player, b.vm_decl_.countdown, b.vm_decl_.silent, b.vm_countdown_, b.vm_hold_);
     a(b.vm_queue_, b.vm_tsw_seen_, b.vm_declared_frame_);
+    a(b.vm_cp_armed_, b.vm_cp_timer_, b.vm_cp_player_);  // ccpgt t02 (state version 9)
     a.seq(b.vm_records_, [](auto& x, auto& r) { x(r.type, r.player, r.countdown, r.silent); });
     a.seq(b.vm_tracked_, [](auto& x, auto& t) { x(t.id, t.owner, t.base); });
     a(b.result_.winner, b.result_.victory, b.result_.retreated, b.result_.destroyed, b.result_.starbase_destroyed);
@@ -101,12 +94,8 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     });
     a(b.queue_group_, b.queue_used_);
     a.seq(b.team_attacks_, [](auto& x, auto& r) { x(r.attacker, r.container, r.member, r.goal); });  // q6 (state version 7)
-#ifdef ALAMO_SIM_HAVE_GARRISON
     a(b.s4_used_);
-#endif
-#ifdef ALAMO_SIM_HAVE_FOG
     a(b.fog_pings_, b.fog_on_, b.fog_global_active_, b.fog_global_render_);
-#endif
     // L1 systems
     a(b.l1_desc_cache_, b.l1_in_asteroid_, b.l1_weather_started_, b.fog_weather_dirty_);
     a.seq(b.l1_trackers_, [](auto& x, auto& t) { x(t.id, t.acc, t.rate, t.next); });
@@ -146,6 +135,14 @@ void TacticalBattle::state_io(Ar& a, Self& b) {
     a(b.hg_launches_, b.hg_used_);
     // S7 t22: fighter formations
     a.seq(b.fformations_, [](auto& x, auto& f) { x(f.key, f.flags, f.goal, f.goal_object); });  // s78f t02: no `pushed` (v6)
+    // cu8k t01: Saber_Throw thrower machines (state version 10)
+    a.seq(b.sabers_, [](auto& x, auto& t) { x(t.thrower, t.target, t.aim, t.throw_frame, t.serial, t.projectile, t.catch_dist, t.end_frame); });
+    // cu8l t03: the start fleet's hyperspace arrivals (state version 11; a version 10 battle has none)
+    a.seq(b.arrivals_, [](auto& x, auto& r) { x(r.id, r.container, r.timer, r.composes); });
+    // s78n t20 stage A: the land attack blocks (state version 12)
+    a.seq(b.attack_blocks_, [](auto& x, auto& r) { x(r.mover, r.target, r.flags, r.next, r.gx, r.gy); });
+    // [port] fleet cohesion per player (state version 13)
+    for (auto& c : b.fleet_cohesion_) a(c);
 }
 
 void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
@@ -164,6 +161,7 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
         case SavePart::Combat:
             put_system(w, combat_.get());
             put_system(w, &l1_weather_);
+            put_system(w, &hero_clash_);  // s78n t06 (part version 2)
             break;
         case SavePart::Abilities:
             put_system(w, abilities_.get());
@@ -171,13 +169,9 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
             put_system(w, &l1_fields_);
             break;
         case SavePart::Garrison:
-#ifdef ALAMO_SIM_HAVE_GARRISON
             w.boolean(true);
             put_system(w, &garrison_);
             put_system(w, captures_.get());
-#else
-            w.boolean(false);
-#endif
             break;
         case SavePart::Hangar:
             put_system(w, hangars_.get());
@@ -186,12 +180,8 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
             put_system(w, &engine_loops_);
             break;
         case SavePart::Fog:
-#ifdef ALAMO_SIM_HAVE_FOG
             w.boolean(true);
             put_system(w, &fog_);
-#else
-            w.boolean(false);
-#endif
             break;
         case SavePart::Damage:
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
@@ -205,8 +195,29 @@ void TacticalBattle::write_part(SavePart p, ByteWriter& w) const {
     }
 }
 
+void TacticalBattle::write_types(ByteWriter& w) const {
+    w.u32(static_cast<uint32_t>(types_used_.size()));
+    for (const uint32_t t : types_used_) w.u32(t);
+}
+
+bool TacticalBattle::read_types(ByteReader& r) {
+    uint32_t n = 0;
+    if (!r.count(n, 4)) return false;
+    std::vector<uint32_t> saved(n);
+    for (uint32_t& t : saved) t = r.u32();
+    if (!r.ok() || !r.done() || saved.size() < types_used_.size() ||
+        !std::equal(types_used_.begin(), types_used_.end(), saved.begin()))
+        return false;
+    if (saved.size() > types_used_.size())
+        script_add_types(std::span<const uint32_t>(saved.data() + types_used_.size(), saved.size() - types_used_.size()));
+    return types_used_ == saved;
+}
+
 bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
-    if (r.u32() != (p == SavePart::State ? kBattleStateVersion : kBattlePartVersion) || !r.ok()) return false;
+    const uint32_t version = r.u32();
+    if (!r.ok()) return false;
+    if (p == SavePart::State ? version != kBattleStateVersion : (version != kBattlePartVersion && version != 1u))
+        return false;
     switch (p) {
         case SavePart::State: {
             // Parsed into a scratch copy of the record lists via a backup: the current state is written first and read
@@ -218,7 +229,10 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             }
             const std::vector<uint32_t> types_used = types_used_, descs = descs_;
             save_io::In in(r);
+            arrivals_.clear();  // cu8l t03: not in a version 10 state
+            state_io_version_ = version;
             state_io(in, *this);
+            state_io_version_ = 0;
             // q6 t12: types a game-object script added mid-battle (script_add_types) follow the rebuilt setup's list; they
             // are built onto the rebuilt tables again (same append order -> the same descriptor indices).
             const bool same = types_used_ == types_used && descs_ == descs;
@@ -228,6 +242,8 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
             bool ok = r.ok() && r.done() && (same || extended);
             for (const Unit& u : units_)
                 if (u.participant >= parts_.size() || (u.container != 0xFFFFFFFFu && u.container >= containers_.size())) ok = false;
+            for (size_t i = 1; i < attack_blocks_.size(); ++i)  // s78n t20 review: one block per mover, ascending (lower_bound)
+                if (!(attack_blocks_[i - 1].mover < attack_blocks_[i].mover)) ok = false;
             if (ok && extended) {
                 const std::vector<uint32_t> saved_descs = descs_;
                 descs_ = descs;
@@ -240,50 +256,69 @@ bool TacticalBattle::read_part(SavePart p, ByteReader& r) {
                 state_io(restore, *this);
                 return false;
             }
+            // cu8g t02 (CU8G_T02_ENV_PICK_RE §2): the environment is not saved; a loaded battle shows the map's start
+            // environment (mini 25 through vf25's clamp), without a draw. [port] The saved weather state is kept and counts
+            // as bound to it (no restart at the next land tick); retail's forced weather rebinds on load (2 + 2 synced
+            // draws and one advance [M]) are not modelled.
+            if (!set_environment(static_cast<int32_t>(map_.environments.start_index))) env_index_ = 0;
+            l1_weather_env_ = env_index_;
             // The combat hooks' tick context (the synced RNG + the global frame of the last battle tick) is used by
             // command-phase hooks before the next battle tick: as in the saving run.
             resume_tick_context();
+            // s78n t18 review: the movement system's pair gates / "hidden" are host-fed, not saved - set them from the
+            // loaded units, containers and garrison state now (after each of the three parts: whichever is read last
+            // sees all of them), so a command before the next tick meets them as in the saving run.
+            feed_pair_gates();
             return true;
         }
         case SavePart::Movement:
-            if (!all_saveable(movement_.get(), &l1_jumps_, &l1_engines_)) return false;
-            return get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done();
+            if (!(get_system(r, movement_.get()) && get_system(r, &l1_jumps_) && get_system(r, &l1_engines_) && r.done())) return false;
+            feed_pair_gates();
+            return true;
         case SavePart::Combat:
-            if (!all_saveable(combat_.get(), &l1_weather_)) return false;
             l1_weather_.set_data(l1_weather_data_.get());  // the saved scenario resolves in it (weather starts on the first service)
-            if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_) && r.done())) return false;
+            if (!(get_system(r, combat_.get()) && get_system(r, &l1_weather_))) return false;
+            // s78n t06: the running hero clashes (part version 2; a version 1 battle has none). The manager's entries and
+            // resolved types are the host's (set_hero_clash_data), so the saved entry indices resolve against them.
+            hero_clash_.clear();
+            if (version >= 2u && !get_system(r, &hero_clash_)) return false;
+            if (!r.done()) return false;
+            (void)hero_clash_.take_changed();
+            hero_clash_sync();
             attach_rocket_terrain();  // refixf t01: the host terrain is not part of the save
             share_groups_sync();  // derived, not saved (State and Movement are read before Combat)
             return true;
         case SavePart::Abilities:
-            if (!all_saveable(abilities_.get(), &l1_sw_, &l1_fields_)) return false;
             return get_system(r, abilities_.get()) && get_system(r, &l1_sw_) && get_system(r, &l1_fields_) && r.done();
         case SavePart::Garrison: {
             const bool has = r.boolean();
-#ifdef ALAMO_SIM_HAVE_GARRISON
-            if (!has || !all_saveable(&garrison_, captures_.get())) return false;
-            return get_system(r, &garrison_) && get_system(r, captures_.get()) && r.done();
-#else
-            return r.ok() && !has && r.done();
-#endif
+            if (!has) return false;
+            if (!get_system(r, &garrison_)) return false;
+            // s78n t12 review: the saved battle had the capture system (its first garrison use made it) but this
+            // rebuilt battle's setup made none - that first use came mid-battle (a reinforcement with GARRISON_UNIT, a
+            // vehicle theft). Create the systems now, as the first use would have (relation callbacks, the capture
+            // system the saved one loads into). The state part, read after the module parts, restores s4_used_.
+            const bool has_captures = r.boolean();
+            if (!r.ok()) return false;
+            if (has_captures && !captures_) s4_init();
+            if (has_captures != (captures_ != nullptr)) return false;
+            if (captures_ && !get_section(r, [this](ByteReader& sub) { return read_system(*captures_, sub); })) return false;
+            if (!r.done()) return false;
+            feed_pair_gates();
+            return true;
         }
         case SavePart::Hangar:
-            if (!all_saveable(hangars_.get(), contents_.get(), production_.get(), &engine_loops_)) return false;
             return get_system(r, hangars_.get()) && get_system(r, contents_.get()) && get_system(r, production_.get()) &&
                    get_system(r, &engine_loops_) && r.done();
         case SavePart::Fog: {
             const bool has = r.boolean();
-#ifdef ALAMO_SIM_HAVE_FOG
-            if (!has || !all_saveable(&fog_)) return false;
+            if (!has) return false;
             return get_system(r, &fog_) && r.done();
-#else
-            return r.ok() && !has && r.done();
-#endif
         }
         case SavePart::Damage: {
             const bool has = r.boolean();
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
-            if (!has || !all_saveable(&damage_tracking_)) return false;
+            if (!has) return false;
             return get_system(r, &damage_tracking_) && r.done();
 #else
             return r.ok() && !has && r.done();

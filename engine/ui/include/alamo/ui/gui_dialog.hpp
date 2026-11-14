@@ -92,6 +92,10 @@ private:
 
 struct GuiStyle {
     bool fallback_art = true;                 // flat stand-ins for missing frame / button / track textures
+    // [port] scroll bar arrow / track auto-repeat while the button is held: first repeat after scroll_repeat_delay,
+    // then every scroll_repeat_rate seconds (the Win32 scroll bar timer pattern).
+    double scroll_repeat_delay = 0.4, scroll_repeat_rate = 0.05;
+    Rgba8 edit_selection{80, 120, 200, 160};  // [port] edit box selected-text highlight
     Rgba8 fallback_background{18, 22, 30, 235};
     Rgba8 fallback_button{60, 66, 80, 255}, fallback_button_hot{90, 100, 125, 255}, fallback_button_down{40, 44, 55, 255};
     Rgba8 selection{255, 255, 255, 60};       // list selected-row highlight
@@ -120,20 +124,29 @@ struct GuiControl {
     int32_t value = 0, range_min = 0, range_max = 100;  // slider / progress
     std::vector<std::u32string> items; // list / combo
     // Per-item colours (list / combo): item k with a colour has its TEXT drawn flat in that colour (both gradient ends,
-    // control font; kept when the control is disabled) - UI.md §3.7.1. The multiplayer colour combos fill each item with
-    // one glyph (U+25A0 / U+2588), which the per-control font (IDC_PLAYER_COLOR_n: Arial Unicode MS 35, Stretch_Factor
+    // control font; kept when the control is disabled) - UI.md §3.7.1. The skirmish staging colour combos fill each item
+    // with one glyph (U+25A0), which the per-control font (IDC_PLAYER_COLOR_n: Arial Unicode MS 35, Stretch_Factor
     // 0.25) turns into a flat wide bar: the colour "swatch".
     std::vector<Rgba8> item_colors;
     // [port] per-item text colours (list): item k is drawn in item_text_colors[k] (flat, no font gradient) when that
     // colour's alpha is > 0, else in the skin's font colours. Story dialog scripts' TEXTCOLOR lines use it.
     std::vector<Rgba8> item_text_colors;
+    // [port: Gabriel] per-item icon and indent (list): item k draws item_icons[k] (a texture name; "" or a missing texture =
+    // no icon, the text keeps its place) in a square one row high, item_indent[k] row-heights in from the left edge. The
+    // saved games tree (FrontEnd) uses them.
+    std::vector<std::string> item_icons;
+    std::vector<uint8_t> item_indent;
     int32_t selected = -1;             // list / combo selection
     int32_t top = 0;                   // first visible list row
     bool open = false;                 // combo drop-down shown
     bool left_justified = false;       // combo: closed-field text starts at the left edge + inset instead of centred (UI.md §3.7.1)
     size_t caret = 0;                  // edit caret (code points)
+    size_t sel_anchor = 0;             // edit: other end of the selection (== caret: nothing selected)
+    size_t scroll_x = 0;               // edit: first code point drawn (ES_AUTOHSCROLL keeps the caret in view)
+    float field_height = 15.0f;        // combo: closed field height (canvas units; the skin's pop-down button height)
     size_t max_chars = 256;            // edit limit [port]
     bool read_only = false;            // edit: keys are not typed into it (key-capture fields)
+    bool key_capture = false;          // edit: a key-binding field - Tab is a key to bind there, not a focus move (UI5 t05)
     bool text_outline = false;         // [port] force an outline under the caption (readability over bright art)
     bool ui_font = false;              // [port] QA D8: text in the dialog's L_Text font instead of the gadget's skin font
     // [port] QA U2: a static with fit_lines > 0 is never narrowed: word-wrapped to the control width in at most fit_lines
@@ -189,7 +202,6 @@ public:
     bool set_image(std::string_view id, std::string texture);
     bool focus(std::string_view id);
     int32_t focus_index() const { return focus_; }
-    bool keyboard_focus() const { return keyboard_focus_; }
 
     // Placement (canvas units): top-left corner of the dialog.
     Vec2f origin() const { return origin_; }
@@ -197,7 +209,6 @@ public:
         origin_ = top_left;
         placed_ = true;
     }
-    bool placed_by_host() const { return placed_; }
     GuiRect rect() const;
     GuiRect control_rect(size_t i) const;
     // Dialog height in canvas units: the .rc height less GuiManager::trim_dialog_height.
@@ -229,6 +240,8 @@ struct GuiEvent {
         Cancel,            // Esc on the topmost dialog
         Opened,
         Closed,
+        RowClicked,        // [port] list row pressed with the mouse (value = row; after its SelectionChanged; the second press of a
+                           // double click sends DoubleClicked instead)
     };
     Kind kind = Kind::Clicked;
     std::string dialog;
@@ -237,7 +250,6 @@ struct GuiEvent {
     int32_t value = 0;
     std::u32string text;
 };
-const char* gui_event_name(GuiEvent::Kind k);
 // "\n" / "\r\n" escape sequences of MasterTextFile strings -> line breaks, "\t" -> space [port].
 std::u32string gui_unescape(std::u32string s);
 // QA U1: "" for a text that is an asset name or path (".ted" and other file extensions, path separators); players never
@@ -265,6 +277,9 @@ public:
     void init(const DialogScript& script, const GuiSkin& skin, const TextureAtlas& atlas, FontCache& fonts,
               const TextDatabase* text = nullptr);
     void resize(uint32_t width, uint32_t height);
+    // [port: Gabriel] DPI-style UI scale (hud_canvas.hpp; 1 = 100 %, 0 = the original fitted canvas): takes effect on the
+    // next resize().
+    void set_ui_scale(float s) { canvas_.ui_scale = s > 0.0f ? s : 0.0f; }
     const HudCanvas& canvas() const { return canvas_; }
     GuiStyle& style() { return style_; }
     void set_sfx_hook(HudSfxHook hook) { sfx_ = std::move(hook); }
@@ -282,8 +297,13 @@ public:
     // GALAXY_MAP_PRESENTATION §5: the version line "V <version> <build>" drawn with the backdrop, bottom-left 2 pixels in,
     // colour (40, 160, 255, 128) [port: Arial 8]. "" = none. Host: e.g. U"V 1.121 <build>".
     void set_version_text(std::u32string text) { version_text_ = std::move(text); }
-    const std::u32string& version_text() const { return version_text_; }
     const TextDatabase* text_db() const { return text_; }
+    // Edit box clipboard (Ctrl+C / Ctrl+X / Ctrl+V, Ctrl+Insert / Shift+Delete / Shift+Insert). Unset: a clipboard
+    // private to the manager [port]; the game host wires the Windows clipboard.
+    void set_clipboard(std::function<std::u32string()> get, std::function<void(std::u32string_view)> set) {
+        clip_get_ = std::move(get);
+        clip_set_ = std::move(set);
+    }
     // Caption -> display text: the MasterTextFile entry for the key, else the caption as written [port].
     std::u32string caption_text(std::string_view caption) const;
     // [port] t47: English the port adds in code, on the same text path (TextDatabase::port_text).
@@ -320,6 +340,9 @@ public:
     bool scroll_to_end(GuiDialog& d, std::string_view control);
     // Scrolls a list so `row` is its first visible row, or as near as the list's length allows (no empty rows at the end).
     bool scroll_list_to(GuiDialog& d, std::string_view control, int32_t row);
+    // The canvas point a mouse press on list row `row` of `control` hits (the row's centre, left of the scroll column),
+    // false when there is no such list box or the row is not visible (scroll it into view first). Scripted input uses it.
+    bool list_row_point(const GuiDialog& d, std::string_view control, int32_t row, Vec2f& out) const;
     // [port] Takes `units` off the dialog's bottom edge and centres it again (controls keep their .rc positions).
     void trim_dialog_height(GuiDialog& d, float units);
     // [port] word-wraps a list box's items to its text width (the control's font; the scroll column is reserved):
@@ -332,14 +355,33 @@ public:
     bool set_paragraphs(GuiDialog& d, std::string_view control, const std::vector<std::u32string>& paragraphs, Rgba8 color,
                         float max_width = 0.0f);
 
-    int32_t hover_control() const { return hover_control_; }
-    const GuiDialog* hover_dialog() const { return hover_dialog_; }
     // Image of a texture name: atlas entry, else the resolver.
     GuiImage image(std::string_view texture) const;
     // Font id for a control (GuiSkin lookup, point -> pixel rule of hud_canvas.hpp, Stretch_Factor).
     int32_t control_font(const GuiDialog& d, size_t i) const;
 
+    // Scroll bar of a list box, or of an open combo's drop-down list (canvas units). active = there are more rows than fit.
+    struct ScrollBar {
+        bool active = false;
+        GuiRect col, up, down, thumb;
+        float track_top = 0, track_len = 0;  // below the up arrow, downwards
+        int32_t max_top = 0, vis = 1;
+    };
+    ScrollBar scroll_bar(const GuiDialog& d, size_t i) const;
+    // Closed-field height of combo i: the skin's Combo_Box_Popdown_Button height (25 units, UI.md §3.7.1), else 15 [port].
+    float combo_field_height(const GuiDialog& d, size_t i) const;
+
 private:
+    enum class ScrollPart : uint8_t { None, Up, Down, PageUp, PageDown, Thumb };
+    ScrollPart scroll_part_at(const ScrollBar& sb, Vec2f p) const;
+    void scroll_press(GuiDialog& d, size_t i, ScrollPart part, double now);
+    void scroll_held(double now);
+    // Edit helpers.
+    GuiRect edit_text_rect(const GuiDialog& d, size_t i) const;
+    float edit_measure(const GuiDialog& d, size_t i, std::u32string_view t) const;
+    size_t edit_index_at(const GuiDialog& d, size_t i, float x) const;
+    void edit_keep_caret_visible(GuiDialog& d, size_t i) const;
+    bool edit_insert(GuiDialog& d, size_t i, std::u32string_view t) const;
     void place(GuiDialog& d) const;
     void click(GuiDialog& d, size_t i, std::vector<GuiEvent>& ev, bool keyboard);
     void move_focus(GuiDialog& d, int32_t dir);
@@ -347,6 +389,9 @@ private:
     void list_select(GuiDialog& d, size_t i, int32_t index, std::vector<GuiEvent>& ev);
     void slider_set(GuiDialog& d, size_t i, int32_t v, std::vector<GuiEvent>& ev);
     void scroll_list(GuiControl& c, size_t i, const GuiDialog& d, int32_t rows);
+    int32_t scroll_rows(const GuiDialog& d, size_t i) const;  // visible rows of a list / open combo list
+    float scroll_width(const GuiDialog& d, size_t i) const;  // scroll bar column width: Scroll_Up_Button art, else 12 [port]
+    void draw_scroll_bar(HudDrawList& dl, uint32_t layer, const GuiDialog& d, size_t i, const ScrollBar& sb) const;
     const GuiFontSpec& font_spec(const GuiDialog& d, size_t i) const;
     int32_t visible_rows(const GuiDialog& d, size_t i) const;
     float row_height(const GuiDialog& d, size_t i) const;
@@ -390,6 +435,13 @@ private:
     GuiDialog* press_dialog_ = nullptr;
     int32_t press_control_ = -1;
     bool slider_drag_ = false;
+    ScrollPart scroll_part_ = ScrollPart::None;  // scroll bar part held (press_dialog_ / press_control_)
+    double scroll_repeat_at_ = 0.0;
+    float scroll_grab_ = 0.0f;                   // thumb drag: cursor distance below the thumb's top edge
+    bool edit_drag_ = false;                     // edit: mouse selection while the button is held
+    std::function<std::u32string()> clip_get_;
+    std::function<void(std::u32string_view)> clip_set_;
+    std::u32string clipboard_;
     int32_t last_list_click_ = -1;
     int32_t last_list_row_ = -1;
     double last_list_time_ = -1e30;

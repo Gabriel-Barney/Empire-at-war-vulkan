@@ -16,7 +16,7 @@ target_link_libraries(alamo_tactical_hangar PUBLIC alamo_tactical_abilities alam
 # destroyed vs disabled bays, carrier death / retreat), a station upgrade driven through the abilities module, and FoC
 # data (ALAMO_FOC_DATA: an Empire station upgraded mid-battle, a Star Destroyer launching and replacing squadrons).
 add_executable(alamo_tactical_hangar_tests tests/test_hangar.cpp)
-target_link_libraries(alamo_tactical_hangar_tests PRIVATE alamo_tactical_hangar alamo_tactical_abilities alamo_data Threads::Threads)
+target_link_libraries(alamo_tactical_hangar_tests PRIVATE alamo_tactical_hangar alamo_tactical_abilities alamo_data alamo_test_support)
 if(TARGET alamo_vfs AND TARGET alamo_objects)
   target_link_libraries(alamo_tactical_hangar_tests PRIVATE alamo_vfs alamo_objects)
   target_compile_definitions(alamo_tactical_hangar_tests PRIVATE ALAMO_HANGAR_TESTS_HAVE_DATA=1)

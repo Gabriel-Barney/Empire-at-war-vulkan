@@ -5,14 +5,14 @@
   build_q6_mod.py tr      [--tr DIR] [--out MODDIR]
 
 Nothing from the game or from TR is stored in the repository: the shipped files are read from the install (loose files
-/ MEGs in the FoC order, through tools/probe_mod/s10_map_owners/ted_owners.py) or from TR's folder, and patched.
+/ MEGs in the FoC order, through tools/probe_mod/common/ted_owners.py) or from TR's folder, and patched.
 
 Mods\\Q6T15Probe (vanilla FoC, MODPATH=Mods\\Q6T15Probe):
   Data\\XML\\CampaignFiles.xml                    shipped list + Q6_Probe_Campaigns.xml
-  Data\\XML\\Q6_Probe_Campaigns.xml               4 campaigns: Q6 PROBE: STORY TIMING, ELIM A / B / C (human Empire)
-  Data\\XML\\Q6_Story_Plots_<X>.xml, Q6_Story_<X>.xml    one plot per campaign (X = Timing, Elim_A, Elim_B, Elim_C)
+  Data\\XML\\Q6_Probe_Campaigns.xml               6 campaigns: Q6 PROBE: STORY TIMING, ELIM A .. E (human Empire)
+  Data\\XML\\Q6_Story_Plots_<X>.xml, Q6_Story_<X>.xml    one plot per campaign (X = Timing, Elim_A .. Elim_E)
   Data\\Scripts\\Story\\Q6_Story_Timing.lua         q6_story_timing.lua (probes 3 and 4)
-  Data\\Scripts\\Story\\Q6_Story_Elim_<A|B|C>.lua   q6_story_elim.lua with Q6E_MODE = A / B / C (probe 1)
+  Data\\Scripts\\Story\\Q6_Story_Elim_<A|B|C>.lua   q6_story_elim.lua, Q6E_MODE = A .. E (probe 1; D, E: q6 t25)
   Data\\Scripts\\FreeStore\\BusyTacticalFreeStore.lua   shipped + q6_tactical_hook.lua (probes 2 and 6)
   Data\\Scripts\\GameObject\\<script>.lua           shipped + q6_objscript_hook.lua, for OBJ_SCRIPTS (probe 2)
   Data\\Text\\MasterTextFile_English.dat           shipped text + TEXTS
@@ -30,7 +30,7 @@ import zipfile
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), 's10_map_owners'))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
 sys.path.insert(0, os.path.dirname(HERE))
 import ted_owners  # noqa: E402
 from build_probe import dat_read, dat_bytes  # noqa: E402
@@ -123,6 +123,14 @@ CAMPAIGNS = {
                'Q6 PROBE: ELIM C (CONTROL)',
                'Q6 t15 probe 1C (control). You own nothing and the Rebel wins when its opponent owns no planet. '
                'Expected: the campaign ends at once.'),
+    'Elim_D': ('Q6_Story_Elim_D', 'Galactic_All_Planets_Controlled', [],
+               'Q6 PROBE: ELIM D (AI GAINS A PLANET)',
+               'q6 t25. You own nothing; after 20 s the script gives the neutral Abregado Rae to the Rebel. Click nothing '
+               'for 3 minutes. Note whether and when the campaign ends.'),
+    'Elim_E': ('Q6_Story_Elim_E', 'Galactic_All_Planets_Controlled', ['Tatooine, Star_Destroyer'],
+               'Q6 PROBE: ELIM E (FLEET, NO PLANET)',
+               'q6 t25. You have a Star Destroyer at Tatooine; the script gives you Tatooine at 10 s and makes it '
+               'neutral again at 40 s. Click nothing for 3 minutes. Note whether and when the campaign ends.'),
 }
 
 PLOTS = '''<?xml version="1.0" ?>
@@ -167,6 +175,11 @@ TEXTS = [
     ('TEXT_Q6_ELIM_RUNNING_C', 'Q6 PROBE ELIM C: control, the Rebel should win at once.'),
     ('TEXT_Q6_ELIM_GIVEN', 'Q6 PROBE ELIM B: the script gave you Abregado Rae'),
     ('TEXT_Q6_ELIM_TAKEN', 'Q6 PROBE ELIM B: the script took Abregado Rae back. You own nothing again.'),
+    ('TEXT_Q6_ELIM_RUNNING_D', 'Q6 PROBE ELIM D: you own nothing; at 20 s the Rebel gets Abregado Rae.'),
+    ('TEXT_Q6_ELIM_RUNNING_E', 'Q6 PROBE ELIM E: you have a fleet; Tatooine is yours at 10 s and neutral at 40 s.'),
+    ('TEXT_Q6_ELIM_E_GIVEN', 'Q6 PROBE ELIM E: the script gave you Tatooine'),
+    ('TEXT_Q6_ELIM_AI_GIVEN', 'Q6 PROBE ELIM D: the script gave Abregado Rae to the Rebel'),
+    ('TEXT_Q6_ELIM_E_TAKEN', 'Q6 PROBE ELIM E: the script made Tatooine neutral. You own a fleet and no planet.'),
     ('TEXT_Q6_ELIM_DONE', 'Q6 PROBE ELIM: 170 s passed and the campaign is still running. Quit (do not save).'),
     ('TEXT_Q6_OBJ_WAVE1', 'Q6 PROBE: object-script test units spawned (wave 1)'),
     ('TEXT_Q6_SEL_READY_LAND', 'Q6 PROBE: selection test set (land) is next to your units. Press Ctrl+A, then screenshot.'),
@@ -242,7 +255,7 @@ def build_vanilla(game, out, source_zip=None, no_text=False):
     story = os.path.join(out, 'Data', 'Scripts', 'Story')
     write(os.path.join(story, 'Q6_Story_Timing.lua'), crlf(hook('q6_story_timing.lua')))
     elim = hook('q6_story_elim.lua')
-    for m in 'ABC':
+    for m in 'ABCDE':
         write(os.path.join(story, 'Q6_Story_Elim_%s.lua' % m), crlf(elim.replace('@@MODE@@', m)))
     fs, fs_src = src.read(FREESTORE)
     if fs is None:

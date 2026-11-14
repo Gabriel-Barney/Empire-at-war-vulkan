@@ -74,7 +74,8 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/parallel.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/tactical/movement/constants.hpp"
 #include "alamo/tactical/movement/heap.hpp"
 
@@ -125,7 +126,6 @@ public:
     // Replaces the track of `id`. `start_frame` = absolute frame of waypoint time 0.
     void set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps);
     void clear_track(ObjectId id);
-    bool has_track(ObjectId id) const;
 
     // OR of the bits of every entry the circle (radius) swept a -> b over absolute frames [t0, t1]
     // touches. `layer`: tracks of that layer are tested; statics are tested when `with_static`.
@@ -136,6 +136,12 @@ public:
     }
     // Static entries only (no time).
     uint32_t query_static(V2 a, V2 b, float radius) const;
+    // OPT3 t12: builds the uniform-grid index query_segment uses to visit only the entries near the query. Call it from one
+    // thread before parallel queries; every mutation drops it and query_segment falls back to the full scan. Each entry
+    // that can pass the per-entry test is visited exactly once, with the same test, and the result is an OR of bits, so the
+    // index changes no result. Derived state: never saved or hashed.
+    void build_index();
+    bool index_valid() const { return index_.valid; }
 
     void hash(StateHasher& h) const;
     // N1 stage 2 save / load (src/movement_save.cpp): everything (static entries and tracks by ascending id, box, look-
@@ -192,8 +198,20 @@ private:
         v.erase(it);
         return true;
     }
+    // OPT3 t12: uniform grid over the entries' boxes (statics: centre +- radius + margin; tracks: waypoint box +- radius +
+    // margin). Per kind, the entries overlapping each cell (CSR, entry index order) and each entry's first cell.
+    struct Index {
+        bool valid = false;
+        float ox = 0.0f, oy = 0.0f, inv_cell = 0.0f;
+        int32_t nx = 0, ny = 0;
+        std::vector<uint32_t> s_start, s_items, t_start, t_items;
+        std::vector<int32_t> s_c0, t_c0;  // per entry: first cell x, first cell y
+    };
+    // Cell range of [lo, hi] clamped to the grid (index_.nx / ny > 0).
+    void index_cells(V2 lo, V2 hi, int32_t& x0, int32_t& y0, int32_t& x1, int32_t& y1) const;
     IdVec<Static> statics_;
     IdVec<Track> tracks_;
+    Index index_;
     V2 box_min_, box_max_;
     bool has_box_ = false;
     uint32_t window_ = 45u * 90u;
@@ -247,11 +265,40 @@ struct SpaceScratch {
         float g;
         bool closed;
     };
-    std::unordered_map<uint64_t, Visit> visited;  // probed only, never iterated
+    // OPT3 t12: the visited states, an open-addressing table (probed only, never iterated, so the layout cannot change a
+    // result; it replaced a std::unordered_map whose per-node allocations and clear() were a large part of a long search).
+    class VisitTable {
+    public:
+        // Empties the table, sized for about `expected` keys (it still grows past that).
+        void clear(size_t expected);
+        Visit* find(uint64_t key);
+        void emplace(uint64_t key, Visit v);
+
+    private:
+        struct Slot {
+            uint64_t key = 0;
+            Visit v{0.0f, false};
+            uint32_t gen = 0;  // the slot is used when gen == gen_
+        };
+        size_t slot_of(uint64_t key) const;
+        void grow();
+        std::vector<Slot> slots_;
+        uint32_t gen_ = 0;
+        size_t count_ = 0;
+    };
+    VisitTable visited;
 };
 
 bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& scratch,
                      SpacePath& out);
+// SIMP sp2: the same, with the retries run in parallel through `pf` (null: serial). Try 1 runs alone; when it fails,
+// tries 2..N run at once with the parameters the serial chain would give them if no try improved on try 1's best
+// progress, and a try past the lowest success stops early. The tries are then walked in order like the serial loop: a
+// speculative try is used only when its parameters equal the serial chain's (bit for bit), else that try and the ones
+// after it run again in parallel from there. So the result (waypoints, tries, pushes, fallback) is the serial loop's
+// for any worker count and timing.
+bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& scratch,
+                     SpacePath& out, const ParallelFor* pf);
 
 // Destination search (§2.4, 0x59caa0): goal if free, else biased rings starting at radius * 1.34,
 // +50 per ring, 40 rings; `reserved` = other group members' destinations (with their radii),
@@ -271,5 +318,10 @@ struct SpacePose {
 };
 // Hermite playback at `t` frames since the path start.
 SpacePose eval_space_path(std::span<const SpaceWaypoint> wps, float t);
+// [port: Gabriel, 2026-11-13] unit path lines (game HUD, display only - nothing in the sim reads it): positions along
+// the playback curve of `wps` (eval_space_path), so the line shows the turns the ship flies. Each waypoint pair is cut
+// into max(ceil(chord / step), ceil(heading change / 10 degrees)) pieces (1..32); the first point is wps.front().pos,
+// the last wps.back().pos, and a turn in place (same position) adds no point. Empty for an empty path.
+std::vector<V2> sample_space_path(std::span<const SpaceWaypoint> wps, float step);
 
 }  // namespace alamo::tactical::movement

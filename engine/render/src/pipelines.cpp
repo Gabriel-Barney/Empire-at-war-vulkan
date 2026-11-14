@@ -8,7 +8,9 @@
 #include <cstring>
 #include <fstream>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/materials/programs.hpp"
@@ -25,10 +27,7 @@ std::string effect_key(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     const size_t dot = n.find_last_of('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    std::string k(n);
-    for (char& c : k)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return k;
+    return ascii_upper(n);
 }
 
 materials::LoadOptions EffectCache::default_options() {
@@ -44,7 +43,33 @@ EffectCache::EffectCache(const FileProvider* files, materials::LoadOptions optio
     if (!files) return;
     lib_ = std::make_unique<materials::EffectLibrary>(*files, options);
     // D.1 effect creation order from the shader directories (a VFS; other providers: the engine head only).
-    if (const auto* v = dynamic_cast<const vfs::Vfs*>(files)) lib_->set_shader_files(materials::shader_files_from_vfs(*v));
+    if (const auto* v = dynamic_cast<const vfs::Vfs*>(files)) {
+        lib_->set_shader_files(materials::shader_files_from_vfs(*v));
+        for (const materials::ShaderFileEntry& f : materials::shader_files_from_vfs(*v, true))
+            if (f.from_mod) mod_paths_[materials::shader_path_key(f.path)] = true;
+    }
+}
+
+void EffectCache::record_issues_locked(std::string_view effect, const std::string& key, const materials::MaterialEffect& m,
+                                       std::string_view err) {
+    if (!lib_ || issues_.count(key)) return;
+    std::vector<materials::ShaderIssue> v = materials::effect_load_issues(*lib_, effect, m, err);
+    for (materials::ShaderIssue& i : v) {
+        i.in_mod = mod_paths_.count(materials::shader_path_key(i.path)) != 0;
+        if (i.kind != materials::ShaderIssueKind::SourceShadowed)
+            log::warnf("render", "effect %s: %s: %s", key.c_str(), materials::shader_issue_kind_name(i.kind), i.detail.c_str());
+    }
+    issues_.emplace(key, std::move(v));
+}
+
+std::vector<materials::ShaderIssue> EffectCache::issues() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<materials::ShaderIssue> out;
+    for (const auto& [k, v] : issues_) out.insert(out.end(), v.begin(), v.end());
+    std::stable_sort(out.begin(), out.end(), [](const materials::ShaderIssue& x, const materials::ShaderIssue& y) {
+        return x.effect != y.effect ? x.effect < y.effect : x.kind < y.kind;
+    });
+    return out;
 }
 
 uint32_t EffectCache::load_rank(const materials::MaterialEffect& e) const {
@@ -70,6 +95,7 @@ std::shared_ptr<const materials::MaterialEffect> EffectCache::get(std::string_vi
         why = "no file provider";
     }
     if (e) {
+        record_issues_locked(effect, key, *e, {});  // shadowing .fx, shader passes without a program
         ++stats_.loaded;
         if (e->used_ff_fallback) ++stats_.ff_fallback;
         for (const auto& p : e->passes) {
@@ -80,9 +106,17 @@ std::shared_ptr<const materials::MaterialEffect> EffectCache::get(std::string_vi
     } else {
         ++stats_.failed;
         // D.3: the original logs nothing for a missing file (one debug line per name here; failures are cached)
-        // and "Failed to load effect" for a file that exists but does not load.
-        if (lib_ && !lib_->find_effect_path(effect)) log::debugf("render", "effect %s: not found (%s)", key.c_str(), why.c_str());
+        // and "Failed to load effect" for a file that exists but does not load (a .fx source without a
+        // .fxo counts as one: get_or_default() records it as a shader issue).
+        if (lib_ && !lib_->find_effect_path(effect) && !lib_->find_effect_source(effect))
+            log::debugf("render", "effect %s: not found (%s)", key.c_str(), why.c_str());
         else log::warnf("render", "effect %s: %s", key.c_str(), why.c_str());
+        if (lib_ && (lib_->find_effect_path(effect) || lib_->find_effect_source(effect))) {
+            // Classified with the fallback the submesh path draws (failures only; cached per name).
+            std::string w;
+            const materials::MaterialEffect d = lib_->load_or_default(effect, &w);
+            record_issues_locked(effect, key, d, w);
+        }
         if (err) *err = why;
     }
     map_[key] = e;
@@ -220,39 +254,68 @@ constexpr VkFormat kColorFormats[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8
                                       VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
                                       VK_FORMAT_R16G16B16A16_SFLOAT};
 // Ids are persisted in the pipeline-cache key file: 1 + colour * 4 + depth; colour-only passes (post,
-// no depth attachment) use 128 + colour.
+// no depth attachment) use 128 + colour. [port] MSAA: sample class s (0 = 1 sample, 1 = 2, 2 = 4, 3 = 8) adds
+// s * 24 to a depth id (1..96) and s * 6 to a colour-only id (128..151); s = 0 keeps the old ids.
 constexpr VkFormat kDepthFormats[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT,
                                       VK_FORMAT_D16_UNORM};
 constexpr uint8_t kColorOnlyBase = 128;
+constexpr size_t kDepthIds = std::size(kColorFormats) * std::size(kDepthFormats);  // 24
+constexpr size_t kSampleClasses = 4;
+static_assert(1 + kSampleClasses * kDepthIds <= kColorOnlyBase, "render pass ids overlap");
+static_assert(kColorOnlyBase + kSampleClasses * std::size(kColorFormats) <= 256, "render pass ids overflow");
+int sample_class(uint32_t samples) {
+    switch (samples) {
+        case 1: return 0;
+        case 2: return 1;
+        case 4: return 2;
+        case 8: return 3;
+        default: return -1;
+    }
+}
 }  // namespace
 
-uint8_t render_pass_id(VkFormat color, VkFormat depth) {
+uint8_t render_pass_id(VkFormat color, VkFormat depth, uint32_t samples) {
+    const int sc = sample_class(samples);
+    if (sc < 0) return 0;
+    const size_t s = static_cast<size_t>(sc);
     if (depth == VK_FORMAT_UNDEFINED) {
         for (size_t c = 0; c < std::size(kColorFormats); ++c)
-            if (kColorFormats[c] == color) return static_cast<uint8_t>(kColorOnlyBase + c);
+            if (kColorFormats[c] == color) return static_cast<uint8_t>(kColorOnlyBase + s * std::size(kColorFormats) + c);
         return 0;
     }
     for (size_t c = 0; c < std::size(kColorFormats); ++c)
         for (size_t d = 0; d < std::size(kDepthFormats); ++d)
             if (kColorFormats[c] == color && kDepthFormats[d] == depth)
-                return static_cast<uint8_t>(1 + c * std::size(kDepthFormats) + d);
+                return static_cast<uint8_t>(1 + s * kDepthIds + c * std::size(kDepthFormats) + d);
     return 0;
 }
 
-bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth) {
+bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth, VkSampleCountFlagBits& samples) {
+    static constexpr VkSampleCountFlagBits kSamples[kSampleClasses] = {VK_SAMPLE_COUNT_1_BIT, VK_SAMPLE_COUNT_2_BIT,
+                                                                       VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_8_BIT};
     if (id == 0) return false;
     if (id >= kColorOnlyBase) {
-        if (static_cast<size_t>(id - kColorOnlyBase) >= std::size(kColorFormats)) return false;
-        color = kColorFormats[id - kColorOnlyBase];
+        const size_t i = static_cast<size_t>(id - kColorOnlyBase);
+        const size_t s = i / std::size(kColorFormats), c = i % std::size(kColorFormats);
+        if (s >= kSampleClasses) return false;
+        color = kColorFormats[c];
         depth = VK_FORMAT_UNDEFINED;
+        samples = kSamples[s];
         return true;
     }
     const size_t i = static_cast<size_t>(id - 1);
-    const size_t c = i / std::size(kDepthFormats), d = i % std::size(kDepthFormats);
-    if (c >= std::size(kColorFormats)) return false;
+    const size_t s = i / kDepthIds, r = i % kDepthIds;
+    if (s >= kSampleClasses) return false;
+    const size_t c = r / std::size(kDepthFormats), d = r % std::size(kDepthFormats);
     color = kColorFormats[c];
     depth = kDepthFormats[d];
+    samples = kSamples[s];
     return true;
+}
+
+bool render_pass_formats(uint8_t id, VkFormat& color, VkFormat& depth) {
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    return render_pass_formats(id, color, depth, samples);
 }
 
 const materials::ShaderBlob* shader_blob_by_id(uint32_t id) {
@@ -306,7 +369,8 @@ bool pipeline_desc_from_key(const materials::PsoKey& k, VkPipelineLayout layout,
     if (!vs || vs->stage != materials::ShaderStage::Vertex) return fail("unknown vertex program id");
     if (k.ps_id && (!ps || ps->stage != materials::ShaderStage::Pixel)) return fail("unknown pixel program id");
     VkFormat depth = VK_FORMAT_UNDEFINED;
-    if (!render_pass_formats(k.render_pass, b.color, depth)) return fail("unknown render pass id");
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    if (!render_pass_formats(k.render_pass, b.color, depth, samples)) return fail("unknown render pass id");
     b.vs.assign(vs->spirv.begin(), vs->spirv.end());
     if (ps) b.fs.assign(ps->spirv.begin(), ps->spirv.end());
     b.vs_entry = vs->entry_point;
@@ -347,6 +411,7 @@ bool pipeline_desc_from_key(const materials::PsoKey& k, VkPipelineLayout layout,
     d.blend.alpha_op = static_cast<VkBlendOp>(k.alpha_op);
     d.blend.write_mask = static_cast<VkColorComponentFlags>(k.color_write_mask & 0xF);
     d.color_formats = {&b.color, 1};
+    d.samples = samples;
     d.depth_format = depth;
     const rhi::FormatInfo& dfi = rhi::format_info(rhi::from_vk(depth));
     d.stencil_format = dfi.stencil ? depth : VK_FORMAT_UNDEFINED;
@@ -364,7 +429,8 @@ bool pipeline_desc_from_translated(const materials::PsoKey& k, const materials::
     if (!(k.flags & materials::kPsoTranslated)) return fail("not a translated key");
     if (tp.vs.spirv.empty() || tp.ps.spirv.empty()) return fail("translated program without SPIR-V");
     VkFormat depth = VK_FORMAT_UNDEFINED;
-    if (!render_pass_formats(k.render_pass, b.color, depth)) return fail("unknown render pass id");
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    if (!render_pass_formats(k.render_pass, b.color, depth, samples)) return fail("unknown render pass id");
     b.vs = tp.vs.spirv;
     b.fs = tp.ps.spirv;
     b.vs_entry = tp.vs.entry;
@@ -423,6 +489,7 @@ bool pipeline_desc_from_translated(const materials::PsoKey& k, const materials::
     d.blend.alpha_op = static_cast<VkBlendOp>(k.alpha_op);
     d.blend.write_mask = static_cast<VkColorComponentFlags>(k.color_write_mask & 0xF);
     d.color_formats = {&b.color, 1};
+    d.samples = samples;
     d.depth_format = depth;
     const rhi::FormatInfo& dfi = rhi::format_info(rhi::from_vk(depth));
     d.stencil_format = dfi.stencil ? depth : VK_FORMAT_UNDEFINED;
@@ -468,7 +535,13 @@ struct KeysHeader {
 };
 #pragma pack(pop)
 constexpr char kMagic[8] = {'A', 'L', 'P', 'S', 'O', 'K', 'E', 'Y'};
-constexpr uint32_t kKeysVersion = 1;
+// Bump whenever the meaning of a stored key changes, the render pass ids above included: the header's programs fingerprint
+// does not cover them. 2 (2026-11-13): MSAA sample classes in the ids. A version-1 file can hold ids from an abandoned
+// MSAA layout (32 + count * 24 + pair) that now decode to other formats (4x R8G8B8A8_UNORM + D32S8 as 4x R8G8B8A8_SRGB + D24S8, which RDNA cannot use).
+constexpr uint32_t kKeysVersion = 2;
+static_assert(sizeof(materials::PsoKey) == 40 && kDepthIds == 24 && kSampleClasses == 4 && kColorOnlyBase == 128 &&
+                  std::size(kColorFormats) == 6,
+              "the stored key / render pass id layout changed: bump kKeysVersion and update this check");
 
 KeysHeader make_header(const rhi::DeviceCaps& c, uint32_t count) {
     KeysHeader h{};
@@ -622,7 +695,8 @@ void PipelineManager::request(const materials::PsoKey& key) {
         slot->key = key;
         e = slot.get();
     }
-    if (desc_.js) desc_.js->spawn(*counter_, [this, e] { create(*e); }, jobs::Priority::Background);
+    // A serial job system runs a job only when someone waits on it, and get() only polls: create inline there.
+    if (desc_.js && !desc_.js->serial()) desc_.js->spawn(*counter_, [this, e] { create(*e); }, jobs::Priority::Background);
     else create(*e);
 }
 

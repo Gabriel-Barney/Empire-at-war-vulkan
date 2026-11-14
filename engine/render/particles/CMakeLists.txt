@@ -50,7 +50,7 @@ target_link_libraries(alamo_render_particles PUBLIC alamo_render PRIVATE alamo_f
 # ---------------------------------------------------------------- tests
 add_executable(alamo_render_particles_tests tests/test_particles.cpp)
 # alamo_core first: tools/formats' inline ByteReader vs core's (see alamo_render_app).
-target_link_libraries(alamo_render_particles_tests PRIVATE alamo_core alamo_render_particles alamo_formats alamo_vfs alamo_engine_flags)
+target_link_libraries(alamo_render_particles_tests PRIVATE alamo_core alamo_render_particles alamo_formats alamo_vfs alamo_engine_flags alamo_render_test_support)
 target_compile_definitions(alamo_render_particles_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 add_test(NAME alamo_render_particles_tests COMMAND alamo_render_particles_tests)
 set_tests_properties(alamo_render_particles_tests PROPERTIES TIMEOUT 900)

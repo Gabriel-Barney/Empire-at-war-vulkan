@@ -39,6 +39,13 @@ public:
         resized_ = false;
         return r;
     }
+    // [port] Whether this application is the active one (WM_ACTIVATEAPP), and true once after every change.
+    bool app_active() const { return app_active_; }
+    bool take_activation_changed() {
+        const bool r = activation_changed_;
+        activation_changed_ = false;
+        return r;
+    }
     // Virtual-key state (VK_ESCAPE = 0x1B ...), updated by pump().
     bool key_down(uint32_t vk) const { return vk < 256 && keys_[vk]; }
     bool key_pressed(uint32_t vk) {  // edge-triggered
@@ -67,11 +74,6 @@ public:
         wheel_ = 0;
         return w;
     }
-    float take_wheel_horizontal() {
-        const float w = static_cast<float>(hwheel_) / 120.0f;
-        hwheel_ = 0;
-        return w;
-    }
     // Text input (integration fixes, alamo_game): the characters typed since the last call, in order, from
     // WM_CHAR / WM_UNICHAR (layout, dead keys, IME and Alt codes applied by Windows; UTF-16 surrogate pairs joined;
     // lone surrogates dropped). Control characters are included (0x08 backspace, 0x09 tab, 0x0D enter, 0x1B
@@ -80,7 +82,6 @@ public:
     static constexpr size_t kMaxTextPerFrame = 256;
     std::u32string take_text();
     std::string take_text_utf8();  // the same, UTF-8 encoded
-    void clear_text() { text_.clear(); }
     void set_title(const char* utf8);
 
     void* native_handle() const { return hwnd_; }      // HWND
@@ -94,12 +95,14 @@ private:
     void* hinstance_ = nullptr;
     uint32_t width_ = 0, height_ = 0;
     bool resized_ = false;
+    bool app_active_ = true;
+    bool activation_changed_ = false;
     bool close_requested_ = false;
     bool keys_[256] = {};
     bool pressed_[256] = {};
     void set_button(MouseButton b, bool down);
     int32_t mouse_x_ = 0, mouse_y_ = 0;
-    int32_t wheel_ = 0, hwheel_ = 0;  // WHEEL_DELTA units
+    int32_t wheel_ = 0;  // WHEEL_DELTA units
     bool buttons_[static_cast<size_t>(MouseButton::Count)] = {};
     bool pressed_buttons_[static_cast<size_t>(MouseButton::Count)] = {};
     bool released_buttons_[static_cast<size_t>(MouseButton::Count)] = {};

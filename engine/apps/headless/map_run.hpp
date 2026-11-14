@@ -30,7 +30,8 @@ struct MapRunOptions {
     // galactic::kDefaultAllPairsLatency; 0 = the original timing) and --no-ai-stagger (every AI player plans on the same
     // frames, as the original). Not recorded in saves.
     int64_t ai_latency = -1;  // < 0: the default
-    bool ai_stagger = true;
+    // -1 = the mode's default (a2m r4: galactic off, as the original; tactical / skirmish on), 0 = off, 1 = on.
+    int8_t ai_stagger = -1;
     // OPT2 t10 (--skirmish-ai): --no-pp-streams (slot-10 plan picks and solves draw from the synced stream in proposal order,
     // the original) and --pp-latency F (frames from a slice to the apply of its solves, default
     // ai::tactical::kDefaultPpLatency). Not recorded in saves.
@@ -39,9 +40,13 @@ struct MapRunOptions {
     // q6 t06 (--story, --galactic-ai): --scoring runs the GameConstants Game_Scoring_Script_Name script at the session start
     // (SimHost::set_scoring_script) as the game does. Off by default: its GlobalValue writes enter the frame CRC.
     bool scoring = false;
-    // q6 (--skirmish-ai): --object-scripts turns on SimConfig::object_scripts (game-object Lua scripts, OBJECT_SCRIPTS.md)
-    // and the GameScoring script (mods set GlobalValue MOD_ID there, which their object scripts read). Off by default.
-    bool object_scripts = false;
+    // q6 (--skirmish-ai): SimConfig::object_scripts (game-object Lua scripts, OBJECT_SCRIPTS.md) and the GameScoring script
+    // (mods set GlobalValue MOD_ID there, which their object scripts read). q6 t23 (2026-11-13): on by default, as the game
+    // (retail runs vanilla object scripts, Q6_T15_RETAIL_RUN.md row 2b); --no-object-scripts turns both off.
+    bool object_scripts = true;
+    // ccpgt t02 (--skirmish-ai foc-land / skirmish on a land map): --control-points, the Capture Control Points game type
+    // (BattleConfig::control_point_domination). Not recorded in saves.
+    bool control_points = false;
 };
 
 int map_run(const MapRunOptions& opt);

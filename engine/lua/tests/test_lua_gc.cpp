@@ -21,6 +21,7 @@
 #include "alamo/core/log.hpp"
 #include "alamo/lua/gc_schedule.hpp"
 #include "alamo/lua/lua_vm.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_LUA_HAVE_JOBS
 #include "alamo/jobs/job_system.hpp"
 #endif
@@ -30,14 +31,7 @@
 using namespace alamo;
 using namespace alamo::lua;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;

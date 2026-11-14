@@ -1,28 +1,13 @@
-cmake_minimum_required(VERSION 3.20)
-project(alamo_meg LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# MEG archive reader (used by engine/vfs) plus the megtool CLI and its selftest. Built with the engine's flags
+# (alamo_engine_flags, defined in engine/CMakeLists.txt and resolved at generate time).
 
 add_library(alamo_meg STATIC src/meg.cpp include/alamo/meg/meg.h)
 target_include_directories(alamo_meg PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-if(MSVC)
-  set(ALAMO_MEG_WARNINGS /W4)
-else()
-  set(ALAMO_MEG_WARNINGS -Wall -Wextra -Wpedantic)
-endif()
-target_compile_options(alamo_meg PRIVATE ${ALAMO_MEG_WARNINGS})
+target_link_libraries(alamo_meg PRIVATE alamo_engine_flags)
 
-option(ALAMO_MEG_BUILD_TOOLS "Build megtool CLI and selftest" ON)
-if(ALAMO_MEG_BUILD_TOOLS)
-  add_executable(megtool src/megtool.cpp)
-  target_link_libraries(megtool PRIVATE alamo_meg)
-  target_compile_options(megtool PRIVATE ${ALAMO_MEG_WARNINGS})
+add_executable(megtool src/megtool.cpp)
+target_link_libraries(megtool PRIVATE alamo_meg alamo_engine_flags)
 
-  add_executable(meg_selftest tests/meg_selftest.cpp)
-  target_link_libraries(meg_selftest PRIVATE alamo_meg)
-  target_compile_options(meg_selftest PRIVATE ${ALAMO_MEG_WARNINGS})
-  enable_testing()
-  add_test(NAME meg_selftest COMMAND meg_selftest)
-endif()
+add_executable(meg_selftest tests/meg_selftest.cpp)
+target_link_libraries(meg_selftest PRIVATE alamo_meg alamo_engine_flags)
+add_test(NAME meg_selftest COMMAND meg_selftest)

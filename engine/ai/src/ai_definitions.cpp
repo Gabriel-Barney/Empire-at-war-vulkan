@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "alamo/data/xml.hpp"
+#include "alamo/galactic/economy.hpp"  // FactionRules
 
 namespace alamo::ai {
 
@@ -35,15 +36,6 @@ bool plan_event_code(std::string_view name, PlanEvent& out) {
     return false;
 }
 
-const char* ai_mode_name(AiMode m) {
-    switch (m) {
-        case AiMode::Galactic: return "Galactic";
-        case AiMode::Land: return "Land";
-        case AiMode::Space: return "Space";
-    }
-    return "?";
-}
-
 bool parse_ai_mode(std::string_view s, AiMode& out) {
     s = ai_trim(s);
     if (ai_iequal(s, "Galactic")) out = AiMode::Galactic;
@@ -51,28 +43,6 @@ bool parse_ai_mode(std::string_view s, AiMode& out) {
     else if (ai_iequal(s, "Space")) out = AiMode::Space;
     else return false;
     return true;
-}
-
-char ai_upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool ai_iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (ai_upper(a[i]) != ai_upper(b[i])) return false;
-    return true;
-}
-
-std::string ai_upper_copy(std::string_view s) {
-    std::string o(s);
-    for (char& c : o) c = ai_upper(c);
-    return o;
-}
-
-std::string_view ai_trim(std::string_view s) {
-    size_t b = 0, e = s.size();
-    while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r' || s[b] == '\n')) ++b;
-    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r' || s[e - 1] == '\n')) --e;
-    return s.substr(b, e - b);
 }
 
 std::vector<std::string> ai_split(std::string_view s, std::string_view seps) {
@@ -128,7 +98,7 @@ uint32_t parse_application_flags(std::string_view s, bool* ok) {
     static constexpr std::pair<const char*, uint32_t> kNames[] = {
         {"Friendly", app::Friendly},
         {"Enemy", app::Enemy},
-        {"Neutral", app::Neutral},
+        {"Neutral", app::Neutral},  // [name-ok: AIGoalApplicationFlags keyword, not a faction]
         {"Contested", app::Contested},
         {"Global", app::Global},
         {"Friendly_Unit", app::FriendlyUnit},
@@ -305,6 +275,19 @@ void AiDefinitions::link() {
             else g.exclusions.push_back(i);
         }
     }
+    // bkg3 (BKG3_RE_ANSWERS Q4, 0x6b7fa0) [H]: like-set = self, each listed type, and self in each listed type's set.
+    for (GoalTypeDef& g : goals) g.like_set.clear();
+    for (uint32_t t = 0; t < goals.size(); ++t) {
+        goals[t].like_set.push_back(t);
+        for (const uint32_t x : goals[t].is_like) {
+            goals[t].like_set.push_back(x);
+            goals[x].like_set.push_back(t);
+        }
+    }
+    for (GoalTypeDef& g : goals) {
+        std::sort(g.like_set.begin(), g.like_set.end());
+        g.like_set.erase(std::unique(g.like_set.begin(), g.like_set.end()), g.like_set.end());
+    }
 }
 
 void AiDefinitions::add_function_set(std::string_view set_name, std::string_view xml, const std::string& file) {
@@ -323,7 +306,11 @@ void AiDefinitions::add_function_set(std::string_view set_name, std::string_view
         GoalFunctionEntry e;
         const std::string_view goal = n.child_text("Goal");
         e.goal = find_goal(goal);
-        e.function = std::string(n.child_text("Function"));
+        // a2m r1: a repeated <Function> is a scalar field read twice: the last occurrence wins (A2K_T06_RE §1.5: the entry is
+        // read through a field table, Function a converter scalar; OBJECT_TYPES §4.4: repeated scalar tags, last wins).
+        // Vanilla BasicDefensiveGalacticSet Generate_Magic_Space_Defense lists Zero then Needs_Magic_Space_Defense;
+        // retail spawns that magic defense (a2m r1: the Rebel fleet at Yavin on mode frame 56, docs/PHASE4.md).
+        for (const data::XmlNode f : n.children("Function")) e.function = std::string(f.text_trimmed());
         if (e.goal == kAiNone) {
             diagnostics.push_back(diag(file, n.line(), "unknown goal '" + std::string(goal) + "' in set " + s.name));
             continue;
@@ -515,32 +502,13 @@ std::string ai_player_control_type(const std::vector<std::string>& pairs, std::s
     return {};
 }
 
-std::map<std::string, std::string> load_faction_basic_ai(const FileProvider& files) {
+std::map<std::string, std::string> load_faction_basic_ai(const std::vector<galactic::FactionRules>& factions) {
     std::map<std::string, std::string> out;
-    std::vector<uint8_t> bytes;
-    auto parse = [&bytes](const std::string& name) {
-        return data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), name);
-    };
-    if (!files.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    std::vector<std::string> list;
-    {
-        const data::XmlDocument doc = parse("FactionFiles.xml");
-        if (!doc.ok()) return out;
-        for (const data::XmlNode n : doc.root().children())
-            if (ai_iequal(n.name(), "File")) list.emplace_back(n.text_trimmed());
-    }
-    for (const std::string& f : list) {
-        const std::string path = "Data\\XML\\" + f;
-        if (!files.read(path, bytes)) continue;
-        const data::XmlDocument doc = parse(f);
-        if (!doc.ok()) continue;
-        for (const data::XmlNode n : doc.root().children()) {
-            if (!ai_iequal(n.name(), "Faction")) continue;
-            const std::string key = ai_upper_copy(ai_trim(n.attribute("Name", "")));
-            if (key.empty() || out.count(key)) continue;
-            const std::string_view b = ai_trim(n.child_text("Basic_AI"));
-            if (!b.empty()) out.emplace(key, std::string(b));
-        }
+    for (const galactic::FactionRules& f : factions) {
+        const std::string key = ai_upper_copy(ai_trim(f.name));
+        if (key.empty() || out.count(key)) continue;
+        const std::string_view b = ai_trim(f.basic_ai);
+        if (!b.empty()) out.emplace(key, std::string(b));
     }
     return out;
 }

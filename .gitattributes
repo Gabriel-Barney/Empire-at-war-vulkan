@@ -21,4 +21,8 @@
 *.ogg binary
 *.wav binary
 *.bik binary
+*.alsv binary
+*.acmd binary
+*.rec binary
 
+*.ico binary

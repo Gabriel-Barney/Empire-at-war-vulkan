@@ -22,7 +22,9 @@
 #include <vector>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/particles/particle_attach.hpp"
 #include "alamo/render/particles/particle_data.hpp"
@@ -33,6 +35,8 @@
 #include "alamo/render/renderer.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 #if defined(ALAMO_PARTICLES_HAVE_SIM)
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
@@ -47,30 +51,9 @@ using namespace alamo;
 using namespace alamo::render::particles;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static SystemPtr one(EmitterDef e, const char* name = "T", bool leave = false) {
     auto s = std::make_shared<SystemDef>();
@@ -93,6 +76,20 @@ static void test_names_pools() {
     CHECK(p.base == "P_X" && p.alt == -1);
     CHECK(texture_base_name("C:\\PROJECTS\\Art\\p_particle_master.tga") == "P_PARTICLE_MASTER.TGA");
     CHECK(texture_base_name("p_asteroids.dds") == "P_ASTEROIDS.DDS");
+    // System cache key (CU2 t03): upper + one trailing .ALO cut; the directory is kept and '/' is not rewritten.
+    CHECK(system_key("p_smoke.alo") == "P_SMOKE" && system_key("P_SMOKE") == "P_SMOKE" && system_key(".alo") == ".ALO");
+    CHECK(system_key("p_smoke.alo.alo") == "P_SMOKE.ALO");
+    CHECK(system_key("Data\\Art\\Models\\p_smoke.ALO") == "DATA\\ART\\MODELS\\P_SMOKE");
+    CHECK(system_key("fx/p_smoke.alo") == "FX/P_SMOKE");
+    {
+        // A path-qualified get() keeps its own key: it does not hit the entry of the bare name.
+        ParticleLibrary lib;
+        auto sys = std::make_shared<SystemDef>();
+        sys->name = "SYN_KEY";
+        lib.add(sys);
+        CHECK(lib.get("syn_key.alo") == sys && lib.get("SYN_KEY") == sys);
+        CHECK(!lib.get("Data\\Art\\Models\\SYN_KEY.ALO") && lib.stats().missing == 1);
+    }
 
     EmitterDef e = basic_emitter(100, 2.0f);
     CHECK(emitter_pool(e) == 200);           // rate x lifetime
@@ -352,6 +349,19 @@ static void test_attach() {
     render::Instance in;
     in.model = &m;
     in.transform.m[0][3] = 100.0f;
+    {
+        // static_key = FNV-1a 64 (offset basis ^ salt) over the model uid then the transform bytes, | 1 (CU2 t09: the
+        // hand-rolled loop it replaced, kept here as the reference so the keys do not change).
+        uint64_t h = 0xcbf29ce484222325ull ^ 77u;
+        auto mix = [&](const void* p, size_t n) {
+            const auto* b = static_cast<const uint8_t*>(p);
+            for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 0x100000001b3ull;
+        };
+        const uint64_t uid = m.uid;
+        mix(&uid, sizeof uid);
+        mix(&in.transform, sizeof in.transform);
+        CHECK(ProxyAttachments::static_key(in, 77u) == (h | 1ull));
+    }
     at.begin();
     at.sync(5, in);
     at.end();
@@ -482,9 +492,7 @@ static void scan_corpus(const char* what, const std::string& root, bool eaw, uin
         if (!v->read(mp, b) || !assets::build_model(b, mp, m)) continue;
         for (const assets::Proxy& p : m.proxies) {
             ++proxies;
-            std::string up = p.name;
-            for (char& c : up) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            if (lib.get(up)) ++exact;
+            if (lib.get(ascii_upper(p.name))) ++exact;
             else if (lib.get(parse_proxy_name(p.name).base)) ++stripped;
             else ++none;
         }
@@ -535,35 +543,11 @@ static void test_real_data() {
 }
 
 // ------------------------------------------------------------------------------------------ GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     render::Renderer renderer;
 };
 
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(readback);
-    }
-};
+using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 static bool frame(Gpu& g, Offscreen& o, const render::ViewMatrices& vm, std::span<const render::Instance> inst, render::RecordOptions ro) {
     rhi::Frame* f = g.ring.begin_frame();
@@ -682,6 +666,19 @@ static void test_gpu(const std::string& src_dir) {
         const std::string png = src_dir + "/logs/particles_synthetic.png";
         CHECK(render::write_png_rgba(png, o.w, o.h, rgba));
         std::printf("wrote %s\n", png.c_str());
+        // [port] MSAA 4x: the hook's Water / Transparent draws go into the multisampled scene (pipelines per sample count).
+        if (g.renderer.msaa_samples(4) == 4) {
+            render::RecordOptions mo = ro;
+            mo.msaa = 4;
+            bool mok = true;
+            for (int f = 0; f < 3; ++f) mok = frame(g, o, vm, {}, mo) && mok;
+            uint32_t mlit = 0;
+            for (size_t i = 0; i < static_cast<size_t>(o.w) * o.h; ++i)
+                if (px[i * 4] > 60 || px[i * 4 + 1] > 60) ++mlit;
+            std::printf("gpu: MSAA 4x: %u draw calls, %u particle pixels\n", pr.last_stats().draw_calls, mlit);
+            CHECK(mok && pr.last_stats().draw_calls >= 5 && mlit > lit / 2);
+            CHECK(frame(g, o, vm, {}, ro));  // back to one sample
+        }
         // Hidden systems keep updating but draw nothing.
         world.for_each([&](uint32_t, const SystemState&) {});
         for (auto h : hs) world.set_visible(h, false);

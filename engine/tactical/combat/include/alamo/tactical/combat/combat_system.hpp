@@ -195,6 +195,9 @@ struct ProjectileDesc {
     // Energy pool (4.7) [H]
     float energy_per_shot = 0.0f;           // Projectile_Energy_Per_Shot
     bool does_energy_damage = false;        // Projectile_Does_Energy_Damage
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4): any energy absorbed from the victim's pool -> CombatHooks::engines_drained.
+    bool disables_engines_when_drained = false;  // Projectile_Disables_Engines_When_Power_Drained
+    float disable_engines_duration = 0.0f;       // Projectile_Disable_Engines_Duration (seconds)
     // Saber/redirect listeners (TACTICAL_COMBAT 3.8) [M]
     float redirect_chance_modifier = 1.0f;  // Projectile_Redirect_Chance_Modifier
     float block_chance_modifier = 1.0f;     // Projectile_Block_Chance_Modifier
@@ -330,7 +333,9 @@ struct InfectionDesc {
     float seconds_to_infect = 0.0f;    // Seconds_To_Infect: consecutive time in range before a neighbour is infected
     float duration_secs = 0.0f;        // Duration_Of_Infection (<= 0: no expiry)
     float damage_per_second = 0.0f;    // Damage_Per_Second
-    uint64_t category_mask = 0;        // Infection_CategoryMask (0 = every category [M])
+    // Infection_CategoryMask: the spread's victim filter (candidate type CategoryMask & mask != 0, so 0 spreads to
+    // nothing); a direct Causes_Infection hit is not filtered (cu8f t06, CU8F_T04_T06_RE §3.5 [H]).
+    uint64_t category_mask = 0;
 };
 
 // S8 t10 (LOB_SOLVER §5.1 "Garrison fire bones in detail"): one gun bone FP_0<i>_ALT<a> / FP_<i>_ALT<a> of a garrison host
@@ -365,8 +370,13 @@ struct UnitDesc {
     // (slot 43 footprint E; 0 = the radius).
     float min_attack_distance = 0.0f;
     float hard_x_extent = 0.0f, hard_y_extent = 0.0f;
-    // A1j t04 (TACTICAL_GAPS 3.1 slot 43, 0x371e70 / 0x372040): without a Custom_Hard extent, |model bbox max.x| (X) and
-    // |model bbox max.y| (Y) x Scale_Factor of the mode's model; < 0: no model data (the radius stands in).
+    // s78n t11 (TACTICAL_COMBAT §5.4.6 items 3 / 4, 0x371f30 / 0x372100): Custom_Hard_X/YExtent_Deployed x Scale_Factor
+    // (0 = unset). Each replaces its axis of the slot 43 / 46 extent while a Deploys unit with a locomotor is deploying
+    // or deployed (Walk state 0x18 / 0x19), each axis on its own.
+    float hard_x_extent_deployed = 0.0f, hard_y_extent_deployed = 0.0f;
+    // A1j t04 / s78n t08f (TACTICAL_COMBAT §5.4.5, 0x371e70 / 0x372040): without a Custom_Hard extent, the game's X extent
+    // (along the facing) = |collision-bound half y| and the Y extent (across) = |collision-bound half x| of the mode's
+    // model x Scale_Factor (models face -Y); 0 without a model; < 0: no model data (the radius stands in).
     float model_x_extent = -1.0f, model_y_extent = -1.0f;
     // OI tactical (TACTICAL_GAPS 3.1 slot 43): the object is a LAND_OBSTACLE (obj +0x346 != 0xFF). Range tests then use
     // the obstacle-cell aim walk (set_obstacle_cell_query) instead of the footprint half-extent.
@@ -376,7 +386,9 @@ struct UnitDesc {
     // the own weapon's distance branch takes the first entry whose mask hits the target's CategoryMask.
     std::vector<InaccuracyEntry> fire_inaccuracy;
     int32_t priority_set = -1;                  // Targeting_Priority_Set (index into CombatData)
-    float stickiness_threshold = 0.0f;          // Targeting_Stickiness_Time_Threshold (seconds)
+    // Targeting_Stickiness_Time_Threshold (seconds, type +0x528). cu8f t04a: read only through a unit's negative override
+    // (Unit::stickiness, TD +0x158) and written into it by a task-force release (reset_stickiness).
+    float stickiness_threshold = 0.0f;
     uint64_t category_mask = 0, property_flags = 0, attack_category_restrictions = 0;
     uint32_t space_layer = 0;  // Space_Layer (short-range attackers only)
     bool target_stealth_units = false;
@@ -426,7 +438,17 @@ struct UnitDesc {
     std::vector<int32_t> death_projectiles;       // Death_Projectiles (ProjectileDesc indices)
     float ranged_target_z_adjust = 0.0f;          // Ranged_Target_Z_Adjust
     float converted_die_time = 0.0f;              // Converted_To_Enemy_Die_Time_Seconds
+    // s78n t05 (TACTICAL_COMBAT §3.5 "Convert and its team rule", 0x395c10 steps 3-5): the convert victim test refuses a
+    // type with the PROXIMITY_MINE behaviour, a Friendly_Damage_Amount (+0x23ec) > 0 or Is_Named_Hero (+0x13).
+    bool proximity_mine = false;
+    float friendly_damage_amount = 0.0f;
+    bool named_hero = false;
     bool has_locomotor = true;                    // jamming victims need a locomotor
+    // cu8g t05: the object has a model (obj +0x2a0, the ModelClass made from the mode's model at creation; never made when
+    // the type names none, MOVEMENT §2 / SPACE_AVOIDANCE). Battle host: the type names a model for the battle's mode
+    // (Land_Model_Name / Space_Model_Name) [port: named, the file is not checked]; true without model data. Read by the
+    // INFECTION spread candidate test 0x6cc790 (CU8F_T04_T06_RE §3.5).
+    bool has_model = true;
     bool deploys = false;                         // Deploys (type +0xd1): the death-clone deploy remap (S9 t04)
     InfectionDesc infection;                      // refix t02: this type's Infection_Ability (the infector's side)
     // HUD repair cursor (HUD_GAPS §1.4): the object has behaviour 0x5C DUMMY_STAR_BASE (behaviour slot obj +0x38e =
@@ -475,6 +497,9 @@ struct UnitDesc {
     bool hold_fire_for_special_ability = false;
     bool limited_turrets_turn = false;
     float max_dist_walk_while_deployed = 0.0f;    // Max_Dist_Walk_While_Deployed (+0x23b0): > 0 keeps an out-of-range target
+    // s78n t26.1 (MOVEMENT §3.2.1 item 6): Shielded_Only_When_Deployed - the shield absorb 0x549ac0 runs only while the unit
+    // is deployed (0x39a390: state 0x19, walking deployed included); not while deploying, undeploying or rolling.
+    bool shielded_only_when_deployed = false;
     // ---- s78f t04 (LOB_SOLVER §3.6 "Charge-up aim"): the TURRET of a LOBBING_SUPERWEAPON unit (combat-side slew) ----
     // Turret_Rotate_Speed (+0x5a8, degrees per service; <= 0: [port] the aim is reached at once), the undeployed
     // Turret_Rotate_Extent_Degrees / Turret_Elevate_Extent_Degrees (+0x5a0 / +0x5a4; a unit without deploy states always
@@ -495,13 +520,19 @@ struct CombatData {
     std::vector<UnitDesc> units;
 };
 
+// Host input per player (set at construction; configuration, not saved or hashed).
 struct PlayerInfo {
     bool active = true;
     bool ai = false;
-    float ai_damage_multiplier = 1.0f;  // DifficultyAdjustments Damage_Multiplier (AI attackers)
+    // cu8 t03: the AI player's DifficultyAdjustments entry (AI_GALACTIC §1.2 GetAdj: player +0x360 -> +0x50 / +0x54,
+    // TACTICAL_COMBAT §3.6 step 12 / §4.3); 1.0 for humans and players without an adjustment.
+    float ai_damage_multiplier = 1.0f;  // Damage_Multiplier (AI attackers)
     float ai_accuracy = 1.0f;           // land inaccuracy factor input
-    float faction_health = 1.0f;        // faction data +0x50
-    float faction_shield = 1.0f;        // faction data +0x54
+    float faction_health = 1.0f;        // Health_Multiplier (+0x50): max hull
+    float faction_shield = 1.0f;        // Shield_Multiplier (+0x54): max shield
+    // cu8 t03 (TACTICAL_COMBAT §3.6 step 9): the player's faction Space_ / Land_Retreat_Units_Damaged_Mod_Factor
+    // (faction +0x20b8 / +0x2198) for the battle's mode; damage to its retreating units is multiplied by it.
+    float retreat_damage_mod = 1.0f;
     // OI abilities: base power is no longer a player flag - see CombatSystem::add_base_power (TACTICAL_GAPS §7.3: a
     // per-player list of Base_Power_Ability entries; an empty list = no base power).
 };
@@ -528,9 +559,8 @@ struct CombatConfig {
     float depleted_shield_regen_cap = 0.25f;       // GameConstants +0x1183c (absolute points)
     float depleted_shield_disable_time = 5.0f;     // Depleted_Shield_Disable_Time
     float shield_recharge_interval_secs = 3.0f;    // ShieldRechargeIntervalInSecs
-    float under_construction_damage_multiplier = 2.0f;
-    float retreat_damage_mod_factor = 1.0f;        // Space/Land_Retreat_Units_Damaged_Mod_Factor
-    float base_shield_vulnerability = 1.0f;        // Base_Shield_Vulnerability_Modifier
+    float under_construction_damage_multiplier = 2.0f;  // Under_Construction_Damage_Multiplier
+    float base_shield_vulnerability = 1.0f;        // Base_Shield_Vulnerability_Modifier (FoC 2.0)
     float max_secs_for_ae_delayed_damage = 0.0f;   // Max_Secs_For_AE_Delayed_Damage
     // refixf t06 (TACTICAL_COMBAT §2.9 Q1 step 1, port difference 1) [port]: a space hit on a non-target keeps the render
     // mesh it struck; the port has no collision meshes, so the hit goes to the closest live hardpoint whose bone lies
@@ -540,6 +570,8 @@ struct CombatConfig {
     // natural cubic spline through the points sorted by x, float; before the first / past the last point the end
     // value); empty = 1.0.
     std::vector<std::pair<float, float>> diminishing_firepower;
+    // Global gates of the original (TACTICAL_COMBAT §3.6 step 3, weapon fire); their writers are not in docs/re, so no
+    // host changes them (cu8 t03).
     bool weapons_enabled = true;
     bool damage_enabled = true;      // global flag: only kinds 0, 8, 13 pass when false
     bool inaccuracy_enabled = true;  // debug flag 0x140b3934d
@@ -561,7 +593,10 @@ struct CombatConfig {
 
 // OI tactical (TACTICAL_GAPS 3.2 / 3.3): the GameConstants fields combat reads - Health_Low_Percent_Threshold
 // (low_health_threshold), Melee_Cutoff_Range (short_range_cutoff), Hardpoint_Recharge_Cutoff_For_Opportunity_Fire,
-// Diminishing_Firepower (flat number list read as (x, y) pairs). Absent tags keep the current values.
+// Diminishing_Firepower (flat number list read as (x, y) pairs); cu8 t03: Base_Shield_Vulnerability_Modifier,
+// Hull_Vs_Hard_Points_Health_Constraint, Under_Construction_Damage_Multiplier, Depleted_Shield_Regen_Cap,
+// Depleted_Shield_Disable_Time, ShieldRechargeIntervalInSecs, EnergyRechargeIntervalInSecs, EnergyToShieldExchangeRate,
+// Sensor_Jamming_Time, Max_Secs_For_AE_Delayed_Damage (TACTICAL_COMBAT §3.6 / §3.7). Absent tags keep the current values.
 void apply_game_constants(CombatConfig& c, const data::GameConstants& gc);
 
 // Hooks the ability system (S9, engine/tactical/abilities) installs into the combat tick. Every call
@@ -601,6 +636,14 @@ enum class ObstacleCell : uint8_t {
 // `query(target, p, centre)`: the cell containing p against `target`'s stamp; always writes that cell's centre (XY; z
 // is free). Read-only: the targeting scan calls it from job workers.
 using ObstacleCellFn = std::function<ObstacleCell(ObjectId target, Vec3 p, Vec3& centre)>;
+// s78n t20 (FIGHTER_FLYING §4.11 E, 0x40edd0; MOVEMENT §4.3.2 item 7): the answer of the "can hit" query, in the order
+// the three tests run. NoTarget: a dead / unknown attacker or target, or an attacker without a weapon range (retail
+// skips members without TARGETING) - the formation rules read it as "can hit".
+enum class CanHit : uint8_t { Yes = 0, NoTarget, OutOfMaxRange, InsideMinRange, LineBlocked };
+// The land line-of-fire test 0x3b5ad0 (L1_S4_REMAINING §1.2): an active base shield holds exactly one of the two
+// points. `shield_damage` false: one of the attacker's projectiles does no shield damage (only shields whose pack +0xc
+// is set count [port: none]). Called from serial host code only.
+using ShieldSidesFn = std::function<bool(Vec3 from, Vec3 to, bool shield_damage)>;
 
 class CombatHooks {
 public:
@@ -649,20 +692,13 @@ public:
     }
     // Set_System_Online(hp, offline) (0x384d00), after the combat-side offline effects. `destroyed` = the hardpoint
     // was shot down (else disabled by the station-upgrade copy, HARDPOINT_DISABLED.md §3). `last_of_kind` = no
-    // functioning hardpoint of the kind remains (Count_Functioning_Hardpoints 0x397c10). The default forwards to
-    // hardpoint_destroyed (hosts that predate the distinction treat both the same).
-    virtual void hardpoint_offline(ObjectId owner, uint32_t index, HardpointKind kind, bool last_of_kind, bool destroyed,
-                                   uint32_t frame) {
-        (void)destroyed;
-        hardpoint_destroyed(owner, index, kind, last_of_kind, frame);
-    }
+    // functioning hardpoint of the kind remains (Count_Functioning_Hardpoints 0x397c10). Default: nothing.
+    virtual void hardpoint_offline(ObjectId /*owner*/, uint32_t /*index*/, HardpointKind /*kind*/, bool /*last_of_kind*/,
+                                   bool /*destroyed*/, uint32_t /*frame*/) {}
     // Set_System_Online(hp, online) (0x384d00, HARDPOINT_DISABLED.md §9): a hardpoint was repaired to max health
     // (the only online caller), after the combat-side online effects (shield regen block cleared). No live-count
     // check: any one hardpoint of the kind runs it.
     virtual void hardpoint_online(ObjectId /*owner*/, uint32_t /*index*/, HardpointKind /*kind*/, uint32_t /*frame*/) {}
-    // Legacy offline hook (see hardpoint_offline).
-    virtual void hardpoint_destroyed(ObjectId /*owner*/, uint32_t /*index*/, HardpointKind /*kind*/, bool /*last_of_kind*/,
-                                     uint32_t /*frame*/) {}
     // Die step 2 (before the death signal): emitter removal, ability effects.
     virtual void unit_dying(ObjectId /*id*/, uint32_t /*frame*/) {}
     // Ion stun applied (DEFEND is switched off).
@@ -678,6 +714,19 @@ public:
     // L1 systems (L1_S4_REMAINING.md §3.3): the victim's ion-storm lockout - its shields absorb nothing (0x549ac0).
     // Called from Take_Damage (serial phases / host calls). Default: never.
     virtual bool ion_storm_shields_down(ObjectId /*victim*/, uint32_t /*frame*/) const { return false; }
+    // s78n t05 (HERO_CLASH §7, 0x395c10 step 6): `id` is a build pad whose under-construction or finished content is set
+    // and alive (retail clears the slot in the frame the content dies). Read by the convert victim test (serial
+    // detonation step). Default: no build pads.
+    virtual bool occupied_build_pad(ObjectId /*id*/) const { return false; }
+    // cu8 t01 (L1_S4_REMAINING §3.2, TACTICAL_GAPS §7.4): `player` is weather-affected (no Weatherproof entry). The land
+    // weather accuracy factor applies only to shooters of such players. Called from the fire step (serial). Default: yes.
+    virtual bool weather_affected(int32_t /*player*/) const { return true; }
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4, EnergyPool::Absorb 0x56c230): a projectile with Projectile_Does_Energy_Damage
+    // and Projectile_Disables_Engines_When_Power_Drained took energy > 0 from `victim`'s pool (Take_Damage step 15, after
+    // the shield steps). The host disables the engines for `seconds` (Locomotor_Set_Engines(destroyed 0, t): expiry =
+    // max(old, now + int(FPS x t))), stops the current move and turns the moving, then the idle engine loop off. Called
+    // from Take_Damage (serial phases / host calls). Default: nothing.
+    virtual void engines_drained(ObjectId /*victim*/, float /*seconds*/, uint32_t /*frame*/) {}
     // OI abilities: a detonation effect / stun on `id` (serial phases, after the combat-side state changed).
     virtual void unit_effect(ObjectId /*id*/, UnitEffect /*effect*/, int32_t /*player*/, Vec3 /*point*/, uint32_t /*frame*/) {}
     // ---- s78f t03 (TACTICAL_COMBAT §3.1.1 "Targeting states, slots 47 / 48 and team copies") ----
@@ -723,7 +772,10 @@ enum UnitFlag : uint32_t {
     kUnitUnderConstruction = 1u << 4,
     kUnitRetreating = 1u << 5,
     kUnitInBaseShield = 1u << 6,
-    kUnitSkipTargeting = 1u << 7,      // +0x3a1 bit 0x10 (candidate skip; CAUSE multiplier for non-projectile sources)
+    // [port] the untargetable marker of the port's dummy targets (never a scan candidate, skipped by the port-only
+    // victim filters). s78n t12: no longer the +0x3a1 & 0x10 stand-in - Blast sets kUnitIncognito, and Take_Damage's
+    // CAUSE_DAMAGE rule reads only that bit.
+    kUnitSkipTargeting = 1u << 7,
     kUnitGarrisoned = 1u << 8,
     kUnitConverted = 1u << 9,          // obj +0x3a2 bit 4: converted-unit decay (4.10)
     kUnitLocomotorBusy = 1u << 10,     // locomotor vfunc +0x2b0 (hyperspace jump ...): no ion stun
@@ -772,10 +824,43 @@ enum UnitFlag : uint32_t {
     // != 0). A moving land unit without TURRET attacks (state 4) only without Attack clips. Derived state: not hashed.
     kUnitMoving = 1u << 20,
     kUnitAttackClip = 1u << 21,
+    // s78n t05 (HERO_CLASH §8.2, TACTICAL_COMBAT §5.4.3 item 5): obj +0x3a2 & 0x08 - a vehicle taken over by a vehicle
+    // thief. Set by the boarding (host), never cleared (owner changes keep it). Read by the Bribe accept (step 6, on T)
+    // and the convert-projectile victim test (0x395c10 step 2). Saved and hashed with the other flags.
+    kUnitStolenVehicle = 1u << 22,
+    // s78n t05 / t12 (HERO_CLASH §8.2, §8.4): obj +0x3a1 & 0x10 "incognito", set by the vehicle-thief boarding (on the
+    // boarded vehicle) and by the Blast ability's apply (on the user) - not a candidate of the target scans (§2.3 item
+    // 1, the hardpoint pick 0x385190), no auto-acquire of its own (targeting services, the hardpoint auto-scan
+    // 0x387400), CAUSE_DAMAGE for a non-projectile source (§3.6 step 5). Cleared only by Take_Damage (take_damage_inner,
+    // §8.4.1: on the victim for a non-projectile source or a projectile aimed at it; on a projectile's shooter; on a
+    // non-projectile source that has it) and by MaximumFirepower's end 0x707390. [port] a bit of its own beside
+    // kUnitSkipTargeting (the port's dummy-target marker). Saved and hashed.
+    kUnitIncognito = 1u << 23,
+    // s78n t06 (HERO_CLASH §3.1 / §5): obj +0x3b4 "in a hero clash", set on the two duelling hero objects (not their team
+    // containers) by the host's HeroClashManager and cleared at the release. While set: the unit's TARGETING is suspended
+    // and its current target dropped (the targeting services' clash test), its movement orders are locked (host), and
+    // every target / fire / ability accept between it and others applies the pairing rule (clash_allows). Area damage is
+    // not filtered. Saved and hashed with the other flags.
+    kUnitHeroClash = 1u << 24,
+    // s78n t06 review (A1_READINGS §28.9 item 4): the clash's share of the movement lock was released by a Lua
+    // Unlock_Current_Orders through the hero's land TEAM object (retail decrements each locked member's counter, so the
+    // duelling hero moves again while +0x3b4 stays set). Read only by the host's movement lock; cleared with
+    // kUnitHeroClash. Saved and hashed with the other flags.
+    kUnitHeroClashUnlocked = 1u << 25,
+    // s78n t11 (TACTICAL_COMBAT §5.4.6 item 4.3): the walk locomotor is in state 0x18 Deploying (vf +0x130), which
+    // kUnitDeployTransition (0x18 or 0x1A) cannot tell from Undeploying. Read by the slot 43 / 46 extents
+    // (footprint_extents: the _Deployed extents apply in 0x18 and 0x19, not in 0x1A). Set by the ability system with
+    // kUnitDeployTransition (set_deploy_state). Saved and hashed with the other flags.
+    kUnitDeployingIn = 1u << 26,
+    // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", readers 0x567c50 / 0x5662b0 / 0x38d730): a Hover_Height unit whose
+    // hover state (pack +0x2a8) is 1, raised. A melee attacker (Targeting_Max_Attack_Distance <= Melee_Cutoff_Range)
+    // neither acquires it (candidate filters), keeps it (current-target validation) nor is given it (Order_Attack C step
+    // 1). Mirrored by the host from MovementSystem::hover_state before every tick; derived state, not hashed.
+    kUnitHoverRaised = 1u << 27,
 };
 // Mirrors the host rewrites before every tick (left out of hash_units).
-inline constexpr uint32_t kUnitHostMirrorFlags =
-    kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery | kUnitMoving | kUnitAttackClip;
+inline constexpr uint32_t kUnitHostMirrorFlags = kUnitFighterIdle | kUnitHoverRest | kUnitRocketAttack | kUnitScanQuery |
+                                                 kUnitMoving | kUnitAttackClip | kUnitHoverRaised;
 
 struct UnitSpawn {
     ObjectId id = kNoObject;
@@ -800,6 +885,14 @@ struct DamageRequest {
     uint8_t kind = kKindNormal;
     ObjectId source = kNoObject;
     bool source_is_projectile = false;
+    // s78n t19: set by the team recursion of a self hit (source == victim: STIM_PACK) that is redirected to / shared with
+    // teammates - the teammates' hits stay the user's own damage: no kill credit, no damage-record source, no final-blow
+    // owner for it ([port], as for the self hit itself). Callers leave it false.
+    bool self_origin = false;
+    // s78n t12 (HERO_CLASH §8.4.1 step 8): the target (projectile pack +8) of the projectile that deals this damage,
+    // kNoObject when it has none. Only a projectile aimed at the victim clears the victim's incognito bit (splash and
+    // stray hits keep it). Read only with source_is_projectile.
+    ObjectId projectile_target = kNoObject;
     int32_t projectile_desc = -1;
     int32_t hardpoint = -1;  // index within the victim's hardpoints (the "hardpoint name")
     bool no_team = false;
@@ -974,6 +1067,21 @@ struct ProjectileLaunch {
     bool toss = false;
 };
 
+// cu8k t01 (CU8F_T01_T02_T07_RE.md §2.7 items 1-3): Saber_Throw's thrown saber, a category-8 LIGHT_SABER projectile.
+// Spawned at `from` (the throw), owned by the thrower; FireAtPosition = `fire_at` (the target point recorded at the
+// activation: a target that moves later does not bend the path); MaxTravelDistance = Projectile_Max_Flight_Distance +
+// the target's radius + |fire_at.z - from.z|. First step on the next frame: the two-leg spline plan (P0 -> T, T -> the
+// thrower's target point at that step), then one Max_Speed step along it per frame with no sweep and the
+// Projectile_Stun_Radius area damage to hostile units every step.
+struct SaberLaunch {
+    ObjectId thrower = kNoObject;  // shooter and the return leg's end
+    int32_t owner = -1;
+    uint32_t projectile = 0;       // ProjectileDesc index (the Saber_Name type)
+    Vec3 from;
+    Vec3 fire_at;
+    ObjectId target = kNoObject;   // its radius joins the max travel (0 when gone)
+};
+
 struct CombatStats {  // diagnostics (not hashed)
     uint64_t scans = 0, shots = 0, hits = 0, expired = 0, deaths = 0, resweeps = 0;
 };
@@ -1001,6 +1109,12 @@ public:
     bool remove_unit(ObjectId id);  // host removal (e.g. retreat); deaths are removed by tick()
     void set_position(ObjectId id, Vec3 p);
     void set_facing(ObjectId id, Vec3 f);
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2.1, §2.2): the position of land team `team`'s container, P_U of its
+    // TeamTargeting (0x62eeb0): the scan box centre, the candidates' distances and range tests (slots 44 / 45), the keep
+    // test and the ordered / goal pre-check. The host sets it every tick before tick() (clear_team_positions first); a
+    // land team head without one (no container position) uses its own. Transient: not saved, not hashed.
+    void set_team_position(uint32_t team, Vec3 p);
+    void clear_team_positions() { team_pos_.clear(); }
     void set_flag(ObjectId id, uint32_t flag, bool on);
     bool set_owner(ObjectId id, int32_t owner);  // S10-int: Change_Owner (host keeps trees / store in step)
     void set_ability_active(ObjectId id, int slot, bool on);
@@ -1029,16 +1143,52 @@ public:
     // always, ordered = 1): the lock is released (a locked ordered target becomes the auto target) and the weapon
     // hardpoints aim at the target (weapon_aim) until the next scan pick, path B or another order replaces it; the unit's
     // own target is untouched. Team members, LUCKY_SHOT (34) units and space BARRAGE units take the set path: the target
-    // becomes their locked ordered target at once. [port: the melee-vs-airborne refusal and the autofire fallback are not
-    // modelled.]
+    // becomes their locked ordered target at once. [port: the melee-vs-airborne refusal is modelled for a raised hover
+    // target (kUnitHoverRaised, s78n t20 batch 2) only; the autofire fallback is not modelled.]
     bool order_attack_issue(ObjectId attacker, ObjectId target, int32_t hardpoint = -1);
     ObjectId weapon_aim(ObjectId id) const;  // path-A hardpoint aim (kNoObject: none)
     bool order_locked(ObjectId id) const;    // the ordered target carries the lock (TD +0xf4: path B / set path)
     // Get_Base_Attack_Range and Targeting_Min_Attack_Distance of a unit (staging, §2.8; 0 for an unknown id).
     float base_attack_range_of(ObjectId id) const;
     float min_attack_distance(ObjectId id) const;
-    // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids.
+    // Slot 45 "inside min range" (TACTICAL_GAPS §3.1): types with a min distance only; false for unknown ids. s78n t02:
+    // slot 46 in full (TACTICAL_COMBAT §5.4.4 item 1, min_range_hit).
     bool inside_min_range(ObjectId attacker, ObjectId target) const;
+    bool inside_min_range_of(ObjectId attacker, ObjectId target, float r) const;  // bkt1 t01: slot 46 with min range r
+    // s78n t20 (FIGHTER_FLYING §4.11 E "c" per member, 0x40edd0; the same three tests as the fire trim 0x410e90,
+    // MOVEMENT §4.3.2 item 7): can `attacker` hit `target` from where it stands / from `from`? Outside max range (slot
+    // 43), inside min range (slot 46), then on land a blocked line of fire (0x3b5ad0: the two points on opposite sides
+    // of an active base shield, both raised by their type's Ranged_Target_Z_Adjust; TACTICAL_COMBAT §2.7: there is no
+    // terrain test). The range tests are the targeting service's own (range_test: what sets targeting state 2), from
+    // the same position with the same weapon - a land team member answers for its team (the container's position, the
+    // head's weapon, else the first member's with one; 0x40edd0 tests a team container through its first member).
+    CanHit can_hit(ObjectId attacker, ObjectId target) const;
+    // bkt1 t06 (b0079, MOVEMENT §4.3.2 item 7): `to` (when given) is the line of fire's end point before T's
+    // Ranged_Target_Z_Adjust (the fire trim's goal G); else T's position. The range tests always measure to T.
+    CanHit can_hit_from(ObjectId attacker, Vec3 from, ObjectId target, const Vec3* to = nullptr) const;
+    // s78n t25.4 (MOVEMENT §4.3.2 item 7, a guard block's trim): only the land line-of-fire term of can_hit_from (0x3b5ad0,
+    // from `from` with the same weapon source): LineBlocked or Yes; NoTarget for an unknown / dead attacker or target.
+    CanHit line_of_fire_from(ObjectId attacker, Vec3 from, ObjectId target, const Vec3* to = nullptr) const;  // (no TARGETING: NoTarget)
+    // The position can_hit measures from (the unit's, or its land team container's).
+    Vec3 can_hit_origin(ObjectId attacker) const;
+    void set_shield_sides_query(ShieldSidesFn fn) { shield_sides_ = std::move(fn); }
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1, slot 46 steps 6 / 7): the centre distance D (XY) from `from` to the target
+    // and the min-range target term E: 0 for a LAND_OBSTACLE target (no aim walk, no sqrt(200)); else the X footprint
+    // half-extent, or the Y half-extent when U's offset along X's facing (unnormalised, |f . (from - X)|) is <= 0.7071.
+    // False (D = E = 0) for an unknown id.
+    bool min_range_geometry_of(ObjectId target, Vec3 from, float& D, float& E) const;
+    // s78m t08 (TACTICAL_COMBAT §5.4.2 slot 43 steps 2 / 5, the ability range): the XY distance `d` from `from` to the
+    // target's aim point and the target term `E` of the weapon range test (footprint half-extent along the line of sight,
+    // or the LAND_OBSTACLE aim walk with sqrt(200)). False (d = E = 0) for an unknown id.
+    bool range_geometry_of(ObjectId target, Vec3 from, float& d, float& E) const;
+    // s78n t01 (TACTICAL_COMBAT §5.4.2 slot 44, LOB_SOLVER §3.1): the unit's current weapon projectile (slot 42) is a
+    // grenade (Projectile_Category 3); then `weapon_lob_reaches` is its slot 44: Lob_Solve at the projectile's Max_Speed
+    // from `from` to `to` finds an arc (false for an unknown id or a non-grenade weapon).
+    bool has_grenade_weapon(ObjectId id) const;
+    bool weapon_lob_reaches(ObjectId id, Vec3 from, Vec3 to) const;
+    // s78n t01 (TACTICAL_COMBAT §5.4.2 step 1): Targeting_Max_Attack_Distance <= Melee_Cutoff_Range (0x372210), the
+    // melee redirect's attacker test. False for an unknown id.
+    bool melee_attacker(ObjectId id) const;
 
     // ---- S9: hooks and ability-facing API ----
     void set_hooks(CombatHooks* hooks) { hooks_ = hooks; }
@@ -1101,11 +1251,17 @@ public:
     // target's position + its Ranged_Target_Z_Adjust, or `point`) on the solver's arc and speed, the yaw from the led aim;
     // no solution -> nothing is spawned, false.
     bool launch_projectile(const ProjectileLaunch& l, uint32_t frame);
+    // cu8k t01: spawn a thrown saber (SaberLaunch); returns its serial, 0 when the projectile index is invalid.
+    uint32_t launch_saber(const SaberLaunch& l, uint32_t frame);
+    // cu8k t01: the saber's position while it flies (alive); false once it expired / detonated or for an unknown serial.
+    bool saber_position(uint32_t serial, Vec3& out) const;
     // S8 t04 (LOB_SOLVER §2, §3): the lob solver for ProjectileDesc `projectile` (category 3 only; G = gravity x lob
     // mod, Can_Lob_Slower) from `from` to `to`; false = no arc (or not a grenade). `out` may be null.
     bool lob_solution(uint32_t projectile, Vec3 from, Vec3 to, LobSolution* out = nullptr) const;
     // 0x398440: the unit's position + its type's Ranged_Target_Z_Adjust (z); the origin for an unknown id.
     Vec3 target_point(ObjectId id) const;
+    // cu8j t03: the unit's target radius (UnitDesc::radius, as the projectile max travel reads it); 0 for an unknown id.
+    float target_radius(ObjectId id) const;
     // refixf t01: land rocket terrain (heightmap h(x, y) and its extent box, S9_DEATH_CLONE_SHIELDS.md §2.4.4 mode 1,
     // §2.4.6 ground points). Read in the serial commit phase only; S8 t04: also the land grenade ground test (LOB_SOLVER
     // §6.2). Unset [port]: flat ground at z 0, no box.
@@ -1113,7 +1269,6 @@ public:
     // S8 t06: the host's tree set for detonations it triggers between ticks (DETONATE_REMOTE_BOMB). Set at setup so a
     // detonation before the first tick after a load queries the same trees as an uninterrupted run; tick() also sets it.
     void set_trees(const TreeSet* trees) { last_trees_ = trees; }
-    const RocketTerrain& rocket_terrain() const { return rocket_terrain_; }
     // Spline-rocket state of projectile i (serial order); false when it is not a spline rocket.
     bool rocket(size_t i, RocketView& out) const;
     // Tactical weather (weather.hpp, L1_S4_REMAINING §3.2): accuracy modifier m per Projectile_Category; land shots'
@@ -1138,6 +1293,16 @@ public:
     void force_regen_service(ObjectId id);  // DEFEND: shield and energy behaviours service next frame
     // Stealth (0x592ae0 target drop): clears the auto/ordered target and every hardpoint target.
     void clear_targets(ObjectId id);
+    // s78n t06 (HERO_CLASH §5.2, TACTICAL_COMBAT §5.4.3 item 3): the running hero clashes' hero pairs in start order (the
+    // host's HeroClashManager::pairs(), set after every change and after a load; derived, not saved). The in-clash byte
+    // +0x3b4 is the unit flag kUnitHeroClash.
+    void set_hero_clashes(std::vector<std::pair<ObjectId, ObjectId>> pairs) { clash_pairs_ = std::move(pairs); }
+    const std::vector<std::pair<ObjectId, ObjectId>>& hero_clashes() const { return clash_pairs_; }
+    // The pairing rule as its callers use 0x39a540: true when neither U nor X is in a hero clash; else only when both are
+    // (+0x3b4 set on both) and the first running clash involving U also involves X. A unit left with the flag and no clash
+    // (retail's snap quirk) can act on nothing and nothing can act on it. Ids that are not combat units count as not in a
+    // clash (a team container: its +0x3b4 stays 0 in a melee clash).
+    bool clash_allows(ObjectId u, ObjectId x) const;
     // WeaponBehavior burst reset (ion / lucky shot apply): cooldown 0, pulses = int(Fire_Pulse_Count
     // x FIRE_RATE x (1 + list 6)) [M].
     void reset_weapon_burst(ObjectId id);
@@ -1153,8 +1318,6 @@ public:
     bool ion_stunned(ObjectId id, uint32_t frame) const;
     uint32_t ion_stun_end(ObjectId id) const;
     float energy(ObjectId id) const;
-    float max_energy(ObjectId id);
-    void set_energy(ObjectId id, float e);
     bool burning(ObjectId id) const;
     // refix t02: INFECTION behaviour (0x54, S9_DEATH_CLONE_SHIELDS.md §1.5). infection_attached: the unit has the
     // behaviour (active or suspended); infection_suspend_count: its suspend counter (+0x3c; 0 = active = kUnitInfected).
@@ -1162,6 +1325,10 @@ public:
     // are no-ops without the behaviour (the Lua behaviour switch 0x393570 ignores a missing behaviour).
     bool infection_attached(ObjectId id) const;
     uint32_t infection_suspend_count(ObjectId id) const;
+    // cu8f t06: the pack's frames left (0 without the behaviour) and a unit's spread counter as a candidate (-1 = never
+    // counted).
+    int32_t infection_frames_left(ObjectId id) const;
+    int32_t infection_spread_count(ObjectId id) const;
     void suspend_infection(ObjectId id);
     void resume_infection(ObjectId id, uint32_t frame);
     // Laser defense (0x716230): detonate projectile i (serial order index) at its position (area
@@ -1170,6 +1337,13 @@ public:
     // Die (0x39bdb0) for scripts / self-destruct: full death sequence (no-op on dead units). `sub_key` = the killing
     // projectile's Damage_Type index (DamageArmorTable damage index, GameConstants Damage_Types order), -1 none.
     void kill_unit(ObjectId id, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1);
+    // s78n t12 review (HERO_CLASH §8.1 / §8.4.3): world removal 0x391310 WITHOUT Die 0x39bdb0 - the vehicle a thief's
+    // capture clone replaces ("kill the vehicle silently"). The unit goes dead (kUnitDead, killer recorded, the
+    // unit_dying hook) and raises its DeathEvent with kind kKindNoDeathClone, and 0x391310's Tactical_Respawn /
+    // Destruction_Survivors run; but no hardpoint dies (no HardpointEvent), and there is no death clone, no death
+    // projectile and no DeathBehavior draw.
+    // (s78n t19: named apart from remove_unit(id), the host's removal of a unit from the combat system.)
+    void remove_from_world(ObjectId id, ObjectId killer, uint32_t frame);
     std::span<const HardpointEvent> hardpoint_events() const { return hp_events_; }  // this tick
     std::span<const SmokeEvent> smoke_events() const { return smoke_events_; }      // this tick
     std::span<const DamageEvent> damage_events() const { return damage_events_; }   // this tick (A1 AI)
@@ -1206,7 +1380,7 @@ public:
     // False for an unknown unit / index.
     bool hardpoint_disabled(ObjectId id, uint32_t hp) const;
     // HP_Set_Disabled (0x387d10): +0x6e := on, then Set_System_Online(hp, online = !on, destroyed = 0) (per-type
-    // offline effects, CombatHooks::hardpoint_destroyed, special-weapon flag). Internal setter; the game's only
+    // offline effects, CombatHooks::hardpoint_offline, special-weapon flag). Internal setter; the game's only
     // caller is the station-upgrade copy (always on = true). No-op for an unknown unit / index.
     void set_hardpoint_disabled(ObjectId id, uint32_t hp, bool on);
     // Station upgrade hardpoint copy (Starbase_Upgrade_Copy_Hardpoints 0x70ec70, HARDPOINT_DISABLED.md §3), by index
@@ -1284,6 +1458,19 @@ public:
     // set (so overriding the head drives the squad). False for an unknown unit or index.
     bool set_priority_override(ObjectId id, int32_t set);
     int32_t priority_override(ObjectId id) const;
+    // cu8f t04a (CU8F_T04_T06_RE §1): the targeting stickiness threshold TD +0x158 (seconds). Spawn value 0.0 (not the
+    // type's value: in practice nothing is sticky until something writes it); a negative value means "the type's
+    // Targeting_Stickiness_Time_Threshold, read at every test". Writers: Lua Set_Targeting_Stickiness_Time_Threshold
+    // (set_stickiness_override, any value, no rescan) and a task-force release (reset_stickiness := the type's value:
+    // the first team member's type for a team owner, else the unit's own). False for an unknown unit. Saved, hashed in
+    // hash_extended when non-zero.
+    bool set_stickiness_override(ObjectId id, float seconds);
+    float stickiness_override(ObjectId id) const;  // 0 for an unknown unit
+    bool reset_stickiness(ObjectId id);
+    // The scan's keep test Is_Target_Sticky (§1.2) of `unit` against `target` at the current frame, and its time to kill
+    // of `target` (a TEAM container: the sum of its members'). False / 1e18 for unknown ids. Queries only.
+    bool target_sticky(ObjectId unit_id, ObjectId target) const;
+    float time_to_kill(ObjectId target) const;
     // OI abilities: the weapon index obj +0x324 (SWAP_WEAPONS flip, Permanent_Weapon_Swap := Weapon_Index). The
     // non-hardpoint weapon fires UnitDesc::weapon_projectiles[index]; [port] an index outside the list (or an empty
     // list) fires `weapon_projectile`. False for an unknown unit or a negative index.
@@ -1461,13 +1648,16 @@ private:
         uint8_t infect_attached = 0;
         uint32_t infect_suspend = 0;           // suspend counter (+0x3c)
         int32_t infect_desc = -1;              // UnitDesc whose InfectionDesc drives it (-1 none: flag only)
-        int32_t infect_player = -1;            // the infecting player (spread targets its enemies [L])
+        int32_t infect_player = -1;            // the infecting player
         ObjectId infect_source = kNoObject;    // the infecting unit (damage source)
-        uint32_t infect_end = 0;               // expiry frame (Duration_Of_Infection; 0 = none)
-        uint32_t infect_next_damage = 0;       // next Damage_Per_Second frame
-        std::vector<std::pair<ObjectId, uint32_t>> infect_exposure;  // neighbours in range: (id, first frame), id order
+        int32_t infect_left = 0;               // cu8f t06: infection pack +8, frames left (int(FPS x Duration) at infect)
+        // cu8f t06 (CU8F_T04_T06_RE §3.5): the spread's per-candidate consecutive-frame counter on the candidate's TD
+        // (+0x114 last counted frame, 0xFFFFFFFF = never; +0x118 count). Hashed once set.
+        uint32_t infect_seen = 0xFFFFFFFFu;
+        int32_t infect_count = 0;
         // ---- OI abilities (hash_extended) ----
         int32_t priority_override = -1;  // Lua Set_Targeting_Priorities (data pack +0x160)
+        float stickiness = 0.0f;         // cu8f t04a: TD +0x158 stickiness threshold (< 0: the type's value)
         uint32_t stun_end = 0;           // STUNNABLE end frame (stunned while > frame)
         uint32_t invuln_end = 0;         // INVULNERABLE behaviour end frame
         uint32_t emitter_entries = 0;    // Add_Emitter registrations (multiset count)
@@ -1530,7 +1720,7 @@ private:
         // OI abilities: BOMB timer (seconds; < 0 none), hashed when set. Without `lob` the shot sits where it was placed
         // (armed bomb); a tossed grenade (ProjectileLaunch::toss) flies with it running.
         float fuse = -1.0f;
-        uint8_t rocket = 0;  // refixf t01: spline rocket (state in rockets_, same serial); hashed in hash_extended
+        uint8_t rocket = 0;  // refixf t01: spline rocket (state in rockets_, same serial); hashed in hash_extended. cu8k t01: 2 = thrown saber
     };
     // refixf t01: spline-rocket flight state, one per Projectile with rocket != 0, serial order (S9 §2.4.1 pack fields).
     struct Rocket {
@@ -1542,6 +1732,7 @@ private:
         Vec3 launch;          // +0x80
         Vec3 last_vel;        // +0x98
         RocketSpline path;
+        ObjectId thrower = kNoObject;  // cu8k t01: a thrown saber's thrower (the return leg's end)
     };
     struct RocketNext {  // phase E output per projectile: the next spline point N (sample at s + speed)
         Vec3 n;
@@ -1562,6 +1753,7 @@ private:
         ObjectId source;
         int32_t projectile_desc;
         int32_t hardpoint;
+        ObjectId projectile_target;  // s78n t12 (combat save 15)
     };
     // mesh_hp (refixf t07): the hardpoint the struck mesh names (§2.9 Q1 step 4), -1 none (hull), kMeshUnknown when
     // the hit came without a precise test (the mesh_hardpoint stand-in decides).
@@ -1604,7 +1796,6 @@ private:
     void set_system_online(Unit& u, uint32_t index, bool online, bool destroyed, uint32_t frame);  // 0x384d00
     float min_health_fraction(const Unit& u) const;
     float base_attack_range(const Unit& u) const;
-    float unit_fire_range(const Unit& u) const;
     Vec3 local_to_world(const Unit& u, Vec3 local) const;
     Vec3 hp_world(const Unit& u, const HardpointDesc& hd) const;
     Vec3 velocity(const Unit& u) const;
@@ -1637,8 +1828,29 @@ private:
     float target_extent(const Unit& t, Vec3 from) const;  // OI tactical: TACTICAL_GAPS 3.1 footprint half-extent E
     // TACTICAL_GAPS 3.1 slot 43 range geometry: XY distance from `from` to the aim point and the slack E.
     void range_geometry(const Unit& t, Vec3 from, float& d, float& E) const;
+    // s78n t02: the footprint half-extents (Custom_Hard_X/YExtent, model collision bound (s78n t08f), radius fallback)
+    // shared by slots 43 and 46;
+    // false when the unit has neither hard extents nor model data (both are then the radius). s78n t11: a deploying /
+    // deployed Deploys unit takes its _Deployed extent on each axis that sets one (0x371f30 / 0x372100).
+    bool footprint_extents(const Unit& t, float& ex, float& ey) const;
+    // s78n t02 (TACTICAL_COMBAT §5.4.4 item 1): slot 46 steps 6 / 7 (min_range_geometry_of) and the whole weapon min
+    // range test from `from` with min distance r (steps 4 - 7): a team-member target is retested against its team's live
+    // member nearest `from` (nearest_team_member), r <= 0 -> false, else D <= r + E.
+    void min_range_geometry(const Unit& t, Vec3 from, float& D, float& E) const;
+    bool min_range_hit(const Unit& t, Vec3 from, float r) const;
+    // s78n t02 (0x404fc0): the team's live member nearest `p` by 3-D squared distance, strict < (ties: the first in
+    // team_members_ order, ascending id); nullptr when none.
+    const Unit* nearest_team_member(uint32_t team, Vec3 p) const;
     int32_t fired_weapon_projectile(const Unit& u) const;  // OI abilities: Projectile_Types[obj +0x324]
     bool sticky(const Unit& u, const Unit& target, uint32_t frame) const;
+    // cu8f t04a: time-to-dead 0x58ba40 of one unit (destroyable hard points' health when it has any, else the hull; +
+    // shield; / damage rate; 1e18 at rate 0) and the unit whose type gives an owner's type values (itself, or a TEAM
+    // owner's first live member; nullptr: a TEAM owner without one).
+    float time_to_dead(const Unit& t, uint32_t frame) const;
+    float time_to_kill(const Unit& t, uint32_t frame) const;  // a TEAM container: its live members' sum (none: 0)
+    const Unit* stickiness_type_unit(const Unit& u) const;
+    const Unit* first_team_member(uint32_t team) const;  // live, team_members_ order (ascending id); nullptr none
+    void rebuild_team_members();  // team_members_ from units_ (phase A, read)
     float damage_rate(const Unit& u, uint32_t frame) const;
 
     // targeting
@@ -1651,6 +1863,7 @@ private:
     void decide(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);  // decide_target + space hp step
     void decide_target(Unit& u, std::vector<Candidate>& cands, uint32_t frame, SimRng& rng);
     bool lock_holds(const Unit& u, const Unit& t) const;  // refixf t06: §2.8 B "while locked" drop rules
+    bool hover_refused(const Unit& a, const Unit& t) const;  // s78n t20 batch 2: melee attacker vs a raised hover unit
     bool promote_goal(Unit& u);                           // refixf t06: §2.8 B promotion
     void share_target(const Unit& u, ObjectId t, float score);  // S8 t17: team target 0x406370 (scan writer)
     bool ability_type_active(const Unit& u, int32_t type) const;
@@ -1665,6 +1878,12 @@ private:
     // S8 t10: slot 44 && !slot 45 for target `t` measured from `from` (the targeting object's position; a team's from its
     // head), with `u`'s weapon and range.
     bool in_attack_range(const Unit& u, Vec3 from, const Unit& t) const;
+    // s78n t20: the same test with its reason (Yes / OutOfMaxRange / InsideMinRange), max range first.
+    CanHit range_test(const Unit& u, Vec3 from, const Unit& t) const;
+    CanHit fire_line(const Unit& src, Vec3 from, const Unit& t, const Vec3* to = nullptr) const;  // s78n t25.4: can_hit_from's line-of-fire term
+    // s78n t20: the unit whose weapon a land team's range test uses (slot 42: the head's, else the first member's that
+    // has one, team list order; the head itself when none has).
+    const Unit& team_weapon_source(const Unit& head) const;
     // s78f t03: the targeting service (Service_Land 0x634810 / Service_Space 0x633ae0 after the scan; the TeamTargeting
     // service 0x62eeb0 for a land team head) and its helpers.
     void targeting_service(Unit& u, uint32_t frame, SimRng& rng);
@@ -1682,8 +1901,10 @@ private:
     // s78i t03: the head of u's land team, u itself when u is that head (the container unit, or the team_leader stand-in,
     // members or not); null outside a land team. A team keeps TeamTargeting while its head lives, even with no member left.
     const Unit* land_team_lead(const Unit& u) const;
+    Vec3 scan_pos(const Unit& u) const;  // s78n t03: a land team head's container position (set_team_position), else u.pos
     uint32_t convert_container(const Unit& v) const;  // s78i t04: v's 0x39b1a0 team container id (v's own when it is one), else 0
     bool targeting_idle(const Unit& u, uint32_t frame) const;  // phase D: stunned, unpowered or targeting suspended
+    void drop_clash_targets();  // s78n t06: before phase D, targets of / at units in a hero clash dropped
     void drop_target(Unit& u);                        // slot 27: the order and scan targets are dropped
     bool lob_turret_aim(Unit& u);                     // s78f t04: 0x631fe0 toward the lobbing order's point (one slew step)
     int32_t model_alt_of(const Unit& u) const;
@@ -1732,11 +1953,15 @@ private:
     bool ion_stun_unit(Unit& v, uint32_t pdesc, uint32_t frame);
     void apply_or_queue(const DamageRequest& r, float delay_secs, uint32_t frame);
     DamageResult take_damage_inner(const DamageRequest& r, uint32_t frame, int depth);
+    // s78n t12 (HERO_CLASH §8.4.1 steps 5 - 8): the gates in front of the incognito clears - +0x37d invulnerable (kinds
+    // other than 0 / 13), Immune_To_Damage, a garrisoned victim - then the victim's clear. False: the hit stops here
+    // (nothing cleared, no damage).
+    bool damage_gates(Unit& v, const DamageRequest& r, uint32_t frame);
     void hull_damage(Unit& v, float x, ObjectId source, DamageResult& out, uint32_t frame, uint8_t kind,
                      int32_t sub_key = -1);
     void hardpoint_damage(Unit& v, Hardpoint& h, float x, ObjectId source, DamageResult& out, uint32_t frame,
                           bool owner_dying = false, int32_t sub_key = -1);
-    void kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1);
+    void kill(Unit& v, ObjectId killer, uint8_t kind, uint32_t frame, int32_t sub_key = -1, bool removal = false);
     // S9 t04: Pick_Death_Clone (0x3718f0) with index -1; one synced draw for a list of >= 2. -1 when no entry.
     int32_t pick_death_clone(const UnitDesc& vd, int32_t key, int32_t sub_key);
     // S9 t05: Missile_Shield_Deflect_Test (0x4c6e30): true + the outward direction for the first qualifying emitter
@@ -1744,6 +1969,7 @@ private:
     bool shield_away(const Projectile& p, Vec3& away) const;
     // refixf t01: one flight step of a spline rocket (0x4cfc40, §2.4.2), serial commit phase.
     void rocket_step(uint32_t i, uint32_t frame, SimRng& rng);
+    void saber_step(uint32_t i, uint32_t frame, SimRng& rng);  // cu8k t01: rocket == 2
     bool spline_rocket(const ProjectileDesc& pd) const;
     void add_rocket(const Projectile& p, Vec3 fire_at, Vec3 launch);
     Rocket* find_rocket(uint32_t serial);
@@ -1753,7 +1979,7 @@ private:
     float unit_max_energy(const Unit& u) const;
     void burning_service(Unit& u, uint32_t frame);
     // refix t02: INFECTION update (0x636ae0) of one unit, and attaching / resuming the behaviour on a victim.
-    void infection_service(Unit& u, uint32_t frame);
+    void infection_service(Unit& u, uint32_t frame, SimRng& rng);
     void infect(Unit& v, int32_t desc, int32_t player, ObjectId source, uint32_t frame);
     void converted_decay(Unit& u, uint32_t frame, SimRng& rng);
     SimRng* listener_rng() const { return tick_rng_ ? tick_rng_ : bound_rng_; }
@@ -1790,6 +2016,7 @@ private:
     std::vector<std::pair<int32_t, ObjectId>> base_power_;  // (player, source), insertion order
     std::vector<Repairer> repairs_;
     ObstacleCellFn obstacle_cell_;                              // OI tactical / S8 t01: LAND_OBSTACLE aim walk
+    ShieldSidesFn shield_sides_;                                // s78n t20: line of fire 0x3b5ad0 (not saved: host query)
     PreciseHitFn precise_hit_;                                  // refixf t07: projectile segment entry test
     ScanRangeFn scan_range_;                                    // S8 t17: formation response range 0x4160a0
     std::function<ObjectId(ObjectId)> garrison_host_;           // S8 t10: garrison host query
@@ -1798,9 +2025,10 @@ private:
     void service_repairs(Unit& u, uint32_t frame);
     void death_spawns(Unit& v, uint32_t frame);  // Die step 7 (respawn, Destruction_Survivors)
     bool effect_match(const Unit& v, uint64_t mask, const std::vector<int32_t>* types) const;
+    // s78n t05: the convert projectile's victim test 0x395c10 (TACTICAL_COMBAT §3.5 step 2, HERO_CLASH §7.3), in order.
+    bool convert_victim_ok(const Unit& v, uint64_t mask) const;
     void effect_victims(int32_t owner, bool enemies, Vec3 center, float radius, std::vector<Unit*>& out);
     std::vector<Unit*> effect_scratch_;
-    std::vector<std::pair<ObjectId, uint32_t>> infect_scratch_;  // refix t02: infection_service exposure scratch
     void record_damage(const DamageRequest& r, const Unit& v, const Unit* src, int32_t hp, const DamageResult& out,
                        uint32_t frame);
     std::vector<uint32_t> emitters_;  // unit indices with emitter_radius > 0 (ascending id), phase F scratch
@@ -1813,6 +2041,11 @@ private:
     std::vector<Hardpoint> flush_hps_;
     std::vector<std::pair<uint32_t, uint32_t>> leaders_;  // (team, unit index) scratch
     std::vector<std::pair<uint32_t, ObjectId>> team_heads_;  // OI tactical: (team, team_leader id), built in phase A
+    std::vector<std::pair<uint32_t, Vec3>> team_pos_;  // s78n t03: (team, container position), ascending team; host-set
+    std::vector<std::pair<ObjectId, ObjectId>> clash_pairs_;  // s78n t06: running hero clashes (host-set, not saved)
+    // cu8f t04a: (team, unit id) of every live unit with a team, sorted; built in phase A and on read (not saved: a pure
+    // function of the units; units that died or left since are skipped at read time).
+    std::vector<std::pair<uint32_t, ObjectId>> team_members_;
     std::vector<ObjectId> land_heads_;  // s78f t03: ground team heads (TeamTargeting), phase A scratch read in phase D
     // s78h t06: one TeamTargeting service per land team per tick at the team's container slot = the team's highest unit
     // index (head included), reached first in phase D's descending walk. Built in phase A, slot descending (ties: team).
@@ -1836,7 +2069,9 @@ private:
     std::vector<QueryContext*> ctx_free_;
     QueryContext serial_ctx_;
     std::array<float, 10> weather_acc_{1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // L1 systems: weather accuracy per category
-    float weather_scale(const ProjectileDesc& pd) const {
+    // Land weather inaccuracy factor (2 - m) of a shot by a unit of `owner`; 1 when the owner is not weather-affected.
+    float weather_scale(const ProjectileDesc& pd, int32_t owner) const {
+        if (hooks_ && !hooks_->weather_affected(owner)) return 1.0f;
         const float m = weather_acc_[static_cast<uint32_t>(pd.category) < 10u ? static_cast<uint32_t>(pd.category) : 0u];
         return 2.0f - m;
     }

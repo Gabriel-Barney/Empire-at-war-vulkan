@@ -118,12 +118,7 @@ float MovementSystem::fform_unit_speed(ObjectId key) {
     for (const ObjectId m : fform_members(key))
         if (const Unit* u = unit_ptr(m)) {
             float v = u->lp.max_speed;
-            if (squad) {  // s78l t01: the container's own Max_Speed is in the minimum too (set_team)
-                const float mult = cfg_.mode == MoveMode::Land ? cfg_.constants.land_speed_multiplier : cfg_.constants.space_speed_multiplier;
-                float b = team_base_speed(*u);
-                if (u->team_max >= 0.0f) b = std::min(b, u->team_max * mult);
-                v = b * u->team_factor;
-            }
+            if (squad) v = team_base_speed(*u) * u->team_factor;  // s78l t01: the container's own Max_Speed included
             s = s < 0.0f ? v : std::min(s, v);
         }
     return s;
@@ -174,7 +169,7 @@ FighterCell MovementSystem::fobject_cell(ObjectId id) {
 // order's block is the only block (Set_Move into an empty stack). Recorded goal = the order's destination, clamped as
 // move_space clamps it; first 0x4192b0 FPS frames later [M]. Set_Move refuses a block naming a squadron's fighter (D 1):
 // that formation then has none. F speed := -1 (unset); the order's own move is the plan, so the state is 1 [port].
-void MovementSystem::fform_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame) {
+void MovementSystem::fform_order(const MoveOrder& order, const std::vector<uint32_t>& idx, uint32_t frame, uint32_t serial) {
     if (cfg_.mode != MoveMode::Space) return;
     std::vector<ObjectId> keys;
     for (uint32_t i : idx)
@@ -202,7 +197,9 @@ void MovementSystem::fform_order(const MoveOrder& order, const std::vector<uint3
         f.blocks.push_back(b);
         f.state = kFormationMoving;
         f.goal = b.point;
-        f.next = frame + kFighterGuardInterval;
+        // cu8j t01 (MOVEMENT §4.6.3): the FormationClass ctor's next-check timer now + FPS + r, set by the order's
+        // composition at the next coordinator update (compose_space). A queued order composes nothing: FPS [M].
+        f.next = serial != 0 ? kStartPending : frame + kFighterGuardInterval;
         if (const FighterSquad* c = squad_ptr(k)) {
             f.follow = c->guard_follow;
         } else if (const Unit* u = unit_ptr(k)) {
@@ -215,13 +212,26 @@ void MovementSystem::fform_order(const MoveOrder& order, const std::vector<uint3
 
 void MovementSystem::fighter_new_order(const MoveOrder& order, uint32_t frame) {
     if (cfg_.mode != MoveMode::Space) return;
-    std::vector<uint32_t> idx;
-    for (const ObjectId id : order.units) {
-        const int32_t i = find(id);
-        if (i < 0 || std::find(idx.begin(), idx.end(), static_cast<uint32_t>(i)) != idx.end()) continue;
-        idx.push_back(static_cast<uint32_t>(i));
+    const std::vector<uint32_t> idx = order_indices(order);
+    // cu8j t01: the group move's coordinator still composes at the next update (draws, first checks); nobody moves.
+    uint32_t serial = 0;
+    if (!idx.empty()) {
+        V2 goal = order.destination;
+        if (space_.has_box()) {
+            goal.x = std::clamp(goal.x, space_.box_min().x, space_.box_max().x);
+            goal.y = std::clamp(goal.y, space_.box_min().y, space_.box_max().y);
+        }
+        serial = compose_register(true, false, goal);
+        PendingComposition& pc = pending_.back();
+        pc.forms.assign(1, {});
+        for (const uint32_t i : idx) {
+            pc.forms[0].push_back(units_[i].d.id);
+            pc.offsets.push_back(0);
+            units_[i].pend = serial;
+            units_[i].adopted = false;
+        }
     }
-    fform_order(order, idx, frame);
+    fform_order(order, idx, frame, serial);
 }
 
 // The waypoint-queue move (MOVEMENT §6.2, 0x2a8240): a fighter whose formation exists hands the block to it (once per

@@ -34,18 +34,12 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::audio;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -616,6 +610,27 @@ void test_state_machine() {
         a.update(0.01);
         CHECK(a.live_instances() == 0);
     }
+    {  // b0282 (§1.7, §5): a missing sample is skipped before a voice is taken - it never steals a playing voice and
+       // takes no slot (the backend is never started for it).
+        MemoryProvider tree = make_tree();
+        tree.add("Data\\XML\\SFXEventsTest.xml",
+                 R"(<SFXEvents><SFXEvent Name="Low"><Is_3D>No</Is_3D><Priority>5</Priority><Samples>LOW.WAV</Samples></SFXEvent>)"
+                 R"(<SFXEvent Name="M"><Is_3D>No</Is_3D><Priority>1</Priority><Samples>MISSING.WAV</Samples></SFXEvent></SFXEvents>)");
+        AudioDatabase db;
+        db.load(tree);
+        NullBackend nb{test_duration};
+        SimRng rng{1};
+        AudioConfig cfg;
+        cfg.max_voices_2d = 1;
+        AudioSystem a(db, nb, rng, cfg);
+        const uint32_t low = a.play_sfx("Low");
+        a.update(0.0);
+        CHECK(voice_of(a, low) != 0);
+        const uint32_t m = a.play_sfx("M");
+        a.update(0.0);
+        CHECK(m != 0 && last_op(a, LogOp::SfxVoice)->reason == "sample_missing" && last_op(a, LogOp::SfxSteal) == nullptr);
+        CHECK(voice_of(a, low) != 0 && a.active_voices(Bus::Sfx2D) == 1 && nb.active_count() == 1);
+    }
     {  // Localized samples take the language suffix (captured at instance creation).
         AudioConfig cfg;
         cfg.language = "German";
@@ -718,6 +733,20 @@ void test_voices() {
         });
         a.update(0.0);
         CHECK(a.sfx_live(o) && rig.backend.voice(voice_of(a, o))->params.gain == 0.0f);
+        // b0280 (§1.6): a cinematic skips only the fog test - a fogged object is heard, a hidden / stealthed one is not.
+        a.set_cinematic(true);
+        a.update(0.0);
+        CHECK(rig.backend.voice(voice_of(a, o))->params.gain > 0.0f);
+        a.set_object_query([](uint64_t id) -> std::optional<AudioSystem::ObjectAudio> {
+            if (id != 77) return std::nullopt;
+            AudioSystem::ObjectAudio oa;
+            oa.audible = false;
+            oa.hidden = true;
+            return oa;
+        });
+        a.update(0.0);
+        CHECK(rig.backend.voice(voice_of(a, o))->params.gain == 0.0f);
+        a.set_cinematic(false);
         a.set_3d_scale(0.0f);  // battle-load screen
         a.update(0.0);
         CHECK(rig.backend.voice(voice_of(a, g))->params.gain == 0.0f);
@@ -1214,10 +1243,7 @@ void test_lua_bridge() {
 
 // ------------------------------------------------------------------ real data
 
-std::string env(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-}
+using ::alamo::test::env_or_empty;
 
 void write_report(const std::string& game, const std::string& text) {
 #ifdef ALAMO_AUDIO_LOG_DIR
@@ -1375,10 +1401,33 @@ void test_real(const std::string& game, const std::string& root, bool is_eaw) {
 
 }  // namespace
 
+// [port] Bounded event log (AudioConfig::log_limit): the live game keeps only the newest events, so a long battle
+// neither regrows the log on the frame thread nor leaks it (docs/PERFORMANCE.md "Audio event log hitches").
+void test_log_limit() {
+    Rig rig;
+    AudioSystem& a = *rig.a;
+    CHECK(a.config().log_limit == static_cast<size_t>(-1));  // tests keep everything by default
+    a.set_log_limit(8);
+    size_t cap = 0;
+    for (int i = 0; i < 200; ++i) {
+        CHECK(a.play_sfx("NoSuchEvent") == 0);  // one SfxReject entry each
+        CHECK(a.log().size() <= 8);
+        if (i == 20) cap = a.log().capacity();
+    }
+    CHECK(a.log().size() >= 4 && last_reason(a) == "unknown_event");  // the newest entry survives every trim
+    CHECK(a.log().capacity() == cap);                                   // trimming never regrows the vector
+    a.set_log_limit(2);  // lowering the limit trims at once
+    CHECK(a.log().size() == 2);
+    a.set_log_limit(0);  // 0: nothing is kept (the log is emptied at once)
+    CHECK(a.log().empty());
+    CHECK(a.play_sfx("NoSuchEvent") == 0 && a.log().empty());
+}
+
 int main() {
     test_parse();
     test_draws();
     test_gates();
+    test_log_limit();
     test_state_machine();
     test_voices();
     test_music();
@@ -1391,7 +1440,7 @@ int main() {
 #else
     std::printf("lua bridge: lua module not configured, skipped\n");
 #endif
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA"), eaw = env_or_empty("ALAMO_EAW_DATA");
     if (foc.empty() && eaw.empty()) std::printf("real data: ALAMO_FOC_DATA / ALAMO_EAW_DATA not set, skipped\n");
     if (!foc.empty()) test_real("foc", foc, false);
     if (!eaw.empty()) test_real("eaw", eaw, true);

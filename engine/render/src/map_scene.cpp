@@ -16,6 +16,8 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/data/values.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::render {
 
@@ -108,12 +110,6 @@ bool parse_rgb(std::string_view s, materials::float4& out) {
     return true;
 }
 
-std::string upper(std::string_view s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
-}
-
 // Comma / whitespace separated names.
 std::vector<std::string> split_names(std::string_view s) {
     std::vector<std::string> out;
@@ -126,13 +122,6 @@ std::vector<std::string> split_names(std::string_view s) {
         i = j;
     }
     return out;
-}
-
-bool load_xml(const FileProvider& files, std::string_view path, data::XmlDocument& doc) {
-    std::vector<uint8_t> bytes;
-    if (!files.read(path, bytes)) return false;
-    doc = data::XmlDocument::parse(bytes, std::string(path));
-    return doc.ok();
 }
 }  // namespace
 
@@ -155,39 +144,36 @@ MpPalette GameTypeResolver::palette() const {
 bool GameTypeResolver::load_render_xml(const FileProvider& files) {
     hardpoint_defs_.clear();
     hardpoints_loaded_ = false;
-    data::XmlDocument list;
-    if (load_xml(files, "Data\\XML\\HardPointDataFiles.xml", list)) {
-        hardpoints_loaded_ = true;
-        for (data::XmlNode f : list.root().children("File")) {
-            data::XmlDocument doc;
-            if (!load_xml(files, "Data\\XML\\" + std::string(f.text_trimmed()), doc)) {
-                log::warnf("render", "hardpoint file %s missing", std::string(f.text_trimmed()).c_str());
-                continue;
-            }
-            for (data::XmlNode hp : doc.root().children()) {
-                const std::string_view name = hp.attribute("Name");
-                if (name.empty()) continue;
-                if (hardpoint_defs_.find(upper(name)) == hardpoint_defs_.end())  // first definition wins
-                    hardpoint_defs_.emplace(upper(name), parse_hardpoint(hp));
-            }
+    // cu5 t02: the shared list walk (list order; every entry is opened, an empty one fails to).
+    data::ListedXmlOptions lo;
+    lo.keep_empty_entries = true;
+    lo.visit_missing = true;
+    lo.visit_unparsable = true;
+    hardpoints_loaded_ = data::for_each_listed_xml(files, "Data\\XML\\HardPointDataFiles.xml", [&](data::ListedXmlFile& file) {
+        if (!file.doc || !file.doc->ok()) {
+            log::warnf("render", "hardpoint file %s missing", file.entry.name.c_str());
+            return;
         }
-    }
+        for (data::XmlNode hp : file.doc->root().children()) {
+            const std::string_view name = hp.attribute("Name");
+            if (name.empty()) continue;
+            if (hardpoint_defs_.find(ascii_upper(name)) == hardpoint_defs_.end())  // first definition wins
+                hardpoint_defs_.emplace(ascii_upper(name), parse_hardpoint(hp));
+        }
+    }, lo) == data::ListStatus::Ok;
     factions_.clear();
-    data::XmlDocument flist;
-    if (load_xml(files, "Data\\XML\\FactionFiles.xml", flist)) {
-        for (data::XmlNode f : flist.root().children("File")) {
-            data::XmlDocument doc;
-            if (!load_xml(files, "Data\\XML\\" + std::string(f.text_trimmed()), doc)) continue;
-            for (data::XmlNode fa : doc.root().children("Faction")) {
-                Faction x;
-                x.name = std::string(fa.attribute("Name"));
-                const std::string_view n = fa.child_text("Is_Neutral");
-                x.neutral = !n.empty() && (n[0] == 'y' || n[0] == 'Y' || n[0] == '1' || n[0] == 't' || n[0] == 'T');
-                parse_rgb(fa.child_text("No_Colorization_Color"), x.no_colorization);
-                factions_.push_back(std::move(x));
-            }
+    data::ListedXmlOptions fo;
+    fo.keep_empty_entries = true;
+    data::for_each_listed_xml(files, "Data\\XML\\FactionFiles.xml", [&](data::ListedXmlFile& file) {
+        for (data::XmlNode fa : file.doc->root().children("Faction")) {
+            Faction x;
+            x.name = std::string(fa.attribute("Name"));
+            const std::string_view n = fa.child_text("Is_Neutral");
+            x.neutral = data::parse_flag_char(n);
+            parse_rgb(fa.child_text("No_Colorization_Color"), x.no_colorization);
+            factions_.push_back(std::move(x));
         }
-    }
+    }, fo);
     return hardpoints_loaded_;
 }
 
@@ -209,8 +195,7 @@ TypeRenderInfo GameTypeResolver::render_info(uint32_t crc) const {
             size_t k = 0;
             while (k < v.size() && std::isspace(static_cast<unsigned char>(v[k]))) ++k;
             if (k < v.size()) {
-                const char c = v[k];
-                t.loop_idle = c == 'y' || c == 'Y' || c == '1' || c == 't' || c == 'T';
+                t.loop_idle = data::parse_flag_char(v.substr(k));
                 loop = true;
             }
         }
@@ -235,8 +220,7 @@ TypeRenderInfo GameTypeResolver::render_info(uint32_t crc) const {
             size_t k = 0;
             while (k < v.size() && std::isspace(static_cast<unsigned char>(v[k]))) ++k;
             if (k < v.size()) {
-                const char c = v[k];
-                t.in_background = c == 'y' || c == 'Y' || c == '1' || c == 't' || c == 'T';
+                t.in_background = data::parse_flag_char(v.substr(k));
                 bg = true;
             }
         }
@@ -270,17 +254,13 @@ TypeRenderInfo GameTypeResolver::render_info(uint32_t crc) const {
 }
 
 const HardpointDef* GameTypeResolver::hardpoint(std::string_view name) const {
-    const auto it = hardpoint_defs_.find(upper(name));
+    const auto it = hardpoint_defs_.find(ascii_upper(name));
     return it == hardpoint_defs_.end() ? nullptr : &it->second;
 }
 
 int32_t TypeRenderInfo::hardpoint_index(std::string_view name) const {
     for (size_t i = 0; i < hardpoints.size(); ++i) {
-        const std::string& h = hardpoints[i];
-        bool eq = h.size() == name.size();
-        for (size_t k = 0; k < h.size() && eq; ++k)
-            eq = std::toupper(static_cast<unsigned char>(h[k])) == std::toupper(static_cast<unsigned char>(name[k]));
-        if (eq) return static_cast<int32_t>(i);
+        if (ascii_iequals(hardpoints[i], name)) return static_cast<int32_t>(i);
     }
     return -1;
 }
@@ -306,6 +286,48 @@ void MapScene::clear_loaded() {
     files_ = nullptr;
     space_ = false;
     masks_dirty_ = false;
+    env_index_ = 0;
+    env_dirty_ = false;
+}
+
+// lighting_ from the active environment; without one the mode's default (land / space).
+void MapScene::lighting_from_environment() {
+    const terrain::Environment* env = environment();
+    // Space too: the main scene keeps the environment's fill lights (SPACE_AND_OPEN.md 0 item 2); the renderer
+    // zeroes them for the background scene only (RecordOptions::space).
+    if (env) lighting_ = Lighting::from_environment(*env, false);
+    else if (space_) {
+        lighting_ = Lighting::space_default();
+        lighting_.space = false;
+    } else {
+        lighting_ = Lighting::land_default();
+    }
+}
+
+// cu8g t03 (CU8G_T02_ENV_PICK_RE §5): mode vf25 on the render side. The CPU part now, the GPU part on the next update().
+// Before start() it only chooses the environment start() applies (the battle's map-load pick, t02: skydomes included).
+// After start() the skydome objects of the load-time environment stay (vf59 runs only at the post-load start), so the
+// sky fields of the lighting are kept.
+bool MapScene::set_environment(uint32_t index) {
+    const size_t n = map_.environments.environments.size();
+    if (n == 0) return false;
+    const uint32_t i = index < n ? index : static_cast<uint32_t>(n - 1);
+    if (i == env_index_) return false;
+    env_index_ = i;
+    const Lighting before = lighting_;
+    lighting_from_environment();
+    if (started_) {
+        for (int k = 0; k < 2; ++k) {
+            lighting_.skydome[k] = before.skydome[k];
+            lighting_.skydome_scale[k] = before.skydome_scale[k];
+            lighting_.skydome_angle[k][0] = before.skydome_angle[k][0];
+            lighting_.skydome_angle[k][1] = before.skydome_angle[k][1];
+        }
+    }
+    env_dirty_ = started_;
+    const terrain::Environment* env = environment();
+    log::infof("render", "map: environment %u (%s) active", i, env ? env->name.c_str() : "");
+    return true;
 }
 
 bool MapScene::load(const FileProvider& files, std::string_view map, const GameTypeResolver* resolver, const ParallelFor& parallel,
@@ -411,23 +433,16 @@ bool MapScene::load_impl(const FileProvider& files, std::string_view map, const 
     placement_model_.clear();
     std::unordered_map<std::string, uint32_t> index;
     for (const terrain::ResolvedPlacement& p : placements_.placements) {
-        std::string key = p.model_name;
-        for (char& c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        const std::string key = ascii_upper(p.model_name);
         auto [it, inserted] = index.try_emplace(key, static_cast<uint32_t>(models_.size()));
         if (inserted) models_.push_back(p.model_name);
         placement_model_.push_back(it->second);
     }
     stats_.distinct_models = static_cast<uint32_t>(models_.size());
-    const terrain::Environment* env = map_.environments.start();
-    // Space too: the main scene keeps the environment's fill lights (SPACE_AND_OPEN.md 0 item 2); the renderer
-    // zeroes them for the background scene only (RecordOptions::space).
-    if (env) lighting_ = Lighting::from_environment(*env, false);
-    else if (space_) {
-        lighting_ = Lighting::space_default();
-        lighting_.space = false;
-    } else {
-        lighting_ = Lighting::land_default();
-    }
+    // The start environment (EnvironmentSet::start(): an out-of-range start index falls back to 0).
+    env_index_ = map_.environments.start_index < map_.environments.environments.size() ? map_.environments.start_index : 0u;
+    env_dirty_ = false;
+    lighting_from_environment();
     // Fog (SPACE_AND_OPEN.md B.1 [H]): the active environment's fog always wins; the 0x100/2 scene-fog block
     // is overwritten on every environment apply, so it is ignored here.
     log::infof("render", "map %s: fog from the start environment (%s, %.0f..%.0f)", std::string(map).c_str(),
@@ -456,7 +471,7 @@ bool MapScene::load_impl(const FileProvider& files, std::string_view map, const 
             for (size_t h = 0; h < ti.hardpoint_defs.size(); ++h) {
                 const std::string& m = ti.hardpoint_defs[h].model_to_attach;
                 if (m.empty()) continue;
-                auto [ai, ins] = attach_index.try_emplace(upper(m), static_cast<uint32_t>(attach_models_.size()));
+                auto [ai, ins] = attach_index.try_emplace(ascii_upper(m), static_cast<uint32_t>(attach_models_.size()));
                 if (ins) attach_models_.push_back(m);
                 pa[h] = ai->second;
             }
@@ -498,9 +513,10 @@ bool MapScene::set_hardpoint_destroyed(size_t placement, std::string_view hardpo
 bool MapScene::start(Renderer& r, ModelStreamer& streamer, assets::AssetCache& cache, const WorldOptions& options,
                      std::string* error) {
     r.set_lighting(lighting_);
+    env_dirty_ = false;
     if (space_) r.set_object_fade(kSpaceObjectFadeBegin, kSpaceObjectFadeEnd);
     else r.set_object_fade(kLandObjectFadeBegin, kLandObjectFadeEnd);
-    terrain::CloudParams clouds = terrain::effective_clouds(map_, map_.environments.start());
+    terrain::CloudParams clouds = terrain::effective_clouds(map_, environment());
     if (space_) clouds.texture.clear();  // no terrain: no cloud shadows
     const TextureSource tex = [&cache](std::string_view n, assets::TextureRole role) { return cache.texture(n, role); };
     WorldOptions wo = options;
@@ -556,7 +572,11 @@ bool MapScene::start(Renderer& r, ModelStreamer& streamer, assets::AssetCache& c
 }
 
 void MapScene::update(Renderer& r, ModelStreamer& streamer) {
-    (void)r;
+    if (env_dirty_ && started_) {  // cu8g t03: re-apply the active environment (set_environment; RE §5)
+        env_dirty_ = false;
+        r.set_lighting(lighting_);  // light record, SH, ambient, fog, bloom, shadow colour, clear colour
+        if (!space_) world_.set_clouds(terrain::effective_clouds(map_, environment()));  // land 0x3bbed0; space: lighting only
+    }
     world_.make_resident();
     // Instances of every ready model (rebuilt when the number of finished models changes).
     uint32_t finished = 0, ready = 0, failed = 0;
@@ -858,4 +878,21 @@ OrbitCamera MapScene::tactical_camera(float aspect, float distance_override) con
     cam.radius = dist;
     return cam;
 }
+namespace {
+Float3 wind_of(const terrain::MapData& map, const terrain::Environment* env) {
+    if (map.is_space()) return {0, 0, 0};  // space mode's environment changes never write the wind (§2.2)
+    const std::array<float, 3> w = env ? env->wind_vector() : terrain::Environment{}.wind_vector();
+    return {w[0], w[1], w[2]};
+}
+}  // namespace
+
+Float3 scene_wind(const terrain::MapData& map) { return wind_of(map, map.environments.start()); }
+Float3 scene_wind(const terrain::MapData& map, uint32_t env_index) { return wind_of(map, active_environment(map, env_index)); }
+
+const terrain::Environment* active_environment(const terrain::MapData& map, uint32_t index) {
+    const std::vector<terrain::Environment>& e = map.environments.environments;
+    if (e.empty()) return nullptr;
+    return &e[index < e.size() ? index : e.size() - 1];
+}
+
 }  // namespace alamo::render

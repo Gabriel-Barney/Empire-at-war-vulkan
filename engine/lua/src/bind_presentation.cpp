@@ -6,10 +6,12 @@
 // Argument contracts and messages: docs/re/LUA_API.md "Binding map" (the original's own strings).
 // Behaviour the docs do not give is marked [inferred].
 // Exception (story t12): Resume_Hyperspace_In also clears the host's reinforcement hold through
-// TacticalScriptHooks::resume_hyperspace_in (script_gaps.hpp) when a tactical host installed it.
+// TacticalScriptHooks::resume_hyperspace_in (script_gaps.hpp) when a tactical host installed it; likewise (cu8g t03)
+// Set_New_Environment changes the mode's environment through TacticalScriptHooks::set_new_environment.
 #include <string>
 
 #include "alamo/lua/object_bridge.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/lua/presentation.hpp"
 #include "alamo/lua/script_gaps.hpp"
 #include "alamo/objects/game_object_types.hpp"
@@ -36,10 +38,8 @@ const detail::Ud* engine_ud(const Call& c, int i) {
 // "Position of some sort": a game object (markers, units), a PositionWrapper or an AI target.
 // [inferred] dead objects are accepted (their last id is recorded).
 bool is_position(const Call& c, int i) {
-    static const uint32_t pos = detail::class_id("PositionWrapper");
-    static const uint32_t target = detail::class_id("AITargetLocationWrapper");
     const detail::Ud* ud = engine_ud(c, i);
-    return ud && (ud->cls == detail::cls_game_object() || ud->cls == pos || ud->cls == target);
+    return ud && (ud->cls == detail::cls_game_object() || ud->cls == detail::cls_position() || ud->cls == detail::cls_target());
 }
 
 bool is_object(const Call& c, int i) {
@@ -336,9 +336,15 @@ int g_set_cinematic_environment(Call& c) {
     return 0;
 }
 
-// No contract strings, no shipped call sites: recorded as is. [inferred]
+// Set_New_Environment(int) (0x5448a0; LUA_API.md contract strings; no shipped call sites): recorded, then (cu8g t03)
+// the tactical host's TacticalScriptHooks::set_new_environment with the int argument (the mode clamps it,
+// CU8F_T03_T05_RE §2.2). [port] the number is truncated toward zero like every int argument (detail::to_int).
 int g_set_new_environment(Call& c) {
+    if (!c.has(1)) return c.script_error_stop("LuaSetNewEnvironment -- Expected int parameter 1");
+    if (!c.is_number(1)) return c.script_error_stop("LuaSetNewEnvironment -- invalid type for parameter 1. Expected int.");
     record(c, PresentationOp::SetNewEnvironment);
+    if (ObjectBridge* b = c.vm->owner ? attached_object_bridge(*c.vm->owner) : nullptr; b && b->tactical && b->tactical->set_new_environment)
+        b->tactical->set_new_environment(detail::to_int(c.number(1)));
     return 0;
 }
 
@@ -522,12 +528,6 @@ int m_stop_sfx_event(Call& c) { return object_sfx(c, "Stop_SFX_Event", Presentat
 // Visual only: recorded for R1 (visibility of sub-objects / emitters) and R4 (particles); none of them
 // touches sim state. [inferred] Hide_Sub_Object's float: non-zero hides.
 
-std::string upper_copy(std::string_view s) {
-    std::string out(s);
-    for (char& ch : out) ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
-    return out;
-}
-
 int g_hide_sub_object(Call& c) {
     if (c.nargs != 3)
         return c.script_error_stop("LuaHideSubObject -- Expected gameobject pointer parameter 1, float parameter 2, string parameter 3");
@@ -536,7 +536,7 @@ int g_hide_sub_object(Call& c) {
     if (!c.is_string(3)) return c.script_error_stop("LuaHideSubObject -- invalid type for parameter 3. Expected string.");
     record(c, PresentationOp::HideSubObject);
     const int32_t id = engine_ud(c, 1)->id;
-    state(c).hidden_sub_objects[std::to_string(id) + "|" + upper_copy(c.string(3))] = c.number(2) != 0.0;
+    state(c).hidden_sub_objects[std::to_string(id) + "|" + ascii_upper(c.string(3))] = c.number(2) != 0.0;
     return 0;
 }
 
@@ -605,7 +605,7 @@ int m_show_emitter(Call& c) {
     if (!c.is_string(1)) return c.script_error_stop("GameObjectWrapper::Show_Emitter -- invalid type for parameter 1. Expected string.");
     if (!is_bool(c, 2)) return c.script_error_stop("GameObjectWrapper::Show_Emitter -- invalid type for parameter 2. Expected boolean.");
     record(c, PresentationOp::ObjectShowEmitter, true);
-    state(c).emitters[std::to_string(c.self->id) + "|" + upper_copy(c.string(1))] = boolean(c, 2);
+    state(c).emitters[std::to_string(c.self->id) + "|" + ascii_upper(c.string(1))] = boolean(c, 2);
     return 0;
 }
 

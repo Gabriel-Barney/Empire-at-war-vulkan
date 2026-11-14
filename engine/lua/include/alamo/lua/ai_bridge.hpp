@@ -45,6 +45,7 @@ struct AiArg {
 };
 
 enum class AiStatusResult : uint8_t { Nil = 0, True = 1, False = 2 };
+inline constexpr int32_t kAiNotAPlanet = -2;  // tf_produce_force: the stage argument is not a planet
 
 // TaskForce orders returning a blocking status (or nil): GalacticTaskForceClass + TaskForceClass.
 enum class AiTfOrder : uint8_t { MoveTo, LandUnits, LaunchUnits, Invade, FormUnits, Raid, ForceTestSpaceConflict, ActivateAbility };
@@ -81,7 +82,9 @@ public:
     virtual bool tf_valid(int32_t tf) = 0;
     virtual int32_t tf_force_count(int32_t tf) = 0;
     virtual void tf_set_flag(int32_t tf, AiTfFlag flag, bool value) = 0;
-    // Produce_Force([stage], [synchronized]) -> status id (-1 = nil).
+    // Produce_Force([stage], [synchronized]) -> status id (-1 = nil). `stage.present` is false only with no argument (the
+    // binding raises the script error for nil / non-wrapper values). kAiNotAPlanet: the argument resolved to no planet,
+    // so the binding raises "Expected a planet object for parameter 1" (a2m t05, A2M_T04_RE_ANSWERS Q4.1).
     virtual int32_t tf_produce_force(int32_t tf, const AiArg& stage, bool synchronized) = 0;
     virtual int32_t tf_get_stage(int32_t tf) = 0;  // target id, -1 = nil
     virtual bool tf_all_on_free_store(int32_t tf) = 0;
@@ -235,6 +238,10 @@ bool call_global_function(LuaVm& vm, std::string_view name, const std::vector<Ai
 // the call succeeded and the first result is a Lua number.
 bool call_global_number(LuaVm& vm, std::string_view name, const std::vector<AiEventArg>& args, double& out,
                         std::string* err = nullptr);
+// ui1 t05 (GAME_SCORING.md §7, Get_Game_Stat_For_Control_ID 0x485760): the first result as a number (`is_number`) or a
+// string; false when the call failed or the result is neither.
+bool call_global_value(LuaVm& vm, std::string_view name, const std::vector<AiEventArg>& args, double& number, std::string& text,
+                       bool& is_number, std::string* err = nullptr);
 
 // Script pool support (AI_GALACTIC.md §1.9.1 "Script pool"): kills every thread of the VM, clears the
 // exit flag, the message / error logs and the GetEvent queue state the host owns. Owner thread only.

@@ -1,4 +1,5 @@
 #include "alamo/sim/game_modes.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -103,9 +104,7 @@ bool GameMode::read_state(ByteReader& r) {
 
 // ------------------------------------------------------------------------------------ GalacticMode
 GalacticMode::GalacticMode(const objects::GameObjectTypes& types, objects::IdCounter& ids)
-    : GameMode(ModeKind::Galactic, types, ids) {
-    next_income_frame_ = income_interval_;
-}
+    : GameMode(ModeKind::Galactic, types, ids) {}
 
 GalacticMode::~GalacticMode() = default;
 
@@ -145,29 +144,20 @@ void GalacticMode::tick(const ModeTickContext& ctx) {
         trace(ctx, "galactic.end");
         return;
     }
-    // Common tick FIRST in galactic mode (MAIN_LOOP.md §3.2).
+    // No GalacticSim attached (tests only): the common tick FIRST in galactic mode (MAIN_LOOP.md §3.2), nothing else
+    // (cu9 t14 / cu9f t01: the pre-S3 income stand-in and its hashed / saved state are gone; GalacticSim owns the fiscal cycle).
     common_tick(ctx);
-    // Cinematic manager step [stub]; income when the mode frame reaches the next income frame.
-    if (frame_ >= next_income_frame_) {
-        ++income_events_;
-        next_income_frame_ += income_interval_;
-        trace(ctx, "galactic.income");
-    }
-    // Per-planet synced random value, HUD message, victory events [stubs: S3 owns planets].
     trace(ctx, "galactic.end");
 }
 
 void GalacticMode::hash(StateHasher& h) const {
     GameMode::hash(h);
-    h.u32(income_interval_);
-    h.u64(next_income_frame_);
-    h.u64(income_events_);
     h.u32(pause_count_);
 }
 
 void GalacticMode::write_state(ByteWriter& w) const {
     GameMode::write_state(w);
-    w.u32(income_interval_).u64(next_income_frame_).u64(income_events_).u32(pause_count_).boolean(sim_ != nullptr);
+    w.u32(pause_count_).boolean(sim_ != nullptr);
 }
 
 bool GalacticMode::read_state(ByteReader& r) {
@@ -175,16 +165,11 @@ bool GalacticMode::read_state(ByteReader& r) {
     constexpr size_t kGameModeStateBytes = 1 + 8 + 8 + 8 + 1 + 1;  // GameMode::write_state
     ByteReader probe = r;
     (void)probe.raw(kGameModeStateBytes);
-    const uint32_t interval = probe.u32();
-    const uint64_t next_income = probe.u64(), events = probe.u64();
     const uint32_t pauses = probe.u32();
     const bool has_sim = probe.boolean();
-    if (!probe.ok() || interval == 0 || has_sim != (sim_ != nullptr)) return false;
+    if (!probe.ok() || has_sim != (sim_ != nullptr)) return false;
     if (!GameMode::read_state(r)) return false;
     r = probe;
-    income_interval_ = interval;
-    next_income_frame_ = next_income;
-    income_events_ = events;
     pause_count_ = pauses;  // not re-pushed into the GalacticSim (its pause state is its own chunk)
     return true;
 }
@@ -259,6 +244,11 @@ bool TacticalMode::obstacle_of(ObjectHandle h, tactical::movement::AvoidObstacle
     o.collide = true;
     tactical::movement::avoid_place(o);
     return true;
+}
+
+void TacticalMode::prepare_bounds(ObjectHandle h) const {
+    const objects::TypeIndex t = primary_.type(h);
+    if (model_source_ && t < team_.size() && !team_[t]) (void)model_ref(t, true);
 }
 
 tactical::Aabb TacticalMode::bounds_of(ObjectHandle h) const {
@@ -361,7 +351,7 @@ void TacticalMode::tick(const ModeTickContext& ctx) {
     // from start-of-tick positions.
     plan_motion(ctx);
     trace(ctx, "tactical.motion_plan");
-    // 4. Land: weather + hero clash.
+    // 4. Land: weather + hero clash (LandMode::mode_specific; the weather itself runs in TacticalBattle).
     mode_specific(ctx);
     // 5. Tactical frame counter. 6. Victory-monitor event 0x11 per player [stub].
     ++tactical_frame_;
@@ -574,8 +564,8 @@ bool TacticalMode::read_state(ByteReader& r) {
 }
 
 void LandMode::mode_specific(const ModeTickContext& ctx) {
-    // Weather system (draws from the synced RNG in the original) and hero-clash manager [stubs:
-    // no draws until the weather system exists, so the RNG stream stays the original's].
+    // Trace step only (cu9 t15): the land weather service runs in the battle (TacticalBattle::l1_weather_tick, before
+    // the common tick, with its synced draws), then the hero clashes (TacticalBattle::hero_clash_tick, s78n t06).
     trace(ctx, "land.weather");
 }
 

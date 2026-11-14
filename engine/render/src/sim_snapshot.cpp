@@ -9,6 +9,7 @@
 
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
 #include "alamo/render/map_scene.hpp"
@@ -32,8 +33,8 @@ using objects::ObjectHandle;
 using objects::ObjectId;
 using objects::TypeIndex;
 
-// Text of a tag on a type: the merged typed view when the tag is a GameObjectType field, else the raw store
-// along the variant chain (own value first).
+}  // namespace
+
 std::string type_text(const GameObjectTypes& types, TypeIndex t, std::string_view tag) {
     if (objects::find_type_field(tag) != 0xFFFFFFFFu) return std::string(types.get_string(t, tag));
     const objects::ObjectTypeDatabase& raw = types.raw();
@@ -43,6 +44,8 @@ std::string type_text(const GameObjectTypes& types, TypeIndex t, std::string_vie
     }
     return {};
 }
+
+namespace {
 
 // Tokens of a list tag: the typed view's list when the tag is a typed list field, else the text (typed or raw store)
 // split at commas / whitespace.
@@ -87,20 +90,11 @@ bool parse_float(std::string_view s, float& v) {
     return r.ec == std::errc{} && std::isfinite(v);
 }
 
-bool yes_text(const std::string& s) {
-    return !s.empty() && (s[0] == 'y' || s[0] == 'Y' || s[0] == 't' || s[0] == 'T' || s == "1");
-}
+bool yes_text(const std::string& s) { return data::parse_type_bool(s); }
 
 bool finite(float f) { return std::isfinite(f); }
 
 float length3(const Vec3& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
-
-std::string upper_ascii(std::string_view s) {
-    std::string u(s);
-    for (char& c : u)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return u;
-}
 
 }  // namespace
 
@@ -241,12 +235,12 @@ void SnapshotTypeTable::build(const GameObjectTypes& types, objects::ModeKind mo
     }
     by_name_.clear();
     by_name_.reserve(info_.size());
-    for (TypeIndex t = 0; t < info_.size(); ++t) by_name_.emplace_back(upper_ascii(info_[t].name), t);
+    for (TypeIndex t = 0; t < info_.size(); ++t) by_name_.emplace_back(ascii_upper(info_[t].name), t);
     std::stable_sort(by_name_.begin(), by_name_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 }
 
 TypeIndex SnapshotTypeTable::find(std::string_view name) const {
-    const std::string key = upper_ascii(name);
+    const std::string key = ascii_upper(name);
     const auto it = std::lower_bound(by_name_.begin(), by_name_.end(), key, [](const auto& e, const std::string& k) { return e.first < k; });
     return it != by_name_.end() && it->first == key ? it->second : objects::kNone;
 }
@@ -507,9 +501,7 @@ bool capture_snapshot(const sim::SimHost& host, const SnapshotTypeTable& table, 
 
 void set_snapshot_effects(SimSnapshot& snap, std::span<const SnapshotEffect> effects) {
     snap.effects.clear();
-    for (const SnapshotEffect& e : effects)
-        if (!e.asset.empty() && snap.find(e.id)) snap.effects.push_back(e);
-    std::stable_sort(snap.effects.begin(), snap.effects.end(), [](const SnapshotEffect& a, const SnapshotEffect& b) { return a.id < b.id; });
+    append_snapshot_effects(snap, effects);
 }
 
 void append_snapshot_effects(SimSnapshot& snap, std::span<const SnapshotEffect> effects) {
@@ -568,18 +560,21 @@ void set_snapshot_hardpoint_events(SimSnapshot& snap, std::span<const SnapshotHa
     }
 }
 
-void apply_fog_hidden(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& hidden) {
+namespace {
+// Sets or clears flag `bit` on every object by `pred` (a null predicate clears it everywhere).
+template <typename Bit>
+void mark_flag(SimSnapshot& snap, Bit bit, const std::function<bool(const SnapshotObject&)>& pred) {
     for (SnapshotObject& o : snap.objects) {
-        const bool h = hidden && hidden(o);
-        o.flags = static_cast<uint8_t>(h ? (o.flags | kSnapFogHidden) : (o.flags & ~kSnapFogHidden));
+        const bool on = pred && pred(o);
+        o.flags = static_cast<uint8_t>(on ? (o.flags | bit) : (o.flags & ~bit));
     }
 }
+}  // namespace
+
+void apply_fog_hidden(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& hidden) { mark_flag(snap, kSnapFogHidden, hidden); }
 
 void apply_contained(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& contained) {
-    for (SnapshotObject& o : snap.objects) {
-        const bool c = contained && contained(o);
-        o.flags = static_cast<uint8_t>(c ? (o.flags | kSnapContained) : (o.flags & ~kSnapContained));
-    }
+    mark_flag(snap, kSnapContained, contained);
 }
 
 void apply_script_hidden(SimSnapshot& snap, const std::function<bool(const SnapshotObject&)>& hidden) {
@@ -900,7 +895,7 @@ void apply_battle_jamming(const sim::TacticalBattle& battle, int32_t local_playe
 }
 #endif
 
-#if defined(ALAMO_SIM_HAVE_BATTLES) && defined(ALAMO_SIM_HAVE_FOG)
+#ifdef ALAMO_SIM_HAVE_BATTLES
 void apply_battle_fog(const sim::TacticalBattle& battle, int32_t local_player, SimSnapshot& snap) {
     const tactical::fog::FogOfWar* fog = battle.fog();
     if (!fog) {

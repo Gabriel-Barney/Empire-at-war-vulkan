@@ -1,0 +1,28 @@
+# Files tools/lint/check_tracked.py lets a landing add although they break a rule (size, output folder, build
+# product type, binary outside the data folders). One glob per line ('**' = any folders, '*' = within one folder);
+# '#' starts a comment. Say why each entry is tracked. Prefer an ignored output folder over a new entry here.
+
+# Tracked before the check existed (2026-11-07). Listed so a move or rename does not trip the check.
+# Generated catalogs and Ghidra exports that the docs read directly:
+docs/shaders/catalog.json
+docs/shaders/shaders_decompiled.zip
+docs/assets/catalog.json
+docs/re/ghidra/*.csv
+docs/re/ghidra/*.json
+docs/re/lua_api.json
+docs/re/rtti_classes.txt
+docs/formats/validation_models_meg.csv
+docs/images/opt1_frame_overlay.png
+# Reference object list the a1 kit still imports:
+tools/probe_mod/s10_map_owners/expected_objects.json
+# Fix-pass probe screenshots (evidence for docs/re; candidates for a docs/archive zip):
+tools/probe_mod/fixpass_capture/*.png
+
+# Vendored reference SMAA (MIT, approved by Gabriel 2026-11-13, docs/DECISIONS.md): the area lookup texture as a
+# C array (160 x 560 RG8), compiled into alamo_render; kept unmodified from iryoku/smaa.
+engine/render/third_party/smaa/AreaTex.h
+
+# Command Center launcher icons (launcher/, docs/DECISIONS.md 2026-11-13): build.rs embeds icon.ico as the exe icon,
+# app.rs include_bytes! icon.png for the window icon. Source assets, not build output.
+launcher/assets/icon.ico
+launcher/assets/icon.png

@@ -1,20 +1,14 @@
 #include "alamo/render/hardpoints.hpp"
 
 #include <algorithm>
-#include <cctype>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/render/lod.hpp"
 
 namespace alamo::render {
 
 namespace {
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
 void sort_unique(std::vector<uint32_t>& v) {
     std::sort(v.begin(), v.end());
     v.erase(std::unique(v.begin(), v.end()), v.end());
@@ -22,7 +16,7 @@ void sort_unique(std::vector<uint32_t>& v) {
 // XML bool: yes / true / 1 (case-insensitive first letter), no / false / 0; `fallback` when empty / other.
 bool parse_bool(std::string_view s, bool fallback) {
     if (s.empty()) return fallback;
-    const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+    const char c = ascii_to_upper(s[0]);
     if (c == 'Y' || c == 'T' || c == '1') return true;
     if (c == 'N' || c == 'F' || c == '0') return false;
     return fallback;
@@ -31,24 +25,24 @@ bool parse_bool(std::string_view s, bool fallback) {
 int32_t find_bone(const assets::Skeleton& sk, std::string_view name) {
     if (name.empty()) return -1;
     for (size_t b = 0; b < sk.names.size(); ++b)
-        if (iequal(sk.names[b], name)) return static_cast<int32_t>(b);
+        if (ascii_iequals(sk.names[b], name)) return static_cast<int32_t>(b);
     return -1;
 }
 }  // namespace
 
 std::string_view HardpointDef::tag(std::string_view tag_name) const {
     for (const auto& [k, v] : tags)
-        if (iequal(k, tag_name)) return v;
+        if (ascii_iequals(k, tag_name)) return v;
     return {};
 }
 
 bool HardpointDef::has_tag(std::string_view tag_name) const {
     for (const auto& kv : tags)
-        if (iequal(kv.first, tag_name)) return true;
+        if (ascii_iequals(kv.first, tag_name)) return true;
     return false;
 }
 
-bool HardpointDef::dummy_art() const { return iequal(type, "HARD_POINT_DUMMY_ART"); }
+bool HardpointDef::dummy_art() const { return ascii_iequals(type, "HARD_POINT_DUMMY_ART"); }
 
 HardpointDef parse_hardpoint(const data::XmlNode& hp) {
     HardpointDef d;
@@ -104,7 +98,7 @@ std::vector<uint32_t> meshes_named(const assets::ModelAsset& model, std::string_
     std::vector<uint32_t> out;
     if (name.empty()) return out;
     for (uint32_t i = 0; i < model.meshes.size(); ++i)
-        if (iequal(model.meshes[i].name, name)) out.push_back(i);
+        if (ascii_iequals(model.meshes[i].name, name)) out.push_back(i);
     return out;
 }
 
@@ -123,9 +117,9 @@ std::vector<int32_t> sub_object_bones(const assets::ModelAsset& model, const Har
 int64_t first_named(const assets::ModelAsset& model, std::string_view name) {
     if (name.empty()) return -1;
     for (size_t i = 0; i < model.meshes.size(); ++i)
-        if (iequal(model.meshes[i].name, name)) return static_cast<int64_t>(i);
+        if (ascii_iequals(model.meshes[i].name, name)) return static_cast<int64_t>(i);
     for (size_t p = 0; p < model.proxies.size(); ++p)
-        if (iequal(model.proxies[p].name, name)) return static_cast<int64_t>(model.meshes.size() + p);
+        if (ascii_iequals(model.proxies[p].name, name)) return static_cast<int64_t>(model.meshes.size() + p);
     return -1;
 }
 std::vector<uint32_t> subtree(const MeshBoneMap& bm, const std::vector<int32_t>& bones, int32_t root) {

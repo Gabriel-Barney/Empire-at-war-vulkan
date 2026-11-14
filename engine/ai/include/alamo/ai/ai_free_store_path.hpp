@@ -19,6 +19,7 @@
 //                        draw, only with >= 2 positive candidates and p < 1.
 // Nothing here iterates a pointer-keyed container; all outputs are pure functions of the inputs.
 #pragma once
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -41,10 +42,48 @@ std::vector<PlanetIndex> ai_reach_flood(const galactic::PlanetGraph& graph, cons
                                         std::span<const PlanetIndex> starts, int m,
                                         std::vector<uint8_t>* reached = nullptr);
 
+// A2k t02 (A2K_T02_RE_ANSWERS Q1(b), A2K_T08_RE_ANSWERS Q3.3) [H]: the per-target source list of the target's
+// PlanetReachabilityClass (0x665160 -> flood 0x3f12e0 with destination = `target`) at AI level m in 0..5. Returns the
+// planets held by the mover or an ally (view.held_by_ally, 0x4ad9f0) in breadth-first pop order:
+//   * flag 4 clear (m <= 1) and the target not held -> empty;
+//   * target held (and, with flag 2 clear, passing the danger test) -> one BFS from the target;
+//   * otherwise one BFS from each neighbour of the target in edge order (ascending planet index) that is not yet
+//     visited and passes, with the visited marks shared; a neighbour that fails is marked visited. The run with
+//     strictly the most held planets is kept (the first wins ties). The target itself is not marked first.
+//     Level 4 ("keep all", A2L_T03_RE_ANSWERS Q3) [H]: every run appends instead, so the list is the union of the
+//     neighbours' runs in neighbour order. Only slot 5 and the ETA of level-4 goals read it; slot 6 / the stage at
+//     level 4 is the target itself.
+// BFS: the start is marked visited; each popped planet that is held is emitted; its unvisited neighbours (edge order)
+// are marked visited and queued when they pass. Pass (0x3f2400): an AI mover (has_ai_system, not human) needs the
+// planet revealed; then passable for the player (0x3f2510) -> flag 2, or corrupted with Benefits_From_Corruption, or
+// not dangerous; impassable -> flag 3 and (not dangerous or corrupted with the benefit).
+// Node order (0x3f1c10): the GOM planet list = FindPlanet.Get_All_Planets order. `rank[p]` = p's position in that
+// order (sized to the graph); adjacency is walked in ascending rank. Empty rank = ascending planet index.
+std::vector<PlanetIndex> ai_stage_flood(const galactic::PlanetGraph& graph, const galactic::PlayerView& view,
+                                        PlanetIndex target, int m, std::span<const uint32_t> rank = {});
+
 // 0x691250: wrapping int32 sum of hop_weights[0 .. min(1000, path_size - 1)); -1 for an empty path.
 int32_t free_store_path_sum(std::span<const uint32_t> hop_weights, size_t path_size);
 // 0x6913a0 with the move's threshold (field +0x60 read as a float; mode 0 -> 0.0f).
 bool free_store_path_passes(int32_t sum, float threshold = 0.0f);
+
+// a2l t03: PlanetReachabilityClass slot 7 (0x663810, A2L_T03_RE_ANSWERS Q1.2) [H] on an AI all-pairs path from the
+// source planet to the target, `path_size` planets long with `hop_weights`, at AI level `level`. The path is accepted by
+// 0x6913a0 when float(((uint32)S >> 16) x 100) <= the level's threshold, S = the wrapping int32 sum of the hop weights
+// [0, min(1000, path_size - 1)) (empty path: -1), or [0, path_size - 2) at level 4 (the final hop is not counted):
+//   levels 0, 2, 3, 4, 6: 1e-4; levels 1, 5, 10: 1e18 (always accepted, even without a path);
+//   levels 7, 8, 9: `threat_tolerance` = GameConstants +0x157c / +0x1580 / +0x1584 Low_ / Medium_ /
+//   High_Threat_Reachability_Tolerance (FoC 1000 / 3000 / 5000; a2m t05, A2M_T04_RE_ANSWERS Q3) [H];
+//   any other level (negative, > 10): 0.0 [H].
+// Accepted: (low 16 bits of S) / 10; rejected: kReachNone. The source == target case (0) is the caller's.
+inline constexpr double kReachNone = 1e18;
+inline constexpr std::array<float, 3> kThreatReachTolerance{1000.0f, 3000.0f, 5000.0f};
+double ai_reach_path_cost(std::span<const uint32_t> hop_weights, size_t path_size, int level,
+                          const std::array<float, 3>& threat_tolerance = kThreatReachTolerance);
+// 0x691370 (Q2F_T09_RE_ANSWERS Q2.4 step 3) [H]: the length of an all-pairs path, (low 16 bits of the wrapping sum of
+// the hop weights [0, min(1000, path_size - 1))) / 10, in world units (trade-route hops already shortened). Empty path:
+// -1 (the sum's start), so (0xFFFF) / 10.
+double ai_path_length(std::span<const uint32_t> hop_weights, size_t path_size);
 
 // 0x3f9270: with a starbase, the planet's owner; else the owner of the first orbiting fleet (arrival order) whose
 // transient test 0x3a9760 is false, or the first one's owner when all pass it; kNoPlayer (-1) when no fleet orbits.

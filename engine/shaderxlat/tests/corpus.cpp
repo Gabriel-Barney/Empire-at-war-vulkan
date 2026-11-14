@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <set>
 
@@ -10,6 +11,9 @@
 #include "test_common.hpp"
 
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
+#include "alamo/core/ascii.hpp"
+#include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/meg/meg.h"
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -347,6 +351,105 @@ dcl t0
 mov oC0, t0
 mov oC1, c0
 )", {}},
+    // Shader model 3 (modc t22): semantic outputs / inputs, flow control, predication, a0 / aL addressing,
+    // texldl, vPos / vFace, def constants above c31.
+    {"vs30_io", R"(vs_3_0
+defi i0, 3, 0, 0, 0
+defi i1, 4, 2, 1, 0
+defb b0, true
+def c200, 0, 1, 0.25, -0.5
+dcl_position v0
+dcl_normal v1
+dcl_texcoord v2
+dcl_blendindices v3
+dcl_position o0
+dcl_color o1
+dcl_color1 o2
+dcl_texcoord o3.xy
+dcl_texcoord1 o4
+dcl_texcoord5 o5.xyz
+dcl_fog o6.x
+dcl_psize o7.x
+m4x4 o0, v0, c0
+mov r0, c200.x
+rep i0
+add r0, r0, v2
+endrep
+loop aL, i1
+add r0, r0, c[aL + 10]
+breakc_gt r0.x, c200.y
+endloop
+if b0
+mul r0, r0, c200.z
+else
+mov r0, c200.y
+endif
+setp_lt p0, v1, c200.yyyy
+(p0) mov r0.xy, v1
+(!p0.y) add r0.z, r0.z, c200.w
+mova a0.x, v3.x
+mov r1, c[a0.x + 20]
+sincos r2.xy, v2.x
+mad o1, r0, c4, r1
+mul o2, v1, c5
+mov o3.xy, r2
+mov o4, r0
+mov o5.xyz, r1
+add o6.x, r0.w, c200.z
+mov o7.x, c200.y
+)", {}},
+    {"ps30_io", R"(ps_3_0
+defi i0, 3, 0, 0, 0
+defi i1, 2, 4, 1, 0
+def c40, 0.5, -0.25, 2, 1
+def c20, 0.125, 0.75, 0, 1
+dcl_texcoord v0.xy
+dcl_texcoord1_centroid v1
+dcl_color v2
+dcl_color1 v3
+dcl_fog v4.x
+dcl_texcoord7 v5
+dcl vPos.xy
+dcl vFace
+dcl_2d s0
+dcl_cube s1
+dcl_2d s2
+texld r0, v0, s0
+texldl r1, v5, s2
+texldb r2, v1, s0
+texldp r3, v1, s2
+texld r4, v1, s1
+add r0, r0, r1
+mov r5, c40.x
+rep i0
+add r5, r5, c20.x
+breakc_gt r5.x, c40.w
+endrep
+loop aL, i1
+add r5, r5, c[aL + 0]
+endloop
+setp_ge p0, v2, c40.yyyy
+(p0) mov r0.xz, v3
+ifc_lt vFace.x, c20.z
+mov r0.w, c40.y
+else
+add r0.w, r0.w, c40.x
+endif
+frc r6.xy, vPos
+mad r6.z, vPos.x, c20.x, c20.y
+dsx r7, v0
+dsy r8, v0
+add r6.w, r7.x, r8.y
+texkill r6
+mad r0, r0, v2, r2
+mad r0, r3, c1, r0
+add r0, r0, r4
+mad r0.xyz, r6, c2, r0
+mul r0.xyz, r0, v4.x
+add r0.w, r0.w, c40.z
+mov oC0, r0
+mov oDepth, r5.x
+)", {}},
 };
 
 }  // namespace
@@ -432,10 +535,7 @@ const std::vector<HardCase>& vkd3d_hard_cases() {
 
 // ---------------------------------------------------------------- real install
 namespace {
-std::string env(const char* n) {
-    const char* v = std::getenv(n);
-    return v ? std::string(v) : std::string();
-}
+using ::alamo::test::env_or_empty;
 
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
 bool is_shader_object(const std::vector<uint8_t>& d) {
@@ -525,6 +625,77 @@ void collect_game(const std::string& root, const char* game, std::map<std::strin
     note += std::string(game) + ": " + std::to_string(files.size()) + " effective FXOs + " + std::to_string(shadowed) +
             " MEG copies (" + std::to_string(fxo) + " parsed); ";
 }
+
+// Shader model 3 blobs of every workshop item under `root` (loose Data\Art\Shaders\**.fxo and the same paths in
+// the item's MEG files). Only SM3 is taken: the SM1-2 programs mods ship are recompiles of the base corpus.
+void collect_mod_sm3(const std::string& root, std::map<std::string, Blob>& out, std::string& note) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path base = alamo::path_from_utf8(root);
+    if (!fs::is_directory(base, ec)) return;
+    std::vector<fs::path> items;
+    for (const auto& d : fs::directory_iterator(base, ec))
+        if (d.is_directory(ec)) items.push_back(d.path());
+    std::sort(items.begin(), items.end());
+    size_t added = 0;
+    for (const fs::path& item : items) {
+        const std::string id = item.filename().string();
+        const fs::path data = item / "Data";
+        if (!fs::is_directory(data, ec)) continue;
+        std::vector<fs::path> files;
+        for (auto it = fs::recursive_directory_iterator(data, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+            if (it->is_regular_file(ec)) files.push_back(it->path());
+        std::sort(files.begin(), files.end());
+        std::vector<std::pair<std::string, std::vector<uint8_t>>> sources;
+        for (const fs::path& f : files) {
+            const std::string ext = alamo::ascii_upper(f.extension().string());
+            if (ext == ".FXO") {
+                std::vector<uint8_t> bytes;
+                if (alamo::read_host_file(f, bytes)) sources.emplace_back(f.stem().string(), std::move(bytes));
+            } else if (ext == ".MEG") {
+                auto a = meg::Archive::open(f.string());
+                if (!a) continue;
+                for (const meg::Entry& en : a->entries()) {
+                    const std::string nn = meg::normalize_name(en.name);
+                    if (nn.rfind("DATA\\ART\\SHADERS\\", 0) != 0 || nn.size() < 4 || nn.compare(nn.size() - 4, 4, ".FXO") != 0) continue;
+                    std::vector<uint8_t> bytes;
+                    if (!a->read(en, bytes)) continue;
+                    const std::string e = nn.substr(nn.find_last_of('\\') + 1);
+                    sources.emplace_back(e.substr(0, e.find('.')), std::move(bytes));
+                }
+            }
+        }
+        for (auto& src : sources) {
+            fx::Effect e;
+            try {
+                e = fx::parseEffect(src.second.data(), src.second.size());
+            } catch (const std::exception&) {
+                continue;
+            }
+            auto add = [&](const std::vector<uint8_t>& raw) {
+                if (!is_shader_object(raw)) return;
+                std::vector<uint8_t> blob = raw;
+                Program p;
+                if (!parse(blob, p, nullptr) || p.major < 3) return;
+                blob.resize(static_cast<size_t>(p.token_count) * 4);
+                const std::string h = sha1_hex(blob).substr(0, 12);
+                if (out.count(h)) return;
+                Blob b;
+                b.name = h;
+                b.origin = "mod" + id + "/" + src.first;
+                b.bytes = std::move(blob);
+                out.emplace(h, std::move(b));
+                ++added;
+            };
+            for (const auto& kv : e.objects) add(kv.second.data);
+            for (const auto& t : e.techniques)
+                for (const auto& pass : t.passes)
+                    for (const auto& st : pass.states)
+                        if (st.kind == fx::State::Kind::Shader) add(st.blob);
+        }
+    }
+    note += "workshop " + root + ": " + std::to_string(items.size()) + " items, " + std::to_string(added) + " SM3 blobs; ";
+}
 #endif
 }  // namespace
 
@@ -532,10 +703,16 @@ std::vector<Blob> corpus_blobs(std::string* note) {
     std::vector<Blob> out;
     std::string n;
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA"), eaw = env_or_empty("ALAMO_EAW_DATA");
     std::map<std::string, Blob> m;
     if (!foc.empty()) collect_game(foc, "foc", m, n);
     if (!eaw.empty()) collect_game(eaw, "eaw", m, n);
+    // modc t22: the shader model 3 programs installed workshop mods ship (ALAMO_WORKSHOP_DIR, else the
+    // workshop folder of the Steam library ALAMO_FOC_DATA is in).
+    std::string ws = env_or_empty("ALAMO_WORKSHOP_DIR");
+    const size_t at = foc.find("\\steamapps\\common\\");
+    if (ws.empty() && at != std::string::npos) ws = foc.substr(0, at) + "\\steamapps\\workshop\\content\\32470";
+    if (!ws.empty()) collect_mod_sm3(ws, m, n);
     if (foc.empty() && eaw.empty()) n = "ALAMO_FOC_DATA / ALAMO_EAW_DATA not set";
     for (auto& kv : m) out.push_back(std::move(kv.second));
 #else

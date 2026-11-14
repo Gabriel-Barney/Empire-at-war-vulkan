@@ -1,10 +1,14 @@
 #include "alamo/galactic/conflicts.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <utility>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/galactic/bounty.hpp"
+#include "alamo/core/ascii.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
@@ -13,20 +17,7 @@ namespace alamo::galactic {
 
 namespace {
 
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
-std::string trimmed(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return std::string(s);
-}
+std::string trimmed(std::string_view s) { return std::string(ascii_trim(s)); }
 
 void note(std::vector<std::string>* d, std::string m) {
     if (d) d->push_back(std::move(m));
@@ -37,18 +28,21 @@ bool space_kind(UnitKind k) { return k == UnitKind::SpaceUnit || k == UnitKind::
 int32_t terrain_index(std::string_view s) {
     static const char* const kNames[] = {"TEMPERATE", "ARCTIC", "DESERT", "FOREST", "SWAMP", "VOLCANIC", "URBAN", "SPACE"};
     for (int32_t i = 0; i < 8; ++i)
-        if (iequal(s, kNames[i])) return i;
+        if (ascii_iequals(s, kNames[i])) return i;
     return -1;
 }
 
+// [name-ok-begin: retail faction-name table 0x140b30568 (Rebel 0, Empire 1, Pirates 2, Underworld 4, Hutts 5),
+// docs/re/L1_S4_REMAINING.md, BATTLE_TRANSITIONS.md "defender faction index"]
 int32_t map_faction_index(std::string_view name) {
-    if (iequal(name, "Rebel")) return 0;
-    if (iequal(name, "Empire")) return 1;
-    if (iequal(name, "Pirates")) return 2;
-    if (iequal(name, "Underworld")) return 4;
-    if (iequal(name, "Hutts")) return 5;
+    if (ascii_iequals(name, "Rebel")) return 0;
+    if (ascii_iequals(name, "Empire")) return 1;
+    if (ascii_iequals(name, "Pirates")) return 2;
+    if (ascii_iequals(name, "Underworld")) return 4;
+    if (ascii_iequals(name, "Hutts")) return 5;
     return 0;
 }
+// [name-ok-end]
 
 }  // namespace
 
@@ -107,6 +101,8 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
         return v ? static_cast<uint64_t>(*v) : 0u;
     };
     out.super_category = category_mask("Super");
+    for (const char* n : {"NalHutta", "NalHutta_Story"})  // a2m r2 (A2M_R2_RE_B §2.3 case B)
+        if (const objects::TypeIndex t = types.resolve_name(n); t != objects::kNone) out.nalhutta_types.push_back(static_cast<uint32_t>(t));
     // OI galactic (TACTICAL_GAPS 4.2): land split constants (same reading as the battle host's BattleCatalog).
     {
         auto words = [](std::string_view s, bool bars) {
@@ -136,9 +132,11 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
 
     // Per type.
     out.types.assign(types.size(), ConflictTypeInfo{});
+    const BountyTable bounty_table = load_bounty_table(g, types);  // a2m r2
     for (objects::TypeIndex t = 0; t < types.size(); ++t) {
         ConflictTypeInfo& i = out.types[t];
         i.categories = types.get_mask(t, "CategoryMask");
+        i.bounty = static_cast<int32_t>(type_bounty(bounty_table, types, t));
         i.population = types.columns().population_value[t];
         if (!types.get_string(t, "Space_Override_Population_Value").empty())
             i.space_population_override = types.get_int(t, "Space_Override_Population_Value");
@@ -173,52 +171,44 @@ bool load_conflict_rules(const FileProvider& provider, const data::GameDatabase&
     // Factions (FactionFiles.xml list order; matched to GalacticRules by name).
     out.factions.assign(galactic.factions.size(), ConflictFactionInfo{});
     for (size_t f = 0; f < galactic.factions.size(); ++f) out.factions[f].map_faction = map_faction_index(galactic.factions[f].name);
-    std::vector<uint8_t> bytes;
-    if (provider.read("Data\\XML\\FactionFiles.xml", bytes)) {
-        const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-        for (data::XmlNode file : list.root().children("File")) {
-            const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
-            std::vector<uint8_t> fb;
-            if (!provider.read(path, fb)) {
-                note(diag, "conflicts: " + path + " not found");
-                continue;
+    // cu5 t01: every <Faction> definition in list order (duplicates included) from the one FactionFiles.xml parse
+    // (galactic_rules.cpp load_factions); a later definition's fields override, as when the XML was read here.
+    for (const FactionRules& fr : galactic.factions) {
+        const uint32_t fi = galactic.find_faction(fr.name);
+        if (fi >= out.factions.size()) continue;
+        ConflictFactionInfo& ci = out.factions[fi];
+        auto num = [&fr](const char* tag, float fallback) {
+            const std::string_view v = fr.xml_text(tag);
+            return v.empty() ? fallback : static_cast<float>(objects::c_atof(v));
+        };
+        ci.space_unit_cap = num("Space_Tactical_Unit_Cap", ci.space_unit_cap);
+        ci.space_retreat_countdown = num("Space_Retreat_Countdown_Seconds", ci.space_retreat_countdown);
+        ci.land_retreat_countdown = num("Land_Retreat_Countdown_Seconds", ci.land_retreat_countdown);
+        ci.space_retreat_damage_mod = num("Space_Retreat_Units_Damaged_Mod_Factor", ci.space_retreat_damage_mod);
+        ci.land_retreat_damage_mod = num("Land_Retreat_Units_Damaged_Mod_Factor", ci.land_retreat_damage_mod);
+        if (const std::string_view sc = fr.xml_text("Scatters_From_Crushers"); !sc.empty())  // s78n t14 part B
+            ci.scatters_from_crushers = data::parse_type_bool(data::trim(sc));  // bool code 0x0: "1" or Y / y / T / t
+        {  // t50: "players, cap, players, cap, ..." (numbers separated by commas / blanks)
+            const std::string_view curve = fr.xml_text("Land_Skirmish_Unit_Cap_By_Player_Count");
+            std::vector<float> v;
+            size_t at = 0;
+            const auto sep = [](char ch) { return ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
+            while (at < curve.size()) {
+                while (at < curve.size() && sep(curve[at])) ++at;
+                size_t end = at;
+                while (end < curve.size() && !sep(curve[end])) ++end;
+                if (end > at) v.push_back(static_cast<float>(objects::c_atof(curve.substr(at, end - at))));
+                at = end;
             }
-            const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
-            for (data::XmlNode n : doc.root().children("Faction")) {
-                const uint32_t fi = galactic.find_faction(n.attribute("Name"));
-                if (fi >= out.factions.size()) continue;
-                ConflictFactionInfo& ci = out.factions[fi];
-                auto num = [&n](const char* tag, float fallback) {
-                    const std::string_view v = n.child_text(tag);
-                    return v.empty() ? fallback : static_cast<float>(objects::c_atof(v));
-                };
-                ci.space_unit_cap = num("Space_Tactical_Unit_Cap", ci.space_unit_cap);
-                ci.space_retreat_countdown = num("Space_Retreat_Countdown_Seconds", ci.space_retreat_countdown);
-                ci.land_retreat_countdown = num("Land_Retreat_Countdown_Seconds", ci.land_retreat_countdown);
-                {  // t50: "players, cap, players, cap, ..." (numbers separated by commas / blanks)
-                    const std::string_view curve = n.child_text("Land_Skirmish_Unit_Cap_By_Player_Count");
-                    std::vector<float> v;
-                    size_t at = 0;
-                    const auto sep = [](char ch) { return ch == ',' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'; };
-                    while (at < curve.size()) {
-                        while (at < curve.size() && sep(curve[at])) ++at;
-                        size_t end = at;
-                        while (end < curve.size() && !sep(curve[end])) ++end;
-                        if (end > at) v.push_back(static_cast<float>(objects::c_atof(curve.substr(at, end - at))));
-                        at = end;
-                    }
-                    ci.land_skirmish_unit_cap.clear();
-                    for (size_t k = 0; k + 1 < v.size(); k += 2) ci.land_skirmish_unit_cap.emplace_back(v[k], v[k + 1]);
-                }
-            }
+            ci.land_skirmish_unit_cap.clear();
+            for (size_t k = 0; k + 1 < v.size(); k += 2) ci.land_skirmish_unit_cap.emplace_back(v[k], v[k + 1]);
         }
-    } else {
-        note(diag, "conflicts: FactionFiles.xml not found (default unit caps)");
     }
+    if (galactic.factions.empty()) note(diag, "conflicts: no factions in the galactic rules (default unit caps)");
 
     // AI contrast table.
     bool ok = true;
-    bytes.clear();
+    std::vector<uint8_t> bytes;
     if (provider.read("Data\\Scripts\\Library\\PGAICommands.lua", bytes)) {
         const std::string_view src(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         if (!out.contrast.parse_lua(src, category_mask, diag)) ok = false;
@@ -284,7 +274,7 @@ void ConflictManager::release_pause() {
 
 // ---- participants ----
 
-std::vector<ObjectHandle> ConflictManager::orbit_units(PlanetIndex planet, int32_t player, bool space_only) const {
+std::vector<ObjectHandle> ConflictManager::orbit_contents(PlanetIndex planet, int32_t player, bool (*keep)(UnitKind)) const {
     std::vector<ObjectHandle> out;
     if (planet >= sim_->planets().size()) return out;
     const auto& store = sim_->store();
@@ -294,28 +284,18 @@ std::vector<ObjectHandle> ConflictManager::orbit_units(PlanetIndex planet, int32
         for (ObjectHandle m : f.contents) {
             if (!store.alive(m)) continue;
             const uint32_t t = static_cast<uint32_t>(store.type(m));
-            const bool sk = t < sim_->rules().types.size() && space_kind(sim_->rules().types[t].kind);
-            if (space_only && !sk) continue;
-            out.push_back(m);
+            if (t < sim_->rules().types.size() && keep(sim_->rules().types[t].kind)) out.push_back(m);
         }
     }
     return out;
 }
 
+std::vector<ObjectHandle> ConflictManager::orbit_units(PlanetIndex planet, int32_t player) const {
+    return orbit_contents(planet, player, space_kind);
+}
+
 std::vector<ObjectHandle> ConflictManager::orbit_cargo(PlanetIndex planet, int32_t player) const {
-    std::vector<ObjectHandle> out;
-    if (planet >= sim_->planets().size()) return out;
-    const auto& store = sim_->store();
-    for (uint32_t fi : sim_->planets()[planet].orbit) {
-        const FleetState& f = sim_->fleets()[fi];
-        if (!f.alive || f.moving || f.owner != player) continue;
-        for (ObjectHandle m : f.contents) {
-            if (!store.alive(m)) continue;
-            const uint32_t t = static_cast<uint32_t>(store.type(m));
-            if (t < sim_->rules().types.size() && sim_->rules().types[t].kind == UnitKind::GroundUnit) out.push_back(m);
-        }
-    }
-    return out;
+    return orbit_contents(planet, player, [](UnitKind k) { return k == UnitKind::GroundUnit; });
 }
 
 std::vector<ObjectHandle> ConflictManager::surface_units(PlanetIndex planet, int32_t player) const {
@@ -339,7 +319,7 @@ bool ConflictManager::can_fight_space(ObjectHandle h) const { return unit_power(
 
 std::vector<ObjectHandle> ConflictManager::overrun_units(const ConflictInfo& rec, bool defender, bool space) const {
     const int32_t player = defender ? rec.defender : rec.attacker;
-    if (space) return orbit_units(rec.planet, player, true);
+    if (space) return orbit_units(rec.planet, player);
     std::vector<ObjectHandle> out = surface_units(rec.planet, player);
     if (!defender)  // the ground power the attacker's orbit fleets carry
         for (ObjectHandle h : orbit_cargo(rec.planet, player)) out.push_back(h);
@@ -484,8 +464,8 @@ bool ConflictManager::validate(const ConflictInfo& c) const {
     const PlanetState& p = sim_->planets()[c.planet];
     if (c.kind == ConflictKind::Space) {
         bool att = false, def = false;
-        for (ObjectHandle h : orbit_units(c.planet, c.attacker, true)) att = att || can_fight_space(h);
-        for (ObjectHandle h : orbit_units(c.planet, c.defender, true)) def = def || can_fight_space(h);
+        for (ObjectHandle h : orbit_units(c.planet, c.attacker)) att = att || can_fight_space(h);
+        for (ObjectHandle h : orbit_units(c.planet, c.defender)) def = def || can_fight_space(h);
         const bool starbase = p.starbase_level > 0 && p.starbase_owner == c.defender && sim_->store().alive(p.starbase);
         return att && (def || starbase);
     }
@@ -504,6 +484,10 @@ void ConflictManager::pop_head(ConflictKind kind) {
         q.erase(q.begin());
         refresh_in_battle(planet);
     }
+    reset_machine();
+}
+
+void ConflictManager::reset_machine() {
     state_ = ConflictState::Idle;
     force_ = false;
     retreating_ = kNoPlayer;
@@ -514,34 +498,29 @@ void ConflictManager::pop_head(ConflictKind kind) {
     ar_cargo_.clear();
 }
 
+ConflictLogEntry ConflictManager::log_entry(const ConflictInfo& c, uint8_t how) const {
+    ConflictLogEntry e;
+    e.tick = tick_;
+    e.galactic_frame = sim_->frame();
+    e.kind = c.kind;
+    e.planet = c.planet;
+    e.attacker = c.attacker;
+    e.defender = c.defender;
+    e.how = how;
+    return e;
+}
+
 bool ConflictManager::yield_to_linked() {
     if (state_ == ConflictState::Idle || state_ == ConflictState::InBattle) return false;
     release_pause();
-    state_ = ConflictState::Idle;
-    force_ = false;
-    retreating_ = kNoPlayer;
-    has_choice_ = false;
-    choice_ = BattleChoice::Pending;
-    ar_in_ = AutoResolveInput{};
-    ar_objects_.clear();
-    ar_cargo_.clear();
+    reset_machine();
     return true;
 }
 
 void ConflictManager::drop_head(ConflictKind kind, bool log_it) {
     const std::vector<ConflictInfo>& q = queue(kind);
     if (q.empty()) return;
-    if (log_it) {
-        ConflictLogEntry e;
-        e.tick = tick_;
-        e.galactic_frame = sim_->frame();
-        e.kind = kind;
-        e.planet = q.front().planet;
-        e.attacker = q.front().attacker;
-        e.defender = q.front().defender;
-        e.how = 0;
-        log_.push_back(std::move(e));
-    }
+    if (log_it) log_.push_back(log_entry(q.front(), 0));
     release_pause();
     pop_head(kind);
 }
@@ -582,15 +561,7 @@ void ConflictManager::on_service_tail() {
                 ++i;
                 continue;
             }
-            ConflictLogEntry e;
-            e.tick = tick_;
-            e.galactic_frame = sim_->frame();
-            e.kind = kind;
-            e.planet = planet;
-            e.attacker = q[i].attacker;
-            e.defender = q[i].defender;
-            e.how = 0;
-            log_.push_back(std::move(e));
+            log_.push_back(log_entry(q[i], 0));
             q.erase(q.begin() + static_cast<std::ptrdiff_t>(i));
             dropped.push_back(planet);
         }
@@ -695,20 +666,19 @@ void ConflictManager::run(ConflictKind kind) {
 
 // ---- auto-resolve ----
 
-ArCombatant ConflictManager::combatant_of(ObjectHandle h, bool space) const {
-    const auto& store = sim_->store();
-    const uint32_t t = static_cast<uint32_t>(store.type(h));
-    const auto& ti = sim_->rules().types;
-    const ConflictTypeInfo& ct = rules_->type(t);
+ArCombatant make_ar_combatant(const GalacticRules& galactic, const ConflictRules& rules, uint32_t t, int32_t owner,
+                              bool space) {
+    const auto& ti = galactic.types;
+    const ConflictTypeInfo& ct = rules.type(t);
     ArCombatant c;
-    c.owner = store.owner(h);
+    c.owner = owner;
     c.own_power = t < ti.size() ? ti[t].ai_combat_power : 0.0f;
     c.hero = ct.hero;
     c.super_killer = ct.super_killer;
     uint64_t first_cats = ct.categories;
     bool first = true;
     for (const auto& [mt, n] : ct.members) {
-        const ConflictTypeInfo& mi = rules_->type(mt);
+        const ConflictTypeInfo& mi = rules.type(mt);
         ArPiece p;
         p.type = mt;
         p.name = mt < ti.size() ? std::string_view(ti[mt].name) : std::string_view();
@@ -728,8 +698,13 @@ ArCombatant ConflictManager::combatant_of(ObjectHandle h, bool space) const {
         p.power = c.own_power;
         c.pieces.push_back(p);
     }
-    c.super = rules_->super_category != 0 && (first_cats & rules_->super_category) != 0;
+    c.super = rules.super_category != 0 && (first_cats & rules.super_category) != 0;
     return c;
+}
+
+ArCombatant ConflictManager::combatant_of(ObjectHandle h, bool space) const {
+    const auto& store = sim_->store();
+    return make_ar_combatant(sim_->rules(), *rules_, static_cast<uint32_t>(store.type(h)), store.owner(h), space);
 }
 
 void ConflictManager::auto_setup(const ConflictInfo& head) {
@@ -754,7 +729,7 @@ void ConflictManager::auto_setup(const ConflictInfo& head) {
     };
     if (space) {
         for (int32_t p : {head.defender, head.attacker})
-            for (ObjectHandle h : orbit_units(head.planet, p, true)) add(h);
+            for (ObjectHandle h : orbit_units(head.planet, p)) add(h);
         if (sim_->store().alive(planet.starbase) && planet.starbase_level > 0 &&
             (planet.starbase_owner == head.defender || planet.starbase_owner == head.attacker)) {
             ArCombatant c = combatant_of(planet.starbase, true);
@@ -788,14 +763,7 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
     const AutoResolveResult& r = last_ar_;
     const bool space = head.kind == ConflictKind::Space;
     const PlanetIndex planet = head.planet;
-    ConflictLogEntry e;
-    e.tick = tick_;
-    e.galactic_frame = sim_->frame();
-    e.kind = head.kind;
-    e.planet = planet;
-    e.attacker = head.attacker;
-    e.defender = head.defender;
-    e.how = 1;
+    ConflictLogEntry e = log_entry(head, 1);
     e.winner = r.winner;
     e.loser = r.loser;
     e.retreating = r.retreating;
@@ -805,6 +773,7 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
         for (size_t i = 0; i < ar_objects_.size() && i < r.survives.size(); ++i)
             if (sim_->store().exists(ar_objects_[i]))
                 on_survival_roll(ar_in_.combatants[i].owner, static_cast<uint32_t>(sim_->store().type(ar_objects_[i])), r.survives[i] != 0);
+    pay_auto_resolve_bounty(head);  // a2m r2, before the objects are removed
     // Destroyed combatants, starbase level.
     for (size_t i = 0; i < ar_objects_.size(); ++i) {
         const ObjectHandle h = ar_objects_[i];
@@ -844,6 +813,75 @@ void ConflictManager::auto_finish(const ConflictInfo& head) {
     log_.push_back(std::move(e));
     release_pause();
     pop_head(head.kind);
+}
+
+// a2m r2: the galactic auto-resolve bounty (docs/re/A2M_R2_RE_B.md §2 [H]; amounts traced in A2M_R2_UW_BOUNTY_TRACE.md §1).
+// Every object the auto-resolve kills runs the death handler 0x39bdb0 -> 0x392600 with the other battle side as the killer
+// K (0x60b930: the first combatant of the other side's list). Galactic branch, per dying object of owner O and type T:
+// - gates: O != K and O not allied with K (an ownerless object passes); B = T's bounty (bounty.hpp) > 0;
+// - case A, K's faction has Benefits_From_Corruption: paid when the planet the object dies at (its parent chain ends at
+//   the battle planet) is corrupted with Racketeering (D +0x2f4 == 3);
+// - case B, else when O's faction has Benefits_From_Corruption: paid when K owns a NalHutta / NalHutta_Story planet;
+// - paid as Add_Credits(K, round(B), notify 0), one call per object (Credit_Multiplier applies inside add_credits).
+// No Bounty_On_Faction ability, percentage or stacking in galactic. Objects: each dying combatant pays its own type's
+// bounty, except a squadron / company holder [port: the traced battles pay 0 for every holder, while the port's typed
+// view gives holders a CategoryMask], then each member of a holder (the linked objects die with it), then a carried company's
+// Company_Transport_Unit (orbit cargo, or a land attacker coming down from orbit). The galactic starbase (a planet level,
+// not an object) and the planet's ground structures (cleared through 0x4bb4a0 -> 0x391310, not the death handler) pay
+// nothing. Order: combatant order, then cargo order [port: draw-free, tier 3].
+void ConflictManager::pay_auto_resolve_bounty(const ConflictInfo& head) {
+    const GalacticRules& gr = sim_->rules();
+    const auto& players = sim_->players();
+    if (head.attacker == head.defender) return;
+    const auto valid = [&](int32_t p) { return p >= 0 && static_cast<size_t>(p) < players.size(); };
+    const auto benefits = [&](int32_t p) {
+        if (!valid(p)) return false;
+        const uint32_t f = players[static_cast<size_t>(p)].faction;
+        return f < gr.factions.size() && gr.factions[f].benefits_from_corruption;
+    };
+    const bool racketeering = sim_->planets()[head.planet].corruption == kCorruptionRacketeering;
+    const auto owns_nalhutta = [&](int32_t k) {
+        for (const PlanetState& p : sim_->planets())
+            if (p.is_planet && p.owner == k &&
+                std::find(rules_->nalhutta_types.begin(), rules_->nalhutta_types.end(), p.type) != rules_->nalhutta_types.end())
+                return true;
+        return false;
+    };
+    const auto pay = [&](uint32_t t, int32_t owner, int32_t killer) {
+        if (!valid(killer) || owner == killer || (owner != kNoPlayer && sim_->allied(owner, killer))) return;
+        const int32_t n = rules_->type(t).bounty;  // already rounded (type_bounty)
+        if (n <= 0) return;
+        if (benefits(killer)) {
+            if (!racketeering) return;
+        } else if (!benefits(owner) || !owns_nalhutta(killer)) {
+            return;
+        }
+        sim_->add_credits(killer, static_cast<float>(n), false);
+    };
+    const auto object_dies = [&](ObjectHandle h, int32_t owner, bool carried) {
+        if (!sim_->store().exists(h)) return;
+        const int32_t killer = owner == head.attacker ? head.defender : head.attacker;
+        const uint32_t t = static_cast<uint32_t>(sim_->store().type(h));
+        const ConflictTypeInfo& ct = rules_->type(t);
+        if (ct.members.empty()) pay(t, owner, killer);  // [port] a holder pays nothing itself (the traces: 0)
+        for (const auto& [mt, n] : ct.members)
+            for (int32_t k = 0; k < n; ++k) pay(mt, owner, killer);
+        if (carried && t < gr.types.size() && gr.types[t].company_transport != kNoIndex)
+            pay(gr.types[t].company_transport, owner, killer);
+    };
+    const AutoResolveResult& r = last_ar_;
+    const bool space = head.kind == ConflictKind::Space;
+    const std::vector<ObjectHandle>& structures = sim_->planets()[head.planet].structures;
+    for (size_t i = 0; i < ar_objects_.size() && i < r.survives.size(); ++i) {
+        if (r.survives[i]) continue;
+        const ArCombatant& c = ar_in_.combatants[i];
+        if (!c.starbase.empty()) continue;  // the starbase level: no object dies
+        if (!space && std::find(structures.begin(), structures.end(), ar_objects_[i]) != structures.end()) continue;
+        // Land: the attacker's units are the companies coming down from orbit (auto_setup).
+        object_dies(ar_objects_[i], c.owner, !space && c.owner == head.attacker);
+    }
+    for (size_t i = 0; i < ar_cargo_.size() && i < r.cargo_survives.size(); ++i)
+        if (!r.cargo_survives[i]) object_dies(ar_cargo_[i], ar_in_.cargo[i].owner, true);
 }
 
 // ---- tactical battle ----
@@ -954,7 +992,7 @@ bool ConflictManager::raid_force(int32_t player, const std::vector<ObjectHandle>
     if (!rules_->raid_required_faction.empty()) {
         if (player < 0 || static_cast<size_t>(player) >= sim_->players().size()) return false;
         const uint32_t f = sim_->players()[static_cast<size_t>(player)].faction;
-        if (f >= sim_->rules().factions.size() || !iequal(sim_->rules().factions[f].name, rules_->raid_required_faction)) return false;
+        if (f >= sim_->rules().factions.size() || !ascii_iequals(sim_->rules().factions[f].name, rules_->raid_required_faction)) return false;
     }
     int32_t limited = 0, heroes = 0;
     for (ObjectHandle h : units) {
@@ -1012,7 +1050,7 @@ void ConflictManager::split_land_impl(const ConflictInfo& head, BattleForces& d,
         if (lead) break;
         for (int pass = 0; pass < 2 && !lead; ++pass)
             for (ObjectHandle h : rec)
-                if (hero(h) == (pass == 1) && iequal(name(h), want)) {
+                if (hero(h) == (pass == 1) && ascii_iequals(name(h), want)) {
                     lead = h;
                     break;
                 }
@@ -1035,12 +1073,15 @@ std::string ConflictManager::choose_map(const ConflictInfo& head, int32_t base_l
     *ok = true;
     const bool space = head.kind == ConflictKind::Space;
     const PlanetState& p = sim_->planets()[head.planet];
-    std::string name = head.planet < planet_map_.size() ? planet_map_[head.planet] : std::string();
+    std::string name;
     const ConflictTypeInfo& pt = rules_->type(p.type);
     const std::string& field = space ? pt.space_map : pt.land_map;
     if (!field.empty()) {
         name = field;
-    } else if (name.empty()) {
+    } else {
+        // BT §2.1 step 1.2 (CU8F_T03_T05_RE §1.3 / §1.4, cu8f t03): the picker runs every time the planet type names no
+        // map; the stored pick (planet data +0x1e0) is only its preferred name (the scan stops after it), and the answer is
+        // stored back every time, an empty one included (a miss clears the earlier pick).
         if (pt.terrain < 0) {
             *ok = false;  // unknown Terrain: the start fails
             return {};
@@ -1048,7 +1089,9 @@ std::string ConflictManager::choose_map(const ConflictInfo& head, int32_t base_l
         const uint32_t f = head.defender >= 0 && static_cast<size_t>(head.defender) < sim_->players().size()
                                ? sim_->players()[static_cast<size_t>(head.defender)].faction
                                : kNoIndex;
-        if (pick_map) name = pick_map(space, pt.terrain, rules_->faction(f).map_faction, base_level);
+        const int32_t faction = head.defender == -1 ? -1 : rules_->faction(f).map_faction;  // -1 only for defender id -1
+        const std::string preferred = head.planet < planet_map_.size() ? planet_map_[head.planet] : std::string();
+        if (pick_map) name = pick_map(space, pt.terrain, faction, base_level, preferred);
         if (head.planet < planet_map_.size()) planet_map_[head.planet] = name;
     }
     if (!head.map.empty()) name = head.map;
@@ -1103,7 +1146,7 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint
             if (linked == Linked::Sandbox && !human(pl)) {
                 f.player = pl;  // §2.9.5 sandbox: AI sides get nothing
             } else if (linked == Linked::Sandbox) {  // story t07: 0x2bce30 with Param6 / Param14
-                const std::vector<ObjectHandle> units = orbit_units(head.planet, pl, true);
+                const std::vector<ObjectHandle> units = orbit_units(head.planet, pl);
                 std::vector<ObjectHandle> leads;  // [port] a fleet's lead ship = its first space unit (fleet order)
                 for (uint32_t fi : sim_->fleets_at(head.planet, pl))
                     for (ObjectHandle m : sim_->fleets()[fi].contents)
@@ -1113,7 +1156,7 @@ bool ConflictManager::begin_battle(const ConflictInfo& head, Linked linked, uint
                         }
                 split_space_forces(pl, units, f, forced_type, flagship, leads);
             } else {
-                split_space_forces(pl, orbit_units(head.planet, pl, true), f);
+                split_space_forces(pl, orbit_units(head.planet, pl), f);
             }
             req.forces.push_back(std::move(f));
         }
@@ -1144,14 +1187,7 @@ void ConflictManager::finish_battle(const BattleResult& result, LinkedResolution
     const int32_t W = result.winner;
     const int32_t L = W == D ? A : D;
     const auto& store = sim_->store();
-    ConflictLogEntry e;
-    e.tick = tick_;
-    e.galactic_frame = sim_->frame();
-    e.kind = head.kind;
-    e.planet = planet;
-    e.attacker = A;
-    e.defender = D;
-    e.how = 2;
+    ConflictLogEntry e = log_entry(head, 2);
     e.winner = W;
     e.loser = L;
     e.map = request_.map;
@@ -1275,14 +1311,7 @@ void ConflictManager::finish_corruption_mission(const BattleResult& result) {
     if (state_ != ConflictState::InBattle || queue(active_).empty()) return;
     const ConflictInfo head = queue(active_).front();
     const auto& store = sim_->store();
-    ConflictLogEntry e;
-    e.tick = tick_;
-    e.galactic_frame = sim_->frame();
-    e.kind = head.kind;
-    e.planet = head.planet;
-    e.attacker = head.attacker;
-    e.defender = head.defender;
-    e.how = 2;
+    ConflictLogEntry e = log_entry(head, 2);
     e.winner = result.winner;
     e.loser = result.winner == head.defender ? head.attacker : head.defender;
     e.map = request_.map;
@@ -1383,7 +1412,7 @@ PlanetIndex ConflictManager::nearest_planet(PlanetIndex from, PlanetIndex exclud
     return best;
 }
 
-PlanetIndex ConflictManager::retreat_destination(int32_t player, PlanetIndex from, PlanetIndex /*came_from*/) const {
+PlanetIndex ConflictManager::retreat_destination(int32_t player, PlanetIndex from) const {
     for (int32_t f = 0; f < 4; ++f) {  // 0x2ba6c0: dd0 -> 400 -> ee0 -> 8dd0, excluding the battle planet
         const PlanetIndex p = nearest_planet(from, from, f, player);
         if (p != kInvalidPlanet) return p;

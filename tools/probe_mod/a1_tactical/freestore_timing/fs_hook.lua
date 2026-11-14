@@ -1,5 +1,5 @@
 -- ==== A1 free-store timing probe (appended to the shipped BusyTacticalFreeStore.lua by
--- tools/probe_mod/a1_tactical/freestore_timing/build_fs_mod.py) ====
+-- tools/probe_mod/a1_tactical/build_a1_mod.py) ====
 -- A1PROBE_SRC_MARK_FREESTORE_V1
 -- Logging only: the shipped functions run unchanged; the wrappers below only note when the engine calls them.
 -- No GameRandom, no spawning, no orders. Lua 5.0 (no '#', varargs via 'arg').

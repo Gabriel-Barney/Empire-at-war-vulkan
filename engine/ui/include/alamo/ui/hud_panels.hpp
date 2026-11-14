@@ -1,6 +1,6 @@
 // P4 HUD panels (docs/re/UI.md Â§2.2 shells, Â§2.3 tooltips / encyclopedia, CommandBarComponents.xml): the encyclopedia
 // pop-up, the hero roster and the FoC black-market / sabotage / corruption shells. Same host API as the galactic HUD:
-// plain data in (a frame struct), a HudDrawList + hit boxes out, clicks -> commands::EventData / HudAction out. Nothing
+// plain data in (a frame struct), a HudDrawList + hit boxes out, clicks -> HudAction out. Nothing
 // here reads or writes sim state.
 //
 // Data (CommandBarComponents.xml):
@@ -160,6 +160,9 @@ public:
     // false when none of the panel's shells is in the table.
     bool init(const ComponentTable& table, const TextureAtlas& atlas, FontCache& fonts, const TextDatabase* text = nullptr);
     void resize(uint32_t width, uint32_t height);
+    // [port: Gabriel] DPI-style UI scale (hud_canvas.hpp; 1 = 100 %, 0 = the original fitted canvas): takes effect on the
+    // next resize().
+    void set_ui_scale(float s) { canvas_.ui_scale = s > 0.0f ? s : 0.0f; }
     const HudCanvas& canvas() const { return canvas_; }
     HudLayout& layout() { return layout_; }
     HudButtons& buttons() { return buttons_; }
@@ -171,6 +174,9 @@ public:
     const std::vector<int32_t>& shells() const { return shells_; }
     int32_t active_shell() const { return open_ ? active_shell_ : -1; }
     virtual std::vector<std::string> shell_names() const = 0;
+    // Shell clicks of this frame -> `actions`. `wheel` = the frame's wheel notches (InputFrame::wheel), read by SlicePanel only.
+    virtual void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                              float wheel = 0.0f) = 0;
 
     const HudDrawList& draw_list() const { return dl_; }
     const std::vector<HudHitBox>& hit_boxes() const { return hits_; }
@@ -184,6 +190,13 @@ protected:
     void draw_slots(const PanelFrame& f);
     void end(const PanelFrame& f);
     std::vector<ButtonClick> clicks(const RoutedInput& routed, bool shift, bool ctrl, double now);
+    // Shared by build() and update_input() of the shell panels.
+    void add_text_slot(std::string_view name, std::u32string text);  // a text-only slot (text role)
+    void add_close(std::string_view name);                           // the shell's close button slot
+    HudAction click_action(const ButtonClick& k, HudAction::Kind kind) const;  // kind + component + component name
+    template <class Accept, class Fill>
+    void shell_clicks(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions,
+                      HudAction::Kind kind, Accept accept, Fill fill);
     const PanelSlot* slot_of(int32_t component) const;
     int32_t find(std::string_view name) const { return table_ ? table_->find(name) : -1; }
     virtual void fallback_layout() = 0;  // [port] positions without shell bones
@@ -259,8 +272,8 @@ class HeroPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"good_hero_frame", "evil_hero_frame"}; }
     void build(const HeroPanelFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
     uint32_t hover_hero() const;        // hovered good slot's hero object (0 = none)
     int32_t hover_component() const;    // its slot component (-1 = none)
 
@@ -280,7 +293,9 @@ struct BlackMarketItem {
     std::u32string name, description;
     int32_t cost = -1;
     bool enabled = true;       // affordable / allowed
-    int32_t tech_alt = -1;     // market_tech_level icon index (0 rebel, 1 empire), -1 hidden
+    // modc t20: the item faction's Tech_Level_Icon_Name (FoC i_button_r_tech_upgrade_ / _e_): market_tech_levelNN shows the
+    // first of its Icon_Alternate_Texture_Name entries that starts with it (any case); "" or no match: hidden.
+    std::string tech_icon;
 };
 struct BlackMarketFrame : PanelFrame {
     uint32_t planet = commands::kNoObject;  // the market's planet (reported by the click)
@@ -291,8 +306,8 @@ class BlackMarketPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"market_frame"}; }
     void build(const BlackMarketFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
 
 private:
     void fallback_layout() override;
@@ -329,10 +344,9 @@ public:
     void build(const SliceFrame& f);
     // `wheel` = this frame's wheel notches (InputFrame::wheel); used while routed.wheel_target is the HUD and the cursor
     // is over one of the panel's components.
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr, float wheel = 0.0f);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
     int32_t first_row() const { return first_; }
-    void set_first_row(int32_t row) { first_ = row < 0 ? 0 : row; }  // clamped to the rows at the next build
 
 private:
     void fallback_layout() override;
@@ -358,8 +372,8 @@ class SabotagePanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"bm_frame"}; }
     void build(const SabotageFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
 
 private:
     void fallback_layout() override;
@@ -386,8 +400,8 @@ class CorruptionPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"corruption_shell"}; }
     void build(const CorruptionFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
 
 private:
     void fallback_layout() override;
@@ -409,8 +423,8 @@ class HackPanel : public HudPanel {
 public:
     std::vector<std::string> shell_names() const override { return {"hack_shell"}; }
     void build(const HackFrame& f);
-    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
-                      std::vector<HudAction>* actions = nullptr);
+    void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<HudAction>* actions = nullptr,
+                      float wheel = 0.0f) override;
 
 private:
     void fallback_layout() override;

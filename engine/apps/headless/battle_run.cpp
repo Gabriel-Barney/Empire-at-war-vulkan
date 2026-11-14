@@ -10,6 +10,8 @@
 
 #ifdef ALAMO_SIM_HAVE_BATTLES
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
@@ -61,6 +63,7 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
     }
 #endif
     std::unique_ptr<FileProvider> files;
+    const vfs::Vfs* vfs_files = nullptr;  // = files when it is a VFS (cu8f t03: map listing)
     std::string err;
     if (!data_dir.empty()) {
         files = std::make_unique<DirectoryProvider>(data_dir);
@@ -70,12 +73,11 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
             std::fprintf(stderr, "--battles needs --game <corruption dir>, --data <dir> or ALAMO_FOC_DATA\n");
             return 2;
         }
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root;
-        vfs::parse_command_line(opt.game_args, vcfg);
-        files = vfs::Vfs::create(vcfg, &err);
+        std::unique_ptr<vfs::Vfs> v = vfs::mount_game(root, opt.game_args, &err);
+        vfs_files = v.get();
+        files = std::move(v);
         if (!files) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }
     }
@@ -123,6 +125,12 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
         bo.battle.retreat_ratio = bopt.retreat_ratio;
         bo.battle.max_frames = bopt.max_frames;
         sim::load_tactical_systems(*files, rules, &db.constants(), bo);  // Int-final: weather, retreat, strikes data
+        if (vfs_files) {
+            // cu8f t03: the random map picker's candidate table (CU8F_T03_T05_RE §1.1), built on the first pick [port].
+            bo.map_candidate_source = sim::map_candidate_source(*files, [v = vfs_files](std::string_view g, bool mod) {
+                return v->list(g, mod ? vfs::Vfs::kLayerMod : vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg);
+            });
+        }
 #ifdef ALAMO_SIM_HAVE_ANIM
         std::unique_ptr<sim::SimAnimation> animation;
         if (anim) {
@@ -174,29 +182,24 @@ int battle_run(const MapRunOptions& opt, const std::string& data_dir, const Batt
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            Out o;
-            run_one(counts[i], o, false);
-            const auto d = first_divergence(first.crc, o.crc);
-            std::printf("  workers %d vs %d: CRC %s, conflict/battle log %s\n", counts.front(), counts[i], d.message.c_str(),
-                        o.text == first.text ? "identical" : "DIFFERS");
-            if (d.diverged || o.text != first.text) ok = false;
-        }
+        ok = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                Out o;
+                run_one(w, o, false);
+                return o;
+            },
+            [](const Out& o) -> const CrcLog& { return o.crc; },
+            [&](int32_t w, const Out& o, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: CRC %s, conflict/battle log %s\n", w0, w, d.message.c_str(),
+                            o.text == first.text ? "identical" : "DIFFERS");
+                return o.text == first.text;
+            });
     }
     first.crc.comments = {"battles campaign " + name + " mode " + bopt.mode + " seed " + std::to_string(opt.seed) + " ticks " +
                           std::to_string(opt.ticks) + " aggressor " + std::to_string(bopt.aggressor_period)};
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first.crc);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.crc, ok) != 0) return 2;
     std::printf(ok ? "battles run: OK\n" : "battles run: FAILED\n");
     return ok ? 0 : 1;
 }

@@ -13,7 +13,7 @@
 #include "alamo/tactical/abilities/space_fields.hpp"
 #include "alamo/tactical/combat/weather.hpp"
 #include "alamo/tactical/abilities/special_weapons.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::tactical;
@@ -23,19 +23,12 @@ using alamo::tactical::Vec3;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 #define CHECK_EQ(a, b)                                                                                  \
     do {                                                                                                \
         const double va_ = static_cast<double>(a), vb_ = static_cast<double>(b);                        \
         if (!(va_ == vb_)) {                                                                            \
-            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, va_, vb_); \
+            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", ALAMO_TEST_FILE(), __LINE__, #a, #b, va_, vb_); \
             ++g_fail;                                                                                   \
         }                                                                                               \
     } while (0)
@@ -526,6 +519,7 @@ void test_weather() {
     WeatherSystem w;
     SimRng rng(77u), ref(77u);
     w.start(data.find("Rain_Test"), &data, 100, rng);
+    ref.range_float(3.0f, 10.0f);  // cu8g t02 (CU8G_T02_ENV_PICK_RE §4): the start draws twice, the second timer stays
     const float len0 = ref.range_float(3.0f, 10.0f) * 30.0f;
     CHECK(w.active() && w.type() == WeatherType::Clear && w.phase_index() == 0 && rng == ref);
     CHECK_EQ(w.accuracy_modifier(7), 1.0f);  // I <= 0.5: the CLEAR block

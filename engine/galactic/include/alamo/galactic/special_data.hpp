@@ -39,6 +39,8 @@ enum class SpecialAbilityClass : uint8_t {
     IncomeGambling = 6, // Planet_Income_Gambling_Ability (P4 4.2)
     Slicer = 7,         // Slicer_Ability (REMAINING_GAPS 1.1: R2D2_Slicer)
     SystemSpy = 8,      // System_Spy_Ability (GRC 2.3 / 2.3.1: planet visibility modifiers)
+    ReducePrice = 9,    // Reduce_Production_Price_Ability (A2K_T01_BUILD_COST_RE 1.3)
+    ReduceTime = 10,    // Reduce_Production_Time_Ability (same class family, the time tables)
 };
 
 struct SpecialAbilityDef {
@@ -85,6 +87,16 @@ struct SpecialAbilityDef {
     // Ground_Activated <= 0 -> 30; any other style -> style None).
     uint32_t spy_mask = 0;                     // ability +0x18C
     float spy_duration = 0.0f;                 // Duration_In_Secs
+    // Reduce_Production_Price_Ability / Reduce_Production_Time_Ability (A2K_T01_BUILD_COST_RE 1.2-1.3): the fraction
+    // (Price_Reduction_Percentage +0x178 / Time_Reduction_Percentage; >= 1.0 is set to 1.0 with a diagnostic, negative
+    // values lengthen / raise), Stacking_Category +0x17c, Galaxy_Wide +0x180 and the applicable set (0x48d070:
+    // Applicable_Unit_Categories / _Types minus Excluded_Unit_Types; "All" = every type [port choice]).
+    float production_reduction = 0.0f;
+    int32_t stacking_category = 0;
+    bool galaxy_wide = false;
+    uint64_t applicable_categories = 0;      // GameObjectCategoryType mask; ~0 = All
+    std::vector<uint32_t> applicable_types;  // type indices
+    std::vector<uint32_t> excluded_types;    // type indices
 };
 
 // BlackMarketItems.xml entry (P4 1.1), table order = file order.
@@ -103,17 +115,45 @@ struct BlackMarketItemDef {
     std::vector<std::string> used_by_units;                     // UI only [M]
 };
 
-// One corruption choice of a planet type (Corruption_N_*, P4 5.1 record 0x52c570), slot order 1, 2, 3.
+// One corruption choice of a planet type (Corruption_N_*, P4 5.1 record 0x52c570), slot order 1, 2, 3. Presentation
+// fields (speech events, briefing, Bink holograms) are not read.
+// Corruption mission [inferred until docs/re/L1_S4_REMAINING.md section C]: a choice whose Tactical_Game_Mode is Land /
+// Space and whose Tactical_Map_Name is set starts a tactical battle at the planet on that map (attacker = the corrupting
+// player, defender = the planet's owner) with Tactical_Script_Name as the tactical story (apps/sim
+// CampaignBattles::start_corruption); a choice without one corrupts the planet directly. Credits and the unit
+// requirement are charged / checked by GalacticSim::corruption_charge.
 struct CorruptionChoiceDef {
     uint32_t slot = 0;
     int8_t type = -1;                            // CorruptionTypeEnum 0..7
     float credit_cost = 0.0f;                    // Corruption_N_Credit_Cost (float)
+    // S4: the same field as an int (get_int, else the float rounded half up): start_corruption's credits pre-check and
+    // its corruption_charge fallback cost.
+    int32_t credit_cost_rounded = 0;
     std::vector<uint32_t> required_unit_types;   // Corruption_N_Required_Unit_Type (type indices, a union)
     int32_t required_unit_count = 0;
     int8_t required_mission = -1;                // Corruption_N_Required_Mission_Type
     int32_t required_mission_count = 0;
     std::vector<uint32_t> required_planets;      // Corruption_N_Required_Planets (planet type indices)
     uint32_t success_unlock = 0xFFFFFFFFu;       // Corruption_N_Success_Unlock_Unit_Type (REMAINING_GAPS 1.5 item 5)
+    // Tactical mission (S4): Corruption_N_Tactical_Game_Mode (tSubGameModeType: Galactic 0, Land 1, Space 2),
+    // Tactical_Map_Name and Tactical_Script_Name (a Story_Plots file), both trimmed.
+    bool tactical = false;        // the mode is Land / Space and the map is set
+    bool tactical_space = false;  // mode Space (else Land)
+    std::string tactical_map;
+    std::string tactical_plots;
+};
+
+// a2m r2: Bounty_On_Faction_Ability. In tactical (A2M_R2_RE_B §2.4, not modelled) the holder's player gains
+// Bounty_Percentage_Amount x the bounty (bounty.hpp) of each destroyed object owned by a Target_Faction_Names faction (max
+// per Stacking_Category, summed over categories). The galactic bounty does not read it (§2.3, ConflictManager).
+// Vanilla FoC: Underworld_Racketeering_Salvage_Effect (1.0, on the Underworld's Racketeering corruption upgrade),
+// Underworld_Planetary_Corruption_Bounty (1.2, a tactical upgrade) and NalHutta_Bounty (0.15, Nal Hutta's planet bonus).
+struct BountyAbilityDef {
+    std::string name;                     // Name attribute
+    float percentage = 0.0f;              // Bounty_Percentage_Amount
+    int32_t stacking_category = 0;        // Stacking_Category
+    std::vector<uint32_t> target_factions;  // Target_Faction_Names (GalacticRules::factions indices; unknown names dropped)
+    bool apply_to_all_allies = false;     // Apply_To_All_Allies (parsed; allies are not modelled [port])
 };
 
 // Per object type (index = TypeIndex). Default-constructed for every type without these fields.
@@ -145,10 +185,18 @@ struct TypeSpecial {
     // GRC 2.3: OR of the spy masks of this type's Initially_Enabled Galactic_Automatic System_Spy_Ability entries (the
     // always-on spies: smugglers, bounty hunters, OLRS, palaces, Bothawui). Derived at load from `abilities`.
     uint32_t auto_spy_mask = 0;
+    // SpecialRules::production indices of this type's Initially_Enabled Reduce_Production_Price / _Time abilities (list
+    // order; a team without its own uses its first member's). Kept out of `abilities` so those indices stay unchanged.
+    std::vector<uint32_t> production;
+    // a2m r2: SpecialRules::bounty indices of this type's Bounty_On_Faction_Ability entries (list order). Kept out of
+    // `abilities` so those indices stay unchanged.
+    std::vector<uint32_t> bounty;
 };
 
 struct SpecialRules {
     std::vector<SpecialAbilityDef> abilities;  // every galactic-relevant <Abilities> entry, type order then list order
+    std::vector<SpecialAbilityDef> production; // Reduce_Production_Price / _Time entries (ReducePrice / ReduceTime)
+    std::vector<BountyAbilityDef> bounty;      // a2m r2: Bounty_On_Faction_Ability entries, type order then list order
     std::vector<BlackMarketItemDef> items;     // BlackMarketItems.xml, file order
     std::vector<TypeSpecial> types;            // index = TypeIndex (empty in hand-built rules: every lookup defaults)
     // GameConstants
@@ -162,6 +210,9 @@ struct SpecialRules {
     const TypeSpecial& type(uint32_t t) const;  // a static default for unknown / missing types
     uint32_t find_item(uint32_t name_crc) const;  // table index (first match), 0xFFFFFFFF if absent (0x48f550)
     uint32_t find_item_by_name(std::string_view name) const;  // exact name (GIVE_BLACK_MARKET 0x7E: length + memcmp)
+    // 0x48d070 applicability of a ReducePrice / ReduceTime ability to type `t` with category mask `categories`:
+    // excluded types never; listed types; else the category mask ("All" = ~0 matches every type) [port choice].
+    static bool production_applies(const SpecialAbilityDef& a, uint32_t t, uint64_t categories);
 };
 
 }  // namespace alamo::galactic

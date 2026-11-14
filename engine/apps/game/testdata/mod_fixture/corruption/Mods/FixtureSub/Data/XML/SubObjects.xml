@@ -1,0 +1,6 @@
+<SubObjects>
+  <SpaceUnit Name="Sub_Frigate">
+    <Affiliation>Mod_Alliance</Affiliation>
+    <Tactical_Health>100</Tactical_Health>
+  </SpaceUnit>
+</SubObjects>

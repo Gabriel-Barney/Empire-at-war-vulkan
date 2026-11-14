@@ -78,6 +78,7 @@ struct GalacticAiTypeInfo {
     bool transport_behavior = false;   // a TRANSPORT behaviour (behaviour 5: company transports, IG-2000): not buildable
     bool generic_hero = false;         // Is_Generic_Hero (+0x14, §2.1)
     bool special_weapon_space = false; // Is_Special_Weapon_In_Space (+0x1E, §2.1)
+    bool lobbing_superweapon = false;  // LOBBING_SUPERWEAPON (0x37) in the Land behaviour set (0x370320(type, 0x37, 1))
     // Structure mask +0x1658: Garrison_Category (a company: its members' OR, OBJECT_TYPES §6.2), else
     // Space_Or_Garrison_Category [port: the original keeps the tag written last]; 0 = unset (galactic_ai_structure_mask
     // reads it as Capital).
@@ -103,8 +104,9 @@ struct GalacticAiTypeInfo {
 };
 
 // GameObjectCategoryType name -> bits; 0 if unknown. `categories` = the loaded enum (GameObjectTypes::enums(), so a mod's
-// renumbered / renamed categories resolve as the game resolves them); null or a discarded converter = the vanilla FoC
-// table (objects::EnumRegistry fallback). Vanilla data loads an enum equal to that table.
+// renumbered / renamed categories resolve as the game resolves them); null = the vanilla FoC table (objects::EnumRegistry
+// fallback); a discarded converter converts nothing (0, OBJECT_TYPES §9.1, A2k t06). Vanilla data loads an enum equal to
+// that table.
 uint64_t ai_category_bit(std::string_view name, const objects::EnumConverter* categories = nullptr);
 // Fills category_mask of every entry from its category names (same enum rule).
 void fill_category_masks(std::vector<GalacticAiTypeInfo>& types, const objects::EnumConverter* categories = nullptr);
@@ -153,6 +155,20 @@ double galactic_ai_enemy_strength(const galactic::GalacticSim& sim, std::span<co
                                   PlanetIndex planet, int32_t self, bool space, uint64_t mask,
                                   const objects::EnumConverter* categories = nullptr,
                                   const GalacticSimTokenResolver* leaves = nullptr);
+// A2k t02: the hull fraction 0x396df0 a PotentialPlan's P = AI_Combat_Power x hull uses (A2K_T02_RE_ANSWERS Q2(b)) [H]:
+// health / the type's Tactical_Health; 1.0 when the type has no maximum or the stored health is not > 0 ([port] an
+// untyped store keeps health 0).
+double galactic_ai_hull_fraction(float health, float max_health);
+// a2m t09 (A2M_T08_T10_T14_RE.md t08) [H]: the AI clock leaves. spf = FrameSynchronizer +0x24 = 1.0f / (float)FPS, a
+// float (0.033333335f). Game.Age (0x6e1f20) = (double)frame x (double)spf, one double multiply.
+// TimeSinceCorruptionChange (0x65f110) = (double)(float)((float)(uint32)(frame - stamp) x spf): the 32-bit difference is
+// converted as an unsigned value to float, multiplied in float, then widened. TimeSinceConversion / GroundConflict /
+// SpaceConflict (0x65f0c0 / 0x65f160 / 0x65f1b0) = (double)1e18f for a stamp < 0, else (double)(int32)(frame - stamp) x
+// (double)spf. Off by one frame against frame / 30 at threshold crossings (Age > 120 first holds at frame 3600).
+inline constexpr float kAiSecondsPerFrame = 1.0f / 30.0f;
+double galactic_ai_game_age(int32_t frame);
+double galactic_ai_time_since_corruption_change(int32_t frame, int32_t stamp);
+double galactic_ai_time_since_stamp(int32_t frame, int32_t stamp);
 // One entry of the PotentialPlan Contrast requirement list (0x5f1990): `row` = the EnemyContrastTypes row, -1 for a layer
 // total; `space` = layer byte 0 (space) / false = layer byte 1 (ground); `target` = the required strength.
 struct GalacticContrastEntry {
@@ -321,19 +337,15 @@ public:
     bool resolve_script(const EvalContext& ctx, std::string_view name, std::span<const Param> params,
                         double& out) const override;
 
-    // "Variable_Self.HasStructure" style key of a token path (upper-case, '.'-joined) for diagnostics.
-    static std::string path_key(Root root, std::span<const TokenId> path, const TokenTable& tokens);
-    static std::span<const std::string_view> known_paths();
     uint64_t cache_hits() const;
 
-    // N1 save / load: frame, the per-planet event stamps and last-seen values, the leaf cache (key order) and the hit
-    // counter; version 2 (q6 t03) adds the logic frame, the per-player conflict stamps and the conflict observer (log
-    // position, active record). Version 3 (q6 t18): the cache key is (leaf, instance, system player, parameter key) and
-    // every entry keeps its parameters (for the 0xE recompute); then the visible flags and the last seen surface units.
-    // A version-1 / 2 image loads with an empty leaf cache (its keys carried Target / Enemy / Human), no visible flags and
-    // the surface units taken from the sim. A version-1 image loads with no player stamps (-1) and the observer
-    // re-synchronised at its next pass (no stamp for log entries written before). The neighbour lists are rebuilt from the
-    // sim (static map data). read() fails (unchanged) unless the saved planet count is 0 (never refreshed) or the sim's.
+    // N1 save / load (version 3): frame, the per-planet event stamps and last-seen values, the leaf cache (key order; key
+    // = leaf, instance, system player, parameter key, and every entry keeps its parameters for the 0xE recompute), the
+    // hit counter, the logic frame, the per-player conflict stamps, the conflict observer (log position, active record),
+    // the visible flags and the last seen surface units. read() accepts only that version, like the other AI chunks
+    // (the version 1 / 2 images were dropped in cu6; the 2026-11-05 kGoalsVersion 2 -> 3 bump had already made saves of
+    // that time unloadable). The neighbour lists are rebuilt from the sim (static map data). read() fails (unchanged)
+    // unless the saved planet count is 0 (never refreshed) or the sim's.
     // A load is a restore: it raises no visibility signal (the original refreshes every object at a load) [port].
     void write(ByteWriter& w) const;
     bool read(ByteReader& r);

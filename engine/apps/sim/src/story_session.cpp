@@ -1,13 +1,13 @@
 #include "alamo/sim/story_session.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
 #include <map>
 
 #include "alamo/commands/pipeline.hpp"  // a1h t04: INVADE_PLANET
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
@@ -23,7 +23,7 @@
 #include "alamo/lua/script_save.hpp"       // q6 t19: story.lua v4 script blocks
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
-#include "alamo/sim/save_session.hpp"  // N1: write_section / write_if_saveable
+#include "alamo/sim/save_session.hpp"  // N1: write_system
 #if defined(ALAMO_LUA_PLAYERS)
 #include "alamo/lua/players.hpp"
 #endif
@@ -34,23 +34,8 @@ namespace alamo::sim {
 
 namespace {
 
-char lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower(a[i]) != lower(b[i])) return false;
-    return true;
-}
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
 int32_t to_int(std::string_view s, int32_t fallback) {
-    s = trim(s);
+    s = ascii_trim(s);
     if (s.empty()) return fallback;
     bool neg = false;
     size_t i = 0;
@@ -68,17 +53,9 @@ int32_t to_int(std::string_view s, int32_t fallback) {
     return static_cast<int32_t>(neg ? -v : v);
 }
 
-// Event / reward parameter i as text ("" when absent; object / player values set from Lua print as
-// "#object:<id>" / "#player:<id>" and never equal a name).
+// Event / reward parameter i as text ("" when absent).
 std::string param_text(const std::vector<lua::StoryParam>& v, size_t i) {
-    if (i >= v.size()) return {};
-    const lua::StoryParam& p = v[i];
-    switch (p.kind) {
-    case lua::StoryParam::Kind::Text: return std::string(trim(p.text));
-    case lua::StoryParam::Kind::Object: return "#object:" + std::to_string(p.id);
-    case lua::StoryParam::Kind::Player: return "#player:" + std::to_string(p.id);
-    }
-    return {};
+    return i < v.size() ? std::string(ascii_trim(v[i].text)) : std::string();
 }
 
 std::string join_params(const std::vector<lua::StoryParam>& v) {
@@ -102,7 +79,7 @@ constexpr double kDefaultServiceRate = 0.2;  // PGStateMachine Base_Definitions:
 // The galactic rules' type index `ty` names the same type in the object type database (they share one
 // index space when the rules were extracted from it; hand-made test rules may not).
 bool same_type(const objects::GameObjectTypes& types, const galactic::GalacticRules& rules, uint32_t ty) {
-    return ty < rules.types.size() && ty < types.raw().type_count() && iequal(types.raw().types().name[ty], rules.types[ty].name);
+    return ty < rules.types.size() && ty < types.raw().type_count() && ascii_iequals(types.raw().types().name[ty], rules.types[ty].name);
 }
 
 // Wave 2a: GameObjectCategoryType name -> CategoryMask bits (StoryModel::category_mask).
@@ -251,18 +228,20 @@ std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, 
     auto player_of = [&](std::string_view faction) -> int32_t {
         for (size_t p = 0; p < players.size(); ++p) {
             const uint32_t f = players[p].faction;
-            if (f < sim.rules().factions.size() && iequal(sim.rules().factions[f].name, faction)) return static_cast<int32_t>(p);
+            if (f < sim.rules().factions.size() && ascii_iequals(sim.rules().factions[f].name, faction)) return static_cast<int32_t>(p);
         }
         return -1;
     };
     std::vector<StoryPlotSet> out;
+    // [name-ok: retail campaign fields Rebel_ / Empire_ / Underworld_Story_Name (+0x48 / +0x68 / ...) read by
+    // TheStoryMode::Load_Plots for those factions' players, docs/re/STORY.md §2 "One plot table"]
     for (const char* faction : {"Rebel", "Empire", "Underworld"}) {
         const int32_t player = player_of(faction);
         if (player < 0) continue;
         const std::string tag = std::string(faction) + "_Story_Name";
         for (const auto& [t, v] : campaign.raw)
-            if (iequal(t, tag) && !trim(v).empty()) {
-                out.push_back({player, std::string(trim(v))});
+            if (ascii_iequals(t, tag) && !ascii_trim(v).empty()) {
+                out.push_back({player, std::string(ascii_trim(v))});
                 break;
             }
     }
@@ -270,7 +249,7 @@ std::vector<StoryPlotSet> campaign_plot_sets(const data::CampaignDef& campaign, 
         std::vector<std::string_view> items;
         for (size_t at = 0; at <= list.size();) {
             const size_t comma = std::min(list.find(',', at), list.size());
-            if (const std::string_view item = trim(list.substr(at, comma - at)); !item.empty()) items.push_back(item);
+            if (const std::string_view item = ascii_trim(list.substr(at, comma - at)); !item.empty()) items.push_back(item);
             at = comma + 1;
         }
         for (size_t i = 0; i + 1 < items.size(); i += 2)
@@ -290,6 +269,12 @@ StorySession::StorySession(galactic::GalacticSim& sim, objects::ObjectStore& sto
         return world->valid(a) && world->valid(b) && world->relation(a, b) == lua::PlayerRelation::Enemy;
     };
 #endif
+    // A2k t12 (A2K_T07_STORY_LOAD_RE.md §4): every spawn_unit creation (story spawn rewards, Lua Spawn_Unit, AI
+    // HIJACK_UNIT) raises CONSTRUCT inside the creating call. The sim may outlive this session: a stale hook does nothing.
+    self_ = std::make_shared<StorySession*>(this);
+    sim.set_spawn_hook([w = std::weak_ptr<StorySession*>(self_)](int32_t, PlanetIndex planet, uint32_t type) {
+        if (const auto p = w.lock(); p && *p) (*p)->dispatch_construct(planet, type, (*p)->planet_owner(planet));
+    });
     // Story VMs run on the galactic store, whose ownership / membership the GalacticSim keeps (wave 1).
     galactic::GalacticSim* gs = sim_;
     lua_->bridge.change_owner = [gs](objects::ObjectHandle h, int32_t owner) { return gs->change_owner(h, owner); };
@@ -422,6 +407,7 @@ void StorySession::poll_planets(std::vector<StoryTrigger>& batch) {
 }
 
 StorySession::~StorySession() {
+    *self_ = nullptr;  // a2k t12: the sim's spawn hook stops here
     tactical_.reset();  // VMs before the families (and the bridge) they point to
     sets_.clear();
 }
@@ -558,14 +544,15 @@ bool StorySession::start(const StoryStart& st, std::vector<std::string>* diagnos
 // code). The tech level is read per player at its turn (an earlier player's SET_TECH_LEVEL reward is seen).
 // a2j t05 (A2J_T05_STORY_LOAD.md; A2I_T01 §2 L8, §3.3, §6 "Related differences"): first the starting forces' CONSTRUCT /
 // CONSTRUCT_LEVEL (retail raises them inside the creation path 0x400b40 during L8, with the plots already loaded, so before
-// L10's tech pass). While loading_, a SPAWN_HERO / UNIQUE_UNIT reward's objects raise CONSTRUCT inside the reward call.
+// L10's tech pass). A2k t12 (A2K_T07_STORY_LOAD_RE.md §1, §5): at L8 no planet has its owner yet (0x3fa160 sets it after
+// all starting forces), so the CONSTRUCT filter judges every starting force as built on a neutral planet. A SPAWN_HERO /
+// UNIQUE_UNIT reward's objects raise CONSTRUCT inside the reward call (spawn hook), filtered on the planet's owner.
 // After each step the galactic events the load rewards raised are routed at once (route_load_events), not at T9 of tick 1.
 void StorySession::load_pass(const std::vector<LoadConstruct>& forces) {
     frame_ = 0;
     seconds_ = 0.0;
     for (const auto& s : sets_) s->model.set_clock(0, 0.0, false);
-    loading_ = true;
-    for (const LoadConstruct& c : forces) dispatch_construct(c.player, c.planet, c.type, c.level);
+    for (const LoadConstruct& c : forces) dispatch_construct(c.planet, c.type, sim_->neutral_player());
     collect_all("load:construct");
     route_load_events();
     const size_t players = sim_->players().size();
@@ -578,14 +565,13 @@ void StorySession::load_pass(const std::vector<LoadConstruct>& forces) {
             collect_all("load");  // the reward spawns' CONSTRUCT may fire events of any plot set
             route_load_events();
         }
-    loading_ = false;
 }
 
-// The galactic objects the galaxy build created (starting forces), in creation order (ObjectStore::all_objects keeps it):
-// every live unit / structure / starbase that sits at a planet (starbase, ground structures, surface, orbit fleets).
-// [port] order: the port creates GalacticSetup::forces in <Starting_Forces> entry order; retail's L8 walks "per planet"
-// (A2I_T01 §2), whose exact entry order is not in the spec (A2J_T05 open question 1). A starbase replaced by a later
-// starting-force starbase on the same planet is gone and raises nothing here.
+// The galactic objects the galaxy build created (starting forces): every live unit / structure / starbase that sits at a
+// planet (starbase, ground structures, surface, orbit fleets). A2k t12 (A2K_T07_STORY_LOAD_RE.md §1): retail's L8 walks the
+// planets in <Locations> order (= PlanetIndex order) and, per planet, the <Starting_Forces> entries in file order; the port
+// creates GalacticSetup::forces in entry order (ObjectStore::all_objects keeps it), so a stable sort by planet gives the
+// same order. A starbase replaced by a later starting-force starbase on the same planet is gone and raises nothing here.
 std::vector<StorySession::LoadConstruct> StorySession::starting_forces() const {
     std::vector<LoadConstruct> out;
     const objects::ObjectStore& st = sim_->store();
@@ -593,62 +579,59 @@ std::vector<StorySession::LoadConstruct> StorySession::starting_forces() const {
     const auto& types = sim_->rules().types;
     constexpr PlanetIndex kNowhere = kInvalidPlanet;
     std::vector<PlanetIndex> where(st.capacity(), kNowhere);
-    std::vector<int32_t> level(st.capacity(), 0);
-    auto put = [&](objects::ObjectHandle h, PlanetIndex p, int32_t lv) {
-        if (!st.alive(h) || h.slot() >= where.size()) return;
-        where[h.slot()] = p;
-        level[h.slot()] = lv;
+    auto put = [&](objects::ObjectHandle h, PlanetIndex p) {
+        if (st.alive(h) && h.slot() < where.size()) where[h.slot()] = p;
     };
     for (PlanetIndex i = 0; i < planets.size(); ++i) {
         const galactic::PlanetState& p = planets[i];
-        put(p.starbase, i, p.starbase_level);
-        int32_t ground = 0;  // ground_base_level as of each structure's creation (the list is in creation order)
-        for (const objects::ObjectHandle h : p.structures) {
-            if (st.alive(h) && static_cast<size_t>(st.type(h)) < types.size() &&
-                galactic::is_ground_structure_type(types[static_cast<size_t>(st.type(h))]))
-                ++ground;
-            put(h, i, ground);
-        }
-        for (const objects::ObjectHandle h : p.surface) put(h, i, 0);
+        put(p.starbase, i);
+        for (const objects::ObjectHandle h : p.structures) put(h, i);
+        for (const objects::ObjectHandle h : p.surface) put(h, i);
     }
     for (const galactic::FleetState& f : sim_->fleets())
         if (f.alive)
-            for (const objects::ObjectHandle h : f.contents) put(h, f.planet, 0);
+            for (const objects::ObjectHandle h : f.contents) put(h, f.planet);
     for (const objects::ObjectHandle h : st.all_objects()) {
         if (!st.alive(h) || h.slot() >= where.size() || where[h.slot()] == kNowhere) continue;
         const auto ty = static_cast<uint32_t>(st.type(h));
         if (ty >= types.size()) continue;
-        out.push_back({st.owner(h), where[h.slot()], ty, level[h.slot()]});
+        out.push_back({where[h.slot()], ty});
     }
+    std::stable_sort(out.begin(), out.end(), [](const LoadConstruct& x, const LoadConstruct& y) { return x.planet < y.planet; });
     return out;
 }
 
-void StorySession::construct_notifications(int32_t player, PlanetIndex planet, uint32_t type, int32_t level,
+int32_t StorySession::planet_owner(PlanetIndex planet) const {
+    return planet < sim_->planets().size() ? sim_->planets()[planet].owner : galactic::kNoPlayer;
+}
+
+// A2k t12 (A2K_T07_STORY_LOAD_RE.md §3, §5; 0x326cd0): CONSTRUCT with no player scope, judged by the planet's owner
+// `owner` (never the creating player); then CONSTRUCT_LEVEL only for a starbase type (DUMMY_STAR_BASE; the port creates
+// no ground-base type, and 0x5B raises nothing), carrying the type's Base_Level, not the planet's level. A ground
+// structure raises CONSTRUCT only.
+void StorySession::construct_notifications(int32_t owner, PlanetIndex planet, uint32_t type,
                                            std::vector<std::pair<std::string, lua::StoryNotification>>& out) const {
     lua::StoryNotification n;
-    n.owner = player;
-    n.owner_neutral = player >= 0 && player == sim_->neutral_player();
+    n.owner = owner;
+    n.owner_neutral = owner < 0 || owner == sim_->neutral_player();  // owner -1 resolves to the neutral faction
     n.planet = planet_type_name(planet);
     if (type < sim_->rules().types.size()) n.name = sim_->rules().types[type].name;
-    n.has_object = true;  // the planet [M: filter on the producing player]
+    n.has_object = true;  // the planet
     out.emplace_back("STORY_CONSTRUCT", n);
-    if (type < sim_->rules().types.size() && planet < sim_->planets().size()) {
-        const galactic::UnitKind k = sim_->rules().types[type].kind;
-        if (k == galactic::UnitKind::StarBase || k == galactic::UnitKind::GroundStructure) {
-            lua::StoryNotification lv = n;
-            lv.category = k == galactic::UnitKind::StarBase ? 0 : 1;
-            if (level >= 0) lv.value = level;
-            else lv.value = k == galactic::UnitKind::StarBase ? sim_->planets()[planet].starbase_level : sim_->ground_base_level(planet);
-            out.emplace_back("STORY_CONSTRUCT_LEVEL", lv);
-        }
+    if (type < sim_->rules().types.size() && planet < sim_->planets().size() &&
+        sim_->rules().types[type].kind == galactic::UnitKind::StarBase) {
+        lua::StoryNotification lv = n;
+        lv.category = 1;  // SPACE
+        lv.value = sim_->rules().types[type].base_level;
+        out.emplace_back("STORY_CONSTRUCT_LEVEL", lv);
     }
 }
 
 // Unscoped like the ProductionCompleted route: every galactic plot set in set order, CONSTRUCT then CONSTRUCT_LEVEL.
 // Nothing is collected here (a reward's nested call must not log the firing event under another cause).
-void StorySession::dispatch_construct(int32_t player, PlanetIndex planet, uint32_t type, int32_t level) {
+void StorySession::dispatch_construct(PlanetIndex planet, uint32_t type, int32_t owner) {
     std::vector<std::pair<std::string, lua::StoryNotification>> list;
-    construct_notifications(player, planet, type, level, list);
+    construct_notifications(owner, planet, type, list);
     for (size_t si = 0; si < sets_.size(); ++si)
         for (const auto& [name, n] : list) sets_[si]->model.dispatch(name, n);
 }
@@ -780,8 +763,9 @@ std::vector<std::pair<std::string, lua::StoryNotification>> StorySession::notifi
             out.emplace_back("STORY_CONQUER_COUNT", n);
             break;
         case K::ProductionCompleted:
-            // The planet's levels now (the stream is routed at the start of T9, after the creation) [port].
-            construct_notifications(e.player, e.planet, e.type, -1, out);
+            // A2k t12: filtered on the planet's owner now (the stream is routed at the start of T9, after the creation;
+            // retail raises it inside the creation) [port].
+            construct_notifications(planet_owner(e.planet), e.planet, e.type, out);
             break;
         case K::FleetArrived:
             if (e.value == galactic::kArrivePassThrough) break;  // [port] stopping arrivals only
@@ -955,7 +939,7 @@ void StorySession::invade_planet_reward(int32_t plot_player, PlanetIndex planet,
         for (const objects::ObjectHandle u : fl.contents) {
             if (!store.alive(u) || sim_->rules().types[store.type(u)].kind != galactic::UnitKind::GroundUnit) continue;
             std::string name = sim_->rules().types[store.type(u)].name;
-            std::transform(name.begin(), name.end(), name.begin(), [](char ch) { return static_cast<char>(std::toupper(static_cast<unsigned char>(ch))); });
+            ascii_upper_in_place(name);
             if (!company.empty() && name != company) {
                 lua_messages_.push_back(std::to_string(frame_) + " story: INVADE PLANET - " + name + " does not match " + company);
                 continue;
@@ -983,7 +967,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         if (player >= 0 && sim_->max_tech_level(player) < level) sim_->set_max_tech_level(player, level);
         if (player >= 0) sim_->set_tech_level(player, level, true);
     } else if (type == "CREDITS") {
-        if (s.player >= 0) sim_->add_credits(s.player, static_cast<float>(to_int(at(0), 0)), false);
+        if (s.player >= 0) sim_->add_credits(s.player, static_cast<float>(to_int(at(0), 0)), true);  // 0x456970: notify on (A2K_T10 Q3)
     } else if (type == "LINK_TACTICAL") {  // wave 2a: recorded for the battle host / begin_battle (not applied here)
         StoryLinkedTactical l;
         l.frame = frame_;
@@ -991,14 +975,14 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         l.params = params;
         linked_.push_back(std::move(l));
     } else if (type == "ENABLE_FOW") {  // fog follow-up (FOG_OF_WAR.md §6.6): no Param1 -> FOW off; atoi(P1) 0 -> off + hidden
-        const std::string p1 = std::string(trim(at(0)));
+        const std::string p1 = std::string(ascii_trim(at(0)));
         if (enable_fow_) enable_fow_(!p1.empty(), static_cast<int32_t>(std::atoi(p1.c_str())));
     } else if (type == "SWITCH_CONTROL") {  // q6 (AI_GALACTIC.md §1.2, reward case 0x30): the host's AI (header)
         StorySwitchControl sw;
         sw.frame = frame_;
         sw.plot_set = s.number;
-        sw.player_text = std::string(trim(at(0)));
-        sw.ai_type = std::string(trim(at(1)));
+        sw.player_text = std::string(ascii_trim(at(0)));
+        sw.ai_type = std::string(ascii_trim(at(1)));
         if (sw.player_text.rfind("#player:", 0) == 0) {
             const int32_t p = to_int(sw.player_text.substr(8), -1);
             sw.player = p >= 0 && static_cast<size_t>(p) < sim_->players().size() ? p : -1;
@@ -1008,7 +992,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         if (switch_control_) switch_control_(sw);
     } else if (type == "ENABLE_VICTORY" || type == "VICTORY") {  // story t06 wiring: tactical plot set -> the battle
         const bool tactical = tactical_ && tactical_->set.get() == &s;
-        const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
+        const std::string p1 = std::string(ascii_trim(at(0))), p2 = std::string(ascii_trim(at(1)));
         if (tactical && type == "ENABLE_VICTORY" && enable_victory_)
             enable_victory_(!p1.empty(), static_cast<int32_t>(std::atoi(p1.c_str())));
         else if (tactical && type == "VICTORY" && victory_)
@@ -1026,30 +1010,30 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // (SPACE 1 -> space slot; 0 / missing -> land slot; anything else: "invalid location (GROUND/SPACE)", ignored);
         // Reward_Param3 = a faction name kept with the slot (forced faction [M], not applied by the port).
         const std::string loc_text = at(1);
-        const std::string_view loc = trim(loc_text);
-        const std::string map = std::string(trim(at(0)));
-        if (loc.empty() || loc == "0" || iequal(loc, "GROUND") || iequal(loc, "LAND")) tactical_map_[0] = map;
-        else if (iequal(loc, "SPACE") || loc == "1") tactical_map_[1] = map;
+        const std::string_view loc = ascii_trim(loc_text);
+        const std::string map = std::string(ascii_trim(at(0)));
+        if (loc.empty() || loc == "0" || ascii_iequals(loc, "GROUND") || ascii_iequals(loc, "LAND")) tactical_map_[0] = map;
+        else if (ascii_iequals(loc, "SPACE") || loc == "1") tactical_map_[1] = map;
         else lua_messages_.push_back(std::to_string(frame_) + " story: SET_TACTICAL_MAP failed due to invalid location (GROUND/SPACE): '" +
                                      std::string(loc) + "' (" + std::to_string(params.size()) + " params)");
     }
     // --- P4 lua (P4_SIM_SYSTEMS 1.4 / 2.4) ---
     else if (type == "GIVE_BLACK_MARKET") {  // 0x7E: the item whose Name equals Param1 (exact), to the plot's player, free
         const std::string item = at(0);
-        if (s.player >= 0) sim_->bm_give_item(s.player, trim(item));
+        if (s.player >= 0) sim_->bm_give_item(s.player, ascii_trim(item));
     } else if (type == "SABOTAGE_STRUCTURE") {
         // 0x81: Param1 planet, Param2 structure type: the first structure of that type there is destroyed (no cost, no
         // saboteur; GALACTIC_SABOTAGE to every plot set, counter + 1). L1P4_LUA_GAPS 3: both params required; Param1 is a
         // game object type name (case-insensitive), the planet is the first planet row of that type (no map-name match);
         // Param2 the structure type, ground special structures only (GalacticSim::sabotage_structure_reward).
-        const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
+        const std::string p1 = std::string(ascii_trim(at(0))), p2 = std::string(ascii_trim(at(1)));
         if (p1.empty() || p2.empty()) {
             lua_messages_.push_back(std::to_string(frame_) +
                                     " story: SABOTAGE_STRUCTURE takes two parameters, a planet name and building type");
         } else {
             PlanetIndex row = kInvalidPlanet;
             for (PlanetIndex i = 0; i < sim_->planets().size() && row == kInvalidPlanet; ++i)
-                if (iequal(planet_type_name(i), p1)) row = i;
+                if (ascii_iequals(planet_type_name(i), p1)) row = i;
             const uint32_t type_index = sim_->rules().find_type(p2);
             if (row == kInvalidPlanet)
                 lua_messages_.push_back(std::to_string(frame_) + " story: SABOTAGE_STRUCTURE failed due to invalid planet " + p1);
@@ -1060,10 +1044,10 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
     // --- end P4 lua ---
     // --- a1h t04 (A1_READINGS §31.6) ---
     else if (type == "INVADE_PLANET") {
-        const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
+        const std::string p1 = std::string(ascii_trim(at(0))), p2 = std::string(ascii_trim(at(1)));
         PlanetIndex row = kInvalidPlanet;
         for (PlanetIndex i = 0; !p1.empty() && i < sim_->planets().size() && row == kInvalidPlanet; ++i)
-            if (iequal(planet_type_name(i), p1)) row = i;
+            if (ascii_iequals(planet_type_name(i), p1)) row = i;
         if (!p1.empty() && row == kInvalidPlanet)  // [port] the original logs and then crashes on the null planet
             lua_messages_.push_back(std::to_string(frame_) + " story: INVADE_PLANET unable to find planet " + p1);
         else if (row != kInvalidPlanet)
@@ -1074,7 +1058,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // 0x4D: Param1 = unit type name (shipped data), locked for the plot's player in the same list as the super-weapon
         // hack and Lua Lock_Tech (GalacticSim::lock_type). Unknown type: logged, ignored [port message].
         const std::string p1 = at(0);
-        const uint32_t type_index = sim_->rules().find_type(trim(p1));
+        const uint32_t type_index = sim_->rules().find_type(ascii_trim(p1));
         if (s.player >= 0 && type_index != galactic::kNoIndex) sim_->lock_type(s.player, type_index, true);
         else if (type_index == galactic::kNoIndex)
             lua_messages_.push_back(std::to_string(frame_) + " story: LOCK_UNIT failed due to unknown unit type '" + p1 + "'");
@@ -1083,8 +1067,8 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // Param2 (the type it supersedes, e.g. Z95 -> X-Wing) joins the locked list; then the Good_Side_Name faction
         // raises its tech when no sliceable candidate remains (GalacticSim::buildable_unit_reward).
         const std::string p1 = at(0), p2 = at(1);
-        const uint32_t type_index = sim_->rules().find_type(trim(p1));
-        const uint32_t obsolete = trim(p2).empty() ? galactic::kNoIndex : sim_->rules().find_type(trim(p2));
+        const uint32_t type_index = sim_->rules().find_type(ascii_trim(p1));
+        const uint32_t obsolete = ascii_trim(p2).empty() ? galactic::kNoIndex : sim_->rules().find_type(ascii_trim(p2));
         if (s.player >= 0 && type_index != galactic::kNoIndex) sim_->buildable_unit_reward(s.player, type_index, obsolete);
         else if (type_index == galactic::kNoIndex)
             lua_messages_.push_back(std::to_string(frame_) + " story: " + type + " failed due to unknown unit type '" + p1 + "'");
@@ -1092,7 +1076,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // REMAINING_GAPS 1.5 (reward 0x70): Param1 leaves the plot player's production-disabled list (GUI build bar and
         // AI production only; not buildability, not an unlock).
         const std::string p1 = at(0);
-        const uint32_t type_index = sim_->rules().find_type(trim(p1));
+        const uint32_t type_index = sim_->rules().find_type(ascii_trim(p1));
         if (s.player >= 0 && type_index != galactic::kNoIndex) sim_->set_production_disabled(s.player, type_index, false);
         else if (type_index == galactic::kNoIndex)
             lua_messages_.push_back(std::to_string(frame_) + " story: " + type + " failed due to unknown unit type '" + p1 + "'");
@@ -1101,15 +1085,15 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // timed removal (wrapper 0x3f6770, GRC 4.3) over Param2 seconds (default 10.0; the sim's guard refuses an
         // uncorrupted planet or a running transition). No shipped event uses it.
         const std::string p1 = at(0);
-        const std::string_view pn = trim(p1);
+        const std::string_view pn = ascii_trim(p1);
         const auto& names = sim_->map().planets.name;
         PlanetIndex row = kInvalidPlanet;
         for (PlanetIndex i = 0; i < sim_->planets().size() && row == kInvalidPlanet; ++i)
-            if ((i < names.size() && iequal(names[i], pn)) || iequal(planet_type_name(i), pn)) row = i;
+            if ((i < names.size() && ascii_iequals(names[i], pn)) || ascii_iequals(planet_type_name(i), pn)) row = i;
         if (row == kInvalidPlanet)
             lua_messages_.push_back(std::to_string(frame_) + " story: REMOVE_CORRUPTION failed due to unknown planet '" + p1 + "'");
         else {
-            const std::string p2 = std::string(trim(at(1)));
+            const std::string p2 = std::string(ascii_trim(at(1)));
             const float seconds = p2.empty() ? 10.0f : std::strtof(p2.c_str(), nullptr);
             sim_->begin_corruption_removal(row, seconds);
         }
@@ -1118,7 +1102,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
     else if (type == "REVEAL_PLANET") {
         // 0x33: Param1 planet TYPE name, Param2 int; both required (else a no-op): every planet of that type gets the
         // local player's revealed byte := atoi(Param2) != 0.
-        const std::string p1 = std::string(trim(at(0))), p2 = std::string(trim(at(1)));
+        const std::string p1 = std::string(ascii_trim(at(0))), p2 = std::string(ascii_trim(at(1)));
         if (!p1.empty() && !p2.empty()) {
             const uint32_t type_index = sim_->rules().find_type(p1);
             if (type_index != galactic::kNoIndex) sim_->reveal_planets_of_type(type_index, to_int(p2, 0) != 0);
@@ -1127,7 +1111,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
     } else if (type == "REVEAL_ALL_PLANETS") {  // 0x39
         sim_->reveal_all_planets();
     } else if (type == "ENABLE_GALACTIC_REVEAL") {  // 0x44: auto-reveal := atoi(Param1) != 0; missing Param1 -> logged
-        const std::string p1 = std::string(trim(at(0)));
+        const std::string p1 = std::string(ascii_trim(at(0)));
         if (p1.empty()) lua_messages_.push_back(std::to_string(frame_) + " story: ENABLE_GALACTIC_REVEAL failed due to missing Param1");
         else sim_->set_planet_auto_reveal(to_int(p1, 0) != 0);
     }
@@ -1135,13 +1119,13 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // 0x51 (GRC 2.3, 0x461a60): Param1 planet (map name, else planet type name [port], as REMOVE_CORRUPTION), Param2
         // faction, Param3 level name or "none" (remove), Param4 entry key, Param5 seconds (missing = -1 = never).
         const std::string p1 = at(0);
-        const std::string_view pn = trim(p1);
+        const std::string_view pn = ascii_trim(p1);
         const auto& names = sim_->map().planets.name;
         PlanetIndex row = kInvalidPlanet;
         for (PlanetIndex i = 0; i < sim_->planets().size() && row == kInvalidPlanet; ++i)
-            if ((i < names.size() && iequal(names[i], pn)) || iequal(planet_type_name(i), pn)) row = i;
-        const std::string p2 = std::string(trim(at(1))), p3 = std::string(trim(at(2))), p4 = std::string(trim(at(3))),
-                          p5 = std::string(trim(at(4)));
+            if ((i < names.size() && ascii_iequals(names[i], pn)) || ascii_iequals(planet_type_name(i), pn)) row = i;
+        const std::string p2 = std::string(ascii_trim(at(1))), p3 = std::string(ascii_trim(at(2))), p4 = std::string(ascii_trim(at(3))),
+                          p5 = std::string(ascii_trim(at(4)));
         const float seconds = p5.empty() ? -1.0f : static_cast<float>(std::atof(p5.c_str()));
         if (row == kInvalidPlanet)
             lua_messages_.push_back(std::to_string(frame_) + " story: " + type + " failed due to unknown planet '" + p1 + "'");
@@ -1155,7 +1139,7 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // REMAINING_GAPS 1.5 (reward 0x6F): Param1 joins the plot player's production-disabled list (GUI build bar and
         // AI production only; buildability ignores it). ENABLE_BUILDABLE removes it.
         const std::string p1 = at(0);
-        const uint32_t type_index = sim_->rules().find_type(trim(p1));
+        const uint32_t type_index = sim_->rules().find_type(ascii_trim(p1));
         if (s.player >= 0 && type_index != galactic::kNoIndex) sim_->set_production_disabled(s.player, type_index, true);
         else if (type_index == galactic::kNoIndex)
             lua_messages_.push_back(std::to_string(frame_) + " story: DISABLE_BUILDABLE failed due to unknown unit type '" + p1 + "'");
@@ -1168,14 +1152,14 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
         // planet without one, none -> keep. [port] "fully owned" = PlanetState::owner (the port keeps one owner field).
         // Each copy goes through GalacticSim::spawn_unit (the planet create path 0x400b40; companies as transports).
         const std::string p1 = at(0), p2 = at(1), p3 = at(2);
-        const std::string_view pn = trim(p2);
-        const uint32_t type_index = sim_->rules().find_type(trim(p1));
+        const std::string_view pn = ascii_trim(p2);
+        const uint32_t type_index = sim_->rules().find_type(ascii_trim(p1));
         const auto& names = sim_->map().planets.name;
         const auto& planets = sim_->planets();
         PlanetIndex row = kInvalidPlanet;
         if (!pn.empty())
             for (PlanetIndex i = 0; i < planets.size() && row == kInvalidPlanet; ++i)
-                if ((i < names.size() && iequal(names[i], pn)) || iequal(planet_type_name(i), pn)) row = i;
+                if ((i < names.size() && ascii_iequals(names[i], pn)) || ascii_iequals(planet_type_name(i), pn)) row = i;
         const int32_t pl = s.player;
         auto owned = [&](PlanetIndex i) { return planets[i].is_planet && !planets[i].destroyed && planets[i].owner == pl; };
         if (row == kInvalidPlanet && pl >= 0)
@@ -1200,13 +1184,12 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
             if (const PlanetIndex n = nearest(row, false); n != kInvalidPlanet) row = n;
         if (row != kInvalidPlanet && pl >= 0 && sim_->blockaded(row, pl))
             if (const PlanetIndex n = nearest(row, true); n != kInvalidPlanet) row = n;
-        const int32_t copies = trim(p3).empty() ? 1 : to_int(p3, 1);
+        const int32_t copies = ascii_trim(p3).empty() ? 1 : to_int(p3, 1);
         if (pl >= 0 && type_index != galactic::kNoIndex && row != kInvalidPlanet) {
-            // a2j t05: in the load pass each created copy raises CONSTRUCT inside the creation call, as 0x400b40 does
-            // (A2I_T01 §3.3); at T9 spawn_unit raises no story event (open item, A2J_T05_STORY_LOAD.md).
-            for (int32_t k = 0; k < copies; ++k)
-                if (sim_->spawn_unit(pl, row, type_index) && loading_) dispatch_construct(pl, row, type_index, -1);
-        } else if (!trim(p1).empty()) {
+            // Each created copy raises CONSTRUCT inside the creation call (spawn hook), as 0x400b40 does (A2I_T01 §3.3,
+            // A2K_T07_STORY_LOAD_RE.md §4): at load and at T9 alike.
+            for (int32_t k = 0; k < copies; ++k) sim_->spawn_unit(pl, row, type_index);
+        } else if (!ascii_trim(p1).empty()) {
             lua_messages_.push_back(std::to_string(frame_) + " story: " + type + " failed for '" + p1 + "' at '" + p2 + "'");
         }
     } else if (type == "SET_MAX_TECH_LEVEL") {
@@ -1219,11 +1202,11 @@ void StorySession::apply_reward(Set& s, const std::string& type, const std::vect
     } else if (type == "RESTRICT_AUTORESOLVE") {
         // Param1 planet (map name, else planet type name [port]), Param2 1 = add to the lock list, 0 = remove [M].
         const std::string p1 = at(0);
-        const std::string_view pn = trim(p1);
+        const std::string_view pn = ascii_trim(p1);
         const auto& names = sim_->map().planets.name;
         PlanetIndex row = kInvalidPlanet;
         for (PlanetIndex i = 0; i < sim_->planets().size() && row == kInvalidPlanet; ++i)
-            if ((i < names.size() && iequal(names[i], pn)) || iequal(planet_type_name(i), pn)) row = i;
+            if ((i < names.size() && ascii_iequals(names[i], pn)) || ascii_iequals(planet_type_name(i), pn)) row = i;
         if (row != kInvalidPlanet) {
             const auto it = std::find(autoresolve_planets_.begin(), autoresolve_planets_.end(), row);
             if (to_int(at(1), 1) != 0) {
@@ -1508,6 +1491,38 @@ std::string_view tactical_story_event_type(TacticalStoryEvent e) {
 }
 
 bool StorySession::battle_attached() const { return tactical_ != nullptr; }
+
+// bkc1 t01 (BKC1_RE_ANSWERS Q1: controller key-down 0x2cbd00 / the Esc tail of 0x61fe0 -> 0x328440).
+bool StorySession::esc_goes_to_story() const {
+    const lua::PresentationState& p = lua_->presentation.state();
+    return p.camera == lua::CameraMode::Cinematic && p.movie.empty();
+}
+
+uint32_t StorySession::handle_esc() {
+    uint32_t calls = 0;
+    auto offer = [&](Set& s) {
+        for (const uint32_t p : s.model.plot_order()) {
+            if (p >= s.model.plot_count() || !s.model.plot(p).active) continue;
+            for (Script& sc : s.scripts) {
+                if (sc.plot != p || !sc.vm || !sc.vm->has_function("Story_Handle_Esc")) continue;
+                sc.vm->set_time(s.model.time());  // the set's last T9 clock, not the script's last service
+                sc.vm->set_frame(s.model.frame());
+                std::string err;
+                if (!sc.vm->call("Story_Handle_Esc", &err) && !err.empty()) lua_note(sc, err);
+                ++calls;
+                const auto& errors = sc.vm->errors();
+                for (; sc.errors_seen < errors.size(); ++sc.errors_seen) lua_note(sc, errors[sc.errors_seen]);
+                collect_set(s, s.number, "esc");
+            }
+        }
+    };
+    if (tactical_) {
+        if (tactical_->set) offer(*tactical_->set);
+    } else {
+        for (auto& s : sets_) offer(*s);
+    }
+    return calls;
+}
 int32_t StorySession::tactical_player() const { return tactical_ && tactical_->set ? tactical_->set->player : -1; }  // S4
 std::string StorySession::tactical_plots_file() const { return tactical_ && tactical_->set ? tactical_->set->file : std::string(); }
 const lua::StoryModel* StorySession::tactical_model() const { return tactical_ && tactical_->set ? &tactical_->set->model : nullptr; }
@@ -1604,7 +1619,7 @@ bool StorySession::begin_battle(const StoryBattleStart& s, uint64_t frame, std::
             for (size_t i = before; i < fired.size(); ++i) {
                 if (fired[i].event_type != type || !plots.empty()) continue;
                 const auto& ep = set.model.plot(fired[i].plot).events[fired[i].event].event_params;
-                const std::string file = ep.empty() ? std::string() : std::string(trim(ep[0].text));
+                const std::string file = ep.empty() ? std::string() : std::string(ascii_trim(ep[0].text));
                 if (!file.empty()) {
                     plots = file;
                     named_by = set.player;
@@ -1615,11 +1630,11 @@ bool StorySession::begin_battle(const StoryBattleStart& s, uint64_t frame, std::
         // A LINK_TACTICAL reward for this planet and kind (Param1 planet, Param2 SPACE / LAND / GROUND, Param7 plots).
         if (plots.empty())
             for (StoryLinkedTactical& l : linked_) {
-                if (l.used || l.params.size() < 7 || trim(l.params[6]).empty()) continue;
-                const std::string_view where = trim(l.params[0]), kind = trim(l.params[1]);
-                const bool kind_ok = space ? iequal(kind, "SPACE") : (iequal(kind, "LAND") || iequal(kind, "GROUND"));
-                if (!kind_ok || !(iequal(where, n.planet) || iequal(where, t.planet))) continue;
-                plots = std::string(trim(l.params[6]));
+                if (l.used || l.params.size() < 7 || ascii_trim(l.params[6]).empty()) continue;
+                const std::string_view where = ascii_trim(l.params[0]), kind = ascii_trim(l.params[1]);
+                const bool kind_ok = space ? ascii_iequals(kind, "SPACE") : (ascii_iequals(kind, "LAND") || ascii_iequals(kind, "GROUND"));
+                if (!kind_ok || !(ascii_iequals(where, n.planet) || ascii_iequals(where, t.planet))) continue;
+                plots = std::string(ascii_trim(l.params[6]));
                 l.used = true;
                 if (l.plot_set >= 0 && static_cast<size_t>(l.plot_set) < sets_.size()) named_by = sets_[static_cast<size_t>(l.plot_set)]->player;
                 break;
@@ -1689,7 +1704,7 @@ bool StorySession::load_tactical(const std::string& plots, int32_t player, std::
         const objects::ObjectStore* st = tactical_ ? tactical_->store : nullptr;
         if (!st) return false;
         for (const objects::ObjectHandle h : st->all_objects()) {
-            if (!st->alive(h) || !iequal(type_name_of(*types_, st->type(h)), type)) continue;
+            if (!st->alive(h) || !ascii_iequals(type_name_of(*types_, st->type(h)), type)) continue;
             const Vec3 p = st->position(h);
             const double dx = p.x - x, dy = p.y - y, dz = p.z - z;
             if (dmath::sqrt(dx * dx + dy * dy + dz * dz) < range) return true;
@@ -1954,7 +1969,7 @@ void StorySession::poll_tactical() {
     const objects::ObjectStore* st = tac.store;
     if (!st) return;
     const int32_t local = s.player;
-    auto upper_eq = [](std::string_view a, std::string_view b) { return iequal(a, b); };
+    auto upper_eq = [](std::string_view a, std::string_view b) { return ascii_iequals(a, b); };
     auto in_list = [&](std::string_view list, std::string_view name) {
         std::string_view rest = list;
         while (!rest.empty()) {
@@ -1969,7 +1984,7 @@ void StorySession::poll_tactical() {
         return false;
     };
     auto param = [](const lua::StoryEventDef& d, size_t i) -> std::string_view {
-        return i < d.event_params.size() ? trim(d.event_params[i].text) : std::string_view();
+        return i < d.event_params.size() ? ascii_trim(d.event_params[i].text) : std::string_view();
     };
     // A copy: a fired event's reward / Story_Event_Trigger may create or destroy objects.
     const auto span = st->all_objects();
@@ -2013,13 +2028,13 @@ void StorySession::poll_tactical() {
     };
     s.model.poll("STORY_CHECK_DESTROYED", [&](const lua::StoryEventDef& d) {
         const std::string_view kw = param(d, 1);
-        const int32_t mode = iequal(kw, "DESTROY_ALL") ? 1 : iequal(kw, "DESTROY_ALL_UNITS") ? 2 : iequal(kw, "DESTROY_ALL_STRUCTURES") ? 3
-                             : iequal(kw, "DESTROY_ALL_INDIGENOUS_SPAWNERS")                                                 ? 4
+        const int32_t mode = ascii_iequals(kw, "DESTROY_ALL") ? 1 : ascii_iequals(kw, "DESTROY_ALL_UNITS") ? 2 : ascii_iequals(kw, "DESTROY_ALL_STRUCTURES") ? 3
+                             : ascii_iequals(kw, "DESTROY_ALL_INDIGENOUS_SPAWNERS")                                                 ? 4
                                                                                                                              : 0;
         if (mode == 4) {
             const std::string_view type = param(d, 2);
             for (const objects::ObjectHandle h : all)
-                if (st->alive(h) && st->has_behavior(h, kSpawner) && (type.empty() || iequal(type_name_of(*types_, st->type(h)), type)))
+                if (st->alive(h) && st->has_behavior(h, kSpawner) && (type.empty() || ascii_iequals(type_name_of(*types_, st->type(h)), type)))
                     return false;
             return true;
         }
@@ -2057,7 +2072,7 @@ void StorySession::poll_tactical() {
         s.model.poll("STORY_FOG_OBJECT_REVEAL", [&](const lua::StoryEventDef& d) {
             const std::string_view type = param(d, 0);
             for (const objects::ObjectHandle h : all)
-                if (st->alive(h) && iequal(type_name_of(*types_, st->type(h)), type) && tac.fog_object_visible(local, st->id(h)))
+                if (st->alive(h) && ascii_iequals(type_name_of(*types_, st->type(h)), type) && tac.fog_object_visible(local, st->id(h)))
                     return true;
             return false;
         });
@@ -2169,7 +2184,7 @@ void StorySession::write(ByteWriter& w) const {
         const Set& s = *sp;
         w.i32(s.player).u32(s.number).str(s.file).u32(static_cast<uint32_t>(s.model.plot_count())).u32(static_cast<uint32_t>(s.scripts.size()));
         w.boolean(s.credits_seen).f32(s.last_credits).u64(static_cast<uint64_t>(s.fired_seen));
-        write_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
+        put_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
     }
     write_triggers(w, triggers_);
     write_triggers(w, pending_host_);
@@ -2211,7 +2226,7 @@ void StorySession::write(ByteWriter& w) const {
     // v3: the holocron list; a record names its event's plot set by number (galactic sets, then the tactical one).
     w.boolean(holocron() != nullptr);
     if (const lua::StoryHolocron* h = holocron())
-        write_section(w, [this, h](ByteWriter& sub) {
+        put_section(w, [this, h](ByteWriter& sub) {
             h->write(sub, [this](const lua::StoryModel* m) -> int32_t {
                 for (const auto& sp : sets_)
                     if (&sp->model == m) return static_cast<int32_t>(sp->number);
@@ -2229,7 +2244,7 @@ void StorySession::write(ByteWriter& w) const {
         const Set& s = *t.set;
         w.i32(s.player).u32(s.number).str(s.file).u32(static_cast<uint32_t>(s.model.plot_count())).u32(static_cast<uint32_t>(s.scripts.size()));
         w.boolean(s.credits_seen).f32(s.last_credits).u64(static_cast<uint64_t>(s.fired_seen));
-        write_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
+        put_section(w, [&s](ByteWriter& sub) { s.model.write(sub); });
     }
     w.u32(static_cast<uint32_t>(t.pending.size()));
     for (const Tactical::Pending& p : t.pending) {
@@ -2239,7 +2254,7 @@ void StorySession::write(ByteWriter& w) const {
         w.boolean(p.has_position).f64(p.x).f64(p.y).f64(p.z);
     }
     w.boolean(t.own_bridge != nullptr);
-    if (t.own_bridge) write_section(w, [&t](ByteWriter& sub) { write_if_saveable(*t.own_bridge, sub); });
+    if (t.own_bridge) put_section(w, [&t](ByteWriter& sub) { write_system(*t.own_bridge, sub); });
 }
 
 bool StorySession::read(ByteReader& r) {
@@ -2411,7 +2426,7 @@ bool StorySession::read(ByteReader& r) {
     }
     if (tactical_ && has_own) {  // read in place: the tactical VMs hold this bridge
         ByteReader br(own_bridge);
-        if (!read_if_saveable(*tactical_->own_bridge, br) || !br.done()) return false;
+        if (!read_system(*tactical_->own_bridge, br) || !br.done()) return false;
     }
     if (tactical_) {
         tactical_->start_frame = tac_start;
@@ -2465,7 +2480,7 @@ void StorySession::write_scripts(ByteWriter& w) const {
         for (const Script& sc : s.scripts) {
             w.u32(sc.plot).str(sc.name).f64(sc.rate).f64(sc.last_service).boolean(sc.serviced);
             w.u64(static_cast<uint64_t>(sc.errors_seen));
-            write_section(w, [&sc](ByteWriter& sub) { lua::write_script_block(sub, *sc.vm); });  // v4
+            put_section(w, [&sc](ByteWriter& sub) { lua::write_script_block(sub, *sc.vm); });  // v4
         }
     };
     w.u32(kStoryScriptsVersion);
@@ -2552,14 +2567,13 @@ bool StorySession::read_scripts(ByteReader& r) {
     return true;
 }
 
-// The shared families: through their own write / read once engine/lua has them (save_session.hpp
-// write_if_saveable); until then "pending" (nothing written, read false).
-void StorySession::write_bridge(ByteWriter& w) const { write_if_saveable(lua_->bridge, w); }
-bool StorySession::read_bridge(ByteReader& r) { return read_if_saveable(lua_->bridge, r); }
+// The shared families: through their own write / read (save_session.hpp write_system / read_system).
+void StorySession::write_bridge(ByteWriter& w) const { write_system(lua_->bridge, w); }
+bool StorySession::read_bridge(ByteReader& r) { return read_system(lua_->bridge, r); }
 
 void StorySession::write_players(ByteWriter& w) const {
 #if defined(ALAMO_LUA_PLAYERS)
-    write_if_saveable(lua_->players, w);
+    write_system(lua_->players, w);
 #else
     (void)w;  // no players family: nothing to save
 #endif
@@ -2567,13 +2581,13 @@ void StorySession::write_players(ByteWriter& w) const {
 
 bool StorySession::read_players(ByteReader& r) {
 #if defined(ALAMO_LUA_PLAYERS)
-    return read_if_saveable(lua_->players, r);
+    return read_system(lua_->players, r);
 #else
     return r.done();
 #endif
 }
 
-void StorySession::write_presentation(ByteWriter& w) const { write_if_saveable(lua_->presentation, w); }  // N1 stage 2
-bool StorySession::read_presentation(ByteReader& r) { return read_if_saveable(lua_->presentation, r); }
+void StorySession::write_presentation(ByteWriter& w) const { write_system(lua_->presentation, w); }  // N1 stage 2
+bool StorySession::read_presentation(ByteReader& r) { return read_system(lua_->presentation, r); }
 
 }  // namespace alamo::sim

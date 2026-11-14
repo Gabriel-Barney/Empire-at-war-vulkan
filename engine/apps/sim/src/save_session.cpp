@@ -16,25 +16,25 @@ namespace {
 constexpr uint32_t kMaxCount = 1u << 20;  // sanity bound for counts read from a save
 
 void write_scheduler(ByteWriter& w, const commands::SchedulerConfig& c) {
-    w.u32(c.delay).u8(c.max_players).u8(static_cast<uint8_t>(c.late)).u64(c.first_tick).u8(static_cast<uint8_t>(c.mode));
-    w.u32(c.turn).u32(c.max_ahead);
+    // late / mode / turn / max_ahead: the retired lockstep bytes (commands/scheduler.hpp), kept as constants.
+    w.u32(c.delay).u8(c.max_players).u8(commands::kSchedLateByte).u64(c.first_tick).u8(commands::kSchedModeByte);
+    w.u32(commands::kSchedTurn).u32(commands::kSchedMaxAhead);
 }
 
 bool read_scheduler(ByteReader& r, commands::SchedulerConfig& c) {
     c.delay = r.u32();
     c.max_players = r.u8();
-    c.late = static_cast<commands::LatePolicy>(r.u8());
+    const uint8_t late = r.u8();
     c.first_tick = r.u64();
-    c.mode = static_cast<commands::ScheduleMode>(r.u8());
-    c.turn = r.u32();
-    c.max_ahead = r.u32();
-    return r.ok();
+    const uint8_t mode = r.u8();
+    const uint32_t turn = r.u32(), max_ahead = r.u32();
+    return r.ok() && late == commands::kSchedLateByte && mode == commands::kSchedModeByte && turn == commands::kSchedTurn &&
+           max_ahead == commands::kSchedMaxAhead;
 }
 
 bool same_scheduler(const commands::SchedulerConfig& a, const commands::SchedulerConfig& b) {
-    // first_tick is the host's (SimHost forces 1); max_ahead is the initial lockstep value.
-    return a.delay == b.delay && a.max_players == b.max_players && a.late == b.late && a.mode == b.mode && a.turn == b.turn &&
-           a.max_ahead == b.max_ahead;
+    // first_tick is the host's (SimHost forces 1).
+    return a.delay == b.delay && a.max_players == b.max_players;
 }
 
 std::vector<std::pair<std::string, std::string>> sorted(std::vector<std::pair<std::string, std::string>> v) {
@@ -146,7 +146,15 @@ std::string SessionDescriptor::mismatch(const SessionDescriptor& s, const Sessio
     for (size_t i = 0; i < s.setup.size(); ++i)
         if (!(s.setup[i] == c.setup[i])) return "player " + std::to_string(i) + " setup differs (" + s.setup[i].faction + ")";
     if (s.difficulty != c.difficulty) return "difficulty '" + s.difficulty + "' != '" + c.difficulty + "'";
-    if (sorted(s.options) != sorted(c.options)) return "session options differ";
+    // sp3: the AI-lane options (ai_lane, k_ai) are not compared: a lane-off save also loads into an AI-lane session (bench,
+    // harness), and the battle.ai chunk refuses a lane save in a lane-off session itself.
+    const auto compared = [](const std::vector<std::pair<std::string, std::string>>& o) {
+        std::vector<std::pair<std::string, std::string>> v;
+        for (const auto& kv : o)
+            if (kv.first != "ai_lane" && kv.first != "k_ai") v.push_back(kv);
+        return sorted(std::move(v));
+    };
+    if (compared(s.options) != compared(c.options)) return "session options differ";
     if (s.data_fingerprint != c.data_fingerprint)
         return "game data differs (fingerprint " + hex64(s.data_fingerprint) + " != " + hex64(c.data_fingerprint) + ")";
     return {};

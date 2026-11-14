@@ -1,9 +1,57 @@
 // test_gui_screens: tests split from test_gui_screens.cpp (PAF t08).
 #include "test_gui_screens_common.hpp"
+#include "alamo/ui/credits_roll.hpp"
 
 namespace test_gui_screens_t {
 
 // ---- mouse cursor ---------------------------------------------------------------------------------------------------
+// ui1 t03: CreditsText DAT (SPEC.md §7: records in file order, HEADER / CENTER keys, "[TBL]" blank) and the roll.
+void test_credits_roll() {
+    std::vector<uint8_t> b;
+    auto u32le = [&](uint32_t v) {
+        for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i)));
+    };
+    const std::vector<std::pair<std::string, std::u16string>> recs = {{"CENTER", u"[TBL]"}, {"HEADER", u"Producer"}, {"CENTER", u"A NAME"}};
+    u32le(static_cast<uint32_t>(recs.size()));
+    for (const auto& [k, v] : recs) {
+        u32le(0);
+        u32le(static_cast<uint32_t>(v.size()));
+        u32le(static_cast<uint32_t>(k.size()));
+    }
+    for (const auto& r : recs)
+        for (const char16_t c : r.second) {
+            b.push_back(static_cast<uint8_t>(c & 0xFF));
+            b.push_back(static_cast<uint8_t>(c >> 8));
+        }
+    for (const auto& r : recs) b.insert(b.end(), r.first.begin(), r.first.end());
+    std::vector<CreditsLine> lines;
+    CHECK(parse_credits(b, lines) && lines.size() == 3);
+    if (lines.size() == 3)
+        CHECK(lines[0].kind == CreditsLine::Kind::Blank && lines[1].kind == CreditsLine::Kind::Header && lines[1].text == U"Producer" &&
+              lines[2].kind == CreditsLine::Kind::Name && lines[2].text == U"A NAME");
+    std::vector<uint8_t> cut(b.begin(), b.end() - 3);
+    CHECK(!parse_credits(cut, lines));
+    CHECK(credits_path("ENGLISH") == "Data\\Text\\CreditsText_ENGLISH.DAT");
+    CreditsStyle st;
+    st.scroll_rate = -0.10f;
+    st.spacing = 0.04f;
+    CreditsRoll roll;
+    std::vector<CreditsLine> parsed;
+    CHECK(parse_credits(b, parsed));
+    roll.start(parsed, st, 100.0);
+    CHECK(roll.active() && roll.lines() == 3);
+    CHECK(std::fabs(roll.duration() - (1.0 + 4 * 0.04) / 0.10) < 1e-6);
+    auto raster = make_box_rasterizer();
+    FontCache fonts(*raster);
+    const HudCanvas cv = HudCanvas::make(1024, 768);
+    HudDrawList dl;
+    CHECK(roll.build(dl, fonts, cv, 100.0) && roll.drawn() == 0);  // all lines start below the screen
+    dl.clear();
+    CHECK(roll.build(dl, fonts, cv, 100.0 + 5.0) && roll.drawn() == 2);  // half a screen scrolled: both text lines visible
+    dl.clear();
+    CHECK(!roll.build(dl, fonts, cv, 100.0 + roll.duration() + 0.1) && !roll.active());
+}
+
 void test_cursor() {
     const char* xml = R"(<MousePointers>
       <MousePointer Name="POINTER_NORMAL"><Base_Texture> DEFAULTPOINTER_00.TGA </Base_Texture><Hot_X>0</Hot_X><Hot_Y>0</Hot_Y><Anim_Frame_Delay>5</Anim_Frame_Delay></MousePointer>
@@ -31,7 +79,30 @@ void test_cursor() {
     CHECK(choose_pointer(c) == Pointer::Attack);
     c.in_range = false;
     CHECK(choose_pointer(c) == Pointer::AttackOutOfRange);
+    c.can_attack = false;
+    CHECK(choose_pointer(c) == Pointer::CantAttack);
+    c.can_attack = c.in_range = true;
+    // ui1 t01: own -> SELECT, garrisonable own / friendly / neutral with a selection -> GARRISON_IN.
+    c.hover = CursorContext::Hover::Own;
+    CHECK(choose_pointer(c) == Pointer::Select);
+    c.garrisonable = true;
+    CHECK(choose_pointer(c) == Pointer::GarrisonIn);
+    c.hover = CursorContext::Hover::Neutral;
+    CHECK(choose_pointer(c) == Pointer::GarrisonIn);
+    c.hover = CursorContext::Hover::Friendly;
+    CHECK(choose_pointer(c) == Pointer::GarrisonIn);
+    c.selection = false;
+    CHECK(choose_pointer(c) == Pointer::Normal);
+    c.selection = true;
+    c.garrisonable = false;
     c.hover = CursorContext::Hover::Ground;
+    CHECK(choose_pointer(c) == Pointer::Move);
+    c.rotating = true;
+    CHECK(choose_pointer(c) == Pointer::MapRotatingMode);
+    c.rotating = false;
+    c.scrolling = true;
+    CHECK(choose_pointer(c) == Pointer::MapScrollingMode);
+    c.scrolling = false;
     c.passable = false;
     CHECK(choose_pointer(c) == Pointer::CantMove);
     c.targeting = CursorContext::Targeting::AbilityEnemy;
@@ -112,12 +183,11 @@ void test_anim_hack_drag() {
     hf.lines = {U"Disable the shield generator"};
     hf.cost = U"500";
     hp.build(hf);
-    std::vector<commands::EventData> cmds;
     std::vector<HudAction> acts;
-    env.click(hp, "hack_hack", cmds, acts);
-    env.click(hp, "hack_close", cmds, acts);
+    env.click(hp, "hack_hack", acts);
+    env.click(hp, "hack_close", acts);
     CHECK(acts.size() == 2 && acts[0].kind == HudAction::Kind::HackConfirm && acts[0].unit == 9001 && acts[0].ids == std::vector<uint32_t>{600} &&
-          acts[1].kind == HudAction::Kind::PanelClose && acts[1].name == "hack_shell" && cmds.empty());
+          acts[1].kind == HudAction::Kind::PanelClose && acts[1].name == "hack_shell");
 
     // Fleet drag and drop on the galactic HUD.
     ComponentTable ft;
@@ -155,6 +225,9 @@ void test_anim_hack_drag() {
             if (h.component == c) return hud.canvas().canvas_to_pixel(0.5f * (h.min.x + h.max.x), 0.5f * (h.min.y + h.max.y));
         return Vec2f{-1, -1};
     };
+    // cu13 t07: GalacticHud::drag_update takes drag().valid from a dry run of drop(), so the highlight (valid) and the drop
+    // (commands emitted) cannot disagree; every drag below is checked against that.
+    bool drag_valid = false;
     auto drag = [&](std::string_view from, Vec2f to, int32_t to_component) {
         const int32_t fc = ft.find(from);
         const Vec2f p = center_px(from);
@@ -173,18 +246,20 @@ void test_anim_hack_drag() {
         r.hover_component = to_component;
         hud.update_input(r, false, false, 1.1, out);
         CHECK(hud.drag().active && hud.drag().component == fc);
+        drag_valid = hud.drag().valid;
         hud.build(gf);  // the dragged icon follows the cursor
         CHECK(!hud.draw_list().items(kHudLayers - 1, HudList::Alpha).empty());
         r.owner = {};
         r.hud = {{HudPointerEvent::Kind::Release, Button::Left, to_component, r.world.mouse_x, r.world.mouse_y}};
         hud.update_input(r, false, false, 1.2, out);
         CHECK(!hud.drag().active);
+        CHECK(drag_valid == !out.empty());
         hud.build(gf);
         return out;
     };
     // unit 902 of fleet 900 onto fleet 950's pad -> merge (op 3) {target 950, fleet 900, unit 902}
     std::vector<commands::EventData> o = drag("q1_0002", center_px("q2_0001"), ft.find("q2_0001"));
-    CHECK(o.size() == 1 && o[0] == fleet_management_event(950, 900, 902, 3));
+    CHECK(o.size() == 1 && o[0] == fleet_management_event(commands::kFleetMerge, 950, 900, 902));
     // fleet 900 header onto the other planet -> MoveObjectToObject(900, 101)
     float sx = 0, sy = 0;
     CHECK(project(gf.view, planets[1].position, sx, sy));
@@ -193,11 +268,17 @@ void test_anim_hack_drag() {
     // fleet header onto its own planet -> nothing; land unit onto a fleet -> launch (op 4)
     CHECK(project(gf.view, planets[0].position, sx, sy));
     CHECK(drag("q1_fleet", {sx, sy}, -1).empty());
+    // a fleet unit onto its own planet: drop() orders the move (it did before cu13 t07), so the highlight says valid now (the
+    // old hand-written predicate refused it); the same unit onto a HUD component that takes no drop is invalid and sends nothing.
+    o = drag("q1_0001", {sx, sy}, -1);
+    CHECK(drag_valid && o.size() == 1 && o[0] == commands::ev::move_object_to_object(901, 100));
+    o = drag("q1_0001", center_px("b_play_pause"), ft.find("b_play_pause"));
+    CHECK(!drag_valid && o.empty());
     o = drag("land_fleet_00", center_px("q1_0001"), ft.find("q1_0001"));
-    CHECK(o.size() == 1 && o[0] == fleet_management_event(900, commands::kNoObject, 701, 4));
+    CHECK(o.size() == 1 && o[0] == fleet_management_event(commands::kFleetLaunch, 900, commands::kNoObject, 701));
     // unit into empty space -> detach (op 2) into a new fleet at the selected planet
     o = drag("q1_0001", {1000, 10}, -1);
-    CHECK(o.size() == 1 && o[0] == fleet_management_event(100, commands::kNoObject, 901, 2));
+    CHECK(o.size() == 1 && o[0] == fleet_management_event(commands::kFleetDetach, 100, commands::kNoObject, 901));
     // a short press (no drag) still clicks: GalacticSelect
     std::vector<HudAction> ga;
     std::vector<commands::EventData> co;
@@ -409,7 +490,7 @@ void test_anim_hack_drag() {
         // 1. Whole fleet onto an empty slot of its planet -> op 8 {planet, fleet, slot}; it is drawn there, the other stays.
         bool valid = false;
         std::vector<commands::EventData> so = drag_map(slot_px(0, 0), slot_px(0, 2), &valid);
-        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(100, 960, kNone, 8, 2));
+        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(commands::kFleetSlot, 100, 960, kNone, commands::kNoObject, 2));
         CHECK(fleet_at(0, 0) == 960 && fleet_at(0, 2) == 0);  // the HUD keeps no slot state: nothing moved yet
         a.slot = 2;                                            // the sim applied op 8; the host feeds the new slot
         planets[0].stacks = {a, b2};
@@ -417,18 +498,18 @@ void test_anim_hack_drag() {
         CHECK(fleet_at(0, 2) == 960 && fleet_at(0, 1) == 961 && fleet_at(0, 0) == 0);
         // 2. Onto another own fleet's slot at the same planet -> merge (op 3) {target, source, all}.
         so = drag_map(slot_px(0, 2), slot_px(0, 1), &valid);
-        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(961, 960, kNone, 3));
+        CHECK(valid && so.size() == 1 && so[0] == fleet_management_event(commands::kFleetMerge, 961, 960, kNone));
         // 3. Onto an empty slot of another planet -> op 8 {planet, fleet, slot, a = destination} (the slot it takes on
         //    arrival), then MoveObjectToObject {fleet, planet}.
         so = drag_map(slot_px(0, 2), slot_px(1, 1), &valid);
-        CHECK(valid && so.size() == 2 && so[0] == fleet_management_event(100, 960, kNone, 8, 1, 101) &&
+        CHECK(valid && so.size() == 2 && so[0] == fleet_management_event(commands::kFleetSlot, 100, 960, kNone, 101, 1) &&
               so[1] == commands::ev::move_object_to_object(960, 101));
         // 4. An organiser unit onto an empty slot of its planet -> detach (op 2); the new fleet takes that slot (not the
         //    first free one).
         planets[0].stacks = {b2};  // 961 in slot 1; 0 and 2 free
         hud.build(gf);
         so = drag("q1_0002", slot_px(0, 2), gpf);
-        CHECK(so.size() == 1 && so[0] == fleet_management_event(100, 900, 902, 2).set("b", 2u));  // the sim gives the slot
+        CHECK(so.size() == 1 && so[0] == fleet_management_event(commands::kFleetDetach, 100, 900, 902).set("b", 2u));  // the sim gives the slot
         GalacticPlanetStack c = a;
         c.fleet = 905;
         c.slot = 2;
@@ -437,7 +518,7 @@ void test_anim_hack_drag() {
         CHECK(fleet_at(0, 2) == 905 && fleet_at(0, 1) == 961 && fleet_at(0, 0) == 0);
         // 5. A land unit onto the empty slot -> op 6 {planet, unit, a = planet} (launched as a new fleet).
         so = drag("land_fleet_00", slot_px(0, 0), gpf);
-        CHECK(so.size() == 1 && so[0] == fleet_management_event(100, kNone, 701, 6, 0, 100).set("b", 0u));
+        CHECK(so.size() == 1 && so[0] == fleet_management_event(commands::kFleetMoveNew, 100, kNone, 701, 100).set("b", 0u));
         // 6. An enemy fleet's slot at the same planet: no drop.
         GalacticPlanetStack foe = a;
         foe.fleet = 990;
@@ -468,7 +549,7 @@ void test_controls() {
     CHECK(pause_event(true).type() == commands::EventType::PortExtension && pause_event(true).u("subtype") == kPortPauseSubtype);
     {
         HotkeyTable table;
-        CHECK(table.binding(hk::kPause).key == vk::kPause && kHotkeySlots == 162 && hotkey_slot("Pause") == hk::kPause);
+        CHECK(table.binding(hk::kPause).key == vk::kPause && kHotkeySlots == 166 && hotkey_slot("Pause") == hk::kPause);
         HotkeyDispatcher disp;
         InputState in;
         std::vector<commands::EventData> cmds;
@@ -553,7 +634,8 @@ void test_controls() {
         GalacticCameraController gc;
         CHECK(std::fabs(gc.fov_deg() - 26.565f) < 1e-2f);
         gc.set_fov_deg(40.0f);
-        CHECK(std::fabs(gc.params(1.5f).fov_x - 40.0f * kDegToRad) < 1e-5f);
+        CHECK(std::fabs(gc.params(4.0f / 3.0f).fov_x - 40.0f * kDegToRad) < 1e-5f);  // the setting is the 4:3 FOV (Hor+ above it)
+        CHECK(std::fabs(gc.params(1.5f).fov_x - galactic_fov_x(40.0f * kDegToRad, 1.5f)) < 1e-6f);
     }
     {
         Env env;
@@ -594,6 +676,68 @@ void test_controls() {
               acts[1].kind == MenuAction::Kind::KeybindingsChanged);
         CHECK(keys.binding(hk::kPause).key == 0x78 && binds.binding(Action::Pause, 0).key == 0x78 && binds.queue_mods() == kModCtrl);
         CHECK(env.gui.find(kPortControlsDialog) == nullptr);
+    }
+    // modc t08: the mod picker. The port's main-menu Mods button (shown only with a mods provider), the rows (the active one
+    // marked and selected first), a selection asks the host for the row's report (CheckMod), the report arriving enables
+    // Launch (not for the active row), Launch reports the row, Back / Esc return to the main menu.
+    {
+        Env env;
+        CHECK(env.script.merge(kPortDialogsRc) && env.script.extend(kPortDialogExtensionsRc) && env.gui.has_dialog(kPortModsDialog));
+        {  // no provider: no button
+            FrontEnd fe0;
+            fe0.init(env.gui, {}, MenuProviders{});
+            fe0.show_main_menu();
+            const GuiDialog* m = env.gui.find("IDD_MAIN_MENU_DIALOG");
+            CHECK(m && m->get("IDC_PORT_MAIN_MENU_MODS") && !m->get("IDC_PORT_MAIN_MENU_MODS")->visible);
+        }
+        FrontEnd fe;
+        MenuProviders p;
+        p.mods = [] {
+            return std::vector<ModPickerEntry>{{"", U"Base game (no mod)", false}, {"STEAMMOD=900000001", U"Workshop mod", true},
+                                               {"MODPATH=Mods\\Local", U"Local mod", false}};
+        };
+        fe.init(env.gui, {}, p);
+        fe.show_main_menu();
+        const GuiDialog* m = env.gui.find("IDD_MAIN_MENU_DIALOG");
+        CHECK(m && m->get("IDC_PORT_MAIN_MENU_MODS") && m->get("IDC_PORT_MAIN_MENU_MODS")->visible);
+        std::vector<MenuAction> acts;
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_MENU_DIALOG", "IDC_PORT_MAIN_MENU_MODS")}, InputFrame{}, acts);
+        CHECK(fe.top() == kPortModsDialog);
+        CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::CheckMod && acts[0].mod == "STEAMMOD=900000001");
+        GuiDialog* d = env.gui.find(kPortModsDialog);
+        CHECK(d && d->get("IDC_PORT_MODS_LIST")->items.size() == 3 && d->get("IDC_PORT_MODS_LIST")->selected == 1 &&
+              d->get("IDC_PORT_MODS_LIST")->items[1] == U"Workshop mod  (running)");
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items == std::vector<std::u32string>{U"Checking..."} &&
+              !d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        fe.set_mod_report("STEAMMOD=900000001", {U"Loads: OK", U"3 campaigns"});
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items.size() == 2 && !d->get("IDC_PORT_MODS_LAUNCH")->enabled);  // active row
+        acts.clear();
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, kPortModsDialog, "IDC_PORT_MODS_LIST", 2)}, InputFrame{}, acts);
+        CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::CheckMod && acts[0].mod == "MODPATH=Mods\\Local" &&
+              fe.selected_mod() == "MODPATH=Mods\\Local");
+        CHECK(d && !d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        fe.set_mod_report("", {U"base"});  // another row's report: kept, not shown
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items == std::vector<std::u32string>{U"Checking..."});
+        acts.clear();
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, kPortModsDialog, "IDC_PORT_MODS_LAUNCH")}, InputFrame{}, acts);
+        CHECK(acts.empty());  // Launch is off until the report is there
+        fe.set_mod_report("MODPATH=Mods\\Local", {U"Loads: OK", U"Submod of X"});
+        CHECK(d && d->get("IDC_PORT_MODS_LAUNCH")->enabled && d->get("IDC_PORT_MODS_REPORT")->items[1] == U"Submod of X");
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, kPortModsDialog, "IDC_PORT_MODS_LAUNCH")}, InputFrame{}, acts);
+        CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::LaunchMod && acts[0].mod == "MODPATH=Mods\\Local");
+        // Back, then the picker again: the row selected last and its kept report; the base row's kept report too.
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, kPortModsDialog, "IDC_CANCEL_BUTTON")}, InputFrame{}, acts);
+        CHECK(fe.top() == "IDD_MAIN_MENU_DIALOG");
+        acts.clear();
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_MENU_DIALOG", "IDC_PORT_MAIN_MENU_MODS")}, InputFrame{}, acts);
+        d = env.gui.find(kPortModsDialog);
+        CHECK(d && d->get("IDC_PORT_MODS_LIST")->selected == 2 && d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        CHECK(acts.size() == 1 && acts[0].mod == "MODPATH=Mods\\Local");
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, kPortModsDialog, "IDC_PORT_MODS_LIST", 0)}, InputFrame{}, acts);
+        CHECK(d && d->get("IDC_PORT_MODS_REPORT")->items == std::vector<std::u32string>{U"base"} && d->get("IDC_PORT_MODS_LAUNCH")->enabled);
+        fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Cancel, kPortModsDialog, "")}, InputFrame{}, acts);
+        CHECK(fe.top() == "IDD_MAIN_MENU_DIALOG");
+        CHECK(std::string(menu_action_name(MenuAction::Kind::LaunchMod)) == "LaunchMod");
     }
     // t36 (QA V6): every way out of Camera and Controls lands on the Options page that opened it, not the pause menu. Real
     // mouse clicks and Esc through the GUI; the pause menu stays underneath.

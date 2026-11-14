@@ -35,7 +35,9 @@
 #include <vector>
 
 #include "alamo/commands/recording.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/game_database.hpp"
@@ -47,6 +49,7 @@
 #include "alamo/sim/scenario.hpp"
 #include "alamo/terrain/ted.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_SIM_HAVE_STORY
 #include "alamo/lua/story_model.hpp"  // dialog_log (L1/S4 wave 1 test)
 #include "alamo/galactic/conflicts.hpp"  // BattleRequest (L1/S4 wave 2a test)
@@ -58,31 +61,10 @@ using namespace alamo::sim;
 namespace fs = std::filesystem;
 namespace cmd = alamo::commands;
 
-static int g_fail = 0;
+using ::alamo::test::g_fail;
 static bool g_regen = false;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static std::string testdata(const std::string& name) { return std::string(ALAMO_SIM_TESTDATA) + "/" + name; }
 
@@ -131,10 +113,7 @@ struct World {
     objects::GameObjectTypes types;
 };
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 static std::unique_ptr<World> make_world() {
     const fs::path root = fs::temp_directory_path() / "alamo_sim_tests_types";
@@ -261,6 +240,58 @@ static void test_tick_order(const World& w) {
     CHECK(trace.size() > 5 && trace[3] == "gmm.scoring" && trace[4] == "galactic.begin" && trace[5] == "common.begin");
 }
 
+// SIMP sp2: CRC capture cadence. Checkpoint ticks + the initial state + on-demand captures, a v2 (checkpoint) log that
+// compares clean against the full log of the same run; the ring keeps the newest records.
+static void test_crc_cadence(const World& w) {
+    auto run = [&](uint32_t every, size_t ring, uint64_t ticks) {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        SimHost host(w.types, js);
+        host.set_crc_cadence(every, ring);
+        host.start_game(ModeKind::Land);
+        for (uint64_t t = 0; t < ticks; ++t) host.tick_once();
+        host.capture_crc_now();
+        host.capture_crc_now();  // twice: no duplicate record
+        return host.crc_log();
+    };
+    const CrcLog full = run(1, 0, 200);
+    const CrcLog sparse = run(64, 0, 200);
+    CHECK(full.records.size() == 201 && full.checkpoint == 0);
+    CHECK(sparse.checkpoint == 64 && sparse.records.size() == 5);  // 0, 64, 128, 192, 200
+    if (sparse.records.size() == 5) {
+        CHECK(sparse.records[0].tick == 0 && sparse.records[1].tick == 64 && sparse.records[3].tick == 192 && sparse.records[4].tick == 200);
+        CHECK(sparse.records[2] == full.records[128]);
+    }
+    CHECK(!first_divergence(full, sparse).diverged);
+    CHECK(!first_divergence(sparse, full).diverged);
+    const CrcLog ringed = run(4, 3, 200);  // 51 checkpoint records + 1; trimmed to 3 whenever more than 6 are held
+    CHECK(ringed.records.size() >= 3 && ringed.records.size() <= 6 && ringed.records.back().tick == 200);
+    // An on-demand record between checkpoints goes on the keep line, so the saved v2 log parses again.
+    {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        SimHost host(w.types, js);
+        host.set_crc_cadence(64);
+        host.start_game(ModeKind::Land);
+        for (int t = 0; t < 100; ++t) host.tick_once();
+        host.capture_crc_now();  // tick 100: off the grid
+        for (int t = 0; t < 40; ++t) host.tick_once();
+        host.capture_crc_now();  // tick 140: the last record
+        CrcLog back;
+        std::string err;
+        CHECK(host.crc_log().keep.size() == 2 && CrcLog::parse(host.crc_log().to_text(), back, &err));
+        CHECK(back.records.size() == host.crc_log().records.size());
+    }
+    // The process default reaches a new host; set back for the other tests even if a check throws.
+    struct Restore {
+        ~Restore() { SimHost::set_default_crc_cadence(1); }
+    } restore;
+    SimHost::set_default_crc_cadence(16);
+    {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        SimHost host(w.types, js);
+        CHECK(host.crc_cadence() == 16 && host.crc_log().checkpoint == 16);
+    }
+}
+
 // --------------------------------------------------------------------------------------- commands
 static void check_spatial(const TacticalMode& tm);
 
@@ -316,6 +347,63 @@ static void test_commands(const World& w) {
     tm.destroy(st.find(15));
     host.tick_once();
     CHECK(tm.order(3) == nullptr && tm.trees().size() == 55 && !host.resolve(15));
+}
+
+// bkc1 t04 (backlog b0012; COMMANDS §2.4.1, q6 t15 probe 6): SelectAll keeps the issuer's SELECTABLE units and leaves out
+// base structures (DUMMY_GROUND_STRUCTURE: barracks, factories), star bases (DUMMY_STAR_BASE: the own space station),
+// orbital structures and mines, plus anything not SELECTABLE (build pads have no SELECTABLE in the shipped data: the
+// FoC check in alamo_objects_tests); other players' units are never selected; the selection is replaced.
+static void test_select_all() {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_tests_select_all";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/GameObjectFiles.xml", "<GameObjectFiles><File>SelTest.xml</File></GameObjectFiles>\n");
+    write_file(root / "Data/XML/SelTest.xml",
+               "<SelTest>\n"
+               " <SpaceUnit Name=\"Sel_Ship\"><Tactical_Health>100</Tactical_Health><Max_Speed>4.0</Max_Speed>\n"
+               "  <Behavior>SELECTABLE</Behavior></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sel_Station\"><Tactical_Health>100</Tactical_Health><Behavior>SELECTABLE, DUMMY_STAR_BASE</Behavior></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sel_Barracks\"><Tactical_Health>100</Tactical_Health><Behavior>SELECTABLE, DUMMY_GROUND_STRUCTURE</Behavior></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sel_Orbital\"><Tactical_Health>100</Tactical_Health><Behavior>SELECTABLE, DUMMY_ORBITAL_STRUCTURE</Behavior></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sel_Mine\"><Tactical_Health>100</Tactical_Health><Behavior>SELECTABLE, PROXIMITY_MINE</Behavior></SpaceUnit>\n"
+               " <SpaceUnit Name=\"Sel_Pad\"><Tactical_Health>100</Tactical_Health><Behavior>REVEAL</Behavior></SpaceUnit>\n"
+               "</SelTest>\n");
+    DirectoryProvider files(path_to_utf8(root));
+    objects::ObjectTypeDatabase db;
+    objects::GameObjectTypes types;
+    CHECK(db.load(files));
+    CHECK(types.build(db));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimHost host(types, js);
+    host.start_game(ModeKind::Space);
+    auto put = [&](const char* type, int32_t owner, float x) {
+        objects::SpawnParams sp;
+        sp.type = static_cast<objects::TypeIndex>(db.find(type));
+        sp.owner = owner;
+        sp.position = {x, 0.0f, 0.0f};
+        sp.facing = {1.0f, 0.0f, 0.0f};
+        const ObjectHandle h = host.tactical()->spawn(sp);
+        CHECK(host.tactical()->primary().alive(h));
+        return host.tactical()->primary().id(h);
+    };
+    const ObjectId ship_a = put("Sel_Ship", 0, 0.0f);
+    put("Sel_Station", 0, 100.0f);
+    put("Sel_Barracks", 0, 200.0f);
+    put("Sel_Orbital", 0, 300.0f);
+    put("Sel_Mine", 0, 400.0f);
+    put("Sel_Pad", 0, 500.0f);
+    const ObjectId ship_b = put("Sel_Ship", 0, 600.0f);
+    const ObjectId enemy = put("Sel_Ship", 1, 700.0f);
+    CHECK(host.submit(0, cmd::ev::select({static_cast<cmd::ObjectId>(enemy)})).ok());
+    CHECK(host.submit(0, cmd::ev::select_all()).ok());
+    host.tick_once();
+    host.tick_once();
+    CHECK(host.selection(0) == (std::vector<ObjectId>{ship_a, ship_b}));
+    CHECK(host.submit(1, cmd::ev::select_all()).ok());
+    host.tick_once();
+    host.tick_once();
+    CHECK(host.selection(1) == std::vector<ObjectId>{enemy});
+    remove_all_long(root, ec);
 }
 
 // Spatial: right after the map load the trees answer = brute force over the store.
@@ -670,9 +758,11 @@ static GalacticRules rules() {
     GalacticRules r;
     FactionRules emp;
     emp.name = "Empire";
+    emp.basic_ai = "BasicEmpire";
     emp.can_control_planets = emp.is_playable = true;
     FactionRules und;
     und.name = "Underworld";
+    und.basic_ai = "AI_Player_Underworld";
     und.can_control_planets = und.is_playable = und.benefits_from_corruption = true;
     FactionRules neu;
     neu.name = "Neutral";
@@ -1346,6 +1436,87 @@ static void test_q6_story_chain(const World& w) {
             CHECK(log == first_log && sw_text == first_switch);
         }
     }
+    remove_all_long(root, ec);
+}
+
+// bkc1 t01 (docs/re/BKC1_RE_ANSWERS.md Q1 [H]): Story_Handle_Esc. The key goes to the story only while the cinematic
+// camera is on (Start_Cinematic_Camera, the controller's state 4); handle_esc() offers the call to every ACTIVE plot of
+// the current mode in plot-table order, calling the plot script's global only when it is a function (no arguments); a
+// suspended plot (D) is skipped, a plot without a script (B) or without the function is no error. A thread the handler
+// creates first runs at the next T9.
+static void test_story_handle_esc(const World& w) {
+    const fs::path root = fs::temp_directory_path() / "alamo_sim_story_handle_esc";
+    std::error_code ec;
+    remove_all_long(root, ec);
+    write_file(root / "Data/XML/Story_Plots_Esc.xml",
+               "<Story_Mode_Plots><Lua_Script>Story_EscA</Lua_Script><Active_Plot>Story_EscA.xml</Active_Plot>"
+               "<Active_Plot>Story_EscB.xml</Active_Plot>"
+               "<Lua_Script>Story_EscC</Lua_Script><Active_Plot>Story_EscC.xml</Active_Plot>"
+               "<Lua_Script>Story_EscD</Lua_Script><Suspended_Plot>Story_EscD.xml</Suspended_Plot>"
+               "<Lua_Script>Story_EscE</Lua_Script><Active_Plot>Story_EscE.xml</Active_Plot></Story_Mode_Plots>\n");
+    const char* kEmpty = "<Story><Event Name=\"Idle\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>NEVER</Event_Param2></Event></Story>\n";
+    write_file(root / "Data/XML/Story_EscA.xml", kEmpty);
+    write_file(root / "Data/XML/Story_EscC.xml", kEmpty);
+    write_file(root / "Data/XML/Story_EscD.xml", kEmpty);
+    write_file(root / "Data/XML/Story_EscE.xml", kEmpty);
+    write_file(root / "Data/XML/Story_EscB.xml",
+               "<Story>\n"
+               " <Event Name=\"Seen_A\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>ESC_A</Event_Param2><Perpetual>Yes</Perpetual></Event>\n"
+               " <Event Name=\"Seen_C\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>ESC_C</Event_Param2><Perpetual>Yes</Perpetual></Event>\n"
+               " <Event Name=\"Seen_D\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>ESC_D</Event_Param2></Event>\n"
+               " <Event Name=\"After_A\"><Event_Type>STORY_AI_NOTIFICATION</Event_Type><Event_Param2>AFTER_A</Event_Param2></Event>\n"
+               "</Story>\n");
+    write_file(root / "Data/Scripts/Story/Story_EscA.lua",
+               "function Base_Definitions() ServiceRate = 0.01 end\n"
+               "function main() Start_Cinematic_Camera() end\n"
+               "function After() Story_Event(\"AFTER_A\") end\n"
+               "function Story_Handle_Esc() Story_Event(\"ESC_A\") Create_Thread(\"After\") End_Cinematic_Camera() end\n");
+    write_file(root / "Data/Scripts/Story/Story_EscC.lua",
+               "function Base_Definitions() ServiceRate = 0.01 end\nfunction main() end\n"
+               "function Story_Handle_Esc(a) if a == nil then Story_Event(\"ESC_C\") end end\n");
+    write_file(root / "Data/Scripts/Story/Story_EscD.lua",
+               "function Base_Definitions() end\nfunction main() end\nfunction Story_Handle_Esc() Story_Event(\"ESC_D\") end\n");
+    write_file(root / "Data/Scripts/Story/Story_EscE.lua",
+               "function Base_Definitions() end\nfunction main() end\nStory_Handle_Esc = 5\n");  // not a function: skipped
+    DirectoryProvider files(path_to_utf8(root));
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 3;
+    SimHost host(w.types, js, cfg);
+    const GalacticRules r = rules();
+    GalacticSim* gs = host.start_galactic(r, setup());
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    StoryStart st;
+    st.files = &files;
+    st.plot_sets = {{pEmpire, "Story_Plots_Esc.xml"}};
+    std::vector<std::string> diag;
+    CHECK(host.start_story(st, &diag) && host.story());
+    if (!host.story()) return;
+    StorySession& story = *host.story();
+    for (int t = 0; t < 5; ++t) host.tick_once();
+    CHECK(story.esc_goes_to_story());  // A's main (first resumed at story start) ran Start_Cinematic_Camera
+    auto fired = [&story]() {
+        std::string out;
+        for (const StoryLogEntry& e : story.log())
+            if (e.event.rfind("Seen_", 0) == 0 || e.event == "After_A") out += e.event + ",";
+        return out;
+    };
+    CHECK(fired().empty());
+    CHECK(story.handle_esc() == 2);  // A then C, in plot-table order; D suspended, B no script, E not a function
+    CHECK(fired() == "Seen_A,Seen_C,");
+    CHECK(!story.esc_goes_to_story());  // A's handler ended the cinematic camera: Esc opens the host's pause menu again
+    const uint64_t esc_frame = host.frame();
+    host.tick_once();
+    CHECK(fired() == "Seen_A,Seen_C,After_A,");  // the thread created by the handler ran at the next tick's T9
+    uint64_t after = 0;
+    for (const StoryLogEntry& e : story.log())
+        if (e.event == "After_A") after = e.frame;
+    CHECK(after == esc_frame + 1);
+    for (const std::string& m : story.lua_messages()) std::printf("  story esc lua: %s\n", m.c_str());
+    CHECK(story.lua_messages().empty());
+    std::printf("  story handle esc: 2 plots called, After_A at frame %" PRIu64 " (Esc after frame %" PRIu64 ")\n", after,
+                esc_frame);
     remove_all_long(root, ec);
 }
 }  // namespace story_test
@@ -2324,10 +2495,13 @@ static void test_story_load_pass(const World& w) {
 }
 
 // a2j t05 (A2J_T05_STORY_LOAD.md): the load pass's CONSTRUCT side and its galactic stream. Before the tech pass every
-// starting-force object raises STORY_CONSTRUCT (+ CONSTRUCT_LEVEL for the starbase / ground structure) to every plot set
-// ("via=load:construct"): the Empire's SB1 (CONSTRUCT, starbase level 1) and Barracks (ground level 1, not 2) at A, the
-// Underworld's Corvette at D (FILTER_ENEMY_ONLY for the Empire). In the tech pass the UNIQUE_UNIT reward's Corvette raises
-// CONSTRUCT inside the reward call, so Own_Corvette fires between Tech_1 and Tech_1's STORY_TRIGGER dependant; that
+// starting-force object raises STORY_CONSTRUCT (+ CONSTRUCT_LEVEL for a starbase) to every plot set ("via=load:construct").
+// a2k t12 (A2K_T07_STORY_LOAD_RE.md): at L8 the planets are still neutral, so only neutral-accepting filters fire
+// (SB_Built with FILTER_NEUTRAL_ONLY, not SB_Friendly with the default FRIENDLY_ONLY, not Enemy_Corvette); CONSTRUCT_LEVEL
+// compares Param2 with SB1's Base_Level 1 under Param3 SPACE (A_Star_1, not A_Star_2), the Barracks raises none
+// (A_Ground_1); the walk is planet by planet in <Locations> order, so the Fighters appended last at A come before the
+// Corvette at D. In the tech pass the UNIQUE_UNIT reward's Corvette raises CONSTRUCT inside the reward call (spawn hook,
+// judged by the Empire-owned planet), so Own_Corvette fires between Tech_1 and Tech_1's STORY_TRIGGER dependant; that
 // dependant's SET_TECH_LEVEL raises TechLevelChanged, routed at load ("T 0 0 ..."), not at T9 of tick 1.
 static void test_story_load_construct(const World& w) {
     using namespace story_test;
@@ -2338,13 +2512,19 @@ static void test_story_load_construct(const World& w) {
                "<Story_Mode_Plots><Active_Plot>Story_Load_C.xml</Active_Plot><Suspended_Plot /></Story_Mode_Plots>\n");
     write_file(root / "Data/XML/Story_Load_C.xml",
                "<Story>\n"
-               " <Event Name=\"SB_Built\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>SB1</Event_Param1></Event>\n"
+               " <Event Name=\"SB_Built\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>SB1</Event_Param1>"
+               "<Event_Param3>FILTER_NEUTRAL_ONLY</Event_Param3></Event>\n"
+               " <Event Name=\"SB_Friendly\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>SB1</Event_Param1></Event>\n"
                " <Event Name=\"A_Star_1\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
-               "<Event_Param2>1</Event_Param2><Event_Param3>0</Event_Param3></Event>\n"
+               "<Event_Param2>1</Event_Param2><Event_Param3>SPACE</Event_Param3><Event_Param4>EMPIRE</Event_Param4></Event>\n"
+               " <Event Name=\"A_Star_2\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
+               "<Event_Param2>2</Event_Param2><Event_Param3>SPACE</Event_Param3></Event>\n"
                " <Event Name=\"A_Ground_1\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
-               "<Event_Param2>1</Event_Param2><Event_Param3>1</Event_Param3></Event>\n"
-               " <Event Name=\"A_Ground_2\"><Event_Type>STORY_CONSTRUCT_LEVEL</Event_Type><Event_Param1>PlanetA</Event_Param1>"
-               "<Event_Param2>2</Event_Param2><Event_Param3>1</Event_Param3></Event>\n"
+               "<Event_Param2>1</Event_Param2><Event_Param3>GROUND</Event_Param3></Event>\n"
+               " <Event Name=\"Fighters_Neutral\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Fighters</Event_Param1>"
+               "<Event_Param3>FILTER_NEUTRAL_ONLY</Event_Param3></Event>\n"
+               " <Event Name=\"Corvette_Neutral\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Corvette</Event_Param1>"
+               "<Event_Param3>FILTER_NEUTRAL_ONLY</Event_Param3></Event>\n"
                " <Event Name=\"Enemy_Corvette\"><Event_Type>STORY_CONSTRUCT</Event_Type><Event_Param1>Corvette</Event_Param1>"
                "<Event_Param3>FILTER_ENEMY_ONLY</Event_Param3></Event>\n"
                " <Event Name=\"Tech_1\"><Event_Type>STORY_TECH_LEVEL</Event_Type><Event_Param1>1</Event_Param1>"
@@ -2365,7 +2545,9 @@ static void test_story_load_construct(const World& w) {
         cfg.story_crc = true;
         SimHost host(w.types, js, cfg);
         const GalacticRules r = rules();
-        GalacticSim* gs = host.start_galactic(r, setup());
+        GalacticSetup su = setup();
+        su.forces.push_back({pEmpire, rA, tFighters});  // last entry, first planet: walked before D's Corvette
+        GalacticSim* gs = host.start_galactic(r, su);
         CHECK(gs != nullptr);
         if (!gs) return {};
         StoryStart st;
@@ -2385,15 +2567,17 @@ static void test_story_load_construct(const World& w) {
             for (const StoryLogEntry& e : story.log()) std::printf("  load: %s\n", e.text().c_str());
             const StoryLogEntry* sb = entry("SB_Built");
             const StoryLogEntry* a1 = entry("A_Star_1");
-            const StoryLogEntry* g1 = entry("A_Ground_1");
-            const StoryLogEntry* ec_ = entry("Enemy_Corvette");
+            const StoryLogEntry* fn = entry("Fighters_Neutral");
+            const StoryLogEntry* cn = entry("Corvette_Neutral");
             const StoryLogEntry* t1 = entry("Tech_1");
             const StoryLogEntry* oc = entry("Own_Corvette");
             const StoryLogEntry* tr = entry("Tech_1_Raise");
-            CHECK(host.frame() == 0 && story.log().size() == 7 && entry("A_Ground_2") == nullptr);
-            CHECK(sb && a1 && g1 && ec_ && t1 && oc && tr);
-            if (sb && a1 && g1 && ec_ && t1 && oc && tr) {
-                for (const StoryLogEntry* e : {sb, a1, g1, ec_}) CHECK(e->frame == 0 && e->via == "load:construct" && e->sequence < t1->sequence);
+            CHECK(host.frame() == 0 && story.log().size() == 7);
+            CHECK(!entry("SB_Friendly") && !entry("A_Star_2") && !entry("A_Ground_1") && !entry("Enemy_Corvette"));
+            CHECK(sb && a1 && fn && cn && t1 && oc && tr);
+            if (sb && a1 && fn && cn && t1 && oc && tr) {
+                for (const StoryLogEntry* e : {sb, a1, fn, cn}) CHECK(e->frame == 0 && e->via == "load:construct" && e->sequence < t1->sequence);
+                CHECK(sb->sequence < fn->sequence && fn->sequence < cn->sequence);  // planet A before planet D
                 CHECK(t1->via == "load" && oc->via == "load" && tr->via == "load");
                 CHECK(t1->sequence < oc->sequence && oc->sequence < tr->sequence);  // CONSTRUCT inside the reward call
             }
@@ -3186,6 +3370,7 @@ int main(int argc, char** argv) {
     story_test::test_scoring_script(*world);  // q6 t06
     story_test::test_scoring_service(*world);  // q6 t09
     story_test::test_scoring_story(*world);    // q6 t09
+    story_test::test_story_handle_esc(*world);  // bkc1 t01
     story_test::test_q6_story_chain(*world);   // q6: load-time resume, Perpetual ELAPSED, SWITCH_CONTROL hook
     object_script_test::test_object_scripts();  // q6: game-object Lua scripts
 #else
@@ -3197,7 +3382,9 @@ int main(int argc, char** argv) {
     }
     test_mode_stack(*world);
     test_tick_order(*world);
+    test_crc_cadence(*world);
     test_commands(*world);
+    test_select_all();  // bkc1 t04
     test_realtime_equals_fast(*world);
     test_save_session(*world);  // N1
     determinism(world->types, make_synthetic_map(), "synthetic", 600);

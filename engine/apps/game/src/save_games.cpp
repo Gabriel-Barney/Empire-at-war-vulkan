@@ -10,6 +10,7 @@
 #include <fstream>
 #include <system_error>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/bytes.hpp"
 
 namespace alamo::game {
@@ -22,19 +23,12 @@ constexpr const char* kMarker = "alamo_game_save 1";
 constexpr uint32_t kHeaderFormat = 1;          // the SaveFile layout read_save_header understands without a full decode
 constexpr size_t kHeaderBytes = 64u * 1024u;   // description longer than this: full read
 
-char lower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower(a[i]) != lower(b[i])) return false;
-    return true;
-}
-
+// Save list order: lower-cased bytes compared as char. Not ascii_iless (upper-cased unsigned bytes), which would sort '_'
+// and bytes >= 0x80 differently against letters.
 bool iless(std::string_view a, std::string_view b) {
     const size_t n = std::min(a.size(), b.size());
     for (size_t i = 0; i < n; ++i) {
-        const char x = lower(a[i]), y = lower(b[i]);
+        const char x = ascii_to_lower(a[i]), y = ascii_to_lower(b[i]);
         if (x != y) return x < y;
     }
     return a.size() < b.size();
@@ -72,8 +66,8 @@ int64_t file_time_seconds(const fs::path& p) {
 bool reserved_device(std::string_view s) {
     static constexpr const char* kNames[] = {"CON", "PRN", "AUX", "NUL"};
     for (const char* n : kNames)
-        if (iequal(s, n)) return true;
-    if (s.size() == 4 && (iequal(s.substr(0, 3), "COM") || iequal(s.substr(0, 3), "LPT")) && s[3] >= '1' && s[3] <= '9') return true;
+        if (ascii_iequals(s, n)) return true;
+    if (s.size() == 4 && (ascii_iequals(s.substr(0, 3), "COM") || ascii_iequals(s.substr(0, 3), "LPT")) && s[3] >= '1' && s[3] <= '9') return true;
     return false;
 }
 
@@ -134,6 +128,34 @@ std::string save_label(const SaveMeta& m) {
     return s;
 }
 
+std::string save_row_label(const SaveMeta& m) {
+    std::string s = m.name.empty() ? std::string("(unnamed)") : m.name;
+    std::string when;
+    if (m.week > 0) {
+        when = "Week " + std::to_string(m.week);
+    } else if (m.game_seconds > 0 || m.kind == "skirmish") {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%llu:%02llu", static_cast<unsigned long long>(m.game_seconds / 60u),
+                      static_cast<unsigned long long>(m.game_seconds % 60u));
+        when = buf;
+    }
+    const std::string at = format_local_time(m.saved_at);
+    std::string rest = when;
+    if (!at.empty()) rest += (rest.empty() ? "" : ", ") + at;
+    if (!rest.empty()) s += "  -  " + rest;
+    return s;
+}
+
+std::string new_playthrough_id(int64_t now) {
+    // Presentation only (never read by the sim): the wall clock plus the high-resolution clock's low bits, so two games
+    // started in the same second still differ.
+    const auto hr = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%llx-%08llx", static_cast<unsigned long long>(now),
+                  static_cast<unsigned long long>((hr ^ (hr >> 32)) & 0xffffffffull));
+    return buf;
+}
+
 std::string encode_description(const SaveMeta& m) {
     std::string s = one_line(save_label(m));
     s += "\n";
@@ -154,6 +176,9 @@ std::string encode_description(const SaveMeta& m) {
     kv("week", std::to_string(m.week));
     kv("game_seconds", std::to_string(m.game_seconds));
     kv("saved_at", std::to_string(m.saved_at));
+    kv("faction_icon", m.faction_icon);
+    kv("playthrough", m.playthrough);
+    kv("playthrough_started", std::to_string(m.playthrough_started));
     return s;
 }
 
@@ -190,6 +215,9 @@ bool decode_description(std::string_view text, SaveMeta& out) {
         else if (k == "week") m.week = static_cast<uint32_t>(std::clamp<int64_t>(to_i64(v, 0), 0, 0x7fffffff));
         else if (k == "game_seconds") m.game_seconds = static_cast<uint64_t>(std::max<int64_t>(0, to_i64(v, 0)));
         else if (k == "saved_at") m.saved_at = to_i64(v, 0);
+        else if (k == "faction_icon") m.faction_icon = std::string(v);
+        else if (k == "playthrough") m.playthrough = std::string(v);
+        else if (k == "playthrough_started") m.playthrough_started = to_i64(v, 0);
     }
     out = std::move(m);
     return true;
@@ -289,7 +317,7 @@ std::vector<SaveEntry> list_saves(const std::string& dir) {
     for (fs::directory_iterator it(d, ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& p = it->path();
         std::error_code ec2;
-        if (!it->is_regular_file(ec2) || !iequal(p.extension().string(), kSaveExtension)) continue;
+        if (!it->is_regular_file(ec2) || !ascii_iequals(p.extension().string(), kSaveExtension)) continue;
         SaveEntry e;
         e.name = p.stem().string();
         e.path = p.string();
@@ -306,7 +334,7 @@ std::vector<SaveEntry> list_saves(const std::string& dir) {
     }
     std::sort(out.begin(), out.end(), [](const SaveEntry& a, const SaveEntry& b) {
         if (a.sort_time != b.sort_time) return a.sort_time > b.sort_time;
-        if (!iequal(a.name, b.name)) return iless(a.name, b.name);
+        if (!ascii_iequals(a.name, b.name)) return iless(a.name, b.name);
         return a.name < b.name;
     });
     return out;

@@ -16,6 +16,11 @@ float tactical_fov_x(float fov_degrees, float aspect) {
     return 2.0f * std::atan(std::tan(0.5f * f) * 0.75f * 16.0f / 9.0f);
 }
 
+float galactic_fov_x(float fov_x_4_3, float aspect) {
+    if (aspect <= 4.0f / 3.0f + 1e-4f) return fov_x_4_3;
+    return 2.0f * std::atan(std::tan(0.5f * fov_x_4_3) * aspect * 0.75f);
+}
+
 float Spline::eval(float t, float fallback) const {
     const size_t n = x.size() < y.size() ? x.size() : y.size();
     if (n == 0) return fallback;
@@ -741,10 +746,12 @@ void GalacticCameraController::update(const InputState& in, const Bindings& keys
 
 float GalacticCameraController::fov_deg() const { return fov_deg_ > 0.0f ? fov_deg_ : kGalacticFovX / kDegToRad; }
 
-CameraParams GalacticCameraController::params(float /*aspect*/) const {
+CameraParams GalacticCameraController::params(float aspect) const {
     const Pose p = blended();
     CameraParams cp = make_params(p.look, 0.0f, p.pitch, p.pullback);
-    cp.fov_x = fov_deg_ > 0.0f ? fov_deg_ * kDegToRad : kGalacticFovX;  // fixed for every aspect (B.8); [port: Gabriel] setting
+    // B.8 keeps this horizontal FOV at every aspect; [port: Gabriel 2026-11-13] Hor+: it is the 4:3 value and wider windows
+    // widen it (galactic_fov_x), so 16:9 / 21:9 / 32:9 keep 4:3's vertical view. [port: Gabriel] the FOV setting likewise.
+    cp.fov_x = galactic_fov_x(fov_deg_ > 0.0f ? fov_deg_ * kDegToRad : kGalacticFovX, aspect);
     cp.znear = kGalacticNear;
     cp.zfar = kGalacticFar;
     cp.galactic = true;

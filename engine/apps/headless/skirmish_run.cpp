@@ -1,9 +1,9 @@
 // alamo_headless --skirmish-ai (A1 stage 2): see skirmish_run.hpp.
 #include "skirmish_run.hpp"
 #include "crc_out.hpp"
+#include "tactical_trace.hpp"  // q4hf t02: --trace-out
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cinttypes>
@@ -16,9 +16,13 @@
 
 #ifdef ALAMO_SIM_HAVE_TACTICAL_AI
 #include "alamo/ai/ai_definitions.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/ai/perception_equations.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
@@ -100,10 +104,11 @@ const char* kHardpoints = R"(<HardPoints>
  <HardPoint Name="HP_A1S_Laser_B"><Variant_Of_Existing_Type>HP_A1S_Laser_A</Variant_Of_Existing_Type><Health>100</Health></HardPoint>
 </HardPoints>
 )";
+// [name-ok: synthetic test data of the headless battle host (--skirmish-ai synthetic)]
 const char* kFactions = R"(<Factions>
- <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+ <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Basic_AI>BasicEmpire</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>6</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
- <Faction Name="Rebel"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+ <Faction Name="Rebel"><Is_Playable>Yes</Is_Playable><Basic_AI>BasicRebel</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>6</Space_Tactical_Unit_Cap><Space_Retreat_Countdown_Seconds>5</Space_Retreat_Countdown_Seconds></Faction>
  <Faction Name="Neutral"><Is_Neutral>Yes</Is_Neutral></Faction>
 </Factions>
@@ -334,19 +339,19 @@ galactic::GalacticSetup make_galaxy(const Session& s, uint32_t planet_type, cons
     }
     g.planet_type = {planet_type, planet_type, planet_type};
     galactic::PlayerSetup e;
+    // [name-ok-begin: the foc-* / synthetic test scenarios' sides (their goldens); the skirmish host passes `slots`]
     e.faction = slots.size() == 2 ? slots[0] : s.rules.find_faction("Empire");
     e.ai = true;
     e.credits = credits;
     galactic::PlayerSetup r = e;
     r.faction = slots.size() == 2 ? slots[1] : s.rules.find_faction("Rebel");
+    // [name-ok-end]
     galactic::PlayerSetup n;
-    n.faction = s.rules.find_faction("Neutral");
-    for (uint32_t f = 0; f < s.rules.factions.size() && n.faction == galactic::kNoIndex; ++f)  // q6 t02: a mod's neutral faction
-        if (s.rules.factions[f].is_neutral) n.faction = f;
+    n.faction = s.rules.neutral_faction();  // modc t03: the first Is_Neutral faction (FoC: Neutral)
     g.players = {e, r, n};
     // S10 map owners [probe 2026-10-29]: a Hostile player besides Neutral (map owners resolve by faction; natives -> Hostile).
     galactic::PlayerSetup h;
-    h.faction = s.rules.find_faction("Hostile");
+    h.faction = s.rules.native_owner_faction();  // modc t03: by data (FoC: Hostile)
     if (h.faction != galactic::kNoIndex && h.faction != e.faction && h.faction != r.faction) g.players.push_back(h);
     for (const uint32_t t : defender) g.forces.push_back({0, 1, t});
     for (const uint32_t t : attacker) g.forces.push_back({1, 2, t});
@@ -412,13 +417,10 @@ bool foc_load(Session& s, const MapRunOptions& opt, std::vector<std::string>& di
         skipped = true;
         return false;
     }
-    vfs::VfsConfig vcfg;
-    vcfg.foc_root = root;
-    vfs::parse_command_line(opt.game_args, vcfg);
     std::string err;
-    std::unique_ptr<vfs::Vfs> v = vfs::Vfs::create(vcfg, &err);
+    std::unique_ptr<vfs::Vfs> v = vfs::mount_game(root, opt.game_args, &err);
     if (!v) {
-        diag.push_back("VFS: " + err);
+        diag.push_back(err);
         return false;
     }
     vfs::Vfs* vp = v.get();
@@ -435,20 +437,30 @@ bool foc_load(Session& s, const MapRunOptions& opt, std::vector<std::string>& di
 // BM1 t02: --skirmish-ai foc-fleet / --save-session skirmish --campaign foc-fleet, the foc space battle with both fleets this many
 // times over (the benchmark's large space battle, tests/benchmark/space_battle.abench).
 constexpr int kFleetScale = 4;
+// BM3 t02: --save-session skirmish --campaign foc-land-army, the foc-land skirmish with both sides' company lists this many times over
+// (the benchmark's large land battle, tests/benchmark/land_battle.abench).
+constexpr int kArmyScale = 6;
+// SP5 t07: --save-session skirmish --campaign foc-land-army4, four times land_battle's forces (the services stress scene,
+// docs/SIM_PARALLEL_DESIGN.md §7 "a large-scene stress (four times the fleets)"; tools/benchmark/stress_land4.cmd).
+constexpr int kArmyStressScale = 4 * kArmyScale;
 
 // land: a land battle; land_skirmish (t50): that battle is a skirmish (an _MP_LAND_ map, MP_Default_Credits), else the campaign invasion.
-// fleet_scale (BM1 t02, kind foc-fleet): the space fleets of both sides repeated that many times (the benchmark's large space battle).
+// fleet_scale (BM1 t02, kind foc-fleet; BM3 t02, kind foc-land-army for the land lists): the starting forces of both sides repeated that many
+// times (the benchmark's large space and land battles).
 bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>& diag, bool& skipped, bool land, bool station = false,
                  bool land_skirmish = false, int fleet_scale = 1) {
     if (!foc_load(s, opt, diag, skipped)) return false;
+    // [name-ok-begin: the foc-* battle scenarios of the test host (kinds named for FoC data; their goldens)]
     std::vector<uint32_t> emp, reb;
     if (land) {  // battle host: --skirmish-ai foc-land - Empire companies hold the planet, Rebel companies invade
         s.land = true;
         s.skirmish = land_skirmish;
-        for (const char* n : {"Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Heavy_Assault_Company", "Imperial_Anti_Infantry_Brigade"})
-            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
-        for (const char* n : {"Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Heavy_Tank_Brigade", "Rebel_Infantry_Squad"})
-            if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+        for (int i = 0; i < fleet_scale; ++i) {
+            for (const char* n : {"Imperial_Stormtrooper_Squad", "Imperial_Armor_Group", "Imperial_Heavy_Assault_Company", "Imperial_Anti_Infantry_Brigade"})
+                if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) emp.push_back(ty);
+            for (const char* n : {"Rebel_Infantry_Squad", "Rebel_Light_Tank_Brigade", "Rebel_Heavy_Tank_Brigade", "Rebel_Infantry_Squad"})
+                if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
+        }
     } else if (station) {  // t41: --skirmish-ai foc-station - a Level 2 station and one escort hold against a far larger fleet
         s.skirmish = false;
         for (const char* n : {"Empire_Star_Base_2", "Tartan_Patrol_Cruiser"})
@@ -464,6 +476,7 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
                 if (const uint32_t ty = s.rules.find_type(n); ty != galactic::kNoIndex) reb.push_back(ty);
         }
     }
+    // [name-ok-end]
     uint32_t planet = s.rules.find_type(land ? "Utapau" : "Kuat");
     if (planet == galactic::kNoIndex) planet = s.rules.find_type("Coruscant");
     if (emp.empty() || reb.empty() || planet == galactic::kNoIndex) {
@@ -478,36 +491,24 @@ bool foc_session(Session& s, const MapRunOptions& opt, std::vector<std::string>&
     return true;
 }
 
-bool iequal(std::string_view a, std::string_view b) {
-    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-           });
-}
-
-std::string trimmed(std::string_view v) {
-    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.remove_prefix(1);
-    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
-    return std::string(v);
-}
+std::string trimmed(std::string_view v) { return std::string(data::trim(v)); }  // data::trim = the std::isspace set
 
 // ---- q6 t02 / t03: the skirmish host's data rules for any faction (mods through MODPATH=) ----
 // engine/apps/game/rules (skirmish_rules.hpp), shared with alamo_game. This host's deliberate differences are options:
-// no stock lists (it has always started every faction from the data's Space_ / Land_Skirmish_AI_Default_Forces, which
+// no base-game lists (it has always started every faction from the data's Space_ / Land_Skirmish_AI_Default_Forces, which
 // the checked-in goldens hold) and no hyperspace leader (the battle starts on the map, no galactic hop).
 
 // A slot's starting forces (skirmish_rules skirmish_data_force_types): the faction's list, keeping the types the scaffold
 // galaxy can hold (unknown names dropped); none left: [port] the faction's cheapest buildable units. Notes to `diag`.
 // Both slots get them (MP_Default_Free_Starting_Units yes): the retail Geonosis trace starts the idle human Empire with 2 TIE
 // Interceptor squadrons too.
-std::vector<uint32_t> skirmish_slot_forces(const Session& s, const game::SkirmishForceTable& table,
-                                           const std::map<std::string, std::string>& basic_ai, const std::string& faction, bool land,
+std::vector<uint32_t> skirmish_slot_forces(const Session& s, const game::SkirmishForceTable& table, const std::string& faction, bool land,
                                            std::vector<std::string>& diag) {
     std::vector<std::string> notes;
     game::SkirmishForceOptions opt;
-    opt.stock_lists = false;
     opt.hyperspace_leader = false;
     opt.diag = &notes;
-    std::vector<uint32_t> out = game::skirmish_data_force_types({s.rules, s.types, table, basic_ai}, faction, land, opt);
+    std::vector<uint32_t> out = game::skirmish_data_force_types({s.rules, s.types, table}, faction, land, opt);
     for (const std::string& n : notes) diag.push_back("skirmish host: " + n);
     return out;
 }
@@ -549,8 +550,9 @@ bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std
     if (!foc_load(s, o, diag, skipped)) return false;
     s.map = o.map;
     terrain::MapData probe;
-    if (!terrain::load_map(*s.files, s.map, probe)) {
-        diag.push_back("skirmish host: map " + s.map + " not loaded");
+    std::string map_err;
+    if (!terrain::load_map(*s.files, s.map, probe, &map_err)) {
+        diag.push_back("skirmish host: map " + s.map + " not loaded (" + map_err + ")");
         return false;
     }
     s.land = !probe.is_space();
@@ -558,7 +560,7 @@ bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std
     s.map_host = true;
     // Slots: Empire, Rebel; --ai A,B: A, B; --human H --ai A: H, A.
     std::vector<std::string> names = split_factions(o.ai_factions);
-    if (names.empty()) names = {"Empire", "Rebel"};
+    if (names.empty()) names = {"Empire", "Rebel"};  // [name-ok: default sides of the retail Geonosis trace (skirmish_ai goldens); --ai picks any]
     else if (names.size() == 1 && !o.human.empty()) names.insert(names.begin(), o.human);
     if (names.size() != 2) {
         diag.push_back("skirmish host: --ai " + o.ai_factions + ": name two factions, or one beside --human");
@@ -584,17 +586,17 @@ bool skirmish_host_session(Session& s, const MapRunOptions& opt, std::vector<std
     }
     const float credits = static_cast<float>(std::max(0, s.db.constants().get_int("MP_Default_Credits", 0)));
     s.setup = make_galaxy(s, planet, {}, {}, credits, slots);
-    auto basic_ai = std::make_shared<const std::map<std::string, std::string>>(ai::load_faction_basic_ai(*s.files));
-    const game::SkirmishForceTable force_table = game::load_skirmish_forces(*s.files);
+    auto basic_ai = std::make_shared<const std::map<std::string, std::string>>(ai::load_faction_basic_ai(s.rules.factions));
+    const game::SkirmishForceTable force_table = game::load_skirmish_forces(s.rules.factions);
     for (int32_t p = 0; p < 2; ++p) {
         galactic::PlayerSetup& ps = s.setup.players[static_cast<size_t>(p)];
         const std::string& faction = s.rules.factions[ps.faction].name;
-        if (!o.human.empty() && iequal(faction, o.human)) {
+        if (!o.human.empty() && alamo::ascii_iequals(faction, o.human)) {
             ps.human = true;
             ps.ai = false;
             s.human = p;
         }
-        const std::vector<uint32_t> forces = skirmish_slot_forces(s, force_table, *basic_ai, faction, s.land, diag);
+        const std::vector<uint32_t> forces = skirmish_slot_forces(s, force_table, faction, s.land, diag);
         if (forces.empty()) {
             diag.push_back("skirmish host: " + faction + " has no starting forces");
             return false;
@@ -766,7 +768,7 @@ void add_galactic_context([[maybe_unused]] const Session& s, [[maybe_unused]] co
 
 }  // namespace
 
-int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log) {
+int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std::string& ai_log, const std::string& trace_out) {
     Session s;
     std::vector<std::string> diag;
     bool skipped = false;
@@ -810,7 +812,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     s.ai->equations = &s.eqs;
     s.ai->files = s.files.get();
     if (opt.ai_latency >= 0) s.ai->path_latency = static_cast<uint32_t>(opt.ai_latency);  // OPT2 t01 / t02 parity knobs
-    s.ai->stagger = opt.ai_stagger;
+    s.ai->stagger = opt.ai_stagger != 0;  // tactical default: the OPT2 t01 phases (a2m r4 changed the galactic default only)
     s.ai->pp_streams = opt.pp_streams;  // OPT2 t10 parity knobs
     if (opt.pp_latency >= 0) s.ai->pp_latency = static_cast<uint32_t>(opt.pp_latency);
     const uint64_t max_ticks = opt.ticks_set ? opt.ticks : 30 * 600;
@@ -826,15 +828,38 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         // t50 (land skirmish): the battle's BattleStats as last seen while it ran (the summary only exists once it has ended).
         unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
         uint64_t orders = 0;
+        // s78n t20: per side, the 2-D distance of its first start-force unit from its spawn-point marker (-1: none)
+        double start_off[2] = {-1.0, -1.0};
+        unsigned long attack_reissues = 0, attack_stops = 0, attack_skips = 0;  // s78n t20 stage A (BattleStats)
     };
     constexpr uint32_t kBattleFrames = 30 * 480;  // [port] the 15-min battle limit (S10)
     std::string log_text;
-    auto run_one = [&](int32_t workers, Out& out) -> bool {
+    auto run_one = [&](int32_t workers, Out& out, bool write_trace = false) -> bool {
         jobs::JobSystem js(jobs::JobSystemConfig{workers});
         sim::SimConfig cfg;
         cfg.seed = opt.seed;
         cfg.players = 4;
         cfg.object_scripts = opt.object_scripts;  // q6
+        // q4hf t02: the tactical state trace reads the battle after each tick (never writes it); the first run only.
+        PortTacticalTrace trace;
+        if (write_trace && !trace_out.empty()) {
+            std::string sides;
+            for (size_t p = 0; p < 2 && p < s.setup.players.size(); ++p) {
+                const galactic::PlayerSetup& ps = s.setup.players[p];
+                const std::string f = ps.faction < s.rules.factions.size() ? s.rules.factions[ps.faction].name : std::string("?");
+                sides += (p ? " vs " : "") + (ps.human ? "human " + f + " idle" : "AI " + f);
+            }
+            const std::vector<std::pair<std::string, std::string>> meta = {
+                {"reader", "alamo_headless"}, {"scenario", "skirmish"}, {"game", "foc"},
+                {"skirmish", std::string(s.land ? "land" : "space") + " 2 players, " + sides}, {"map", foc ? s.map : std::string("synthetic")},
+                {"label", "alamo_headless --skirmish-ai " + kind}, {"mode_type", s.land ? "1" : "2"},
+                {"target_ticks", std::to_string(max_ticks)}};
+            std::string terr;
+            if (!trace.open(trace_out, meta, cfg.seed, terr)) {
+                std::fprintf(stderr, "skirmish-ai: %s\n", terr.c_str());
+                return false;
+            }
+        }
         sim::SimHost host(s.types, js, cfg);
         if (opt.object_scripts) {  // q6: game-object scripts, and the GameScoring script that sets the mod's GlobalValues
             host.set_object_script_files(s.files.get());
@@ -849,6 +874,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         bo.battle.max_frames = s.map_host ? 0 : kBattleFrames;  // skai: a skirmish has no time limit (it ends at --ticks)
         bo.battle.skirmish = s.skirmish;
         bo.battle.skirmish_map = s.map_host;        // skai: team markers, income, skirmish victory
+        bo.battle.control_point_domination = s.map_host && s.land && opt.control_points;  // ccpgt t02
         bo.battle.skip_human_units = s.human >= 0;  // skai: the idle human gets no stand-in orders
         bo.tactical_ai = s.ai;
         sim::load_tactical_systems(*s.files, s.rules, &s.db.constants(), bo);  // Int-final: weather, retreat, strikes data
@@ -898,6 +924,8 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         uint64_t orders = 0, rejected = 0;
         size_t decisions = 0, lua_errors = 0;
         unsigned long prebuilt = 0, pads = 0, structures = 0, shots = 0;
+        double start_off[2] = {-1.0, -1.0};
+        unsigned long attack_reissues = 0, attack_stops = 0, attack_skips = 0;
         std::vector<std::string> error_list;
         std::string state_text;  // skai: --ai-log state lines
         std::string script_state;  // q6: --object-scripts, the battle's last state line (units per player)
@@ -926,6 +954,15 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                 pads = bs.skirmish_pads;
                 structures = bs.pad_builds;
                 shots = static_cast<unsigned long>(bs.shots);
+                attack_reissues = bs.attack_reissues;
+                attack_stops = bs.attack_land_stops;
+                attack_skips = bs.attack_reissue_skips;
+                for (int sd = 0; sd < 2; ++sd)
+                    if (bs.skirmish_marked[sd] && bs.start_placed[sd]) {
+                        const double dx = static_cast<double>(bs.first_start[sd].x) - static_cast<double>(bs.skirmish_marker[sd].x);
+                        const double dy = static_cast<double>(bs.first_start[sd].y) - static_cast<double>(bs.skirmish_marker[sd].y);
+                        start_off[sd] = std::sqrt(dx * dx + dy * dy);
+                    }
                 if (!ai_log.empty())
                     if (sim::TacticalMode* tmode = host.tactical()) {
                         static const objects::BehaviorTypeId kLandBaseDmg = objects::behavior_type_id("DUMMY_LAND_BASE_LEVEL_COMPONENT");
@@ -955,11 +992,29 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
                     }
                 }
                 if (opt.object_scripts && (bs.frames == 1 || bs.frames % 600 == 0)) script_state = battle_state_text(t + 1, host, *gs, *tb);
+                if (trace.is_open())  // q4hf t02
+                    if (const sim::TacticalMode* tmode = host.tactical()) {
+                        const sim::GameMode* top = host.modes().top();
+                        PortTacticalTrace::Sample ts;
+                        ts.global_frame = host.frame();
+                        ts.mode_type = top ? static_cast<uint32_t>(top->kind()) : 2u;
+                        ts.rng_state = host.random().synced().state();
+                        ts.stack_depth = static_cast<uint32_t>(host.modes().depth());
+                        trace.sample(*tmode, *tb, *gs, ts);
+                    }
             }
             if (battles.battles_fought() > 0 && !battles.battle() && host.modes().depth() == 1) {
                 ++t;
                 break;
             }
+        }
+        if (trace.is_open()) {
+            std::string terr;
+            if (!trace.finish(t < max_ticks ? "mode_changed" : "ticks_reached", terr)) {
+                std::fprintf(stderr, "skirmish-ai: %s\n", terr.c_str());
+                return false;
+            }
+            std::printf("wrote %s\n", trace_out.c_str());
         }
         out.crc = host.crc_log();
         out.ticks = t;
@@ -972,6 +1027,11 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         out.lua_errors = lua_errors;
         out.orders = orders;
         out.prebuilt = prebuilt;
+        out.attack_reissues = attack_reissues;
+        out.attack_stops = attack_stops;
+        out.attack_skips = attack_skips;
+        out.start_off[0] = start_off[0];
+        out.start_off[1] = start_off[1];
         out.pads = pads;
         out.structures = structures;
         out.shots = shots;
@@ -1032,7 +1092,7 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     };
     Out first;
     const auto counts = jobs::determinism_worker_counts();
-    if (!run_one(opt.check_workers ? counts.front() : opt.workers, first)) {
+    if (!run_one(opt.check_workers ? counts.front() : opt.workers, first, true)) {
         std::fprintf(stderr, "skirmish-ai: run failed\n");
         return 1;
     }
@@ -1040,13 +1100,19 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
     if (!ai_log.empty()) std::ofstream(fs::path(ai_log), std::ios::binary) << log_text;
     bool good = true;
     if (opt.check_workers)
-        for (size_t i = 1; i < counts.size(); ++i) {
-            Out other;
-            run_one(counts[i], other);
-            const auto dv = first_divergence(first.crc, other.crc);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], dv.message.c_str());
-            if (dv.diverged) good = false;
-        }
+        good = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                Out other;
+                run_one(w, other);
+                return other;
+            },
+            [](const Out& o) -> const CrcLog& { return o.crc; },
+            [&](int32_t w, const Out&, const CrcDivergence& dv) {
+                std::printf("  workers %d vs %d: %s\n", counts.front(), w, dv.message.c_str());
+                return true;
+            },
+            counts);
     // t48: shipped scripts against the port: a Lua error here is a port bug until shown otherwise. a1j t07: any kind with
     // --fail-on-lua-errors.
     if ((kind == "foc-station" || opt.fail_on_lua_errors) && first.lua_errors != 0) {
@@ -1077,27 +1143,26 @@ int skirmish_ai_run(const MapRunOptions& opt, const std::string& kind, const std
         }
     }
     if (opt.expect_skirmish_base) {  // t50: the land skirmish starts from its base and the shipped AI plays from it
-        // Both slots' Command Center and Barracks pads start built (4), the AI issues orders, shots are fired, no Lua errors. Whether
-        // the battle reaches a result in the frame limit is not asked here: the skirmish AI does not take the enemy base in 15 minutes.
-        const bool base_ok = kind == "foc-land" && first.prebuilt >= 4 && first.pads >= first.prebuilt && first.shots > 0 && first.orders > 0 &&
-                             first.lua_errors == 0;
+        // skai t08 (SKAI_T06_LAND_RUNS 2, retail Utapau frame 0): every slot pad but the five generic <FACTION>_BUILD_PADs starts
+        // built - 10 structures per slot on _MP_LAND_UTAPAU, 20 in all - the AI issues orders, shots are fired, no Lua errors.
+        // Whether the battle reaches a result in the frame limit is not asked here (the _end tests do).
+        // s78n t20 / skai t07 (SKIRMISH_SETUP §2.2; retail: all squads within 41 of the last TEAM_tt spawn marker): each side's
+        // start companies stand on its own spawn-point marker (the free placement ring search around it).
+        const bool start_ok = first.start_off[0] >= 0.0 && first.start_off[0] <= 100.0 && first.start_off[1] >= 0.0 && first.start_off[1] <= 100.0;
+        const bool base_ok = kind == "foc-land" && first.prebuilt >= 20 && first.pads >= first.prebuilt && first.shots > 0 && first.orders > 0 &&
+                             first.lua_errors == 0 && start_ok;
+        std::printf("skirmish start: first start-force unit %.0f / %.0f from the spawn-point markers\n", first.start_off[0], first.start_off[1]);
         std::printf("skirmish base: %s (%lu pre-built of %lu pads, %lu structures started, %lu shots, %" PRIu64 " AI orders, %zu Lua errors)\n",
                     base_ok ? "ok" : "MISSING", first.prebuilt, first.pads, first.structures, first.shots, first.orders, first.lua_errors);
         if (!base_ok) good = false;
     }
+    if (kind == "foc-land" || kind == "foc-land-campaign")  // s78n t20 stage A: the land attack blocks' 30-frame checks
+        std::printf("land attack blocks: %lu approaches re-issued, %lu land stops, %lu re-approaches skipped (goal where the mover stood)\n",
+                    first.attack_reissues, first.attack_stops, first.attack_skips);
     first.crc.comments = {"A1 skirmish-ai " + kind + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(first.ticks)};
     std::string err;
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first.crc, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto dv = first_divergence(golden, first.crc);
-        std::printf("golden: %s\n", dv.message.c_str());
-        if (dv.diverged) good = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.crc, good) != 0) return 2;
     std::printf(good ? "skirmish-ai run: OK\n" : "skirmish-ai run: FAILED\n");
     return good ? 0 : 1;
 }
@@ -1118,22 +1183,27 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     Session& s = d->s;
     std::vector<std::string> diag;
     skipped = false;
-    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-fleet";
+    const bool army4 = kind == "foc-land-army4";  // SP5 t07: four times foc-land-army
+    const bool army = kind == "foc-land-army" || army4;  // BM3 t02: foc-land with the company lists repeated kArmyScale times
+    const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-fleet" || army;
     if (!foc && kind != "synthetic") {
-        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-fleet | foc-land | foc-land-campaign)";
+        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-fleet | foc-land | foc-land-army | foc-land-army4 | foc-land-campaign)";
         return nullptr;
     }
     MapRunOptions mo;
     mo.game_dir = game_dir;
     mo.game_args = game_args;
     mo.map = map;
-    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign", false, kind == "foc-land",
-                                      kind == "foc-fleet" ? kFleetScale : 1)
+    const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign" || army, false,
+                                      kind == "foc-land" || army, kind == "foc-fleet" ? kFleetScale : army4 ? kArmyStressScale : army ? kArmyScale : 1)
                         : synthetic_session(s, diag);
     if (skipped) {
         err = "ALAMO_FOC_DATA / --game not set";
         return nullptr;
     }
+    // SP5 t07: Max_Ground_Forces_On_Planet x 4 for the stress scene, so the galaxy holds (and the battle takes) four times
+    // land_battle's companies on each side ([port] bench only; GalacticSim reads the rules when it starts).
+    if (army4) s.rules.constants.max_ground_forces_on_planet *= 4;
     if (!ok) {
         err = "skirmish " + kind + ": setup failed (" + std::to_string(diag.size()) + " diagnostics" +
               (diag.empty() ? std::string() : ": " + diag.front()) + ")";
@@ -1166,6 +1236,10 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     h.u32(static_cast<uint32_t>(s.defs.goals.size()));
     h.u32(static_cast<uint32_t>(s.eqs.size()));
     d->fingerprint = sim::combine_fingerprints({sim::fingerprint_types(s.types), sim::fingerprint_galactic(s.rules, s.setup), h.digest()});
+    // SP5 t07: the services stress scene runs without the tactical AI. The AI's land population cap (BattleAi::population_cap,
+    // retail rule) would keep most of the 24x lists in reserve; the stand-in deploys every reserve on its cadence (no land
+    // cap), so the map holds four times land_battle's forces, and the tick is movement, combat and the services.
+    if (army4) s.ai.reset();
     return d;
 }
 
@@ -1243,7 +1317,7 @@ bool skirmish_save_start(const SkirmishSaveData& d, sim::SimHost& host, bool ani
 }
 // --- end N1 stage 2 ---
 #else
-int skirmish_ai_run(const MapRunOptions&, const std::string&, const std::string&) {
+int skirmish_ai_run(const MapRunOptions&, const std::string&, const std::string&, const std::string&) {
     std::fprintf(stderr, "--skirmish-ai: this build has no tactical AI (engine/ai/tactical + engine/lua)\n");
     return 2;
 }

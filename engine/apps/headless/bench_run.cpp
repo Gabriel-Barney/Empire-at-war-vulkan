@@ -25,6 +25,7 @@
 #include "alamo/sim/bench_scenario.hpp"
 #include "alamo/sim/bench_stats.hpp"
 #include "crc_out.hpp"
+#include "alamo/jobs/topology.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -52,7 +53,7 @@ namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 constexpr int kExitNotComparable = 3;
-constexpr uint32_t kTopZones = 24;
+constexpr uint32_t kTopZones = 192;  // sp0: every active zone (the step zones are small), was the top 24
 
 double ms_between(Clock::time_point a, Clock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
@@ -274,6 +275,7 @@ int not_comparable(const BenchOptions& opt, const std::string& why) {
 
 // ================================================================================================= --bench
 int bench_run(const BenchOptions& opt) {
+    (void)alamo::jobs::raise_current_thread_priority();  // SIMP sp1: the sim thread one step up (wall clock only)
     std::string err;
     bench::Scenario sc;
     if (!bench::Scenario::load(opt.scenario, sc, &err)) {
@@ -281,11 +283,14 @@ int bench_run(const BenchOptions& opt) {
         return 1;
     }
     std::printf("bench: scenario %s version %u: %s\n", sc.name.c_str(), sc.version, sc.description.c_str());
-    if (sc.host == bench::Host::Game) {  // BM2: an alamo_game save (game.campaign / game.skirmish), not a headless harness
-        std::fprintf(stderr, "bench: %s was made by alamo_game (host game): run it with alamo_game --bench-scenario %s\n", sc.name.c_str(),
-                     opt.scenario.c_str());
+    const bool game_host = sc.host == bench::Host::Game;  // BM2: an alamo_game save (game.campaign / game.skirmish)
+#ifndef ALAMO_HEADLESS_HAVE_GAME_CORE
+    if (game_host) {  // bm2c t02: timed sim-only through alamo_game_core (bench_game.cpp), not built into this exe
+        std::fprintf(stderr, "bench: %s was made by alamo_game (host game) and this alamo_headless has no alamo_game_core: run it with "
+                     "alamo_game --bench-scenario %s\n", sc.name.c_str(), opt.scenario.c_str());
         return 2;
     }
+#endif
     if (!bench::verify_files(sc, &err)) return not_comparable(opt, err);
     CrcLog fingerprint;
     if (!CrcLog::load(sc.resolve(sc.fingerprint), fingerprint, &err) || fingerprint.records.empty()) {
@@ -299,7 +304,12 @@ int bench_run(const BenchOptions& opt) {
         return 1;
     }
     std::unique_ptr<SaveSessionSource> src;
+#ifdef ALAMO_HEADLESS_HAVE_GAME_CORE
+    const int opened = game_host ? open_game_save_source(sc.resolve(sc.save), opt.game_dir, opt.game_args, src, err)
+                                 : open_save_source(sc.resolve(sc.save), opt.game_dir, opt.game_args, src, err);
+#else
     const int opened = open_save_source(sc.resolve(sc.save), opt.game_dir, opt.game_args, src, err);
+#endif
     if (opened == 0) {
         std::printf("bench: %s: %s: skipped\n", sc.name.c_str(), err.c_str());
         return 0;
@@ -436,6 +446,7 @@ int bench_run(const BenchOptions& opt) {
     bench::Json zones = bench::Json::array();
     for (size_t i = 0; i < rep.zones.size() && i < kTopZones; ++i) {
         const profile::ZoneStat& z = rep.zones[i];
+        if (z.active_ticks == 0) continue;
         bench::Json zj = bench::Json::object();
         zj.set("name", bench::Json::string(z.name));
         zj.set("share", bench::Json::number(z.share));

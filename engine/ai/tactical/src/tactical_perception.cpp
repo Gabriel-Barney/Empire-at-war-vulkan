@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/objects/enums.hpp"
 
@@ -794,7 +795,6 @@ struct Eval {
         GridQuery q;
         q.self = ctx.self;
         q.exclude = a.attached;
-        q.memory_counted_when_not_fogged = p.config().memory_counted_when_not_fogged;
         switch (l) {
             case Leaf::FriendlyForceUnnormalized: case Leaf::EnemyForceUnnormalized: {
                 if (!w.is_player(ctx.self)) return false;
@@ -960,8 +960,13 @@ struct Eval {
                 std::vector<std::string_view> types;
                 param_names(ps, "Parameter_Type", types);
                 uint32_t c = 0;
-                for (const PerceptionObject& o : w.objects)
-                    if (o.owner == P && o.alive && o.built_structure && (types.empty() || listed(types, type_name(o.type)))) ++c;
+                for (const PerceptionObject& o : w.objects) {
+                    if (o.owner != P || !o.alive || !o.built_structure) continue;
+                    // skai t12: a structure under construction counts as the type it becomes.
+                    const PerceptionType* t = w.type_of(o);
+                    const int32_t ty = t && t->under_construction && t->constructed_type >= 0 ? t->constructed_type : o.type;
+                    if (types.empty() || listed(types, type_name(ty))) ++c;
+                }
                 out = static_cast<double>(c);
                 return true;
             }
@@ -1083,16 +1088,20 @@ uint64_t default_category_mask(std::string_view name) {
     return v ? static_cast<uint64_t>(*v) : 0;
 }
 
-// TACTICAL_GAPS 6.8 name-id match [M: ASCII case-insensitive].
-bool zone_names_equal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'A' && a[i] <= 'Z') ? static_cast<char>(a[i] - 'A' + 'a') : a[i];
-        const char y = (b[i] >= 'A' && b[i] <= 'Z') ? static_cast<char>(b[i] - 'A' + 'a') : b[i];
-        if (x != y) return false;
-    }
-    return true;
+}  // namespace
+
+std::function<uint64_t(std::string_view)> category_mask_from(const objects::EnumRegistry& enums) {
+    const objects::EnumConverter* cat = &enums.get(objects::EnumId::GameObjectCategory);
+    return [cat](std::string_view name) -> uint64_t {
+        const auto v = cat->lookup(name);
+        return v ? static_cast<uint64_t>(*v) : 0;
+    };
 }
+
+namespace {
+
+// TACTICAL_GAPS 6.8 name-id match [M: ASCII case-insensitive].
+bool zone_names_equal(std::string_view a, std::string_view b) { return ascii_iequals(a, b); }
 
 }  // namespace
 
@@ -1359,28 +1368,10 @@ int32_t TacticalPerception::register_cell(int32_t x, int32_t y, const Rect2& rec
     return h;
 }
 
-void TacticalPerception::register_targets(const PerceptionWorld& w, const TacticalTargetList& list, std::vector<int32_t>* handles) {
-    if (handles) handles->clear();
-    for (const TacticalTarget& t : list.targets()) {
-        int32_t h = -1;
-        if (t.is_unit()) h = register_unit(w, t.object_id);
-        else if (t.zone >= 0) h = register_zone(t.zone);
-        else h = register_cell(t.cell_x, t.cell_y, t.eval_rect);
-        if (handles) handles->push_back(h);
-    }
-}
-
-int32_t TacticalPerception::handle_for(const TacticalTarget& t) const {
-    if (t.is_unit()) return handle_of_object(t.object_id);
-    if (t.zone >= 0) {
-        for (const auto& [z, h] : zone_handles_)
-            if (z == t.zone) return h;
-        return -1;
-    }
-    const int64_t key = (static_cast<int64_t>(t.cell_x) << 32) | static_cast<int64_t>(static_cast<uint32_t>(t.cell_y));
-    for (const auto& [k, h] : cell_handles_)
-        if (k == key) return h;
-    return -1;
+int32_t TacticalPerception::register_target(const PerceptionWorld& w, const TacticalTarget& t) {
+    if (t.is_unit()) return register_unit(w, t.object_id);
+    if (t.zone >= 0) return register_zone(t.zone);
+    return register_cell(t.cell_x, t.cell_y, t.eval_rect);
 }
 
 void TacticalPerception::on_object_destroyed(int32_t object_id) {

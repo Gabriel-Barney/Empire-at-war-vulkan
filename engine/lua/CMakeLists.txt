@@ -186,6 +186,8 @@ endif()
 set_source_files_properties(${_lua_sources} PROPERTIES LANGUAGE CXX)
 
 add_library(alamo_lua_vm STATIC ${_lua_sources})
+set_property(TARGET alamo_lua_vm PROPERTY PRECOMPILE_HEADERS_REUSE_FROM)
+set_property(TARGET alamo_lua_vm PROPERTY DISABLE_PRECOMPILE_HEADERS ON)  # 'register=' define
 target_include_directories(alamo_lua_vm SYSTEM PUBLIC "${ALAMO_LUA_DIR}/include")
 target_compile_features(alamo_lua_vm PRIVATE cxx_std_20)
 # 'register' is gone in C++17; Lua 5.0 still spells it.
@@ -285,7 +287,7 @@ target_include_directories(alamo_lua PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(alamo_lua PUBLIC alamo_objects alamo_core alamo_engine_flags PRIVATE alamo_lua_vm)
 
 add_executable(alamo_lua_tests tests/test_lua.cpp)
-target_link_libraries(alamo_lua_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads)
+target_link_libraries(alamo_lua_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads alamo_test_support)
 # Binding coverage / script compile reports go to <project>/logs/lua_*.txt.
 target_compile_definitions(alamo_lua_tests PRIVATE "ALAMO_LUA_LOG_DIR=\"${PROJECT_SOURCE_DIR}/logs\"")
 if(TARGET alamo_vfs)
@@ -295,23 +297,20 @@ endif()
 add_test(NAME alamo_lua_tests COMMAND alamo_lua_tests)
 set_tests_properties(alamo_lua_tests PROPERTIES TIMEOUT 120)
 
-# One test exe per binding family (L1 stage 2), so families are developed in parallel without
-# touching each other's files. A family's test file is created by the agent that owns that family.
+# One test exe per binding family (L1 stage 2): tests/test_lua_<family>.cpp.
 foreach(_fam objects players story presentation tactical script_gaps fog script_remaining save gc script_save)
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lua_${_fam}.cpp)
-    add_executable(alamo_lua_${_fam}_tests tests/test_lua_${_fam}.cpp)
-    target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads)
-    target_include_directories(alamo_lua_${_fam}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    if(TARGET alamo_vfs)
-      target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_vfs)
-      target_compile_definitions(alamo_lua_${_fam}_tests PRIVATE ALAMO_LUA_HAVE_VFS=1)
-    endif()
-    add_test(NAME alamo_lua_${_fam}_tests COMMAND alamo_lua_${_fam}_tests)
-    set_tests_properties(alamo_lua_${_fam}_tests PROPERTIES TIMEOUT 120)
+  add_executable(alamo_lua_${_fam}_tests tests/test_lua_${_fam}.cpp)
+  target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_lua alamo_lua_vm Threads::Threads alamo_test_support)
+  target_include_directories(alamo_lua_${_fam}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  if(TARGET alamo_vfs)
+    target_link_libraries(alamo_lua_${_fam}_tests PRIVATE alamo_vfs)
+    target_compile_definitions(alamo_lua_${_fam}_tests PRIVATE ALAMO_LUA_HAVE_VFS=1)
   endif()
+  add_test(NAME alamo_lua_${_fam}_tests COMMAND alamo_lua_${_fam}_tests)
+  set_tests_properties(alamo_lua_${_fam}_tests PROPERTIES TIMEOUT 120)
 endforeach()
 # OPT2 t04: the GC schedule test checks 0 / 1 / 4 / 16 workers on engine/jobs (configured before lua) when it is built.
-if(TARGET alamo_lua_gc_tests AND TARGET alamo_jobs)
+if(TARGET alamo_jobs)
   target_link_libraries(alamo_lua_gc_tests PRIVATE alamo_jobs)
   target_compile_definitions(alamo_lua_gc_tests PRIVATE ALAMO_LUA_HAVE_JOBS=1)
 endif()

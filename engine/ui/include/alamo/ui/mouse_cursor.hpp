@@ -16,8 +16,8 @@
 //     over a fleet pad, DROP / CANT_DROP over a planet); drag-select box -> DRAG_SELECT_MODE; targeting modes (ability
 //     by target kind and validity, special weapon, beacon, reinforcement point, bombing run, tactical build / sell,
 //     waypoint, guard, barrage, repair, garrison, attack-move, move-only, attack-only); then the hovered object: enemy
-//     with a selection -> ATTACK (ATTACK_OUT_OF_RANGE / CANT_ATTACK), own selectable -> SELECT, friendly garrisonable
-//     -> GARRISON_IN; ground with a selection -> MOVE / CANT_MOVE; else NORMAL.
+//     with a selection -> ATTACK (ATTACK_OUT_OF_RANGE / CANT_ATTACK), a garrisonable own / friendly / neutral object with
+//     a selection -> GARRISON_IN (ui1 t01), own selectable -> SELECT; ground with a selection -> MOVE / CANT_MOVE; else NORMAL.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -116,6 +116,8 @@ public:
     size_t frame(double now) const;
     // Texture of the current frame ("" when the table has no entry).
     std::string texture(double now) const;
+    // The current pointer's table entry (hot spot); null without a table / entry.
+    const CursorDef* current_def() const { return table_ ? table_->find(current_) : nullptr; }
     // Adds the cursor quad (layer 12, Quads) at the cursor pixel. False when nothing could be drawn (no entry / image).
     bool build(HudDrawList& dl, const HudCanvas& canvas, Vec2f cursor_px, double now) const;
 

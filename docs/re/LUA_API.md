@@ -857,7 +857,7 @@ Resolved: 124 globals and 322 methods to implementation RVAs (names as persisted
 | `GameObjectTypeWrapper.Is_Hero` | 0x606520 |  |
 | `GameObjectTypeWrapper.Is_Obsolete` | 0x606130 | GameObjectTypeWrapper::Is_Obsolete -- invalid number of parameters. Expected 1, got %d.<br>GameObjectTypeWrapper::Is_Obsolete -- invalid type for parameter 1. Expected player |
 | `GameObjectTypeWrapper.Is_Valid` | 0x6024d0 |  |
-| `GameObjectWrapper.Activate_Ability` | 0x570580 |  |
+| `GameObjectWrapper.Activate_Ability` | 0x570580 | GameObjectWrapper::Activate_Ability -- invalid number of parameters.  Expected 2, got %d.<br>... -- invalid type for ability 1.  Expected string. / unknown ability %s. / unsupported unit ability %s.<br>... -- invalid type for parameter 2.  Ability %s expects a bool. / a target position. / a target object.<br>... -- object does not seem to have valid ability data. / unit ability %s is not hooked up to special ability logic for unit %s. (all errors: the script ends)<br>warnings: Object %s does not have ability %s. / target object is already dead.<br>Order: count, name (errors); not the unit's ability (warning); not ready / Can_Activate (silent nil); then the argument kind per ability. Kinds per ability id and what the port needs: CU8K_T04_COORDINATOR_TRACES "Which check ends the script" (cu8k t10). JET_PACK takes a live object, AI target, task force or `PositionWrapper`; a bool ends the script. |
 | `GameObjectWrapper.Are_Engines_Online` | 0x572d90 |  |
 | `GameObjectWrapper.Attach_Particle_Effect` | 0x572e90 | GameObjectWrapper::Attach_Particle_Effect -- Invalid number of parameters. Expected 1 or 2, got %d.<br>GameObjectWrapper::Attach_Particle_Effect -- Invalid type for parameter 1. Expected type or type name.<br>GameObjectWrapper::Attach_Particle_Effect -- Invalid type for parameter 2. Expected string. |
 | `GameObjectWrapper.Attack_Move` | 0x5730e0 |  |
@@ -1248,6 +1248,9 @@ type name 0x407c00), but only one optional string, in argument 2; failure → er
 - Argument 2 is the filter only if it is a string; otherwise the player is looked for at index 2. The player
   (PlayerWrapper) and the bool (LuaBool 0x140a157b0, default **true**) are read **only when both slots exist**
   (`player_index + 1 < nargs`): `Find_Nearest(obj, "Infantry", player)` ignores the player.
+  A value in the player slot that is not a PlayerWrapper converts to a null player (no player filter, as the "null
+  player wrappers" of Find_All_Objects_Of_Type), and a non-bool in the bool slot keeps the default: the function has
+  no error string for either slot (table above) [M; modc t06, a mod's `Find_Nearest(obj, nil, owner, true)`].
 - Candidates: for each player Q in player-list index order, skipping Q whose faction is `Is_Neutral`, and, with a
   player P, keeping only Q with `(relation(Q, P) == 0) == friendly_bool` (0x2823e0: allied / self = true): the
   objects of Q in the tactical perception grid list (0x140b31900 +0x88[Q], UNIT_AI objects only,
@@ -1716,7 +1719,7 @@ valid.
   - Each call is an "unknown faction" error and returns nil, so the comparisons are false. The script ends at the end
     of its pass.
 
-Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
+Both are object scripts (run in every game session since q6 t23, 2026-11-13; before that only with a mod layer).
 
 ### Port notes
 
@@ -1727,8 +1730,8 @@ Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
     - the flag-less `script_error()` (bind_objects, bind_fog, bind_script_gaps, bind_script_remaining);
     - `script_error_nil` (bind_ai_tactical).
 
-    Today there are about 316 `fail()` sites: ai 19, ai_tactical 22, engine 19, objects 104, players 87,
-    presentation 40, story 23, script_remaining 2.
+    Before q6 t11 there were about 316 `fail()` sites (ai 19, ai_tactical 22, engine 19, objects 104, players 87,
+    presentation 40, story 23, script_remaining 2); none is left and `Call::fail` is gone (cu14 t01).
   - **Warning**: log only, then return what the warning table says (nothing, a value, or skip and continue).
   - **Silent**: dead wrapper (nothing), `Is_Valid` (false), and the nil lookups.
 - Returning one `nil` instead of zero results is equivalent for every Lua caller except `select('#', …)` and table
@@ -1741,10 +1744,10 @@ Both are object scripts, which are mod-only (PHASE4 decision 2026-11-04).
 
 ### Port status (q6 t11, 2026-11-04)
 
-- Every binding family reports errors through `Call::script_error_stop` (the family helpers `script_error` of
-  bind_objects / bind_fog / bind_script_gaps / bind_script_remaining / bind_ai_tactical call it or set the flag the same
-  way; `script_error_nil` is gone). Warnings go through `Call::script_warning` or the family `script_warning`, which set
-  no flag. No binding calls `Call::fail` any more (kept in vm_internal.hpp, unused).
+- Every binding family reports errors through `Call::script_error_stop` (`script_error_nil` is gone; the family
+  helpers `script_error` / `script_warning` of bind_objects / bind_fog / bind_script_gaps / bind_script_remaining /
+  bind_ai_tactical were folded into the `Call` methods by cu14 t06). Warnings go through `Call::script_warning`, which
+  sets no flag. No binding calls `Call::fail` any more (cu14 t01, 2026-11-07: removed, with its `Call::err` buffer).
 - Mode-gate text: the generic "<name> -- this command is only supported in tactical modes" / "... in galactic mode",
   except the bindings with their own recovered text (bindings.cpp `kGateTexts`: Find_Nearest, Find_Nearest_Space_Field,
   Are_On_Opposite_Sides_Of_Shield, Spawn_Special_Weapon, Create_Cinematic_Transport, Start_Cinematic_Space_Retreat,

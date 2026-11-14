@@ -3,8 +3,8 @@
 (--source-zip, no text file), runs every probe Lua under a stock Lua 5.0.2 interpreter with the game's own script
 library (Data\\Scripts\\Library from the zip) and stubbed engines, and builds report.txt from the records they keep.
 
-  selftest_q6.py [--lua <lua50.exe>]   (default tools\\probe_mod\\a1_tactical\\out\\tools\\lua50.exe, built by
-                                        tools\\probe_mod\\a1_tactical\\selftest\\build_lua50.cmd)
+  selftest_q6.py [--lua <lua50.exe>]   (default tools\\probe_mod\\out\\tools\\lua50.exe, built by
+                                        tools\\probe_mod\\common\\build_lua50.cmd)
 
 Two engine models, each must give its own answers in the report:
   port  plot threads resumed once at load; first-pump draw bound = ServiceRate; ELIM B ends a few s after the take-back
@@ -26,10 +26,12 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
+import lua50  # noqa: E402
 import build_q6_mod  # noqa: E402
 import q6_parse  # noqa: E402
 
-DEFAULT_LUA = os.path.join(ROOT, 'tools', 'probe_mod', 'a1_tactical', 'out', 'tools', 'lua50.exe')
+DEFAULT_LUA = lua50.LUA50
 
 PRELUDE = r'''
 Q6_OUT = io.open(Q6_LOG, "w")
@@ -384,7 +386,9 @@ def run_model(runner, mod, model, rng):
     t = runner.run('%s_story' % model, 'MODEL = "%s"\nDRAW = 0.37' % model, [timing, STORY_DRIVER])
     recs += runner.records(t)
     story_text = t
-    ends = {'A': None, 'B': 55.0 if model == 'port' else None, 'C': 0.5}
+    # D / E: the RE reading (end about 1.5 s after the event; the plot starts at t = 1.17) in 'port', no end in 'alt'.
+    ends = {'A': None, 'B': 55.0 if model == 'port' else None, 'C': 0.5,
+            'D': 23.0 if model == 'port' else None, 'E': 43.0 if model == 'port' else None}
     for m, end in ends.items():
         elim = read(os.path.join(sdir, 'Story', 'Q6_Story_Elim_%s.lua' % m))
         hdr = 'END_T = %s' % ('nil' if end is None else repr(end))
@@ -412,7 +416,7 @@ def main():
     ap.add_argument('--lua', default=DEFAULT_LUA)
     a = ap.parse_args()
     if not os.path.isfile(a.lua):
-        print('lua50.exe not found (%s): run tools\\probe_mod\\a1_tactical\\selftest\\build_lua50.cmd' % a.lua)
+        print('lua50.exe not found (%s): run tools\\probe_mod\\common\\build_lua50.cmd' % a.lua)
         return 2
     out_dir = os.path.join(HERE, 'out', 'selftest')
     if os.path.isdir(out_dir):
@@ -440,13 +444,17 @@ def main():
     tr_recs = runner.records(runner.run('tr_land', '', [TR_STUB_FREESTORE, hook, TR_DRIVER]))
     rng = random.Random(20261104)
     expect = {
-        'port': {1: ['ANSWER A (own nothing all game): RAN_TO_END', 'ANSWER B (owned once, then nothing): STOPPED'],
+        'port': {1: ['ANSWER A (own nothing all game): RAN_TO_END', 'ANSWER B (owned once, then nothing): STOPPED',
+                     'ANSWER D (AI gains a planet while the human owns nothing): STOPPED',
+                     'ANSWER E (fleet, then no planet): STOPPED', 'after the AIGIVE event'],
                  2: ['ANSWER bound: hi = ServiceRate', 'ANSWER vanilla objects run their Lua_Script: YES'],
                  3: ['ANSWER: Cycle2 period'],
                  4: ['ANSWER: MAIN (f=', 'Begin0 state entered'],
                  5: ['the CC survived'],
                  6: ['spawned for you: Darth_Vader', 'spawned for you: Eclipse_Super_Star_Destroyer']},
-        'alt': {1: ['ANSWER B (owned once, then nothing): RAN_TO_END'],
+        'alt': {1: ['ANSWER B (owned once, then nothing): RAN_TO_END',
+                    'ANSWER D (AI gains a planet while the human owns nothing): RAN_TO_END',
+                    'ANSWER E (fleet, then no planet): RAN_TO_END'],
                 2: ['ANSWER bound: hi = 1'],
                 4: ['BEFORE main\'s first resume', 'Begin0 state NEVER entered']},
     }

@@ -110,7 +110,6 @@ struct TacticalPpInput {
 };
 
 enum class PpSource : uint8_t { FreeStore = 0, Reinforcement = 1, Build = 2, Produce = 3 };
-const char* pp_source_name(PpSource s);
 
 struct TacticalPpPick {
     int32_t type = -1;

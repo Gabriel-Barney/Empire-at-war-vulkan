@@ -4,17 +4,6 @@
 
 namespace alamo::ai::tactical {
 
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'a' && x <= 'z') x = static_cast<char>(x - 32);
-        if (y >= 'a' && y <= 'z') y = static_cast<char>(y - 32);
-        if (x != y) return false;
-    }
-    return true;
-}
-
 void PerceptionWorld::index() {
     id_index_.clear();
     id_index_.reserve(objects.size());

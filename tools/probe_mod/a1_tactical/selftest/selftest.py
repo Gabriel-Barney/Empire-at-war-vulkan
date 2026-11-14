@@ -4,7 +4,7 @@
   selftest.py [--game DIR | --source-zip extracted\\foc_data_text.zip] [--keep]
 
 1. Lua: the hooked BusyTacticalFreeStore.lua (shipped script from the install or the zip + fs_hook.lua) runs under a
-   stock Lua 5.0.2 (build_lua50.cmd) with stubbed engine functions. A harness plays the engine's free-store service
+   stock Lua 5.0.2 (common\\lua50.py) with stubbed engine functions. A harness plays the engine's free-store service
    (every 3rd frame, AI_TACTICAL §5.3) for two battles: land with the float reading of `now`, space with the exact
    reading, and prints the probe's records. Checks: LOAD, BASEDEF, MAIN, FSS, OUS, ADD, FAC present; the shipped
    functions still run (the stubs count their calls).
@@ -28,11 +28,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 REPO = os.path.abspath(os.path.join(ROOT, '..', '..', '..'))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(os.path.dirname(ROOT), 'common'))
+import lua50  # noqa: E402
 import a1_parse  # noqa: E402
 import build_a1_mod  # noqa: E402
 
 OUT = os.path.join(ROOT, 'out', 'selftest')
-LUA = os.path.join(ROOT, 'out', 'tools', 'lua50.exe')
+LUA = lua50.LUA50
 PY = sys.executable
 
 STUBS = r'''
@@ -170,10 +172,8 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     fails = []
     print('1. Lua 5.0.2 harness')
-    if not os.path.exists(LUA):
-        subprocess.run(['cmd', '/c', os.path.join(HERE, 'build_lua50.cmd')], capture_output=True)
-    if not os.path.exists(LUA):
-        print('  FAIL  lua50.exe could not be built (out\\tools\\lua50_build.txt)')
+    if not lua50.find_lua():
+        print('  FAIL  lua50.exe could not be built (%s)' % lua50.BUILD_LOG)
         return 1
     data, src = build_a1_mod.freestore_text(a.game, a.source_zip)
     script = os.path.join(OUT, 'BusyTacticalFreeStore.lua')

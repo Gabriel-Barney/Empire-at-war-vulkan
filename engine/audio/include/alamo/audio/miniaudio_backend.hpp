@@ -27,6 +27,7 @@ public:
     ~MiniaudioBackend() override;
 
     bool start(uint32_t voice, const SampleRef& sample, const VoiceParams& p) override;
+    bool load(const SampleRef& sample) override;  // SFX buses: decode into the cache; streams: the file exists
     void set(uint32_t voice, const VoiceParams& p) override;
     void stop(uint32_t voice) override;
     bool playing(uint32_t voice) const override;
@@ -42,7 +43,6 @@ public:
     uint64_t read_mix(float* out, uint64_t frames);
     uint32_t sample_rate() const;
     size_t cached_samples() const;
-    const std::string& last_error() const;
 
     struct Impl;
 

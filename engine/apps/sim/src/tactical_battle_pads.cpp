@@ -1,36 +1,19 @@
 // Int-final: build pads of a tactical battle (L1_S4_REMAINING §2.2 / §3.6; tactical_battle.hpp "build pads").
 // Serial code (Lua service / tick), no RNG draws; pad state in ascending pad id.
 #include <algorithm>
-#include <cctype>
 #include <string>
 #include <string_view>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/ascii.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 
 namespace alamo::sim {
-
-namespace {
-
-bool same_name(std::string_view a, std::string_view b) {
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.front()))) a.remove_prefix(1);
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.back()))) a.remove_suffix(1);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
-
-std::string_view trim_ws(std::string_view a) {
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.front()))) a.remove_prefix(1);
-    while (!a.empty() && std::isspace(static_cast<unsigned char>(a.back()))) a.remove_suffix(1);
-    return a;
-}
-
-}  // namespace
 
 void TacticalBattle::pad_persist(const objects::ObjectStore& st, objects::ObjectHandle pad, objects::TypeIndex type, const Vec3& pos, bool add) {
     // AI_GALACTIC_TOKENS §9.4 gate 0x42f160: a campaign battle (not a skirmish) with a battle planet whose list the host
@@ -110,6 +93,20 @@ objects::ObjectId TacticalBattle::pad_contents(objects::ObjectId pad) const {
     return s->built != objects::kNoObjectId ? s->built : s->uc;
 }
 
+bool TacticalBattle::pad_occupied(objects::ObjectId pad) const {
+    // s78n t05 (HERO_CLASH §7.1: "occupied" = +8 or +0x10 non-null, both cleared in the frame the content dies).
+    const PadState* s = pad_state(pad);
+    if (!s) return false;
+    const auto live = [this](objects::ObjectId id) {
+        if (id == objects::kNoObjectId) return false;
+        if (combat_ && combat_->has_unit(id)) return combat_->alive(id);
+        const auto it = std::lower_bound(units_.begin(), units_.end(), id, [](const Unit& u, objects::ObjectId v) { return u.id < v; });
+        if (it != units_.end() && it->id == id) return it->alive && !it->retreated;
+        return true;
+    };
+    return live(s->uc) || live(s->built);
+}
+
 bool TacticalBattle::pad_locked(objects::ObjectId pad) const {
     const PadState* s = pad_state(pad);
     return s && s->locked;
@@ -144,10 +141,10 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
         bool listed = false, in_row = false;
         for (const std::string_view tok : types.get_list(st.type(ph), pad_list_tag())) {
             if (types.raw().find(tok) == objects::kNone) {
-                in_row = same_name(tok, faction);
+                in_row = ascii_iequals(data::trim(tok), faction);
                 continue;
             }
-            listed = listed || (in_row && same_name(tok, name));
+            listed = listed || (in_row && ascii_iequals(data::trim(tok), name));
         }
         // Rule 0x42e400: empty, no blocking object (alive, Influences_Capture_Point, pad_rule_blocker) within the radius.
         bool blocked = !empty;
@@ -187,7 +184,10 @@ int32_t TacticalBattle::pad_build(TacticalMode& mode, objects::ObjectId pad, obj
     // battle host: the UC joins the battle as a combat unit of the builder; health ramp vf9 / vf6 (rate = max / frames,
     // starting at one service's worth [inferred]).
     const float start = frames > 0 ? 1.0f / static_cast<float>(frames) : 1.0f;
-    if (bt_adopt_built(mode, uc, builder, start, bt_rng_) != 0xFFFFFFFFu && frames > 0) {
+    hg_spawn_off_ = skirmish_land() || skirmish_map();  // bkg3 b0028: the pad's byte (0 on every skirmish pad) is copied
+    const uint32_t adopted = bt_adopt_built(mode, uc, builder, start, bt_rng_);
+    hg_spawn_off_ = false;
+    if (adopted != 0xFFFFFFFFu && frames > 0) {
         const objects::ObjectId id = st.id(uc);
         const float rate = combat_->max_health(id) / static_cast<float>(frames);
         const auto it = std::lower_bound(bt_ramps_.begin(), bt_ramps_.end(), id, [](const UcRamp& r, objects::ObjectId v) { return r.id < v; });
@@ -257,7 +257,11 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                     sp.position.z += 0.1f;
                     sp.facing = st.facing(uh);
                     bh = mode.spawn(sp);
-                    if (st.alive(bh)) bt_adopt_built(mode, bh, sp.owner, frac, bt_rng_);
+                    if (st.alive(bh)) {
+                        hg_spawn_off_ = skirmish_land() || skirmish_map();  // bkg3 b0028: copied from the pad (0 in skirmish)
+                        bt_adopt_built(mode, bh, sp.owner, frac, bt_rng_);
+                        hg_spawn_off_ = false;
+                    }
                 }
                 mode.destroy(uh);
                 s.uc = objects::kNoObjectId;
@@ -268,8 +272,8 @@ void TacticalBattle::pads_tick(TacticalMode& mode) {
                     // §6.5 kill list (+0xa60): every object of exactly Previous_Upgrade_Level_Type (the built type's, else
                     // the UC type's [M: which type carries the field]) owned by a player allied with the pad owner
                     // (0x39a230) is killed silently (0x391310 flag 1), store order.
-                    std::string_view prev = trim_ws(types.get_string(ft, "Previous_Upgrade_Level_Type"));
-                    if (prev.empty() && ut < types.size()) prev = trim_ws(types.get_string(ut, "Previous_Upgrade_Level_Type"));
+                    std::string_view prev = data::trim(types.get_string(ft, "Previous_Upgrade_Level_Type"));
+                    if (prev.empty() && ut < types.size()) prev = data::trim(types.get_string(ut, "Previous_Upgrade_Level_Type"));
                     const objects::TypeIndex pv = prev.empty() ? objects::kNone : types.resolve_name(prev);
                     if (pv != objects::kNone && pad_alive) {
                         const int32_t po = st.owner(ph);

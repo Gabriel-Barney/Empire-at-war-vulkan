@@ -789,6 +789,8 @@ these ranges before adding any rule.
 
 ### 4.11 0x4192b0 leftovers: block stack, fog, team objects, non-guard blocks, solo speed (s78f t02, 2026-11-03) [H unless tagged]
 
+**bkr2 (2026-11-12), see `docs/re/BKR2_RE_ANSWERS.md` Q6**: C.3's stored point is the block's last-observed target position (+0x18, `0x584750`), rewritten at every formation step with the lead as viewer (supersedes "[M: no writer]"); C.3 runs every formation step. [H]
+
 Read from 0x4192b0 and its callees 0x4165f0, 0x40edd0, 0x40e7a0, 0x41a9b0, 0x583680, 0x5ca390, and from the block
 writers 0x423c10, 0x4f8200, 0x41fd30, 0x420f70, 0x4105a0, 0x423760, 0x423070, 0x4234d0, 0x410a60, 0x42d0f0. This
 settles the [port] / [M] items left by S7 t35 / t37 and corrects A1_READINGS §33.4.1 in places (list in H).
@@ -979,8 +981,8 @@ A1_READINGS §33.4.1 run **only while the formation is moving (state 1)**. The o
    fallback members[0]. The follow distance |L − G| and the leash use L, not the lead's position.
 4. **Copy branch** (G moving): F speed := formation speed (0x41b2a0); within R, S and the cap as in A1_READINGS
    §33.4.1. If F's path already equals G's path (0x40ded0: same node count, node fields, path +0x30 / +0x34) → only
-   F speed := cap and **return** (no re-issue, no step 4). Else copy, F speed := cap, then: footprint check
-   0x40eb90(members, 2, 1) (MOVEMENT §4.3 step 5); a copied path of one node → state 3 (no signal 10); otherwise
+   F speed := cap and **return** (no re-issue, no step 4). Else copy, F speed := cap, then: the layout driver
+   0x40eb90(members, 2, 1) (MOVEMENT §4.3.1 item 1: it lays the slots out, it is not a footprint check); a copied path of one node → state 3 (no signal 10); otherwise
    each member that is not deployed (0x39a390) / deploying (0x39a400), or whose type +0x23b0 ≠ 0, gets the path
    (locomotor vf +0x158(0), +0x190(path), +0x148(0)); 0x410170(member) → its path +0x6d := 1 [L]; its waypoint index
    (path +0x60 / +0x64) := G's.
@@ -1273,12 +1275,12 @@ of from / to are read.
 6. **Per hit**, in list order:
    - O = the object by id; skip it if gone or typeless;
    - m = the type's model for the current mode (0x3729f0; land model type +0x2a0); skip if none;
-   - (lo, hi) = m's bounding box (vf +0x58: min xyz, max xyz, model space);
-   - v = (lo.z + hi.z) × `Scale_Factor` (type +0x658) + O.z (obj +0x80);
+   - (c, h) = m's collision bound (vf +0x58: **centre xyz, half size xyz**, model space; corrected 2026-11-10,
+     TACTICAL_COMBAT §5.4.6: box[2] / box[5] are centre z and half z, not min z / max z);
+   - v = (c.z + h.z) × `Scale_Factor` (type +0x658) + O.z (obj +0x80), the scaled top of the collision bound;
    - if v ≥ M: M = v.
 
-   The term is lo.z + **hi.z** (a sum, not hi − lo): for a box starting at z = 0 it is the scaled top; a box centred
-   on 0 gives O.z. There is no `Hover_Offset`, no fade and no margin. The reduction is a max, so the hit order (tree
+   The term is c.z + h.z = the bound's top z (scaled), plus the object's z. There is no `Hover_Offset`, no fade and no margin. The reduction is a max, so the hit order (tree
    order) does not matter.
 7. Return M. There is no terrain, water or floor term here: those come only from steps 3 and 8.
 
@@ -1417,7 +1419,7 @@ of from / to are read.
 
 ---
 
-## 7. Infantry-team slot geometry (LandTeamInfantry 0x62d620) [H; M for 0x509810]
+## 7. Infantry-team slot geometry (LandTeamInfantry 0x62d620) [H]
 Called from the member service 0x62ca10 (MOVEMENT §3.7). Let K be the container. The slot comes from the
 container's locomotor.
 
@@ -1429,24 +1431,793 @@ container's locomotor.
    - side = (slot.y (+0x118) + jig.y (+0x130)) − ((−s·d.x + c·d.y) + d.z·0).
 
    0x42c270 refreshes the jiggle (MOVEMENT §4) before it is read.
-4. **Speed.** vK = K pack +0xec, vmax = the member's maxspeed.
+4. **Speed.** vK = K pack +0xec, vmax = the member's maxspeed = **0x370f00(member type, member object)** (dis: rdx =
+   the member at 0x14062d97a; the same call in the speed step 0x62d520): the member has no TEAM slot, so this is its
+   own `Max_Speed` × the §3.4 chain (mode 1.56, fleeing through its container's path, its own SPEED product), **not**
+   capped by the team speed.
    - |along| ≤ 1.0 (0x140a4430c): v = vK.
    - along > 1: t = clamp(along / 10, 0, 1) (0x140a44310) and v = (vmax − vK)·t + vK.
-   - along < −1: t = clamp(−along / 10, 0, 1) and v = (0 − vK)·t·t + vK (quadratic slow-down).
+   - along < −1: t = clamp(−along / 10, 0, 1) and v = (0 − vK)·t·t + vK (quadratic slow-down; **v = 0 while the
+     member is 10 or more ahead of its slot**, so after a re-lay that puts its slot far behind it the member stands
+     until the slot comes within 10).
    - If the member state is 0x10: v = 0.
+   - **Confirmed by the s78n t14 retail run [H]** (`S78N_T14_RUN.md`): Stormtrooper squads (team speed min(0.8, 1.0)
+     × 1.56 = 1.248, member vmax 1.0 × 1.56 = 1.56) reach 1.25 × the container while behind and close an 8-10 unit
+     lag in about 60 frames (rate (vmax − vK) / 10 per frame); Rebel squads (team min(1.1, 1.0) × 1.56 = 1.56 = member
+     vmax) never exceed the container (peak 1.00-1.01), so a lagging Rebel member stays behind until the container
+     brakes. The catch-up headroom is vmax(member) − team speed, a data effect; there is no separate catch-up factor.
 5. Speed step (0x62d520): accelerate by vf +0x2d8 or decelerate by vf +0x2e0, clamped to [0, vmax], into pack
    +0xec.
 6. **Heading.**
    - w = clamp(|side| / 10, 0, 0.5) (0x140a44314 / 0x140a44318);
    - perp = (−s, c) when side > 0, else (s, −c);
    - dir = (c + w·(perp.x − c), (perp.y − s)·w + s, 0).
-   - Add the collision steering vector from the mode's +0x230 system (0x509810) [M].
+   - Add the collision steering vector from the mode's +0x230 system (0x509810, §7.5).
    - Yaw target = angles(0 → dir).yaw.
 7. **Turn:** 0x5ad5a0 turns yaw by at most the turn rate (× GC +0x150c `Fleeing_Infantry_Speed_Bonus` when fleeing,
-   0x62c3d0) and sets the orientation to (0, 0, wrap360(yaw)).
-8. **Move:** P' = (cos(yaw)·v + P.x, sin(yaw)·v + P.y, P.z + 0) through vf +0x2f8 (conform).
+   0x62c3d0, §7.1) and sets the orientation to (0, 0, wrap360(yaw)).
+8. **Move:** P' = (cos(yaw)·v + P.x, sin(yaw)·v + P.y, P.z + 0) through vf +0x2f8 (conform). vf +0x2f8 is 0x42d6a0
+   (MOVEMENT §3.6, terrain conform and commit): **there is no passability test on a member's step** (s78n t14).
 9. Constants (read from the image): 1.0, 10.0, 10.0, 0.5 at 0x140a4430c / 10 / 14 / 18. The recovery threshold
    0x140a4431c = **4.0** (MOVEMENT §8 item 5).
+
+### 7.1 s78n t14: "fleeing" = the crush-flee path, kind 7 (0x39a5b0) [H unless tagged]
+Read from 0x39a5b0, 0x62c3d0, 0x683140, 0x6859a0, 0x5c8900, 0x5c8890, 0x5ad690, 0x5adfb0, 0x62bbf0, 0x62bef0,
+0x62d190, 0x370f00 (MOVEMENT §3.4).
+- **Test 0x39a5b0(obj):** the locomotor data pack of obj's container when obj +0x2b0 is set (a squad member: its team
+  container), else obj's own pack; its current (top) path 0x5569b0 has kind +0x48 == **7**. A member never reads its
+  own path: it flees exactly while its container's current path is kind 7.
+- **Who writes kind 7** (the path kinds: 1 formation move, 3 TerrainCollision, 4 push, 5 locomotor-internal, 7):
+  1. The push 0x6859a0 (MovingVsStopped resolution, MOVEMENT §5.4): the pushed blocker b gets a path to the free spot
+     with kind 4, or **7 when 0x5c8900(pusher m, b)**: m's owner is hostile to b's (0x2824f0), m has the SQUASH
+     behaviour (0x26) and (b's type `Is_Squashable` +0x18, or m's type `Is_Supercrusher` +0x19 and b's
+     `Is_Squashable_By_Supercrusher` +0x1a).
+  2. 0x683140, called from 0x682d00 = MovingVsMoving vf +0x20 (vftable 0x8b5090): the collision path of participant
+     +0x80 away from participant +0x7c with kind 4, or **7 when 0x5c8900(+0x7c, +0x80) and 0x5c8890(+0x80)**:
+     0x5c8890(b) = b's owner's faction has `Scatters_From_Crushers` (+0x2f88; FoC: true in every faction entry but one) and
+     b's SPREAD_OUT ability (7) is not active (0x39b950(b, 7, 1); for a container: its members' state).
+  So "fleeing" is **infantry scattering from a hostile crusher** (AT-AT, AT-ST, MAL). No order, AI script or morale
+  sets it. A squad flees when its **container** is the pushed blocker: the container is a registered collision mover
+  (§7.5 item 1), FoC team containers are `Is_Squashable` with `UnitCollisionClass` Infantry. The kind-7 path ends like
+  any push path (popped at its end; MOVEMENT §5.4).
+- **Factor:** GC +0x150c `Fleeing_Infantry_Speed_Bonus` (read as a float at 0x140b16d0c; FoC GameConstants.xml **2**).
+- **Where it multiplies** (every reader of 0x39a5b0 in the team code):
+  1. the container's speed: the team speed chain 0x370f00 (MOVEMENT §3.4, step 3) on the container;
+  2. the container's turn rate: state 0x10 (0x5ad690 case 0x10) and the move step 0x5adfb0 (Max_Rate_Of_Turn × mode
+     multiplier 0x372560 × 2);
+  3. a member's max speed vmax (0x370f00 on the member: its 0x39a5b0 reads the container's path), so §7 step 4's
+     catch-up speed and the recovery speed;
+  4. a member's turn rate 0x62c3d0 (= 0x372560(member type) × 2): §7 step 7, the recovery turn 0x29 (0x62ca10) and
+     move 0x2A (0x62d190), the recovery decision threshold (§7.3 item 5) and the turn-clip blend 0x62bef0.
+- ***Port spec:*** the factor can only fire once a container takes part in land collision (§7.5 ***Port spec*** item
+  1); until then 1 is exact for the port. Then: `MovementSystem::push_aside` (0x6859a0) marks the pushed path
+  "crush-flee" when `crushes(a, b)`; the MovingVsMoving response (`mvm_response`, 0x683140) does the same only with
+  b's faction `Scatters_From_Crushers` and SPREAD_OUT off; `TeamSnap` gets `fleeing` (the container's current path is
+  crush-flee) and `MovementSystem::steer_member` multiplies `rate` and `vmax` by `Fleeing_Infantry_Speed_Bonus`; the
+  container's own walk turn rate and its team speed (`apply_speed_factors` / `team_caps`) take the same factor.
+
+### 7.2 s78n t14: slot layout and re-lay on turns (0x5ac120, Rows 0x5ac970, Dartboard 0x5ac2a0) [H unless tagged]
+**0x5ac120(K locomotor, teleport, dir)** (K = the container; P = its data pack obj +0xa8):
+1. dir is normalised (sqrtf, × 1/len when len > 0). If dot(dir, P +0xd8..+0xe0) > **0.99** and the laid-out flag
+   P +0x2a4 is set → return false (no change; a heading change ≤ acos 0.99 ≈ 8.11° keeps the slots).
+2. Arrangement = K's type `ContainerArrangement` (+0x1684; OBJECT_TYPES: None −1, **Rows 0**, **Dartboard 1**):
+   0 → 0x5ac970, 1 → 0x5ac2a0, anything else → false.
+3. On success: P +0xd8 := dir, P +0x2a4 := 1.
+
+FoC data: `Stormtrooper_Team`, `Empire_Field_Commander_Team` and `Tactical_R2_3PO_Team` are **Rows**; every other land
+team container (Rebel, Plex, pirates, Hutt, Underworld, indigenous, civilian, slave teams) is **Dartboard**.
+
+**Callers (when the slots are re-laid).** All pass teleport = 0, so the slots are only written; the members walk.
+1. Container vf6 0x5ad690, state 0 (start/resume a move): dir = the wanted facing 0x5ab840 (toward the current
+   waypoint; the container's own facing when that vector is 0 or there is no path), before the turn state 0x10.
+2. 0x5ad690 states 0x13 / 0x16 / fall-through with no path, and the end of the switch: when P +0x2a4 is clear, dir =
+   the container's facing (0x41c000 on obj +0x84). This is the **first layout** (the first container service after
+   creation, so with the first member's facing) and the re-lay after a clear.
+3. The move step 0x5adfb0, on reaching a waypoint: dir = the next segment's direction (0x5c5850; the path below on
+   the stack when this one ends).
+4. The path-set hook 0x5ad140: a path whose kind (input +0x30) is **not** 1 and has ≥ 2 waypoints: dir =
+   normalise(wp1 − wp0). (Kind 1 instead draws the start delays, §7.3 item 2.)
+5. P +0x2a4 is cleared by the data-pack ctor / resets (0x553f00, 0x55d530, 0x55da50) and by the SPREAD_OUT handler
+   0x3a3500 (both on and off), so toggling SPREAD_OUT re-lays at the next container service (caller 2). No clear on
+   a member's death was found [M: 0x592d00 / 0x5931b0 also clear a +0x2a4 of an object at +0x100, not identified].
+
+**Common rules.** The member list is TEAM behaviour 0x16 (0x405300 count, 0x4052d0(i)), null entries skipped. The
+sort comparator 0x5ad4d0(a, b) = proj(a) > proj(b), proj(o) = dot(o.P − K.P, v) (z term × 0) for a global vector
+v; member lists are ≤ 32, where MSVC `std::sort` is an insertion sort, so **ties keep member index order**. SPREAD_OUT
+active on K (0x39b950(K, 7, 1)) gives f = GC +0x153c `Spread_Out_Spacing_Coefficient` (FoC **1.8**), else f = 1.
+Slots are (along +0x114, side +0x118, +0x11c := 0) in the container frame of §7 step 3. **Which member gets which
+slot depends on where the members stand at layout time** (a projection sort), not on the team index.
+
+**Rows 0x5ac970(K, teleport, dir):**
+1. A = the members, sorted by proj onto dir, descending (front-most first). k = ceil(√n) with the float rule of
+   0x5abc00 ((uint)sqrtf(n), + 1 unless squared = n). k = 0 → false.
+2. along := 0. While A is not empty: R = the first min(k, |A|) of A (removed from A); sort R by proj onto
+   (dir.y, −dir.x), descending, so **R runs from the most negative side to the most positive**. For each m in R:
+   hy_m = 0x396b70(m), hx_m = 0x396a30(m) (the member object's half-extents, TACTICAL_COMBAT §5.4.6, deployed
+   variants included), g_m = `FormationSpacing`(m's **own** type +0x16d4) × 20 × f.
+   - HX = max hx_m, G = max g_m over R (both start at 0).
+   - Width W: |R| = 1 → W = 2·hy; else, in R order from W = 0, the first and last add g_m/2 + 2·hy_m and the others
+     2·hy_m + g_m.
+   - First row: HX0 := HX, along stays 0. Later rows: along −= G/2 + HX before placing.
+   - When A is now empty: D := HX0 − (along − HX) (= HX0 + |along| + HX of the last row).
+   - side := −W/2; for each m in R order: |R| = 1 → side = 0; first → side += hy_m; others → side += g_m/2 + hy_m;
+     write (along, side); then side += g_m/2 + hy_m (only for a member with a pack).
+   - After the row: along −= G/2 + HX.
+3. Then for every member in **index** order: along += D/2 − HX0 (rows centred; row 0 at the front, +along).
+   teleport ≠ 0 (no caller): P_m = K.P + along·dir + side·(−dir.y, dir.x), orientation := K's.
+4. Returns true. With identical members and f = 1 this is exactly the drop layout 0x5abc00 (TACTICAL_GAPS §4.2.1:
+   (2ex + g) row and column pitch, the same float order).
+
+**Dartboard 0x5ac2a0(K, teleport, dir):** a Halton scatter.
+1. n = member count; F = member 0's type (null member or type → false). k = ceil(√n) (same rule); m = ceil(n / k)
+   (n / k, + 1 when n % k ≠ 0). (hx, hy) = 0x371be0(F) (type half-extents, TACTICAL_COMBAT §5.4.6); r =
+   sqrtf(hx² + hy²) (0x371e30); g = F's `FormationSpacing` (+0x16d4).
+2. L = (k − 1)·g·20 + k·hx (along range), Wd = (m − 1)·g·20 + m·hy (side range) - **half**-extents, not 2hx.
+   SPREAD_OUT active: L, Wd and r × 1.8.
+3. Two radical-inverse generators (0x241820 / 0x241830) with bases **2** and **3**, both starting at index
+   i0 = (int32) K.id (obj +0x50) × NOW (the logic frame 0x140b0a320), wrapping uint32. A draw at index i: f = 0, b_k =
+   (float)b; while i ≠ 0 { f += (float)(i % b) / b_k; i /= b; b_k ×= (float)b }; then index += 1 (i = 0 gives 0).
+4. Up to **1000** tries, stopping when n points are accepted: x = (h2 − 0.5)·L, y = (h3 − 0.5)·Wd (both draws every
+   try); accept unless some accepted p has sqrtf((y − p.y)² + (x − p.x)²) < **5.0** (0x140a43c48) + r. The points
+   are kept in acceptance order.
+5. Fewer than n points → **Rows 0x5ac970 with the same dir** (its result is returned).
+6. Assignment:
+   - points sorted by x descending (0x5aa880); members sorted by proj onto dir descending (front-most first);
+   - groups: i = 0; repeat { j = i; while j < n and x[i] − x[j] ≤ Wd / m: j += 1; sort members [i, j) by proj onto
+     (−dir.y, dir.x) (side) descending and points [i, j) by y descending (0x5aabf0); i = j + 1 } while i < n.
+     **i = j + 1 skips index j**: that member and point keep their x-order places and join no group sort (a retail
+     quirk; copy it);
+   - member q gets point q: along = x, side = y. teleport ≠ 0 (no caller): placed as in Rows.
+7. A new layout (every turn > 8.11°, every move start, every SPREAD_OUT toggle) is a new scatter, because NOW
+   differs; the members are re-assigned by where they stand.
+
+**s78n t14 retail run (2026-11-10, `S78N_T14_RUN.md`):**
+- **Re-lay rule confirmed [H]:** all 16 legs follow the dot ≤ 0.99 test against the last laid direction when the
+  container's *actual* path heading is used (0 deg keeps, 30 deg re-lays; the 5 deg legs kept the slots where the
+  path ran 0.4 / 5.0 deg from the last layout and re-laid where it ran 9.4 / 10.7 deg).
+- **Rows confirmed [H]:** settled slots fit the grid of pitch 2·hx + 20·g with g = the **member** type's
+  `FormationSpacing` (12 for Stormtroopers, RMS 0.97-1.79; the container's 1.0 gives RMS about 16).
+- **Dartboard: code re-read, unchanged; not confirmed by the run.** Re-read 0x5ac2a0 / 0x241830 / 0x371e30 /
+  0x371be0: L uses k and hx (`Custom_Hard_XExtent` × `Scale_Factor`, +0x16bc), Wd uses m and hy (+0x16c0), g = member
+  0's type +0x16d4; seed (int32) K obj +0x50 (= Lua `Get_Object_ID`) × NOW (FS global frame 0x140b0a320) wrapping;
+  both generators start at that index and accumulate in **float**; points always inside ±L/2 × ±Wd/2. A scatter is
+  re-randomised at each call of 0x5ac2a0 (each re-lay), not per order. The kit could not test it: Lua
+  `GetCurrentTime()` (0x5428b0) is the **mode** frame / 30, not NOW (NOW / 30 is `GetCurrentTime.Frame()`, 0x5406b0
+  [M for the Lua call form]), and Rebel jiggle (raggedness 1.6, ±3.5 per axis, inside the slot point 0x62c180) puts
+  the settled-position RMS at the random baseline. What a rerun should fit: `S78N_T14_RUN.md` "What the kit should
+  do".
+- **Late starts after a re-lay are step 4, not a delay:** a member whose new slot lies ≥ 10 behind it has v = 0
+  (§7 step 4); one mirrored layout (trial 3 leg 2) made the old front row stand 19-20 frames.
+
+**Spawn.** The drop (TACTICAL_GAPS §4.2.1) places the members with 0x5abc00 in index order; the container's first
+service then lays out with its own facing (caller 2). For a Rows team of identical members whose drop orientation
+equals the container's, the projection sort reproduces the index order, so nothing moves; a Dartboard team, or a Rows
+team with mixed members (the field-commander teams), walks from the drop slots to the new layout at once.
+
+***Port spec:*** a new `MovementSystem::lay_out_land_team(container, dir, frame)` in `land_team.cpp` (Rows / Dartboard
+exactly as above; inputs per member: half-extents (`unit_half_extents`), `FormationSpacing` of its own type; per
+container: `ContainerArrangement`, the SPREAD_OUT state, `Spread_Out_Spacing_Coefficient`; Halton seed = container id ×
+frame, the port's ids). Keep a laid-out flag and the last dir on the container `Unit` (saved and hashed). Call it
+from the container's walk at the callers 1-4 above and clear the flag on a SPREAD_OUT toggle (host). It writes
+`Unit::tslot` of each member and must refresh `team_ix_` (`team_ix_rebuild`), because `land_team()` /
+`squad_joint_slots` (Bribe's E_T) read the slot copies there. `TacticalBattle::mv_squad_add` keeps `drop_team` only
+for the initial `set_land_team` call; the first container tick replaces it.
+
+### 7.3 s78n t14: what the copied walk states drive on a member (0x62ca10) [H unless tagged]
+Each member service first maps the container's state (when obj +0x2b0 has a pack) and sets it as its own
+(0x559250): container 0 / 0x15 / 0x16 → the recovery decision 0x62bbf0 (0, 0x29 or 0x2A); 0x10 → 0x10; 0x13 →
+0x13; 0x14 → 0x14; any other → 0. Then by the member's state:
+1. **0 (idle):** pack +0xe8 and +0xec (speed) := 0; if the current clip (0x3956a0) is 2, 0x42 or 0x43 (walk
+   clips), the clip speed := 1 and the idle clip is played (blend GC 0x140b16d20); and the engine-audio idle loop
+   is started / the moving loop stopped on every member (0x3a7cf0(m, 1), 0x3a7e30(m, 0); audio only). No movement.
+2. **Start delay** (new): the container's path-set hook 0x5ad140, for a **kind-1 (formation) path while the container
+   speed +0xec is 0**, sets every member's pack **+0xe4 := synced int [0, `Max_Move_Frame_Delay`]** (GC +0x1538, FoC
+   **6**; 0x1ffb40 on the synced LCG 0x140a13e24, inclusive, rejection-masked), in member index order, members without
+   a pack skipped (no draw). Nothing else resets +0xe4 (state 0 clears +0xe8 / +0xec only). **s78n t14 run [H]:**
+   start spreads 0.9-6.0 frames on every ordinary leg; no longer delay exists in the code. The two longer "late
+   starts" of the run (17 and 19-20 frames) are members standing at v = 0 because a re-lay put their slot ≥ 10 behind
+   them (§7 step 4), and on that leg no delays were drawn at all [M: not a kind-1 path set at speed 0].
+3. **0x10 (container turning in place):** if +0xe4 ≠ 0: +0xe4 −= 1 and nothing else (no steer, no turn, the
+   member stands). Else §7 0x62d620 (v = 0: the member only turns toward its heading) and the turn clip 0x62bef0
+   (TURNL 3 / TURNR 4, or 0x48 / 0x49 while SPREAD_OUT is active; blend min(|Δ| / rate × 0.03333, GC 0x140b16d28)).
+4. **0x13 (moving):** if +0xe4 ≠ 0: +0xe4 −= 1 and nothing else. Else §7 0x62d620, the walk clip 0x62cf90 (move clip
+   chosen by 0x62c420, its speed scaled by the member speed) and the moving audio loop on every member.
+5. **0x14 (braking):** §7 0x62d620 and the walk clip; +0xe4 is not read (no delay).
+6. **Recovery decision 0x62bbf0** (container in 0 / 0x15 / 0x16), only when the container is laid out (+0x2a4) and has
+   no current target (0x397a40(K, 0) = null [M: the formation's / obj +0xf0 target]): d = |slot point 0x62c180 − P|
+   (2-D). d > 4.0: |angle to the slot| > **0.5 × rate** (0x62c3d0) → 0x29, else 0x2A; d = 4.0 → 0x2A; d < 4.0 and
+   the member is in 0x2A: stays 0x2A while |P + (cos yaw, sin yaw)·v − slot| ≤ d and the deceleration (0x373080)
+   ≤ v, else 0.
+7. **0x29 (recovery turning):** speed := 0; turn toward the slot point by rate (0x5ad5a0) and the turn clip.
+   **0x2A (recovery moving) 0x62d190:** turn toward the slot point by rate; speed step (0x62d520) toward vmax, or
+   toward 0 when d < v² / (2·decel); step P += (cos yaw, sin yaw)·v through vf +0x2f8 (no passability test); walk
+   clip.
+So the copies decide **which step runs** (and the delay gates); the only speed / facing rule tied to a state inside
+the steering is 0x10's v = 0. Animations and audio are presentation.
+
+***Port spec:*** `MovementSystem::steer_member`: (a) a per-member `start_delay` (saved, hashed) drawn with the sim RNG
+for each member in team index order when the container gets a formation-move path while its speed is 0 (the container
+move path in `move_land`); while the container turns in place (port `WalkStartTurn` / `WalkTurning`) or moves, a
+member with `start_delay > 0` decrements it and does nothing else; braking does not read it; (b) the recovery decision
+of item 6 (0.5 × rate turn threshold instead of `err > rate && err > close_enough_angle`; no recovery while the
+container has a target; keep moving while closing in); (c) the 0x2A speed: brake inside v² / (2·decel). Clips and
+audio stay with the presentation layer.
+
+**Recovery in full, and what bounds a member's lag (s78n follow-up, 2026-11-10)** [H unless tagged]. Re-read 0x62ca10,
+0x62bbf0, 0x62d190, 0x62c180, 0x62d520, 0x62d620, 0x42d6a0 and the LandTeamInfantry vftable 0x8af8d0 from the exe
+(vf +0x2f8 = 0x42d6a0, +0x2d8 = 0x42c400, +0x2e0 = 0x42c4c0, +0x210 = 0x42cd10, +0x228 = "true" 0x17dc70).
+1. **When the decision runs.** Only inside the member service and only while the **container's** state is 0, 0x15 or
+   0x16 (start, arriving, idle). In container 0x10 / 0x13 / 0x14 the member copies the state and runs §7 (v = 0 in
+   0x10); any other container state gives member state 0. So there is **no recovery while the container moves, brakes
+   or turns in place**: a member behind a moving container is handled only by §7 step 4 and by the container's cap
+   (§7.7). The whole service is skipped while the member's locomotor is suspended (vf +0x210: pack +0x260 ≠ 0) or its
+   state is outside {0, 0x10, 0x13, 0x14, 0x29, 0x2A} (mask 0x60000190001; returns an error code).
+2. **Preconditions** (any false → state 0, the member stands with speed 0): the member has a type and a pack; it has a
+   container K (+0x2b0); **K has no current target** (0x397a40(K, 0) = null: K's formation target through K pack +0x1f0
+   → 0x41a2e0, else K obj +0xf0 → +8); K has a pack with the laid-out flag +0x2a4; the slot point exists (0x62c180: K
+   has a locomotor, the member a pack). Nothing about the member's distance, path or health is tested.
+3. **Slot point** S = K.P + R(K yaw)·(slot + jiggle) (0x62c180; z = K.z). d = |S − P| in 2-D.
+4. **Thresholds.** The only distance is **4.0** (0x140a4431c): d > 4 → e = |wrap(yaw to S − yaw)|; e > 0.5 × rate →
+   0x29, else 0x2A. d = 4 → 0x2A. d < 4 → 0x2A only when already in 0x2A and |P + (cos yaw, sin yaw)·v − S| ≤ d and
+   0x373080(type, member) ≤ v (still closing and faster than one frame's deceleration); otherwise 0, where the idle
+   step zeroes the speed at once (pack +0xe8 / +0xec := 0). rate = 0x62c3d0 (`Max_Rate_Of_Turn` × 1.56, × 2 while
+   fleeing). There is **no upper distance**: a member 5 or 5000 away takes the same branch.
+5. **0x29:** speed := 0, turn toward S by rate; the decision is re-taken every frame (so 0x29 → 0x2A as soon as
+   e ≤ 0.5 × rate).
+6. **0x2A (0x62d190):** turn toward S by rate (0x5ad5a0); target speed = **vmax = 0x370f00(member type, member)**
+   (the member's own `Max_Speed` × the §3.4 chain: mode 1.56, × 2 while its container flees, its own SPEED product;
+   not the team speed), or 0 when d3 < v² / (2·dec), dec = 0x373080(type, member) > 0, d3 = the **3-D** distance
+   |P − S| (S.z = K.z, so a height difference between member and container delays the brake [quirk]); speed step
+   0x62d520 (+ vf +0x2d8 = `OverrideAcceleration` × eff / `Max_Speed`, − vf +0x2e0 = `OverrideDeceleration` × eff /
+   `Max_Speed`, MOVEMENT §3.4; clamp [0, vmax]); then P += (cos yaw, sin yaw)·v **along the member's own facing**
+   through vf +0x2f8 = 0x42d6a0 (terrain conform and set position).
+7. **What recovery does not have:** no path request, **no passability test and no collision test on the step**, no
+   teleport, no speed above the member's own vmax, no timer, no give-up, no detach from the team, no kill. It is a
+   straight walk at the slot, through anything.
+8. **What bounds the lag in retail.** Not recovery: the pair (§7 step 4, §7.7 cap) together with item 7's "no
+   passability test" (the same vf +0x2f8 commits the §7 step).
+   - Container moving (0x13): its target speed falls linearly to 0 between HX + 2 and HX + 12 behind (§7.7 item 2);
+     its speed follows at a = 0x5ab540 per frame, so the lag can overshoot by about the stopping distance v² / (2a)
+     (Stormtrooper squads 1.248² / (2 × 0.078) ≈ 10, Rebel squads 1.56² / (2 × 0.109) ≈ 11) [M: estimate, not read].
+     Meanwhile a member ≥ 10 behind its slot walks at its vmax along the container's facing turned ≤ 45° toward its
+     side error (§7 step 6), and **nothing can stop that step**. So the along-facing lag of a member stays within
+     about **HX + 12 + v² / (2a)** [M: same estimate], and the container's wait at cap 0 lasts only until that member
+     is back inside HX + 12: (lag − (HX + 12)) / vmax frames, a few frames.
+   - The cap measures the lag **along the container's facing only**. After a turn an old along-lag becomes a side
+     offset, which does not hold the container; the member closes it at ≤ vmax·sin 45° and the re-lay (§7.2) gives it
+     the slot nearest to where it stands.
+   - Container braking (0x14): the cap is overridden (§7.7 item 4); the container coasts ≤ v² / (2a), then is idle and
+     the members finish by recovery (item 6), again unblockable.
+   - Ways a retail member can be far away at all: its locomotor suspended (pack +0x260) [M: who sets it for
+     infantry], or the container moved by something other than its walk (garrison exit §7.4, script teleport). Then
+     the moving container **does** wait at speed 0 for as long as it takes; no code path leaves the member behind.
+   - Consequence for the port's observation (waits of 150-785 frames for members 85-590 behind): such lags cannot
+     build up under the retail rules. They need either a member whose step is refused (the port's `steer_commit` wall
+     slide; retail has no test) or a cap that lets the container walk away from a member (the port's "straight line to
+     the slot is impassable → not counted" rule; retail has no exclusion, §7.7 item 2). Each of the two alone breaks
+     the retail balance: blocking without exclusion deadlocks the container, exclusion lets the lag grow without
+     limit and the cap then holds the container for lag / vmax frames once the member counts again [M: reasoned from
+     the retail rules and the reported symptom; the port's code was not read for this].
+
+***Port spec (recovery / lag bound):*** (1) `MovementSystem::steer_member` and the recovery step commit a squad
+member's position with terrain conform only: no passability test, no wall slide, no stop (drop the [port]
+`steer_commit` slide for LandTeamInfantry members). (2) Recovery: enter at 2-D slot distance > 4.0 while the container
+is in start / arriving / idle, is laid out and has no target; turn-in-place when the heading error > 0.5 × rate, else
+walk; target speed = the member's own effective max speed, 0 inside v² / (2·dec); leave when d < 4 unless still
+closing with v ≥ dec; idle zeroes the speed. No path, no timeout, no teleport, no distance limit. (3) While the
+container is in its moving or braking state (also at speed 0 under the cap) members run slot steering (§7), never
+recovery; while it turns in place they only turn.
+
+### 7.4 s78n t14: where a garrisoned squad container is [H]
+- **Entry** GarrisonUnitBehavior 0x4446b0 (host H, entering object = the container K): stop K's locomotor (vf +0x140),
+  then **0x3abb80(K, H.P)**: every member is put at H.P + (m.P − K.P) (its offset from K kept, recursion), K's
+  team data (obj +0x110) +0xa4 / +0xb0 := H.P, K itself is moved through its locomotor (vf +0x2f8) and adopted (0x39bcb0). Then
+  0x379d30: K joins H's garrison list, **K +0x2b0 := H** (the members keep +0x2b0 = K), and 0x37ade0 hides K and each
+  member (+0x3a7 := 1, out of the player's list, the coordinator system 0x426d50 and the mode's object grid 0x539470;
+  positions are not touched). **While inside, K sits at H's position; members at H.P + their old offsets.** This
+  settles LOB_SOLVER §5.2's [M] on where a garrisoned container's obj +0x78 sits (probe s78f t09: the bunker centre)
+  as [H].
+- **Exit** 0x444dd0 (one call for the whole squad): 0x37a8d0 unhides K and its members (+0x3a7 := 0, K +0x2b0 := 0).
+  0x444830: the exit point E = H.P, or the exit bone of K's garrison slot (K +0x210 → +0x30 indexes H's type bone list
+  +0x2390 / count +0x2398 [M: field names]) with yaw = direction H.P → bone (else H's yaw); dist = H's type
+  `Garrison_Exit_Dist` (+0x2364) when > 0, else the length of H's model half-extent vector (0x3982b0); the walk-out
+  point X = E + dist·(cos yaw, sin yaw). Admitted K (0x425e30): **0x3abb80(K, E)** (members keep their offsets) and a
+  Move_To X with flags 0x20 through the coordinator; else 0x3abb80(K, X) only. The Move_To gives a kind-1 path, so the
+  members get start delays (§7.3 item 2) and a re-lay at the move start (§7.2 caller 1).
+- **Host destroyed / release all** 0x37a060: K and every member := H.P and H's orientation, then adopted.
+- **Whose `Garrison_Value` / `Garrison_Category` count, and the approach radius (s78n t18 RE, 2026-11-10)** [H
+  unless tagged]. Read from 0x444310, 0x443d10, 0x443ff0, 0x443700, 0x4446b0, 0x379d30, 0x37ade0, 0x3954b0,
+  0x3982b0, 0x405320, 0x443ce0, the type constructor 0x367250.
+  1. **Capacity counts the container, once.** The entry 0x4446b0 tests free(H) ≥ **K's type** `Garrison_Value`
+     (+0x23ac), and 0x379d30 appends **one entry, K**, to H's contents list (0x37ade0 then only hides the members).
+     free(H) = 0x3954b0 = H's `Num_Garrison_Slots` − Σ over the contents-list entries of the **entry's type**
+     `Garrison_Value` (DUMMY_UPGRADE entries skipped). The members' values are never read. The same K-type value is
+     used by the approach checks (0x443d10 / 0x443ff0 / 0x443700: free(H) < value → cancel) and by Lua
+     `Can_Garrison` (L1_S4_REMAINING §2.5).
+  2. **Default 1.** The type constructor writes `Garrison_Value` := 1; no FoC team container and no FoC infantry
+     member sets the tag (only AT-ST, T2-B, TIE Crawler, the mobile defence unit, Dark Troopers I / II / III and the
+     Destroyer Droid do: 2, 2, 2, 2, 1, 1, 2, 2). So **a squad takes 1 slot**: a `Garrison_Bunker_Template` (5 slots)
+     holds 5 squads, a Juggernaut / HTT / F9-TZ (10) holds 10, whatever the squad size.
+  3. **Category:** the mask test 0x38f9a0 (L1_S4_REMAINING §3.5) reads the ordered object's type, so K's
+     `Garrison_Category` (every FoC land team container: Infantry); the members' categories are not read.
+  4. **Approach / entry radius:** every range test is (distance from K's position (K obj +0x78) to the approach
+     point 0x443a90) − r ≤ limit, with r = 0x443ce0 = the **3-D length of the half-extent vector** of the box
+     0x3982b0(K). For an object with TEAM that box is the team data +0x8c / +0x98 (0x405320): the **live union box of
+     the members' model bounds**, world axis-aligned, refreshed by the TEAM service 0x405b10 (TACTICAL_COMBAT
+     §5.4.4). So r = √(ex² + ey² + ez²) of that union box's half extents: it grows when the squad is strung out and
+     has nothing to do with the joint slot box or with `Custom_Hard_*Extent`. (A non-team unit: its model's local
+     box turned into a world-axis box, 0x264ab0, so r varies a little with yaw; no model: half extents 0.05 each,
+     r = 0.0866.) Limits: the service 0x443ff0, every frame in states 1-2: 3-D distance − r ≤ H's
+     `Garrison_Radius` (+0x236c) → start entering; the handler 0x443d10 on a finished approach move: 3-D distance −
+     r ≤ **60.0** (0x140a28bcc) → state 2 and 0x443700 (2-D distance − r ≤ `Garrison_Radius` → enter, else a
+     flag-0x20 move of the whole excess d − r toward the point: "Garrison approach in full" below).
+  5. **Host id of the squad:** K's pack, as for any unit (MOVEMENT §5.3 "Garrison host id"): set at the order,
+     cleared at K's next order or death, or at the walk-out arrival when K is still subscribed to signal 10.
+- **Garrison approach in full (s78n t19 RE, 2026-11-10)** [H unless tagged]. Read from the GarrisonEvent 0x3ad620,
+  0x3ad880, 0x444310, 0x443a90, 0x443ce0, 0x443ff0, 0x443d10, 0x443700, 0x443560, 0x444440, 0x3a9880. **The same
+  code runs for a squad container and for a single unit; only the box behind r differs** (item 4 above).
+  1. **Order.** 0x444310 sends no move. The GarrisonEvent first issues an ordinary group move 0x2a7b80 (kind 1;
+     flags 4 from the UI and from the retry below, 0 from Lua; **never 0x20**), then calls 0x444310 (only from
+     state 0: subscribe signals 10 and 0x10, state 1, host id, host vf +0xe0 = slot reserve), then pack +0x30 :=
+     the bone index. Destination (0x3ad880): the host's entry bone (`Garrison_Bone_Names`) nearest the unit in 3-D
+     whose point is reachable (0x50eeb0); point = bone + `Garrison_Enter_Dist`·(direction host → bone) when that is
+     > 0. No bones, or none reachable: host position + L·(cos, sin)(host yaw), L = `Garrison_Enter_Dist` if > 0,
+     else half the 3-D length of the host's box half-extent vector; index −1. Because the flags lack 0x20, the
+     approach goal goes through the order-time destination check (MOVEMENT §4.3.1) and can be displaced off the
+     host's footprint [M: inference from the flag test].
+  2. **Approach point A** (0x443a90): the host's position when the index is < 0, the host has no bones or the bone
+     lookup fails; else the bone's world position (+ `Garrison_Enter_Dist` outward, the bone's z kept).
+  3. **Service 0x443ff0**, every frame in states 1-2: free(H) < the unit's `Garrison_Value` → cancel. Else **3-D**
+     |A − U.P| − r ≤ H's `Garrison_Radius` → pack +0x10 := U.P, start entering (0x444440: state 5, fade 1.0 at 0.03
+     per frame), unsubscribe signal 10. No host-moving test here.
+  4. **Handler 0x443d10.** The capacity test runs on every signal; signal 0x10 (death) → cancel. Signal 10 (the
+     approach move finished): state 2 → enter (0x444440); a state other than 1 or 2 → unsubscribe 10, host vf
+     +0xf8, state 0, id cleared; **state 1, in this order:**
+     - if A equals the A stored at the previous arrival **bit for bit** (behaviour +0x44…+0x4c), the retry counter
+       (**GarrisonUnitBehavior +0x40**, not the pack) += 1 and a value **> 9 → cancel**; otherwise stored A := A,
+       counter := 0. Nothing else resets the counter (not the cancel, not a successful entry) [M: other writers
+       were not searched], so the cancel comes on the 11th consecutive arrival with an unchanged A;
+     - 3-D distance − r ≤ **60.0** → state 2, pack +0x10 := U.P, 0x443700 (item 5);
+     - otherwise: **the host has a path** (0x39ade0 = its locomotor's vf +0x1c0(0): any record on its path stack)
+       → **cancel**; else a new GarrisonEvent (flags 4) is queued, which re-runs item 1 (a fresh approach move to
+       the then-nearest bone). "The host is moving" is tested only here, never per frame.
+  5. **0x443700** (state 2): capacity → cancel. Else **the host is stopped** (0x3a9880: locomotor stop, removed
+     from its coordinator, re-adopted). Land only: d = **2-D** |A − U.P|, e = d − r. e ≤ `Garrison_Radius` → enter.
+     Else a new coordinator (0x426010, admit 0x425e30) gets a move 0x4f8200 (kind 1, **flags 0x20**: forced path,
+     no destination check, no passability step test) to U.P + e·(A − U.P) / d: the **whole excess**, so the unit
+     stops r short of A. The state stays 2; the service enters on the way (3-D test), or that move's signal 10
+     enters unconditionally.
+  6. **Cancel 0x443560:** unsubscribe 10 and 0x10; in states 1-2 the host's reserved count (host pack +0x34) −= 1;
+     host vf +0xf8 when the state was 2 or 4; pack reset 0x563d00 (state 0, host id 0x3FFFFF). The cancel itself
+     issues no stop: the unit walks on to wherever its approach move ends [M: no stop call seen in 0x443560].
+  7. FoC data: `Garrison_Radius` 30 (Juggernaut, F9-TZ, Gargantuan), 20 (HTT), 10 (Empire bunker), 5 (bunker
+     template); `Garrison_Enter_Dist` 0 everywhere; bunkers have four bones, vehicles one.
+- ***Port spec (garrison approach):*** path the unit (squad container or single unit alike) with a normal,
+  displaceable move to the nearest reachable entry-bone point A (host position + half its box diagonal along its
+  yaw when it has no usable bone). Every tick while approaching: capacity → cancel; enter when the **3-D**
+  distance |A − P| − r ≤ `Garrison_Radius`, r = half the 3-D diagonal of the unit's box (squad: the members' live
+  union box; single unit: its model box, world-aligned). When the approach move finishes outside that: within 60
+  of A (3-D, minus r) → stop the host and, if the **2-D** excess e = |A − P| − r exceeds `Garrison_Radius`, walk e
+  straight toward A on a forced path (entering on the way or at its end), else enter; farther than 60 → cancel if
+  the host has a path, else re-issue the approach. Cancel on the 11th consecutive finished approach with an
+  unchanged A.
+- *Not read:* the meaning of block flag 0x04; the host vf +0xe0 / +0xf8 bodies beyond the hover case; 0x3ad880 can
+  keep the point of a nearer unreachable bone while storing the reachable bone's index [M: looks like a retail
+  quirk].
+- ***Port spec (capacity / radius):*** a squad counts the **container type's** `Garrison_Value` (default 1 when the
+  tag is absent) and `Garrison_Category` against the host; the plan's [port] "sum of the members' values" would
+  refuse a 9-man squad at a 5-slot bunker and is wrong. The squad enters as one when (container position → approach
+  point distance) − r ≤ `Garrison_Radius`, r = half the 3-D diagonal of the members' live bounding box (members'
+  positions ± their model half extents; [port] the members' hard extents and a nominal height if model bounds are
+  not at hand, and say so); the plan's [port] "the container's movement radius" is not what retail subtracts.
+- ***Port spec:*** the port parks members one by one (`park_team_member` / `rejoin_land_team`). Retail garrisons the
+  container: `TacticalBattle` should, at entry, teleport the container mover to the host position (members to it + their
+  offsets) and keep it there while parked; at exit, teleport it (`TacticalBattle::teleport` → `MovementSystem::teleport`)
+  to the exit bone point E (or the host) with the members at their offsets, then order the container to X. The [port]
+  "first member out moves the container to its exit point" becomes "the squad leaves as one".
+
+### 7.5 s78n t14: the member collision steering vector 0x509810 [H unless tagged]
+1. **Registration** 0x504880: the collision system's mover list (+0xd8) takes an object only when its type has
+   `Avoidance_Disabled` (+0xd3) false and `UnitCollisionClass` (+0x169c) ≠ −1, and its locomotor is none or (the
+   object has no TEAM slot or its locomotor vf +0x230 is true) **and vf +0x228 is false**. LandTeamInfantry (vftable
+   0x8af8d0) answers vf +0x228 true, LandTeamContainer (0x8a3630) vf +0x230 true. So **members are never collision
+   checkers; the squad container is** (FoC containers: `UnitCollisionClass` Infantry, `MovementClass` Infantry,
+   `Is_Squashable`, `MovementPredictionInterval` 4.0). **Members are not partners either** (corrected 2026-11-10, §7.8):
+   the detection's candidate list is tracking layer 0x10, which the tracker fills only from this same mover list
+   (0x53a400), so a member is never a candidate of any unit's check, of its own container's included. (The earlier
+   text here, "members are in the mode's object grid, so a member can be the partner of another unit's check [M]", was
+   wrong.)
+2. **0x509810(system, out, dir, obj)** (dir = §7 step 6's unnormalised heading): the key is obj's id, or for a team
+   member (locomotor vf +0x228) its container's (obj +0x2b0). The id-keyed hash (+0x80, Park-Miller hash of
+   id ^ 0xdeadbeef) gives the key's active collision objects, in list order. For each record c:
+   - weight w = c vf +0x30: MovingVsMoving 1.0, MovingVsStopped 2.0, StoppedVsStopped 3.0, TerrainCollision 4.0;
+   - vector v = c vf +0x38(obj, dir): MovingVsMoving only in states 3 (Repulse) or 11; MovingVsStopped unless obj is
+     participant +0x7c and the state ≠ 2 (Repulsion); StoppedVsStopped only in state 1 and obj = +0x7c;
+     TerrainCollision 0. Each calls 0x5c6ca0(c, obj, dir, 1.0): needs exactly 2 participants and obj's type
+     `Avoidance_Disabled` false; O = the first participant that is not obj and whose TEAM does not hold obj
+     (0x5c7100), then 0x5c6d40(obj, dir, O, 1.0);
+   - kept only if both segments P → P + 25·normalise(v) and P → P + 25·(v + dir) pass 0x5a4c10 for obj's movement
+     class (type +0x1688);
+   - best = the kept record with the largest w (a tie goes to the longer v).
+   Result = best + Σ the other kept v with dot(best, v) ≥ −0.5 (the exclusion compares the record loop index with the
+   kept-list index, so after a dropped record the wrong entry can be skipped: copy it); for a team member also +
+   0x5c6d40(obj, dir, its container, 1.0). No key entry → 0.
+3. **0x5c6d40(a, dir, O, s):** a's type `Avoidance_Disabled` → 0. O a land team container (vf +0x230 and TEAM): Σ
+   over O's members m ≠ a of 0x5c71a0(a, m, dir, s); else 0x5c71a0(a, O, dir, s). Then × clamp(a's speed / a's max
+   speed (0x370f00), 0, 1).
+4. **0x5c71a0(a, b, dir, s)** = a side-step: 0 when a and b share a container (+0x2b0), so **the own-container term of
+   item 2 is always 0**. t = clamp(1 − |a.P − b.P| / ((r_a + r_b)·1.3·s), 0, 1), r = 0x397780 (hard radius); when
+   0x4261d0 / 0x41cf50 relate a and b [M: meaning] t = clamp(footprint overlap 0x20d7a0, 0, 1). t = 0 → 0. Else
+   0x5c66a0 tests the two side steps of length (r_a + r_b)·1.3 for a's movement class: b on a's right side
+   (cross(dir, b − a) < 0) and the left step free → t·(−dir.y, dir.x); otherwise the right step free →
+   t·(dir.y, −dir.x); else 0.
+So a member's vector is: side-steps (≤ 1 each, scaled by its speed ratio) away from the other party (or that party's
+members) of each of its **container's** collision objects. Members get no vector from their own team.
+
+**Corrections and confirmations (s78n t18 RE, 2026-11-10) [H]:**
+- **Callers of 0x509810:** a scan of the whole `.text` for `call` / `jmp` rel32 finds four sites: Walk 0x61d890
+  (0x61dca4), LandTeamInfantry 0x62d620 (0x62db2e), Bike 0x639550 (0x6397a6), JetPack 0x640cc0 (0x640e75). **No
+  LandTeamContainer function uses a collision vector**; the container's wanted facing 0x5ab840 is the path direction
+  plus the lane term (pack +0x15c) only. How Walk adds the vector to its heading: MOVEMENT §5.4.1.
+- **Item 4, "0x4261d0 / 0x41cf50 relate a and b":** they test that b is in **a's formation** (b's pack +0x1f0 = the
+  formation of a). Then t = clamp(overlap coefficient of the two footprint rectangles, 0, 1) (MOVEMENT §5.3.1)
+  instead of the distance ramp.
+- **Item 4, r = 0x397780:** √(HX² + HY²) of the joint slot box only for a land team container; for any other unit
+  it is 0x373b30 = `Scale_Factor` × the **soft** footprint radius (`Custom_Soft_Footprint_Radius`, else
+  `Space_Obstacle_Radius`, else the larger model x / y half extent), not the hard extents. The distance |a.P − b.P|
+  in t is 3-D.
+- **Item 4, the two side tests (0x5c66a0):** with L = (r_a + r_b)·1.3 and b's position B: "left free" = the segment
+  B → B + L·left passes 0x5a4c10 for a's movement class **and** so does the segment from B + L·left − L·dir to B +
+  L·left + L·dir (a corridor of length 2L beside b); "right free" likewise with −left. left = (−dir.y, dir.x).
+  b on a's right (left·(b − a) < 0) and left free → + t·left; else right free → − t·left; else 0.
+- **Which records give a vector** (vf +0x38): MovingVsStopped: the obstacle side in every state, the mover side only
+  in state 2 (Repulsion); MovingVsMoving: both sides in states 3 (Repulse) and 11 only; StoppedVsStopped: state 1,
+  the unit being moved. When each state is taken: MOVEMENT §5.4.1 / §5.4.2.
+
+***Port spec:*** (1) `MovementSystem::ground_collider` / `detect_collisions`: the container is a collision checker
+and a partner (its type's `UnitCollisionClass`, `Is_Squashable`, `MovementPredictionInterval`), members stay out as
+checkers and as partners (§7.8). (2) `MovementSystem::steer_member`:
+after step 6's dir, add Σ of items 2-4 over the container's collision objects (`coll_`, in creation order; the
+container's start-of-tick state, so it stays read-only for the parallel walk). (3) Retail tests no passability on a
+member's step (§7 step 8, §7.3 item 7): the port's `steer_commit` wall slide is a [port] choice to keep or drop.
+
+### 7.6 s78n t14: jetpack and multi-locomotor squads [H]
+- No FoC land team container has such members. Every squad with `Create_Team_Type` naming a
+  LAND_TEAM_CONTAINER_LOCOMOTOR container lists LAND_TEAM_INFANTRY_LOCOMOTOR members, except four with
+  **WALK_LOCOMOTOR** members (`Sandpeople_War_Party`: 2 × `Sand_Person_Sniper_A`; `Twilek_Slave_Company`;
+  `Pyngani_Slave_Company`; `Rebel_Prisoner_Team`: `Prisoner_Rebel_01`). The jetpack / `Uses_Multiple_Locomotors`
+  infantry (Dark Trooper companies, Boba Fett, IG-88, Bossk, Silri, Tyber Zann, Urai Fen) have no team container.
+- Retail never re-centres a container whose locomotor answers vf +0x230 (TEAM service 0x405b10, TACTICAL_COMBAT §5.4.4
+  item 2), whatever its members are: such a container always walks its own path. Only LandTeamInfantry members run
+  0x62ca10 / 0x62d620; a member on another locomotor is not slot-steered and is admitted to the coordinator on its own
+  (0x425e30 refuses only a vf +0x228 member of a vf +0x230 container) [M: how the container's orders reach it].
+- ***Port spec:*** none for FoC data. `TacticalBattle::mv_squad_add` may keep `bt_team_positions` for squads it
+  refuses; for the four Walk-member squads retail's container still walks its own path while the Walk members act on
+  their own [M], so the re-centred stand-in is a [port] choice there.
+
+### 7.7 s78n t14 run: the container's speed step (0x5aaf70): acceleration and the straggler cap [H unless tagged]
+The container's move step 0x5adfb0 calls 0x5aaf70 (rel32 call at 0x1405ae0b3; Ghidra files its body under
+0x5abbf0, which is really the thunk at vf +0x110 → vf +0x1c0). It computes a target speed T and steps pack +0xec
+toward it. Confirmed by the s78n t14 run (`S78N_T14_RUN.md`).
+1. **Acceleration and deceleration = 0x5ab540** (LandTeamContainer vftable 0x8a3630, both vf +0x2d8 and vf +0x2e0):
+   a = min over the members m (TEAM list, index order, null entries skipped; start −1, first value taken) of
+   **0x373080(m's type, K)** = `OverrideDeceleration`(T_m) × E(T_m, K) / `Max_Speed`(T_m), with E(T_m, K) =
+   min(`Max_Speed`(T_m), min over K's members of their raw `Max_Speed` (0x4049e0)) × the §3.4 chain 0x376990 run on
+   the container object (mode 1.56, fleeing, K's SPEED product, ...); `OverrideDeceleration`(T_m) itself when
+   `Max_Speed`(T_m) = 0. If the minimum is not > 0 (no members, or every member type has no deceleration): a = K's
+   effective max speed 0x370f00(K type, K) (full speed in one frame). **The member type's deceleration, for both
+   directions; the container's own acceleration fields are not read** (FoC containers carry `Override_Acceleration`,
+   a tag the parser does not know anyway). FoC: Stormtrooper squads 0.05 × 1.56 = **0.078**, Rebel squads 0.07 ×
+   1.56 = **0.109** per frame; the run measured 0.078 and 0.109 on start ramps and braking.
+2. **Straggler cap 0x5ab640(K)** (called twice; T := min(T, its value)): vmax = 0x370f00(K type, K) (the team
+   speed); f = K's facing (cos yaw, sin yaw) (0x41c000 on obj +0x84); HX = the joint box 0x404450 output +0x18 =
+   (max − min) / 2 of the members' slot x ± their half-extents (box seeded with 0) + K's type `MaxJiggleDistance`
+   (+0x16ac; default 0, no FoC container sets it) (TACTICAL_COMBAT §5.4.4). If 0x404450 fails (no TEAM / no members)
+   the cap is vmax. Else, for each member m in index order (null skipped), p = f.x·(m.x − K.x) + f.y·(m.y − K.y)
+   (live positions, 2-D): when **p < −(HX + 2)** (0x1408007d4 = 2.0), t = clamp(((−HX − 2) − p) / 10, 0, 1)
+   (0x140805898 = 10.0) and cap := min(cap, (1 − t)·vmax). So a member more than HX + 2 behind the container slows it
+   linearly to 0 at HX + 12. Run: solving the cap for HX from each poll's speed and rearmost member gives 15.0-15.4 on
+   three Rows starts (3 × 3 grid of pitch 12, hx 3: predicted 15.0) and 15.69-15.86 over 85 frames of a Dartboard leg.
+
+   **Who is counted, and the bounds (s78n follow-up, 2026-11-10; 0x5ab640 re-read in full) [H]:**
+   - **Every non-null entry of the TEAM list** (0x405300 count, 0x4052d0(i)), index order. The loop tests nothing
+     else: not the member's locomotor state (idle, 0x29 / 0x2A recovery, a running start delay +0xe4), not its pack,
+     path or speed, not obj +0x3a7 (hidden / garrisoned), not a suspended locomotor (pack +0x260), not health, not
+     whether its line to the slot is passable, not a push / flee. A member without a locomotor pack is counted too
+     (the box 0x404450 skips it; this loop does not).
+   - A member stops counting only when it leaves the list (0x4058c0): on its signal 0x28 (TEAM vf +0x80 = 0x404750;
+     raised by `Remove_Object` at the store flush after its Kill, OBJECT_RUNTIME §2.2), or at once when it is set on
+     fire and becomes a burning runner (0x3a9e30: type flag +0x81, damage argument 7, not yet burning) [M: the flag's
+     name]. So a dying member is counted for at most the frame it dies in [M: Kill and flush in the same frame].
+   - **p is measured against the container** (K obj +0x78 / +0x7c, projected on K's facing), **not against the
+     member's slot**. A member standing exactly on a slot that lies more than HX + 2 behind K therefore slows K for
+     as long as the layout lasts. That happens when the slot box is off-centre: HX is half the x-extent of the box
+     seeded with 0, so with the slots' x-range [xmin, xmax] the rear member on its slot has p = xmin (+ jiggle) and
+     the test is xmin < −((max(0, xmax + hx) − min(0, xmin − hx)) / 2 + 2). Rows layouts are centred (§7.2 step 3),
+     so p ≥ −(HX − hx) there; a Dartboard scatter whose x-midpoint lies more than hx + 2 behind K runs below
+     vmax until the next re-lay (the 85-frame Dartboard leg of the run above) [M: derived from the two formulas].
+   - **No lower bound:** the result is in [0, vmax] and is exactly 0 once any member has p ≤ −(HX + 12). There is no
+     minimum speed and no timeout.
+3. **Order inside 0x5aaf70** [H; M for the brake-ahead geometry]. vmax = 0x370f00(K type, K); rate = 0x372560(K
+   type), × 2 while fleeing; a = vf +0x2e0 (item 1); v = pack +0xec; path = the top of K's path stack (0x5569b0).
+   1. T := vmax. When vf +0x1c8 (0x42cc20: the top path's kind +0x48 is 1, a formation path): T := pack +0x158 (the
+      formation speed), and if that is 0 → state := 0x14.
+   2. No path, or the top path is not started (+0x6d = 0): T := a.
+   3. With a path: w = the wanted facing 0x5ab840 for waypoint index +0x60. If the path's turn-done flag +0x6c is
+      clear and |wrap(yaw − w)| ≥ |rate|: c = the speed fraction of waypoint +0x60 (0x5c4b80, entry +4; an index
+      past the end reads the static (1.0, 1.0) at 0x140a440f8); when c·vmax < T: T := c·vmax, and T = 0 → state :=
+      0x14. (+0x6c is set by the move step once the turn has rate left over, and cleared when the waypoint index
+      steps, 0x5c4920.)
+   4. Brake-ahead: vn = (fraction of waypoint +0x60 + 1, 0x5c4af0; default 1.0) × vmax. When vn < v: bd = (v² − vn²)
+      / (2a) (double); g = the distance from K, along the current segment direction (0x5c5850), to the waypoint line
+      of 0x5c4ec0 (point W, unit direction n); when g ≤ bd: T := min(T, vn), and T = 0 → state := 0x14.
+   5. Collision cap: with a collision system (mode vf +0x230), T := min(T, 0x509ea0(system, T, K, &now)); `now` is
+      the "at once" flag of item 5.
+   6. Straggler cap: T := min(T, 0x5ab640(K)).
+   7. State = 0x14 (also when set in steps 1, 3, 4 of this very call): **T := a**, replacing everything above,
+      the straggler cap included.
+   8. Step: T > v → v += min(vf +0x2d8, T − v); T < v → `now` ? v := T : v −= min(a, v − T); v := clamp(v, 0, vmax)
+      → pack +0xec.
+4. **Where the cap applies** [H]. 0x5aaf70 has one caller, the move step 0x5adfb0, and the container service
+   0x5ad690 runs that step in state **0x13** (every frame) and in **0x14** while v > a (then 0x15 zeroes the speed).
+   Not in 0 / 0x16 (start, idle), 0x10 (turn in place) or 0x15 (arriving).
+   - In 0x13 the cap is folded on **every** frame, whatever the path: kind 1 formation, 3 TerrainCollision, 4 push,
+     5, **7 crush-flee** (the cap's vmax then holds the × 2), started or not, any waypoint. No path kind, order type
+     or flag skips it.
+   - In 0x14 it is computed and then discarded (step 7): **a braking container does not wait for stragglers**.
+     0x14 is entered: when the top path is not started (a new path arrived while moving; 0x5adfb0 start), on the
+     last waypoint or an unstarted path with no started path below (0x5adfb0 loop), when the remaining path length
+     ≤ v² / (2a) with no started path below, and from steps 1, 3, 4 above.
+   - **At cap 0 the container stays in 0x13 with v = 0.** 0x5adfb0 returns right after 0x5aaf70 when v = 0: no turn,
+     no waypoint step, no passability test, no state change. Its members keep copying 0x13 and run slot steering
+     (§7), which is what brings the straggler back; they are not in recovery (§7.3 "Recovery in full" item 1). When
+     the last straggler is back inside HX + 12 the cap rises and v ramps up at a.
+5. **When the speed changes at once instead of at the rate a** [H; M for the collision state names].
+   - **Collision flag** (`now`, the only "at once" inside 0x5aaf70). 0x509ea0 asks every active collision record of K
+     (id-keyed list, list order) for vf +0x40(K, &now) and keeps the lowest speed; **`now` ends as the flag of the
+     last record that writes it** (not an OR). With `now` set, any T below v is taken in one frame, whichever cap
+     produced it (the straggler cap included); a rise is never immediate.
+     - MovingVsStopped (0x684660) always writes its +0x84: 1 once the decision 0x684f90 has re-routed the mover
+       (0x685e10 succeeded; then state 5 Resolved), else 0. Its speed for the mover (+0x7c) that cannot crush the
+       obstacle: state 7 (Try Again Later) → **0**; state 1 (Path Around) → 0x5c69f0 (the formation-follow speed);
+       else vmax. So an ordinary MovingVsStopped hold (state 7) brakes K **at the rate a**.
+     - MovingVsMoving (0x680d00) writes +0xbd for participant +0x7c and +0xbe for +0x80, and answers +0x84 / +0x88
+       when its state ≠ 0 (else vmax). Each resolution pass first resets both speeds to vmax and both flags to 0
+       (0x67f080); the flag is then set together with a **0 speed** (a hold): state 1 (0x682510: +0x7c at or past its
+       hold line and unable to crush), state 2 (0x6814f0: the slave speed 0x67f590 of +0x80 is 0), 0x682170 (+0x80
+       at or past its hold line), and by the slave-speed rule 0x67f130 when the two footprints already touch. A new
+       record (state 0) has both flags 1 and answers vmax.
+     - StoppedVsStopped and TerrainCollision (0x5c78e0): vmax, flag untouched.
+   - **Stop** (LandTeamContainer vf +0x140(id) = 0x5ad320; **the Walk vftable 0x8ad798 has the same function in
+     that slot**, s78n t20): 0x42c920 clears the path stack (0x554480(pack, K, id):
+     every record when id ≠ 0 or the pack has no owner; with id = 0 and an owner id in pack +0x248, the records
+     **below** the owner's record, which stays with those above it [M], *corrected s78n t20 from "from that
+     order's record on"*)
+     and, when vf +0x170(id) agrees (0x42cba0: pack +0x248 = 0 or = id): state := 0x16 and pack +0xec / +0xf0 := 0
+     **at once**. When it does not agree the stack is emptied all the same and the unit brakes through End Move
+     (MOVEMENT §5.4.1, "The impassable-cell rule"). Callers seen: the garrison entry (§7.4) and the collision
+     code for a participant standing on an impassable cell (0x684450) [M: the Stop order's own call was not
+     enumerated].
+   - **New move order while moving: not at once.** The formation plan 0x41c1a0 resets the path stack directly
+     (0x554480, not vf +0x140) and sets the new path (vf +0x190 = 0x5ad140). The new top path is not started, so the
+     next move step enters 0x14: K brakes at a (coasting straight along its facing, passability-tested), 0x15 zeroes
+     the speed when v ≤ a, 0x16 starts the path, 0 re-lays the slots, 0x10 turns, 0x13 moves. Start delays are drawn
+     only when the path is set while v = 0 (§7.3 item 2).
+   - **Path end: not at once.** 0x14 brakes at a from v² / (2a) before the end; 0x15 then sets the speed (≤ a) to 0.
+   - **Arrival state 0x15** (0x5adb50) always writes pack +0xec / +0xf0 := 0.
+   - **MovingVsMoving flags, precisely (s78n t18 RE, 2026-11-10; MOVEMENT §5.4.2):** the constructor leaves both
+     flags 0; the state-0 *service* (a record that waits for quota) sets both to 1; states 1, 2, 4, 6, 7, 10, 12, 15,
+     16 reset them to 0 each frame before deciding a hold; **state 3 (Repulse) and state 11 do not reset them** (3
+     never sets one either; 11 can set the slave's through 0x67f130).
+     Two Infantry-class movers on crossing or opposed headings are in Repulse: speed answer = max speed for both, no
+     hold. On headings within 60° they are in Speed Slave Only (2): the rear one gets the slave speed 0x67f590, and
+     the flag when that speed is 0 or the two footprint rectangles touch (speed 0 = they touch while the front one
+     moves away).
+6. **The container service 0x5ad690 and the arrival state 0x5adb50 in full (s78n t18 RE, 2026-11-10)** [H]. Read
+   from 0x5ad690, 0x5adb50, 0x5ab840, 0x5c4ec0 / 0x5c5060, 0x5c4920, 0x5c5910, 0x557b10, 0x559260.
+   The service is one `switch` on the state that **loops in the same call** until a case ends the frame:
+   | state | does | then |
+   |---|---|---|
+   | 0 | no path → lay out if needed, **frame ends**. Top path not started (+0x6d = 0) → state 0x16, **frame ends**. Started → re-lay the slots toward the wanted facing (0x5ac120, §7.2 caller 1), state 0x10 | **same frame** → 0x10 |
+   | 0x10 | turn toward the wanted facing 0x5ab840 by the rate (0x5ad5a0) | turn budget left over (> 0) → state 0x13, **same frame**; else frame ends |
+   | 0x13 | lay out if needed; move step 0x5adfb0 | frame ends |
+   | 0x14 | speed > a (vf +0x2e0, item 1) → move step 0x5adfb0, frame ends | speed ≤ a → state 0x15, **same frame** (no move step that frame) |
+   | 0x15 | 0x5adb50, below | frame ends, except the final-facing turn → 0x10 same frame |
+   | 0x16 | no path → lay out if needed, frame ends. Top path already started → state 0x15, same frame. Not started → +0x6d := 1, state 0 | **same frame** → 0 → 0x10 (→ 0x13) |
+   **0x5adb50 (state 0x15), in order:**
+   1. speed := 0 (pack +0xec / +0xf0). **No position is written anywhere in the function: no snap.**
+   2. No top path, or the top path is not started (a new path arrived while moving, item 5) → state 0x16, frame
+      ends; nothing is popped.
+   3. **Arrival tolerance.** If the container is heading for the **last** waypoint (path index +0x60 + 2 = waypoint
+      count) and n·(K.P − W) **> −5.0**, where W is the last waypoint and n the unit direction of the last segment
+      (the waypoint line 0x5c4ec0 / 0x5c5060; 2-D): the waypoint index steps (0x5c4920). So "arrived" = within 5.0
+      before the last waypoint's line, measured along the last segment, or past it; the sideways offset is not
+      tested.
+   4. Not on the last waypoint now (0x5c5910 false: stopped short of that line, or on an earlier leg) → **state 0,
+      frame ends**. Next frame state 0 finds a started path: re-lay (only if the direction changed by more than 8.11°
+      or the slots are not laid), turn (0x10), move (0x13): **the container restarts the same path from speed 0**
+      at the rate a and brakes again at v² / (2a) before the end. No start delays are drawn (they belong to the path
+      set, §7.3 item 2).
+   5. On the last waypoint: wanted = 0x5ab840 = the last waypoint's **final facing** (+0x0c) when it is non-zero,
+      else the container's own orientation. When it is non-zero and |wanted yaw − yaw| > the threshold → state
+      0x10 and the switch goes on **in the same frame** (turn in place; when the turn completes the move step runs,
+      finds the last waypoint, brakes and comes back here). Threshold = **10°**, or the turn rate (0x372560) when
+      that is ≤ 10° and the path kind is 3 (TerrainCollision) or the current waypoint's speed fraction is 0: the
+      Walk rule of MOVEMENT §3.5.1.
+   6. Otherwise **pop** the top path record (0x557b10: the stack's last record is destroyed, the tracker hook
+      0x559260 runs, pack **+0x288 := NOW**), state 0x16, frame ends.
+   **After the pop, one state per frame boundary:** the next frame's 0x16 finds either no path (idle; the members'
+   recovery runs from here, §7.3), or the path below: already started → 0x15 **the same frame**, which pops it too
+   if the container is within the tolerance of its end, else → state 0 and it resumes the frame after (rare: the
+   move step 0x5adfb0 itself pops a top path that reaches its last waypoint while a started path lies below and
+   walks on along that one without braking, A1_READINGS §40.3); not started → it is started and 0 → 0x10 (→ 0x13)
+   run **in that same frame**.
+   **Sequence for a path end:** frame N: 0x14 with speed ≤ a → 0x15: speed 0, arrived test, pop, state 0x16.
+   Frame N + 1: 0x16 (idle, or the start of the next path as above). **For a new order while moving:** frame N: 0x14
+   → 0x15: speed 0, state 0x16 (top path not started). Frame N + 1: 0x16 → started → 0 (re-lay) → 0x10 (turn; and
+   0x13's first move step in the same frame when the turn has budget left).
+   "Signal 10 / order finished" is not raised here: it is the formation's arrival (A1_READINGS §33.4), once every
+   member's locomotor reports done (no speed and no path).
+
+7. **State 0x10, the turn in place before the walk (s78n t19 RE, 2026-11-10)** [H unless tagged]. Read from
+   0x5ad690 (case 0x10), 0x5ad5a0, 0x5ab840, 0x5c5850, 0x5adfb0.
+   - **Budget** B = 0x372560(container type) (`Max_Rate_Of_Turn` × the mode factor) per frame, × 2
+     (`Fleeing_Infantry_Speed_Bonus`) while the top path is kind 7 (0x39a5b0). No other multiplier and **no angle
+     threshold**: the container has no `Close_Enough_Angle_For_Move_Start` rule.
+   - **Target** (0x5ab840, recomputed every frame): no path or path not started → own orientation; on the last
+     waypoint → that waypoint's final facing (+0x0c), or own orientation when it is zero; otherwise d =
+     waypoint[idx + 1] − waypoint[idx], idx = path +0x60: the **current segment's direction**, not the direction
+     from the container to the waypoint; d is normalised in 2-D and the lane term k = pack +0x15c is added: (d.x −
+     k·d.y, d.y + k·d.x); yaw = its heading in [0, 360) (0x20acd0).
+   - **Step** (0x5ad5a0): δ = wrap(target yaw − yaw) into (−180, 180]. |δ| > B → yaw moves by B toward the target,
+     leftover := 0. |δ| ≤ B → yaw := target, leftover := B − |δ|. Pitch and roll are written 0.
+   - **Exit:** leftover > 0 → state 0x13 and the move step runs **in the same frame**; leftover ≤ 0 → the frame
+     ends. So it is a **full turn to the path heading**: an aligned container (δ = 0) passes straight through;
+     |δ| = B exactly completes the turn but the first move step comes one frame later; B = 0 never leaves 0x10.
+     The leftover is only a flag; it is not handed to the move step.
+   - **In 0x13 / 0x14** the move step 0x5adfb0 turns again every frame, before moving, with a fresh full B toward
+     the same target (unused budget carries across the waypoints passed in that call; no more turning once a path
+     was popped in the call), and then moves along the **current facing** (cos yaw, sin yaw), not along the
+     segment. When that turn ends with budget left it sets the path's turn-done flag +0x6c. So 0x10 only matters
+     at a path start and after a stop.
+   - **Back to 0x10:** 0x5adfb0 writes only state 0x14; the way back is the indirect one of items 3 and 6: turn
+     not done, remaining angle ≥ the rate and the waypoint's speed fraction 0 → target speed 0 → 0x14 → 0x15 → not
+     on the last waypoint → state 0 → 0x10 on the next frame [M: composed from those items].
+   - For contrast, Walk (0x61e930, state 0) skips the turn in place when |error| ≤ its rate, or when |error| ≤
+     `Close_Enough_Angle_For_Move_Start` and the waypoint fraction is > 0. The container always turns exactly.
+   - **Completeness (s78n t26, 2026-11-10):** this item and item 3 do not give the whole move step. The full
+     0x5adfb0 (line crossing at −0.001, the travel distance s' = |D / τ| to the waypoint line along the facing, the
+     τ = 0 waypoint skip, the coast along the facing on the last waypoint, the End Move test v² / (2a) > rest, the
+     slot re-lay `0x5ac120` at each waypoint stepped, the pop onto a started path below) is MOVEMENT §3.5.2 C and E,
+     and the corner fractions its speed step reads come from MOVEMENT §3.5.2 D.
+
+***Port spec (container turn in place):*** at a path start (and after any stop on a path), each tick: target yaw =
+the current segment's direction plus the lane term (or the final facing on the last waypoint); rotate by min(B,
+|δ|), B = the container's turn rate (× 2 on a crush-flee path). If |δ| < B, or δ = 0, run the first move step in
+the same tick; if |δ| ≥ B it does not move that tick (|δ| = B: aligned now, moves next tick). No close-enough
+angle. While moving, the move step keeps steering by up to B per tick and advances along the facing.
+
+***Port spec (arrival, s78n t18):*** the plan's [port] choice is confirmed: (a) the braking state ends when the
+speed is ≤ a at the start of a tick: speed := 0 that tick, no step; (b) arrived = on the last segment and within 5.0
+before the last waypoint's line along that segment (or past it); no snap, the container stays where it stopped; the
+path is popped and the unit is idle (`WalkStopped`) from that tick; (c) otherwise the same path restarts on the next
+tick (turn, then accelerate from 0); (d) a final facing on the last waypoint is turned to in place when it differs by
+more than 10°, before the pop; (e) a container with a new, unstarted path: speed 0 this tick, the start (re-lay,
+turn, and the first move step if the turn leaves budget) on the **next** tick. The plan's "[port] the start is the
+next frame" is retail.
+
+***Port spec (s78n t14 run):*** (1) the squad container's walk uses a = d = the minimum over its members of
+`OverrideDeceleration` × (the member type's team-capped effective speed / its `Max_Speed`), falling back to full speed
+when that is not > 0; today `MovementSystem::configure` gives it its own type's (absent) values, so the port's squads
+start and stop in one frame. (2) The container's walk target speed takes min(·, straggler cap) of item 2, computed from
+the members' start-of-tick positions and slots (`tslot`) in member index order (serial, before the parallel walk, like
+`team_caps`); the cap is a target, reached at the item-1 rate. (3) No change to `steer_member`'s vmax (already the
+member's own effective max speed) or to the start delays.
+
+***Port spec (s78n follow-up, 2026-11-10):***
+1. **Cap membership:** every live member in the team list, no exclusion. Remove the [port] rule "a member whose
+   straight line to its slot is impassable is left out". cap = vmax × min over members of (1 − clamp((−(HX + 2) − p)
+   / 10, 0, 1)), p = dot(member.P − container.P, container facing), HX = the joint slot box half x-extent (seeded
+   with 0) + the container type's `MaxJiggleDistance`; range [0, vmax], no floor. A member removed from the team
+   (dead, burning runner) is not in the list.
+2. **Where:** fold the cap into the container's target speed on every frame of its moving state (retail 0x13), for
+   every path kind (formation, push, crush-flee, collision paths). While braking (retail 0x14: path end, new path
+   arrived, formation speed 0, zero waypoint fraction) the target is the deceleration value a and the cap is not
+   applied. No cap while turning in place, arriving or idle.
+3. **At cap 0:** the container keeps its moving state with speed 0 and does nothing else that frame (no turn, no
+   waypoint advance); members stay in slot steering. It must be impossible for a member's step to be refused
+   (§7.3 ***Port spec (recovery / lag bound)*** item 1), otherwise this rule deadlocks; with both retail rules in
+   place the wait ends after about (lag − (HX + 12)) / member vmax frames.
+4. **Rate:** down-steps use a per frame unless the collision "at once" flag is set (item 5: the flag of the last
+   collision record of the container that reports one; MovingVsMoving holds and a re-routed MovingVsStopped set it).
+   A plain MovingVsStopped "try again later" hold brakes at a. Stop zeroes the speed at once; a new move order and
+   the path end brake at a, then zero the remainder (≤ a) on arrival.
+5. Step order of item 3 (formation speed, unstarted path, corner fraction until aligned, brake-ahead, collision,
+   straggler, braking override) is the order to keep; all caps are mins, so only the braking override and the "at
+   once" flag are order-sensitive.
+
+### 7.8 s78n follow-up: squads in land collision detection and the dynamic repath (2026-11-10) [H unless tagged]
+Read from 0x504880, 0x508170, 0x53a400, 0x539b20, 0x559260 (dis), 0x5d7a00 / 0x6b0e50, 0x683790, 0x442540, 0x686500,
+0x684f90, 0x5c7100, 0x396850 / 0x38de80, 0x67cf20, 0x677340, 0x684710. The pair gates themselves (garrison, landing
+transport, hover, build pad) are in MOVEMENT §5.2 / §5.3.
+1. **The candidate list is the registered mover list.** The detection 0x508170 takes its candidates from tracking
+   layer 0x10 (Land; 0x5387f0(tracker, 0x10), box query 0x5d7a00). That layer is filled by one function only: the
+   tracker's land update **0x53a400** (called from the tracker update 0x539b20, itself from the mode's frame update
+   0x3639d0). It walks the **collision system's mover list** (0x508ec0 → system +0xd8, the list 0x504880 fills) and
+   makes or refreshes a record at the object's current position for every mover whose layer 0x397900(obj, 0) is
+   exactly 0x10, with obj +0x3a7 clear, a live manager (+0x2b8 → +0x63e) and the dead bit (+0x3a0 & 2) clear. The
+   path-change hook 0x559260 never inserts a pure-Land object (`test eax, 0xffffffef; je` at 0x1405592cd), and the
+   other inserts (0x53acf0 / 0x53a900 / 0x53ae20) are called only from SPACE_OBSTACLE, the Flying / JetPack /
+   LandBomber / SimpleSpace "placed" slots and the space formation code. So on land: **candidate ⇔ registered mover
+   with `Space_Layer` Land, not hidden.**
+2. **Squad members are never registered** (0x504880: locomotor vf +0x228 true, §7.5 item 1), so they are neither
+   checkers nor candidates:
+   - **A container never gets a collision object with one of its own members**, moving or standing. No own-team test
+     is needed in the contact tests, and there is none (0x683790 / 0x442540 / 0x686500 read no +0x2b0 and no TEAM
+     list).
+   - **Enemy (and friendly) squad members do not block a container or any other unit.** A squad takes part in
+     collision only as its **container**: at the container's position, with the container's footprint = the joint
+     slot box (0x396850 → 0x404450: the slot layout ± member half-extents, centred on the container and turned by
+     its yaw, TACTICAL_COMBAT §5.4.4; 0x38de80 builds the collision rectangle from it), the container type's
+     `UnitCollisionClass` (FoC: Infantry) and its `MovementPredictionInterval`. Where the members really stand does
+     not matter.
+   - Members only **read** their container's records for the steering vector (§7.5 items 2-4); 0x5c7100 (the "other
+     participant" helper: the first participant that is not obj and whose TEAM does not hold obj) exists for that
+     read, where obj is a member and the record holds its container.
+3. **The dynamic repath ignores members the same way.** The dynamic land pathfinder's obstacle rectangles come from
+   the same layer-0x10 query, minus the pathing unit's own id (0x67cf20: 0x5d7ae0(layer, box, own id, 0x3fffff);
+   0x677340; 0x679aa0), and the side-step test 0x684710 uses it too. So a container's Path Around sees other
+   containers (their joint boxes), vehicles and structures, **never a squad member, its own or anyone else's**.
+4. **The container's own step** is passability-tested for its own movement class at its own point only (0x50e280
+   in 0x5adfb0, skipped when the path's +0x5c flag is set); a failed test reports to the collision system (0x509090)
+   and the container does not move that frame. Members are not tested at all (§7.3 "Recovery in full" item 7).
+
+5. **What a container does in its collision records (s78n t18 RE, 2026-11-10; details and addresses MOVEMENT
+   §5.4.1 / §5.4.2)** [H]. A container is Infantry class in every FoC type; the code tests "team container" as
+   locomotor vf +0x230.
+   - **Container moving, Infantry-class unit stopped (MovingVsStopped, decision 0x684f90).** The "infantry against
+     infantry → Repulsion at once" rule **excludes a container mover** (and a container obstacle), unless the mover
+     is short-range and the obstacle is its target. A container reaches Repulsion (state 2) when its path is forced
+     (flag 0x20: garrison exit) or when its **destination is not blocked**: it is not on its final leg, or its
+     footprint at the path end overlaps no stopped unit (0x684710). Then it **walks on at its normal speed straight
+     through the obstacle's footprint** (speed answer = max speed, no flag; no LandTeamContainer code reads a
+     vector; only its own point is passability-tested), its members side-step (§7.5), the stopped unit stays where
+     it is, and the record ends when the obstacle lies behind the container's facing by more than the two radii
+     √(HX² + HY²) + √(hx² + hy²), or the container has no path left.
+     With a blocked destination the container gets, in this order: the **early-arrival cut** 0x685e10 (its path is
+     shortened to the last point where its box (HX + 5, HY) is clear; Resolved, with the "at once" flag), a Path
+     Around (dynamic path, state 1), for a **non-hostile** pair a **push** of the blocker (0x6859a0; a single,
+     non-container infantry mover does not push at this step), else Try Again Later (speed answer 0, braking at a,
+     re-decided every 30 frames).
+   - **Container stopped, something moving at it:** a single infantry / bike mover: the decision goes the same way
+     with the container as obstacle (no immediate Repulsion; Repulsion when the mover's destination is free). A
+     vehicle that cannot crush: Path Around first; when that fails and the pair is not hostile, a push of the
+     container; else a second Path Around / state 8 / Try Again Later. A crusher: MOVEMENT §5.4.1 steps 8-9 (one
+     push attempt if the squad scatters, then state 4: it drives on at full speed and the push is not retried).
+   - **Two moving, both Infantry class (MovingVsMoving, chooser 0x67f7b0):** no container test at all. Forced path
+     on one side → the other one path-arounds. Same formation, or headings within 60° → **Speed Slave Only** (the
+     rear one follows by the slave-speed rule and is held at once when the two boxes touch). Otherwise → **Repulse**:
+     both at max speed, no hold (0x67f130 is not called in that state), vectors of weight 1.0 for both sides'
+     members. The record is removed the frame either one has neither speed nor path.
+6. **Layer 0x10 stores a rectangle per mover** (MOVEMENT §5.3.2): for a container the joint slot box turned by its
+   yaw, flagged Static while it has no speed and no path, else Moving, refreshed every frame. The occupancy query
+   0x538200 (jetpack landing 0x6420e0 and others) is a rectangle-overlap test against those records: a spot inside
+   a squad's joint box is occupied, a spot where only a member stands is not.
+
+***Port spec (s78n t18):*** (a) container mover against Infantry-class stopped unit: first ask "is my destination
+blocked" (final leg and footprint at the path end overlaps a stopped layer object); no → Repulsion (walk through at
+full speed, members side-step, no repath / hold / push / nudge; ends when the obstacle is behind by the two radii
+or the path is gone); yes → arrival cut, Path Around, friendly push, hold with a 30-frame retry, in that order. The
+plan's unconditional Repulsion for the pair is right only for the first case. (b) Two moving Infantry-class
+participants: Repulse on crossing / opposed headings, Speed Slave Only within 60° (MOVEMENT §5.4.2 port spec).
+(c) Occupancy and candidate queries use the container's joint box rectangle; members are in no query.
+
+***Port spec:*** (1) `MovementSystem::detect_collisions`: candidates are the registered ground colliders only; a
+squad member is never a checker, never a partner and never an obstacle rectangle of the dynamic repath, for its own
+container or for any other unit (own or enemy). (2) A squad is represented by its container with the joint slot box
+as footprint (the same box as the straggler cap's HX and the fog / range tests). (3) No own-team exclusion code is
+needed once (1) holds; if the port keeps members in a shared spatial index, filter them out of the collision and
+dynamic-repath queries before the pair gates of MOVEMENT §5.3.
 
 ---
 
@@ -1466,6 +2237,12 @@ container's locomotor.
   with decel = vf +0x2e0.
 - The exact arithmetic and the use of `Stopped_Rate_Of_Turn` (+0x3b0) are **untraced**. Nothing in §2–§6 reads
   +0x3ac or +0x3b0.
+- *Superseded s78n t26 (2026-11-10) [H]: the full pass is MOVEMENT §3.5.2 D.* Corrections to the bullets above: it is
+  also called through the land team container's path set `0x5ad140`; it runs only for formation paths (kind 1) in
+  land mode; the merge (and the pull-back of the aim point) runs only when `Min_Speed_Fraction_For_Turn` > 0, whose
+  default is 0; the speed is min(vmax, ω·r / (1 − cos θ), L·ω / (2|θ|)) with r = clamp(L / 2, 20, 100); a probe that
+  passes is also checked against the corridor test `0x5093c0`; the backward pass needs ≥ 3 waypoints. The pass does
+  not read `Stopped_Rate_Of_Turn`; that field is the at-rest turn rate (`0x374310`, MOVEMENT §3.5.1).
 
 ---
 
@@ -1535,7 +2312,8 @@ container's locomotor.
 ## 11. Still open
 1. **Fighter / squadron:**
    - the writers of team list +0x88 (E) and +0x8c (S);
-   - pack +0x15c (lateral offset) [L];
+   - ~~pack +0x15c (lateral offset) [L]~~: the formation lane term, written by 0x41dbb0 (MOVEMENT §5.4.1 "How Walk
+     combines", 2026-11-10) [H];
    - the 0x5c5060 corner shift length (0x54f700) [L];
    - who enters Dead_Stop 0x1F;
    - unit abilities 0x29 / 0x22 in the provocation test (by number only);
@@ -1551,7 +2329,8 @@ container's locomotor.
 2. **Flying:**
    - how state 0x26 is left;
    - the clearance query 0x63b640: resolved (§6.3.1). Still open there: the entry builder 0x6b3b00 (entry AABB and
-     half-extents) [M], and whether land transports ever hold a Corvette-layer record [L];
+     half-extents) [M] (read 2026-11-10 for land movers: MOVEMENT §5.3.2), and whether land transports ever hold a
+     Corvette-layer record [L];
    - the formation destination kinds of 0x583680: read 2026-11-03 (§4.11 D 7; kind 4 = the viewer's own position);
    - the jetpack follower 0x641010 was not compared line by line.
 3. **0x5070b0:** exact arithmetic; `Stopped_Rate_Of_Turn` readers.

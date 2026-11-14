@@ -21,6 +21,8 @@ add_library(alamo_tactical_movement STATIC
   src/formation.cpp
   src/unit_params.cpp
   src/movement_system.cpp
+  src/movement_system_part2.cpp  # bo3 t03: split by position, shared code in movement_system_internal.hpp
+  src/movement_system_part3.cpp
   src/hyperspace.cpp  # L1 systems
   src/corridor.cpp            # REMAINING_GAPS 4.1
   src/special_locomotors.cpp  # REMAINING_GAPS 4.3-4.7 (pure rules)
@@ -30,6 +32,10 @@ add_library(alamo_tactical_movement STATIC
   src/fighter_formation.cpp   # s78f t02: fighter formation block stacks (FIGHTER_FLYING 4.11)
   src/space_avoid.cpp         # SPACE_AVOIDANCE: avoidance tree members + precise model test (FighterAvoidFn rules)
   src/movement_save.cpp       # N1 stage 2: save / load of the battle movement state
+  src/fleet_placement.cpp     # cu8l t03: campaign space fleet placement layout (CU8K_T03_T08_T09_RE 1)
+  src/land_team.cpp           # s78n t03: land squad containers walk their own path, members steer to slots (MOVEMENT 3.7)
+  src/path_around.cpp         # s78n t20: relation code, swept box, ring search, the dynamic pathfinder's graph search (MOVEMENT 1.5.1)
+  src/attack_approach.cpp     # s78n t25.1: attack approach geometry: arc slots, rings, slot leg, fire trim (MOVEMENT 4.3.2)
 )
 add_library(alamo::tactical_movement ALIAS alamo_tactical_movement)
 target_include_directories(alamo_tactical_movement PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -42,7 +48,7 @@ if("terrain" IN_LIST ALAMO_ENGINE_MODULES AND EXISTS ${PROJECT_SOURCE_DIR}/engin
 endif()
 
 add_executable(alamo_tactical_movement_tests tests/test_movement.cpp)
-target_link_libraries(alamo_tactical_movement_tests PRIVATE alamo_tactical_movement Threads::Threads)
+target_link_libraries(alamo_tactical_movement_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 # Real-data tests (ALAMO_FOC_DATA): every shipped land / space map through the VFS.
 if("vfs" IN_LIST ALAMO_ENGINE_MODULES AND "terrain" IN_LIST ALAMO_ENGINE_MODULES)
   target_link_libraries(alamo_tactical_movement_tests PRIVATE alamo_vfs)
@@ -52,20 +58,66 @@ add_test(NAME alamo_tactical_movement_tests COMMAND alamo_tactical_movement_test
 set_tests_properties(alamo_tactical_movement_tests PROPERTIES TIMEOUT 900)
 
 # REMAINING_GAPS 4.1-4.7: corridor squeeze, threat mode, special locomotors.
-add_executable(alamo_tactical_movement_gaps_tests tests/test_movement_gaps.cpp)
-target_link_libraries(alamo_tactical_movement_gaps_tests PRIVATE alamo_tactical_movement Threads::Threads)
+add_executable(alamo_tactical_movement_gaps_tests tests/test_movement_gaps.cpp tests/test_movement_gaps_part1.cpp tests/test_movement_gaps_part2.cpp tests/test_movement_gaps_part3.cpp)
+target_link_libraries(alamo_tactical_movement_gaps_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_gaps_tests COMMAND alamo_tactical_movement_gaps_tests)
 set_tests_properties(alamo_tactical_movement_gaps_tests PROPERTIES TIMEOUT 300)
 
+# s78n t20 batch 2: zone validation of the ordered point, the destination check's D / forced pass / try state (MOVEMENT
+# 4.2 step 2, 4.3.1 items 3, 4, 7).
+add_executable(alamo_tactical_movement_b2_tests tests/test_movement_b2.cpp)
+target_link_libraries(alamo_tactical_movement_b2_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_b2_tests COMMAND alamo_tactical_movement_b2_tests)
+set_tests_properties(alamo_tactical_movement_b2_tests PROPERTIES TIMEOUT 300)
+
+# s78n t23 (t20 batch 3): the t21 review follow-ups, the deployed half width and MovingVsMoving for every pair (MOVEMENT
+# 5.3, 5.4.2, 5.4.6).
+add_executable(alamo_tactical_movement_b3_tests tests/test_movement_b3.cpp)
+target_link_libraries(alamo_tactical_movement_b3_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_b3_tests COMMAND alamo_tactical_movement_b3_tests)
+set_tests_properties(alamo_tactical_movement_b3_tests PROPERTIES TIMEOUT 300)
+# s78n t24 (t20 batch 4): TerrainCollision (MOVEMENT §5.4.7)
+add_executable(alamo_tactical_movement_b4_tests tests/test_movement_b4.cpp)
+target_link_libraries(alamo_tactical_movement_b4_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_b4_tests COMMAND alamo_tactical_movement_b4_tests)
+set_tests_properties(alamo_tactical_movement_b4_tests PROPERTIES TIMEOUT 300)
+# s78n t25.1 (t20 batch 5): the attack approach geometry on land (MOVEMENT §4.3.2 items 2-4, 6, 7); s78n t25.2: the attack
+# block in MovementSystem (slots, attack plan, re-plan, solo rule).
+add_executable(alamo_tactical_movement_b5_tests tests/test_movement_b5.cpp)
+target_link_libraries(alamo_tactical_movement_b5_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_b5_tests COMMAND alamo_tactical_movement_b5_tests)
+set_tests_properties(alamo_tactical_movement_b5_tests PROPERTIES TIMEOUT 300)
+# [port: Gabriel 2026-11-13] fleet cohesion (MoveOrder::cohesion_tight): the tight space move's shared speed cap.
+add_executable(alamo_tactical_movement_cohesion_tests tests/test_movement_cohesion.cpp)
+target_link_libraries(alamo_tactical_movement_cohesion_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_cohesion_tests COMMAND alamo_tactical_movement_cohesion_tests)
+set_tests_properties(alamo_tactical_movement_cohesion_tests PROPERTIES TIMEOUT 120)
+# bkm1 (2026-11-12): the retail rules of backlog group bkm1 (formation class, lanes, 3-D brake lengths, secondary facing).
+add_executable(alamo_tactical_movement_bkm_tests tests/test_movement_bkm.cpp)
+target_link_libraries(alamo_tactical_movement_bkm_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
+add_test(NAME alamo_tactical_movement_bkm_tests COMMAND alamo_tactical_movement_bkm_tests)
+set_tests_properties(alamo_tactical_movement_bkm_tests PROPERTIES TIMEOUT 300)
+# s78n t26.1: walking while deployed (MOVEMENT 3.2.1), the move order's skip of deployed manual deployers (6.2).
+add_executable(alamo_tactical_movement_t26_tests tests/test_movement_t26.cpp)
+target_link_libraries(alamo_tactical_movement_t26_tests PRIVATE alamo_tactical_movement alamo_test_support)
+add_test(NAME alamo_tactical_movement_t26_tests COMMAND alamo_tactical_movement_t26_tests)
+set_tests_properties(alamo_tactical_movement_t26_tests PROPERTIES TIMEOUT 120)
+
 # L1 systems: hyperspace departures, engine control, teleport (hyperspace.hpp, MovementSystem::teleport).
 add_executable(alamo_tactical_hyperspace_tests tests/test_hyperspace.cpp)
-target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement)
+target_link_libraries(alamo_tactical_hyperspace_tests PRIVATE alamo_tactical_movement alamo_test_support)
 add_test(NAME alamo_tactical_hyperspace_tests COMMAND alamo_tactical_hyperspace_tests)
 set_tests_properties(alamo_tactical_hyperspace_tests PROPERTIES TIMEOUT 120)
+
+# cu8l t03: the campaign space fleet placement layout (fleet_placement.hpp): lists, grid / ring / row offsets, members.
+add_executable(alamo_tactical_fleet_placement_tests tests/test_fleet_placement.cpp)
+target_link_libraries(alamo_tactical_fleet_placement_tests PRIVATE alamo_tactical_movement alamo_test_support)
+add_test(NAME alamo_tactical_fleet_placement_tests COMMAND alamo_tactical_fleet_placement_tests)
+set_tests_properties(alamo_tactical_fleet_placement_tests PROPERTIES TIMEOUT 60)
 
 # N1 stage 2: save / load mid-battle (MovementSystem, grid stamps, occupancy, collision layer, fighter grids,
 # hyperspace departures, engine control): resumed runs must match the uninterrupted run tick for tick.
 add_executable(alamo_tactical_movement_save_tests tests/test_movement_save.cpp)
-target_link_libraries(alamo_tactical_movement_save_tests PRIVATE alamo_tactical_movement Threads::Threads)
+target_link_libraries(alamo_tactical_movement_save_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_save_tests COMMAND alamo_tactical_movement_save_tests)
 set_tests_properties(alamo_tactical_movement_save_tests PROPERTIES TIMEOUT 600)

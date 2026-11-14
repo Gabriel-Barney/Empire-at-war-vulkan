@@ -2,11 +2,12 @@
 // They act on the StoryModel attached to the VM (attach_story, include/alamo/lua/story_model.hpp);
 // without one, queries return nil/false and commands do nothing (a message is logged).
 // Contracts and messages: docs/re/LUA_API.md "Binding map" (the original's validation strings).
-// Error discipline: vm_internal.hpp (no Lua error raised from here; Call::fail).
+// Error discipline: vm_internal.hpp (no Lua error raised from here; Call::script_error_stop).
 #include <cstdio>
 #include <string>
 
 #include "alamo/lua/object_bridge.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/lua/story_model.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
@@ -22,13 +23,7 @@ const char kStoryKey[] = "alamo.story";
 const char kStoryGroupKey[] = "alamo.story.group";  // q6 t03: the StoryTable (attach_story_table)
 constexpr uint32_t kNone = 0xFFFFFFFFu;
 
-StoryModel* story(lua_State* L) {
-    lua_pushstring(L, kStoryKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    auto* m = static_cast<StoryModel*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    return m;
-}
+StoryModel* story(lua_State* L) { return detail::registry_ptr<StoryModel>(L, kStoryKey); }
 StoryModel* story(Call& c) { return story(c.L); }
 
 uint32_t cls_plot() {
@@ -51,13 +46,7 @@ int push_bool(Call& c, bool b) {
 
 // q6 t03 (STORY.md §2.4): the story manager's plot table - every player's plot set of the VM's game mode
 // (attach_story_table; nullptr = the VM's own model is the whole table).
-StoryTable* story_table(lua_State* L) {
-    lua_pushstring(L, kStoryGroupKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    auto* t = static_cast<StoryTable*>(lua_touserdata(L, -1));
-    lua_pop(L, 1);
-    return t;
-}
+StoryTable* story_table(lua_State* L) { return detail::registry_ptr<StoryTable>(L, kStoryGroupKey); }
 // The model a plot / event wrapper refers to: Ud::reserved = 0 the VM's own model (attach_story), k > 0 the table's
 // model k - 1 (a plot of another player's plot set found by Get_Story_Plot; the same slots as the q6 t03 plot group,
 // so saved wrappers keep their meaning). nullptr when that model is gone.
@@ -103,12 +92,6 @@ StoryEventState& self_event_state(Call& c) {
 }
 
 void no_story(Call& c, const char* what) { c.vm->message(std::string("[story] ") + what + " ignored: no story attached"); }
-
-std::string upper_ascii(std::string_view s) {
-    std::string out(s);
-    for (char& ch : out) ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
-    return out;
-}
 
 // `(int)(n + 0.5)` (C truncation, so -1.7 -> -1; saturating) printed with "%d" (LUA_API.md "StoryEventWrapper dialog and
 // parameter setters" 2d / the shared converter).
@@ -328,12 +311,12 @@ bool convert_value(Call& c, int i, std::string& out) {
         if (!detail::object_alive(*c.vm, *o)) return false;
         const objects::TypeIndex t = representative_type(c, *o);
         if (t == objects::kNone) return false;
-        out = upper_ascii(c.vm->host.types->raw().types().name[t]);
+        out = ascii_upper(c.vm->host.types->raw().types().name[t]);
         return true;
     }
     if (const detail::Ud* t = c.userdata(i, detail::cls_type())) {
         if (!c.vm->host.types || t->value >= c.vm->host.types->raw().type_count()) return false;
-        out = upper_ascii(c.vm->host.types->raw().types().name[static_cast<size_t>(t->value)]);
+        out = ascii_upper(c.vm->host.types->raw().types().name[static_cast<size_t>(t->value)]);
         return true;
     }
     const int lt = lua_type(c.L, c.idx(i));
@@ -407,7 +390,7 @@ int m_event_set_reward_type(Call& c) {
     if (!self_event_valid(c)) return 0;
     if (c.nargs != 1) return c.script_error_stop("%sinvalid number of parameters. Expected 1, got %d.", kWho, c.nargs);
     if (!c.is_string(1)) return c.script_error_stop("%sinvalid type for parameter 1. Expected string.", kWho);
-    self_event(c).reward_type = upper_ascii(c.string(1));
+    self_event(c).reward_type = ascii_upper(c.string(1));
     ++self_event_state(c).lua_edits;
     return 0;
 }
@@ -523,25 +506,13 @@ constexpr detail::ImplEntry kImpl[] = {
 std::span<const detail::ImplEntry> detail::impl_story() { return kImpl; }
 
 void attach_story(LuaVm& vm, StoryModel* model) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kStoryKey);
-    if (model)
-        lua_pushlightuserdata(L, model);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kStoryKey, model);
 }
 
 StoryModel* attached_story(LuaVm& vm) { return story(vm.state()); }
 
 void attach_story_table(LuaVm& vm, StoryTable* table) {
-    lua_State* L = vm.state();
-    lua_pushstring(L, kStoryGroupKey);
-    if (table)
-        lua_pushlightuserdata(L, table);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(vm.state(), kStoryGroupKey, table);
 }
 
 }  // namespace alamo::lua

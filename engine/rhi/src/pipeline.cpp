@@ -1,19 +1,16 @@
 #include "alamo/rhi/pipeline.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <functional>
 #include <iterator>
 #include <string>
 #include <system_error>
-#include <thread>
 
-#include <io.h>
-#include <process.h>
-
+#include "alamo/core/atomic_file.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
+#include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/rhi/context.hpp"
 
@@ -60,15 +57,6 @@ namespace {
 constexpr uint8_t kCacheMagic[4] = {'A', 'L', 'P', 'C'};
 constexpr uint32_t kCacheVersion = 1;
 
-uint64_t fnv1a64(std::span<const uint8_t> bytes) {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (uint8_t b : bytes) {
-        h ^= b;
-        h *= 0x100000001b3ull;
-    }
-    return h;
-}
-
 void put_le(std::vector<uint8_t>& out, uint64_t v, int bytes) {
     for (int i = 0; i < bytes; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i)));
 }
@@ -79,28 +67,6 @@ uint64_t get_le(std::span<const uint8_t> in, size_t off, int bytes) {
     return v;
 }
 
-// Writes `data` to `path` and flushes it to the device before returning (fflush + _commit).
-bool write_file_synced(const std::filesystem::path& path, std::span<const uint8_t> data) {
-    std::FILE* f = nullptr;
-    if (_wfopen_s(&f, path.c_str(), L"wb") != 0) f = nullptr;
-    if (!f) return false;
-    bool ok = data.empty() || std::fwrite(data.data(), 1, data.size(), f) == data.size();
-    ok = std::fflush(f) == 0 && ok;
-    ok = _commit(_fileno(f)) == 0 && ok;
-    ok = std::fclose(f) == 0 && ok;
-    return ok;
-}
-
-std::filesystem::path unique_temp_path(const std::filesystem::path& file) {
-    static std::atomic<uint64_t> counter{0};
-    const long long pid = _getpid();
-    const size_t tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
-    std::filesystem::path tmp = file;
-    tmp += "." + std::to_string(pid) + "." + std::to_string(tid) + "." +
-           std::to_string(counter.fetch_add(1, std::memory_order_relaxed)) + ".tmp";
-    return tmp;
-}
-
 }  // namespace
 
 std::vector<uint8_t> pipeline_cache_wrap(std::span<const uint8_t> driver_blob) {
@@ -109,7 +75,7 @@ std::vector<uint8_t> pipeline_cache_wrap(std::span<const uint8_t> driver_blob) {
     out.insert(out.end(), std::begin(kCacheMagic), std::end(kCacheMagic));
     put_le(out, kCacheVersion, 4);
     put_le(out, driver_blob.size(), 8);
-    put_le(out, fnv1a64(driver_blob), 8);
+    put_le(out, alamo::fnv1a64(driver_blob), 8);
     out.insert(out.end(), driver_blob.begin(), driver_blob.end());
     return out;
 }
@@ -121,7 +87,7 @@ bool pipeline_cache_unwrap(std::span<const uint8_t> file, std::span<const uint8_
     const uint64_t size = get_le(file, 8, 8);
     if (size != file.size() - kPipelineCacheFileHeader) return false;  // truncated or trailing bytes
     const std::span<const uint8_t> body = file.subspan(kPipelineCacheFileHeader);
-    if (get_le(file, 16, 8) != fnv1a64(body)) return false;
+    if (get_le(file, 16, 8) != alamo::fnv1a64(body)) return false;
     blob = body;
     return true;
 }
@@ -183,25 +149,20 @@ bool PipelineCache::save() const {
     std::error_code ec;
     const std::filesystem::path target = long_path(file_);  // "\\?\" form on Windows: no MAX_PATH limit
     if (target.has_parent_path()) std::filesystem::create_directories(target.parent_path(), ec);
-    const std::filesystem::path tmp = unique_temp_path(target);
-    if (!write_file_synced(tmp, wrapped)) {
-        log::warnf("rhi", "pipeline cache save failed: cannot write %s", path_to_utf8(tmp).c_str());
-        std::filesystem::remove(tmp, ec);
+    // The temp file is flushed to the device before the rename. A concurrent save, or a foreign reader
+    // without FILE_SHARE_DELETE, may hold the target briefly (Windows). Bounded: 10 attempts, back-off
+    // 1, 2, 4, ... capped at 50 ms (~0.26 s worst case). A lost race stays a failed save, as before.
+    AtomicWriteOptions opt;
+    opt.attempts = 10;
+    opt.max_backoff_ms = 50;
+    opt.flush_to_disk = true;
+    const AtomicWriteResult r = write_file_atomic(target, wrapped, opt);
+    if (r == AtomicWriteResult::WriteFailed) {
+        log::warnf("rhi", "pipeline cache save failed: cannot write a temp file beside %s", path_to_utf8(target).c_str());
         return false;
     }
-    // A concurrent save, or a foreign reader without FILE_SHARE_DELETE, may hold the target briefly
-    // (Windows). Bounded: 10 attempts, back-off 1, 2, 4, ... capped at 50 ms (~0.26 s worst case).
-    constexpr int kRenameAttempts = 10;
-    for (int attempt = 0; attempt < kRenameAttempts; ++attempt) {
-        std::filesystem::rename(tmp, target, ec);
-        if (!ec) break;
-        if (attempt + 1 < kRenameAttempts)
-            std::this_thread::sleep_for(std::chrono::milliseconds(std::min(1 << attempt, 50)));
-    }
-    if (ec) {
-        log::warnf("rhi", "pipeline cache save failed: %s", ec.message().c_str());
-        std::error_code ec2;
-        std::filesystem::remove(tmp, ec2);
+    if (r == AtomicWriteResult::ReplaceFailed) {
+        log::warnf("rhi", "pipeline cache save failed: cannot replace %s", path_to_utf8(target).c_str());
         return false;
     }
     return true;

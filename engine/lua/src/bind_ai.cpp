@@ -1,7 +1,7 @@
 // Binding family: AI plans and free stores (roadmap A2; alamo/lua/ai_bridge.hpp). Every binding forwards to
 // the AiScriptHost attached to the VM (engine/ai implements it); without a host the bindings answer as an
 // empty AI would (no task force, nil statuses). Argument checks follow the vm_internal.hpp error discipline
-// (Call::fail, never lua_error). Validation strings are the port's own unless LUA_API.md gives one.
+// (Call::script_error_stop, never lua_error). Validation strings are the port's own unless LUA_API.md gives one.
 //
 // Methods NOT in the RE binding table (intentional, counted as "extra" by binding_coverage):
 //   * Is_Pool_Safe -> false on TaskForceClass, AIBlockingStatus, AITargetLocationWrapper, BudgetWrapper,
@@ -30,13 +30,7 @@ const char kHostKey[] = "alamo.ai.host";
 const char kScriptKey[] = "alamo.ai.script";
 const char kMetaKey[] = "alamo.meta";  // bindings.cpp: the shared wrapper metatable
 
-AiScriptHost* host_of(lua_State* L) {
-    lua_pushstring(L, kHostKey);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    void* p = lua_type(L, -1) == LUA_TLIGHTUSERDATA ? lua_touserdata(L, -1) : nullptr;
-    lua_pop(L, 1);
-    return static_cast<AiScriptHost*>(p);
-}
+AiScriptHost* host_of(lua_State* L) { return detail::registry_ptr<AiScriptHost>(L, kHostKey); }
 
 int32_t script_of(lua_State* L) {
     lua_pushstring(L, kScriptKey);
@@ -69,10 +63,7 @@ uint32_t cls_status() {
     static const uint32_t c = cls("AIBlockingStatus");
     return c;
 }
-uint32_t cls_target() {
-    static const uint32_t c = cls("AITargetLocationWrapper");
-    return c;
-}
+using detail::cls_target;
 uint32_t cls_budget() {
     static const uint32_t c = cls("BudgetWrapper");
     return c;
@@ -94,10 +85,7 @@ uint32_t cls_tf(AiTaskForceKind k) {
         default: return generic;
     }
 }
-bool is_tf_class(uint32_t c) {
-    return c == cls_tf(AiTaskForceKind::Generic) || c == cls_tf(AiTaskForceKind::Galactic) ||
-           c == cls_tf(AiTaskForceKind::Space) || c == cls_tf(AiTaskForceKind::Land);
-}
+using detail::is_task_force_class;
 
 // Key spaces for push_cached_userdata are per class; ids are non-negative.
 void push_tf(lua_State* L, int32_t tf, AiTaskForceKind kind) {
@@ -144,29 +132,7 @@ bool is_bool(const Call& c, int i) { return c.has(i) && lua_type(c.L, c.idx(i)) 
 bool to_bool(const Call& c, int i) { return lua_toboolean(c.L, c.idx(i)) != 0; }
 
 // Any wrapper argument -> AiArg.
-AiArg arg_of(lua_State* L, LuaVm::Impl& vm, int index) {
-    AiArg a;
-    if (lua_type(L, index) != LUA_TUSERDATA) return a;
-    const auto* ud = static_cast<const Ud*>(lua_touserdata(L, index));
-    if (!ud) return a;
-    if (ud->cls == detail::cls_game_object()) {
-        if (detail::object_alive(vm, *ud)) {
-            a.present = true;
-            a.object = detail::object_handle(*ud);
-        }
-    } else if (ud->cls == cls_target()) {
-        a.present = true;
-        a.target = ud->id;
-    } else if (is_tf_class(ud->cls)) {
-        a.present = true;
-        a.task_force = ud->id;
-    } else if (ud->cls == detail::cls_player()) {
-        a.present = true;
-        a.player = ud->id;
-    }
-    return a;
-}
-AiArg arg(Call& c, int i) { return c.has(i) ? arg_of(c.L, *c.vm, c.idx(i)) : AiArg{}; }
+AiArg arg(Call& c, int i) { return detail::ai_arg(c, i); }
 
 objects::ObjectHandle object_arg(Call& c, int i) {
     const AiArg a = arg(c, i);
@@ -200,18 +166,27 @@ int m_tf_unblock_goal_proposal(Call& c) {
     if (AiScriptHost* h = host_of(c.L)) h->tf_set_flag(c.self->id, AiTfFlag::BlockGoalProposal, false);
     return 0;
 }
+// 0x5fe240 (a2m t05, A2M_T04_RE_ANSWERS Q4.1) [H]: a Lua nil counts as a present argument. Argument 1, when present,
+// must be a game object or an AI target that resolves to a planet; anything else (nil, a bool, a number, a non-planet
+// object) is the script error below: no status, no build tasks, the script stops. Argument 2, when present, must be a
+// bool (the sync flag; the exe's message has the "Prioduce" typo). So argument 1 cannot be skipped.
 int m_tf_produce_force(Call& c) {
-    AiScriptHost* h = host_of(c.L);
-    if (!h) return push_nil(c);
+    static constexpr const char* kNotPlanet = "TaskForceClass::Produce_Force -- Expected a planet object for parameter 1";
     AiArg stage;
     bool sync = false;
-    for (int i = 1; i <= c.nargs; ++i) {
-        if (is_bool(c, i))
-            sync = to_bool(c, i);
-        else if (lua_type(c.L, c.idx(i)) == LUA_TUSERDATA)
-            stage = arg(c, i);
+    if (c.nargs >= 1) {
+        stage = arg(c, 1);
+        if (!stage.present || (stage.target < 0 && !stage.object)) return c.script_error_stop(kNotPlanet);
     }
-    return push_status(c, h->tf_produce_force(c.self->id, stage, sync));
+    if (c.nargs >= 2) {
+        if (!is_bool(c, 2)) return c.script_error_stop("TaskForceClass::Prioduce_Force -- invalid type for parameter 2.  Expected bool");
+        sync = to_bool(c, 2);
+    }
+    AiScriptHost* h = host_of(c.L);
+    if (!h) return push_nil(c);
+    const int32_t status = h->tf_produce_force(c.self->id, stage, sync);
+    if (status == kAiNotAPlanet) return c.script_error_stop(kNotPlanet);
+    return push_status(c, status);
 }
 int m_tf_get_stage(Call& c) {
     AiScriptHost* h = host_of(c.L);
@@ -610,6 +585,34 @@ bool push_global_function(lua_State* L, std::string_view name) {
 
 std::span<const detail::ImplEntry> detail::impl_ai() { return kImpl; }
 
+bool detail::is_task_force_class(uint32_t c) {
+    return c == cls_tf(AiTaskForceKind::Generic) || c == cls_tf(AiTaskForceKind::Galactic) ||
+           c == cls_tf(AiTaskForceKind::Space) || c == cls_tf(AiTaskForceKind::Land);
+}
+
+AiArg detail::ai_arg(Call& c, int i) {
+    AiArg a;
+    if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return a;
+    const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
+    if (!ud) return a;
+    if (ud->cls == cls_game_object()) {
+        if (object_alive(*c.vm, *ud)) {
+            a.present = true;
+            a.object = object_handle(*ud);
+        }
+    } else if (ud->cls == cls_target()) {
+        a.present = true;
+        a.target = ud->id;
+    } else if (is_task_force_class(ud->cls)) {
+        a.present = true;
+        a.task_force = ud->id;
+    } else if (ud->cls == cls_player()) {
+        a.present = true;
+        a.player = ud->id;
+    }
+    return a;
+}
+
 // L1P4_LUA_GAPS 1.1 (vm_internal.hpp). Error texts as the original's Activate_Ability_Galactic.
 bool detail::galactic_ability_type_arg(Call& c, const char* who, uint32_t& filter) {
     filter = objects::kNone;
@@ -644,7 +647,7 @@ int detail::ai_wrapper_object(Call& c, int i, objects::ObjectHandle& out) {
     out = {};
     if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return 0;
     const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
-    if (!ud || (ud->cls != cls_target() && !is_tf_class(ud->cls))) return 0;
+    if (!ud || (ud->cls != cls_target() && !is_task_force_class(ud->cls))) return 0;
     AiScriptHost* h = host_of(c.L);
     const objects::ObjectStore* st = c.vm->host.store;
     if (!h || !st) return 1;
@@ -701,7 +704,7 @@ bool detail::ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHand
     out.clear();
     if (!c.has(i) || lua_type(c.L, c.idx(i)) != LUA_TUSERDATA) return false;
     const auto* ud = static_cast<const Ud*>(lua_touserdata(c.L, c.idx(i)));
-    if (!ud || !is_tf_class(ud->cls)) return false;
+    if (!ud || !is_task_force_class(ud->cls)) return false;
     AiScriptHost* h = host_of(c.L);
     const objects::ObjectStore* st = c.vm->host.store;
     if (!h || !st) return true;
@@ -714,12 +717,7 @@ bool detail::ai_task_force_units(Call& c, int i, std::vector<objects::ObjectHand
 
 void attach_ai_host(LuaVm& vm, AiScriptHost* host, int32_t script_id) {
     lua_State* L = vm.state();
-    lua_pushstring(L, kHostKey);
-    if (host)
-        lua_pushlightuserdata(L, host);
-    else
-        lua_pushnil(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
+    detail::set_registry_ptr(L, kHostKey, host);
     lua_pushstring(L, kScriptKey);
     lua_pushnumber(L, script_id);
     lua_rawset(L, LUA_REGISTRYINDEX);
@@ -873,6 +871,32 @@ bool call_global_number(LuaVm& vm, std::string_view name, const std::vector<AiEv
         if (err) *err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "error";
     } else if (lua_type(L, -1) == LUA_TNUMBER) {  // anything else (nil, boolean) fails (AI_GALACTIC_TOKENS §6b)
         out = lua_tonumber(L, -1);
+        ok = true;
+    }
+    lua_settop(L, top);
+    return ok;
+}
+
+bool call_global_value(LuaVm& vm, std::string_view name, const std::vector<AiEventArg>& args, double& number, std::string& text,
+                       bool& is_number, std::string* err) {
+    lua_State* L = vm.state();
+    LuaVm::Impl* impl = impl_of(L);
+    if (!impl) return false;
+    const int top = lua_gettop(L);
+    if (!push_global_function(L, name)) return false;
+    for (const AiEventArg& a : args) push_arg(L, *impl, a);
+    const detail::ExecZone zone;  // OPT2 t08: lua.exec
+    const int st = lua_pcall(L, static_cast<int>(args.size()), 1, 0);
+    bool ok = false;
+    if (st != 0) {
+        if (err) *err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "error";
+    } else if (lua_type(L, -1) == LUA_TNUMBER) {
+        number = lua_tonumber(L, -1);
+        is_number = true;
+        ok = true;
+    } else if (lua_type(L, -1) == LUA_TSTRING) {
+        text.assign(lua_tostring(L, -1), lua_strlen(L, -1));
+        is_number = false;
         ok = true;
     }
     lua_settop(L, top);

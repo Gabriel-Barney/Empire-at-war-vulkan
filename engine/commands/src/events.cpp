@@ -38,18 +38,6 @@ void EventBus::unsubscribe(SubscriberId id) {
     subs_.erase(std::remove_if(subs_.begin(), subs_.end(), [id](const Sub& s) { return s.id == id; }), subs_.end());
 }
 
-void EventBus::open_lanes(size_t n) {
-    lanes_.clear();
-    lanes_.resize(n);
-}
-
-void EventBus::merge_lanes() {
-    for (auto& l : lanes_) {
-        for (auto& e : l.events_) queue_.events_.push_back(std::move(e));
-    }
-    lanes_.clear();
-}
-
 // N1 layout (v1): u32 version | u32 n, per event: u8 kind (0 CommandResult, 1 SimEvent), then
 //   CommandResult: u64 tick | u8 player | u8 source | u32 sequence | u64 issue_tick | u64 scheduled_tick
 //                  | u16 type | u16 reason

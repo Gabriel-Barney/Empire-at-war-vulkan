@@ -4,6 +4,17 @@
 namespace alamo_game_app {
 
 // ------------------------------------------------------------------------------------------------ render
+void App::resize_ui() {
+    ui_.resize(win_.width(), win_.height(), ui_scale_);
+    // The side panels (hero / market / slice / sabotage / corruption / hack) follow the same canvas; their shells re-anchor.
+    const float s = static_cast<float>(ui_scale_) / 100.0f;
+    for (ui::HudPanel* p : panels()) {
+        p->set_ui_scale(s);
+        p->resize(win_.width(), win_.height());
+        if (panel_shells_ok_) panel_shells_.apply(p->layout());
+    }
+}
+
 bool App::present_settled() const {
     if (screen_ == Screen::Galactic) return gview_.settled() && draw_stats_.pending_pipeline == 0 && draw_stats_.translation_pending == 0;
     if (screen_ == Screen::Battle || screen_ == Screen::BattleLoad || (screen_ == Screen::Menu && demo_session() && bview_.active()))
@@ -48,16 +59,27 @@ bool App::render_frame() {
     bool ok = true;
     draw_stats_ = {};
     const bool galactic = screen_ == Screen::Galactic && gview_.attached();
-    const bool battle = (screen_ == Screen::Battle || screen_ == Screen::BattleLoad || (screen_ == Screen::Menu && demo_session())) && bview_.active();
-    const int world_view = galactic ? 1 : battle ? 2 : 0;
+    const bool battle_view = (screen_ == Screen::Battle || screen_ == Screen::BattleLoad || (screen_ == Screen::Menu && demo_session())) && bview_.active();
+    const int world_view = galactic ? 1 : battle_view ? 2 : 0;
     if (world_view != world_view_) gpu_.renderer.reset_taa_history();
     world_view_ = world_view;
-    apply_aa_options(gview_.ropt, video_profile_.anti_alias);  // the Anti-Aliasing list (t11)
+    // the Anti-Aliasing list (t11; one mode since 2026-11-13) and the Upscaler / Upscaler Quality lists (2026-11-13)
+    apply_aa_options(gview_.ropt, video_profile_.anti_alias, video_profile_.upscaler, video_profile_.upscale_quality);
     bview_.ropt.taa = gview_.ropt.taa;
     bview_.ropt.taa_weight = gview_.ropt.taa_weight;
+    bview_.ropt.upscaler = gview_.ropt.upscaler;  // [port] the Upscaler list
+    bview_.ropt.upscale_quality = gview_.ropt.upscale_quality;
+    {
+        const float ms = fsr_last_s_ >= 0.0 && now_s_ >= fsr_last_s_ ? static_cast<float>((now_s_ - fsr_last_s_) * 1000.0) : 0.0f;
+        fsr_last_s_ = now_s_;
+        gview_.ropt.frame_ms = bview_.ropt.frame_ms = std::min(ms, 100.0f);  // FSR's frame time (0: the renderer's 16.6 ms)
+    }
+    bview_.ropt.smaa = gview_.ropt.smaa;
+    bview_.ropt.msaa = gview_.ropt.msaa;
     bview_.ropt.ambient_occlusion = adv_video_.ambient_occlusion;  // land battles only (render skips space / galactic)
     // The original's detail options on top of each view's own frame options (copies: the views keep theirs).
     render::RecordOptions gro = gview_.ropt, bro = bview_.ropt;
+    gro.taa_provisional = bro.taa_provisional = bench_taa_provisional();  // BM2b: an uncounted frame leaves the TAA history
     if (detail_options_) {
         apply_detail_options(gro, adv_video_);
         apply_detail_options(bro, adv_video_);
@@ -66,6 +88,8 @@ bool App::render_frame() {
         gview_.set_particle_detail(particle_detail(adv_video_.particle));
         bview_.set_particle_detail(particle_detail(adv_video_.particle));
     }
+    // [port: Gabriel] Render Scale (Advanced video): the share of the window's pixels the galactic / battle scene is drawn with.
+    gro.render_scale = bro.render_scale = render_scale_value(adv_video_.render_scale);
     gro.gpu_timer = bro.gpu_timer = bench_gpu_timer();  // bm2: the renderer's scopes (null outside a benchmark)
     if (galactic) {
         ui::CameraParams cp = gview_.camera_params(w, h);
@@ -76,11 +100,13 @@ bool App::render_frame() {
         gview_.use_scene(gpu_);
         ok = gpu_.renderer.render(*f, cmd, pt, ui::to_view_matrices(cp, w, h), gview_.main, render::DrawMode::Lit, gro, &draw_stats_,
                                   nullptr, gview_.background);
-    } else if (battle) {
+    } else if (battle_view) {
         // story t13: no selection circles while a linked battle's P11 input block holds (UI.md §1.3, flag 0x140a28c91).
         if (screen_ == Screen::Battle && !cinematic_hides_hud() && !linked_ui_.input_blocked())
             bview_.set_selection_blobs(ui_.tactical_hud.selection_blobs());  // last HUD build's circles (one frame behind)
         else bview_.set_selection_blobs({});  // load screen / attract demo: no selection
+        // cu9g t03 bombing-run blob; ui3 t04: the reinforcement drop preview takes the same slot (one pick at a time).
+        bview_.set_bombing_blob(screen_ != Screen::Battle ? std::nullopt : bombing_targeting_ ? bombing_blob_ : reinforce_blob_);
         const auto prep0 = Clock::now();
         bview_.prepare(gpu_, render_alpha());
         ft_.prepare += static_cast<float>(ms_since(prep0));
@@ -131,7 +157,7 @@ bool App::render_frame() {
             shells = &ui_.galactic_shells;
             layout = &ui_.galactic_hud.layout();
         }
-    } else if (screen_ == Screen::Battle && battle && !cinematic_hides_hud()) {  // refixf t05: no HUD during the cinematic
+    } else if (screen_ == Screen::Battle && battle_view && !cinematic_hides_hud()) {  // refixf t05: no HUD during the cinematic
         build_tactical_hud();
         hud_list = ui_.tactical_hud.draw_list();
         canvas = &ui_.tactical_hud.canvas();
@@ -159,11 +185,11 @@ bool App::render_frame() {
     // Panels (hero roster, black market, sabotage, corruption, hack) on top of the HUD list; their shells draw at the
     // HUD's ShellModels step.
     std::vector<ui::HudDrawList> panel_lists;
-    const bool battle_hud = screen_ == Screen::Battle && battle && !cinematic_hides_hud();
+    const bool battle_hud = screen_ == Screen::Battle && battle_view && !cinematic_hides_hud();
     if (galactic || battle_hud) build_panels(panel_lists);
     for (const ui::HudDrawList& pl : panel_lists) merge_lists(hud_list, pl);
     if ((galactic || battle_hud) && !bench_active()) build_encyclopedia(hud_list, *canvas);  // BM2a: no tooltips
-    if (battle) draw_letterbox(dialogs, *canvas, w, h);  // refixf t05: cinematic letterbox, over the world, under the dialogs
+    if (battle_view) draw_letterbox(dialogs, *canvas, w, h);  // refixf t05: cinematic letterbox, over the world, under the dialogs
     // OI host: the attract demo world under the menu. GuiManager's backdrop paints an opaque black fill under the
     // MenuBack_overlay quad, which would hide the world: left out while the demo is drawn [port: until engine/ui draws the
     // overlay alone - stretched to the window, straight alpha - over a world, MAIN_MENU_BACKGROUND.md §6.4].
@@ -171,7 +197,7 @@ bool App::render_frame() {
     // 86 % transparent) stays over the demo for as long as the menu shows: one quad stretched to the window, straight
     // alpha, under the dialogs, without the backdrop's black fill.
     std::string backdrop;
-    if (battle && screen_ == Screen::Menu) {
+    if (battle_view && screen_ == Screen::Menu) {
         backdrop = ui_.gui.backdrop();
         ui_.gui.set_backdrop({});
         if (const ui::GuiImage img = ui_.gui.image(backdrop); img.valid) {
@@ -206,7 +232,7 @@ bool App::render_frame() {
         }
     }
     // Playtest QA D1: the end-of-battle hold ends in a fade to black over its last 2 s [port]
-    if (const sim::TacticalBattle* hb = session_ ? session_->battle() : nullptr; hb && hb->end_hold_active()) {
+    if (const sim::TacticalBattle* hb = battle(); hb && hb->end_hold_active()) {
         const float fade = 1.0f - std::min(static_cast<float>(hb->end_hold_frames_left()) / 60.0f, 1.0f);
         ui::HudQuad q;
         q.min = canvas->pixel_to_canvas(0.0f, static_cast<float>(h));
@@ -215,6 +241,8 @@ bool App::render_frame() {
         dialogs.add(ui::kHudLayers - 1, ui::HudList::Alpha, q);
     }
     info_.build_overlay(dialogs);  // data-chart lines over IDC_DATA_CHART_IMAGE
+    if (credits_.active() && !credits_.build(dialogs, *ui_.fonts, *canvas, now_s_)) open_main_menu();  // ui1 t03: ended
+    if (rename_.active()) rename_.build(dialogs, *ui_.fonts, *canvas, now_s_);  // [port] fleet / ship rename prompt
     if (overlay_.shown()) {  // OPT1 t07: the frame-time overlay, top layer of the dialogs list (under the cursor)
         overlay_.read_ticks();
         overlay_.build(dialogs, *canvas, *ui_.fonts);
@@ -357,12 +385,13 @@ void App::frame() {
     const double now = bench_active() ? bench_now() : script_.empty() ? ms_since(t0_) / 1000.0 : static_cast<double>(frames_) / 30.0;
     dt_ = static_cast<float>(std::clamp(now - now_s_, 0.0, 0.1));
     now_s_ = now;
+    if (win_.take_activation_changed()) on_activation_changed();  // [port] alt-tab out of / back into Fullscreen
     if (win_.take_resized() && win_.width() > 0 && win_.height() > 0) {
         gpu_.ring.wait_idle();
         sc_.recreate(win_.width(), win_.height());
         targets_.destroy(gpu_.alloc);
         targets_.create(gpu_.alloc, gpu_.ring.frames_in_flight(), win_.width(), win_.height());
-        ui_.resize(win_.width(), win_.height());
+        resize_ui();
     }
     // 1. Input (script frames replace the window in smoke runs).
     ui::InputFrame raw;
@@ -409,6 +438,21 @@ void App::frame() {
     cinematic_input(raw);  // refixf t05: the cinematic controller takes the mouse first (TSW_PLANET_DESTROY.md §11.2)
     std::u32string typed = printable(win_.take_text());
     if (bench_active()) typed.clear();
+    // [port: Gabriel] The fleet / ship rename prompt takes the keyboard while open (typed text, Backspace, Enter, Esc): no
+    // key reaches the camera, the hotkeys, the dialogs or the pause menu. It closes when the galactic screen does.
+    if (rename_.active()) {
+        if (screen_ != Screen::Galactic || !session_ || ui_.gui.has_focus()) {
+            rename_.close();
+        } else {
+            const ui::RenamePrompt::Result r =
+                rename_.update(typed, raw.keys_pressed.test(ui::vk::kBack), raw.keys_pressed.test(ui::vk::kReturn),
+                               raw.keys_pressed.test(ui::vk::kEscape));
+            if (r == ui::RenamePrompt::Result::Submit) submit(commands::rename_object_event(rename_.object(), rename_.utf8()), false);
+            typed.clear();
+            raw.keys_pressed = {};
+            raw.keys_down = {};
+        }
+    }
     // OI host: attract demo (idle clock, idle pause, map cycle); input reaches the menus as usual.
     attract_step(raw);
     // 2. Routing: overlay -> dialogs -> HUD -> world.
@@ -442,10 +486,17 @@ void App::frame() {
     router_.route(raw, hooks, routed_);
     target_input_.update(raw);
     gui_events_.clear();
+    // ui1 t03 [port]: a click or Esc / Space / Enter ends the credits roll and brings the main menu back.
+    if (credits_.active() && (input_.button(ui::Button::Left).click || input_.button(ui::Button::Right).click ||
+                              input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace) || input_.key_pressed(0x0D))) {
+        credits_.stop();
+        open_main_menu();
+    }
     ui_.gui.update(raw, routed_, now_s_, gui_events_, typed);
     std::vector<ui::MenuAction> acts;
     ui_.front.update(gui_events_, raw, acts);
     handle_menu_actions(acts);
+    poll_mod_check();  // modc t08: a finished mod load report goes to the picker
     {  // in-game screens: battle end, retreat, planet info, buy units, story, holocron (P4)
         std::vector<ui::ScreenAction> sacts;
         std::vector<commands::EventData> scmds;
@@ -465,10 +516,23 @@ void App::frame() {
     }
     input_.update(routed_.world);
     if (screen_ == Screen::Movie) movie_step();
-    if (session_ && !paused_ && (screen_ == Screen::Galactic || screen_ == Screen::Battle) && routed_.keys_to_world &&
-        input_.key_pressed(ui::vk::kEscape) && script_.empty() && !(screen_ == Screen::Battle && targeting_.active())) {
-        paused_ = true;  // (Esc during a targeted-ability pick only cancels the pick: battle_input)
-        ui_.front.show_pause_menu();
+    // bkc1 t01 (BKC1_RE_ANSWERS Q1 step 2): an in-game full-screen Bink takes the key first: Esc or Space stops it
+    // unless the movie is Cannot_Skip, and neither the pause menu nor Story_Handle_Esc sees that Esc.
+    const bool movie_key = session_ && !paused_ && screen_ != Screen::Movie && full_movie_.playing() &&
+                           (input_.key_pressed(ui::vk::kEscape) || input_.key_pressed(ui::vk::kSpace));
+    if (movie_key && !full_movie_.cannot_skip()) {
+        story_ui_.movie_done(full_movie_.name());  // as a movie that ends by itself (STORY_MOVIE_DONE)
+        full_movie_.stop(audio_);
+    }
+    if (!movie_key && session_ && !paused_ && (screen_ == Screen::Galactic || screen_ == Screen::Battle) && routed_.keys_to_world &&
+        input_.key_pressed(ui::vk::kEscape) && script_.empty() &&
+        !(screen_ == Screen::Battle && (targeting_.active() || reinforce_unit_ != 0 || bombing_targeting_ || beacon_pick_))) {
+        // bkc1 t01 (BKC1_RE_ANSWERS Q1): with the story's cinematic camera on, Esc goes to the plots' Story_Handle_Esc
+        // and consumes the key (no pause menu); otherwise it opens the pause menu.
+        if (!session_->story_esc()) {
+            paused_ = true;  // (Esc during a targeted-ability / reinforcement / bombing-run / beacon pick only cancels the pick: battle_input)
+            ui_.front.show_pause_menu();
+        }
     }
     // MAIN_LOOP.md §1.5: the pause menu and the full-screen dialogs it opens (options and their pages, save / load, quit
     // confirm) set the tactical pause in single player - no ticks while any of them is open, whatever opened it.
@@ -565,6 +629,7 @@ bool App::crc_check() {
         std::fprintf(stderr, "crc check: no session\n");
         return false;
     }
+    session_->host().capture_crc_now();  // sp2: both logs end with the current tick (checkpoint cadence)
     const CrcLog& on = session_->host().crc_log();
     const uint64_t ticks = session_->ticks();
     CrcLog off;
@@ -577,6 +642,7 @@ bool App::crc_check() {
             return false;
         }
         for (uint64_t i = 0; i < ticks; ++i) replay->tick();
+        replay->host().capture_crc_now();
         off = replay->host().crc_log();
     } else {
         jobs::JobSystem js(jobs::JobSystemConfig{opt_.workers});
@@ -587,6 +653,7 @@ bool App::crc_check() {
             return false;
         }
         for (uint64_t i = 0; i < ticks; ++i) replay.tick();
+        replay.host().capture_crc_now();
         off = replay.host().crc_log();
     }
     if (!opt_.png_dir.empty() && !opt_.smoke.empty()) {  // the run's CRC log and command stream, for cross-build comparisons

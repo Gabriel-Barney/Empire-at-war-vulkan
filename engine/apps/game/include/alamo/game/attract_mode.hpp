@@ -96,7 +96,6 @@ public:
     size_t map_index() const { return index_; }
     const std::string& map() const;
     double cycle_delay() const;  // of the current map (120 s past the end of the delay list)
-    double map_started() const { return started_at_; }
     uint64_t starts() const { return starts_; }
 
 private:

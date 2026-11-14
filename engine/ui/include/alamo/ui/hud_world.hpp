@@ -139,7 +139,8 @@ struct WorldHudContext {
     int32_t local_player = 0;
     std::function<bool(int32_t owner)> hostile;          // default: owner >= 0 && owner != local_player
     // Faction default selection material (Faction XML Land_ / Space_Mode_Selection_Blob_Material_Name; heroes
-    // Selection_<faction>_Hero) for an owner. Default [port]: "Selection_Empire_Land" / "Selection_Empire_Space".
+    // Selection_<faction>_Hero) for an owner. Null [port]: no material name (modc t20: no built-in faction name; the
+    // land blob then takes the material table's first entry, the space blob model does not read it).
     std::function<std::string(int32_t owner, bool land, bool hero)> selection_material;
     bool interface_hidden = false;  // byte 0x140b3069b: nothing world-anchored is drawn
     bool targeting_active = false;  // modal targeting controller: selection circles hidden

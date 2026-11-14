@@ -57,7 +57,7 @@ int32_t GoalSystem::exclusion_count(uint32_t goal_type) const {
 }
 
 bool GoalSystem::proposable(uint32_t goal_type) const {
-    if (blocked_) return false;
+    if (proposals_blocked()) return false;
     if (templates_ && templates_->goal_value(goal_type) <= 0) return false;
     return exclusion_count(goal_type) == 0;
 }
@@ -78,9 +78,20 @@ void GoalSystem::service(int64_t now) {
         --countdown_;
         return;
     }
-    if (quota_ == 0) {  // [port] first pass: the cap term
+    if (quota_ == 0) {  // first pass
         const int32_t players = std::max(1, hooks_->quota_players());
-        quota_ = static_cast<uint32_t>(std::max(1, static_cast<int32_t>(20.0f / static_cast<float>(players) + 0.5f)));
+        const auto cap = static_cast<int32_t>(20.0f / static_cast<float>(players) + 0.5f);
+        if (cfg_.retail_cadence) {
+            // Init 0x6ca1f0 (A2M_R2_RE_A §2.1) [H]: +0x188 = S x max(1, T) (the slice's sources, the unfiltered target
+            // list); quota = max(1, min(ceil(+0x188 / (FPS x 5)), cap)); +0x188 is kept, so pass 1 counts on top of it.
+            const uint64_t seed = static_cast<uint64_t>(sources_.size()) * std::max<uint64_t>(1, hooks_->target_count());
+            evals_pass_ += static_cast<uint32_t>(std::min<uint64_t>(seed, 0xFFFFFFFFu - evals_pass_));
+            const auto need = static_cast<int32_t>(std::min<double>(
+                std::ceil(static_cast<double>(evals_pass_) / static_cast<double>(kAiFps * 5)), 1e9));
+            quota_ = static_cast<uint32_t>(std::max(1, std::min(need, cap)));
+        } else {  // [port]: the cap term
+            quota_ = static_cast<uint32_t>(std::max(1, cap));
+        }
     }
     if (!proposal_slice(now)) return;
     if (pending_ready_ >= 0) {  // OPT2 t10: Commit once the last slice's solves are applied
@@ -103,7 +114,7 @@ void GoalSystem::end_pass(int64_t now) {
 }
 
 bool GoalSystem::skip(uint32_t goal_type, int32_t target) {
-    if (find_active(goal_type, target)) return true;
+    if (cfg_.like_sets ? active_like(goal_type, target) : find_active(goal_type, target) != nullptr) return true;
     return hooks_->blocked(goal_type, target);
 }
 
@@ -210,6 +221,10 @@ bool GoalSystem::proposal_slice(int64_t now) {
             }
             ++cursor_source_;
             cursor_target_ = 0;
+            if (cfg_.retail_cadence && used >= quota_) {  // 0x6cb120: the slice ends when its counter reaches the quota
+                flush();
+                return false;
+            }
             continue;
         }
         const uint32_t n = hooks_->target_count();
@@ -226,6 +241,10 @@ bool GoalSystem::proposal_slice(int64_t now) {
             ++used;
             visit(cursor_source_, t);
             ++cursor_target_;
+            if (cfg_.retail_cadence && used >= quota_) {  // 0x6cb120 (see above)
+                flush();
+                return false;
+            }
         }
         ++cursor_source_;
         cursor_target_ = 0;
@@ -240,7 +259,8 @@ bool GoalSystem::proposal_slice(int64_t now) {
 void GoalSystem::accept_tail(Goal g) {
     if (hooks_->uses_budget()) {
         const float at = allowed_time(g);
-        if (!((at <= 0.0f || at >= g.eta) && hooks_->can_fund(g))) {
+        // a2m r3 (A2M_R3_RE_A §1.1) [H]: the accept fund test is the gross P / I test 0x6139f0, not 0x6129c0.
+        if (!((at <= 0.0f || at >= g.eta) && hooks_->can_fund_accept(g))) {
             hooks_->drop_potential_plan(g);
             return;
         }
@@ -303,13 +323,19 @@ Goal* GoalSystem::find_active(uint32_t goal_type, int32_t target) {
     return nullptr;
 }
 
+bool GoalSystem::active_like(uint32_t goal_type, int32_t target) const {
+    for (const auto& cat : active_)
+        for (const Goal& g : cat)
+            if (g.target == target && defs_->goals[g.type].like(goal_type)) return true;
+    return false;
+}
+
 void GoalSystem::block_proposals(uint32_t goal_serial) {
     for (auto& p : proposed_) {
         for (Goal& g : p) hooks_->drop_potential_plan(g);
         p.clear();
     }
     block_list_.push_back(goal_serial);
-    blocked_ = true;
     if (!pending_.empty()) {  // OPT2 t10: proposals made before the block are dropped with the proposed set
         for (Goal& g : pending_) hooks_->drop_potential_plan(g);
         pending_.clear();
@@ -319,7 +345,6 @@ void GoalSystem::block_proposals(uint32_t goal_serial) {
 
 void GoalSystem::unblock_proposals(uint32_t goal_serial) {
     block_list_.erase(std::remove(block_list_.begin(), block_list_.end(), goal_serial), block_list_.end());
-    blocked_ = !block_list_.empty();
 }
 
 Goal* GoalSystem::find_active_by_running(int32_t running) {
@@ -515,11 +540,22 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
     for (Goal& g : props) pool.push_back(std::move(g));
     sort_by_eff(pool);
     uint32_t last_old_type = kAiNone;
+    int32_t last_old_target = -1;
     for (const Goal& g : pool)
-        if (g.state != GoalState::Proposed) last_old_type = g.type;  // the lowest old candidate (pool sorted desc)
+        if (g.state != GoalState::Proposed) {  // the lowest old candidate (pool sorted desc)
+            last_old_type = g.type;
+            last_old_target = g.target;
+        }
     std::vector<uint8_t> taken(pool.size(), 0);
     auto is_kept_or_active = [&](const Goal& g) {
         if (g.state != GoalState::Proposed) return true;
+        if (cfg_.like_sets) {
+            // bkg3 (BKG3_RE_ANSWERS Q4) [H]: 0x721a50 on this Resolve's kept set, then on the active set (this category's
+            // goals were moved out of it above, so that reads the other categories).
+            for (const Goal& k : keep)
+                if (k.target == g.target && defs_->goals[k.type].like(g.type)) return true;
+            return active_like(g.type, g.target);
+        }
         for (const Goal& k : keep)
             if (k.type == g.type && k.target == g.target) return true;
         return false;
@@ -537,7 +573,7 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
         if (hooks_->uses_budget() && !(hooks_->category_credits(category) > 0.0f)) break;
         Goal& g = pool[i];
         const GoalTypeDef& def = defs_->goals[g.type];
-        if (blocked_ || !proposable(g.type)) break;
+        if (proposals_blocked() || !proposable(g.type)) break;
         if (is_kept_or_active(g)) break;
         if (!hooks_->plan_activatable(g) || !fundable(g)) {
             learning_->record_activation(g.type, g.target, false, def.activation_tracking_duration, now);
@@ -547,9 +583,13 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
             learning_->record_activation(g.type, g.target, false, def.activation_tracking_duration, now);
             break;
         }
-        if (last_old_type != kAiNone && is_like(g.type, last_old_type)) break;
+        if (!cfg_.like_sets && last_old_type != kAiNone && is_like(g.type, last_old_type)) break;
         if (keep.size() >= limit) break;
+        // bkg3 (BKG3_RE_ANSWERS Q4, 0x692d30) [H]: the lastOld test runs after the accept: the goal stays, the greedy phase ends
+        // when it and lastOld share the target and lastOld's type is in its like-set.
+        const bool like_last = cfg_.like_sets && last_old_type != kAiNone && g.target == last_old_target && def.like(last_old_type);
         accept_goal(i);
+        if (like_last) break;
     }
     // 6. Weighted random phase.
     while (keep.size() < limit) {
@@ -558,7 +598,7 @@ void GoalSystem::resolve(int32_t category, int64_t now) {
         for (size_t i = 0; i < pool.size(); ++i) {
             if (taken[i]) continue;
             const Goal& g = pool[i];
-            if (blocked_ || !proposable(g.type) || is_kept_or_active(g)) continue;
+            if (proposals_blocked() || !proposable(g.type) || is_kept_or_active(g)) continue;
             if (!fundable(g)) continue;
             const float e = effective_desire(g);
             if (!(e > 0.0f)) continue;

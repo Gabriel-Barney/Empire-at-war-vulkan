@@ -55,6 +55,7 @@
 #include "alamo/render/lighting.hpp"
 #include "alamo/render/lod.hpp"
 #include "alamo/render/pipelines.hpp"
+#include "alamo/render/upscale.hpp"
 #include "alamo/rhi/rendertarget.hpp"
 #include "alamo/rhi/rhi.hpp"
 
@@ -280,6 +281,31 @@ struct RecordOptions {
     bool taa = false;
     float taa_sharpen = 0.25f;  // kTaaDefaultSharpen
     float taa_weight = -1.0f;   // share of the current frame in the resolve (smaller = stronger smoothing); < 0: kTaaCurrentWeight
+    // [port] BM2b: this frame's TAA step (jitter index, history, object motion) may be taken back with
+    // Renderer::discard_taa_frame() before the next render() - the benchmark's fixed-frames mode draws an unsettled frame
+    // again and must not let it into the history. The frame itself is drawn exactly as without the flag.
+    bool taa_provisional = false;
+    // [port: Gabriel 2026-11-13] FSR upscaling (upscale.hpp): Upscaler::Fsr draws the frame at the quality mode's render
+    // size with FSR's jitter and reconstructs the caller's (display) size with AMD FSR 4.1 / 3.1; it replaces TAA for the
+    // frame (`taa` is then ignored) and reuses its object-motion bookkeeping. When FSR cannot run (no runtime, no
+    // support, a failed dispatch) the frame is drawn at full size with TAA instead; DrawStats::fsr says which happened.
+    // fsr_sharpness: FSR's own RCAS sharpening 0..1 (0 = off). frame_ms: time since the last frame (0: 16.6). "fsr" GPU
+    // timer scope. [port: Gabriel 2026-11-13] Upscaler::Xess does the same with Intel XeSS Super Resolution (src/xess.hpp:
+    // XeSS's preset of the same name, its own render size; no sharpening, no frame time); DrawStats::xess, "xess" scope.
+    Upscaler upscaler = Upscaler::None;
+    UpscaleQuality upscale_quality = UpscaleQuality::Quality;
+    float fsr_sharpness = kFsrDefaultSharpness;
+    float frame_ms = 0.0f;
+    // [port] SMAA 1x (src/smaa.hpp; the original has none): after the post chain (after the TAA resolve when both are
+    // on), luma edge detection, blending weights and neighbourhood blending of the scene colour at one fixed quality
+    // (the reference HIGH preset). "smaa" GPU timer scope.
+    bool smaa = false;
+    // [port] MSAA: samples per pixel of the main scene (1 = off, 2, 4 or 8; clamped to what the device supports for the
+    // scene's colour + depth-stencil formats, Renderer::msaa_samples). The scene buckets, the world passes, lasers / beams
+    // and the scene hook draw into a multisampled colour + depth-stencil target that is resolved (colour average, depth
+    // sample 0) before the post chain; the soft-shadow blur and SSAO resolve it first where they read it. Water reflection /
+    // refraction and the sky cube stay single-sample. "msaa" GPU timer scope (the resolves).
+    uint32_t msaa = 1;
     // [port] The video options' Shader / Water detail on top of the frame graph (RENDER.md 1.5, 6; both default to the
     // maximum = nothing changes). Shader detail 0..3: 0 is the fixed-function path - no shadow volumes, no soft shadows (the
     // StencilDarken variant, TERRAIN_WATER_POST.md 4.3) - and it caps Water detail: < 3 -> 1, < 1 -> 0. Water detail 0..2:
@@ -287,7 +313,17 @@ struct RecordOptions {
     // samples its default textures). The port keeps the effects' best technique at every level; only these passes change.
     int shader_detail = 3;
     int water_detail = 2;
+    // [port: Gabriel] Render scale: the share of the output image's PIXELS the scene (world, post chain, TAA) is drawn
+    // with, clamped to kRenderScaleMin..1; 1 = native. Each side is scaled by sqrt(render_scale) (render_scale_extent),
+    // so 0.75 at 3840 x 2160 draws 3326 x 1871. The scene is then stretched to the output with a linear filter (native:
+    // the unchanged point copy). Whatever the caller draws on the output afterwards (HUD, dialogs) stays native.
+    float render_scale = 1.0f;
 };
+
+inline constexpr float kRenderScaleMin = 0.25f;
+// The scene size render() draws for an output of `out` at `scale` (see RecordOptions::render_scale): each side
+// round(side x sqrt(clamp(scale, kRenderScaleMin, 1))), at least 1. 1 (or anything above) returns `out` unchanged.
+VkExtent2D render_scale_extent(VkExtent2D out, float scale);
 
 struct DrawTiming {
     double build_ms = 0;   // cull + LOD + keys (parallel), sort, records, upload to the frame ring
@@ -335,8 +371,11 @@ struct PassTarget;
 struct EngineFrame;  // render_internal.hpp
 class WorldRenderer;  // world.hpp: terrain + water of a land map
 class SsaoPass;       // ssao.hpp: [port] screen-space ambient occlusion
+class SmaaPass;       // src/smaa.hpp: [port] SMAA 1x
 class TaaPass;        // src/taa.hpp: [port] temporal anti-aliasing
 class GammaPass;      // src/gamma.hpp: [port] output gamma
+class FsrPass;        // src/fsr.hpp: [port] FSR upscaling
+class XessPass;       // src/xess.hpp: [port] XeSS upscaling
 struct WorldBindStats;
 
 struct DrawStats {
@@ -365,6 +404,12 @@ struct DrawStats {
     // [port] TAA (RecordOptions::taa): the resolve ran; this frame restarted the history (current frame only).
     bool taa = false, taa_reset = false;
     uint32_t taa_movers = 0;  // draws of the TAA velocity pass (keyed instances that moved since the last frame)
+    // [port] FSR (RecordOptions::upscaler): the frame was drawn at render_width x render_height and upscaled by FSR.
+    bool fsr = false;
+    bool xess = false;  // [port] the same with XeSS (RecordOptions::upscaler = Upscaler::Xess)
+    uint32_t render_width = 0, render_height = 0;  // the scene's size this frame (the caller's size without FSR)
+    bool smaa = false;        // [port] SMAA (RecordOptions::smaa) ran
+    uint32_t msaa = 1;        // [port] samples the scene was drawn with (RecordOptions::msaa after the device clamp)
 };
 
 // ---- R4 scene hook (engine/render/particles): render-owned effects drawn inside the frame graph's buckets.
@@ -378,6 +423,7 @@ struct SceneHookPass {
     const ViewMatrices* view = nullptr;
     PhaseBucket bucket = PhaseBucket::Transparent;
     VkFormat color_format = VK_FORMAT_UNDEFINED, depth_format = VK_FORMAT_UNDEFINED, stencil_format = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;  // [port] MSAA: the scene target's sample count
     uint32_t width = 0, height = 0;
 };
 class SceneHook {
@@ -463,7 +509,6 @@ public:
     bool render(rhi::Frame& frame, VkCommandBuffer primary, const PassTarget& target, const ViewMatrices& view,
                 std::span<const Instance> instances, DrawMode mode, const RecordOptions& opts, DrawStats* stats = nullptr,
                 DrawTiming* timing = nullptr, std::span<const Instance> sky = {});
-    VkFormat scene_depth_format() const { return ds_format_; }
     // Land map world (terrain bucket 0, water bucket 7 + its reflection / refraction / sky-cube passes),
     // drawn by render() while set. Not owned; null detaches.
     // Detaching (or switching) also drops the world's CLOUD_TEXTURE / FOW_TEXTURE views, slots and matrices.
@@ -477,7 +522,6 @@ public:
         fade_begin_ = begin;
         fade_end_ = end;
     }
-    float object_fade_end() const { return fade_end_; }
     WorldRenderer* world() const { return world_; }
     // R4: effects drawn by render() in buckets 7 / 8 / 11 (SceneHook). Not owned; null detaches.
     void set_scene_hook(SceneHook* h) { scene_hook_ = h; }
@@ -485,7 +529,23 @@ public:
     // restarts on resize, on a frame without TAA and on a camera jump (taa_history_usable); call this on cuts it can
     // miss (teleports to a similar view, a cinematic cut, a different scene drawn through the same Renderer).
     void reset_taa_history();
-    SceneHook* scene_hook() const { return scene_hook_; }
+    // [port] MSAA: the sample count render() uses for `requested` (1, 2, 4 or 8): the largest supported count not above
+    // it (the device's framebuffer colour / depth / stencil sample counts), 1 without a device.
+    uint32_t msaa_samples(uint32_t requested) const;
+    // [port] BM2b: undo the TAA step of the last render() drawn with RecordOptions::taa_provisional, so the next frame
+    // jitters, reprojects and sees object motion as if it had not been drawn. True when there was one to undo; false after
+    // a render() without the flag or without TAA, a reset_taa_history(), keep_taa_frame() or a discard already done.
+    // keep_taa_frame(): that frame stands (drops what discard would restore).
+    bool discard_taa_frame();
+    void keep_taa_frame();
+    // [port] FSR (RecordOptions::upscaler): loads the runtime on first call; true when FSR frames can be drawn here
+    // (the context itself is created by the first FSR frame and can still fail - DrawStats::fsr). upscaler_status():
+    // the provider in use ("FSR 4.1.2" style, once a frame created the context) or why FSR is off.
+    bool fsr_supported();
+    // [port] XeSS: the same for Upscaler::Xess. upscaler_status(u): that upscaler's runtime ("XeSS 2.0.2" style) or why
+    // it is off.
+    bool xess_supported();
+    std::string upscaler_status(Upscaler u = Upscaler::Fsr) const;
     // Laser projectiles (lasers.hpp, PROJECTILE_NEBULA_DRAW.md 1): init_lasers loads W_Laser_Pill.tga /
     // p_particle_master.tga through `textures` and Engine\PrimAdditive; set_lasers gives the frame's lasers (copied),
     // drawn by render() in the Transparent bucket after its mesh items (and the hook's transparent draws) with the frame's
@@ -507,7 +567,6 @@ public:
     bool beams_ready() const;  // effect and pipeline inputs ready (textures load on demand)
     void release_beams();      // drops the beam pass, its textures and buffers (GPU idle); set_beams then does nothing until init_beams
     const BeamGeometry& last_beam_geometry() const;
-    bool stencil_shadows_supported() const { return ds_format_ != VK_FORMAT_UNDEFINED; }
     // The draw list of the last draw()/render() (instance, submesh, pass, key, material), in order.
     const std::vector<DrawListEntry>& last_draw_list() const { return last_list_; }
 
@@ -547,6 +606,10 @@ public:
         double translate_ms = 0;  // summed job time
     };
     TranslationStats translation_stats() const;
+    // Shader issues met so far (docs/MODS.md shader section): desc.effects->issues() plus one TranslateFailed
+    // per failed translation job (effect, path, translator / DXC message; the submesh draws unlit). Sorted by
+    // (effect, kind); a load report or debug overlay lists them. Thread-safe.
+    std::vector<materials::ShaderIssue> shader_issues() const;
     // Register images of one translated draw (what draw() uploads; tests feed them to the interpreter).
     bool translated_constants(const Instance& inst, const GpuSubmesh& g, const GpuPass& p, const ViewMatrices& view,
                               materials::VSConstants& vs, materials::PSConstants& ps, materials::IntBoolConstants* vs_ib = nullptr,
@@ -696,14 +759,28 @@ private:
     // Frame graph state.
     struct Targets {
         rhi::RenderTarget scene, scene_tex, distortion, bloom_a, bloom_b;
+        rhi::RenderTarget scene_ms;  // [port] MSAA scene colour + depth-stencil (msaa_ samples; empty when 1)
         bool ready = false;
     };
     Targets tg_;
     std::unique_ptr<SsaoPass> ssao_;  // [port] created on first use (RecordOptions::ambient_occlusion)
+    std::unique_ptr<SmaaPass> smaa_;  // [port] created on first use (RecordOptions::smaa)
     std::unique_ptr<TaaPass> taa_;    // [port] created on first use (RecordOptions::taa)
-    ViewMatrices taa_begin(const ViewMatrices& view, const RecordOptions& opts);  // taa.cpp: jittered camera (or `view`)
+    // taa.cpp: jittered camera (or `view`); fsr_phases > 0: FSR's jitter sequence of that length (FSR frame).
+    ViewMatrices taa_begin(const ViewMatrices& view, const RecordOptions& opts, uint32_t fsr_phases = 0);
+    std::unique_ptr<FsrPass> fsr_;   // [port] created on first use (RecordOptions::upscaler)
+    std::unique_ptr<XessPass> xess_;  // [port] created on first use (RecordOptions::upscaler = Upscaler::Xess)
+    // FSR / XeSS hooks in taa.cpp: true when this frame is drawn at `render` and upscaled by opts.upscaler.
+    bool fsr_begin(VkExtent2D display, const RecordOptions& opts, VkExtent2D& render);
     VkFormat ds_format_ = VK_FORMAT_UNDEFINED;        // scene depth-stencil (D32FS8 here)
     uint8_t rp_scene_ = 0, rp_external_ = 0, rp_post_ = 0;
+    // [port] MSAA: rp_main_ = the main scene's render pass (rp_scene_ with msaa_ samples; == rp_scene_ at 1 sample), the
+    // class render_pass_ holds outside the single-sample world prepass and draw(); rp_world_ = the class the world passes
+    // (terrain, decorations, water) build their pipelines for: rp_scene_ in the prepass, rp_main_ in the main scene.
+    uint8_t rp_main_ = 0, rp_world_ = 0;
+    uint32_t msaa_ = 1;
+    VkPipeline unlit_ms_[2][3] = {};  // unlit fallback for rp_main_ when msaa_ > 1
+    bool set_msaa(uint32_t samples);  // rp_main_ / unlit_ms_ / scene_ms for `samples` (GPU idle when it changes)
     bool external_ = false;                           // draw(): caller's attachment formats
     VkPipeline unlit_int_[2][3] = {};
     rhi::Buffer quad_vb_;                             // 6 FLOAT2 vertices at +-1.005 (TERRAIN_WATER_POST.md 4.2)
@@ -779,6 +856,7 @@ private:
         std::atomic<int> state{0};  // 0 pending, 1 ready, 2 failed
         std::shared_ptr<const materials::TranslatedProgram> tp;
         std::string error;
+        std::string effect, path;   // the effect that first asked (shader_issues())
         double ms = 0;
     };
     mutable std::mutex xlat_mutex_;

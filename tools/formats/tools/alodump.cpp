@@ -292,29 +292,11 @@ void dump_minifile(JsonWriter& j, const minifile::File& f, bool tem) {
     for (std::size_t i = 0; i < cap(f.records.size()); ++i) {
         const auto& r = f.records[i];
         j.begin_object().kv("chunk", r.chunk_id);
-        if (tem && r.chunk_id == 3) {
-            const auto m = minifile::decode_terrain_material(r);
-            j.kv("slot", i).kv("used", m.used()).kv("diffuse_texture", m.diffuse_texture)
-                .kv("normal_texture", m.normal_texture).kv("tile_size", m.tile_size)
-                .kv("uv_rotation_z", m.uv_rotation_z).kv("uv_rotation_x", m.uv_rotation_x)
-                .kv("specular_power", m.specular_power).kv("surface_type", m.surface_type);
-            j.key("diffuse_color").floats({m.diffuse_color.x, m.diffuse_color.y, m.diffuse_color.z});
-            j.key("specular_color").floats({m.specular_color.x, m.specular_color.y, m.specular_color.z});
-        } else if (!tem && r.chunk_id == 6) {
-            const auto e = minifile::decode_environment(r);
-            j.kv("name", e.name).kv("preset_name", e.preset_name).kv("weather_effect", e.weather_effect)
-                .kv("cloud_texture", e.cloud_texture);
-            j.key("lights").begin_array();
-            for (std::size_t k = 0; k < 3; ++k) {
-                j.begin_object().key("color").floats({e.light_color[k].x, e.light_color[k].y, e.light_color[k].z});
-                j.kv("intensity", e.light_intensity[k]).kv("angle_z", e.light_angle_z[k]).kv("angle_x", e.light_angle_x[k]);
-                j.end_object();
-            }
-            j.end_array();
-            j.kv("fog_enabled", e.fog_enabled).kv("fog_start", e.fog_start).kv("fog_end", e.fog_end);
-            j.key("ambient_color").floats({e.ambient_color.x, e.ambient_color.y, e.ambient_color.z});
-            j.key("specular_color").floats({e.specular_color.x, e.specular_color.y, e.specular_color.z});
-        }
+        if (tem && r.chunk_id == 3) j.kv("slot", i);
+        // Raw minis only: the field meanings are the engine's (engine/terrain ted_read.cpp).
+        j.key("strings").begin_array();
+        for (const auto& str : r.strings()) j.value(str);
+        j.end_array();
         j.key("mini_ids").begin_array();
         for (auto id : r.mini_ids) j.value(static_cast<unsigned>(id));
         j.end_array();

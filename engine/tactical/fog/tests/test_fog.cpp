@@ -12,21 +12,19 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/tactical/fog/fog_of_war.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/test/thread_parallel_for.hpp"  // SP5 batch sources
 
 using namespace alamo::tactical::fog;
+using alamo::ParallelFor;
+using alamo::RangeFn;
+using alamo::StateHasher;
+using alamo::serial_for;
 
 namespace {
 
-int g_fail = 0;
-int g_checks = 0;
-#define CHECK(c)                                                                \
-    do {                                                                        \
-        ++g_checks;                                                             \
-        if (!(c)) {                                                             \
-            ++g_fail;                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);           \
-        }                                                                       \
-    } while (0)
+using ::alamo::test::g_fail;
+using ::alamo::test::g_checks;
 
 // 20 x 20 land grid (cell 15) over [0, 300]^2: centre of (col, row).
 float cx_of(int32_t col) { return 15.0f * static_cast<float>(col) + 7.5f; }
@@ -731,6 +729,96 @@ void test_order_independence() {
 
 }  // namespace
 
+// SP5: FogOfWar::service_sources (cell lists in parallel, grid changes in op order) gives exactly the state of the same ops
+// as source_remove / source_service calls, serially and at 4 / 8 threads, over many frames of moving, contained, removed
+// and re-added sources of allied and enemy owners, with a dense mask (both reveal_dense passes) and decay.
+void test_batch_sources() {
+    struct Rng {
+        uint64_t s;
+        uint32_t next() {
+            s += 0x9E3779B97F4A7C15ull;
+            uint64_t z = s;
+            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+            z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+            return static_cast<uint32_t>((z ^ (z >> 31)) >> 32);
+        }
+        float unit() { return static_cast<float>(next() % 10000u) / 10000.0f; }
+    };
+    const auto make = [] {
+        FogSetup s;
+        s.mode = FogMode::Space;
+        s.box = {0.0f, 0.0f, 2000.0f, 2000.0f};
+        s.players = {{0, true, true}, {1, true, false}, {2, true, true}};
+        auto f = std::make_unique<FogOfWar>();
+        f->start(s);
+        const FogOfWar::DenseCircle nebula[] = {{1050.0f, 950.0f, 500.0f}};
+        f->set_dense_obstacles(nebula);
+        f->set_relation(0, 2, 0);  // 0 and 2 allied: their sources' lists go to both grids (the allies' undo quirk)
+        f->set_relation(2, 0, 0);
+        return f;
+    };
+    const auto digest = [](const FogOfWar& f) {
+        StateHasher h;
+        f.hash(h);
+        return h.digest();
+    };
+    for (unsigned threads : {0u, 4u, 8u}) {
+        auto ref = make();
+        auto bat = make();
+        std::unique_ptr<alamo::test::ThreadPoolFor> pool;
+        ParallelFor pf = serial_for;
+        if (threads) {
+            pool = std::make_unique<alamo::test::ThreadPoolFor>(threads);
+            pf = [&pool](uint32_t c, uint32_t g, const RangeFn& fn) { pool->run(c, g, fn); };
+        }
+        Rng rng{2026u + threads};
+        struct Src {
+            float x, y, sight, dense;
+            int32_t owner;
+            bool alive;
+        };
+        std::vector<Src> src(60);
+        for (Src& q : src) q = {rng.unit() * 2000.0f, rng.unit() * 2000.0f, 150.0f + rng.unit() * 400.0f, rng.unit(), static_cast<int32_t>(rng.next() % 3u), true};
+        bool same = true;
+        for (uint32_t frame = 1; frame <= 120; ++frame) {
+            ref->set_frame(frame);
+            bat->set_frame(frame);
+            std::vector<FogOfWar::SourceOp> ops;
+            for (size_t i = 0; i < src.size(); ++i) {
+                Src& q = src[i];
+                const uint32_t r = rng.next() % 100u;
+                if (r < 3) q.alive = !q.alive;  // removed / re-added
+                if (r >= 50) {                   // moves (often less than a cell: the threshold path)
+                    q.x = std::clamp(q.x + (rng.unit() - 0.5f) * 220.0f, 0.0f, 1999.0f);
+                    q.y = std::clamp(q.y + (rng.unit() - 0.5f) * 220.0f, 0.0f, 1999.0f);
+                }
+                FogOfWar::SourceOp op;
+                op.id = static_cast<int32_t>(i + 1);
+                if (!q.alive) {
+                    if (!ref->has_source(op.id)) continue;
+                    op.remove = true;
+                } else {
+                    op.obj = unit(q.owner, q.x, q.y, q.sight);
+                    op.obj.dense_multiplier = q.dense;
+                    op.contained = r % 17u == 0u;
+                    op.setup_only = r % 29u == 0u;
+                }
+                ops.push_back(op);
+            }
+            for (const FogOfWar::SourceOp& op : ops) {
+                if (op.remove) ref->source_remove(op.id);
+                else ref->source_service(op.id, op.obj, op.contained, op.setup_only);
+            }
+            bat->service_sources(ops, pf);
+            ref->decay_step(frame);
+            bat->decay_step(frame);
+            same = same && digest(*ref) == digest(*bat) && ref->source_count() == bat->source_count();
+        }
+        std::printf("  batch sources, %u threads: %s\n", threads, same ? "identical" : "DIFFERENT");
+        CHECK(same);
+    }
+}
+
 int main() {
     test_geometry();
     test_circle();
@@ -744,6 +832,7 @@ int main() {
     test_setup_manager();
     test_reinforce_sampler();
     test_order_independence();
+    test_batch_sources();  // SP5
     std::printf("alamo_tactical_fog_tests: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

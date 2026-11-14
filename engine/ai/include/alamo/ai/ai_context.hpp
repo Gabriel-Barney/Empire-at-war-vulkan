@@ -43,7 +43,6 @@ public:
     virtual ~ContextModeServices() = default;
     virtual void first_service(int64_t now) = 0;      // opponent pick + slot 6 of the subsystems
     virtual void template_init(int64_t now) = 0;      // after templates.first_service: budget init
-    virtual void perception_service(int64_t now) = 0;
     virtual void planning_service(int64_t now) = 0;   // running plans (Lua threads)
     virtual void execution_service(int64_t now) = 0;  // blocking statuses, free store
     virtual void templates_changed(int64_t now) = 0;  // template switches re-derived this frame
@@ -94,8 +93,9 @@ private:
 };
 
 // TheAIClass (vt 0x8795f8): enable gate only (§1.1). Is-enabled = master && perMode[mode] [H]; Start_Game
-// sets all four bytes to 1. Suspend_AI(x) sets master = !(x > 0) [H]. The galactic pause disables galactic
-// AI on 0 -> 1 and re-enables it on 1 -> 0 [H].
+// sets all four bytes to 1. Suspend_AI(x) sets master = !(x > 0) [H]. The original's galactic pause disables galactic
+// AI on 0 -> 1 and re-enables it on 1 -> 0 [H]; the port has no per-mode edge setter for it: update_player reads
+// sim.paused() live (galactic_ai.cpp).
 class AiEnableGate {
 public:
     void start_game() {
@@ -106,8 +106,6 @@ public:
     void set_mode_enabled(AiMode m, bool on) { per_mode_[static_cast<size_t>(m)] = on; }
     void suspend(bool suspended) { master_ = !suspended; }
     bool suspended() const { return !master_; }
-    // Galactic pause counter edges.
-    void on_galactic_pause(bool paused) { per_mode_[static_cast<size_t>(AiMode::Galactic)] = !paused; }
     void write(ByteWriter& w) const;  // N1 save / load: master + per-mode switches
     bool read(ByteReader& r);
 

@@ -127,6 +127,11 @@ double dist3(const Vec3f& a, const Vec3f& b) {
 
 }  // namespace
 
+std::pair<uint32_t, uint32_t> ai_lane_seeds(uint32_t game_seed) {
+    const uint64_t h = pp_mix(pp_mix(game_seed) ^ 0x41494C414E450001ull);  // "AILANE" salt
+    return {static_cast<uint32_t>(h >> 32), static_cast<uint32_t>(h)};
+}
+
 // ================================================================ state records
 
 struct Slot {
@@ -229,12 +234,23 @@ struct PlayerAi;
 struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHost {
     Impl(objects::ObjectStore& st, const objects::GameObjectTypes* ty, const FileProvider* fp, GameRandom& r, const AiDefinitions& d,
          const EquationSet& e, TacticalAiHost& h, TacticalAiConfig c)
-        : store(st), types(ty), files(fp), rng(r), defs(d), eqs(e), host(h), cfg(std::move(c)) {}
+        : snap_store(c.ai_lane ? std::make_unique<objects::ObjectStore>(st) : nullptr), live_store(&st),
+          store(snap_store ? *snap_store : st), types(ty), files(fp), own_rng(lane_rng(c)), rng(c.ai_lane ? own_rng : r), defs(d),
+          eqs(e), host(h), cfg(std::move(c)) {}
+    static GameRandom lane_rng(const TacticalAiConfig& c) {
+        const auto [synced, free] = ai_lane_seeds(c.game_seed);
+        return c.ai_lane ? GameRandom(synced, free) : GameRandom();
+    }
 
+    // sp3 t02: with the lane on, `store` is the snapshot store (a copy of the battle store taken at each publish());
+    // live_store is the battle store it copies (read only by publish()).
+    std::unique_ptr<objects::ObjectStore> snap_store;
+    const objects::ObjectStore* live_store;
     objects::ObjectStore& store;
     const objects::GameObjectTypes* types;
     const FileProvider* files;
-    GameRandom& rng;
+    GameRandom own_rng;  // sp3: the AI-owned stream of an AI-lane world (unused with the lane off)
+    GameRandom& rng;     // the session's GameRandom, or own_rng with the lane on
     const AiDefinitions& defs;
     const EquationSet& eqs;
     TacticalAiHost& host;
@@ -244,13 +260,20 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     // perception
     PerceptionWorld w;
     std::vector<TacticalAiObject> facts;
+    // sp3 t02: the host event lists publish() captured for think()
+    struct LaneInputs {
+        std::vector<OpportunityTargetEvent> opportunity;
+        std::vector<AttackStateSignal> attack_states;
+        std::vector<int32_t> ability_finished;
+        std::vector<ReinforcementsUnloaded> unloaded;
+        std::vector<TacticalAiHost::ProductionCompleted> produced;
+    } lane_in;
     std::vector<std::pair<int32_t, int32_t>> prev;  // (id, owner) of the last snapshot, ascending id
     // q6 (OBJECT_SCRIPTS §10.1): ids a script took out of the AI before this world perceived them (ascending); their
     // first admission (the add path of refresh) is skipped once.
     std::vector<int32_t> unadmit_pending;
     TacticalPerception perc;
     ZoneGraph zones;
-    std::map<std::string, uint32_t> eq_index;
     std::vector<uint8_t> eq_script_free;  // OPT2 t03: per equation, 0 not known yet, 1 being checked, 2 Script_-free, 3 not
 
     // Lua
@@ -262,6 +285,14 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     std::map<std::string, lua::AiGlobalValue> globals;
     ScriptEvaluators scripts;  // Script_<File> perception evaluators (AI_GALACTIC_2 §4.4), one shared VM per file
     lua::GlobalValueStore* gv_store = nullptr;  // Int-final: attached session-wide GlobalValue table (globals unused then)
+    // sp3 slice 4e (part 3): the AI lane's copy of gv_store, the host's overlay and this job's writes
+    lua::GlobalValueStore gv_view;
+    std::vector<TacticalAiWorld::GlobalWrite> gv_overlay, gv_out;
+    void refresh_gv_view() {
+        if (!gv_store) return;
+        gv_view = *gv_store;
+        for (const auto& [name, v] : gv_overlay) gv_view.set(name, v);
+    }
 
     AiEnableGate gate;
     std::vector<std::unique_ptr<PlayerAi>> ai;  // by player index
@@ -314,6 +345,10 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     // OPT2 t10: enemy_strength_at for several masks in one pass (each sum in the same object order: identical values).
     std::vector<double> enemy_strengths_at(int32_t player, const Vec3f& at, int32_t zone, std::span<const uint64_t> masks,
                                            int32_t exclude = -1) const;
+    // The shared object filter of both: `o`'s type when it is a live object hostile to `player` in the target's area
+    // (header comment of enemy_strength_at) and not `exclude`, else null. The category mask is the caller's test.
+    const PerceptionType* enemy_in_area(const PerceptionObject& o, int32_t player, const Vec3f& at, int32_t zone,
+                                        int32_t exclude) const;
     // OPT2 t10: the host answers every first solve of one player's proposal slice reads (build pads, reinforcement pool,
     // population). They only change in the battle tick or through an executed order, and no order runs between a
     // slice's candidates (an order a Script_ evaluator might issue clears the cache), so the slice asks the host once
@@ -347,13 +382,8 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     const PlayerAi* player_ai(int32_t p) const {
         return p >= 0 && static_cast<size_t>(p) < ai.size() ? ai[static_cast<size_t>(p)].get() : nullptr;
     }
-    uint32_t equation(const std::string& name) {
-        const std::string key = ai_upper_copy(ai_trim(name));
-        const auto it = eq_index.find(key);
-        if (it != eq_index.end()) return it->second;
-        const uint32_t i = eqs.find(key);
-        eq_index.emplace(key, i);
-        return i;
+    uint32_t equation(const std::string& name) const {
+        return eqs.find(ai_trim(name));  // EquationSet::find upper-cases the name
     }
     int32_t first_human() const {
         for (size_t p = 0; p < w.players.size(); ++p)
@@ -411,10 +441,10 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     }
     // The evaluate() of a function concurrent_equation() accepted, without its bookkeeping (counted serially).
     bool evaluate_concurrent(int32_t self, const std::string& fn, int32_t handle, double& out) const {
-        const auto it = eq_index.find(ai_upper_copy(ai_trim(fn)));
-        if (it == eq_index.end() || it->second == kUnresolved) return false;
+        const uint32_t e = equation(fn);  // a const lookup (the EquationSet does not change after load)
+        if (e == kUnresolved) return false;
         const LeafCacheUncounted uncounted;
-        const EvalResult r = perc.evaluate(eqs, it->second, eval_context(self, handle), w);  // rng unset: no Script_
+        const EvalResult r = perc.evaluate(eqs, e, eval_context(self, handle), w);  // rng unset: no Script_
         if (!r.ok) return false;
         out = r.value;
         return true;
@@ -563,7 +593,7 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     }
 
     // ---- object signals / free store ----
-    void refresh();
+    void refresh(bool fill = true);  // sp3 t02: fill false = publish() already filled w / facts
     void admit(PlayerAi& p, size_t index, bool call_lua);
     // A task force releases `u` (TaskForce vf49 0x5ff610): 0x6c27d0 with the plan's PP `pp` (-1 none), re-admission.
     void release_to_free_store(int32_t player, ObjectHandle u, int32_t pp);
@@ -771,11 +801,17 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     int32_t find_target(int32_t script, const lua::AiFindTargetRequest& request) override;
     int32_t find_stage_area(int32_t, const lua::AiArg&, const lua::AiArg&, const lua::AiArg&) override { return -1; }
     lua::AiGlobalValue global_value(std::string_view name) override {
+        if (gv_store && cfg.ai_lane) return gv_view.get(name);  // sp3 slice 4e: the lane's copy
         if (gv_store) return gv_store->get(name);  // Int-final: the session-wide table
         const auto it = globals.find(std::string(name));
         return it == globals.end() ? lua::AiGlobalValue{} : it->second;
     }
     void set_global_value(std::string_view name, const lua::AiGlobalValue& v) override {
+        if (gv_store && cfg.ai_lane) {  // sp3 slice 4e: the copy now, the session table at the due tick
+            gv_view.set(name, v);
+            gv_out.emplace_back(std::string(name), v);
+            return;
+        }
         if (gv_store) return gv_store->set(name, v);  // Int-final
         if (v.kind == lua::AiGlobalValue::Nil) globals.erase(std::string(name));
         else globals[std::string(name)] = v;
@@ -978,9 +1014,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         for (size_t i = from; i < list.size(); ++i) {
             Slot s;
             s.t = list[i];
-            if (s.t.is_unit()) s.handle = w->perc.register_unit(w->w, s.t.object_id);
-            else if (s.t.zone >= 0) s.handle = w->perc.register_zone(s.t.zone);
-            else s.handle = w->perc.register_cell(s.t.cell_x, s.t.cell_y, s.t.eval_rect);
+            s.handle = w->perc.register_target(w->w, s.t);
             if (s.handle >= 0 && !s.t.name.empty())  // A2 tactical: target vf+0x50 name [M: = the target name]
                 w->handle_name_crc[s.handle] = crc32(s.t.name.data(), s.t.name.size());
             slots.push_back(std::move(s));
@@ -1284,7 +1318,7 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
             ++n;
             humans += p.is_human ? 1 : 0;
         }
-        return n - humans;
+        return std::max(n, w->cfg.player_list_size) - humans;  // skai t12: N = the whole PlayerList
     }
 
     // ---- ContextModeServices ----
@@ -1293,7 +1327,6 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
         budget_weights();  // the battle budget is filled at the first AI service (§9.3)
         templates_changed(now);
     }
-    void perception_service(int64_t) override {}  // §2: Service only reschedules
     void planning_service(int64_t) override { w->service_plans(player); }
     void execution_service(int64_t) override {
         // Execution service (0x526590): all-pairs recompute when the mode frame reached next, then next = frame + 90.
@@ -1440,8 +1473,10 @@ void TacticalAiWorld::Impl::release_to_free_store(int32_t player, ObjectHandle u
     if (readmit && o->alive && o->owner == player) host.unit_released(player, o->id, TacticalAiHost::UnitRelease::TaskForce);
 }
 
-void TacticalAiWorld::Impl::refresh() {
-    host.fill(w, facts);
+void TacticalAiWorld::Impl::refresh(bool fill) {
+    profile::Steps steps;  // sp0: tac.ai.perception split (wall-clock only)
+    if (fill) host.fill(w, facts);
+    ALAMO_PROFILE_STEP(steps, "tac.perc.fill");
     if (facts.size() != w.objects.size()) facts.resize(w.objects.size());
     // refix t01: dying / removing objects (death clones: +0x3a0 |= 0xc0, S9_DEATH_CLONE_SHIELDS.md §1.6) are not
     // perceived - the perception adds (AI_TACTICAL §2 slot 11), the FreeStore base test and the target lists all skip
@@ -1459,9 +1494,11 @@ void TacticalAiWorld::Impl::refresh() {
         w.objects.resize(keep);
         facts.resize(keep);
     }
+    ALAMO_PROFILE_STEP(steps, "tac.perc.dying");
     w.frame = mode_frame;
     w.index();
     gate.suspend(world.ai_suspended());
+    ALAMO_PROFILE_STEP(steps, "tac.perc.index");
     // Object signals by snapshot comparison (header comment).
     std::vector<std::pair<int32_t, int32_t>> cur;
     cur.reserve(w.objects.size());
@@ -1489,11 +1526,8 @@ void TacticalAiWorld::Impl::refresh() {
         if (!o.alive) continue;
         const auto* old = in(prev, o.id);
         if (!old) {
-            if (o.has_unit_ai) {  // first check at the stamp the host drew at creation (A1_READINGS §14)
-                const int32_t stamp = facts[i].reprojection_stamp;
-                if (stamp != TacticalAiObject::kNoReprojectionStamp) perc.grid().register_object(w, o.id, mode_frame, stamp);
-                else perc.grid().register_object(w, o.id, mode_frame);
-            }
+            if (o.has_unit_ai)  // first check at the stamp the host drew at creation (A1_READINGS §14)
+                perc.grid().register_object(w, o.id, facts[i].reprojection_stamp);
             const bool produced = claim_produced(o, facts[i].handle);
             bool unadmit = false;
             if (!unadmit_pending.empty()) {
@@ -1518,8 +1552,10 @@ void TacticalAiWorld::Impl::refresh() {
         }
     }
     prev = std::move(cur);
+    ALAMO_PROFILE_STEP(steps, "tac.perc.diff");
     // UNIT_AI service (every frame, registration order).
     perc.grid().service_all(w, mode_frame);
+    ALAMO_PROFILE_STEP(steps, "tac.perc.grid");
     // Order completion for the AI VMs' object states [port]: idle units lose Has_Active_Orders and the order lock;
     // Get_Attack_Target reads the combat target.
     for (size_t i = 0; i < w.objects.size(); ++i) {
@@ -1537,6 +1573,7 @@ void TacticalAiWorld::Impl::refresh() {
             }
         }
     }
+    ALAMO_PROFILE_STEP(steps, "tac.perc.orders");
     // S7 t20 (AI_TACTICAL §7.3.2): the task forces' death / removal signals (0x10 / 0x1a) - members gone this frame leave
     // at once (ascending TF id) and No_Units_Remaining is queued when nothing is left. Before, a per-service poll.
     for (auto& [id, t] : tfs) {
@@ -1544,6 +1581,7 @@ void TacticalAiWorld::Impl::refresh() {
         prune_tf(t);
         if (t.units.size() < before) units_lost(t);
     }
+    ALAMO_PROFILE_STEP(steps, "tac.perc.tf_prune");
 }
 
 // S7 t26 (AI_TACTICAL §7.3.3 item 4, TF signal handler 0x5fe5d0): on every member loss (0x10 / 0x1a, Release_Unit, a failed
@@ -1572,7 +1610,7 @@ void TacticalAiWorld::Impl::units_lost(TfRec& t) {
         if (counted_entry_type(type)) return;
     // a1j t01: a company still in its landing (0x6ee010 put its type entries on the TF +0x60 vector at the order, 0x5f9fd0).
     for (const auto& [id, s] : statuses)
-        if (s.kind == StatusKind::Reinforce && !s.finished && s.tf == t.id)
+        if ((s.kind == StatusKind::Reinforce || s.kind == StatusKind::SpaceReinforce) && !s.finished && s.tf == t.id)
             for (const auto& [key, type] : s.landings)
                 if (counted_entry_type(type)) return;
     decide(t.player, "tf " + t.name + " no units remaining");
@@ -1835,6 +1873,8 @@ void TacticalAiWorld::Impl::pp_input(PlayerAi& p, uint32_t plan, const Goal& g, 
     for (const int32_t id : ids) {
         const PerceptionObject* o = object(id);
         if (!o || !o->alive) continue;
+        // s78n t06 (A1_READINGS §28, HERO_CLASH §5.2): Setup A 0x7287a0 skips a unit in a hero clash (+0x3b4).
+        if (const TacticalAiObject* f = fact(id); f && f->hero_clash) continue;
         PpFreeUnit u;
         u.id = id;
         u.type = o->type;
@@ -1962,39 +2002,43 @@ void TacticalAiWorld::Impl::pp_input(PlayerAi& p, uint32_t plan, const Goal& g, 
         std::vector<uint64_t> masks{~uint64_t{0}};
         if (in.contrast)
             for (size_t j = 0; j < in.contrast->size(); ++j) masks.push_back(in.contrast->rows[j].enemy_mask);
-        std::vector<double> v = enemy_strengths_at(self, at, zone, masks);
-        if (escort_tf) {
-            std::vector<double> ev = enemy_strengths_at(self, at, zone, masks, excl);
-            in.escort_strength = [mk = masks, sums = std::move(ev)](uint64_t mask) {
+        // The answers per mask (0 for a mask that was not asked).
+        const auto lookup = [](std::vector<uint64_t> mk, std::vector<double> sums) {
+            return [mk = std::move(mk), sums = std::move(sums)](uint64_t mask) {
                 for (size_t k = 0; k < mk.size(); ++k)
                     if (mk[k] == mask) return sums[k];
                 return 0.0;
             };
-        }
-        in.enemy_strength = [mk = std::move(masks), sums = std::move(v)](uint64_t mask) {
-            for (size_t k = 0; k < mk.size(); ++k)
-                if (mk[k] == mask) return sums[k];
-            return 0.0;
         };
+        std::vector<double> v = enemy_strengths_at(self, at, zone, masks);
+        if (escort_tf) in.escort_strength = lookup(masks, enemy_strengths_at(self, at, zone, masks, excl));
+        in.enemy_strength = lookup(std::move(masks), std::move(v));
     }
 }
 
 // Enemy strength at a tactical target for a category mask (the Contrast requirement 0x6c5de0 / 0x5f2430 in tactical)
 // [M]: the combat power of live objects hostile to `player` - land: in the target's hint zone (every hostile object
 // when the map has no zones); space: inside the AI_SpaceEvaluatorRegionSize square centred on the target.
+const PerceptionType* TacticalAiWorld::Impl::enemy_in_area(const PerceptionObject& o, int32_t player, const Vec3f& at,
+                                                            int32_t zone, int32_t exclude) const {
+    if (!o.alive || o.owner < 0 || o.owner == player || w.rel(player, o.owner) != 1 || (exclude >= 0 && o.id == exclude))
+        return nullptr;
+    const PerceptionType* t = w.type_of(o);
+    if (!t) return nullptr;
+    if (cfg.mode == TacticalMode::Land) {
+        if (zone >= 0 && zones.size() > 0 && (o.zone >= 0 ? o.zone : zone_at(o.position)) != zone) return nullptr;
+    } else {
+        const float half = cfg.constants.space_region_size * 0.5f;
+        if (std::fabs(o.position.x - at.x) > half || std::fabs(o.position.y - at.y) > half) return nullptr;
+    }
+    return t;
+}
+
 double TacticalAiWorld::Impl::enemy_strength_at(int32_t player, const Vec3f& at, int32_t zone, uint64_t mask, int32_t exclude) const {
     double s = 0.0;
-    const float half = cfg.constants.space_region_size * 0.5f;
     for (const PerceptionObject& o : w.objects) {
-        if (!o.alive || o.owner < 0 || o.owner == player || w.rel(player, o.owner) != 1 || (exclude >= 0 && o.id == exclude)) continue;
-        const PerceptionType* t = w.type_of(o);
-        if (!t || (t->category & mask) == 0) continue;
-        if (cfg.mode == TacticalMode::Land) {
-            if (zone >= 0 && zones.size() > 0 && (o.zone >= 0 ? o.zone : zone_at(o.position)) != zone) continue;
-        } else if (std::fabs(o.position.x - at.x) > half || std::fabs(o.position.y - at.y) > half) {
-            continue;
-        }
-        s += static_cast<double>(o.combat_power);
+        const PerceptionType* t = enemy_in_area(o, player, at, zone, exclude);
+        if (t && (t->category & mask) != 0) s += static_cast<double>(o.combat_power);
     }
     return s;
 }
@@ -2002,16 +2046,9 @@ double TacticalAiWorld::Impl::enemy_strength_at(int32_t player, const Vec3f& at,
 std::vector<double> TacticalAiWorld::Impl::enemy_strengths_at(int32_t player, const Vec3f& at, int32_t zone,
                                                                std::span<const uint64_t> masks, int32_t exclude) const {
     std::vector<double> s(masks.size(), 0.0);
-    const float half = cfg.constants.space_region_size * 0.5f;
     for (const PerceptionObject& o : w.objects) {
-        if (!o.alive || o.owner < 0 || o.owner == player || w.rel(player, o.owner) != 1 || (exclude >= 0 && o.id == exclude)) continue;
-        const PerceptionType* t = w.type_of(o);
+        const PerceptionType* t = enemy_in_area(o, player, at, zone, exclude);
         if (!t) continue;
-        if (cfg.mode == TacticalMode::Land) {
-            if (zone >= 0 && zones.size() > 0 && (o.zone >= 0 ? o.zone : zone_at(o.position)) != zone) continue;
-        } else if (std::fabs(o.position.x - at.x) > half || std::fabs(o.position.y - at.y) > half) {
-            continue;
-        }
         for (size_t k = 0; k < masks.size(); ++k)
             if ((t->category & masks[k]) != 0) s[k] += static_cast<double>(o.combat_power);
     }
@@ -2721,7 +2758,6 @@ bool TacticalAiWorld::Impl::ambush_point(const StatusRec& s, int32_t player, Vec
         GridQuery q;
         q.self = player;
         q.ally = false;
-        q.memory_counted_when_not_fogged = perc.config().memory_counted_when_not_fogged;
         const float half = step * 0.5f;
         perc.grid().rect_cells({p.x - half, p.y - half, p.x + half, p.y + half}, cells);
         const float threat = perc.grid().cells_force(w, cells, q) * scale;
@@ -3185,7 +3221,9 @@ int32_t TacticalAiWorld::Impl::tf_reinforce(int32_t tf, const lua::AiArg& target
             return false;
         // a1j t01 (A1_READINGS §36): the company is inside a landing object that unloads it over the next seconds; the
         // status listens for its signal 0x19 (in-flight count + 1) and the units join the TF then (0x6a1440).
-        if (host.reinforce_in_flight(t->player, r.key)) {
+        // sp3 slice 4d: with the AI lane every accepted drop waits so - the order is applied k_ai ticks later and the host
+        // reports its units (or none, when the apply refused it) as an unload record.
+        if (cfg.ai_lane || host.reinforce_in_flight(t->player, r.key)) {
             in_flight.emplace_back(r.key, r.type);
             return true;
         }
@@ -3226,7 +3264,9 @@ void TacticalAiWorld::Impl::reinforcements_unloaded(const std::vector<Reinforcem
         StatusRec* s = nullptr;
         size_t at = 0;
         for (auto& [id, st] : statuses) {
-            if (st.kind != StatusKind::Reinforce || st.finished || script_player(st.plan) != rec.player) continue;
+            if ((st.kind != StatusKind::Reinforce && st.kind != StatusKind::SpaceReinforce) || st.finished ||
+                script_player(st.plan) != rec.player)
+                continue;  // sp3 slice 4d: a space status waits for its lane drops too
             const auto it = std::find_if(st.landings.begin(), st.landings.end(), [&rec](const std::pair<int32_t, int32_t>& e) { return e.first == rec.key; });
             if (it == st.landings.end()) continue;
             s = &st;
@@ -3248,7 +3288,7 @@ void TacticalAiWorld::Impl::reinforcements_unloaded(const std::vector<Reinforcem
             decide(t->player, "tf " + t->name + ": reinforcements unloaded " + type_name(type) + " (" + std::to_string(rec.units.size()) +
                                   " units, " + std::to_string(s->landings.size()) + " in flight)");
         }
-        if (s->landings.empty()) {
+        if (s->landings.empty() && s->kind == StatusKind::Reinforce) {  // a space status finishes in its poll
             s->finished = true;
             if (const auto pit = plans.find(s->plan); pit != plans.end()) pit->second.non_removable = !s->saved_removable;
         }
@@ -3326,9 +3366,13 @@ void TacticalAiWorld::Impl::space_reinforce_poll(StatusRec& s) {
                                                      " (tf " + t->name + ")") == cmd::RejectReason::None) {
                             placed = true;
                             t->pending.pop_back();
-                            const auto owned = store.owned_by(t->player);
-                            for (size_t i = before; i < owned.size(); ++i)
-                                if (store.active(owned[i]) && store.has_behavior(owned[i], objects::beh::Locomotor)) t->units.push_back(owned[i]);
+                            if (cfg.ai_lane) {  // sp3 slice 4d: the units join at their unload record (applied k_ai later)
+                                s.landings.emplace_back(r.key, r.type);
+                            } else {
+                                const auto owned = store.owned_by(t->player);
+                                for (size_t i = before; i < owned.size(); ++i)
+                                    if (store.active(owned[i]) && store.has_behavior(owned[i], objects::beh::Locomotor)) t->units.push_back(owned[i]);
+                            }
                             s.ring = s.prevent ? 1000.0f : 0.0f;
                             break;
                         }
@@ -3343,7 +3387,8 @@ void TacticalAiWorld::Impl::space_reinforce_poll(StatusRec& s) {
         }
     }
     const bool timed_out = s.timeout >= 0 && s.timeout <= now;
-    if (timed_out || t->pending.empty()) done(t->pending.empty());
+    // sp3 slice 4d: with the AI lane the status also waits for its drops' unload records (empty otherwise)
+    if (timed_out || (t->pending.empty() && s.landings.empty())) done(t->pending.empty());
 }
 
 int32_t TacticalAiWorld::Impl::tf_build_all(int32_t tf) {
@@ -3507,8 +3552,7 @@ bool TacticalAiWorld::Impl::most_defended_position(int32_t, const lua::AiArg& so
         if (const Slot* s = source.target >= 0 ? slot_of(source.target) : nullptr; s && s->t.zone >= 0) z = s->t.zone;
         if (z < 0) z = zone_at(p);
         if (z < 0) return false;
-        d = most_defended_position_cells(perc.grid(), w, perc.zone_threat_cells(z), player, rng.synced(),
-                                         perc.config().memory_counted_when_not_fogged);
+        d = most_defended_position_cells(perc.grid(), w, perc.zone_threat_cells(z), player, rng.synced());
     } else {
         d = most_defended_position_space(perc.grid(), w, p, cfg.constants.space_region_size, player, rng.synced());
     }
@@ -3586,10 +3630,7 @@ bool TacticalAiWorld::Impl::script_evaluate(const EvalContext& c, std::string_vi
 
 std::function<uint64_t(std::string_view)> tactical_category_resolver(const objects::GameObjectTypes* types) {
     if (!types) return {};  // TacticalPerception::init falls back to the built-in table
-    return [types](std::string_view name) -> uint64_t {
-        const auto v = types->enums().get(objects::EnumId::GameObjectCategory).lookup(name);
-        return v ? static_cast<uint64_t>(*v) : 0u;
-    };
+    return category_mask_from(types->enums());
 }
 
 uint64_t tactical_space_categories(const objects::EnumConverter& categories) {
@@ -3701,6 +3742,12 @@ std::function<void()> TacticalAiWorld::release_scripts() {
 
 lua::ObjectBridge& TacticalAiWorld::object_bridge() { return impl_->bridge; }
 void TacticalAiWorld::set_global_values(lua::GlobalValueStore* store) { impl_->gv_store = store; }  // Int-final
+void TacticalAiWorld::set_lane_global_overlay(std::vector<GlobalWrite> overlay) { impl_->gv_overlay = std::move(overlay); }
+std::vector<TacticalAiWorld::GlobalWrite> TacticalAiWorld::take_lane_global_writes() {
+    std::vector<GlobalWrite> out = std::move(impl_->gv_out);
+    impl_->gv_out.clear();
+    return out;
+}
 lua::LuaPlayerWorld& TacticalAiWorld::player_world() { return impl_->world; }
 
 bool TacticalAiWorld::load_plans(std::vector<std::string>* diagnostics) {
@@ -3711,6 +3758,8 @@ bool TacticalAiWorld::load_plans(std::vector<std::string>* diagnostics) {
 
 bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
     Impl& w = *impl_;
+    if (w.snap_store) *w.snap_store = *w.live_store;  // sp3: the start scripts read the battle as it is now (critical lane)
+    if (w.cfg.ai_lane) w.refresh_gv_view();
     const AiMode mode = ai_mode_of(w.cfg.mode);
     const auto mi = static_cast<size_t>(mode);
     w.ai.clear();
@@ -3762,6 +3811,10 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
         // §2.1], so the time tests (accept, Resolve time_ok: 0 < AllowedTime < ETA) never fail (§4); the value is hashed and
         // saved with the goal.
         gcfg.nominal_allowed_time = true;
+        // skai t12 (AI_GALACTIC §1.6 step 5 [H]): the Commit limit's extension is the AIPlayerType's GoalSetExtensionSize
+        // (default 2) in every mode: retail's first land skirmish commit starts two scouts and two Secure_Contestable
+        // plans (SKAI_T06_LAND_RUNS §7); the config default 1 started one of each.
+        gcfg.extra_goals_per_category = type->goal_set_extension_size;
         p.ctx.goals.init(w.defs, std::move(sources), &p, &p.ctx.learning, &p.ctx.templates, &w.rng.synced(), gcfg);
         p.ctx.attach(&p, [&w, &p](const std::string& eq, double& out) { return w.evaluate(p.player, eq, -1, out); });
         if (w.cfg.stagger) {  // OPT2 t01: a fixed planning phase from the player's AI ordinal (players in index order)
@@ -3772,30 +3825,15 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
         // Free-store script (Land / Space FreeStoreScript of the AIPlayerType).
         const std::string& fs = type->free_store_script[mi];
         if (!fs.empty() && w.files) {
-            std::vector<uint8_t> bytes;
-            const std::string path = "Data\\Scripts\\FreeStore\\" + fs + ".lua";
-            if (w.files->read(path, bytes)) {
-                std::string err;
-                p.fs_vm = w.runtime->make_vm(fs, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()), path, &err);
-                if (p.fs_vm) {
-                    const int32_t sid = kFreeStoreScriptBase + pc.player;
-                    lua::attach_ai_host(*p.fs_vm, &w, sid);
-                    p.fs_vm->call("Base_Definitions", &err);
-                    lua::set_free_store_global(*p.fs_vm, sid, false);
-                    lua::set_player_global(*p.fs_vm, "PlayerObject", pc.player);
-                    lua::set_number_global(*p.fs_vm, "LastService", 0.0);
-                    lua::set_number_global(*p.fs_vm, "LastUnitService", 0.0);
-                    p.sched = FreeStoreSchedule{};
-                    if (!lua::global_is_nil(*p.fs_vm, "ServiceRate")) p.sched.service_rate = lua::global_number(*p.fs_vm, "ServiceRate", 0.0);
-                    if (!lua::global_is_nil(*p.fs_vm, "UnitServiceRate"))
-                        p.sched.unit_service_rate = lua::global_number(*p.fs_vm, "UnitServiceRate", 0.0);
-                    p.fs_vm->create_thread("main");
-                } else if (diagnostics) {
-                    diagnostics->push_back(err);
-                }
-            } else if (diagnostics) {
-                diagnostics->push_back(path + ": not found");
-            }
+            // ServiceRate / UnitServiceRate are read after the globals are set and before the main thread starts.
+            FreeStoreSchedule& sched = p.sched;
+            const auto read_rates = [&sched](lua::LuaVm& vm) {
+                sched = FreeStoreSchedule{};
+                if (!lua::global_is_nil(vm, "ServiceRate")) sched.service_rate = lua::global_number(vm, "ServiceRate", 0.0);
+                if (!lua::global_is_nil(vm, "UnitServiceRate")) sched.unit_service_rate = lua::global_number(vm, "UnitServiceRate", 0.0);
+            };
+            p.fs_vm = start_free_store_vm(*w.runtime, *w.files, fs, &w, kFreeStoreScriptBase + pc.player, false, pc.player,
+                                          read_rates, diagnostics);
         }
         w.ai[static_cast<size_t>(pc.player)] = std::move(pa);
         any = true;
@@ -3803,10 +3841,46 @@ bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
     return any;
 }
 
+namespace {
+// update()'s body; lane = think() (publish() filled w / facts and lane_in, and set now / mode_frame).
+void run_update(TacticalAiWorld::Impl& w, bool lane);
+}  // namespace
+
 void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
+    Impl& w = *impl_;
+    if (w.cfg.ai_lane) {  // sp3 t02
+        publish(now, mode_frame);
+        think();
+        return;
+    }
+    w.now = now;
+    w.mode_frame = mode_frame;
+    run_update(w, false);
+}
+
+void TacticalAiWorld::publish(int64_t now, uint32_t mode_frame) {
     Impl& w = *impl_;
     w.now = now;
     w.mode_frame = mode_frame;
+    {
+        ALAMO_PROFILE_SCOPE("tac.ai.publish");  // sp3: the critical lane's share (fill, event lists, snapshot store)
+        if (w.snap_store) *w.snap_store = *w.live_store;
+        w.refresh_gv_view();  // slice 4e (part 3)
+        w.host.fill(w.w, w.facts);
+        w.lane_in.opportunity = w.host.opportunity_targets();
+        w.lane_in.attack_states = w.host.attack_state_signals();
+        w.lane_in.ability_finished = w.host.ability_finished();
+        w.lane_in.unloaded = w.host.reinforcements_unloaded();
+        w.lane_in.produced = w.host.production_completed();
+    }
+}
+
+void TacticalAiWorld::think() { run_update(*impl_, true); }
+
+namespace {
+void run_update(TacticalAiWorld::Impl& w, bool lane) {
+    const int64_t now = w.now;
+    const uint32_t mode_frame = w.mode_frame;
     for (auto& pa : w.ai)  // OPT2 t02: background land path recomputes due on this mode frame
         if (pa) pa->publish_paths(static_cast<int64_t>(mode_frame));
     {  // OPT2 t04: staggered scheduled Lua collections, once per update before any script of this world runs
@@ -3821,13 +3895,16 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     }
     {
         ALAMO_PROFILE_SCOPE("tac.ai.perception");  // OPT2 t08: snapshot, threat grid, signals
-        w.refresh();
-        w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
-        w.target_in_range_events(w.host.attack_state_signals());  // s78f t08: signal 0x1E
-        w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
-        w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
-        w.production_completed(w.host.production_completed());        // q6 t19: signal 0x22 (land builds to the pool)
+        w.refresh(!lane);
+        profile::Steps steps;  // sp0: the signal passes after refresh()
+        // sp3 t02: with the lane on, the lists publish() captured (same calls, same order)
+        w.opportunity_events(lane ? w.lane_in.opportunity : w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
+        w.target_in_range_events(lane ? w.lane_in.attack_states : w.host.attack_state_signals());  // s78f t08: signal 0x1E
+        w.ability_signals(lane ? w.lane_in.ability_finished : w.host.ability_finished());       // S7 t15 A1: signal 0x29
+        w.reinforcements_unloaded(lane ? w.lane_in.unloaded : w.host.reinforcements_unloaded());  // a1j t01: signal 0x19
+        w.production_completed(lane ? w.lane_in.produced : w.host.production_completed());        // q6 t19: signal 0x22
         w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
+        ALAMO_PROFILE_STEP(steps, "tac.perc.signals");
     }
     const bool enabled = w.gate.enabled(ai_mode_of(w.cfg.mode));
     // OPT2 t08: one zone per AI player's service (goals, plans, free store; their Lua is also in lua.exec).
@@ -3844,6 +3921,7 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     // or the queue grows for the whole battle. Sim code never reads it (events.hpp), so no CRC or saved state depends on it.
     w.pipeline.events().deliver();
 }
+}  // namespace
 
 void TacticalAiWorld::end_battle() {
     Impl& w = *impl_;
@@ -3860,7 +3938,6 @@ void TacticalAiWorld::end_battle() {
         }
 }
 
-void TacticalAiWorld::set_suspended(bool suspended) { impl_->gate.suspend(suspended); }
 void TacticalAiWorld::order_replaced(int32_t object_id) { impl_->order_signal(object_id); }
 void TacticalAiWorld::refog(int32_t player, float x, float y) { impl_->perc.grid().refog_at(player, x, y, impl_->mode_frame); }
 lua::PreventAiResult TacticalAiWorld::prevent_ai_usage(int32_t id, int32_t owner, bool on) {
@@ -3919,6 +3996,9 @@ std::vector<std::string> TacticalAiWorld::lua_errors() const {
     return e;
 }
 uint64_t TacticalAiWorld::orders_issued() const { return impl_->orders; }
+bool TacticalAiWorld::ai_lane() const { return impl_->cfg.ai_lane; }
+const objects::ObjectStore& TacticalAiWorld::view_store() const { return impl_->store; }
+uint32_t TacticalAiWorld::k_ai() const { return impl_->cfg.k_ai; }
 uint64_t TacticalAiWorld::orders_rejected() const { return impl_->rejected; }
 size_t TacticalAiWorld::pending_order_results() const { return impl_->pipeline.events().pending().size(); }
 const std::map<std::string, uint32_t>& TacticalAiWorld::stats() const {
@@ -4094,6 +4174,11 @@ void TacticalAiWorld::hash(StateHasher& h) const {
     w.bridge.hash(h);
     h.u64(w.orders);
     h.u64(w.rejected);
+    if (w.cfg.ai_lane) {  // sp3: the AI-owned stream is AI state (both instances: the free one drives AI decisions too)
+        h.u32(w.cfg.k_ai);
+        w.own_rng.synced().hash(h);
+        w.own_rng.free().hash(h);
+    }
 }
 
 void TacticalAiWorld::register_crc(CrcRegistry& registry, const std::string& name) const {
@@ -4106,6 +4191,7 @@ namespace {
 
 namespace io = save_io;
 
+constexpr uint32_t kTacticalAiLaneSaveVersion = 13;  // sp3: version 12 plus the AI-lane block (k_ai, the AI-owned GameRandom)
 constexpr uint32_t kTacticalAiSaveVersion = 12;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
                                                  // 5: refixf t06 space reinforcement status fields; 6: a1g t01 PP+0x100,
                                                  // entry +0x30 moved into the free store; 7: S7 t20/t21/t15 A1 (no had_units /
@@ -4351,7 +4437,12 @@ void rebind_vm(TacticalAiWorld::Impl& m, lua::LuaVm& vm, int32_t script_id) {
 void TacticalAiWorld::write(ByteWriter& w) const {
     const Impl& m = *impl_;
     const objects::ObjectStore& st = m.store;
-    w.u32(kTacticalAiSaveVersion);
+    // sp3: an AI-lane world writes version 13 with its lane block; with the lane off the bytes are version 12's.
+    w.u32(m.cfg.ai_lane ? kTacticalAiLaneSaveVersion : kTacticalAiSaveVersion);
+    if (m.cfg.ai_lane) {
+        w.u32(m.cfg.k_ai);
+        m.own_rng.write(w);
+    }
     // ---- shape ----
     io::put_count(w, m.ai.size());
     for (const auto& a : m.ai) w.boolean(a != nullptr);
@@ -4447,13 +4538,7 @@ void TacticalAiWorld::write(ByteWriter& w) const {
                 w.u32(static_cast<uint32_t>(o.candidates));
                 w.str(o.last_veto);
                 io::put_count(w, o.picks.size());
-                for (const TacticalPpPick& k : o.picks) {
-                    w.i32(k.type);
-                    w.u8(static_cast<uint8_t>(k.source));
-                    w.i32(k.ref);
-                    w.i32(k.tf);
-                    w.i32(k.team);
-                }
+                for (const TacticalPpPick& k : o.picks) io::put_pick(w, k);
             }
         }
     }
@@ -4523,13 +4608,7 @@ void TacticalAiWorld::write(ByteWriter& w) const {
         w.u32(pp.plan);
         w.boolean(pp.reserved);
         io::put_count(w, pp.picks.size());
-        for (const TacticalPpPick& k : pp.picks) {
-            w.i32(k.type);
-            w.u8(static_cast<uint8_t>(k.source));
-            w.i32(k.ref);
-            w.i32(k.tf);
-            w.i32(k.team);
-        }
+        for (const TacticalPpPick& k : pp.picks) io::put_pick(w, k);
     }
     put_int_map(w, m.pool_reserved);
     put_int_map(w, m.pad_reserved);
@@ -4570,11 +4649,24 @@ void TacticalAiWorld::write(ByteWriter& w) const {
 
 bool TacticalAiWorld::read(ByteReader& r) {
     Impl& m = *impl_;
+    // sp3 t02: the snapshot store is refreshed from the restored battle store (battle.ai is read last), so the saved
+    // handles resolve against it; it is not saved state (every publish() copies it again).
+    if (m.snap_store) *m.snap_store = *m.live_store;
     const objects::ObjectStore& st = m.store;
     const size_t lib = m.library.plans.size();
     const size_t goal_types = m.defs.goals.size();
     const auto mi = static_cast<size_t>(ai_mode_of(m.cfg.mode));
-    if (!io::version(r, kTacticalAiSaveVersion)) return false;
+    // sp3: version 13 = an AI-lane world (its lane block follows) and loads only into one; version 12 (lane off) also
+    // loads into an AI-lane world, which then keeps its configured k_ai and its stream from the start seeds (the bench
+    // and harness saves).
+    const uint32_t version = r.u32();
+    if (!r.ok() || !(version == kTacticalAiSaveVersion || (m.cfg.ai_lane && version == kTacticalAiLaneSaveVersion))) return io::bad(r);
+    uint32_t saved_k_ai = m.cfg.k_ai;
+    GameRandom saved_lane_rng = m.own_rng;
+    if (version == kTacticalAiLaneSaveVersion) {
+        saved_k_ai = r.u32();
+        if (!r.ok() || saved_k_ai == 0 || !saved_lane_rng.read(r)) return io::bad(r);
+    }
     // ---- shape: the loader rebuilt the same session ----
     if (r.u32() != m.ai.size() || !r.ok()) return io::bad(r);
     for (const auto& a : m.ai)
@@ -4733,16 +4825,8 @@ bool TacticalAiWorld::read(ByteReader& r) {
                 o.ok = r.boolean();
                 o.candidates = r.u32();
                 o.last_veto = r.str();
-                o.picks.resize(io::count(r, 17));
-                for (TacticalPpPick& k : o.picks) {
-                    k.type = r.i32();
-                    const uint8_t source = r.u8();
-                    if (source > static_cast<uint8_t>(PpSource::Produce)) r.fail();
-                    k.source = static_cast<PpSource>(source);
-                    k.ref = r.i32();
-                    k.tf = r.i32();
-                    k.team = r.i32();
-                }
+                o.picks.resize(io::count(r, io::kPickBytes));
+                for (TacticalPpPick& k : o.picks) io::get_pick(r, k);
             }
             for (const uint32_t pl : sp.pp_plans)
                 if (pl >= m.library.plans.size()) return io::bad(r);
@@ -4863,16 +4947,8 @@ bool TacticalAiWorld::read(ByteReader& r) {
             pp.player = r.i32();
             pp.plan = r.u32();
             pp.reserved = r.boolean();
-            pp.picks.resize(io::count(r, 17));
-            for (TacticalPpPick& k : pp.picks) {
-                k.type = r.i32();
-                const uint8_t source = r.u8();
-                if (source > static_cast<uint8_t>(PpSource::Produce)) r.fail();
-                k.source = static_cast<PpSource>(source);
-                k.ref = r.i32();
-                k.tf = r.i32();
-                k.team = r.i32();
-            }
+            pp.picks.resize(io::count(r, io::kPickBytes));
+            for (TacticalPpPick& k : pp.picks) io::get_pick(r, k);
             if (!r.ok() || !valid_ai(pp.player) || (pp.plan != kAiNone && pp.plan >= lib) || id < 0 || id >= next[3] ||
                 (!new_pps.empty() && new_pps.rbegin()->first >= id))
                 return io::bad(r);
@@ -5023,6 +5099,10 @@ bool TacticalAiWorld::read(ByteReader& r) {
         for (const int32_t hp : list) m.tf_opportunity_fire_subscription(t, 0, hp);
     m.runtime->restore_pools(std::move(pools), static_cast<size_t>(created));
     m.scripts.restore(std::move(evals), std::move(missing));
+    if (m.cfg.ai_lane) {  // sp3: the saved k_ai and stream position
+        m.cfg.k_ai = saved_k_ai;
+        m.own_rng = saved_lane_rng;
+    }
     return true;
 }
 
@@ -5059,7 +5139,7 @@ std::vector<TacticalAiDifficulty> load_tactical_ai_difficulties(const FileProvid
     std::vector<uint8_t> bytes;
     if (!files.read("Data\\XML\\DifficultyAdjustments.xml", bytes)) return out;
     const data::XmlDocument doc =
-        data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), "DifficultyAdjustments.xml");
+        data::XmlDocument::parse(bytes, "DifficultyAdjustments.xml");
     if (!doc.ok()) return out;
     for (const data::XmlNode n : doc.root().children()) {
         TacticalAiDifficulty d;

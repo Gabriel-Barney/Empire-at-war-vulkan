@@ -1,6 +1,7 @@
 // Terrain decorations, CPU side (DECORATIONS.md 1, 3, 4, 5). See decorations.hpp for the contract.
 #include "alamo/terrain/decorations.hpp"
 
+#include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 
 #include <algorithm>
@@ -12,20 +13,9 @@ namespace alamo::terrain {
 
 namespace {
 
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
-std::string_view trim_ws(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
+// Names compared here (render modes, XML tags, material and parameter names) hold no '/' or '\\', so
+// alamo::iequals (which also folds '/' == '\\') gives the same answers as a plain ASCII compare.
+using alamo::iequals;
 
 float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
@@ -98,7 +88,7 @@ bool terrain_ok(const Terrain& t) {
 
 // ---------------------------------------------------------------- render modes
 RenderMode render_mode_from_string(std::string_view s) {
-    s = trim_ws(s);
+    s = ascii_trim(s);
     for (uint32_t i = 0; i < kRenderModeCount; ++i) {
         const std::string_view n = render_mode_name(static_cast<RenderMode>(i));
         if (!n.empty() && iequals(n, s)) return static_cast<RenderMode>(i);
@@ -488,11 +478,6 @@ std::array<uint8_t, 4> blob_vertex_color(RenderMode mode, const float (&c)[4], f
     default: break;
     }
     return {unorm8(rgb[2]), unorm8(rgb[1]), unorm8(rgb[0]), unorm8(out_a)};
-}
-
-void set_blob_color(BlobGeometry& g, RenderMode mode, const ShadowBlob& b) {
-    const auto c = blob_vertex_color(mode, b.color, b.intensity);
-    for (PrelitVertex& v : g.vertices) set_color(v.color, c);
 }
 
 bool build_blob_geometry(const Terrain& t, const ShadowBlob& b, RenderMode mode, BlobGeometry& out) {

@@ -9,8 +9,6 @@ Inputs found in --run-dir:
                            per-frame m_world series for planet candidates (shaders with UVOffset) -> steps per turn.
                            Heat pass: d3dretrace snapshots just before / after the first SceneHeat-like draw,
                            then the measured image shift (the 0x80 bias + half-texel term).
-  *.summary.json           RenderDoc extraction (rdoc_extract.py): Vulkan cull/front-face, stencil, clears,
-                           heat before/after PNGs (shift measured the same way), final image colour stats.
   shots\\*.png, *_d3d9.log DXVK run: listed, DXVK log summarised (draw counts are in the HUD screenshots).
 Outputs: <run>\\analysis\\facts.json and report.md.
 
@@ -39,7 +37,6 @@ import zlib
 from collections import Counter, defaultdict
 
 KIT = os.path.dirname(os.path.abspath(__file__))
-CALIBRATION = os.path.join(KIT, "selftest", "calibration.json")
 
 D3DCULL = {"1": "D3DCULL_NONE", "2": "D3DCULL_CW", "3": "D3DCULL_CCW"}
 CALL_RE = re.compile(r"^(\d+) ([A-Za-z0-9_:]+)\((.*)$")
@@ -526,29 +523,6 @@ def analyse_trace(trace, apitrace, d3dretrace, out_dir, track, max_calls, snap, 
         else:
             facts["heat_shift_apitrace"] = {"error": "d3dretrace produced no snapshots", "stderr": r.stderr[-2000:]}
     return facts
-
-
-# ---------------------------------------------------------------------------------------------- RenderDoc
-def analyse_rdoc(summary_path, calib):
-    s = json.load(open(summary_path, encoding="utf-8"))
-    out = {"summary": summary_path, "draws": len(s.get("draws", []))}
-    cull = Counter("%s/front_ccw=%s" % (d["cull"], d["front_ccw"]) for d in s.get("draws", []))
-    out["vulkan_cull_at_draw"] = dict(cull)
-    if calib:
-        m = {"%s/front_ccw=%s" % (v["cull"], v["front_ccw"]): k for k, v in calib.get("dxvk_cull_map", {}).items()}
-        out["d3d9_cull_at_draw (via self-test calibration)"] = {m.get(k, "?" + k): n for k, n in cull.items()}
-    st = Counter(json.dumps({"front": d["front"], "back": d["back"]}, sort_keys=True) for d in s.get("draws", []) if d["stencil"])
-    out["stencil_states"] = [{"state": json.loads(k), "draws": n} for k, n in st.most_common(10)]
-    out["clears"] = [{"eid": p["eid"], "values": p["clear_values"], "markers": p["markers"][-1:]} for p in s.get("passes", [])]
-    out["render_targets"] = dict(Counter("%dx%d %s" % (t["w"], t["h"], t["format"]) for t in s.get("textures", [])
-                                         if "ColorTarget" in t["category"] or "DepthTarget" in t["category"]))
-    imgs = s.get("images", {})
-    if "final" in imgs:
-        out["final_colour"] = dict(colour_stats(imgs["final"]["path"]), png=imgs["final"]["path"])
-    if "heat_before" in imgs and "heat_after" in imgs:
-        out["heat_shift"] = dict(measure_shift(imgs["heat_before"]["path"], imgs["heat_after"]["path"]),
-                                 before=imgs["heat_before"]["path"], after=imgs["heat_after"]["path"])
-    return out
 
 
 # ---------------------------------------------------------------------------------------------- vertex buffers (G1f t02)
@@ -1143,11 +1117,6 @@ def md(facts):
         if f["planet_candidates"]:
             L += ["- Planet candidates (m_world per frame, shaders with UVOffset): `%s`" % json.dumps(f["planet_candidates"])]
         L.append("")
-    for name, r in facts.get("renderdoc", {}).items():
-        L += ["## RenderDoc `%s`" % name, ""]
-        for k, v in r.items():
-            L.append("- %s: `%s`" % (k, json.dumps(v)))
-        L.append("")
     if facts.get("dxvk"):
         L += ["## DXVK", ""] + ["- %s: `%s`" % (k, json.dumps(v)) for k, v in facts["dxvk"].items()] + [""]
     return "\n".join(L) + "\n"
@@ -1227,7 +1196,7 @@ def main(argv):
                                                     "whose final image is snapshotted (default: 3 frames of the focus range)")
     ap.add_argument("--vb-draws", default="", help="A-B: decode the vertex-buffer contents read by the draws in this call range")
     ap.add_argument("--vs-filter", default="", help="--vb-draws: only draws whose 'vs | ps' description contains this text")
-    ap.add_argument("--facts", default="", help="--vb-draws: facts.json with the shader descriptions (default analysisacts.json)")
+    ap.add_argument("--facts", default="", help="--vb-draws: facts.json with the shader descriptions (default analysis\\facts.json)")
     ap.add_argument("--max-draws", type=int, default=64)
     ap.add_argument("--draw-calls", default="", help="--vb-draws: comma list of draw call numbers; only these draws")
     ap.add_argument("--tex-filter", default="", help="--vb-draws: comma list of texture handles; only draws with one of them on stage 0")
@@ -1265,8 +1234,7 @@ def main(argv):
         return 0
     out = os.path.join(rd, "analysis")
     os.makedirs(out, exist_ok=True)
-    calib = json.load(open(CALIBRATION)) if os.path.isfile(CALIBRATION) else None
-    facts = {"run_dir": rd, "apitrace": {}, "renderdoc": {}, "dxvk": {}, "errors": []}
+    facts = {"run_dir": rd, "apitrace": {}, "dxvk": {}, "errors": []}
     for n in sorted(os.listdir(rd)):
         p = os.path.join(rd, n)
         try:
@@ -1276,8 +1244,6 @@ def main(argv):
                     [focus[0] + (focus[1] - focus[0]) * k // 4 for k in (1, 2, 3)] if focus else [])
                 facts["apitrace"][n] = analyse_trace(p, a.apitrace, a.d3dretrace, out, a.track, a.max_calls,
                                                      not a.no_snapshots, focus, seq)
-            elif n.endswith(".summary.json"):
-                facts["renderdoc"][n] = analyse_rdoc(p, calib)
             elif n.endswith("_d3d9.log"):
                 txt = open(p, encoding="utf-8", errors="replace").read()
                 facts["dxvk"][n] = {"dxvk_version": (re.findall(r"DXVK: (\S+)", txt) or [None])[0],

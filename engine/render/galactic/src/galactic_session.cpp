@@ -1,13 +1,18 @@
 #include "alamo/render/galactic/galactic_session.hpp"
+#include "alamo/core/host_fs.hpp"
 
-#include <cctype>
 #include <filesystem>
 #include <fstream>
 
 #include "alamo/commands/command.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/sim_crc.hpp"
 
 namespace alamo::render {
+
+namespace {
+constexpr uint32_t kOrderInterval = 90;  // global frames between order rounds
+}
 
 // ------------------------------------------------------------------------------------------ session
 GalacticSession::GalacticSession(const objects::GameObjectTypes& types, jobs::JobSystem& js, const galactic::GalacticRules& rules,
@@ -19,23 +24,19 @@ GalacticSession::GalacticSession(const objects::GameObjectTypes& types, jobs::Jo
           cfg.players = sim::session_players(setup.players.size());
           return cfg;
       }()),
-      spec_(spec),
       lcg_(spec.seed * 2654435761u + 12345u) {
-    if (spec_.order_interval == 0) spec_.order_interval = 1;
     sim_ = host_.start_galactic(rules, setup, diagnostics);
     if (!sim_) return;
-    if (spec_.board_ground) {
-        // Ground units board their owner's orbiting fleet (AI / Lua direct path), planet order then player order.
-        const objects::ObjectStore& store = sim_->store();
-        for (PlanetIndex p = 0; p < sim_->planets().size(); ++p) {
-            for (int32_t pl = 0; pl < static_cast<int32_t>(sim_->players().size()); ++pl) {
-                if (pl == sim_->neutral_player() || sim_->fleets_at(p, pl).empty()) continue;
-                std::vector<objects::ObjectHandle> units;
-                for (objects::ObjectHandle h : sim_->planets()[p].surface)
-                    if (store.alive(h) && store.owner(h) == pl) units.push_back(h);
-                if (units.empty()) continue;
-                if (sim_->launch_units(pl, p, units) == commands::RejectReason::None) boarded_ += units.size();
-            }
+    // Ground units board their owner's orbiting fleet (AI / Lua direct path), planet order then player order.
+    const objects::ObjectStore& store = sim_->store();
+    for (PlanetIndex p = 0; p < sim_->planets().size(); ++p) {
+        for (int32_t pl = 0; pl < static_cast<int32_t>(sim_->players().size()); ++pl) {
+            if (pl == sim_->neutral_player() || sim_->fleets_at(p, pl).empty()) continue;
+            std::vector<objects::ObjectHandle> units;
+            for (objects::ObjectHandle h : sim_->planets()[p].surface)
+                if (store.alive(h) && store.owner(h) == pl) units.push_back(h);
+            if (units.empty()) continue;
+            if (sim_->launch_units(pl, p, units) == commands::RejectReason::None) boarded_ += units.size();
         }
     }
     between();  // UI input before the first tick (R1 / run_map order)
@@ -47,7 +48,7 @@ uint32_t GalacticSession::next() {
 }
 
 void GalacticSession::between() {
-    if (!sim_ || !spec_.orders || host_.frame() % spec_.order_interval != 0) return;
+    if (!sim_ || host_.frame() % kOrderInterval != 0) return;
     const objects::ObjectStore& store = sim_->store();
     const std::span<const galactic::PlanetState> planets = sim_->planets();
     const std::span<const galactic::FleetState> fleets = sim_->fleets();
@@ -105,19 +106,8 @@ uint64_t GalacticSession::state_hash() const {
 }
 
 namespace {
-bool same_name(std::string_view a, std::string_view b) {
-    auto trimmed = [](std::string_view v) {
-        while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
-        while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.remove_suffix(1);
-        return v;
-    };
-    a = trimmed(a);
-    b = trimmed(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
+// Faction name vs Good_Side_Name / Evil_Side_Name: case-insensitive, surrounding blanks ignored.
+bool same_name(std::string_view a, std::string_view b) { return ascii_iequals(ascii_trim(a), ascii_trim(b)); }
 }  // namespace
 
 GalacticViewOptions galactic_view_options(const galactic::GalacticSim& sim, std::string_view evil_side_name) {
@@ -129,6 +119,7 @@ GalacticViewOptions galactic_view_options(const galactic::GalacticSim& sim, std:
             break;
         }
     const galactic::GalacticRules& rules = sim.rules();
+    if (evil_side_name.empty()) evil_side_name = rules.constants.evil_side_name;
     for (const galactic::PlayerState& p : sim.players()) {
         const bool known = p.faction < rules.factions.size();
         o.neutral.push_back((known && rules.factions[p.faction].is_neutral) ? 1 : 0);
@@ -320,7 +311,7 @@ std::unique_ptr<GalacticWorld> load_galactic_world(std::unique_ptr<FileProvider>
     }
     w->faction_colors = load_faction_colors(*w->files);
     w->route_style = load_route_line_style(*w->files);
-    w->corruption_path = load_corruption_path_settings(*w->files);
+    w->corruption_path = load_corruption_path_settings(w->gdb->constants().element);  // cu5 t04: the parsed GameConstants
     return w;
 }
 

@@ -11,7 +11,7 @@ Spec: `docs/re/TSW_PLANET_DESTROY.md`. Three open **probe** items:
 ## What the mod does
 
 `build_mod.py` builds `corruption\Mods\TswPlanetProbe` from the installed game's own files (nothing from the game is
-stored in the repository; it reuses the `s10_map_owners` install reader):
+stored in the repository; it reuses the shared install reader `common/ted_owners.py`):
 
 - **Campaign "TSWP PROBE: KUAT"** (play the **Empire**): Byss (Empire: level-1 station, `Death_Star_II`, 3
   `Star_Destroyer`) - route `Byss_Kuat` - Kuat (Rebel: `Rebel_Star_Base_1`, 2 `Corellian_Corvette`,

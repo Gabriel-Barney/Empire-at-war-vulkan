@@ -15,6 +15,7 @@
 
 #include "alamo/commands/recording.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
@@ -62,12 +63,9 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
             std::fprintf(stderr, "--economy needs --game <corruption dir>, --data <dir> or ALAMO_FOC_DATA\n");
             return 2;
         }
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root;
-        vfs::parse_command_line(opt.game_args, vcfg);
-        files = vfs::Vfs::create(vcfg, &err);
+        files = vfs::mount_game(root, opt.game_args, &err);
         if (!files) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }
     }
@@ -116,27 +114,23 @@ int economy_run(const MapRunOptions& opt, const std::string& data_dir) {
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            CrcLog other;
-            run_one(counts[i], other);
-            const auto d = first_divergence(first, other);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], d.message.c_str());
-            if (d.diverged) ok = false;
-        }
+        const int32_t w0 = jobs::determinism_worker_counts().front();
+        ok = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                CrcLog other;
+                run_one(w, other);
+                return other;
+            },
+            [](const CrcLog& l) -> const CrcLog& { return l; },
+            [&](int32_t w, const CrcLog&, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: %s\n", w0, w, d.message.c_str());
+                return true;
+            });
     }
     first.comments = {"economy campaign " + name + " seed " + std::to_string(opt.seed) + " ticks " + std::to_string(opt.ticks)};
     if (!opt.crc_out.empty() && alamo_headless::save_crc_log(first, opt.crc_out, &err)) std::printf("wrote %s\n", opt.crc_out.c_str());
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first, ok) != 0) return 2;
     std::printf(ok ? "economy run: OK\n" : "economy run: FAILED\n");
     return ok ? 0 : 1;
 }
@@ -158,12 +152,9 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
             std::fprintf(stderr, "--story needs --game <corruption dir>, --data <dir> or ALAMO_FOC_DATA\n");
             return 2;
         }
-        vfs::VfsConfig vcfg;
-        vcfg.foc_root = root;
-        vfs::parse_command_line(opt.game_args, vcfg);
-        files = vfs::Vfs::create(vcfg, &err);
+        files = vfs::mount_game(root, opt.game_args, &err);
         if (!files) {
-            std::fprintf(stderr, "VFS: %s\n", err.c_str());
+            std::fprintf(stderr, "%s\n", err.c_str());
             return 2;
         }
     }
@@ -177,6 +168,7 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         std::fprintf(stderr, "story: game data incomplete (%zu diagnostics)\n", diag.size());
         return 2;
     }
+    // [name-ok: test host default campaign (--story without --map)]
     const std::string name = !opt.map.empty() ? opt.map : std::string("Full_Story_Campaign_Underworld");
     const data::CampaignDef* camp = nullptr;
     for (const auto& c : db.campaigns())
@@ -236,16 +228,24 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            std::string l2;
-            CrcLog c2;
-            run_one(counts[i], l2, c2);
-            const auto d = first_divergence(crc, c2);
-            std::printf("  workers %d vs %d: CRC %s, story log %s\n", counts.front(), counts[i], d.message.c_str(),
-                        l2 == log ? "identical" : "DIFFERS");
-            if (d.diverged || l2 != log) ok = false;
-        }
+        struct StoryOut {
+            std::string text;
+            CrcLog crc_log;
+        };
+        const int32_t w0 = jobs::determinism_worker_counts().front();
+        ok = jobs::check_worker_counts(
+            StoryOut{log, crc},
+            [&](int32_t w) {
+                StoryOut o;
+                run_one(w, o.text, o.crc_log);
+                return o;
+            },
+            [](const StoryOut& o) -> const CrcLog& { return o.crc_log; },
+            [&](int32_t w, const StoryOut& o, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: CRC %s, story log %s\n", w0, w, d.message.c_str(),
+                            o.text == log ? "identical" : "DIFFERS");
+                return o.text == log;
+            });
     }
     crc.comments = {header};
     if (!story_out.empty()) {
@@ -272,16 +272,7 @@ int story_run(const MapRunOptions& opt, const std::string& data_dir, const std::
         std::printf("story golden %s: %s\n", story_golden.c_str(), same ? "MATCH" : "DIFFERS");
         if (!same) ok = false;
     }
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, crc);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, crc, ok) != 0) return 2;
     std::printf(ok ? "story run: OK\n" : "story run: FAILED\n");
     return ok ? 0 : 1;
 }
@@ -293,13 +284,10 @@ int map_run(const MapRunOptions& opt) {
         std::fprintf(stderr, "--map needs --game <corruption dir> or ALAMO_FOC_DATA\n");
         return 2;
     }
-    vfs::VfsConfig vcfg;
-    vcfg.foc_root = root;
-    vfs::parse_command_line(opt.game_args, vcfg);
     std::string err;
-    auto files = vfs::Vfs::create(vcfg, &err);
+    auto files = vfs::mount_game(root, opt.game_args, &err);
     if (!files) {
-        std::fprintf(stderr, "VFS: %s\n", err.c_str());
+        std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
     auto t0 = std::chrono::steady_clock::now();
@@ -357,17 +345,20 @@ int map_run(const MapRunOptions& opt) {
 
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = alamo::jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            sim::MapRunSpec o = spec;
-            o.workers = counts[i];
-            o.record = nullptr;
-            const sim::MapRunResult r = sim::run_map(types, map, index, o);
-            print_run(r, o.workers, false);
-            const auto d = first_divergence(first.log, r.log);
-            std::printf("  workers %d vs %d: %s\n", counts.front(), counts[i], d.message.c_str());
-            if (d.diverged) ok = false;
-        }
+        ok = alamo::jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                sim::MapRunSpec o = spec;
+                o.workers = w;
+                o.record = nullptr;
+                return sim::run_map(types, map, index, o);
+            },
+            [](const sim::MapRunResult& r) -> const CrcLog& { return r.log; },
+            [&](int32_t w, const sim::MapRunResult& r, const CrcDivergence& d) {
+                print_run(r, w, false);
+                std::printf("  workers %d vs %d: %s\n", spec.workers, w, d.message.c_str());
+                return true;
+            });
     }
     first.log.comments = {"map " + opt.map + " seed " + std::to_string(opt.replay.empty() ? opt.seed : replay.seed) +
                           " ticks " + std::to_string(first.ticks) +
@@ -391,16 +382,7 @@ int map_run(const MapRunOptions& opt) {
         }
         std::printf("wrote %s (%zu records)\n", opt.crc_out.c_str(), first.log.records.size());
     }
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first.log);
-        std::printf("golden %s: %s\n", std::filesystem::path(opt.golden).filename().string().c_str(), d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.log, ok, true) != 0) return 2;
     std::printf(ok ? "map run: OK\n" : "map run: FAILED\n");
     return ok ? 0 : 1;
 }

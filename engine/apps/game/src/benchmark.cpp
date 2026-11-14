@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "json_text.hpp"
+
 namespace alamo::game {
 
 const char* bench_mode_name(BenchMode m) {
@@ -20,6 +22,10 @@ const char* bench_mode_name(BenchMode m) {
 }
 
 namespace {
+
+// Anti-aliasing modes of the Video dialog's list (ui::kAaOff / ui::kAaTaa in gui_menus.hpp; this library may build without
+// the ui module, app_benchmark.cpp checks they agree).
+constexpr int32_t kAaOff = 0, kAaTaa = 2;
 
 constexpr BenchPreset make_preset(std::string_view name, std::string_view description, uint32_t w, uint32_t h, int32_t detail,
                                   int32_t aa, int32_t aniso, bool effects, bool ao) {
@@ -39,36 +45,18 @@ constexpr BenchPreset make_preset(std::string_view name, std::string_view descri
 // [port] BM2a: the four quality levels of the Video dialog at 720p / 1080p, plus a small one for quick checks. V-sync off,
 // no frame cap, null audio everywhere.
 constexpr std::array<BenchPreset, 5> kPresets = {
-    make_preset("bm-low", "1280x720, Low detail (0), no TAA, no soft shadows / heat / bloom", 1280, 720, 0, 0, 0, false, false),
-    make_preset("bm-medium", "1920x1080, Medium detail (40), no TAA, effects on", 1920, 1080, 40, 0, 4, true, false),
-    make_preset("bm-high", "1920x1080, High detail (75), TAA Medium, effects on", 1920, 1080, 75, 63, 8, true, false),
-    make_preset("bm-ultra", "1920x1080, Ultra detail (100), TAA Medium, effects and ambient occlusion on, 16x anisotropy", 1920, 1080,
-                100, 63, 16, true, true),
-    make_preset("bm-smoke", "640x360, High detail (75), no TAA: quick test runs", 640, 360, 75, 0, 0, true, false),
+    make_preset("bm-low", "1280x720, Low detail (0), no TAA, no soft shadows / heat / bloom", 1280, 720, 0, kAaOff, 0, false, false),
+    make_preset("bm-medium", "1920x1080, Medium detail (40), no TAA, effects on", 1920, 1080, 40, kAaOff, 4, true, false),
+    make_preset("bm-high", "1920x1080, High detail (75), TAA, effects on", 1920, 1080, 75, kAaTaa, 8, true, false),
+    make_preset("bm-ultra", "1920x1080, Ultra detail (100), TAA, effects and ambient occlusion on, 16x anisotropy", 1920, 1080,
+                100, kAaTaa, 16, true, true),
+    make_preset("bm-smoke", "640x360, High detail (75), no TAA: quick test runs", 640, 360, 75, kAaOff, 0, true, false),
 };
 
 bool parse_u64(const std::string& s, uint64_t& out) {
     if (s.empty() || s.find_first_not_of("0123456789") != std::string::npos || s.size() > 18) return false;
     out = std::strtoull(s.c_str(), nullptr, 10);
     return true;
-}
-
-void json_string(std::string& o, std::string_view s) {
-    o.push_back('"');
-    for (const char c : s) {
-        const auto u = static_cast<unsigned char>(c);
-        if (c == '"' || c == '\\') {
-            o.push_back('\\');
-            o.push_back(c);
-        } else if (u < 0x20) {
-            char buf[8];
-            std::snprintf(buf, sizeof buf, "\\u%04x", static_cast<unsigned>(u));
-            o += buf;
-        } else {
-            o.push_back(c);
-        }
-    }
-    o.push_back('"');
 }
 
 std::string num(double v) {
@@ -104,9 +92,10 @@ int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkO
         o.verify = false;
         return 1;
     }
-    static constexpr std::array<std::string_view, 11> kValued = {"--benchmark",      "--bench-save",        "--bench-preset",  "--bench-ticks",
+    static constexpr std::array<std::string_view, 13> kValued = {"--benchmark",      "--bench-save",        "--bench-preset",  "--bench-ticks",
                                                                  "--bench-frames-per-tick", "--bench-settle", "--bench-max-unsettled",
-                                                                 "--bench-report",   "--bench-crc-out",     "--bench-png-dir", "--bench-png-every"};
+                                                                 "--bench-report",   "--bench-crc-out",     "--bench-png-dir", "--bench-png-every",
+                                                                 "--bench-redraw-every", "--bench-trace"};
     if (std::find(kValued.begin(), kValued.end(), std::string_view(a)) == kValued.end()) return 0;
     if (i + 1 >= args.size()) return fail("needs a value");
     const std::string& v = args[++i];
@@ -132,6 +121,8 @@ int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkO
         else if (a == "--bench-frames-per-tick") o.frames_per_tick = static_cast<uint32_t>(n);
         else if (a == "--bench-settle") o.settle_frames = static_cast<uint32_t>(n);
         else if (a == "--bench-max-unsettled") o.max_unsettled = static_cast<uint32_t>(n);
+        else if (a == "--bench-trace") o.trace_every = static_cast<uint32_t>(n);
+        else if (a == "--bench-redraw-every") o.redraw_every = static_cast<uint32_t>(n);
         else o.png_every = static_cast<uint32_t>(n);  // --bench-png-every
     }
     return 1;
@@ -149,6 +140,8 @@ std::string check_benchmark_options(const BenchmarkOptions& o) {
     if (o.frames_per_tick == 0 || o.frames_per_tick > 64) return "--bench-frames-per-tick must be 1..64";
     if (o.max_unsettled == 0) return "--bench-max-unsettled must be at least 1";
     if (o.png_every != 0 && o.png_dir.empty()) return "--bench-png-every needs --bench-png-dir DIR";
+    if (o.redraw_every != 0 && !o.fixed()) return "--bench-redraw-every needs --benchmark fixed";
+    if (o.redraw_every == 1) return "--bench-redraw-every must be 0 (off) or at least 2";
     return {};
 }
 
@@ -173,13 +166,27 @@ FrameTimeStats frame_time_stats(std::span<const float> ms) {
     return s;
 }
 
+void bench_hitches(std::span<const float> frame_ms, BenchReport& r) {
+    r.early_ms = frame_time_stats(frame_ms.first(std::min(frame_ms.size(), kEarlyFrames)));
+    r.hitch_threshold_ms = std::max(4.0 * r.frame_ms.median, 25.0);
+    r.hitch_count = 0;
+    r.hitches.clear();
+    for (size_t k = 0; k < frame_ms.size(); ++k)
+        if (static_cast<double>(frame_ms[k]) > r.hitch_threshold_ms) {
+            ++r.hitch_count;
+            r.hitches.emplace_back(k, frame_ms[k]);
+        }
+    std::stable_sort(r.hitches.begin(), r.hitches.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    if (r.hitches.size() > kMaxHitches) r.hitches.resize(kMaxHitches);
+}
+
 std::string bench_report_json(const BenchReport& r) {
     std::string o = "{\n  \"alamo_game_benchmark\": 1,\n";
     auto str = [&](const char* k, std::string_view v) {
         o += "  \"";
         o += k;
         o += "\": ";
-        json_string(o, v);
+        json_text::json_str(o, v);
         o += ",\n";
     };
     auto val = [&](const char* k, const std::string& v) {
@@ -207,6 +214,8 @@ std::string bench_report_json(const BenchReport& r) {
     val("warmup_frames", std::to_string(r.warmup_frames));
     val("unsettled_frames", std::to_string(r.unsettled_frames));
     val("excluded_frames", std::to_string(r.excluded_frames));
+    val("forced_redraws", std::to_string(r.forced_redraws));
+    val("taa_discarded", std::to_string(r.taa_discarded));
     val("wall_seconds", num(r.wall_seconds));
     val("frame_ms", stats_json(r.frame_ms));
     val("render_ms", stats_json(r.render_ms));
@@ -227,14 +236,23 @@ std::string bench_report_json(const BenchReport& r) {
     std::string gpu = "{";
     for (size_t k = 0; k < r.gpu_ms.size(); ++k) {
         if (k) gpu += ", ";
-        json_string(gpu, r.gpu_ms[k].first);
+        json_text::json_str(gpu, r.gpu_ms[k].first);
         gpu += ": " + stats_json(r.gpu_ms[k].second);
     }
     val("gpu_ms", gpu + "}");
+    // bm3 t04: load time and the first frames' hitches.
+    val("load_ms", num(r.load_ms));
+    val("early_ms", stats_json(r.early_ms));
+    std::string hit = "{\"threshold_ms\": " + num(r.hitch_threshold_ms) + ", \"count\": " + std::to_string(r.hitch_count) + ", \"worst\": [";
+    for (size_t k = 0; k < r.hitches.size(); ++k) {
+        if (k) hit += ", ";
+        hit += "[" + std::to_string(r.hitches[k].first) + ", " + num(static_cast<double>(r.hitches[k].second)) + "]";
+    }
+    val("hitches", hit + "]}");
     o += "  \"autopilot\": [";
     for (size_t k = 0; k < r.autopilot.size(); ++k) {
         if (k) o += ", ";
-        json_string(o, r.autopilot[k]);
+        json_text::json_str(o, r.autopilot[k]);
     }
     o += "]\n}\n";
     return o;

@@ -7,9 +7,9 @@
 // (that can present when ContextDesc::presentation is set). Discrete GPUs are preferred, then
 // integrated, then the largest device-local heap. ALAMO_VK_DEVICE=<index> overrides the choice.
 //
-// Queues: graphics (+present), compute and transfer. Compute/transfer use dedicated families when
-// the device has them (AMD: async compute + SDMA) and otherwise alias the graphics queue; the
-// accessors always return a usable Queue. Queue::submit() locks a per-VkQueue mutex, so several
+// Queues: graphics (+present) and transfer. Transfer uses a dedicated family when the device has
+// one (AMD: SDMA) and otherwise aliases the graphics queue; the accessors always return a usable
+// Queue. (Compute work runs on the graphics queue: no dedicated async-compute queue is created.) Queue::submit() locks a per-VkQueue mutex, so several
 // threads (frame loop, upload workers) may submit to the same queue.
 //
 // Validation: VK_LAYER_KHRONOS_validation is enabled only when the loader lists it (the loader
@@ -35,9 +35,14 @@ struct ContextDesc {
     const char* app_name = "alamo";
     Validation validation = Validation::IfAvailable;
     bool presentation = false;   // VK_KHR_surface (+ win32) and VK_KHR_swapchain; graphics queue must present
-    bool use_async_compute = true;   // use a dedicated compute family when present
     bool use_transfer_queue = true;  // use a dedicated transfer family when present
     int device_index = -1;           // -1: automatic (env ALAMO_VK_DEVICE overrides)
+    // [port] FSR upscaling (render/src/fsr.cpp): also enable every optional feature the device supports in the core
+    // 1.0-1.3 feature structs (except robustBufferAccess / robustImageAccess) and, when present, VK_KHR_cooperative_matrix,
+    // VK_KHR_shader_bfloat16 and VK_EXT_shader_float8 with their features - what AMD's FSR 4 ML upscaler may use
+    // (fp16 / int8 / dot product / wave matrix), and VK_EXT_mutable_descriptor_type for Intel's XeSS (render/src/xess.cpp).
+    // Rendering itself never relies on them. DeviceCaps::upscaler_features.
+    bool upscaler_features = false;
 };
 
 struct Queue {
@@ -53,13 +58,11 @@ struct Queue {
 // Pure queue-family choice, exposed for tests. present_ok may be empty (= every family presents).
 struct QueueFamilies {
     uint32_t graphics = UINT32_MAX;
-    uint32_t compute = UINT32_MAX;   // == graphics when no dedicated compute family
     uint32_t transfer = UINT32_MAX;  // == graphics when no usable dedicated transfer family
     bool valid() const { return graphics != UINT32_MAX; }
 };
 QueueFamilies select_queue_families(std::span<const VkQueueFamilyProperties> families,
-                                    std::span<const bool> present_ok, bool want_compute = true,
-                                    bool want_transfer = true);
+                                    std::span<const bool> present_ok, bool want_transfer = true);
 
 struct DeviceCaps {
     std::string name;
@@ -84,9 +87,16 @@ struct DeviceCaps {
     VkDeviceSize min_storage_buffer_offset_alignment = 256;
     VkDeviceSize non_coherent_atom_size = 256;
     uint32_t max_push_constants_size = 128;
+    // Sample counts usable for a colour + depth-stencil render target (framebufferColor / Depth / StencilSampleCounts,
+    // intersected; MSAA scene targets).
+    VkSampleCountFlags framebuffer_samples = VK_SAMPLE_COUNT_1_BIT;
     float timestamp_period_ns = 1.0f;   // ns per timestamp tick
     uint32_t timestamp_valid_bits = 0;  // graphics queue family; 0 = no timestamps
     bool host_query_reset = false;
+    bool upscaler_features = false;      // ContextDesc::upscaler_features took effect
+    bool cooperative_matrix = false;     // VK_KHR_cooperative_matrix enabled (with upscaler_features)
+    bool shader_float8 = false;          // VK_EXT_shader_float8 enabled (with upscaler_features)
+    bool full_screen_exclusive = false;  // [port] VK_EXT_full_screen_exclusive enabled (presentation contexts that offer it)
     uint8_t pipeline_cache_uuid[VK_UUID_SIZE] = {};
 };
 
@@ -112,17 +122,27 @@ public:
     const VkPhysicalDeviceMemoryProperties& memory_properties() const { return mem_props_; }
 
     const Queue& graphics() const { return queues_[0]; }
-    const Queue& compute() const { return queues_[slot_compute_]; }
     const Queue& transfer() const { return queues_[slot_transfer_]; }
-    bool has_async_compute() const { return slot_compute_ != 0; }
     bool has_transfer_queue() const { return slot_transfer_ != 0; }
     bool presentation_enabled() const { return presentation_; }
     bool instance_extension_enabled(const char* name) const;
+    bool device_extension_enabled(const char* name) const;  // [port] XeSS checks its required device extensions
 
     bool validation_enabled() const { return validation_; }
     uint32_t validation_errors() const { return errors_.load(); }
     uint32_t validation_warnings() const { return warnings_.load(); }
-    void reset_validation_counts() { errors_ = 0; warnings_ = 0; }
+    // [port] FSR: messages raised on this thread while a ThirdPartyValidation scope is open - inside a closed third-party
+    // runtime's own Vulkan calls (AMD's FSR DLL: its ML shaders use SPIR-V the pinned layer cannot judge) - are counted
+    // here instead of in errors / warnings, and the first few are logged. Our own calls never run inside such a scope.
+    uint32_t validation_third_party() const { return third_party_.load(); }
+    void reset_validation_counts() { errors_ = 0; warnings_ = 0; third_party_ = 0; }
+    class ThirdPartyValidation {
+    public:
+        ThirdPartyValidation();
+        ~ThirdPartyValidation();
+        ThirdPartyValidation(const ThirdPartyValidation&) = delete;
+        ThirdPartyValidation& operator=(const ThirdPartyValidation&) = delete;
+    };
 
     // Optimal-tiling (or linear) format feature check.
     bool format_supported(VkFormat format, VkFormatFeatureFlags features, bool optimal = true) const;
@@ -155,15 +175,16 @@ private:
     VkPhysicalDeviceMemoryProperties mem_props_{};
     QueueFamilies families_{};
 
-    Queue queues_[3];  // [0] graphics, then dedicated compute / transfer when present
-    std::unique_ptr<std::mutex> queue_mutex_[3];
-    uint32_t slot_compute_ = 0, slot_transfer_ = 0, queue_count_ = 1;
+    Queue queues_[2];  // [0] graphics, then the dedicated transfer queue when present
+    std::unique_ptr<std::mutex> queue_mutex_[2];
+    uint32_t slot_transfer_ = 0, queue_count_ = 1;
 
     bool presentation_ = false;
     bool validation_ = false;
     bool debug_utils_ = false;
-    std::atomic<uint32_t> errors_{0}, warnings_{0};
+    std::atomic<uint32_t> errors_{0}, warnings_{0}, third_party_{0};
     std::vector<std::string> instance_extensions_;
+    std::vector<std::string> device_extensions_;
 
     std::mutex immediate_mutex_;
     VkCommandPool immediate_pool_ = VK_NULL_HANDLE;

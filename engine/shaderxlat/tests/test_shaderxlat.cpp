@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/shaderxlat/interpreter.hpp"
 #include "alamo/shaderxlat/shaderxlat.hpp"
@@ -24,8 +25,6 @@
 #include "test_common.hpp"
 
 namespace alamo::shaderxlat::test {
-
-int g_fail = 0;
 
 namespace {
 
@@ -77,6 +76,19 @@ bool parse_tokens(const std::vector<uint32_t>& t, std::string* err = nullptr) {
 }
 
 // ---------------------------------------------------------------- parser
+// A key without the source hash (source_hash 0): cache.hpp's CacheKey::make always keys on the HLSL text, so the
+// concurrency / file-name tests build theirs from the blob fields directly (cheap, no translation needed).
+CacheKey plain_key(std::span<const uint8_t> bytecode, const TranslateOptions& options, std::string_view compiler) {
+    CacheKey k;
+    k.blob_fnv = alamo::fnv1a64(bytecode.data(), bytecode.size());
+    k.blob_crc = alamo::crc32(bytecode.data(), bytecode.size());
+    k.blob_size = static_cast<uint32_t>(bytecode.size());
+    k.options_key = options.key();
+    k.translator_version = kTranslatorVersion;
+    k.compiler = std::string(compiler);
+    return k;
+}
+
 void test_parser_units() {
     std::printf("parser unit tests\n");
     {
@@ -220,7 +232,23 @@ void test_parser_malformed() {
         Translation t;
         return translate(q, TranslateOptions{}, t, &err);
     };
-    CHECK(!tr("vs_3_0\ndcl_position v0\nmov r0, v0\n"));
+    // Shader model 3 (modc t22): what the translator does not cover is rejected with a message.
+    CHECK(tr("vs_3_0\ndcl_position v0\ndcl_position o0\nmov o0, v0\n"));
+    CHECK(!tr("vs_3_0\ndcl_position v0\ndcl_position o0\nmov o1, v0\n"));                  // o1 without dcl
+    CHECK(!tr("vs_3_0\ndcl_position v0\ndcl_normal o1\nmov o1, v0\n"));                    // no varying slot
+    CHECK(!tr("vs_3_0\ndcl_position v0\ndcl_texcoord o0\ndcl_texcoord o1\nmov o0, v0\n"));  // same usage twice
+    CHECK(!tr("vs_3_0\ndcl_texcoord v0\ndcl_2d s0\ndcl_position o0\ntexldl r0, v0, s0\nmov o0, r0\n"));  // vertex texture fetch
+    CHECK(!tr("ps_3_0\nmov oC0, c40\n"));                                                    // c40 not in PSConstants
+    CHECK(tr("ps_3_0\ndef c40, 1, 0, 0, 1\nmov oC0, c40\n"));                                 // def literal is fine
+    CHECK(!tr("ps_3_0\nmov oC0, v0\n"));                                                     // v0 without dcl
+    CHECK(!tr("ps_3_0\ndcl_normal v0\nmov oC0, v0\n"));                                      // no varying slot
+    {
+        std::string e2;
+        CHECK(!parse_tokens(asm_tokens("ps_3_0\nmov oC0, t0\n"), &e2));  // no t# in ps_3_0
+        CHECK(!parse_tokens(asm_tokens("ps_2_0\nmov oC0, vPos\n"), &e2));  // vPos is ps_3_0 only
+        CHECK(parse_tokens(asm_tokens("ps_3_0\nmov oC0, c200\n"), &e2));   // ps_3_0 parses c0..c223
+        CHECK(!parse_tokens(asm_tokens("ps_3_0\nmov oC0, c224\n"), &e2));
+    }
     CHECK(!tr("vs_2_0\ndefb b0, true\ndcl_position v0\nif b0\nmov oPos, v0\n"));  // unterminated if
     CHECK(!tr("vs_2_0\nbreak\n"));
     CHECK(!tr("vs_2_0\ncall l3\n"));
@@ -325,7 +353,7 @@ void test_review_regressions() {
         Translation t2 = t;
         t2.hlsl += " ";
         const CacheKey b = CacheKey::make(blob, TranslateOptions{}, "dxc-test 1.0", t2);
-        const CacheKey plain = CacheKey::make(blob, TranslateOptions{}, "dxc-test 1.0");
+        const CacheKey plain = plain_key(blob, TranslateOptions{}, "dxc-test 1.0");
         CHECK(a.source_hash != 0 && a.source_hash != b.source_hash);
         CHECK(a.describe() != b.describe() && a.file_name() != b.file_name() && a.file_name() != plain.file_name());
         CHECK(a.translator_version == kTranslatorVersion && kTranslatorVersion >= 2);
@@ -380,6 +408,17 @@ void test_emitter(const std::vector<Blob>& syn) {
     has("ps14_phase", ", -8.0, 8.0)");
     has("ps20_ops", "[[vk::combinedImageSampler]][[vk::binding(1, 1)]] TextureCube<float4> tex1;");
     has("ps2x_flow", "SampleGrad");
+    has("vs30_io", "    oD0 = o1;");
+    has("vs30_io", "    OUT.oD0 = oD0;");         // vs_3_0 colors are not saturated
+    has("vs30_io", "    OUT.oFog = oFog.x;");
+    has("vs30_io", "[[vk::builtin(\"PointSize\")]]");
+    has("ps30_io", "SampleLevel(");
+    has("ps30_io", "bool xl_face : SV_IsFrontFace;");
+    has("ps30_io", "vPos = float4(IN.vpos.xy - 0.5, 0.0, 0.0);");
+    has("ps30_io", "    v4 = float4(IN.fog, 0.0, 0.0, 0.0);");
+    has("ps30_io", "centroid float4 t1 : TEXCOORD1;");
+    has("ps30_io", "OUT.color = xl_epilogue(oC0);");  // no fixed-function fog for ps_3_0
+    has("ps30_io", "if (i == 40) v = k40;");
 
     // Interfaces.
     if (tr.count("vs11_ops")) {
@@ -403,10 +442,29 @@ void test_emitter(const std::vector<Blob>& syn) {
     if (tr.count("ps11_texbem")) CHECK(tr["ps11_texbem"].iface.bump_env);
     if (tr.count("vs20_intconst")) CHECK(tr["vs20_intconst"].iface.int_bool_constants);
     if (tr.count("ps20_mrt")) CHECK(tr["ps20_mrt"].iface.color_outputs == 2);
+    if (tr.count("vs30_io")) {
+        const ShaderInterface& f = tr["vs30_io"].iface;
+        CHECK(f.major == 3 && f.inputs.size() == 4 && f.writes_point_size && f.relative_addressing);
+        // COLOR0, COLOR1, TEXCOORD0 (.xy), TEXCOORD1, TEXCOORD5 (.xyz), FOG.
+        CHECK(f.varyings.size() == 6);
+        if (f.varyings.size() == 6) {
+            CHECK(f.varyings[0].location == kVaryingColor0 && f.varyings[1].location == kVaryingColor1);
+            CHECK(f.varyings[2].location == kVaryingTexcoord0 && f.varyings[2].mask == 3);
+            CHECK(f.varyings[4].location == kVaryingTexcoord0 + 5 && f.varyings[4].mask == 7);
+            CHECK(f.varyings[5].location == kVaryingFog);
+        }
+    }
+    if (tr.count("ps30_io")) {
+        const ShaderInterface& f = tr["ps30_io"].iface;
+        CHECK(f.major == 3 && f.samplers.size() == 3 && f.writes_depth && f.can_discard && !f.int_bool_constants);
+        // COLOR0, COLOR1, TEXCOORD0, TEXCOORD1, TEXCOORD7, FOG.
+        CHECK(f.varyings.size() == 6);
+        if (f.samplers.size() == 3) CHECK(f.samplers[1].dim == TextureDim::Cube);
+    }
 
     // Golden text.
     const std::filesystem::path gdir = ALAMO_SHADERXLAT_GOLDEN_DIR;
-    for (const char* name : {"vs11_skin", "vs20_flow", "ps11_ops", "ps14_phase", "ps20_ops"}) {
+    for (const char* name : {"vs11_skin", "vs20_flow", "ps11_ops", "ps14_phase", "ps20_ops", "vs30_io", "ps30_io"}) {
         if (!tr.count(name)) continue;
         const std::filesystem::path f = gdir / (std::string(name) + ".hlsl");
         if (g_write_golden) {
@@ -581,7 +639,7 @@ CacheEntry cache_test_entry() {
 int cache_writer(const std::string& dir, int id) {
     ShaderCache c(dir);
     const std::vector<uint8_t> blob = {1, 2, 3, 4, 5, 6, 7, 8};
-    const CacheKey shared = CacheKey::make(blob, TranslateOptions{}, "dxc-test 1.0");
+    const CacheKey shared = plain_key(blob, TranslateOptions{}, "dxc-test 1.0");
     const CacheEntry e = cache_test_entry();
     int bad = 0;
     for (int i = 0; i < 60; ++i) {
@@ -592,7 +650,7 @@ int cache_writer(const std::string& dir, int id) {
         b2.push_back(0xEE);
         b2.push_back(static_cast<uint8_t>(id));
         b2.push_back(static_cast<uint8_t>(i));
-        if (!c.store(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), e)) ++bad;
+        if (!c.store(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), e)) ++bad;
     }
     return bad ? 1 : 0;
 }
@@ -610,7 +668,7 @@ void test_cache(bool deep) {
     ShaderCache cache(dir);
     const std::vector<uint8_t> blob = {1, 2, 3, 4, 5, 6, 7, 8};
     TranslateOptions o;
-    CacheKey k = CacheKey::make(blob, o, "dxc-test 1.0");
+    CacheKey k = plain_key(blob, o, "dxc-test 1.0");
     const CacheEntry e = cache_test_entry();
     CacheEntry got;
     CHECK(!cache.load(k, got));
@@ -622,8 +680,8 @@ void test_cache(bool deep) {
     k2.compiler = "dxc-test 1.1";
     CHECK(!cache.load(k2, got));
     o.sampler_dims[3] = TextureDim::Cube;
-    CHECK(!cache.load(CacheKey::make(blob, o, "dxc-test 1.0"), got));
-    CHECK(k.file_name() != CacheKey::make(blob, o, "dxc-test 1.0").file_name());
+    CHECK(!cache.load(plain_key(blob, o, "dxc-test 1.0"), got));
+    CHECK(k.file_name() != plain_key(blob, o, "dxc-test 1.0").file_name());
     // Corruption / truncation is a miss.
     const auto file = dir / k.file_name();
     {
@@ -648,7 +706,7 @@ void test_cache(bool deep) {
                 b2.push_back(static_cast<uint8_t>((t * 40 + i) >> 8));
                 CacheEntry e2 = e;
                 e2.spirv.push_back(static_cast<uint32_t>(t * 40 + i));
-                if (!c.store(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), e2)) ++failures;
+                if (!c.store(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), e2)) ++failures;
                 CacheEntry r;
                 if (c.load(k, r) && r.spirv != e.spirv) ++failures;
             }
@@ -662,13 +720,13 @@ void test_cache(bool deep) {
         b2.push_back(static_cast<uint8_t>(i & 0xFF));
         b2.push_back(static_cast<uint8_t>(i >> 8));
         CacheEntry r;
-        if (cache.load(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv.back() == static_cast<uint32_t>(i)) ++ok;
+        if (cache.load(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv.back() == static_cast<uint32_t>(i)) ++ok;
     }
     CHECK(ok == 256 + 64);
     size_t tmp = 0;
     std::error_code lec;
     for (const auto& de : alamo::list_directory(dir, lec))
-        if (de.string().find(".tmp.") != std::string::npos) ++tmp;
+        if (de.extension() == ".tmp") ++tmp;  // write_file_atomic temp names end in .tmp
     CHECK(!lec);
     CHECK(tmp == 0);
     std::printf("  concurrent stores (8 threads): %d failures, %zu leftover temp files\n", failures.load(), tmp);
@@ -693,11 +751,11 @@ void test_cache(bool deep) {
                 b2.push_back(static_cast<uint8_t>(p));
                 b2.push_back(static_cast<uint8_t>(i));
                 CacheEntry r;
-                found += cache.load(CacheKey::make(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv == e.spirv ? 1 : 0;
+                found += cache.load(plain_key(b2, TranslateOptions{}, "dxc-test 1.0"), r) && r.spirv == e.spirv ? 1 : 0;
             }
         size_t tmp2 = 0;
         for (const auto& de : alamo::list_directory(dir, lec))
-            if (de.string().find(".tmp.") != std::string::npos) ++tmp2;
+            if (de.extension() == ".tmp") ++tmp2;
         std::printf("  4 writer processes: %d failed, %d/240 entries readable, shared entry ok: %s, %zu temp files\n", rc_bad.load(),
                     found, cache.load(k, got) && got.spirv == e.spirv ? "yes" : "no", tmp2);
         CHECK(rc_bad.load() == 0 && found == 240 && tmp2 == 0);

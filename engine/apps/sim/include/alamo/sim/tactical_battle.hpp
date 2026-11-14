@@ -62,38 +62,39 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "alamo/commands/command.hpp"
 #include "alamo/commands/events.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/sim/battle_catalog.hpp"
+#include "alamo/sim/fleet_groups.hpp"  // [port] fleet groups
 #include "alamo/sim/game_modes.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
+#include "alamo/tactical/movement/fleet_placement.hpp"  // cu8l t03
 #include "alamo/tactical/movement/movement_system.hpp"
 #include "alamo/tactical/movement/space_avoid.hpp"  // SPACE_AVOIDANCE (fighter avoidance members)
 #include "alamo/tactical/abilities/space_fields.hpp"     // L1 systems
 #include "alamo/tactical/combat/weather.hpp"            // L1 systems
+#include "alamo/tactical/combat/hero_clash.hpp"         // s78n t06: land hero clashes
 #include "alamo/tactical/abilities/special_weapons.hpp"  // L1 systems
 #include "alamo/tactical/movement/hyperspace.hpp"        // L1 systems
 #include "alamo/tactical/hangar/engine_loops.hpp"         // hangars / engine loops (STATION_HANGARS_SOUND.md)
 #include "alamo/tactical/hangar/hangar_system.hpp"
 #include "alamo/tactical/hangar/contents.hpp"            // station contents / tactical production
+#include "alamo/tactical/services/service_graph.hpp"  // SP5: the tick as a services phase graph
 #include "alamo/terrain/ted.hpp"
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
 #include "alamo/ai/tactical/damage_tracking.hpp"
 #endif
-#ifdef ALAMO_SIM_HAVE_FOG
 #include "alamo/tactical/fog/fog_of_war.hpp"  // fog of war hookup (owner: fog agent)
-#endif
-#ifdef ALAMO_SIM_HAVE_GARRISON
 #include "alamo/tactical/garrison/capture.hpp"   // S4 garrisons + structure capture (owner: S4 agent)
 #include "alamo/tactical/garrison/garrison.hpp"
-#endif
 
 namespace alamo::anim {
 struct IdleRecord;  // s78l t03 (alamo/anim/anim_behaviors.hpp)
@@ -116,8 +117,7 @@ struct BattleConfig {
     uint32_t end_hold_frames = 0;
     float space_spacing = 250.0f;      // [port] formation spacing (world units)
     float land_spacing = 40.0f;
-    // S10-int
-    bool particles = true;                    // spawn sim PARTICLE objects (R4 B.1 layer 1)
+    // S10-int (cu9 t13: sim PARTICLE objects are always spawned, R4 B.1 layer 1; the `particles` switch is gone)
     uint32_t particle_default_lifetime = 30;  // [port] frames when Particle_Lifetime_Frames is unset / <= 0
     uint32_t dummy_lifetime = 900;            // [port] a Dummy_Barrage_Target is removed after this many frames at most
     float walk_speed_ratio = 0.5f;            // [port M] WALKMOVE below this x max speed (global 0x140b16d04 unknown)
@@ -127,10 +127,7 @@ struct BattleConfig {
     float presence_relaxation_seconds = 3.0f;
     // Fog of war (docs/re/FOG_OF_WAR.md; owner: fog agent). Not in the frame CRC, never draws RNG.
     bool fog = true;
-    // OI fog: overrun reveal (FOG_OF_WAR §3.3) inputs: game type (mode +0xc; only the multiplayer types 1, 2, 4
-    // reveal; [port] 0 = campaign / single-player, never) and the mode's overrun-enabled byte (+0x2cf).
-    int32_t fog_game_type = 0;
-    bool fog_overrun = true;
+    // The overrun reveal (FOG_OF_WAR §3.3) runs only in the multiplayer game types: not ported (CU7).
     // --- integration fixes (alamo_game): [port] true = the units of human players (GalacticSim::players()[p].human)
     // take orders only from commands (TacticalBattle::order_*): the stand-in orders (issue_orders, BattleAi's
     // stand-in) skip them. Default false: headless sims / goldens let the stand-in drive the "human" side too. ---
@@ -150,13 +147,18 @@ struct BattleConfig {
     // both slots' team markers become their faction's objects, Income_Stream_Ability pays, the skirmish victory rules apply
     // (tactical_battle_skirmish.cpp). The attract demo's map battle leaves it off.
     bool skirmish_map = false;
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): the Capture Control Points game type (4), land only: each player's win condition is 0x15
+    // CONTROL_POINT_DOMINATION instead of the map kind's default. Off: unchanged rules.
+    bool control_point_domination = false;
     // --- S4 garrisons / structure capture (owner: S4 agent; tactical_battle_garrison.cpp) ---
     // GameConstants Garrisoned_Max_Attack_Distance_Multiplier / Land_ / Space_Capture_Allowed_Countdown_Seconds (vanilla
     // values; used only when the catalog's GameConstants lack them: BattleCatalog::capture_countdown).
     float garrisoned_range_multiplier = 1.5f;
     float land_capture_countdown = 30.0f, space_capture_countdown = 30.0f;
-    bool garrisons = true;  // garrison holders / occupants / capture points registered (false: no S4 battle state)
+    // cu9 t13: garrison holders / occupants / capture points are always registered (the `garrisons` switch is gone).
     // --- end S4 ---
+    // SP5 t03: the host's session seed (SimHost::session_seed), the first input of the services' counter-based streams.
+    uint32_t session_seed = 0;
 };
 
 struct BattleStats {
@@ -169,6 +171,18 @@ struct BattleStats {
     // t50 (land skirmish): pads of the two slots, pads that started built, structures started on a pad during the battle.
     uint32_t skirmish_pads = 0, skirmish_prebuilt = 0, pad_builds = 0;
     uint32_t pad_restored = 0;  // §9.4 persisted pad children recreated at setup
+    // s78n t20 (skirmish, SKIRMISH_SETUP §2.2; not saved): per side, its spawn-point marker (when one was found) and where its
+    // first start-force unit was placed.
+    bool skirmish_marked[2] = {false, false}, start_placed[2] = {false, false};
+    Vec3 skirmish_marker[2] = {}, first_start[2] = {};
+    // cu8l t03: the campaign space fleet placement (objects placed, their adopt draws), the vf82 pass's TEAM-container lock
+    // adopt draws, the arrivals started and the arrival ends that registered a new coordinator.
+    uint32_t fleet_placed = 0, fleet_adopts = 0, fleet_lock_adopts = 0, fleet_arrivals = 0, fleet_arrival_ends = 0;
+    // s78n t20 stage A (land attack blocks; not saved): approaches re-issued by the 30-frame checks, land stops, and
+    // re-approaches skipped because their goal was where the mover stood (s78n t25.3: not retail, dropped - always 0).
+    uint32_t attack_reissues = 0, attack_land_stops = 0, attack_reissue_skips = 0;
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 C 3): blocks dropped after arrival on a hidden / stealthed target
+    uint32_t attack_unseen_drops = 0;
 };
 
 // A render-side attachment reported by the sim (Damaged_Smoke_Asset_Name at 75 % / 50 %).
@@ -227,8 +241,9 @@ struct LandDropRadiusObject {
 };
 bool land_drop_radius_ok(float x, float y, std::span<const LandDropRadiusObject> objects, bool use_reinforcement_points);
 // The drop shape of a company type (its Company_Units in list order, or the type itself) and the half extents 0x371be0
-// of a type: Custom_Hard_X/YExtent x Scale_Factor when both are > 0, else per axis the hard extent when > 0, else |land
-// model box max x / y|, x Scale_Factor; no model -> 0 on that axis (a1h t06, TACTICAL_GAPS §4.2.2 item 4).
+// of a type with the land model (s78n t10, TACTICAL_COMBAT §5.4.6 item 1): Custom_Hard_X/YExtent x Scale_Factor when both
+// are > 0; else no Land_Model_Name -> (0, 0); else per axis the hard extent when > 0, else the |collision-bound half x /
+// y| of the land model, x Scale_Factor ([port] a named model that does not load: the hard extent, else 0).
 LandDropShape land_drop_shape(const objects::GameObjectTypes& types, const BattleCatalog* catalog, const galactic::ConflictRules& rules,
                               uint32_t company_type);
 void drop_half_extents(const objects::GameObjectTypes& types, const BattleCatalog* catalog, uint32_t type, float& hx, float& hy);
@@ -338,6 +353,12 @@ public:
     TacticalBattle(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
                    galactic::BattleRequest request, BattleConfig cfg = {}, const ParallelFor& pf = serial_for);
     ~TacticalBattle();
+    // OPT3 t12: loads, through `pf`, the catalog's model data (bones, avoid models, land stamp extents) of the types a map
+    // battle on `map` is likely to use: the forces' spawn types, the map's placement types and their pads' buildable /
+    // constructed types. Called before the battle's first tick (CampaignBattles::start_map_battle, at session load), so the
+    // setup finds them cached. The cache is a pure memo of the model files: nothing the battle computes depends on it.
+    static void prepare_models(const BattleCatalog& catalog, const galactic::GalacticSim& galaxy, const galactic::ConflictRules& rules,
+                               const galactic::BattleRequest& request, const terrain::MapData& map, const ParallelFor& pf);
     TacticalBattle(const TacticalBattle&) = delete;
     TacticalBattle& operator=(const TacticalBattle&) = delete;
 
@@ -460,10 +481,8 @@ public:
                                           objects::ObjectId holder, SimRng& rng);
     commands::RejectReason order_leave_garrison(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units);
     uint32_t eject_garrison(TacticalMode& mode, objects::ObjectId holder);
-#ifdef ALAMO_SIM_HAVE_GARRISON
     const tactical::garrison::GarrisonSystem& garrison() const { return garrison_; }
     const tactical::garrison::CapturePointSystem* captures() const { return captures_.get(); }
-#endif
     // --- end S4 ---
 
     // --- integration fixes: human order API (alamo_game battle_orders.cpp) ---
@@ -493,6 +512,13 @@ public:
     commands::RejectReason order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y,
                                       SimRng& rng, float facing_deg = tactical::movement::kNoFacing, bool attack_move = false,
                                       bool queued = false, uint8_t move_flags = 0, bool switch_locomotor = false);
+    // [port: Gabriel 2026-11-13] Fleet cohesion: a per-player setting, not in retail. Tight: the player's space move orders
+    // (order_move and the queued moves it runs later) keep the fleet together - every ship that is not a fighter flies at
+    // the slowest such ship's speed (mv::MoveOrder::cohesion_tight). Loose (the default): retail behaviour, each ship at
+    // its own speed. Set by the port event kFleetCohesionSubtype (GameSession); saved in the battle state (version 13).
+    // AI, Lua and script moves are never tight. Land ignores it (land group moves already share the slowest speed).
+    void set_fleet_cohesion(uint8_t player, bool tight);
+    bool fleet_cohesion(uint8_t player) const { return player < fleet_cohesion_.size() && fleet_cohesion_[player] != 0; }
     // Facing event (id 20, P1_DOUBLE_CLICK_MOVE.md §2.2: a land drag that started on a selected unit; rotate only) [port:
     // MovementSystem has no turn-in-place order]: one single-unit move per eligible movable unit (selection order) to its
     // own position with final facing `facing_deg`; attack orders and order queues are kept.
@@ -504,10 +530,37 @@ public:
     commands::RejectReason order_move_to_object(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units,
                                                 objects::ObjectId target, SimRng& rng, bool attack_move = false, bool queued = false);
     commands::RejectReason order_stop(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units);
+    // ---- [port] Fleet groups, phase 1 (sim/fleet_groups.hpp; docs/DECISIONS.md "Fleet groups: exception to the current
+    // focus"). Off by default: while off, fleet_group_command is NotAllowed, fleet_order_move passes every unit through
+    // (`rest`) and nothing reaches the CRC or a save. The host enables it before the first tick (CampaignBattles).
+    void enable_fleet_groups(bool on) { fleet_on_ = on; }
+    bool fleet_groups_enabled() const { return fleet_on_; }
+    const FleetGroups& fleet_groups() const { return fleet_; }
+    // A kFleetGroupSubtype payload for `player`, applied to the player's live movable battle units in `selection`.
+    commands::RejectReason fleet_group_command(TacticalMode& mode, uint8_t player, std::span<const uint8_t> data,
+                                               std::span<const objects::ObjectId> selection);
+    // A human move order: the members of `player`'s locked groups among `units` get one order_move each to their slot (in
+    // group order, ascending id); the other units are returned in `rest` (selection order) for the caller's normal move.
+    // Queued moves are not expanded (all of `units` goes to `rest`). `moved` = how many locked groups were ordered.
+    void fleet_order_move(TacticalMode& mode, uint8_t player, std::span<const objects::ObjectId> units, float x, float y, SimRng& rng,
+                          float facing_deg, bool attack_move, bool queued, uint8_t move_flags, std::vector<objects::ObjectId>& rest,
+                          uint32_t& moved);
+    // Any other order to these units stops their locked group's running move.
+    void fleet_interrupt(std::span<const objects::ObjectId> units) {
+        if (fleet_on_) fleet_.interrupt(units);
+    }
+    void write_fleet_groups(ByteWriter& w) const { fleet_.write(w); }
+    bool read_fleet_groups(ByteReader& r) { return fleet_.read(r); }
     // The target's first targetable hard point of HardPointType `type` (Attack ref2 = 1 + type), -1 when none.
     int32_t first_hardpoint_of_type(objects::ObjectId target, int32_t type) const;
     // True when `player`'s units are left to commands (BattleConfig::skip_human_units and a human galactic player).
     bool commanded_by_player(int32_t player) const;
+    // bkt1 t07 (b0084) [port]: the stand-in orders (issue_orders, BattleAi::standin_orders: an attack on the nearest enemy
+    // anywhere on the map, for the sides without a tactical AI - in vanilla the headless 'human' participant) drive only
+    // the battle's attacker and defender. A third party (a story / hostile / native owner, Participant::third or a Lua
+    // spawn) has no AI in retail either: its units idle and fire at what their own targeting acquires in range. Land only
+    // for now: a space skirmish puts its extra slot players outside attacker / defender (backlog entry from bkt1).
+    bool standin_owner(int32_t player) const;
     // OI follow-up t03 (A1_READINGS §28.9): movement locked (0x39ad40) = the abilities' share of the obj +0x3a8 counter,
     // or a share a Lua bridge reports (Lock_Current_Orders, a running Divert). The lock never changes speed: a group move
     // (player commands, AI orders, the stand-in) leaves locked units out and they keep their current order; ability
@@ -516,6 +569,16 @@ public:
     // Registered per bridge owner `key` (an empty fn removes it; the battle outlives its AI / story bridges).
     void set_script_movement_lock(const void* key, std::function<bool(objects::ObjectId)> fn);
     bool script_movement_locked(objects::ObjectId id) const;  // the bridges' shares only
+    // s78n t06 review: the hero clash's share of the lock (+0x3b4, HERO_CLASH §3.2) while it is held. release_hero_clash_lock
+    // = a Lua Unlock_Current_Orders through the hero's land TEAM object (A1_READINGS §28.9 item 4: retail's decrement of
+    // the member's counter): the hero's movement orders are free again while +0x3b4 stays set (until the clash release
+    // clears both). False when the clash holds no share.
+    bool hero_clash_locked(objects::ObjectId id) const;
+    bool release_hero_clash_lock(objects::ObjectId id);
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): a Lua Lock_Current_Orders that took the obj +0x3a8 counter 0 -> 1 (the bridge's
+    // script share, lua::TacticalScriptHooks::movement_first_lock): the first lock's split / adopt (at most one draw of
+    // the battle's synced RNG, at the call).
+    void script_first_lock(TacticalMode& mode, objects::ObjectId id);
     // --- end human order API ---
 
     // --- P host (owner: game host agent): human reinforcements ---
@@ -569,11 +632,19 @@ public:
     // ignores movers (a locomotor and no LAND_OBSTACLE) and counts landing transports; a human issuer counts movers and
     // ignores TRANSPORT_LANDING objects except persistent ones (Create_Cinematic_Transport persist, a1i t05). Footprint =
     // position + R(yaw)(Custom_Hard_X/YExtent_Offset x Scale_Factor), half extents drop_half_extents, or the deployed
-    // extents (drop_deployed_extents) while a Deploys type with a locomotor has DEPLOY active (a1i t05, 0x396850 rule 2).
+    // extents (drop_deployed_extents) while a Deploys type with a locomotor is deploying / deployed (a1i t05, 0x396850
+    // rule 2; s78n t10: Walk state 0x18 / 0x19).
     // Unknown entry -> false. Space battles -> true.
-    bool land_drop_valid(TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
+    bool land_drop_valid(const TacticalMode& mode, int32_t player, objects::ObjectId key, float x, float y, bool human,
                          bool use_reinforcement_points) const;
     float player_drop_yaw(int32_t player) const { return drop_yaw(side_player(1) == player ? uint8_t{1} : uint8_t{0}); }
+    // ui3 t04 (presentation reads between ticks: the checks of order_reinforce, nothing changed). reinforce_block: None when
+    // `player`'s reserve `galactic_id` could be called now - else InvalidUnit (not an undeployed reserve of the player),
+    // NotAllowed (finished, its side retreating, the hyperspace hold, a campaign type that stays in its transport / the
+    // planet restricts), QueueFull (space unit cap). reinforce_point_ok: the drop point test of a human Reinforce at (x, y)
+    // (land: land_drop_valid with movers counted and Use_Reinforcement_Points; space: fog_reinforce_point_ok).
+    commands::RejectReason reinforce_block(int32_t player, objects::ObjectId galactic_id) const;
+    bool reinforce_point_ok(const TacticalMode& mode, int32_t player, objects::ObjectId galactic_id, float x, float y) const;
     // s78i t02 (TACTICAL_COMBAT §3.1.1 "other spawns"): the facing the reinforcement creators give `player`'s new objects:
     // its side's entry-facing record (mode +0x288), +X when the record is zero or the player has no side.
     Vec3 player_drop_facing(int32_t player) const;
@@ -625,9 +696,10 @@ public:
     bool sw_begin_targeting(objects::ObjectId weapon);
     bool sw_fire_at_object(const TacticalMode& mode, objects::ObjectId weapon, objects::ObjectId target);
     bool sw_fire_lobbing_at(const TacticalMode& mode, objects::ObjectId weapon, Vec3 point);
-    // SpecialWeaponsAllowed (0x527620) for a campaign battle: false once the battle planet is destroyed (in the galaxy,
-    // or by this battle's TSW); the skirmish Enable_Special_Weapons rule does not apply to campaign battles. A skirmish
-    // battle (BattleConfig::skirmish) also needs CombatSystem::special_weapon_hp_enabled(player) (HARDPOINT_DISABLED §4).
+    // SpecialWeaponsAllowed (0x527620): false once the battle planet is destroyed (in the galaxy, or by this battle's TSW).
+    // cu8f t06: then the player's Enable_Special_Weapons list (AbilitySystem PlayerGate::SpecialWeapons): empty -> allowed
+    // in a campaign battle, refused in a skirmish (BattleConfig::skirmish); non-empty -> its AND and
+    // CombatSystem::special_weapon_hp_enabled(player) (HARDPOINT_DISABLED §4).
     bool special_weapons_allowed(int32_t player) const;
     int32_t tsw_state(objects::ObjectId tsw) const;                         // < 0: not a TSW
     bool tsw_fire(objects::ObjectId tsw);                                   // 0x42a200 incl. the planet checks
@@ -675,6 +747,18 @@ public:
     bool victory_declared_silent() const { return vm_decl_.silent; }    // +0x15: no TEXT_WIN / LOSE_TACTICAL
     int32_t victory_countdown() const { return vm_countdown_; }
     size_t victory_queued() const { return vm_queue_.size(); }           // deferred {type, player} tests
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): BattleConfig::control_point_domination registers only {0x15, player} records (the slot
+    // players on a skirmish map, else the attacker and the defender), so no other rule (elimination, retreat, base) can win.
+    // 0x15 is tested only by the domination timer: a completed capture transition of a relevant point (CAPTURE_POINT with
+    // Control_Point_Domination_Condition_Relevant) arms it for round(30 x Control_Point_Domination_Victory_Time_In_Secs) frames
+    // (GameConstants, 30 s) when every other relevant point is allied (relation 0) with the new owner and its faction is
+    // Is_Playable, else disarms it; each battle tick it counts down, at <= 0 it tests 0x15 for that player and disarms. E wins
+    // 0x15 when its faction is playable, at least one relevant point exists and every one is allied with E (any owner, no
+    // alive / Victory_Relevant test). The win then waits the record's 210-frame countdown. [port] the 30 / 15 / 5 s announcer
+    // lines are the host's (presentation): control_point_timer() = frames left (-1 not armed), control_point_leader() = the
+    // armed player (-1 none).
+    int32_t control_point_timer() const { return vm_cp_armed_ ? vm_cp_timer_ : -1; }
+    int32_t control_point_leader() const { return vm_cp_armed_ ? vm_cp_player_ : -1; }
     // --- end story t06 ---
     // Teleport (0x3a8f90): store, movement (stops the unit), combat, trees. False when the object is not alive.
     bool teleport(TacticalMode& mode, objects::ObjectId id, Vec3 position, Vec3 facing);
@@ -687,6 +771,11 @@ public:
     int32_t engines_online(objects::ObjectId id) const;
     // Locomotor_Set_Engines: disable for `seconds` (< 0 indefinitely); enable_engines = repair (not after destruction).
     bool disable_engines(objects::ObjectId id, float seconds);
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4): the energy-pool path (CombatHooks::engines_drained, inside Take_Damage). With
+    // a locomotor: the timed disable (as disable_engines: expiry = max(old, now + int(30 t)), only while the engines are on
+    // or a timed disable runs) and the current move stopped; then the moving, then the idle engine loop off (engine-loop
+    // units). [port] the stop does not check the last waypoint's flag 0x10 [M]; signal 0x16 is not modelled.
+    void energy_drain_engines(objects::ObjectId id, float seconds);
     bool enable_engines(objects::ObjectId id);
     // max(terrain height, water height) at (x, y) on land maps; space: -3e38 (no ground).
     float ground_height(float x, float y) const;
@@ -764,20 +853,53 @@ public:
         float max_bombing_run_interval = 120.0f, min_bombing_run_interval = 120.0f;
         int32_t bombing_run_reduction_per_squadron = 0;
         float max_bombard_interval = 260.0f, min_bombard_interval = 260.0f;
+        // cu9h t01: the skirmish "special weapons" option (0x140b154bc & 4, HUD_GAPS §9.2) gates skirmish bombing runs. [port] no
+        // lobby: GameConstants MP_Default_Allow_SuperWeapons (shipped yes).
+        bool skirmish_superweapons = true;
+        // cu8l t03 (CU8K_T03_T08_T09_RE §1.9): GameConstants In_Game_Cinematics (GC 0x140b16dd2; shipped True), one of the
+        // three gates of the start fleet's hyperspace arrival.
+        bool in_game_cinematics = true;
         Vec3 bombardment_offset{0.0f, 0.0f, 600.0f};
         std::vector<int32_t> bombardment_distribution{0, 3, 1, 2, 3, 2, 0, 1, 2, 1, 3, 0, 1, 2, 0, 3, 0, 2, 1, 3, 3, 2, 1, 0};
     };
     void set_l1_constants(L1Constants c) { l1_k_ = std::move(c); }
-    // Tactical weather (land; tactical::combat::WeatherSystem, L1_S4_REMAINING §3.2): scenario = the map's start
-    // environment Weather effect name (TEE mini 29) [M], looked up in the data set here (load_weather_data); started
-    // at the first battle tick (one synced draw), serviced at the start of each tick (before the fog decay); the
-    // accuracy row feeds CombatSystem::set_weather_accuracy. Force_Weather = force_weather (one advance, one draw).
+    // Tactical weather (land; tactical::combat::WeatherSystem, L1_S4_REMAINING §3.2): scenario = the active
+    // environment's Weather effect name (TEE mini 29; cu8g t02: the map-load pick), looked up in the data set here
+    // (load_weather_data); started at the first battle tick (two synced draws, CU8G_T02_ENV_PICK_RE §4), serviced at the
+    // start of each tick (before the fog decay); the accuracy row feeds CombatSystem::set_weather_accuracy.
+    // Force_Weather = force_weather (one advance, one draw).
     void set_weather_data(std::shared_ptr<const tactical::combat::WeatherData> d) { l1_weather_data_ = std::move(d); }
+    // s78n t06 (HERO_CLASH §2 / §6): HEROCLASH.XML for the land hero clashes (tactical::combat::HeroClashManager, ticked
+    // after the weather service, land only). The First / Second hero type names resolve through the catalog here; none =
+    // no clashes. The running clashes are saved with the Combat part and hashed with the battle (absent while none).
+    void set_hero_clash_data(std::shared_ptr<const tactical::combat::HeroClashData> d);
+    const tactical::combat::HeroClashManager& hero_clashes() const { return hero_clash_; }
     const tactical::combat::WeatherSystem& weather() const { return l1_weather_; }
     bool force_weather(SimRng& rng);
     // Sight factor of a battle object (Weather_Category of its type; 1.0 without weather): the fog's Land_FOW_Reveal_Range
     // x weather factor (FOG_OF_WAR §3.1.1; owner: fog agent). Weather FowDirty events this tick: weather().events().
     float weather_sight_modifier(objects::ObjectId id) const;
+    // cu8g t02 / t03 (CU8G_T02_ENV_PICK_RE): the mode's active environment (index into the map's EnvironmentSet;
+    // RtsScene +0xa0). setup() picks it after the map objects (bt_map_load: chunk 0x102 and its spawn-table draws) and
+    // before every post-load step (pick_environment: one synced int(0, n - 1) when n != 1, "Cinematic" -> the next
+    // record). Not saved: a loaded battle takes the map's start index (mini 25, clamped) without a draw (§2).
+    // set_environment = mode vf25 (Lua Set_New_Environment): index := clamp(index, 0, n - 1), no draw; false (nothing
+    // changes) when the map has no environments [port]. Land: the weather's re-init on its next service
+    // (l1_weather_tick) sees the changed index and restarts with the new environment's scenario (2 synced draws when it
+    // has phases; none -> weather off); an unchanged index re-inits nothing. Space: the index only (no weather). The
+    // render host reads environment_index() and re-applies lighting / fog / bloom / shadow colour and land clouds / wind
+    // (render::MapScene; the skydomes stay). Not hashed: its only game-logic effect is the land weather restart, which
+    // the weather state and the RNG show on the next land tick.
+    uint32_t environment_index() const { return env_index_; }
+    bool set_environment(int32_t index);
+    // Mode vf27 (0x2770e0, "random environment of a weather type"; no caller found in retail or the port): type <= 4 ->
+    // the environments whose mini 13 (Environment::field_13) equals type, in index order; m = 1 -> that one, m >= 2 ->
+    // one synced int(0, m - 1) (no "Cinematic" skip); m = 0 or type > 4 -> pick_environment over all n. False when the
+    // map has no environments.
+    bool set_environment_of_weather_type(uint32_t type, SimRng& rng);
+    // 0x277030 (§1): n == 0 / 1 -> 0 without a draw; else i = synced int(0, n - 1), a record named exactly "Cinematic"
+    // (case-sensitive) -> i + 1 wrapping to 0, no re-check.
+    static uint32_t pick_environment(const terrain::EnvironmentSet& envs, SimRng& rng);
     // Damage statistics (L1_S4_REMAINING §2.4): DAMAGE_TRACKING objects accumulate the applied damage of the tick's
     // CombatSystem::damage_events (after multipliers [M]); every 30 frames (the behaviour interval, first service at
     // registration [port]) rate = FPS x accumulated / interval. TEAM containers sum their members. -1 = not alive.
@@ -805,6 +927,8 @@ public:
         std::vector<std::string> bombard_particles;    // Bombardment_Particle (one per salvo; the last repeats)
         int32_t salvos = 0, shots_per_salvo = 0;       // Bombardment_Number_Of_Salvos / _Shots_Per_Salvo
         float shot_delay = 0.0f, salvo_delay = 0.0f, initial_delay = 0.0f;  // seconds
+        bool playable = false;                         // cu9h t01: Is_Playable (+0x20a8)
+        std::string skirmish_land_bomber;              // cu9h t01: Skirmish_Land_Bomber (the skirmish bombing-run bomber type)
     };
     void set_l1_factions(std::vector<L1Faction> f) { l1_factions_ = std::move(f); }
     // Campaign: only the battle attacker [M: battle-record slot 1] gets a record, enabled when one of its orbit fleets
@@ -820,10 +944,21 @@ public:
     bool bombing_run_available(int32_t player) const;
     bool bombing_run_target_valid(int32_t player, Vec3 target) const;
     void set_bombing_run_disabled(int32_t player, bool disabled);  // Disable_Bombing_Run (tactical list +0x1c8)
+    // cu8f t06 (CU8F_T04_T06_RE §3.3): a player's tactical bool list gate (bombing runs 0x527550, bombardment 0x5275a0):
+    // the AND of the list (Battlefield_Modifier Enable_* entries, the Lua Disable_* entry); an empty list allows in a
+    // campaign battle and refuses in a skirmish (BattleConfig::skirmish).
+    bool player_gate_allows(int32_t player, tactical::abilities::PlayerGate g) const;
     // BombingBlockStatus: IsFinished = no bomber left; Result = undamaged / total ([port] bombers are not targets: 1).
     bool bombing_run_finished(int32_t player) const;
     float bombing_run_result(int32_t player) const;
-    uint32_t bombing_run_frames_until_available(int32_t player) const;  // UI query 0x4950f0
+    // UI queries (HUD_GAPS §9.3, cu9g t02; const, presentation only - the sim never reads them back):
+    // frames_until_available = 0x4950f0's frame minus now (0 = ready; a run in progress: interval + the longest remaining
+    // flight); cooldown_fraction = 0x495250's dial fraction 0..1 (1 = ready, 0 = shown as a full dial by the caller).
+    uint32_t bombing_run_frames_until_available(int32_t player) const;
+    float bombing_run_cooldown_fraction(int32_t player) const;
+    // The player's bomber type (Land_Bomber_Type of the first Ship_Class 1 bomber in orbit; objects::kNone = no record):
+    // the HUD plays its SFXEvent_Bomb_Run_Select_Target / _Incoming (HUD_GAPS §9.4, §9.6).
+    objects::TypeIndex bombing_run_bomber_type(int32_t player) const;
     const L1Constants& l1_constants() const { return l1_k_; }
     // --- end L1 systems ---
 
@@ -849,6 +984,11 @@ public:
     // pad was used.
     int32_t pad_build(TacticalMode& mode, objects::ObjectId pad, objects::TypeIndex type, bool check_rules, int32_t builder = -1);
     objects::ObjectId pad_contents(objects::ObjectId pad) const;  // built, else UC, else kNoObjectId
+    // s78n t05 (HERO_CLASH §7.1 / §7.2, 0x395c10 step 6): the pad's UC or built slot is set AND that object is alive (a
+    // combat unit: not dead in CombatSystem; else a battle unit: alive and not retreated; [port] else set counts).
+    // Retail clears the slot in the frame its content dies; pads_tick clears it on the next poll, so the liveness test
+    // stands for that. Read by the Bribe accept and the convert victim test through their host hooks.
+    bool pad_occupied(objects::ObjectId pad) const;
     bool pad_locked(objects::ObjectId pad) const;
     void pad_lock(objects::ObjectId pad, bool lock);
     // --- end Int-final ---
@@ -861,8 +1001,9 @@ public:
     // one service's worth] and grows by max / build frames per frame; the constructed object carries the UC's health
     // fraction. tactical_build = TacticalBuildEvent 0x42edf0 (command 33) for `player`: refusals in order (UC present,
     // built present -> NotAllowed; pad fogged for the player or not allied-owned -> NotAllowed; cooldown -> NotAllowed;
-    // type without TACTICAL_UNDER_CONSTRUCTION -> InvalidUnit); `ai` (an AI player): built at once without a charge;
-    // otherwise cost = build_cost(type) > credits -> CannotAfford, else charged (credit hooks) and started.
+    // type without TACTICAL_UNDER_CONSTRUCTION -> InvalidUnit); `ai` (an AI player) in a campaign battle: built at once without
+    // a charge; otherwise (a human, or any player in land skirmish: skai t09) cost = build_cost(type) > credits -> CannotAfford,
+    // else charged (credit hooks) and started.
     // The AI agent's TacticalBuild hook: call tactical_build(mode, player, pad, type, rng, /*ai=*/true).
     // tactical_sell = TacticalSellBehavior 0x5248b0 (command 34): the built object of a pad owned by `player`; silently
     // refused (NotAllowed) while the pad is locked; refund = int(cost of the UC entry whose constructed type matches x
@@ -984,6 +1125,10 @@ public:
     const galactic::BattleResult& result() const { return result_; }
     const galactic::BattleRequest& request() const { return req_; }
     const BattleStats& stats() const { return stats_; }
+    // cu8l t03: the attacker's hyperspace arrivals still running (records; a squadron container counts until its members end).
+    size_t arrivals_pending() const { return arrivals_.size(); }
+    // s78n t20 stage A: the land attack blocks alive (AttackBlock records, one per mover).
+    size_t attack_blocks() const { return attack_blocks_.size(); }
     // HARDPOINT_DISABLED.md §9.1 (presentation): units whose engines came back online this tick (EnginesOnline: an ENGINE
     // hardpoint repaired to max) - the host restarts their SFXEvent_Engine_Idle_Loop. Not hashed.
     const std::vector<objects::ObjectId>& engines_restarted() const { return engines_restarted_; }
@@ -1031,8 +1176,20 @@ public:
     std::vector<BuildOptionInfo> station_build_options(const objects::ObjectStore& st, int32_t player, objects::ObjectId builder) const;
     // --- end hangars ---
     uint32_t frame() const { return frame_; }
-    // Retreat coordinator request (§3.4 vf9): false when not a participant, not yet allowed or already retreating.
+    // Retreat coordinator request (§3.4 vf9): false when not a participant, not yet allowed, already retreating or
+    // (cu8 t01) prevented by an interdict / Retreat_Prevention entry.
     bool request_retreat(int32_t player);
+    // cu8 t01: the ability check of the request (AbilitySystem::retreat_blocked, TACTICAL_GAPS §1.5); cu8f t07: in space
+    // also while the player owns a live TACTICAL_SUPER_WEAPON battle unit (CU8F_T01_T02_T07_RE.md §3.2).
+    bool retreat_prevented(int32_t player) const;
+    // ui3 t03 (BATTLE_TRANSITIONS §3.4 vf9 reasons, presentation read): 0 = request_retreat(player) would start a retreat;
+    // 1 not a participant / battle over; 2 the retreat-allowed countdown still runs; 5 a retreat already runs; 6 [port]
+    // prevented (retreat_prevented: interdict, Retreat_Prevention, a super weapon in space).
+    int32_t retreat_block(int32_t player) const;
+    // ui3 t03: 0..1 progress of the retreat-allowed countdown (1 = allowed) and of the running retreat countdown (-1 when
+    // none runs), for the b_retreat Build_Texture_Name dial.
+    float retreat_allowed_progress() const;
+    float retreat_countdown_progress() const;
     // --- OI host: the retreating player while a retreat countdown runs (-1 none / done). The mode's unit-response
     // "excluded set" (AUDIO.md §3.3, STRATEGIC_GAPS §7.4 [M]): that player's units give no unit responses. ---
     int32_t retreating_player() const {
@@ -1068,6 +1225,14 @@ public:
     // (index 0, looping, hard cut). False when the battle has no animation world or `id` has no row in it.
     bool test_attack_idle(objects::ObjectId id, bool arg, SimRng& rng);
     bool test_play_clip(objects::ObjectId id, int32_t clip_type);
+    // s78n t09 test seam (TACTICAL_COMBAT §5.4.4 item 1, 0x404450): the joint box half-extents (along / across the
+    // facing) of movement-backed land squad container `id` - the AbilityHost::land_squad_slots input Bribe's E_T folds
+    // (abilities::squad_joint_half_extents). False: not such a container. Const read only.
+    bool squad_joint_box(const objects::ObjectStore& st, objects::ObjectId id, float& hx, float& hy) const;
+    // s78n t10 review test seam (FOG_OF_WAR §5.2, TACTICAL_COMBAT §5.4.6 port spec item 3): the 8 (x, y) points of object
+    // `h`'s fog multisample footprint 0x38de80 (the 4 corners, then c + hx a, c - hy b, c - hx a, c + hy b), whether or
+    // not its type has Multisample_FOW_Check. Const read only.
+    void fog_footprint(const objects::ObjectStore& st, objects::ObjectHandle h, float* xy16) const { fog_footprint_samples(st, h, xy16); }
     const tactical::abilities::AbilitySystem& abilities() const { return *abilities_; }
     tactical::abilities::AbilitySystem& abilities() { return *abilities_; }
     const BattleTables& tables() const { return *tables_; }
@@ -1075,18 +1240,17 @@ public:
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
     // A1 DAMAGE_TRACKING (behaviour 0x3E) per battle: objects with the behaviour are enabled at spawn and
     // serviced on their behaviour cadence (interval 30, first service at once) with AI_SpaceThreatDecayStep.
-    // Fed every tick from CombatSystem::damage_events through ai::tactical::record_combat_damage (S10-int).
+    // Fed every tick from CombatSystem::damage_events, recorded inline in TacticalBattle (S10-int).
     ai::tactical::DamageTrackingStore& damage_tracking() { return damage_tracking_; }
     const ai::tactical::DamageTrackingStore& damage_tracking() const { return damage_tracking_; }
 #endif
-#ifdef ALAMO_SIM_HAVE_FOG
     // --- fog of war (owner: fog agent; tactical_battle_fog.cpp) ---
     // One FogOfWar per battle (BattleConfig::fog): grids created in setup() (neutral player skipped, relations
     // from CombatSystem::is_enemy, humans from the galaxy, dense mask from the mode's nebula / asteroid / ion
     // storm SPACE_OBSTACLE objects), decay at the start of tick() (common-tick step 4), REVEAL units serviced
     // after the combat events (object-service step; dead / retreated / garrisoned units undone, every shot flashes
     // the shooter for the target's owner), battle scale (land: the defender by the attacker's Modifies_Reveal_Range
-    // objects; space: the attacker by the defender's), overrun reveal before the decay (BattleConfig::fog_game_type),
+    // objects; space: the attacker by the defender's), no overrun reveal (multiplayer only, not ported),
     // land setup phase when SetupPhaseEnabled. Null when fog is off or the battle is not set up.
     tactical::fog::FogOfWar* fog() { return fog_on_ ? &fog_ : nullptr; }
     const tactical::fog::FogOfWar* fog() const { return fog_on_ ? &fog_ : nullptr; }
@@ -1105,6 +1269,9 @@ public:
     // else the company type). The battle has no tactical transport or fleet objects; anything else -> objects::kNone (the
     // binding then uses the store type).
     objects::TypeIndex representative_type(objects::ObjectId id) const;
+    // q6 t28 (TERRAIN_WATER_POST 1.6): the map hint name (.ted chunk 0x482) of an object the map load created for a
+    // placement (lua::ObjectBridge::map_hint: Find_Hint / Get_Hint / Find_All_Objects_With_Hint); "" when it has none.
+    std::string_view map_hint(objects::ObjectId id) const;
     // The fog's view of a live object (Lua Reveal / Temporary_Reveal input); false when not alive.
     bool fog_object(objects::ObjectId id, tactical::fog::FogObject& out) const;
     // OI fog: host-level FOW-active flag / render option (FOG_OF_WAR §1.3, §6.5: Lua Disable_Rendering, story
@@ -1130,7 +1297,6 @@ public:
     bool fog_reinforce_overlay(int32_t player, std::vector<uint8_t>& out) const;
     bool fog_reinforce_point_ok(int32_t player, float x, float y) const;
     // --- end fog ---
-#endif
     void hash(StateHasher& h) const;  // battle-host state (participants, units, retreat, result)
     // S10-int: abilities.objects + combat.ext (S9 state) and the integration state (speed factors, particles,
     // containers, dummies, engines-offline flags). Registered by CampaignBattles as "battle.abilities".
@@ -1153,12 +1319,18 @@ public:
     //   Hangar     HangarSystem, ContentsSystem, TacticalProduction, EngineLoops (absent ones: a flag)
     //   Fog        FogOfWar (nothing without engine/tactical/fog)
     //   Damage     DamageTrackingStore (nothing without engine/ai)
-    // Every module system part is written through write_if_saveable: a system without write / read writes nothing and
-    // its part fails to read ("pending"). read_part() returns false (State: unchanged) on bad data.
+    // Every module system is written through write_system / read_system (save_session.hpp; a system without write /
+    // read is a build error, cu9 t16). read_part() returns false (State: unchanged) on bad data.
     enum class SavePart : uint8_t { State, Movement, Combat, Abilities, Garrison, Hangar, Fog, Damage, Count };
     static const char* save_part_name(SavePart p);  // "battle.state", "battle.movement", ...
     void write_part(SavePart p, ByteWriter& w) const;
     bool read_part(SavePart p, ByteReader& r);
+    // q6 t28 integration: "battle.types", read before the module parts. The rebuilt battle has only the setup's types; a
+    // game-object script may have added more (script_add_types), and Combat / Abilities check their table sizes. Writes
+    // types_used_; the read checks the rebuilt list is its prefix and adds the tail through script_add_types (same append
+    // order -> the same descriptor indices and ability types as the saving run).
+    void write_types(ByteWriter& w) const;
+    bool read_types(ByteReader& r);
 
     // refix t03 (S9_DEATH_CLONE_SHIELDS.md §1.6 [L]): true when the death clone of a dying_type unit takes the infantry
     // corpse path (no clone object; the dying unit's corpse row plays the clone type) instead of a store object.
@@ -1231,9 +1403,9 @@ private:
                 uint32_t member_count = 0xFFFFFFFFu);
     void space_obstacles_sync(const TacticalMode& mode);  // refixf t02: SPACE_OBSTACLE units as space static entries
     // S8 t02 / S7 t13 (MOVEMENT §1.3 / §2.2): obstacle footprints of single objects under their object id (tactical_battle.cpp).
-    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);   // LAND_OBSTACLE stamp; false: none
+    bool land_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h, const ParallelFor& pf = serial_for);   // LAND_OBSTACLE stamp; false: none
     bool space_obstacle_attach(const TacticalMode& mode, objects::ObjectHandle h);  // SPACE_OBSTACLE static entry
-    void land_obstacles_sync(const TacticalMode& mode);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
+    void land_obstacles_sync(const TacticalMode& mode, const ParallelFor& pf);  // S8 t02: stamp new LAND_OBSTACLE objects, unstamp the gone
     std::vector<uint8_t> land_obstacle_none_;  // S8 t02: per type, 1 = no footprint (no XML size, no model); derived, not saved
     Vec3 slot_position(uint8_t side, uint32_t passability_mask);
     Vec3 snap_passable(Vec3 p, uint32_t passability_mask, bool always) const;  // slot_position's box clamp + cell search
@@ -1298,6 +1470,13 @@ private:
     void vm_release(bool replay);                     // 0x3440a0
     void vm_sync_tsw();                               // TSW fire / state-13 holds -> raise / release
     bool vm_base_object(const objects::ObjectStore& st, objects::ObjectHandle h) const;
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): the domination rule.
+    bool vm_cp_relevant(const objects::ObjectStore& st, objects::ObjectHandle h) const;  // CAPTURE_POINT + the type flag
+    // Every relevant point except `skip` allied with `player`; `any` = at least one relevant point (skip excluded).
+    bool vm_cp_all_allied(int32_t player, objects::ObjectId skip, bool& any) const;
+    bool vm_player_playable(int32_t player) const;
+    void vm_cp_capture(objects::ObjectId point, int32_t new_owner);  // 0x360d90, before the new owner is written
+    void vm_cp_disarm();
     void check_victory(TacticalMode& mode);
     // BT §3.1a item 1 (0x372230): Victory_Relevant, else Space_ / Land_Victory_Relevant of the type. Cached per type in
     // vr_cache_ (0 unknown, 1 no, 2 yes): a pure function of the type data and the mode, not saved.
@@ -1306,6 +1485,71 @@ private:
     float side_power(uint8_t side) const;
     int32_t side_player(uint8_t side) const { return side == 0 ? req_.info.defender : req_.info.attacker; }
     Unit* unit_by_id(objects::ObjectId id);
+    // cu8j t02 (MOVEMENT §4.7.1): the adopt 0x39bcb0 of object h - the predicate (not a TEAM member; the mode's locomotor
+    // kind, a TEAM_LOCOMOTOR container only when a member's locomotor admits; [port] builders and hyperspacing objects are
+    // not tested), then for a movement unit MovementSystem::adopt (no draw while it has a coordinator; `leave` first leaves
+    // every coordinator: stop_and_hold), for any other object one FormationClass ctor draw. True = one draw.
+    bool mv_adopt(const TacticalMode& mode, objects::ObjectHandle h, SimRng& rng, bool leave = false);
+    int8_t mv_adopt_kind(uint32_t type);  // per type and mode: 1 land, 2 space, 0 not admitted, -1 TEAM_LOCOMOTOR (cached)
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): the first movement lock's split / adopt of a unit or TEAM container (no
+    // draw for a squad member, or an object in a coordinator without a formation). True = one draw.
+    bool mv_first_lock(const TacticalMode& mode, objects::ObjectId id, SimRng& rng);
+    std::string_view mv_locomotor_token(uint32_t type) const;  // the mode's active *_LOCOMOTOR behaviour token (empty: none)
+    bool mv_self_registers(uint32_t type) const;  // cu8l t01: LandTeamContainer (land) / SimpleSpace (space) locomotor
+    // s78n t03 (TACTICAL_COMBAT §5.4.4 item 2, MOVEMENT §3.7): makes land squad container containers_[ci] (object type
+    // `object_type`, a LAND_TEAM_CONTAINER locomotor) a movement unit walking its own path, its members steering to their
+    // slots (MovementSystem::set_land_team). False (nothing changed): a member is not a Default-locomotor walker without
+    // Uses_Multiple_Locomotors [port: such squads keep bt_team_positions' re-centring].
+    bool mv_squad_add(TacticalMode& mode, size_t ci, uint32_t object_type);
+    // s78n t09 (TACTICAL_COMBAT §5.4.6 items 1, 2, 4): 0x371be0 - a type's half-extents (Custom_Hard_X/YExtent x
+    // Scale_Factor when both > 0, else per axis the mode model's collision-bound half x / y x Scale_Factor, no model 0);
+    // 0x396850 for a unit (0x371d20, the deployed pair, for a deploying / deployed Deploys walker).
+    void type_half_extents(uint32_t type, float& hx, float& hy) const;
+    void unit_half_extents(const Unit& u, float& hx, float& hy) const;
+    // s78n t20 (MOVEMENT §5.3.1 item 5, §5.4.3, §5.4.4): the type's half extents 0x371be0 of a land mover, for its
+    // movement unit (mv::UnitDesc::type_hx / type_hy: the early-arrival box and the StoppedVsStopped cost radius).
+    void mv_type_extents(tactical::movement::UnitDesc& d, uint32_t type) const;
+    // s78n t10 (§5.4.6 item 2, 0x371d20 as 0x396850 selects it): replaces (hx, hy) by the deployed pair when object `id`
+    // of type `type` is a movement-backed Deploys walker in Walk state 0x18 / 0x19 with Custom_Hard_XExtent_Deployed > 0.
+    // Const reads only (the fog footprint calls it from the parallel filter).
+    void deployed_half_extents(uint32_t type, objects::ObjectId id, float& hx, float& hy) const;
+    // s78n t09 (§5.4.4 item 1, 0x404450): a movement-backed land squad container's joint box input - its live members'
+    // slots (team index order) with their half-extents, the container type's MaxJiggleDistance and the container's
+    // facing. False: not such a container.
+    bool squad_joint_slots(const objects::ObjectStore& st, objects::ObjectId container,
+                           std::vector<tactical::abilities::SquadSlot>& slots, float& jiggle, Vec3& facing) const;
+    void combat_team_positions(const objects::ObjectStore& store);  // s78n t03: CombatSystem::set_team_position per team
+    void s4_rejoin_squad(TacticalMode& mode, const Unit& u, Vec3 at);  // s78n review: a member out of a garrison
+    // s78n t14 (FIGHTER_FLYING §7.2 / §7.4): a squad member's layout shape (MovementSystem::set_team_member_shape); the
+    // garrisoned squad container (the last member in takes it in; a squad leaves as one, see s4_squad_leave).
+    void mv_team_shape(const Unit& u);
+    struct SquadExit {
+        objects::ObjectId container = objects::kNoObjectId;
+        objects::ObjectId holder = objects::kNoObjectId;  // s78n t18: the host it leaves (the garrison-host gate)
+        Vec3 at{};          // E: where the container was put (the host centre)
+        Vec3 to{};          // X: the walk-out point (Exited)
+        bool walk = false;  // Exited (walk out to X) / Ejected (everything at the host position)
+    };
+    void s4_squad_enter(TacticalMode& mode, const Unit& u, Vec3 host);
+    // s78n t18 (FIGHTER_FLYING §7.4): the movement-backed land squad container a unit garrisons with (kNoObjectId: it
+    // garrisons on its own), GarrisonSystem's group of a unit (the container type's Garrison_Value, default 1, and
+    // Garrison_Category), the squad's live members of an order, and the range tests' radius 0x443ce0 of an approaching
+    // key (s78n t20 batch 2: the 3-D length of the half-extent vector of its world box - a squad container's the members'
+    // live union box 0x405320, a unit's its own TacticalMode::bounds_of box).
+    objects::ObjectId s4_squad_of(objects::ObjectId unit) const;
+    bool s4_group(objects::ObjectId unit, tactical::garrison::GarrisonGroup& g) const;
+    float s4_reach_radius(TacticalMode& mode, objects::ObjectId key) const;
+    // s78n t20 batch 2: a holder's entry bones (BattleCatalog::entry_bones) into its descriptor
+    void s4_holder_bones(uint32_t type, tactical::garrison::HolderDesc& hd) const;
+    // s78n t20 batch 2 (MOVEMENT §5.3 "Hover in full", death 0x391310): a GARRISON_HOVER host dying while not grounded
+    // kills its occupants - called by the death paths before the host's mover is removed (the hover state goes with it).
+    void s4_hover_death(objects::ObjectId id, Vec3 at, Vec3 facing);
+    // s78n t20 batch 2 (0x3982b0): the 3-D length of the object's model-box half-extent vector (TacticalMode::bounds_of)
+    float s4_extent_len(TacticalMode& mode, objects::ObjectHandle h) const;
+    Vec3 s4_squad_leave(TacticalMode& mode, const tactical::garrison::GarrisonEvent& e, std::vector<SquadExit>& outs,
+                        std::vector<tactical::garrison::GarrisonEvent>& events);
+    std::vector<int8_t> adopt_kind_;      // cu8j t02: mv_adopt_kind cache (+1; 0 = not computed); derived, not saved
+    bool deploy_script_ = false;          // cu8j t02: deploy() for a script spawn (no team helper adopt; transient)
     // FIGHTER_FLYING §6.3.1: FlyingHooks::clearance type data per object (ClearanceInfoFn), cached per type.
     bool clearance_info(objects::ObjectId id, tactical::movement::ClearanceInfo& out);
     // SPACE_AVOIDANCE: the avoidance tree members (space battles), rebuilt from the committed store before the movement
@@ -1314,6 +1558,13 @@ private:
     void unit_gone(TacticalMode& mode, Unit& u);  // container bookkeeping after a death / retreat
     // S10-int steps
     void apply_speed_factors();
+    // s78n t18 review: the movement system's pair gates / "hidden" from the garrison state (tactical_battle.cpp): every
+    // tick, after garrison events, at the tick end and after a load.
+    void feed_pair_gates();
+    // s78n t20 (MOVEMENT §5.4.3 - §5.4.5, MovementSystem::set_collision_info): every land mover's current target (a squad
+    // member's target counts for its container; a target inside a squad is named by its container), attack range,
+    // "short-range" and hero-clash state, before each movement tick (the tick is its only reader).
+    void feed_collision_info(const objects::ObjectStore& store);
     void drop_locked(std::vector<objects::ObjectId>& ids) const;  // OI follow-up t03: group moves skip locked units
     // OI follow-up t03: per bridge owner, registration order (not saved: the bridges' own state)
     std::vector<std::pair<const void*, std::function<bool(objects::ObjectId)>>> script_locks_;
@@ -1369,7 +1620,9 @@ private:
     std::vector<uint8_t> idle_gate_;  // drive_animation scratch (per units_ index)
     void consume_events(TacticalMode& mode, SimRng& rng);
     // consume_events step d for one combat death (also script_damage's out-of-tick kills): a dead or unknown unit is skipped.
-    void process_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng);
+    // s78n t12 review: `silent` = a world removal without Die (CombatSystem::remove_from_world: the vehicle a thief's clone
+    // replaces) - the object leaves as for a death, without the Death_Explosions particle and the death clip.
+    void process_death(TacticalMode& mode, const tactical::combat::DeathEvent& d, SimRng& rng, bool silent = false);
     void spawn_particle(TacticalMode& mode, int32_t type, Vec3 pos, int32_t owner);
     objects::ObjectHandle spawn_prop(TacticalMode& mode, int32_t type, Vec3 pos, Vec3 facing, int32_t owner);
     // refix t01 / t03: Die step 8's clone object (flags 0xc0), and the infantry corpse-path test (S9 §1.6).
@@ -1387,15 +1640,26 @@ private:
     std::vector<OrderQueue> queues_;  // ascending id, never empty orders
     uint32_t queue_group_ = 0;        // command serial
     bool queue_used_ = false;         // some order was queued (CRC section on from then)
+    // [port] fleet groups (fleet_groups.hpp): CRC section on once a group was made; never saved in state_io (own chunk).
+    FleetGroups fleet_;
+    bool fleet_on_ = false;
+    FleetUnitInfo fleet_unit_info(const objects::ObjectStore& store, objects::ObjectId id) const;
+    void fleet_tick(const TacticalMode& mode);  // prune + speed regulation, after apply_speed_factors
     bool order_busy(objects::ObjectId id, const OrderQueue* q) const;
     void clear_queues(std::span<const objects::ObjectId> ids);
     std::vector<objects::ObjectId> enqueue(std::span<const objects::ObjectId> ids, const QueuedOrder& o);  // -> run now
     void advance_queues(TacticalMode& mode, SimRng& rng);
     void late_swap_back_signals();  // S7 t27: signal 0x29 for a jetpack swap back after the combat_pre loop
+    void combat_sync(const objects::ObjectStore& store);  // SP5 / S10: positions, facings, movement flags into combat
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
+    // s78n t20: `no_destination_check` - the move stands for an object-goal block (MOVEMENT §4.3.1 item 2: no destination
+    // check; an object goal implies it)
     void exec_move(TacticalMode& mode, std::span<const objects::ObjectId> ids, float x, float y, SimRng& rng, float facing_deg,
                    bool attack_move, uint8_t flags = 0, bool switch_locomotor = false,
-                   objects::ObjectId goal_object = kNoObjectId);  // S7 t37: an object goal (mv::MoveOrder::goal_object)
+                   objects::ObjectId goal_object = kNoObjectId,  // S7 t37: an object goal (mv::MoveOrder::goal_object)
+                   bool no_destination_check = false,
+                   bool cohesion_tight = false);  // [port] fleet cohesion (mv::MoveOrder::cohesion_tight)
+    bool cohesion_for(uint8_t player, uint8_t move_flags) const;  // [port] fleet cohesion of a player move
     uint32_t exec_attack(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, int32_t hp, SimRng& rng);
     // --- q6: an attack ordered on a TEAM container (A1_READINGS §33.2.1 row 1: a TEAM container passes 0x5680b0 on its
     // own; TACTICAL_COMBAT §2.8 B step 5 / FIGHTER_FLYING §4.10 B: the attacker's target is the container itself). The
@@ -1423,9 +1687,92 @@ private:
     void team_attack_set(objects::ObjectId attacker, objects::ObjectId container, objects::ObjectId member, bool goal);
     void team_attack_drop(std::span<const objects::ObjectId> ids);
     void team_attack_service(TacticalMode& mode, SimRng& rng);  // after the combat tick's events
-    // exec_attack's approach: a movable, unlocked unit farther than 80 % of max(range, 100) from `tp` moves to 70 %. With a
-    // `goal` (the order's object block), a fighter's move names it, and in range the fighter still gets a new formation.
-    void attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal = objects::kNoObjectId);
+    // ---- s78n t20 stage A: land attack blocks (FIGHTER_FLYING §4.11 A / E [H], MOVEMENT §4.3.2 items 6 / 8) ----
+    // One record per mover (a steering squad's container, else the unit) that was given an attack on an object: the
+    // Attack order (human and AI) and the AI's Attack_Move on an attackable object (bkt1 t05: a non-hostile one too, with
+    // kAttackBlockNoLock). Every 30 frames (serial, ascending
+    // mover, before the collision feed and the movement tick), per attack formation (s78n t26 review round 2: the
+    // blocks on one target whose movers share UnitView::atk_form; lead: bkt1 t03, the unlocked member nearest the
+    // movers' centroid), with c = every member's
+    // attack_can_hit (a mover's tested unit: the first unit of the mover whose combat order or attack goal still names
+    // the target), D = |the lead's recorded goal - target position| and R = half the lead unit's attack range:
+    //   - arrived (no member has a goal, none on a collision-owned top record) and not c -> plan again (0x410a60);
+    //   - moving, c, not stopping (the lead in Walk End Move, or flag 0x01 and the lead without a path) and D <= R ->
+    //     the land stop of every member (0x4192b0 / 0x40e7a0);
+    //   - moving and (stopping and not c, or D > R) -> plan again.
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 C / E [H]): c is false when the target is hidden for the lead's owner
+    // or stealthed without Target_Stealth_Units; a hidden target is never re-pathed to while moving (0x4165f0 false);
+    // after arrival an unseen target gives P (hidden: its position; stealthed: the lead's own) and d = |centroid - P|:
+    // d >= 40 plans again toward P, d < 40 drops the block (a position block at the centroid, every unit's attack order
+    // and attack goal cleared).
+    // A plan (land_attack_order, replan) is the movement's attack block (MOVEMENT §4.3.2 items 6 - 8): no path when
+    // every member can fire, else the path to the staged target point, cut back to where every member can fire.
+    // s78n t25.3: the re-plan takes every block on the same target whose mover is in the same attack formation
+    // (UnitView::atk_form), their timers reset together. Dropped by team_attack_drop (every new order and Stop), the
+    // target's death or when the lead's order no longer names it (not for a kAttackBlockNoLock block). Saved (battle state 12), hashed while any exists.
+    struct AttackBlock {
+        objects::ObjectId mover = objects::kNoObjectId;   // ascending
+        objects::ObjectId target = objects::kNoObjectId;  // the target unit, or a TEAM container (TeamAttack)
+        uint8_t flags = 0;                                // block flags: mv::kMoveFlagAttackMove for an Attack_Move
+        uint32_t next = 0;                                // next check frame (order frame + 30, then every 30)
+        float gx = 0.0f, gy = 0.0f;                       // recorded goal: the target's position at the last plan
+    };
+    std::vector<AttackBlock> attack_blocks_;
+    std::array<uint8_t, 8> fleet_cohesion_{};  // [port] fleet cohesion per player (1 = tight; state version 13)
+    // bkt1 t05 (b0075): AttackBlock::flags host-only bit (0x40) - a unit Attack_Move on a non-hostile attackable object (kind 3 with
+    // flag 0x01, no Order_Attack, no lock: BKT1_ATTACK_RE §3 [H]); masked off the movement order's flags.
+    static constexpr uint8_t kAttackBlockNoLock = 0x40;  // (0x40: no movement flag uses it in the port)
+    objects::ObjectId attack_mover(objects::ObjectId unit) const;  // the squad container `unit` steers to, else `unit`
+    // Stage A's c (0x40edd0): CombatSystem::can_hit of `unit`, for a steering squad member from its container's position
+    // (s78n t20 review: TeamTargeting's origin, TACTICAL_COMBAT §5.4.4 item 2.1; the combat system's team positions are
+    // only set for the combat tick, so between ticks can_hit alone tests from the head member's own position).
+    tactical::combat::CanHit attack_can_hit(objects::ObjectId unit, objects::ObjectId target) const;
+    // The stand-in loops' arrived re-check (land): `u`'s mover has no goal and no top record, and u cannot hit `enemy`.
+    bool standin_recheck(const Unit& u, objects::ObjectId enemy) const;
+    void attack_block_set(objects::ObjectId unit, objects::ObjectId target, uint8_t flags, Vec3 goal);  // land only
+    void attack_block_drop(std::span<const objects::ObjectId> ids);
+    void attack_block_service(TacticalMode& mode, SimRng& rng);
+    enum class AttackPlan : uint8_t { None, Stopped, Moved };
+    // s78n t25.3 (MOVEMENT §4.3.2, FIGHTER_FLYING §4.11 A / E): every land attack order on an object - the human and AI
+    // Attack (one call per resolved target), the AI's Attack_Move on an enemy object (flags 0x01), the stand-in loops'
+    // auto-attack pushes (0x41fd30, one unit), the TEAM re-pick and the stage A re-plans (replan) - is one movement order
+    // with the attack block (mv::MoveOrder::attack): locked / immovable units dropped; G = the staging 0x40e260
+    // (attack_stage_goal); the target's footprint half extents (0x396850: its movement collision_half, else the type's
+    // hard extents); per mover (a squad container is answered by its first live member, attack_lead) the engagement
+    // range 0x4f6e40 = Get_Max_Attack_Range + min(hx, hy) (bkt1 t01: a pending targeted ability with an Activation_Max_Range
+    // > 0 gives min(range, that range) instead), in range =
+    // attack_can_hit in {Yes, LineBlocked} (slots 44 / 45) and the melee test; the fire trim gated by fog (the target
+    // point not fogged for the first unit's owner) and stealth (a stealthed target and a first unit without
+    // Target_Stealth_Units). Returns Moved when some mover got a goal, Stopped when the plan's "every member can fire"
+    // stop took them, None otherwise. Land only.
+    // s78n t25.4: `guard` = a guard block on the object (Lua Guard_Target, flags 0x02, MOVEMENT §4.3.2 items 1 / 2 / 7):
+    // not staged (G = C), each engagement range capped at Land_Guard_Range, the guard L rule and guard trim in the movement.
+    // s78n t26 review round 3: c's fog / stealth terms (attack_target_unseen for the first unit) gate the item-6 stop
+    // (mv::LandAttack::unseen); `repath` = a re-path of a moving formation (FIGHTER_FLYING §4.11 G 5: in-range members
+    // that stand keep their own path, mv::LandAttack::repath).
+    AttackPlan land_attack_order(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp,
+                                 uint8_t flags, bool replan, SimRng& rng, bool guard = false, bool repath = false);
+    // s78n t26 review round 3 (FIGHTER_FLYING §4.11 C / E [H]): `target` hidden for `unit`'s owner (FOW_Object_Hidden
+    // 0x35f470, force 1), or stealthed (0x39b140) while `unit`'s type lacks Target_Stealth_Units.
+    void attack_target_unseen(const objects::ObjectStore& st, const Unit& unit, objects::ObjectId target, bool& hidden,
+                              bool& stealthed);
+    // s78n t25.3 / bkt1 t01 (0x40e260, BKT1_ATTACK_RE §1.1 / §1.2.1 [H]): G = T's position, unless the unit M with the
+    // largest min range (Targeting_Min_Attack_Distance, or a pending ability's Activation_Min_Range) is inside it: then
+    // the free-position search 0x440f90 around M (rings from min - |M - T|, counter-clockwise from T -> M, inside the map
+    // box and zone-connected for M's movement class) for the first point at least min + 0.2 x (base range - min) from T;
+    // a lone crusher on a squashable target keeps T; no point found keeps T.
+    Vec3 attack_stage_goal(const TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId target, Vec3 tp,
+                           size_t movers);  // movers: the formation's mover count (the crush case needs one)
+    // bkt1 t01: the pending targeted ability's activation ranges of `unit` or its squad container, and its target
+    bool pending_ability_ranges(objects::ObjectId unit, float& min_range, float& max_range, objects::ObjectId& on) const;
+    // s78n t25.3: the unit that answers for mover `mover` (0x40edd0 tests a team container through its first member): a
+    // land squad container's first live member in team slot order, else the mover; kNoObjectId when none.
+    objects::ObjectId attack_lead(objects::ObjectId mover);
+    // exec_attack's approach (space): a movable, unlocked unit farther than 80 % of max(range, 100) from `tp` moves to
+    // 70 %. With a `goal` (the order's object block), a fighter's move names it, and in range the fighter still gets a new
+    // formation. s78n t25.3: on land with a `target` it is land_attack_order for the one unit (`replan` for the TEAM re-pick).
+    void attack_approach(TacticalMode& mode, const Unit& u, Vec3 tp, SimRng& rng, objects::ObjectId goal = objects::kNoObjectId,
+                         objects::ObjectId target = objects::kNoObjectId, bool replan = false);
     commands::RejectReason handle_ability(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void hash_queues(StateHasher& h) const;
     // --- end queueable unit actions ---
@@ -1445,7 +1792,8 @@ private:
     std::unique_ptr<BattleTables> tables_;
     std::vector<uint32_t> types_used_;  // every type spawned in this battle, first-use order
     std::vector<uint32_t> descs_;       // CombatData::units index per types_used_ entry
-    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;  // OPT3 t09: constructor / setup's table build (q6 t12: kept for script_add_types)
+    // OPT3 t09: constructor / setup's table build (q6 t12: kept for script_add_types). Never null after the constructor.
+    std::unique_ptr<BattleCatalog::BattleBuild> tables_build_;
     void tables_extend();  // tables_ / descs_ := the build of types_used_ (only the appended types are built)
     std::unique_ptr<tactical::movement::MovementSystem> movement_;
     std::vector<tactical::movement::ClearanceInfo> clr_types_;  // §6.3.1: per type (derived from type / model data)
@@ -1472,6 +1820,11 @@ private:
 #endif
     void schedule_death_clone(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type, uint8_t kind, SimRng& rng);
     void remove_death_clones(TacticalMode& mode, bool all);  // due ones (expire_objects), or all (battle end)
+    // s78n t20 batch 1 (MOVEMENT §5.4.5 item 2): a land clone of a type with IsDeathCloneObstacle and a UnitCollisionClass
+    // is a movement object without a locomotor (the obstacle b of the land collisions); the clones a collision push
+    // killed this tick (MovementSystem::push_kills) are removed after the movement tick, in list order.
+    void register_clone_obstacle(TacticalMode& mode, objects::ObjectHandle clone, int32_t clone_type);
+    void kill_pushed_clones(TacticalMode& mode);
     std::vector<AttachedEffect> effects_;
     std::vector<objects::ObjectId> story_reinforced_;  // L1/S4 wave 2b: reserve units deployed this tick
     std::vector<objects::ObjectId> ability_finished_;  // S7 t15 A1: signal 0x29 this tick (not saved: read the same tick)
@@ -1494,16 +1847,35 @@ private:
     void s4_tick(TacticalMode& mode, SimRng& rng);        // tick after the combat events
     void s4_cancel(std::span<const objects::ObjectId> ids);  // a new move order replaces a pending enter
     void s4_set_owner(TacticalMode& mode, objects::ObjectId id, int32_t owner);
-    void s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 at);
+    void s4_leave(TacticalMode& mode, objects::ObjectId unit, Vec3 at, objects::ObjectId holder = objects::kNoObjectId);
+    void s4_hold(TacticalMode& mode, objects::ObjectId holder);  // cu8l t02: a garrison host's stop-and-hold
+    // s78n t26.1 (MOVEMENT §3.2.1 item 1, §5.3 "Hover in full"): a hover transport lowers and a Deploys type deploys
+    // (0x635ee0 / 0x635fc0 -> 0x391260); a garrison vehicle / hover host's +0xf0 / +0xf8 hooks run the cap test with d = 0
+    // (Deploy(false) for M = 0); the walk-out moves that finished this tick run +0xf8.
+    void s4_hover_lower(objects::ObjectId holder);
+    void s4_host_undeploy(objects::ObjectId holder);
+    void s4_exit_arrivals();
     void s4_apply(TacticalMode& mode);  // garrison / capture events -> movement, combat, store, owners, story feeds
+    // s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 1): the approach order of `ids` (live units of one player, squads
+    // expanded) to `holder` - per key (squad container or unit) the destination and bone, one checked group move per bone,
+    // then GarrisonSystem::order_enter. `reissue`: the retry of a finished approach (no reservation hold). The units
+    // ordered.
+    uint32_t s4_approach(TacticalMode& mode, std::span<const objects::ObjectId> ids, objects::ObjectId holder, SimRng& rng,
+                         bool reissue);
+    // the units an approach event names: a squad member -> the squad's members approaching `holder`; else the unit
+    std::vector<objects::ObjectId> s4_key_units(objects::ObjectId unit, objects::ObjectId holder) const;
     commands::RejectReason s4_command(TacticalMode& mode, uint8_t player, const commands::EventData& ev, SimRng& rng);
     void s4_hash(StateHasher& h) const;
-#ifdef ALAMO_SIM_HAVE_GARRISON
     tactical::garrison::GarrisonSystem garrison_;
     std::unique_ptr<tactical::garrison::CapturePointSystem> captures_;
     bool s4_used_ = false;  // some garrison / capture state exists (CRC section on from then)
     objects::ObjectStore* s4_store_ = nullptr;  // the battle mode's primary store (capture rule b)
-#endif
+    // SP5: Influences_Capture_Point per type (-1 not looked up yet), filled on first use by the serial capture pass;
+    // type data does not change in a battle, so this is a pure cache (never saved or hashed)
+    std::vector<int8_t> s4_capture_influence_;
+    // SP5: Max_Speed per type for apply_speed_factors (kMaxSpeedUnread: not looked up yet, -1: no tag); a pure cache
+    static constexpr float kMaxSpeedUnread = -2.0f;
+    std::vector<float> sp_type_max_speed_;
     // --- end S4 ---
     Vec3 anchor_[2]{}, facing_[2]{};
     Vec3 drop_facing_[2]{};  // a1h t06: the sides' entry-facing records (mode +0x288; zero = yaw 0), see drop_yaw
@@ -1523,6 +1895,9 @@ private:
     std::vector<VmTracked> vm_tracked_;                    // last scan, ascending id
     uint32_t vm_tsw_seen_ = 0;                             // l1_sw_.victory_holds() at the last sync
     uint32_t vm_declared_frame_ = 0;                       // frame_ of the declaration (the countdown runs from the next tick)
+    bool vm_cp_armed_ = false;                             // ccpgt t02: mode +0x2b0..+0x2b8, the domination timer
+    int32_t vm_cp_timer_ = -1;
+    int32_t vm_cp_player_ = -1;
     std::vector<objects::ObjectId> vm_deaths_;             // transient: this tick's combat deaths in event order
     TacticalMode* vm_mode_ = nullptr;
     bool finished_ = false;
@@ -1531,8 +1906,12 @@ private:
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
     ai::tactical::DamageTrackingStore damage_tracking_;
 #endif
-    // --- fog of war (owner: fog agent; tactical_battle_fog.cpp). No-ops without ALAMO_SIM_HAVE_FOG. ---
+    // --- fog of war (owner: fog agent; tactical_battle_fog.cpp) ---
     void fog_begin(TacticalMode& mode, uint32_t players);  // setup(): before the start forces deploy
+    // FOWF t01: the mode's map extents (vf +0x1f8; FOG_OF_WAR §1.2 [H]): land = the whole terrain [0, 20 W] x [0, 20 H],
+    // space = the playable box. Used by the staging search's map test (bkt1 t01); the fog box and the AI threat grid
+    // still use bounds() (bkt1 t08 moved back: foc-land seed 7 slows from 23121 to 42347 frames with both switched).
+    tactical::Aabb map_extents(const TacticalMode& mode) const;
     void fog_after_deploy(TacticalMode& mode);              // setup(): dense mask, battle scale
     void fog_decay();                                       // tick(): step 4, before movement
     void fog_service(TacticalMode& mode);                   // tick(): after consume_events
@@ -1544,26 +1923,29 @@ private:
     // AbilityEventKind::SpawnObject handler that spawns it (Spawned_Object_Type at the target, gone next tick [M]).
     void fog_ping(objects::ObjectId id);
     void spawn_ability_object(TacticalMode& mode, const tactical::abilities::AbilityEvent& e);
-#ifdef ALAMO_SIM_HAVE_FOG
     std::vector<objects::ObjectId> fog_pings_;  // fog follow-up: live ping objects, spawn order
     tactical::fog::FogObject fog_object_of(const objects::ObjectStore& store, objects::ObjectHandle h) const;
     std::vector<tactical::fog::FogSetupObject> fog_setup_objects() const;              // OI fog
     std::vector<tactical::fog::PreventionCircle> fog_prevention_circles() const;       // OI fog
     void fog_footprint_samples(const objects::ObjectStore& store, objects::ObjectHandle h, float* xy) const;  // FOWF t02
     void fog_service_sources(const objects::ObjectStore& store);                       // OI fog
-    void fog_overrun();                                                                // OI fog
     tactical::fog::FogOfWar fog_;
     TacticalMode* fog_mode_ = nullptr;
     bool fog_on_ = false;
     bool fog_global_active_ = true, fog_global_render_ = true;
     objects::BehaviorTypeId fog_reveal_beh_ = 0, fog_hide_beh_ = 0, fog_team_beh_ = 0;
-#endif
     // --- end fog ---
     // --- L1 systems (owner: tactical-systems agent; tactical_battle_l1.cpp) ---
     void l1_add_types(std::vector<uint32_t>& use) const;    // constructor: the mode's special-weapon types
     void l1_setup(TacticalMode& mode);                       // setup(): the world callbacks
     void l1_register(TacticalMode& mode, objects::ObjectHandle h, int32_t type);  // deploy / adopt_object
     void l1_motion(TacticalMode& mode, SimRng& rng);         // tick step 4 (after the movement commit)
+    // cu8 t02 / cu8f t07 (TACTICAL_GAPS §2.3.1a, CU8F_T01_T02_T07_RE.md §3.1): every object carrying DISABLE_FORCE_ABILITIES
+    // (0x52, interval 1: every frame) with Disable_Force_Abilities_Range r > 0 stamps the Force-disable timer of every live
+    // SELECTABLE battle unit of another owner within 3-D distance < r that owns an F-flag unit ability. After the movement
+    // commit, before the combat tick.
+    void l1_force_disable(const TacticalMode& mode);
+    std::vector<float> force_disable_range_;  // per type (Disable_Force_Abilities_Range), filled on first use
     void l1_weapons(TacticalMode& mode, SimRng& rng);        // tick after consume_events
     void l1_engines_destroyed(objects::ObjectId id);         // EnginesOffline
     bool l1_engines_off(objects::ObjectId id) const { return !l1_engines_.online(id); }
@@ -1584,10 +1966,20 @@ private:
     std::vector<tactical::movement::CrushEvent> oi_crush_;
     void oi_apply_crush(uint32_t frame);
     // --- end OI tactical ---
+    // s78n t06: the hero-clash manager step (land tick step 4, after the weather; tactical_battle_clash.cpp).
+    friend class BattleClashHost;
+    void hero_clash_tick(TacticalMode& mode, SimRng& rng, uint64_t global_frame);
+    void hero_clash_sync();  // the running pairs -> CombatSystem::set_hero_clashes (after a change and after a load)
+    void hero_clash_apply_hits(uint32_t frame);  // BattleHooks::before_units: this tick's exchange damage (transient)
+    std::vector<tactical::combat::DamageRequest> hero_clash_hits_;
+    tactical::combat::HeroClashManager hero_clash_;
+    std::shared_ptr<const tactical::combat::HeroClashData> hero_clash_data_;
     void l1_weather_tick(SimRng& rng);            // tick start (land weather service)
     tactical::combat::WeatherSystem l1_weather_;
     std::shared_ptr<const tactical::combat::WeatherData> l1_weather_data_;
     bool l1_weather_started_ = false;
+    uint32_t l1_weather_env_ = 0;  // cu8g t03: the environment index the weather was (re)initialised for (not saved)
+    uint32_t env_index_ = 0;       // cu8g t02: the active environment (not saved; see environment_index)
     bool fog_weather_dirty_ = false;  // Int-final: a weather FowDirty event not yet seen by fog_service
     void l1_weather_note_fow();       // Int-final: FowDirty in weather().events() -> fog_weather_dirty_
     struct L1Tracker {
@@ -1627,6 +2019,7 @@ private:
     };
     std::vector<L1Bombard> l1_bombard_;
     std::vector<L1BombingRun> l1_runs_;
+    int64_t l1_bombing_run_ready_frame(const L1BombingRun& r) const;  // 0x4950f0 absolute frame, -1 = disabled
     std::vector<std::pair<int32_t, int32_t>> l1_extra_projectiles_;  // (type, CombatData projectile) appended for strikes
     void l1_strikes_setup(TacticalMode& mode);  // setup(): records
     void l1_strikes(TacticalMode& mode, SimRng& rng);  // tick after consume_events
@@ -1708,6 +2101,9 @@ private:
         std::vector<objects::TypeIndex> specific;  // Marker_For_Specific_Object_Type
         bool used = false;
     };
+    // q6 t28: map hint names by object id (ascending), set by bt_map_load. [port] Not saved: a loaded battle is rebuilt
+    // through the same map load, which hands the map objects the same ids.
+    std::vector<std::pair<objects::ObjectId, std::string>> map_hints_;
     std::vector<MapMarker> bt_markers_;  // MARKER objects with an owner, map (GOM list) order
     // S10 land outcome: the start markers for the AI's IsFriendly / IsEnemyStartLocation (AI_TACTICAL_PERCEPTION §3):
     // (true = Defending Forces Position, false = Attacker Entry Position, position), map order.
@@ -1715,7 +2111,7 @@ private:
     uint32_t bt_players_ = 0;            // the host's player count (valid map owner ids)
     void bt_map_prepass();                                  // setup: base-level filter + discard rule, map types -> tables
     void bt_map_load(TacticalMode& mode, SimRng& rng);      // setup: spawn the kept placements (spawn-table draws)
-    void bt_place_forces(TacticalMode& mode, SimRng& rng);  // setup: §3.2 steps 1-7 + the start-force deploys
+    void bt_place_forces(TacticalMode& mode, SimRng& rng, const ParallelFor& pf);  // setup: §3.2 steps 1-7 + the start-force deploys
     bool bt_owner_valid(int32_t owner) const;
     bool bt_owner_neutral(int32_t owner) const;  // owner's faction Is_Neutral
     // S7 t30 (TACTICAL_COMBAT §2.10): the start value of the relation table entry (row p, column q): 0 friendly, 1 enemy,
@@ -1733,8 +2129,12 @@ private:
     std::vector<PadRecord>* pad_records_ = nullptr;  // §9.4 galactic persistence (GalacticSim::built_objects of the planet)
     bool pad_restore_ = true;                         // §9.4 recreate at setup (false while a save is loaded)
     void bt_pad_restore(TacticalMode& mode);          // setup: persistent pad children back on their pads
-    void bt_skirmish_base(TacticalMode& mode);        // t50 setup: the land skirmish's pre-built base (command center, barracks)
-    void bt_skirmish_anchors();                       // t50 setup: land skirmish start positions from the slot's map markers
+    void bt_skirmish_base(TacticalMode& mode);        // t50 / skai t08 setup: the land skirmish's pre-built base (every slot pad
+                                                      // whose type respects the pre-build option)
+    // t50 setup: skirmish start positions from the slot's map markers (skai t07: on land the last matching marker); s78n t20:
+    // returns bit `side` set for each side whose spawn-point marker was found (that side's anchor and facing then come from
+    // the marker only).
+    uint8_t bt_skirmish_anchors();
     // skai: skirmish map battles (tactical_battle_skirmish.cpp). Per-type Income_Stream data (parsed on first use, by type).
     struct SkIncome {
         bool parsed = false;
@@ -1757,6 +2157,13 @@ private:
     uint32_t bt_lead_participant_ = 0xFFFFFFFFu;
     bool bt_raid_ = false, bt_sw_killed_ = false, bt_used_ = false;
     bool bt_have_ds_ = false;  // DEATH_STAR_POSITION marker found (space maps)
+    // bkg3 b0028 (BKG3 RE b0028 [H]): the garrison / hangar spawn byte (retail obj +0x3CB). hg_adopt adds a SPAWN_SQUADRON
+    // carrier with spawning off while hg_spawn_off_ is set: the skirmish team-marker structures (0x295cf0 clears +0x3CB
+    // after the create), map placements of a skirmish whose placement byte (mini 0x29) is 0 (every _MP_ map object), and
+    // structures built on a skirmish pad (the pad's byte is copied; every skirmish pad holds 0). bt_team_swap_ marks the
+    // map_.objects entries made by the team-marker swap (index parallel to map_.objects after bt_filter).
+    bool hg_spawn_off_ = false;
+    std::vector<uint8_t> bt_team_swap_;
     Vec3 bt_ds_pos_{};
     struct UcRamp {
         objects::ObjectId id = objects::kNoObjectId;
@@ -1802,9 +2209,70 @@ private:
     void hg_ability_host(tactical::abilities::AbilityHost& h);  // oi_install(): DEPLOY_SQUAD hooks
     int32_t hg_tech(int32_t player) const;
     bool hg_engine_unit(const Unit& u) const;    // SimpleSpace engine-loop unit
-    void hg_adopt(const Unit& u, SimRng& rng);   // after add_unit: engine mode enter, add_carrier
+    bool hg_walk_engine_unit(const Unit& u) const;  // cu8g t01: land Walk-locomotor engine-loop unit
+    void hg_adopt(const Unit& u, SimRng& rng);   // after add_unit: holster attach, engine mode enter, add_carrier
     void hg_unit_removed(objects::ObjectId id);  // death / silent kill / retreat / container removal
     void hg_engine_service();                    // tick(): after the movement commit
+    // cu8g t01 HOLSTER_WEAPON (CU8F_T01_T02_T07_RE.md §2.3; EngineLoops holds the state): per-type data (lazy, derived,
+    // not saved), the attach at adopt, the per-frame service (tick(): after the hangar services), the Saber_Throw throw.
+    struct HgHolsterType {
+        uint8_t known = 0, has_bone_name = 0;
+        tactical::hangar::HolsterDesc desc;
+        std::string bone;
+    };
+    const HgHolsterType* hg_holster_type(objects::TypeIndex t);
+    void hg_holster_attach(const Unit& u);
+    void hg_holster_service();
+    // cu8k t01 (CU8F_T01_T02_T07_RE.md §2.7 items 1-4): Saber_Throw's thrower machine. The apply records the target point
+    // T (event point); kSaberThrowDelay frames later the throw spawns the Saber_Name projectile (CombatSystem::
+    // launch_saber); from the throw + 6 (SWORD_CONTROL) the thrower ends the ability as soon as the saber is gone, or
+    // catches it within Catch_Dist (3D) and ends 11 frames later (SWORD_CATCH). Serviced after the combat tick (the saber
+    // steps before the thrower's update, as retail's service order: epsilon 0) and before hg_holster_service, which runs
+    // the EngineLoops throw / catch snaps. Saved in the battle state (version 10).
+    struct SaberThrowState {
+        objects::ObjectId thrower = objects::kNoObjectId, target = objects::kNoObjectId;
+        Vec3 aim;                       // T: the target point at the apply
+        uint32_t throw_frame = 0;       // the throw (spawn) frame
+        uint32_t serial = 0;            // the saber projectile, 0 = not thrown yet
+        int32_t projectile = -1;        // its ProjectileDesc
+        float catch_dist = 0.0f;
+        uint32_t end_frame = 0;         // 0 = still flying / waiting; set at the catch (catch + 11)
+    };
+    std::vector<SaberThrowState> sabers_;  // apply order
+    // --- cu8l t03: the campaign space fleet placement 0x4fbb10 and the start fleet's hyperspace arrival
+    // (CU8K_T03_T08_T09_RE §1, §4; tactical_battle_bt.cpp) ---
+    struct FleetEntry {      // a registration (object, group) of the campaign spawn 0x2a00b0 (0x4fc7e0)
+        uint32_t unit = 0xFFFFFFFFu;       // index into units_ (a unit registered as itself), else
+        uint32_t container = 0xFFFFFFFFu;  // index into containers_ (the first chunk's TEAM container)
+        uint32_t group = 0;                // group k: anchor k mod (marker count)
+    };
+    void bt_fleet_placement(TacticalMode& mode, SimRng& rng, const std::vector<FleetEntry>& reg, const std::vector<size_t>& markers);
+    void bt_fleet_arrival(TacticalMode& mode, SimRng& rng, const std::vector<FleetEntry>& reg);
+    tactical::movement::fleet::HalfBox fleet_box(uint32_t type) const;            // cull-box half extents [M: model bounds]
+    std::vector<tactical::movement::V2> fleet_offsets(uint32_t type) const;       // Squadron_Offsets (x, y)
+    // The start fleet's hyperspace arrival (§1.9, L1_S4_REMAINING §3.4 "Hyperspace in") [port stand-in: the units are not
+    // moved, hidden or suspended; only the timer, its synced draw, the movement lock and the end's new coordinator are
+    // modelled]. Unit record (container = none): timer kArrivalState5 (the vf82 call: the first service turns it to
+    // state 4), kArrivalState4 (state 4's first frame: timer := clamp(int(1, 4) + 5 trunc(4 f), 0, 24), one synced draw),
+    // then += 1 per frame unless the hyperspace hold is on; > 149: the finish. `composes`: a ship outside a team (its finish
+    // 0x624dc0: lock released, a new coordinator holding its position - one space composition at the next step 10).
+    // Container record: the TEAM container's lock (taken by the placement's vf82 0x62f800), released once none of its
+    // members' records is left (0x630390: a new coordinator - one composition). Ascending id per kind.
+    struct ArrivalRec {
+        objects::ObjectId id = objects::kNoObjectId;
+        uint32_t container = 0xFFFFFFFFu;  // containers_ index of a container record
+        int32_t timer = 0;
+        bool composes = false;
+    };
+    static constexpr int32_t kArrivalState5 = -2, kArrivalState4 = -1;
+    std::vector<ArrivalRec> arrivals_;  // saved (battle state version 11)
+    void arrival_service(TacticalMode& mode, SimRng& rng);  // tick: after the L1 motion services, before step 10
+    bool arrival_locked(objects::ObjectId key) const;        // MovementSystem::set_locked_fn
+    uint32_t state_io_version_ = 0;  // the battle state version state_io reads (0: the current one)
+    void saber_throw_service(TacticalMode& mode);
+    bool anim_engaged_clip(objects::ObjectId id) const;  // tactical_battle.cpp: current clip ATTACK (5) / SPINMOVE (0x68)
+    std::vector<HgHolsterType> hg_holster_types_;
+    const TacticalMode* hg_mode_ = nullptr;  // set by hg_setup (before the map load)
     void hg_tick(TacticalMode& mode, SimRng& rng);  // tick(): after the combat tick and its events
     void hg_station_upgrade(TacticalMode& mode, const tactical::abilities::SpawnRequest& q);
     void hg_publish_engine_requests();           // tick() end
@@ -1845,6 +2313,58 @@ private:
     uint32_t hg_launches_ = 0;
     bool hg_used_ = false;                       // hashed once a carrier / upgrade existed
     // --- end hangars ---
+
+    // ---- SP5: the tick as a services phase graph (tactical_battle_services.cpp; docs/SIM_PARALLEL_DESIGN.md §5) ----
+    // Every step of tick() is a service with declared read / write components; tick() runs the graph. The run mode and the
+    // debug write check never change results when the declarations are right (the checks prove them), so they are
+    // process-wide defaults read when a battle is built (headless --svc-mode / --svc-check, tests).
+public:
+    struct ServiceRunDefaults {
+        tactical::services::RunMode mode = tactical::services::RunMode::Parallel;
+        // Debug write check (serial; a violation is counted and printed). On by default in debug builds (NDEBUG unset),
+        // where a violation also asserts.
+#ifdef NDEBUG
+        bool check = false;
+#else
+        bool check = true;
+#endif
+        // A per-unit service loop forks through the tick's ParallelFor only with at least this many units (below it the
+        // fork costs more than the loop). Wall clock only: results do not depend on it (tests set 1 to force the forks).
+        uint32_t parallel_min = 256;
+        // SP5 t03 (docs/SIM_PARALLEL_DESIGN.md §4.4): bit (1 << StreamId) set = that service draws from counter-based
+        // streams (stream_rng(BattleConfig::session_seed, frame, id, entity)) instead of the synced RNG. Unlike the fields
+        // above this CHANGES per-seed outcomes (draw order, tier 3): set it per run, the same for a save and its load
+        // (headless --svc-streams). 0 = every service on the synced RNG (retail order; the goldens). A default is switched
+        // only after the Q4 harness A/B (DECISIONS "Parallel sim redesign").
+        uint32_t streams = 0;
+    };
+    static void set_service_run_defaults(const ServiceRunDefaults& d);
+    static ServiceRunDefaults service_run_defaults();
+    void set_service_mode(tactical::services::RunMode m) { svc_mode_ = m; }
+    void set_service_check(bool on);
+    uint64_t service_violations() const;
+    static uint64_t service_violations_total();  // every battle of the process (tests)
+    const tactical::services::ServiceGraph* service_graph() const { return svc_graph_.get(); }
+
+private:
+    static constexpr uint32_t kSvcParallelGrain = 64;  // units per chunk of a per-unit service loop (wall clock only)
+    void build_service_graph();
+    uint64_t service_digest(uint32_t component) const;
+    struct TickContext {
+        TacticalMode* mode = nullptr;
+        SimRng* rng = nullptr;
+        const ParallelFor* pf = nullptr;
+        double sim_time = 0.0;
+        uint64_t global_frame = 0;
+    };
+    TickContext tick_{};
+    std::unique_ptr<tactical::services::ServiceGraph> svc_graph_;
+    const TacticalBattle* svc_owner_ = nullptr;  // the graph's lambdas capture this; rebuilt if the object moved
+    tactical::services::RunMode svc_mode_ = service_run_defaults().mode;
+    uint32_t svc_parallel_min_ = service_run_defaults().parallel_min;
+    uint32_t svc_streams_ = service_run_defaults().streams;  // SP5 t03: services on counter-based streams (bit per StreamId)
+    std::unique_ptr<tactical::services::Checker> svc_check_;
+    // --- end SP5 ---
 };
 
 // --- P4 tactical: campaign Black Market gate (ABILITIES_HARDPOINTS 2.4, P4_SIM_SYSTEMS 1.5) ---

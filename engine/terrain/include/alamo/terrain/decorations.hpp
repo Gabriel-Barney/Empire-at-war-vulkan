@@ -194,8 +194,6 @@ struct BlobGeometry {
 bool build_blob_geometry(const Terrain& terrain, const ShadowBlob& blob, RenderMode mode, BlobGeometry& out);
 // Colour rules of 3.3 (0x12ff60), returned as B, G, R, A.
 std::array<uint8_t, 4> blob_vertex_color(RenderMode mode, const float (&rgba)[4], float alpha);
-// Rewrites only the colours (the engine does this when only the intensity changes).
-void set_blob_color(BlobGeometry& g, RenderMode mode, const ShadowBlob& blob);
 
 // ---------------------------------------------------------------- map tracks (types 3 / 5)
 struct SplineSample {

@@ -82,16 +82,21 @@ struct TacticalScriptHooks {
     CinematicTransports* transports = nullptr;
     // Teleport (Start_Cinematic_Space_Retreat line-up, 0x3a8f90): store + movement + trees. Unset: store only.
     std::function<void(objects::ObjectHandle unit, Vec3 position, Vec3 facing)> teleport;
-    // Locomotor vtable +0x2a8: hyperspace out after `delay_frames` (sets the in-end-cinematic flag obj +0x3c9).
-    // Unset: the line-up happens, nobody jumps (logged).
-    std::function<void(objects::ObjectHandle unit, int32_t delay_frames)> hyperspace_out;
-    // L1 final: the same locomotor call with its keep_parent_link flag (L1_S4_REMAINING §3.4): Hyperspace_Away([bool =
-    // true]) -> (unit, 0, bool); Start_Cinematic_Space_Retreat -> (unit, delay, false). False = not such a unit. When set
-    // it is used instead of hyperspace_out; unset, Hyperspace_Away keeps its Lua order on the direct path.
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6): Lock_Current_Orders took the movement lock counter 0 -> 1 on `unit` (0x3a8e50's
+    // first lock: the split from its formation or the adopt, at most one synced draw). Unset: no draw.
+    std::function<void(objects::ObjectHandle unit)> movement_first_lock;
+    // Locomotor vtable +0x2a8: hyperspace out after `delay_frames` (sets the in-end-cinematic flag obj +0x3c9), with
+    // its keep_parent_link flag (L1 final, L1_S4_REMAINING §3.4): Hyperspace_Away([bool = true]) -> (unit, 0, bool);
+    // Start_Cinematic_Space_Retreat -> (unit, delay, false). False = not such a unit. Unset: Hyperspace_Away keeps its
+    // Lua order on the direct path; the space retreat line-up happens, nobody jumps (logged).
     std::function<bool(objects::ObjectHandle unit, int32_t delay_frames, bool keep_parent_link)> hyperspace_out_link;
     // story t12: Resume_Hyperspace_In() (0x543570) clears the reinforcement hyperspace hold 0x140b27d5f (LINK_TACTICAL
     // P9 == 2, L1_S4_REMAINING §3.4). Unset: only the presentation event is recorded.
     std::function<void()> resume_hyperspace_in;
+    // cu8g t03: Set_New_Environment(int) (0x5448a0 -> mode vf25, CU8F_T03_T05_RE §2.2): the mode's active environment
+    // index := clamp(index, 0, n - 1) (the battle's TacticalBattle::set_environment; land weather re-inits on its next
+    // service, the renderer re-applies lighting / fog / clouds / sky / land wind). Unset: only the presentation event.
+    std::function<void(int32_t index)> set_new_environment;
     // The player's faction Space_Retreat_Unit_Increment_Wait_Frames (+0x20c0). Unset: 0 [port].
     std::function<int32_t(int32_t player)> retreat_increment_frames;
 

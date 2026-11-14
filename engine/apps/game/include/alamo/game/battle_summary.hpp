@@ -12,9 +12,9 @@
 //                   destroyed (both sides). Deterministic, integer, no wall clock.
 //   * bounty        the sum of the bounty of every destroyed unit that is not the local player's: Override_Bounty_SP when
 //                   the type sets it (0 allowed), else the amount of the FIRST Default_Bounty_By_Category_SP entry
-//                   (document order) whose category intersects the type's CategoryMask, else 0. Shown only: whether the
-//                   original credits it for auto-resolve kills (the 0x392600 "Awarding a %d credit bounty" path is the
-//                   tactical kill handler) is open, so no credits move.
+//                   (document order) whose category intersects the type's CategoryMask, else 0. Shown only here; since
+//                   a2m r2 the galactic sim pays the bounty of a player's Bounty_On_Faction abilities for auto-resolve
+//                   kills (conflicts.cpp, docs/re/A2M_R2_UW_BOUNTY_TRACE.md §1).
 //   * efficiency    per side: the other side's lost credit value / both sides' lost credit value, rounded to a percent
 //                   (nothing lost on either side: 100 for the winner, 0 for the loser).
 #pragma once
@@ -25,24 +25,17 @@
 #include <vector>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/galactic/bounty.hpp"
 #include "alamo/objects/game_object_types.hpp"
 
 namespace alamo::game {
 
-// Default_Bounty_By_Category_SP, document order.
-struct BountyTable {
-    struct Entry {
-        uint64_t categories = 0;  // GameObjectCategory mask of the entry's category name (0 = unknown name: never matches)
-        int32_t amount = 0;
-    };
-    std::vector<Entry> entries;
-};
-
-BountyTable load_bounty_table(const data::GameConstants& constants, const objects::GameObjectTypes& types);
-// Bounty of one destroyed unit of type `t` (rule above); never negative.
-int64_t type_bounty(const BountyTable& table, const objects::GameObjectTypes& types, objects::TypeIndex t);
-// Same rule from already-extracted values (tests, hosts without a type database).
-int64_t bounty_of(const BountyTable& table, bool has_override, int32_t override_amount, uint64_t categories);
+// a2m r2: the bounty rule lives in the galactic sim (galactic/bounty.hpp), which now also pays it for galactic
+// auto-resolve kills; the results screen shows the same values.
+using galactic::BountyTable;
+using galactic::bounty_of;
+using galactic::load_bounty_table;
+using galactic::type_bounty;
 
 // One unit of the auto-resolve's forces (recorded when it started; `destroyed` evaluated after it ended).
 struct ArUnitRecord {

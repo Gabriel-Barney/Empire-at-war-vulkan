@@ -110,7 +110,7 @@ constexpr DWORD kLoadFlags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEA
 std::string file_identity(const std::filesystem::path& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return "unreadable " + path.string();
-    uint64_t h = 0xcbf29ce484222325ull, size = 0;
+    uint64_t h = alamo::kFnv1a64Offset, size = 0;
     std::vector<char> buf(1u << 16);
     while (f) {
         f.read(buf.data(), static_cast<std::streamsize>(buf.size()));

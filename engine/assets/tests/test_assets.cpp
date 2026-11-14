@@ -27,9 +27,11 @@
 #include "alamo/assets/skeleton.hpp"
 #include "alamo/assets/texture.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/formats/alo.hpp"
+#include "alamo/test/support.hpp"
 #include "mini_json.hpp"
 
 #if defined(ALAMO_ASSETS_HAVE_VFS)
@@ -39,14 +41,7 @@
 using namespace alamo::assets;
 using Bytes = std::vector<std::uint8_t>;
 
-static int g_fail = 0;
-#define CHECK(x)                                                                    \
-    do {                                                                            \
-        if (!(x)) {                                                                 \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);                \
-            ++g_fail;                                                               \
-        }                                                                           \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -1334,11 +1329,8 @@ void test_real_data() {
     // with and without 128-byte 0x10005 vertex chunks, so loader changes can be checked byte-for-byte.
     {
         std::size_t fmt_ok = 0, fmt_fail = 0, legacy_models = 0;
-        std::uint64_t dig_plain = 14695981039346656037ull, dig_legacy = dig_plain;
-        auto mix = [](std::uint64_t& h, const void* p, std::size_t n) {
-            const auto* b = static_cast<const std::uint8_t*>(p);
-            for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
-        };
+        std::uint64_t dig_plain = alamo::kFnv1a64Offset, dig_legacy = dig_plain;
+        auto mix = [](std::uint64_t& h, const void* p, std::size_t n) { h = alamo::fnv1a64(p, n, h); };
         std::vector<std::string> fmt_fails;
         std::map<std::string, std::array<std::size_t, 4>> legacy_stats;  // submeshes, verts, colour 0000, colour 1111
         std::size_t b4i4_subs = 0, b4i4_verts = 0, b4i4_inexact = 0, b4i4_blended = 0;
@@ -1473,11 +1465,8 @@ void test_real_data() {
             };
             AssetCache ocache(*vfs, opt);
             parallel_for(alos.size(), [&](std::size_t i) { (void)ocache.model(alos[i]); });
-            std::uint64_t dig = 14695981039346656037ull;
-            auto mix = [](std::uint64_t& h, const void* p, std::size_t n) {
-                const auto* b = static_cast<const std::uint8_t*>(p);
-                for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 1099511628211ull;
-            };
+            std::uint64_t dig = alamo::kFnv1a64Offset;
+            auto mix = [](std::uint64_t& h, const void* p, std::size_t n) { h = alamo::fnv1a64(p, n, h); };
             std::size_t ov_subs = 0, ov_render = 0, ov_bytes_changed = 0, ov_skin_change = 0;
             std::set<std::string> ov_models;
             std::map<std::string, std::size_t> ov_pairs;  // "from->to" counts
@@ -1764,7 +1753,7 @@ void test_real_data() {
     const std::string mod = std::string(root) + "\\Mods\\Legeds_ships_transfer";
     if (std::filesystem::is_directory(alamo::path_from_utf8(mod))) {
         alamo::vfs::VfsConfig mcfg = cfg;
-        mcfg.mod_paths = {mod};
+        mcfg.mod_search = {{alamo::vfs::ModSearchEntry::Kind::Path, mod}};
         auto mvfs = alamo::vfs::Vfs::create(mcfg, &err);
         CHECK(mvfs != nullptr);
         if (mvfs)

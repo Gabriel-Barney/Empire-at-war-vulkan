@@ -14,11 +14,14 @@
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_DATA_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -27,14 +30,7 @@ using namespace alamo;
 using namespace alamo::data;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static bool has_warning(const XmlDocument& d, uint32_t line, std::string_view needle) {
     for (const auto& w : d.diagnostics())
@@ -138,6 +134,25 @@ static void test_xml_recovery() {
         CHECK(has_warning(d, 2, "<R> is not closed"));
         CHECK(d.root().child_text("A") == "x < 5");
     }
+    {  // element names may start with a digit (the original loads these unit files: docs/re/MODC_LOADER.md section 3)
+        const char* src =
+            "\xEF\xBB\xBF<?xml version=\"1.0\"?>\r\n"
+            "<181st>\r\n"
+            "\t<UniqueUnit Name=\"U1\"><Variant_Of_Existing_Type>TIE_Fighter</Variant_Of_Existing_Type></UniqueUnit>\r\n"
+            "\t<80s_Visor_Man Name=\"U2\"/>\r\n"
+            "\t<Text>a < 5</Text>\r\n"
+            "</181st>\r\n";
+        XmlDocument d = XmlDocument::parse(src, "digit.xml");
+        CHECK(d.ok());
+        CHECK(d.root().name() == "181st");
+        CHECK(d.root().child_count() == 3);
+        CHECK(d.root().child("UniqueUnit").attribute("Name") == "U1");
+        CHECK(d.root().child("UniqueUnit").child_text("Variant_Of_Existing_Type") == "TIE_Fighter");
+        CHECK(d.root().child("80s_Visor_Man").attribute("Name") == "U2");
+        CHECK(d.root().child_text("Text") == "a < 5");
+        CHECK(has_warning(d, 5, "does not start markup"));
+        CHECK(d.diagnostics().size() == 1);
+    }
     {  // unquoted attribute and self-closing variants
         XmlDocument d = XmlDocument::parse("<R a=1 b = \"2\" c=x/><S/>", "q.xml");
         CHECK(d.ok());
@@ -174,7 +189,6 @@ static void test_xml_recovery() {
         CHECK(b.root().child_text("A") == "v");
     }
 }
-
 
 // Every prefix and a set of deterministic byte mutations of a tricky document must parse
 // without crashing (run under ASan/UBSan in CI to catch out-of-bounds reads).
@@ -218,6 +232,24 @@ static void test_values() {
     CHECK(parse_int("3.9") == 3);
     CHECK(!parse_int("x"));
     CHECK(!parse_int("99999999999"));
+    // CU3 prefix / first-character variants.
+    CHECK(parse_int_prefix(" 12abc") == 12);
+    CHECK(parse_int_prefix("\v\f-7") == -7);
+    CHECK(parse_int_prefix("+2.9") == 2);
+    CHECK(parse_int_prefix("-0") == 0);
+    CHECK(!parse_int_prefix(""));
+    CHECK(!parse_int_prefix("x1"));
+    CHECK(!parse_int_prefix(" -"));
+    CHECK(!parse_int_prefix("+-1"));
+    CHECK(parse_int_prefix("99999999999") == 2147483647);
+    CHECK(parse_int_prefix("2147483647") == 2147483647);
+    CHECK(parse_int_prefix("2147483648") == 2147483647);
+    CHECK(parse_int_prefix("-2147483648") == -2147483647 - 1);
+    CHECK(parse_int_prefix("-99999999999999999999") == -2147483647 - 1);
+    CHECK(parse_type_bool("1") && parse_type_bool("yes") && parse_type_bool("True") && parse_type_bool("Y"));
+    CHECK(!parse_type_bool("10") && !parse_type_bool(" Yes") && !parse_type_bool("") && !parse_type_bool("no") && !parse_type_bool("0"));
+    CHECK(parse_flag_char("1") && parse_flag_char("10") && parse_flag_char("yes") && parse_flag_char("t"));
+    CHECK(!parse_flag_char("") && !parse_flag_char(" Yes") && !parse_flag_char("false") && !parse_flag_char("0"));
     CHECK(parse_bool(" Yes ") == true);
     CHECK(parse_bool("TRUE") == true);
     CHECK(parse_bool("1") == true);
@@ -247,9 +279,59 @@ static void test_values() {
     CHECK(!parse_pair("Rebel"));
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
+using ::alamo::test::write_file;
+
+// modc t06: planet columns through Variant_Of_Existing_Type (OBJECT_TYPES.md §3.3 / §3.4). The template is in a later
+// file (any definition order), a two-step chain, a variant's own tags win, its <Behavior> replaces the list (last one
+// wins), an empty tag is a no-op, a missing parent or a cycle keeps only the element's own tags.
+static void test_planet_variants() {
+    const fs::path tmp = fs::temp_directory_path() / "alamo_data_planet_variants";
+    fs::remove_all(tmp);
+    const fs::path x = tmp / "Data" / "XML";
+    write_file(x / "GAMECONSTANTS.XML", "<GameConstants/>");
+    write_file(x / "TRADEROUTEFILES.XML", "<Trade_Route_Files/>");
+    write_file(x / "CAMPAIGNFILES.XML", "<Campaign_Files/>");
+    write_file(x / "GAMEOBJECTFILES.XML",
+               "<Game_Object_Files><File>Planets.xml</File><File>Templates.xml</File></Game_Object_Files>");
+    write_file(x / "PLANETS.XML",
+               "<Mod_Planets>"
+               "<Planet Name=\"A\"><Variant_Of_Existing_Type>TEMPLATE_PLANET</Variant_Of_Existing_Type>"
+               "<Galactic_Position>1,2,3</Galactic_Position><Max_Space_Base></Max_Space_Base></Planet>"
+               "<Planet Name=\"B\"><Variant_Of_Existing_Type>Rich_Template</Variant_Of_Existing_Type>"
+               "<Planet_Credit_Value>7</Planet_Credit_Value></Planet>"
+               "<Planet Name=\"C\"><Variant_Of_Existing_Type>Template_Planet</Variant_Of_Existing_Type>"
+               "<Behavior>PLANET</Behavior><Behavior>IDLE</Behavior></Planet>"
+               "<Planet Name=\"D\"><Variant_Of_Existing_Type>No_Such_Type</Variant_Of_Existing_Type>"
+               "<Behavior>PLANET</Behavior></Planet>"
+               "<Planet Name=\"E\"><Variant_Of_Existing_Type>E</Variant_Of_Existing_Type><Planet_Credit_Value>3</Planet_Credit_Value></Planet>"
+               "</Mod_Planets>");
+    write_file(x / "TEMPLATES.XML",
+               "<Planets>"
+               "<Planet Name=\"Template_Planet\"><Behavior>SELECTABLE, PLANET, PRODUCTION</Behavior>"
+               "<Planet_Credit_Value>40</Planet_Credit_Value><Max_Space_Base>5</Max_Space_Base><Max_Ground_Base>4</Max_Ground_Base>"
+               "<Always_Instantiate_Galactic>Yes</Always_Instantiate_Galactic></Planet>"
+               "<Planet Name=\"Rich_Template\"><Variant_Of_Existing_Type>Template_Planet</Variant_Of_Existing_Type>"
+               "<Planet_Credit_Value>90</Planet_Credit_Value><Max_Ground_Base>2</Max_Ground_Base></Planet>"
+               "</Planets>");
+    DirectoryProvider dp(path_to_utf8(tmp));
+    std::vector<std::string> diag;
+    GameDatabase db;
+    const bool loaded = db.load(dp, {}, &diag);
+    if (!loaded)
+        for (const std::string& s : diag) std::printf("  diag: %s\n", s.c_str());
+    CHECK(loaded);
+    const PlanetTypes& p = db.planets();
+    const uint32_t a = p.find("A"), b = p.find("B"), c = p.find("C"), d = p.find("D"), e = p.find("E");
+    CHECK(a != kInvalidPlanet && b != kInvalidPlanet && c != kInvalidPlanet && d != kInvalidPlanet && e != kInvalidPlanet);
+    CHECK(p.flags[a] == (kPlanetAlwaysInstantiate | kPlanetHasPlanetBehavior) && p.credit_value[a] == 40);
+    CHECK(p.max_space_base[a] == 5 && p.max_ground_base[a] == 4 && p.position[a].y == 2.0f);  // empty tag: no-op
+    CHECK(p.behaviors[a] == (std::vector<std::string>{"SELECTABLE", "PLANET", "PRODUCTION"}));
+    CHECK(p.credit_value[b] == 7 && p.max_ground_base[b] == 2 && p.max_space_base[b] == 5);  // two-step chain
+    CHECK((p.flags[b] & kPlanetHasPlanetBehavior) && (p.flags[c] & kPlanetAlwaysInstantiate));
+    CHECK(p.behaviors[c] == std::vector<std::string>{"IDLE"} && !(p.flags[c] & kPlanetHasPlanetBehavior));
+    CHECK(p.flags[d] == kPlanetHasPlanetBehavior && p.credit_value[d] == 0);  // missing parent: own tags
+    CHECK(p.flags[e] == 0 && p.credit_value[e] == 3);                         // cycle: own tags
+    fs::remove_all(tmp);
 }
 
 static void test_database_synthetic() {
@@ -524,21 +606,7 @@ static void test_database_install_layout() {
 // ------------------------------------------------------------------------------------------
 // Integration over the real data
 
-static std::string env_or(const char* name, const char* fallback) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out = fallback;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        if (*v) out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : std::string(fallback);
-#endif
-}
+using ::alamo::test::env_or;  // alamo/test/support.hpp
 
 struct TreeStats {
     size_t files = 0, bytes = 0, nodes = 0, recovered = 0, fatal = 0;
@@ -729,6 +797,75 @@ static void integration_merge(const DataSource& foc, const DataSource& eaw) {
     CHECK(db.find_campaign("Full_Story_Campaign_Empire") != nullptr);
 }
 
+// cu5 t02: the <File> list helper keeps list order and duplicates; empty entries, missing and unparsable files follow
+// the options.
+namespace {
+class MapProvider final : public FileProvider {
+public:
+    std::map<std::string, std::string> files;
+    bool read(std::string_view path, std::vector<uint8_t>& out) const override {
+        const auto it = files.find(std::string(path));
+        if (it == files.end()) return false;
+        out.assign(it->second.begin(), it->second.end());
+        return true;
+    }
+    bool exists(std::string_view path) const override { return files.count(std::string(path)) != 0; }
+    std::string origin(std::string_view path) const override { return std::string(path); }
+};
+}  // namespace
+
+static void test_listed_xml() {
+    MapProvider p;
+    p.files["Data\\XML\\L.xml"] =
+        "<L><File> B.xml </File><File></File><File>A.xml</File><Other>C.xml</Other><File>Gone.xml</File>"
+        "<file>B.xml</file><File>Bad.xml</File></L>";
+    p.files["Data\\XML\\A.xml"] = "<A><X Name=\"a\"/></A>";
+    p.files["Data\\XML\\B.xml"] = "<B><X Name=\"b\"/></B>";
+    p.files["Data\\XML\\C.xml"] = "<C/>";
+    p.files["Data\\XML\\Bad.xml"] = "";
+    ListStatus st = ListStatus::Missing;
+    const std::vector<ListedXmlEntry> e = read_listed_xml_entries(p, "Data\\XML\\L.xml", {}, &st);
+    CHECK(st == ListStatus::Ok);
+    CHECK(e.size() == 5);
+    if (e.size() == 5) {
+        CHECK(e[0].name == "B.xml" && e[0].path == "Data\\XML\\B.xml");
+        CHECK(e[1].name == "A.xml" && e[2].name == "Gone.xml" && e[3].name == "B.xml" && e[4].name == "Bad.xml");
+        CHECK(e[0].line == 1);
+    }
+    ListedXmlOptions keep;
+    keep.keep_empty_entries = true;
+    keep.entry_tag = {};
+    const std::vector<ListedXmlEntry> all = read_listed_xml_entries(p, "Data\\XML\\L.xml", keep);
+    CHECK(all.size() == 7 && all[1].path == kListedXmlDir && all[3].name == "C.xml");
+
+    std::string order;
+    CHECK(for_each_listed_xml(p, "Data\\XML\\L.xml", [&](ListedXmlFile& f) {
+              order += f.doc->root().name();
+              CHECK(f.doc->file() == f.entry.path);
+          }) == ListStatus::Ok);
+    CHECK(order == "BAB");  // missing and unparsable files skipped, the duplicate visited twice
+    ListedXmlOptions visit;
+    visit.visit_missing = true;
+    visit.visit_unparsable = true;
+    visit.name_docs_by_entry = true;
+    order.clear();
+    for_each_listed_xml(p, "Data\\XML\\L.xml", [&](ListedXmlFile& f) {
+        order += !f.doc ? "-" : f.doc->ok() ? std::string(f.doc->root().name()) : std::string("!");
+        if (f.doc) CHECK(f.doc->file() == f.entry.name);
+    }, visit);
+    CHECK(order == "BA-B!");
+    size_t bytes = 0, missing = 0;
+    for_each_listed_file(p, "Data\\XML\\L.xml", [&](const ListedXmlEntry&, const std::vector<uint8_t>* b) {
+        if (b) bytes += b->size();
+        else ++missing;
+    }, visit);
+    CHECK(missing == 1 && bytes == p.files["Data\\XML\\B.xml"].size() * 2 + p.files["Data\\XML\\A.xml"].size());
+
+    CHECK(for_each_listed_xml(p, "Data\\XML\\None.xml", [](ListedXmlFile&) { CHECK(false); }) == ListStatus::Missing);
+    p.files["Data\\XML\\Empty.xml"] = "   ";
+    CHECK(for_each_listed_xml(p, "Data\\XML\\Empty.xml", [](ListedXmlFile&) { CHECK(false); }) == ListStatus::Unparsable);
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep output if a check aborts the process
     log::set_min_level(log::Level::Error);  // loaders warn a lot by design; tests read diagnostics
@@ -737,7 +874,9 @@ int main() {
     test_xml_robustness();
     test_values();
     test_database_synthetic();
+    test_planet_variants();
     test_database_install_layout();
+    test_listed_xml();
 
     const std::string foc = env_or("ALAMO_FOC_DATA", "/home/claude/data/foc");
     const std::string eaw = env_or("ALAMO_EAW_DATA", "/home/claude/data/eaw");

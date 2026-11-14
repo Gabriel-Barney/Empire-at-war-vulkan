@@ -19,14 +19,13 @@
 #include <thread>
 #include <vector>
 
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 #include "alamo/ai/tactical/applies.hpp"
 #include "alamo/ai/tactical/constants.hpp"
 #include "alamo/ai/tactical/damage_tracking.hpp"
 #include "alamo/ai/tactical/find_target.hpp"
 #include "alamo/ai/tactical/free_store.hpp"
 #include "alamo/ai/tactical/hint_zones.hpp"
-#include "alamo/ai/tactical/land_connectivity.hpp"
 #include "alamo/ai/tactical/tactical_credits.hpp"
 #include "alamo/ai/tactical/tactical_perception.hpp"
 #include "alamo/ai/tactical/target_list.hpp"
@@ -34,6 +33,7 @@
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/test/support.hpp"
 
 #if defined(ALAMO_AI_TACTICAL_HAVE_DATA) && defined(ALAMO_AI_TACTICAL_HAVE_TERRAIN)
 #include "alamo/data/game_database.hpp"
@@ -46,17 +46,10 @@ using namespace alamo;
 using namespace alamo::ai::tactical;
 namespace econ = ::alamo::galactic::econ;
 
-static int g_fail = 0;
-#define CHECK(c)                                                         \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
-            ++g_fail;                                                    \
-        }                                                                \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static ParallelFor make_thread_pf(unsigned threads) {
-    return ::alamo::ai::tactical::testing::make_thread_parallel_for(threads);  // persistent pool, thread_parallel_for.hpp
+    return ::alamo::test::make_thread_parallel_for(threads);  // persistent pool, alamo/test/thread_parallel_for.hpp
 }
 
 static TargetObjectInfo obj(int32_t id, bool land, bool space_rep, bool space_own, bool dead = false) {
@@ -232,7 +225,7 @@ static void test_reachability() {
     const ZoneThreatFn threat = [](uint32_t z) { return z == 1 ? 500.0 : (z == 2 ? 2000.0 : 0.0); };
     // A1_READINGS §3: S = wrapping sum of the hop weights; accept iff (S >> 16) * 100 <= tolerance; cost = (S & 0xFFFF) / 10.
     // Node costs 0: 0 -> 2 = 2 hops of 0x10000 + 10 -> threat 200, cost 2.0; 0 -> 1 -> threat 100, cost 1.0.
-    CHECK(zone_reachability_cost(g, 0, 2, Reachability::AnyThreat, c, threat) == 2.0);
+    CHECK(zone_reachability_cost(g, 0, 2, Reachability::AnyThreat, c) == 2.0);
     CHECK(zone_reachability_cost(g, 0, 2, Reachability::HighThreat, c) == 2.0);
     CHECK(zone_reachability_cost(g, 0, 2, Reachability::LowThreat, c) == 2.0);
     CHECK(zone_reachability_cost(g, 0, 2, Reachability::NoThreat, c) == kUnreachable);
@@ -307,9 +300,6 @@ static void test_reachability() {
         fg.flood(-1, fails({}), out);
         CHECK(out.empty());
     }
-    // custom edge weights (drop B -> C)
-    g.recompute([](uint32_t from, uint32_t to, uint32_t) { return (from == 1 && to == 2) ? ::alamo::galactic::kUnlinked : 7u; });
-    CHECK(g.weight(0, 1) == 7u && !g.path(0, 2, p) && g.weight(2, 0) == 14u);
     // serial vs threaded all-pairs on a larger random zone graph
     SimRng r(1234);
     std::vector<HintZone> big;
@@ -321,7 +311,7 @@ static void test_reachability() {
     }
     ZoneGraph a, b;
     a.build(big);
-    b.build(big, {}, make_thread_pf(8));
+    b.build(big, make_thread_pf(8));
     CHECK(a.matrices() == b.matrices());
 }
 
@@ -377,45 +367,6 @@ static void test_select_target() {
     CHECK(find_target_return_kind(nullptr) == FindTargetReturn::Nil && reachable_target_return_kind(nullptr) == FindTargetReturn::Nil);
 }
 
-static void test_collect_candidates() {
-    TacticalTargetList t(TacticalMode::Land);
-    const TargetObjectInfo objs[] = {obj(1, true, false, false), obj(2, true, false, false), obj(3, true, false, false)};
-    t.add_existing_objects(objs);
-    std::vector<HintZone> zs = {zone(1, "Near", 100, 0, {}), zone(2, "Far", 5000, 0, {})};
-    t.add_land_regions(zs);
-    // units at x = 0, 300, 900
-    CandidateFilter f;
-    f.applies = [](const TacticalTarget& x) { return x.object_id != 2; };
-    int evals = 0;
-    f.score = [&](const TacticalTarget& x) -> std::optional<double> {
-        ++evals;
-        if (x.object_id == 3) return std::nullopt;  // failed evaluation
-        return x.is_unit() ? 1.0 : 2.0;
-    };
-    std::vector<ScoredTarget> out;
-    collect_candidates(t.targets(), f, out);
-    CHECK(out.size() == 3 && out[0].target == 0 && out[1].target == 3 && out[2].target == 4 && evals == 4);
-    // range (squared 3-D) with live unit positions
-    f.position = [](const TacticalTarget& x) {
-        if (!x.is_unit()) return x.position;
-        return Vec3f{x.object_id == 1 ? 0.0f : (x.object_id == 2 ? 300.0f : 900.0f), 0.0f, 0.0f};
-    };
-    f.max_range = 500.0f;
-    f.origin = {0.0f, 0.0f, 400.0f};
-    collect_candidates(t.targets(), f, out);
-    // unit 1 at d = 400 and "Near" at d = sqrt(100^2 + 400^2) = 412 are in range, "Far" is not
-    CHECK(out.size() == 2 && out[0].target == 0 && out[1].target == 3);
-    f.max_range = 0.0f;
-    // reachability: only regions are filtered
-    int reach_calls = 0;
-    f.reachability = [&](const TacticalTarget& x) {
-        ++reach_calls;
-        return x.name == "Far" ? kUnreachable : 10.0;
-    };
-    collect_candidates(t.targets(), f, out);
-    CHECK(out.size() == 2 && out[0].target == 0 && out[1].target == 3 && reach_calls == 2);
-}
-
 // ---------------------------------------------------------------- 6.3 damage tracking
 static void test_damage_tracking() {
     DamageTrackingStore s;
@@ -454,45 +405,6 @@ static void test_damage_tracking() {
     CHECK(s.entries(10)->at(7) == 2.5f && s.entries(11)->at(7) == 28.0f);
     s.disable(10);
     CHECK(!s.tracks(10) && s.tracked_count() == 1);
-#if defined(ALAMO_AI_TACTICAL_HAVE_COMBAT)
-    namespace cb = ::alamo::tactical::combat;
-    cb::DamageRequest rq;
-    rq.victim = 11;
-    rq.source = 5;
-    cb::DamageResult rs;
-    rs.applied = true;
-    rs.after_multipliers = 9.0f;  // A1_READINGS §7: not the tracked amount
-    rs.absorbed = 1.5f;
-    rs.to_hull = 2.5f;
-    rs.hull_lost = 2.5f;
-    record_combat_damage(s, rq, rs);
-    CHECK(s.entries(11)->at(5) == 4.0f);
-    rs.absorbed = 0.0f;
-    rs.to_hull = 0.0f;
-    rs.hull_lost = 0.0f;
-    record_combat_damage(s, rq, rs);  // nothing lost: no record
-    CHECK(s.entries(11)->at(5) == 4.0f);
-    // A1_READINGS §30.2: a tracked 50-hull victim hit for 200 records 50 (the clamped hull loss, not the hit)
-    rq.source = 6;
-    rs.to_hull = 200.0f;
-    rs.hull_lost = 50.0f;
-    record_combat_damage(s, rq, rs);
-    CHECK(s.entries(11)->at(6) == 50.0f);
-    rs.hull_lost = 0.0f;  // a cannot-die victim (restore ran): no hull loss, no record
-    rq.source = 8;
-    record_combat_damage(s, rq, rs);
-    CHECK(s.entries(11)->count(8) == 0);
-    rq.source = 5;
-    rs.absorbed = 1.5f;
-    rs.to_hull = 2.5f;
-    rs.hull_lost = 2.5f;
-    rs.applied = false;
-    record_combat_damage(s, rq, rs);
-    rq.source = cb::kNoObject;
-    rs.applied = true;
-    record_combat_damage(s, rq, rs);
-    CHECK(s.entries(11)->size() == 3 && s.entries(11)->at(5) == 4.0f);
-#endif
 }
 
 // ---------------------------------------------------------------- 5 free store
@@ -630,7 +542,7 @@ static uint64_t scenario_crc(const ParallelFor& pf) {
     space.add_existing_objects(objs);
     space.build_space_grid({-7000, -7000, 7000, 7000}, c.space_region_size, true);
     ZoneGraph g;
-    g.build(zones, {}, pf);
+    g.build(zones, pf);
     DamageTrackingStore dmg;
     TacticalFreeStore fs;
     FreeStoreSchedule sched = busy_tactical_schedule();
@@ -659,22 +571,23 @@ static uint64_t scenario_crc(const ParallelFor& pf) {
         free_store_service(sched, fs, frame, step);
         // FindTarget-like pick over the land list with a pseudo score, and a Reachable_Target-like
         // pick over regions with the zone reachability filter
-        CandidateFilter f;
         const uint32_t salt = frame;
-        f.score = [salt](const TacticalTarget& t) -> std::optional<double> {
+        auto score = [salt](const TacticalTarget& t) {
             const uint32_t h = (static_cast<uint32_t>(t.object_id) * 2654435761u) ^ (static_cast<uint32_t>(t.zone) * 40503u) ^ salt;
             return static_cast<double>(h % 1000u) - 200.0;
         };
         std::vector<ScoredTarget> cand;
-        collect_candidates(land.targets(), f, cand);
+        const std::span<const TacticalTarget> lt = land.targets();
+        for (size_t i = 0; i < lt.size(); ++i) cand.push_back({static_cast<uint32_t>(i), score(lt[i])});
         picks.push_back(select_target(cand, pick_weight(0.5f), rng).target);
-        f.applies = [](const TacticalTarget& t) { return !t.is_unit(); };
         const int32_t src = static_cast<int32_t>(frame % 40u);
-        f.reachability = [&](const TacticalTarget& t) {
-            return zone_reachability_cost(g, src, t.zone, Reachability::MediumThreat, c,
-                                          [salt](uint32_t z) { return static_cast<double>((z * 977u + salt) % 4000u); });
-        };
-        collect_candidates(land.targets(), f, cand);
+        cand.clear();
+        for (size_t i = 0; i < lt.size(); ++i) {
+            const TacticalTarget& t = lt[i];
+            if (t.is_unit()) continue;
+            if (t.has_reachability() && zone_reachability_cost(g, src, t.zone, Reachability::MediumThreat, c) == kUnreachable) continue;
+            cand.push_back({static_cast<uint32_t>(i), score(t)});
+        }
         picks.push_back(select_target(cand, pick_weight(0.75f), rng).target);
         const int32_t victims[] = {rng.range_int(0, next_id - 1), rng.range_int(0, next_id - 1)};
         picks.push_back(find_deadly_enemy(dmg, victims));
@@ -717,22 +630,6 @@ static void test_scenario(const char* golden, const char* write_golden) {
         }
     }
 }
-
-#if defined(ALAMO_AI_TACTICAL_HAVE_MOVEMENT)
-static void test_land_connectivity() {
-    namespace mv = ::alamo::tactical::movement;
-    mv::PassabilityGrid grid;
-    grid.init(8, 4);
-    // wall at column 4
-    for (int32_t y = 0; y < 4; ++y) grid.set_base(4, y, mv::kPassObstacle);
-    mv::RegionMap rm;
-    const uint32_t masks[] = {mv::kPassClear};
-    rm.build(grid, masks);
-    CHECK(land_points_connected(rm, mv::kPassClear, 0.0f, 0.0f, 60.0f, 40.0f));
-    CHECK(!land_points_connected(rm, mv::kPassClear, 0.0f, 0.0f, 120.0f, 0.0f));
-    CHECK(!land_points_connected(rm, 0x12345u, 0.0f, 0.0f, 60.0f, 40.0f));
-}
-#endif
 
 #ifdef AI_TACTICAL_REAL_DATA
 static void test_real_data() {
@@ -815,7 +712,7 @@ static void test_real_data() {
             }
             ZoneGraph g, gp;
             g.build(zones);
-            gp.build(zones, {}, pf);
+            gp.build(zones, pf);
             CHECK(g.matrices() == gp.matrices());
             unresolved += g.unresolved_links();
             for (uint32_t i = 0; i < g.size(); ++i)
@@ -1021,15 +918,11 @@ int main(int argc, char** argv) {
     test_applies();
     test_reachability();
     test_select_target();
-    test_collect_candidates();
     test_damage_tracking();
     test_free_store();
     test_credits();
     test_component_saves();  // N1 stage 2
     test_zone_cell_order();  // A1_READINGS §30.1
-#if defined(ALAMO_AI_TACTICAL_HAVE_MOVEMENT)
-    test_land_connectivity();
-#endif
     test_scenario(golden, write_golden);
 #ifdef AI_TACTICAL_REAL_DATA
     test_real_data();

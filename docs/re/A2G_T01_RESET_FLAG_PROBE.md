@@ -47,6 +47,13 @@ From `records.txt` (PSTART): BuildEconomicStructurePlan 19, BuildBaseComponentBa
 17, UpgradeStarbasePlan 2; Underworld UpgradeStarbasePlan 6 (the Lua cap is 40 starts per script). Each Empire base-component /
 economic start reads Spendable 0 / Unallocated 500. Used by the t04 comparison (`A2G_T02_T04_PORT_VS_RETAIL.md`).
 
+**Pre-fix recorder artefact (a2m t12):** these start counts are unreliable. This run used the kit before its 2026-11-08
+Flush_G fix (`tools/probe_mod/a2f_budget/README.md`, "a2k t05 fix"). Until then, the second and later runs of every pooled
+instance of a hooked plan died at their first record, before the shipped plan code ran. The counts therefore come from
+plans that were ending at once, and the Empire's AI after each hooked plan's first release was disturbed. The flag
+mechanism of section 1 is read from the watcher, not from plan records, but its frames (17569, 21042) are from the same
+disturbed run [M]. See `A2K_T05_SABOTEUR_RUN.md` section 5.
+
 ## 4. Open
 
 - The setter function (which code writes +0x74 on a template change) is not read; the behaviour above is enough to port it.

@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/commands/fleet_group.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/ui/camera.hpp"
 #include "alamo/ui/hotkeys.hpp"
@@ -408,21 +409,43 @@ void test_hotkeys() {
     disp.update(keys_frame({'K'}, false, false, true), d, sel, 14.1, cmds, evs);
     CHECK2(evs.size() == e0 + 2 && evs[e0].slot == hk::kGuard && evs[e0 + 1].kind == HotkeyKind::Ability &&
            evs[e0 + 1].slot == hotkey_slot("Ability_LuckyShot"));
+    // [port] fleet groups: N / U / Y do nothing while off; on, they send the fleet group commands for a non-empty selection
+    // (Y locks unless the selection's groups are all locked, then unlocks).
+    {
+        HotkeyDispatcher fd;
+        std::vector<commands::EventData> fc;
+        std::vector<HotkeyEvent> fe;
+        fd.update(keys_frame({'N'}), d, sel, 20.0, fc, fe);
+        CHECK2(fc.empty() && fe.empty());
+        fd.set_fleet_groups(true, false);
+        fd.update(keys_frame({'N'}), d, {}, 20.1, fc, fe);
+        CHECK2(fc.empty());
+        fd.update(keys_frame({'N'}), d, sel, 20.2, fc, fe);
+        fd.update(keys_frame({'U'}), d, sel, 20.3, fc, fe);
+        fd.update(keys_frame({'Y'}), d, sel, 20.4, fc, fe);
+        fd.set_fleet_groups(true, true);
+        fd.update(keys_frame({'Y'}), d, sel, 20.5, fc, fe);
+        const auto fg = [](commands::FleetGroupOp o, bool locked) {
+            commands::FleetGroupCommand c;
+            c.op = o;
+            c.locked = locked;
+            return commands::fleet_group_event(c);
+        };
+        using FO = commands::FleetGroupOp;
+        CHECK2(fc.size() == 4 && fc[0] == fg(FO::Create, true) && fc[1] == fg(FO::Dissolve, true) && fc[2] == fg(FO::SetLock, true) &&
+               fc[3] == fg(FO::SetLock, false) && fe.empty());
+    }
     // P1 Bindings follow the table.
     Bindings b;
     t.apply_to_bindings(b);
     CHECK2(b.binding(Action::Stop, 0).key == 'G' && b.binding(Action::Stop, 0).mods == kModNone);
     CHECK2(b.binding(Action::ControlGroup1, 0).key == 'Z' && b.binding(Action::SelectAll, 0).mods == kModCtrl &&
            b.binding(Action::ScrollUp, 0).mods == kModAny && b.binding(Action::ScrollUp, 0).key == 'W');
-    // OrderTranslator leaves the keyboard to the dispatcher when asked.
+    // OrderTranslator leaves the keyboard to the dispatcher (cu13 t01): the SelectAll key emits nothing.
     OrderTranslator ot;
-    ot.set_keyboard_orders(false);
     OrderContext ctx;
     ot.update(keys_frame({'Y'}, false, true), Bindings{}, ctx);
     CHECK2(ot.pending().empty());
-    OrderTranslator ot2;
-    ot2.update(keys_frame({'Y'}, false, true), Bindings{}, ctx);
-    CHECK2(ot2.pending().size() == 1);
 }
 
 // ------------------------------------------------------------------------------------------- text wrap
@@ -691,6 +714,56 @@ void test_markers() {
     line.points = {{0, 0, 0}, {200, 0, 0}, {200, 200, 0}};
     const uint32_t dots = add_waypoint_lines(dl, cv, v, std::span<const HudWaypointLine>(&line, 1));
     CHECK2(dots > 10 && dl.items(0, HudList::Alpha).size() == dots);
+    {  // path lines: one solid free quad per segment, kPathLineWidthPx wide, drawn with the given corners
+        HudDrawList dl2;
+        HudWaypointLine pl = line;
+        pl.width_px = kPathLineWidthPx * 4.0f;
+        const uint32_t segs = add_waypoint_lines(dl2, cv, v, std::span<const HudWaypointLine>(&pl, 1));
+        const auto qs = dl2.items(0, HudList::Alpha);
+        CHECK2(segs == 2 && qs.size() == 2 && qs[0].has_corners && qs[1].has_corners);
+        float ax = 0, ay = 0, bx = 0, by = 0;
+        CHECK2(project(v, line.points[0], ax, ay) && project(v, line.points[1], bx, by));
+        const Vec2f a = cv.pixel_to_canvas(ax, ay), b = cv.pixel_to_canvas(bx, by);
+        const auto& c = qs[0].corners;  // the corner pairs straddle the segment ends, 4 px apart (768 lines: scale 1)
+        CHECK2(near2(0.5f * (c[0].x + c[3].x), a.x, 0.01f) && near2(0.5f * (c[0].y + c[3].y), a.y, 0.01f));
+        CHECK2(near2(0.5f * (c[1].x + c[2].x), b.x, 0.01f) && near2(0.5f * (c[1].y + c[2].y), b.y, 0.01f));
+        const float wx = (c[0].x - c[3].x) / cv.units_per_pixel_x, wy = (c[0].y - c[3].y) / cv.units_per_pixel_y;
+        CHECK2(near2(std::sqrt(wx * wx + wy * wy), 4.0f, 0.01f));
+        std::vector<HudVertex> vb;
+        std::vector<uint32_t> ib;
+        std::vector<HudDrawList::Batch> bb;
+        dl2.build_geometry(0, HudList::Alpha, vb, ib, bb);
+        CHECK2(vb.size() == 8 && ib.size() == 12 && vb[2].x == c[2].x && vb[2].y == c[2].y);
+        // Same winding as a plain quad (top-left, top-right, bottom-right, bottom-left): the signed area agrees.
+        auto area = [](const HudVertex* q) {
+            float s = 0.0f;
+            for (int i = 0; i < 4; ++i) s += q[i].x * q[(i + 1) % 4].y - q[(i + 1) % 4].x * q[i].y;
+            return s;
+        };
+        HudDrawList plain;
+        HudQuad pq;
+        pq.min = {0, 0};
+        pq.max = {10, 10};
+        plain.add(0, HudList::Alpha, pq);
+        std::vector<HudVertex> pv;
+        std::vector<uint32_t> pi;
+        std::vector<HudDrawList::Batch> pb;
+        plain.build_geometry(0, HudList::Alpha, pv, pi, pb);
+        CHECK2(pv.size() == 4 && (area(vb.data()) > 0.0f) == (area(pv.data()) > 0.0f) && (area(vb.data() + 4) > 0.0f) == (area(pv.data()) > 0.0f));
+    }
+    {  // remaining_route: the line starts at the unit and skips the travelled path points
+        const std::vector<Vec3> path = {{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {200, 100, 0}};
+        const std::vector<Vec3> r = remaining_route({100, 40, 5}, path, {200, 100, 0});
+        CHECK2(r.size() == 3 && r[0].z == 5 && r[1].x == 100 && r[1].y == 100 && r[2].x == 200);
+        const std::vector<Vec3> s = remaining_route({10, 1, 0}, path, {200, 100, 0});
+        CHECK2(s.size() == 4 && s[1].x == 100 && s[1].y == 0);
+        const std::vector<Vec3> on = remaining_route({100, 0, 0}, path, {200, 100, 0});  // on a waypoint: past it
+        CHECK2(on.size() == 3 && on[1].y == 100);
+        const std::vector<Vec3> end = remaining_route({250, 100, 0}, path, {200, 100, 0});
+        CHECK2(end.size() == 2 && end[1].x == 200);
+        const std::vector<Vec3> none = remaining_route({0, 0, 0}, {}, {50, 60, 0});
+        CHECK2(none.size() == 2 && none[1].x == 50 && none[1].y == 60);
+    }
     const data::XmlDocument gc = data::XmlDocument::parse(std::string_view(R"(<GameConstants>
       <GUI_Move_Command_Ack_Effect> GUI_Move_Command_Particle </GUI_Move_Command_Ack_Effect>
       <GUI_Attack_Move_Command_Ack_Effect> GUI_Attack_Move_Command_Particle </GUI_Attack_Move_Command_Ack_Effect>
@@ -891,6 +964,46 @@ void test_order_buttons() {
     CHECK2(apply_gui_script(hide, t, hud.buttons(), nullptr, 0.0) && apply_gui_script(dis, t, hud.buttons(), nullptr, 0.0));
     hud.build(fr, {}, {});
     CHECK2(!shown(2) && shown(3) && !enabled(3) && enabled(4) && hud.stats().buttons == 5);
+}
+
+// HUD_GAPS §9.2 (cu9g t03): b_special_weapon in land is the bombing-run button: never hidden, disabled from the feed,
+// alternate icon 3, tooltip 3, the cooldown on the Build_Texture_Name dial; a frame without the land feed leaves it alone.
+void test_bombing_run_button() {
+    const std::string xml =
+        "<CommandBarComponents><CommandBarComponent Name=\"b_special_weapon\"><Type>Button</Type><Disabled>True</Disabled>"
+        "<Blank_Texture_Name>i_button_back_new.tga</Blank_Texture_Name>"
+        "<Icon_Alternate_Texture_Name>ion.tga, hyper.tga, turret.tga, i_button_command_bar_bombing_run.tga</Icon_Alternate_Texture_Name>"
+        "<Disabled_Texture_Name>i_button_disabled.tga</Disabled_Texture_Name><Build_Texture_Name>i_button_build.tga</Build_Texture_Name>"
+        "<Tooltip_Text>A, B, C, TEXT_TOOLTIP_BOMBRUN_BUTTON, E</Tooltip_Text></CommandBarComponent></CommandBarComponents>";
+    ComponentTable t;
+    const data::XmlDocument doc = data::XmlDocument::parse(std::string_view(xml), "bomb.xml");
+    CHECK2(doc.ok());
+    t.parse(doc.root());
+    const TextureAtlas atlas = stage2_atlas();
+    auto box = make_box_rasterizer();
+    FontCache fonts(*box);
+    TacticalHud hud;
+    hud.init(t, atlas, fonts);
+    hud.resize(1024, 768);
+    TacticalHudFrame fr;
+    fr.world.view = top_view2(1024, 768);
+    const auto ci = static_cast<uint32_t>(t.find("b_special_weapon"));
+    // No land feed (space): the component keeps its data state (Disabled True), no dial.
+    hud.build(fr, {}, {});
+    const ButtonRuntime* r = hud.buttons().find_state(ci);
+    CHECK2(!r || (r->disabled && r->build_fill < 0.0f && r->icon_override.empty()));
+    // Land, ready: enabled, icon 3, tooltip 3, no dial.
+    fr.bombing_run.present = true;
+    fr.bombing_run.disabled = false;
+    hud.build(fr, {}, {});
+    r = hud.buttons().find_state(ci);
+    CHECK2(r && !r->hidden && !r->disabled && r->icon_override == "i_button_command_bar_bombing_run.tga" && r->tooltip_index == 3 && r->build_fill < 0.0f);
+    // Cooldown: disabled with the dial (fraction x 100).
+    fr.bombing_run.disabled = true;
+    fr.bombing_run.dial = 0.25f;
+    hud.build(fr, {}, {});
+    r = hud.buttons().find_state(ci);
+    CHECK2(r && !r->hidden && r->disabled && r->build_fill == 25.0f);
 }
 
 // Drag-select box (Playtest 3): drawn from the drag threshold on, over exactly the bounds box_select uses on release.
@@ -1175,8 +1288,8 @@ void test_tactical_stage2() {
                acts[0].value == 33 && acts[0].ids == (std::vector<uint32_t>{0, 1}));
     }
     {  // Tactical buy buttons: Build_00 enabled (cost text2), Build_01 blocked by funds (disabled, tooltip index 2).
-        const HudBuildOption opts[2] = {{41, "i_button_hologram.tga", 1200, 0, HudBuildOption::Block::None},
-                                        {42, "i_button_hologram.tga", 3500, 2, HudBuildOption::Block::Funds}};
+        const HudBuildOption opts[2] = {{41, "i_button_hologram.tga", 1200, 0, HudBuildOption::Block::None, {}},
+                                        {42, "i_button_hologram.tga", 3500, 2, HudBuildOption::Block::Funds, {}}};
         TacticalHudFrame f3 = fr;
         f3.builder = 777;
         f3.build_options = opts;
@@ -1184,8 +1297,8 @@ void test_tactical_stage2() {
         CHECK2(hud.stats().build_options == 2);
         const ButtonRuntime* b0 = hud.buttons().find_state(static_cast<uint32_t>(t.find("Build_00")));
         const ButtonRuntime* b1 = hud.buttons().find_state(static_cast<uint32_t>(t.find("Build_01")));
-        CHECK2(b0 && b1 && b0->text2 == U"1200" && !b0->disabled && b0->tooltip_index == -1 && b1->disabled &&
-               b1->tooltip_index == 2 && b1->text == U"2");
+        CHECK2(b0 && b1 && b0->text2 == U"1200" && !b0->disabled && b0->tooltip_index == 0 && b0->tooltip_key.empty() &&
+               b1->disabled && b1->tooltip_index == 2 && b1->text == U"2" && b1->tooltip_key.empty());  // ui3 t07: index 0 + key
         auto buy_click = [&](const char* name, Button b) {
             const int32_t ci = t.find(name);
             Vec2f c{-1e9f, -1e9f};
@@ -1313,6 +1426,7 @@ int run_stage2_tests() {
     test_markers();
     test_tactical_stage2();
     test_order_buttons();
+    test_bombing_run_button();
     test_drag_box();
     return g_fail2;
 }

@@ -87,8 +87,19 @@ struct SessionSpec {
     // OI host: the main-menu attract demo (docs/re/MAIN_LOOP.md §1.5 / AUDIO.md §1.6 "AI-vs-AI attract demo") [port]: a
     // space skirmish with no human - the skirmish's player 0 is AI controlled too, AI-vs-AI conflicts are fought (both
     // sides by the tactical AI, else the stand-in cadence) and player 0's fleet hop is a direct setup operation (no
-    // command). local_player() stays 0 (the viewpoint). Space maps only (a land map fails start()).
+    // command). local_player() stays 0 (the viewpoint). Space maps only (a land map fails start()). The demo's objects run
+    // their Lua_Scripts (object-script host on, modc t18): a DEMO_CONTROLLER runs Demo_Attract_Controller.lua.
     bool attract = false;
+    // ui1 t06: the campaign's advanced game options (ui::GameOptionsSetup; game_options false = the campaign's own
+    // Starting_Credits / tech levels). Credits, start and max tech apply to every player the campaign names; the
+    // auto-resolve option (0 always / 1 never / 2 ask / 3 overwhelming odds) is the host's battle prompt rule; random
+    // events are carried for the rule that reads them (backlog). Not saved [port]: a loaded game asks again.
+    bool game_options = false;
+    int32_t start_credits = 6000, start_tech = 1, max_tech = 5, auto_resolve_option = 2;
+    bool random_events = false;
+    // [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): off = retail. Copied into
+    // CampaignBattleOptions::fleet_groups; the HUD hotkeys send fleet group commands only while it is on.
+    bool fleet_groups = false;
 };
 
 // The human's answer to a pending conflict as a port-only command (PortExtension subtype kBattleChoiceSubtype, one byte
@@ -97,7 +108,8 @@ inline constexpr uint16_t kBattleChoiceSubtype = 0x4243;  // "BC"
 commands::EventData battle_choice_event(galactic::BattleChoice choice);
 // P4 host: the retreat dialog's Autoresolve (IDC_AUTORESOLVE in a tactical battle; retail drives the sim from the GUI
 // without a command, docs/re/P4_SIM_SYSTEMS.md §9.3, so the port wraps it in this port event, one byte, for replays).
-// The auto-resolve dialog's Withdraw is the original Withdrawl event (COMMANDS.md id 49, no payload, §9.2). The story
+// The auto-resolve dialog's Withdraw is the original Withdrawl event (COMMANDS.md id 49, no payload, §9.2); retail shows
+// that dialog only in multiplayer, so the port has no dialog for it (GameSession::withdraw has no UI caller). The story
 // summary's Abandon is dead in retail (§9.1): no command. See GameSession::port_event.
 inline constexpr uint16_t kTacticalAutoResolveSubtype = 0x5441;  // "TA"
 commands::EventData tactical_auto_resolve_event();
@@ -112,6 +124,7 @@ struct BattleOrderStats {
 struct PortEventStats {
     uint64_t withdraw = 0, withdraw_accepted = 0, withdraw_dropped = 0;
     uint64_t tactical_auto_resolve = 0, tactical_auto_resolve_refused = 0;
+    uint64_t story_esc = 0;  // bkc1 t01: story Esc commands applied (Story_Handle_Esc offered to the plots)
     uint64_t story_ui = 0, story_ui_dropped = 0;  // L1/S4 wave 1: story UI events applied / dropped (no story, bad payload)
 };
 
@@ -189,11 +202,6 @@ public:
     // DEMO_CONTROLLER reveal (MAIN_MENU_BACKGROUND.md §4a, [H] code chain, [M] that the capture is that). Presentation
     // only: the demo's sim fog (targeting, AI) is unchanged.
     bool view_draws_fog() const { return !spec_.attract; }
-    // Attract demo: the map's Demo_Attract_Controller ran (game_session.cpp attract_demo_script): at least one
-    // DEMO_CONTROLLER object revealed the map for Empire / Rebel / Underworld. False before the battle runs and on maps
-    // without a controller (the shipped Demo_Attract_Kamino).
-    bool attract_controller_ran() const { return attract_controllers_ > 0; }
-    uint32_t attract_moves() const { return attract_moves_; }  // its Attack_Move orders the battle accepted
     const BattleOrderStats& order_stats() const { return order_stats_; }
     uint64_t ticks() const { return ticks_; }
     // Skirmish: the battle ran and ended (the session is over).
@@ -203,6 +211,10 @@ public:
     // is being auto-resolved (ConflictManager AutoRunning), `conflict` its head.
     bool battle_choice_pending() const;
     const galactic::ConflictInfo* conflict_head() const;
+    // The local player is the head conflict's attacker or defender: battle_choice_pending and auto_resolving add the
+    // conflict state; on its own it is the Withdraw enable rule (cu9 t04: was can_withdraw; no Withdraw button yet, the
+    // dialog is multiplayer-only in retail).
+    bool local_in_head_conflict() const;
     bool choose_battle(galactic::BattleChoice choice);
     // GALACTIC_DIALOGS §1.4: the story lock (DISABLE / RESTRICT_AUTORESOLVE, StorySession::autoresolve_locked) forbids
     // auto-resolving a battle at `planet`: the prompt offers Begin only. False without a running story.
@@ -217,15 +229,23 @@ public:
     // P4 host requests (commands; true when submitted). Their results come at the command phase (port_event):
     // withdraw = Withdrawl 49 -> ConflictManager::set_retreating(issuer), result ignored (P4_SIM_SYSTEMS §9.2);
     // auto_resolve_battle = the tactical IDC_AUTORESOLVE -> CampaignBattles::auto_resolve_battle(issuer) (§9.3).
-    // can_withdraw: the Withdraw enable rule (the local player is the head conflict's attacker or defender).
+    // Withdraw's enable rule is local_in_head_conflict.
     bool withdraw();
     bool auto_resolve_battle();
-    bool can_withdraw() const;
+    // [port: Gabriel 2026-11-13] Fleet cohesion (sim::TacticalBattle::set_fleet_cohesion): the local player's preference,
+    // sent as a command (commands::kPortFleetCohesionSubtype) to the running battle and again to every later battle
+    // while it differs there (after_tick), so it lasts across battles. Not saved [port]: a new session starts loose.
+    bool set_fleet_cohesion(bool tight);
+    bool toggle_fleet_cohesion() { return set_fleet_cohesion(!fleet_cohesion_); }
+    bool fleet_cohesion() const { return fleet_cohesion_; }
     const PortEventStats& port_stats() const { return port_stats_; }
     // L1/S4 wave 1: a local UI notification for the story (story_ui.hpp) as a command; GameSession::port_event hands it
     // to StorySession::notify_ui with the issuing player at the command phase. False without a story session or when
     // the submit failed.
     bool notify_story_ui(const sim::StoryUiNotification& n);
+    // bkc1 t01: true when the story takes this Esc (sim::StorySession::esc_goes_to_story) and the key was sent as a
+    // story Esc command; false = the host goes on with its own Esc handling (pause menu).
+    bool story_esc();
     // P4 host: galactic special abilities (SpecialAbility event 13; galactic special_systems.hpp). activate_special =
     // kind 1 (a hero or fleet of the local player at the planet). The dialog answers use the open special_dialog() and
     // close it once submitted: buy_black_market (kind 4, item = SpecialRules::items index, price from bm_offers;
@@ -247,6 +267,9 @@ public:
     // presentation (SFX / messages). Collected right before T9 (the T2..T8 events), from every later batch the story
     // drains inside T9 (events raised by Lua / story rewards there, StorySession::set_drain_tap) and after each tick.
     std::vector<galactic::GalacticEvent> take_special_events();
+    // ui4 t08: the galactic events the announcer reacts to (PlanetOwnerChanged, CorruptionChanged, FleetDeparted), since
+    // the last call (presentation only).
+    std::vector<galactic::GalacticEvent> take_announce_events();
     const SpecialStats& special_stats() const { return special_stats_; }
     // OI host: the Lua presentation's cinematic rate lock (lua::PresentationState::cinematic_rate_lock: cinematic camera
     // or cinematic mode of the story VMs), read right after T9 of every tick (SimHost::set_after_story_hook): it pins
@@ -261,7 +284,6 @@ public:
     // the shot runs). Pacing only (30 ticks/s, wins over fast mode): [port] the parity options stay with the story lock,
     // because the shot is presentation (input can skip it) and must not reach a CRC.
     void set_presentation_rate_lock(bool on);
-    bool presentation_rate_lock() const { return pres_lock_; }
     // OI host: single-player fast mode (the HUD's b_fast_forward / b_fast_forward_t; MAIN_LOOP.md §1.5: 120 ticks/s,
     // the cinematic lock wins). Wall-clock pacing only (FrameSynchronizer::set_fast), mirrored into the Lua presentation
     // state (PresentationLog::set_fast_forward); Lua Cancel_Fast_Forward ends it at the next tick; a pause / resume
@@ -291,6 +313,13 @@ public:
     bool save(SaveFile& out, const SaveMeta& meta, std::string* err = nullptr);
     // The description fields of this session now (name and wall-clock time from the caller; title = the campaign name).
     SaveMeta save_meta(std::string name, int64_t saved_at) const;
+    // [port: Gabriel] the playthrough this session's saves belong to (SaveMeta::playthrough / playthrough_started): the
+    // host sets a new one for a new game; load_game sets the loaded save's.
+    void set_playthrough(std::string id, int64_t started) {
+        playthrough_ = std::move(id);
+        playthrough_started_ = started;
+    }
+    const std::string& playthrough() const { return playthrough_; }
     // The SessionSpec a save was written with (false + *err: no session chunk, not an alamo_game save, bad options).
     // Tests' in-memory skirmish maps (skirmish_map_data) are not saved: the caller sets them again.
     static bool spec_from_save(const SaveFile& save, SessionSpec& out, std::string* err = nullptr);
@@ -325,12 +354,11 @@ private:
     int32_t local_player_ = 0;
     bool started_ = false;
     std::array<uint32_t, 2> attract_sides_{};  // attract demo: attacker / defender faction = player index (§6)
-    bool attract_script_done_ = false;          // attract demo: the controller script's State_Init point has passed
-    uint32_t attract_controllers_ = 0;          // DEMO_CONTROLLER objects whose script ran
-    uint32_t attract_moves_ = 0;                // their Attack_Move orders the battle accepted
     bool replay_ = false, invaded_ = false;
     bool paused_ = false, pause_pending_ = false;
     uint64_t pause_events_ = 0;
+    bool fleet_cohesion_ = false;       // [port] fleet cohesion preference of the local player
+    bool fleet_cohesion_sent_ = false;  // a cohesion command is in flight (cleared when port_event applies it)
     bool choice_sent_ = false;  // a battle choice is in flight for the pending conflict
     bool banner_sent_ = false;  // story t13: the linked banner's Begin is in flight (cleared once the banner is down)
     PortEventStats port_stats_;
@@ -342,13 +370,13 @@ private:
     void after_tick();
     // OI host: after-T9 hook (rate lock -> pacing + parity) and its state.
     void after_story(sim::SimHost& h);
-    void attract_demo_script(sim::SimHost& h);
     std::function<bool()> rate_lock_source_;
     bool rate_lock_ = false;
     bool pres_lock_ = false;  // refixf t05 (pacing only)
     uint64_t rate_lock_ticks_ = 0;
     size_t events_seen_ = 0;  // GalacticSim::events() already tapped
     std::vector<galactic::GalacticEvent> special_events_;
+    std::vector<galactic::GalacticEvent> announce_events_;  // ui4 t08
     SpecialDialog dialog_;
     bool dialog_open_ = false;
     SpecialStats special_stats_;
@@ -358,6 +386,8 @@ private:
     // N1 / t09 save / load.
     bool loading_ = false;  // start() runs for start_from_save (no skirmish opening order)
     bool loaded_ = false;
+    std::string playthrough_;           // [port: Gabriel] presentation only, never read by the sim
+    int64_t playthrough_started_ = 0;
     commands::SavePoint load_point_;
     sim::LoadReport load_report_;
     std::vector<std::string> ai_types_;  // per player: the galactic AI type ("" = none), for the descriptor

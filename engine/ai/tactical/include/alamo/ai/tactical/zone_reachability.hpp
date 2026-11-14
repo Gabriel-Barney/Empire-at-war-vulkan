@@ -10,8 +10,7 @@
 // and unknown ids dropped; duplicates keep the smallest weight [port]); then hop = (uint)(int64)(3-D distance between
 // the zone centres / 10.0) & 0xFFFF and the weight = n(j) x 65536 + hop, or 0x10000 + hop when the node cost n(j) = 0
 // (uint32 wrap). Node cost n(i) = (uint32)(int64)max(0, threat sum over zone i's cells) / 100 for the AI player
-// (land_zone_node_cost; the threat grid's cells_danger), 0 without a threat grid. A ZoneEdgeWeightFn replaces the
-// weight (tests).
+// (land_zone_node_cost; the threat grid's cells_danger), 0 without a threat grid.
 //
 // zone_reachability_cost (A1_READINGS §3) [H]: only reachability levels 6-10 (No/Low/Medium/High/Any_Threat) are
 // answered; every other level, and a missing source zone, returns kUnreachable. Tolerance: No_Threat 0, Low/Medium/High
@@ -20,7 +19,7 @@
 // Accepted iff (float)((S >> 16) * 100) <= tolerance (the high half = summed node costs, at least 1 per hop); the
 // returned cost is (float)(S & 0xFFFF) / 10 (summed hop distances in tenths; carries into the high half are kept). So an
 // unreachable target passes only Any_Threat, with cost 6553.5. The threat is in the edge weights (node costs of the last
-// recompute); the ZoneThreatFn argument is not read. Callers (A1_READINGS §25.3): Reachable_Target with a source (6th
+// recompute). Callers (A1_READINGS §25.3): Reachable_Target with a source (6th
 // argument), the FreeStore distance key (Low_Threat, from each free unit's zone) and the TF.Reinforce point ranking.
 //
 // ZoneGraph::flood (A1_READINGS §25.2, ZoneReachabilityClass slots 5 / 6) [H]: the set of zones reachable around a
@@ -54,9 +53,6 @@ class ByteReader;
 
 namespace alamo::ai::tactical {
 
-// Edge weight for the directed edge from zone index `from` to `to` (`link_kind` = the flags of zone `to`'s link to
-// `from`). Return ::alamo::galactic::kUnlinked (0xFFFFFFFF) to drop the edge.
-using ZoneEdgeWeightFn = std::function<uint32_t(uint32_t from, uint32_t to, uint32_t link_kind)>;
 // Threat of a zone index for the AI player (threat grid; >= 0).
 using ZoneThreatFn = std::function<double(uint32_t zone)>;
 
@@ -65,8 +61,6 @@ uint32_t land_zone_hop(const HintZone& a, const HintZone& b);
 uint32_t land_zone_edge_weight(const HintZone& a, const HintZone& b, uint32_t node_cost_b);
 // Node cost from a zone's threat sum: (uint32)(int64)max(0, sum) / 100.
 uint32_t land_zone_node_cost(double threat_sum);
-// Weight with node cost 0 (no threat grid / no threat): 0x10000 + hop.
-uint32_t default_zone_edge_weight(const HintZone& a, const HintZone& b);
 
 // OPT2 t02: a ZoneGraph::compute() result (node costs, edges, all-pairs), applied with ZoneGraph::adopt().
 struct ZoneGraphResult {
@@ -78,10 +72,10 @@ struct ZoneGraphResult {
 class ZoneGraph {
 public:
     // Builds the graph and runs Recompute_All_Pairs (node costs 0). `pf` parallelises rows for a fixed k (exact).
-    void build(std::span<const HintZone> zones, const ZoneEdgeWeightFn& weight = {}, const ParallelFor& pf = serial_for);
-    // Recompute with new edge weights (the 90-frame cadence is the caller's: cadence frames of
-    // PHASE2_ANSWERS 11). Without `weight` the §6.1 weight with the stored node costs is used.
-    void recompute(const ZoneEdgeWeightFn& weight = {}, const ParallelFor& pf = serial_for);
+    void build(std::span<const HintZone> zones, const ParallelFor& pf = serial_for);
+    // Recompute the §6.1 weights with the stored node costs and the all-pairs (the 90-frame cadence is the caller's:
+    // cadence frames of PHASE2_ANSWERS 11).
+    void recompute(const ParallelFor& pf = serial_for);
     // Node_Weight pass + Recompute_All_Pairs: node cost of every zone from `threat` (land_zone_node_cost), then the §6.1
     // weights. An empty `threat` = no threat grid (every cost 0).
     void recompute_with_threat(const ZoneThreatFn& threat, const ParallelFor& pf = serial_for);
@@ -124,8 +118,7 @@ public:
     bool read(ByteReader& r);
 
 private:
-    void build_raw(const ZoneEdgeWeightFn& weight, std::span<const uint32_t> node_cost,
-                   ::alamo::galactic::detail::RawOwned& raw) const;
+    void build_raw(std::span<const uint32_t> node_cost, ::alamo::galactic::detail::RawOwned& raw) const;
 
     std::vector<HintZone> zones_;
     ZoneLocator locator_;
@@ -140,8 +133,8 @@ private:
 // Threat tolerance of a reachability level (levels 6-10); negative for the other levels.
 double reachability_tolerance(Reachability level, const TacticalAiConstants& c);
 
-// Path cost from `source_zone` to `target_zone`, or kUnreachable (header comment). The last argument is unused.
+// Path cost from `source_zone` to `target_zone`, or kUnreachable (header comment).
 double zone_reachability_cost(const ZoneGraph& graph, int32_t source_zone, int32_t target_zone, Reachability level,
-                              const TacticalAiConstants& c, const ZoneThreatFn& threat = {});
+                              const TacticalAiConstants& c);
 
 }  // namespace alamo::ai::tactical

@@ -16,6 +16,9 @@
 -- A run that the goal system releases has its thread killed: no end record. PSTART's prev= says how the previous
 -- run of the same script instance ended (none = no end record = killed / released), so a lost end record is seen.
 -- No start cap (a2f had 40 per script instance).
+-- a2k t05: a plan-specific extension file (build_a2f_mod.PLAN_EXTRA, appended after this hook) may define
+-- A2FB_PlanStartX() and A2FB_PlanEndX(kind): each returns extra " key=value" text for PSTART / the end records. Each
+-- runs in its own pcall, so a failing extension costs its text only (ERR PlanStartX / PlanEndX), never the record.
 A2FB_MAX = 3000
 A2FB_CANARY = "Mods\\A2fBudgetProbe\\A2FB_Canary_Plan.txt"
 A2FB_PLAN_N = 0
@@ -41,6 +44,22 @@ function A2FB_PlanBudget()
 		" cr=" .. A2FB_Str(function() return PlayerObject.Get_Credits() end)
 end
 
+-- Extra text of an extension function (nil = none), in its own pcall.
+function A2FB_PlanX(where, f, a)
+	if f == nil then
+		return ""
+	end
+	local ok, s = pcall(f, a)
+	if not ok then
+		A2FB_Error(where, s)
+		return ""
+	end
+	if s == nil then
+		return ""
+	end
+	return tostring(s)
+end
+
 function A2FB_PlanStart()
 	local prev = A2FB_PLAN_END
 	if A2FB_PLAN_N == 0 then
@@ -52,7 +71,7 @@ function A2FB_PlanStart()
 	local t = A2FB_Now()
 	A2FB_PLAN_T0 = t
 	A2FB_Say("PSTART", A2FB_PlanHead(t) .. " budget=" .. type(Budget) .. A2FB_PlanBudget() ..
-		" n=" .. A2FB_PLAN_N .. " prev=" .. prev)
+		" n=" .. A2FB_PLAN_N .. " prev=" .. prev .. A2FB_PlanX("PlanStartX", A2FB_PlanStartX))
 	if PlayerObject ~= nil then
 		A2FB_Sample("PS", PlayerObject, A2FB_PLAN_FULL)
 	end
@@ -69,7 +88,8 @@ function A2FB_PlanEnd(kind, extra)
 	else
 		A2FB_PLAN_END = string.sub(A2FB_PLAN_END .. "+" .. kind, 1, 40)
 	end
-	A2FB_Say(kind, A2FB_PlanHead(t) .. " n=" .. A2FB_PLAN_CUR .. " age=" .. age .. A2FB_PlanBudget() .. extra)
+	A2FB_Say(kind, A2FB_PlanHead(t) .. " n=" .. A2FB_PLAN_CUR .. " age=" .. age .. A2FB_PlanBudget() .. extra ..
+		A2FB_PlanX("PlanEndX", A2FB_PlanEndX, kind))
 	if A2FB_PLAN_FULL and kind ~= "PFAIL" and PlayerObject ~= nil then
 		A2FB_Sample("PE", PlayerObject, true)
 	end
@@ -88,29 +108,33 @@ function A2FB_Caller()
 	return " by=" .. tostring(info.name) .. " line=" .. tostring(info.currentline)
 end
 
+-- a2k t05: the error path is in pcall too (A2FB_Error outside pcall was what killed the plan's thread after a release
+-- wiped the kit's global tables, a2fb_core.lua). The thread wrap is redone each time this chunk runs, around the
+-- function the shipped part above just defined; Flush_G keeps functions, so the wrap stays across releases.
 A2FB_Thread_Orig = @@THREAD@@
 function @@THREAD@@(...)
 	local ok, err = pcall(A2FB_PlanStart)
 	if not ok then
-		A2FB_Error("PlanStart", err)
+		pcall(A2FB_Error, "PlanStart", err)
 	end
 	local r = { A2FB_Thread_Orig(unpack(arg)) }
 	local ok2, err2 = pcall(A2FB_PlanEnd, "PRET", "")
 	if not ok2 then
-		A2FB_Error("PlanRet", err2)
+		pcall(A2FB_Error, "PlanRet", err2)
 	end
 	return unpack(r)
 end
 
 -- ScriptExit (PGBase): _ScriptExit() and, inside a thread, coroutine.yield(false). The wrapper records first and then
--- calls the original as a tail call (no pcall around it: a yield must not cross a pcall in Lua 5.0).
-A2FB_Exit_Orig = ScriptExit
-if A2FB_Exit_Orig ~= nil then
+-- calls the original as a tail call (no pcall around it: a yield must not cross a pcall in Lua 5.0). A library
+-- function: wrapped once per script instance (require does not run PGBase again; LUA_SCRIPT_OUTPUT.md section 4 rule 4).
+if A2FB_Exit_Orig == nil and ScriptExit ~= nil then
+	A2FB_Exit_Orig = ScriptExit
 	function ScriptExit()
 		local by = A2FB_Caller()
 		local ok, err = pcall(A2FB_PlanEnd, "PEXIT", by)
 		if not ok then
-			A2FB_Error("PlanExit", err)
+			pcall(A2FB_Error, "PlanExit", err)
 		end
 		return A2FB_Exit_Orig()
 	end
@@ -130,7 +154,7 @@ if A2FB_Fail_Orig ~= nil then
 			A2FB_PlanEnd("PFAIL", " args=" .. table.getn(arg) .. names)
 		end)
 		if not ok then
-			A2FB_Error("PlanFail", err)
+			pcall(A2FB_Error, "PlanFail", err)
 		end
 		return A2FB_Fail_Orig(unpack(arg))
 	end

@@ -19,7 +19,7 @@
 // game object) is the players family's EvaluatePerception, which forwards to this host whenever one is attached;
 // Find_Nearest and the other objects-family position arguments resolve AI targets / task forces themselves (the
 // former port Lua shim and PlayerWrapper.Evaluate_Tactical_Perception are gone).
-// Error discipline as vm_internal.hpp (Call::fail, never lua_error). Without an attached host the bindings
+// Error discipline as vm_internal.hpp (Call::script_error_stop, never lua_error). Without an attached host the bindings
 // answer as an empty AI would (nil statuses / results).
 #pragma once
 #include <cstdint>

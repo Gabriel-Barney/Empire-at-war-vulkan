@@ -5,7 +5,7 @@
 
 Spec: docs/re/TSW_PLANET_DESTROY.md (L1 systems t04). Nothing from the game is stored in the repository: the shipped
 GameScoring.lua, CampaignFiles.xml and MasterTextFile_English.dat are read from the install (loose files / MEGs, FoC
-file order, the s10_map_owners reader) and patched:
+file order, the shared common/ted_owners.py reader) and patched:
   Data\\Scripts\\Miscellaneous\\GameScoring.lua   shipped script + tswp_hook.lua (fires the Death Star, stamps frames)
   Data\\XML\\CampaignFiles.xml                    shipped list + TSWP_Probe_Campaign.xml
   Data\\XML\\TSWP_Probe_Campaign.xml              "TSWP PROBE: KUAT" (Empire with the Death Star at Byss, Rebel
@@ -26,8 +26,7 @@ import xml.dom.minidom
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
-S10 = os.path.join(os.path.dirname(HERE), 's10_map_owners')
-sys.path.insert(0, S10)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
 sys.path.insert(0, os.path.dirname(HERE))
 
 MARKER = 'TSWP_PROBE_MARKER.txt'
@@ -258,7 +257,7 @@ def write_own_files(out, rate):
 
 
 def build(game, out, rate):
-    import ted_owners  # noqa: E402  (s10_map_owners: install file reader)
+    import ted_owners  # noqa: E402  (common: install file reader)
     from build_probe import dat_read, dat_bytes  # noqa: E402
     gf = ted_owners.GameFiles(game)
     if os.path.exists(out):

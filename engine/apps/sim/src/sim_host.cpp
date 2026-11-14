@@ -1,6 +1,9 @@
 #include "alamo/sim/sim_host.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cstddef>
 #include <limits>
 
 #include "alamo/galactic/campaign.hpp"
@@ -21,14 +24,16 @@ namespace cmd = alamo::commands;
 
 namespace {
 bool finite(float f) { return f - f == 0.0f; }
+// sp2: the process-wide CRC cadence new hosts start with (set_default_crc_cadence; alamo_game's main sets it once).
+std::atomic<uint32_t> g_crc_every{1};
+std::atomic<size_t> g_crc_ring{0};
 }  // namespace
 
 SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, SimConfig cfg)
     : js_(&js),
       cfg_(cfg),
       pf_(jobs::make_parallel_for(js)),
-      modes_(types, cfg.players < kMaxPlayers ? cfg.players : kMaxPlayers),
-      sched_(js) {
+      modes_(types, cfg.players < kMaxPlayers ? cfg.players : kMaxPlayers) {
     if (cfg_.players > kMaxPlayers) cfg_.players = kMaxPlayers;
     // Q6: every player may submit orders (a mod's campaign can have more than the scheduler's default 8). Only raised, so
     // sessions of up to 8 players keep their recorded scheduler config.
@@ -43,7 +48,38 @@ SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, Sim
     }
     make_pipeline(cfg_.scheduler);
     register_crc();
-    recorder_ = std::make_unique<jobs::CrcRecorder>(sched_, registry_, cfg_.parallel_crc);
+    crc_every_ = std::max<uint32_t>(1u, g_crc_every.load(std::memory_order_relaxed));
+    crc_ring_ = g_crc_ring.load(std::memory_order_relaxed);
+    make_recorder();
+}
+
+void SimHost::set_default_crc_cadence(uint32_t every, size_t ring) {
+    g_crc_every.store(std::max<uint32_t>(1u, every), std::memory_order_relaxed);
+    g_crc_ring.store(ring, std::memory_order_relaxed);
+}
+
+void SimHost::set_crc_cadence(uint32_t every, size_t ring) {
+    crc_every_ = std::max<uint32_t>(1u, every);
+    crc_ring_ = ring;
+    recorder_->log().checkpoint = crc_every_ > 1 ? crc_every_ : 0;
+}
+
+void SimHost::record_crc() {
+    recorder_->capture(frame_);
+    std::vector<CrcRecord>& r = recorder_->log().records;
+    if (crc_ring_ > 0 && r.size() > 2 * crc_ring_) {  // amortised: drop the oldest records once twice the ring is held
+        r.erase(r.begin(), r.begin() + static_cast<std::ptrdiff_t>(r.size() - crc_ring_));
+        std::vector<uint64_t>& keep = recorder_->log().keep;
+        keep.erase(keep.begin(), std::lower_bound(keep.begin(), keep.end(), r.front().tick));
+    }
+}
+
+void SimHost::capture_crc_now() {
+    CrcLog& log = recorder_->log();
+    if (!log.records.empty() && log.records.back().tick == frame_) return;
+    // An off-checkpoint record after the first goes on the v2 log's keep line, or CrcLog::parse rejects the saved log.
+    if (log.checkpoint != 0 && !log.records.empty() && frame_ % log.checkpoint != 0) log.keep.push_back(frame_);
+    record_crc();
 }
 
 void SimHost::make_pipeline(const cmd::SchedulerConfig& cfg) {
@@ -122,7 +158,7 @@ GameMode& SimHost::start_game(ModeKind kind) {
             frame_ = 0;
             batch_crc_ = 0;
             make_pipeline(cfg_.scheduler);
-            recorder_ = std::make_unique<jobs::CrcRecorder>(sched_, registry_, cfg_.parallel_crc);
+            make_recorder();
             for (auto& s : selection_) s.clear();
             for (auto& pg : groups_)  // P host: control groups
                 for (auto& g : pg) g.clear();
@@ -301,6 +337,29 @@ void SimHost::scoring_mode_started(ModeKind kind, std::string map_name) {
 #else
     (void)kind;
     (void)map_name;
+#endif
+}
+
+bool SimHost::scoring_game_stat(int32_t player, std::string_view control_id, bool tactical, double& number, std::string& text,
+                                bool& is_number) {
+#ifdef ALAMO_SIM_HAVE_STORY
+    if (!scoring_vm_ || !scoring_vm_->has_function("Get_Game_Stat_For_Control_ID")) return false;
+    lua::AiEventArg t;
+    t.kind = lua::AiEventArg::Boolean;
+    t.boolean = tactical;
+    std::string err;
+    const bool ok = lua::call_global_value(*scoring_vm_, "Get_Game_Stat_For_Control_ID",
+                                           {arg_player(player), arg_string(std::string(control_id)), t}, number, text, is_number, &err);
+    if (!ok && !err.empty()) scoring_note("Get_Game_Stat_For_Control_ID: " + err);
+    return ok;
+#else
+    (void)player;
+    (void)control_id;
+    (void)tactical;
+    (void)number;
+    (void)text;
+    (void)is_number;
+    return false;
 #endif
 }
 
@@ -541,6 +600,7 @@ bool SimHost::tick_once() {
     step("T1.begin_tick");
     // T2 scheduled commands due this frame (handler runs inside, in drain order).
     batch_crc_ = 0;
+    if (before_commands_) before_commands_(*this);  // sp3 t04: AI lane batches due this frame, before the players' commands
     pipeline_->begin_tick(frame_);
     step("T2.commands");
     // T4 TreeCull: rebuild dirty spatial trees.
@@ -602,7 +662,7 @@ bool SimHost::tick_once() {
     step("T12.post_tick");
     // T13 End_Tick: events, frame CRC.
     pipeline_->events().deliver();
-    recorder_->capture(frame_);
+    if (crc_every_ <= 1 || frame_ % crc_every_ == 0) record_crc();  // sp2: checkpoint ticks only when the cadence is > 1
     step("T13.end_tick");
     profile::end_tick();
     return true;
@@ -616,12 +676,8 @@ uint64_t SimHost::run_fast(uint64_t ticks) {
 
 bool SimHost::loop_iteration(uint32_t now_ms) {
     pacing_.set_stopped(modes_.empty());
-    const uint64_t f0 = frame_;
-    const bool ticked = pacing_.pace(now_ms) && tick_once();
-    // R1: d = (frame_now - F0) x 30 / 1000 (0.03 per tick, as the original).
-    const double d = static_cast<double>(frame_ - f0) * static_cast<double>(kSimTicksPerSecond) / 1000.0;
-    if (GameMode* t = modes_.top()) t->per_frame_update(d);
-    return ticked;
+    // [port] no per-frame mode update (vtable +0xb8, R1 d = 0.03 per tick): no mode overrides it (cu9 t15).
+    return pacing_.pace(now_ms) && tick_once();
 }
 
 uint64_t SimHost::run_realtime(uint64_t ticks, const std::function<uint32_t()>& now_ms,

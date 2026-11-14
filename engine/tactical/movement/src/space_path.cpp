@@ -1,6 +1,11 @@
 #include "alamo/tactical/movement/space_path.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
+#include <cmath>
+#include <limits>
 #include <utility>
 
 namespace alamo::tactical::movement {
@@ -35,17 +40,21 @@ void SpaceOccupancy::set_box(V2 min_xy, V2 max_xy) {
 }
 
 void SpaceOccupancy::add_static(ObjectId id, V2 center, float radius, uint32_t bits) {
+    index_.valid = false;
     put(statics_, id, Static{center, radius, bits});
 }
-bool SpaceOccupancy::remove_static(ObjectId id) { return erase(statics_, id); }
+bool SpaceOccupancy::remove_static(ObjectId id) {
+    index_.valid = false;
+    return erase(statics_, id);
+}
 bool SpaceOccupancy::has_static(ObjectId id) const { return find(statics_, id) != statics_.end(); }
-bool SpaceOccupancy::has_track(ObjectId id) const { return find(tracks_, id) != tracks_.end(); }
 
 bool SpaceOccupancy::rekey_static(ObjectId from, ObjectId to) {
     if (from == to || find(statics_, to) != statics_.end()) return false;
     const auto it = find(statics_, from);
     if (it == statics_.end()) return false;
     const Static s = it->second;
+    index_.valid = false;
     statics_.erase(it);
     put(statics_, to, s);
     return true;
@@ -68,6 +77,7 @@ bool SpaceOccupancy::static_entry(ObjectId id, V2& center, float& radius, uint32
 }
 
 void SpaceOccupancy::set_track(ObjectId id, uint32_t layer, float radius, uint32_t start_frame, std::vector<SpaceWaypoint> wps) {
+    index_.valid = false;
     if (wps.empty()) {
         erase(tracks_, id);
         return;
@@ -76,7 +86,10 @@ void SpaceOccupancy::set_track(ObjectId id, uint32_t layer, float radius, uint32
     make_pieces(t);
     put(tracks_, id, std::move(t));
 }
-void SpaceOccupancy::clear_track(ObjectId id) { erase(tracks_, id); }
+void SpaceOccupancy::clear_track(ObjectId id) {
+    index_.valid = false;
+    erase(tracks_, id);
+}
 
 void SpaceOccupancy::make_pieces(Track& tr) {
     // Pieces: before the first waypoint, each segment, after the last (the values query_segment formed per call).
@@ -122,15 +135,123 @@ uint32_t SpaceOccupancy::query_static(V2 a, V2 b, float radius) const {
     return bits;
 }
 
+// OPT3 t12: the margin of the grid index and of query_segment's track cull. A query circle on [a, b] passes an entry's test
+// only within radius + entry radius of the entry (a static's centre, a track piece's point inside the waypoint box); the
+// margin covers the float rounding of the per-entry tests by orders of magnitude, so a skipped entry could not pass.
+constexpr float kCullMargin = 16.0f;
+constexpr float kMinIndexCell = 256.0f;
+constexpr int32_t kMaxIndexCells = 64;  // per axis
+
+void SpaceOccupancy::index_cells(V2 lo, V2 hi, int32_t& x0, int32_t& y0, int32_t& x1, int32_t& y1) const {
+    const Index& g = index_;
+    auto cell = [&g](float v, float o, int32_t n) {
+        const float c = std::floor((v - o) * g.inv_cell);
+        if (!(c > 0.0f)) return 0;  // also NaN
+        return c >= static_cast<float>(n - 1) ? n - 1 : static_cast<int32_t>(c);
+    };
+    x0 = cell(lo.x, g.ox, g.nx);
+    x1 = cell(hi.x, g.ox, g.nx);
+    y0 = cell(lo.y, g.oy, g.ny);
+    y1 = cell(hi.y, g.oy, g.ny);
+    if (x1 < x0) std::swap(x0, x1);
+    if (y1 < y0) std::swap(y0, y1);
+}
+
+void SpaceOccupancy::build_index() {
+    if (index_.valid) return;
+    index_ = Index{};
+    // Entry boxes, statics then tracks; a non-finite value anywhere keeps the full scan.
+    std::vector<V2> lo, hi;
+    lo.reserve(statics_.size() + tracks_.size());
+    hi.reserve(statics_.size() + tracks_.size());
+    for (const auto& [id, e] : statics_) {
+        const float m = e.r + kCullMargin;
+        lo.push_back({e.c.x - m, e.c.y - m});
+        hi.push_back({e.c.x + m, e.c.y + m});
+    }
+    for (const auto& [id, t] : tracks_) {
+        const float m = t.r + kCullMargin;
+        lo.push_back({t.lo.x - m, t.lo.y - m});
+        hi.push_back({t.hi.x + m, t.hi.y + m});
+    }
+    V2 mn{0.0f, 0.0f}, mx{0.0f, 0.0f};
+    for (size_t i = 0; i < lo.size(); ++i) {
+        if (!std::isfinite(lo[i].x) || !std::isfinite(lo[i].y) || !std::isfinite(hi[i].x) || !std::isfinite(hi[i].y)) return;
+        mn = i == 0 ? lo[i] : V2{std::min(mn.x, lo[i].x), std::min(mn.y, lo[i].y)};
+        mx = i == 0 ? hi[i] : V2{std::max(mx.x, hi[i].x), std::max(mx.y, hi[i].y)};
+    }
+    Index& g = index_;
+    const float extent = std::max(mx.x - mn.x, mx.y - mn.y);
+    const float cell = std::max(kMinIndexCell, extent / static_cast<float>(kMaxIndexCells));
+    g.ox = mn.x;
+    g.oy = mn.y;
+    g.inv_cell = 1.0f / cell;
+    g.nx = std::clamp(static_cast<int32_t>((mx.x - mn.x) * g.inv_cell) + 1, 1, kMaxIndexCells + 1);
+    g.ny = std::clamp(static_cast<int32_t>((mx.y - mn.y) * g.inv_cell) + 1, 1, kMaxIndexCells + 1);
+    const size_t cells = static_cast<size_t>(g.nx) * static_cast<size_t>(g.ny);
+    auto fill = [&](size_t first, size_t count, std::vector<uint32_t>& start, std::vector<uint32_t>& items, std::vector<int32_t>& c0) {
+        start.assign(cells + 1, 0);
+        c0.assign(count * 2, 0);
+        std::vector<uint32_t> at;
+        for (int pass = 0; pass < 2; ++pass) {
+            if (pass == 1) {
+                for (size_t c = 0; c < cells; ++c) start[c + 1] += start[c];
+                items.assign(start[cells], 0);
+                at.assign(start.begin(), start.end() - 1);
+            }
+            for (size_t e = 0; e < count; ++e) {
+                int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+                index_cells(lo[first + e], hi[first + e], x0, y0, x1, y1);
+                c0[e * 2] = x0;
+                c0[e * 2 + 1] = y0;
+                for (int32_t y = y0; y <= y1; ++y)
+                    for (int32_t x = x0; x <= x1; ++x) {
+                        const size_t c = static_cast<size_t>(y) * static_cast<size_t>(g.nx) + static_cast<size_t>(x);
+                        if (pass == 0) ++start[c + 1];
+                        else items[at[c]++] = static_cast<uint32_t>(e);
+                    }
+            }
+        }
+    };
+    fill(0, statics_.size(), g.s_start, g.s_items, g.s_c0);
+    fill(statics_.size(), tracks_.size(), g.t_start, g.t_items, g.t_c0);
+    g.valid = true;
+}
+
 uint32_t SpaceOccupancy::query_segment(V2 a, V2 b, float t0, float t1, float radius, uint32_t layer, ObjectId self, bool with_static,
                                        uint32_t now) const {
     uint32_t bits = 0;
+    const V2 qlo{std::min(a.x, b.x), std::min(a.y, b.y)}, qhi{std::max(a.x, b.x), std::max(a.y, b.y)};
+    // OPT3 t12: with the index only the entries whose box shares a cell with the query box (segment box +- radius) are
+    // tested, each once: in the cell (max(entry first x, query first x), max(entry first y, query first y)), which both cell
+    // ranges contain. Without it (or for a non-finite query) every entry is tested. Same tests, OR of bits: same result.
+    const bool indexed = index_.valid && std::isfinite(qlo.x) && std::isfinite(qlo.y) && std::isfinite(qhi.x) &&
+                         std::isfinite(qhi.y) && std::isfinite(radius);
+    int32_t cx0 = 0, cy0 = 0, cx1 = -1, cy1 = -1;
+    if (indexed) index_cells({qlo.x - radius, qlo.y - radius}, {qhi.x + radius, qhi.y + radius}, cx0, cy0, cx1, cy1);
+    // Calls f(entry index) for the candidate entries of one kind.
+    auto visit = [&](size_t count, const std::vector<uint32_t>& start, const std::vector<uint32_t>& items, const std::vector<int32_t>& c0,
+                     auto&& f) {
+        if (!indexed) {
+            for (size_t e = 0; e < count; ++e) f(e);
+            return;
+        }
+        for (int32_t y = cy0; y <= cy1; ++y)
+            for (int32_t x = cx0; x <= cx1; ++x) {
+                const size_t c = static_cast<size_t>(y) * static_cast<size_t>(index_.nx) + static_cast<size_t>(x);
+                for (uint32_t k = start[c]; k < start[c + 1]; ++k) {
+                    const uint32_t e = items[k];
+                    if (x == std::max(c0[e * 2], cx0) && y == std::max(c0[e * 2 + 1], cy0)) f(e);
+                }
+            }
+    };
     if (with_static) {
-        for (const auto& [id, s] : statics_) {
-            if (id == self) continue;
+        visit(statics_.size(), index_.s_start, index_.s_items, index_.s_c0, [&](size_t e) {
+            const auto& [id, s] = statics_[e];
+            if (id == self) return;
             const float rr = radius + s.r;
             if (seg_point_dist_sq(a, b, s.c) < rr * rr) bits |= s.bits;
-        }
+        });
     }
     if (t1 < t0) std::swap(t0, t1);
     const float horizon = static_cast<float>(now) + static_cast<float>(window_);
@@ -139,15 +260,13 @@ uint32_t SpaceOccupancy::query_segment(V2 a, V2 b, float t0, float t1, float rad
     const V2 qv = qdt > 0.0f ? (b - a) * (1.0f / qdt) : V2{};
     auto q_at = [&](float u) { return qdt > 0.0f ? a + qv * (u - t0) : a; };
     // OPT3 t06 cull: the query circle stays on [a, b] and every piece's point inside the track's waypoint box, so a track
-    // whose box is more than rr + kCullMargin away on an axis cannot pass the distance test (the margin covers the float
-    // rounding of the per-piece test by orders of magnitude): skipping it changes no bit.
-    constexpr float kCullMargin = 16.0f;
-    const V2 qlo{std::min(a.x, b.x), std::min(a.y, b.y)}, qhi{std::max(a.x, b.x), std::max(a.y, b.y)};
-    for (const auto& [id, tr] : tracks_) {
-        if (id == self || (tr.layer & layer) == 0) continue;
+    // whose box is more than rr + kCullMargin away on an axis cannot pass the distance test: skipping it changes no bit.
+    visit(tracks_.size(), index_.t_start, index_.t_items, index_.t_c0, [&](size_t e) {
+        const auto& [id, tr] = tracks_[e];
+        if (id == self || (tr.layer & layer) == 0) return;
         const float rr = radius + tr.r;
         const float reach = rr + kCullMargin;
-        if (qlo.x - tr.hi.x > reach || tr.lo.x - qhi.x > reach || qlo.y - tr.hi.y > reach || tr.lo.y - qhi.y > reach) continue;
+        if (qlo.x - tr.hi.x > reach || tr.lo.x - qhi.x > reach || qlo.y - tr.hi.y > reach || tr.lo.y - qhi.y > reach) return;
         const float rr2 = rr * rr;
         for (const Piece& p : tr.pieces) {
             const float u0 = std::max(t0, p.ps), u1 = std::min(t1, p.pe);
@@ -156,7 +275,7 @@ uint32_t SpaceOccupancy::query_segment(V2 a, V2 b, float t0, float t1, float rad
             const V2 d0 = q_at(u0) - tp0;
             if (min_dist_sq(d0, qv - p.pv, u1 - u0) < rr2) bits |= p.bit;
         }
-    }
+    });
     return bits;
 }
 
@@ -187,6 +306,71 @@ void SpaceOccupancy::hash(StateHasher& h) const {
 }
 
 // ---------------------------------------------------------------- planner
+// OPT3 t12: SpaceScratch::VisitTable - linear probing over a power-of-two slot array; clear() bumps a generation instead
+// of touching the slots.
+size_t SpaceScratch::VisitTable::slot_of(uint64_t key) const {
+    uint64_t x = key + 0x9E3779B97F4A7C15ull;  // splitmix64 finaliser
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+    x ^= x >> 31;
+    return static_cast<size_t>(x) & (slots_.size() - 1);
+}
+
+void SpaceScratch::VisitTable::clear(size_t expected) {
+    size_t cap = 64;
+    while (cap < expected * 2) cap *= 2;
+    count_ = 0;
+    if (cap > slots_.size()) {
+        slots_.assign(cap, Slot{});
+        gen_ = 1;
+        return;
+    }
+    if (++gen_ == 0) {  // wrapped: every slot reads as used by generation 0
+        for (Slot& sl : slots_) sl.gen = 0;
+        gen_ = 1;
+    }
+}
+
+SpaceScratch::Visit* SpaceScratch::VisitTable::find(uint64_t key) {
+    if (slots_.empty()) return nullptr;
+    const size_t mask = slots_.size() - 1;
+    for (size_t i = slot_of(key);; i = (i + 1) & mask) {
+        Slot& sl = slots_[i];
+        if (sl.gen != gen_) return nullptr;
+        if (sl.key == key) return &sl.v;
+    }
+}
+
+void SpaceScratch::VisitTable::emplace(uint64_t key, Visit v) {
+    if (slots_.empty() || (count_ + 1) * 2 > slots_.size()) grow();
+    const size_t mask = slots_.size() - 1;
+    for (size_t i = slot_of(key);; i = (i + 1) & mask) {
+        Slot& sl = slots_[i];
+        if (sl.gen != gen_) {
+            sl.key = key;
+            sl.v = v;
+            sl.gen = gen_;
+            ++count_;
+            return;
+        }
+        if (sl.key == key) {
+            sl.v = v;
+            return;
+        }
+    }
+}
+
+void SpaceScratch::VisitTable::grow() {
+    std::vector<Slot> old;
+    old.swap(slots_);
+    const uint32_t old_gen = gen_;
+    slots_.assign(old.empty() ? 64 : old.size() * 2, Slot{});
+    gen_ = 1;
+    count_ = 0;
+    for (const Slot& sl : old)
+        if (sl.gen == old_gen) emplace(sl.key, sl.v);
+}
+
 namespace {
 
 struct TryParams {
@@ -248,6 +432,11 @@ struct Search {
     V2 circ_c[2] = {};        // 0 = left (counter-clockwise), 1 = right (clockwise)
     bool threat = false;      // REMAINING_GAPS §4.2: threat mode (ops 25-32 only)
     ThreatCost tcost{};
+    // SIMP sp2: a speculative try (try number `self`) stops early once a lower try succeeded (*stop < self); its result
+    // is then never used. Scheduling only: a try that runs to its end is unaffected.
+    const std::atomic<uint32_t>* stop = nullptr;
+    uint32_t self = 0;
+    bool aborted = false;
 
     int32_t cell(float v, float s) const { return static_cast<int32_t>(std::floor((v - s) * 1.5f / D)); }
     int32_t bucket(float h) const {
@@ -305,15 +494,14 @@ struct Search {
         n.op = op;
         n.speed = node_speed;
         const uint64_t key = vkey(cell(pos.x, req.start.x), cell(pos.y, req.start.y), bucket(n.heading));
-        auto it = sc.visited.find(key);
-        if (it != sc.visited.end()) {
-            if (it->second.closed) {
-                if (!reexpand_op(op) || n.g > it->second.g) return;
-                it->second.closed = false;
-                it->second.g = n.g;
+        if (SpaceScratch::Visit* it = sc.visited.find(key)) {
+            if (it->closed) {
+                if (!reexpand_op(op) || n.g > it->g) return;
+                it->closed = false;
+                it->g = n.g;
             } else {
-                if (!(n.g < it->second.g)) return;
-                it->second.g = n.g;
+                if (!(n.g < it->g)) return;
+                it->g = n.g;
             }
         } else {
             sc.visited.emplace(key, SpaceScratch::Visit{n.g, false});
@@ -523,7 +711,7 @@ struct Search {
         sc.nodes.clear();
         sc.heap.clear();
         sc.heap.set_capacity(std::max<uint32_t>(tp.budget, 16u));
-        sc.visited.clear();
+        sc.visited.clear(tp.budget);
         SpaceScratch::Node s;
         s.pos = req.start;
         s.heading = wrap_deg(req.start_heading);
@@ -555,14 +743,18 @@ struct Search {
 
         bool first = true;
         int32_t found = -1;
+        uint32_t polls = 0;
         while (!sc.heap.empty()) {
+            if (stop && (++polls & 127u) == 0 && stop->load(std::memory_order_relaxed) < self) {
+                aborted = true;
+                return false;
+            }
             const int32_t ni = sc.heap.pop().value;
             const SpaceScratch::Node n = sc.nodes[static_cast<size_t>(ni)];
             const uint64_t key = vkey(cell(n.pos.x, req.start.x), cell(n.pos.y, req.start.y), bucket(n.heading));
-            auto vit = sc.visited.find(key);
-            if (vit != sc.visited.end()) {
-                if (vit->second.closed || n.g > vit->second.g) continue;
-                vit->second.closed = true;
+            if (SpaceScratch::Visit* vit = sc.visited.find(key)) {
+                if (vit->closed || n.g > vit->g) continue;
+                vit->closed = true;
             }
             const float dg = distance(n.pos, req.goal);
             best_progress = std::max(best_progress, dist0 - dg);  // furthest progress toward the goal
@@ -831,8 +1023,65 @@ bool static_route(const SpaceOccupancy& occ, const SpaceRequest& req, float spee
 
 }  // namespace
 
+namespace {
+
+// §2.4 retry chain: try t's parameters from try t-1's and the best progress of tries 1..t-1.
+void next_try(TryParams& tp, float& budget_f, uint32_t t, float dist, float best_progress, const MovementConstants& k,
+              const SpaceRequest& req) {
+    if (t >= 2) {
+        tp.rot_div += k.space_failure_rotation_increment;
+        tp.step_scale += k.space_failure_forward_increment;
+        budget_f *= k.space_failure_max_expansions_coefficient;
+        // sp2 review: clamped before the cast (a mod's large SpacePathingTries grows it past 2^32: undefined conversion).
+        tp.budget = budget_f >= 4.0e9f ? 4000000000u : static_cast<uint32_t>(budget_f);
+    }
+    if (t >= 3) {
+        tp.weight_dist = std::max(tp.weight_dist + k.space_failure_distance_cutoff_coefficient * dist, best_progress);
+        tp.heuristic_div *= k.current_path_cost_coefficient_space;
+    }
+    if (t >= 4) tp.mask = kSpaceMoving | kSpaceStatic;
+    if (t >= 5) tp.speed = req.speed * 0.5f;
+    tp.facing = t == 1;  // OI tactical: from try 2 the facing requirement is dropped
+}
+
+bool same_params(const TryParams& a, const TryParams& b) {
+    const auto f = [](float x, float y) { return std::bit_cast<uint32_t>(x) == std::bit_cast<uint32_t>(y); };
+    return f(a.rot_div, b.rot_div) && f(a.step_scale, b.step_scale) && a.budget == b.budget && f(a.heuristic_div, b.heuristic_div) &&
+           f(a.weight_dist, b.weight_dist) && a.mask == b.mask && f(a.speed, b.speed) && a.facing == b.facing;
+}
+
+// One try's outcome (sp2: a speculative try keeps its own until the in-order walk takes or rejects it).
+struct TryResult {
+    TryParams tp;
+    bool done = false;  // ran to its end (not stopped early)
+    bool ok = false;
+    uint32_t pushes = 0;
+    float best_progress = 0.0f;
+    float step_deg = 0.0f;
+    std::vector<SpaceScratch::Node> chain;
+};
+
+void run_try(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& sc, TryResult& r,
+             const std::atomic<uint32_t>* stop, uint32_t self) {
+    Search s{occ, k, req, r.tp, sc};
+    s.stop = stop;
+    s.self = self;
+    r.ok = s.run(r.chain);
+    r.done = !s.aborted;
+    r.pushes = s.pushes;
+    r.best_progress = s.best_progress;
+    r.step_deg = s.step_deg;
+}
+
+}  // namespace
+
 bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& sc,
                      SpacePath& out) {
+    return plan_space_path(occ, k, req, sc, out, nullptr);
+}
+
+bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& sc,
+                     SpacePath& out, const ParallelFor* pf) {
     out = SpacePath{};
     const float dist = distance(req.start, req.goal);
     if (!(req.speed > 0.0f)) return false;
@@ -846,31 +1095,59 @@ bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, cons
     tp.budget = k.space_pathfind_max_expansions;
     tp.mask = req.mask;
     tp.speed = req.speed;
-    std::vector<SpaceScratch::Node> chain;
     float budget_f = static_cast<float>(tp.budget);
     float best_progress = 0.0f;
     const uint32_t tries = std::max<uint32_t>(1, k.space_pathing_tries);
+    // sp2: results of tries 2..N (index t - 2) run in parallel waves: when try t (t >= 2) has no usable result, tries t..N
+    // run at once, try t with its exact parameters and the later ones with the chain's parameters for the best progress
+    // known now (the real one can only grow; a later try whose parameters that changes starts the next wave).
+    std::vector<TryResult> spec;
+    if (pf && tries >= 2) spec.resize(tries - 1);
+    constexpr uint32_t kWaveTries = 8;  // a wave runs at most this many tries (a mod may set many)
+    const auto wave = [&](uint32_t from) {
+        const uint32_t last = std::min(tries, from + kWaveTries - 1);
+        TryParams stp = tp;
+        float sbf = budget_f;
+        for (uint32_t u = from; u <= last; ++u) {
+            if (u > from) next_try(stp, sbf, u, dist, best_progress, k, req);
+            spec[u - 2] = TryResult{};
+            spec[u - 2].tp = stp;
+        }
+        std::atomic<uint32_t> lowest_ok{std::numeric_limits<uint32_t>::max()};
+        (*pf)(last - from + 1, 1, [&](uint32_t b, uint32_t e) {
+            SpaceScratch s2;
+            for (uint32_t i = b; i < e; ++i) {
+                const uint32_t self = from + i;
+                if (lowest_ok.load(std::memory_order_relaxed) < self) continue;  // a lower try already succeeded
+                TryResult& r = spec[self - 2];
+                run_try(occ, k, req, s2, r, &lowest_ok, self);
+                if (r.done && r.ok) {
+                    uint32_t lo = lowest_ok.load(std::memory_order_relaxed);
+                    while (self < lo && !lowest_ok.compare_exchange_weak(lo, self, std::memory_order_relaxed)) {
+                    }
+                }
+            }
+        });
+    };
+    TryResult cur;
     for (uint32_t t = 1; t <= tries; ++t) {
-        if (t >= 2) {
-            tp.rot_div += k.space_failure_rotation_increment;
-            tp.step_scale += k.space_failure_forward_increment;
-            budget_f *= k.space_failure_max_expansions_coefficient;
-            tp.budget = static_cast<uint32_t>(budget_f);
+        next_try(tp, budget_f, t, dist, best_progress, k, req);
+        TryResult* r = nullptr;
+        if (t >= 2 && !spec.empty()) {
+            TryResult& sp = spec[t - 2];
+            if (!(sp.done && same_params(sp.tp, tp)) && t < tries) wave(t);  // the wave runs try t exactly
+            if (sp.done && same_params(sp.tp, tp)) r = &sp;  // the speculative run had exactly this try's parameters
         }
-        if (t >= 3) {
-            tp.weight_dist = std::max(tp.weight_dist + k.space_failure_distance_cutoff_coefficient * dist, best_progress);
-            tp.heuristic_div *= k.current_path_cost_coefficient_space;
+        if (!r) {
+            cur.tp = tp;
+            run_try(occ, k, req, sc, cur, nullptr, 0);
+            r = &cur;
         }
-        if (t >= 4) tp.mask = kSpaceMoving | kSpaceStatic;
-        if (t >= 5) tp.speed = req.speed * 0.5f;
-        tp.facing = t == 1;  // OI tactical: from try 2 the facing requirement is dropped
-        Search s{occ, k, req, tp, sc};
-        const bool ok = s.run(chain);
         out.tries = t;
-        out.pushes += s.pushes;
-        best_progress = std::max(best_progress, s.best_progress);
-        if (ok) {
-            chain_to_waypoints(chain, req, tp.speed, s.step_deg, out.wps);
+        out.pushes += r->pushes;
+        best_progress = std::max(best_progress, r->best_progress);
+        if (r->ok) {
+            chain_to_waypoints(r->chain, req, r->tp.speed, r->step_deg, out.wps);
             out.ok = true;
             return true;
         }
@@ -957,6 +1234,32 @@ SpacePose eval_space_path(std::span<const SpaceWaypoint> wps, float t) {
     const V2 dp = (a.pos * d00 + m0 * d10 + b.pos * d01 + m1 * d11) * (1.0f / dur);
     out.speed = length(dp);
     out.heading = length_sq(dp) > 0.0f ? heading_deg(dp) : a.heading;
+    return out;
+}
+
+std::vector<V2> sample_space_path(std::span<const SpaceWaypoint> wps, float step) {
+    std::vector<V2> out;
+    if (wps.empty()) return out;
+    out.push_back(wps.front().pos);
+    const float st = step > 0.0f ? step : 1.0f;
+    for (size_t i = 0; i + 1 < wps.size(); ++i) {
+        const SpaceWaypoint& a = wps[i];
+        const SpaceWaypoint& b = wps[i + 1];
+        if (a.pos == b.pos) continue;  // a turn in place
+        const float dur = b.time - a.time;
+        uint32_t pieces = 1;
+        if (dur > 0.0f) {
+            const float by_len = std::ceil(length(b.pos - a.pos) / st);
+            const float by_turn = std::ceil(std::fabs(wrap_deg(b.heading - a.heading)) / 10.0f);
+            pieces = static_cast<uint32_t>(std::clamp(std::max(by_len, by_turn), 1.0f, 32.0f));
+        }
+        for (uint32_t j = 1; j < pieces; ++j) {
+            const float t = a.time + dur * static_cast<float>(j) / static_cast<float>(pieces);
+            const V2 p = eval_space_path(wps, t).pos;
+            if (!(p == out.back())) out.push_back(p);
+        }
+        if (!(b.pos == out.back())) out.push_back(b.pos);
+    }
     return out;
 }
 

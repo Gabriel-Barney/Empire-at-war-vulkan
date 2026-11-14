@@ -1,6 +1,7 @@
 #include "alamo/tactical/abilities/ability_data.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <initializer_list>
 
 #include "alamo/core/hash.hpp"
@@ -129,6 +130,7 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     set_bonus(L::FireRate, f_or(e, "Fire_Rate_Bonus_Percentage", 0.0f));  // [M: the fire-rate field name]
     s.apply_to_all_allies = b_or(e, "Apply_To_All_Allies", false) || b_or(e, "Affects_All_Allies", false);
     s.reverse_logic = b_or(e, "Reverse_Application_Logic", false);
+    s.specific_faction = s_or(e, "Specific_Faction");  // s78n t04: Combat_Bonus +0x1a0 (resolved by AbilitySystem::set_host)
     s.fow_reveal_multiplier = f_or(e, "FOW_Reveal_Range_Multiplier", 1.0f);
     s.reinforcement_time_multiplier = f_or(e, "Reinforcement_Time_Multiplier", 1.0f);
     s.stealth_duration_multiplier = f_or(e, "Stealth_Duration_Multiplier", 1.0f);
@@ -146,6 +148,13 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     s.berserker_damage = f_or(e, "Berserker_Damage", 0.0f);
     s.berserker_damage_range = f_or(e, "Berserker_Damage_Range", 0.0f);
     s.berserker_duration = f_or(e, "Berserker_Duration_In_Secs", 0.0f);
+    s.catch_dist = f_or(e, "Catch_Dist", 0.0f);  // cu8i t01: Saber_Throw
+    if (r.type_max_speed) {
+        const std::string_view saber = data::trim(e.child_text("Saber_Name"));
+        if (!saber.empty()) s.saber_speed = std::max(0.0f, r.type_max_speed(saber));
+        if (!saber.empty() && r.type_max_flight_distance) s.saber_max_flight = std::max(0.0f, r.type_max_flight_distance(saber));
+        if (!saber.empty() && r.projectile) s.saber_projectile = r.projectile(saber);  // cu8k t01: the thrown saber's desc
+    }
     s.activation_time = f_or(e, "Activation_Time_In_Seconds", 0.0f);
     s.trigger_radius = f_or(e, "Trigger_Radius", 0.0f);
     for (std::string_view tag : {"Mine_Type", "Object_Type", "Contamination_Object_Name"})
@@ -178,8 +187,8 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
     s.health_per_victim = f_or(e, "Health_Per_Victim", 0.0f);
     s.fire_frame = i_or(e, "Fire_Frame", 0);
     s.face_target = b_or(e, "Face_Target", false);
-    s.turn_rate = f_or(e, "Turn_Rate", 0.0f);
-    s.firing_cone = f_or(e, "Firing_Cone", 0.0f);
+    s.turn_rate = f_or(e, "Turn_Rate", 10.0f);      // ctor 0x714e30 defaults (cu8f t06)
+    s.firing_cone = f_or(e, "Firing_Cone", 45.0f);
     s.fire_delay = f_or(e, "Fire_Delay", 0.0f);
     s.fire_continuation = f_or(e, "Fire_Continuation", 0.0f);
     s.damage_per_second = f_any(e, {"Damage_Per_Second", "Shield_Damage_Per_Second", "Shield_Drain_Per_Second"}, 0.0f);
@@ -201,6 +210,22 @@ void parse_class_fields(const data::XmlNode& e, SpecialAbilityDesc& s, const Abi
 }
 
 }  // namespace
+
+SaberFlight saber_flight(float out_dist, float back_dist, float max_travel, float speed, float catch_dist) {
+    SaberFlight f;
+    if (!(speed > 0.0f)) return f;
+    const float ltot = std::max(0.0f, out_dist) + std::max(0.0f, back_dist);
+    const float b = max_travel > 0.0f ? max_travel : 3.0e38f;
+    const float kc = std::floor(std::max(0.0f, ltot - catch_dist) / speed) + 1.0f;
+    if (speed * kc < std::min(ltot, b)) {
+        f.catch_step = static_cast<uint32_t>(kc);
+        f.end = f.catch_step + 11u;  // SWORD_CATCH finishes at the 10th advance after its play tick, seen by the next update
+        return f;
+    }
+    const float kd = std::min(std::ceil(ltot / speed), std::ceil(b / speed));
+    f.end = std::max(1u, static_cast<uint32_t>(kd));  // epsilon 0 [M]
+    return f;
+}
 
 // ---- OI abilities: CubicInterpolator ----
 void CubicCurve::set(std::vector<std::pair<float, float>> pts) {
@@ -299,14 +324,14 @@ bool parse_unit_ability(const data::XmlNode& e, UnitAbilityRecord& out, const Ab
     out.effective_radius = f_or(e, "Effective_Radius", 0.0f);
     out.recharge_seconds = f_or(e, "Recharge_Seconds", 0.0f);
     out.expiration_seconds = f_or(e, "Expiration_Seconds", 0.0f);
-    out.is_pulsing = b_or(e, "Is_Pulsing", false);
+    out.is_pulsing = b_or(e, "Is_Pulsing", false);  // no reader in the original [M] (cu8f t06): kept for the record only
     out.pulse_frequency_secs = f_or(e, "Pulse_Frequency_Secs", 0.0f);
     out.max_pulses = i_or(e, "Max_Number_Of_Pulses", 0);
     out.alternate_icon_name = s_or(e, "Alternate_Icon_Name");
     out.gui_activated_ability_name = s_or(e, "GUI_Activated_Ability_Name");
     out.gui_name_crc = out.gui_activated_ability_name.empty() ? 0u : name_crc(out.gui_activated_ability_name);
     out.spawned_object_type = s_or(e, "Spawned_Object_Type");
-    out.max_spawned_objects = i_or(e, "Max_Num_Spawned_Objects", 0);
+    out.max_spawned_objects = i_or(e, "Max_Num_Spawned_Objects", -1);  // [port] absent: no cap (cu8f t06)
     out.bomb_countdown_seconds = f_or(e, "Bomb_Countdown_Seconds", 0.0f);
     out.area_effect_decal_distance = f_or(e, "Area_Effect_Decal_Distance", 0.0f);
     for (data::XmlNode c : e.children("Projectile_Types_Override"))
@@ -425,13 +450,6 @@ std::vector<uint32_t> parse_special_abilities(const data::XmlNode& type_element,
             data.specials.push_back(parse_special_ability(e, r, diag));
         }
     return out;
-}
-
-const UnitAbilityRecord* find_record(const AbilityObjectDesc& d, uint8_t type) {
-    const UnitAbilityRecord* found = nullptr;
-    for (const UnitAbilityRecord& r : d.unit_abilities)
-        if (r.type == type) found = &r;  // later entries replace earlier ones
-    return found;
 }
 
 void link_combat_abilities(const AbilityObjectDesc& d, combat::CombatData& cd, combat::UnitDesc& ud) {

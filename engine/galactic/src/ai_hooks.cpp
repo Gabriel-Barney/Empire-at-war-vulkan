@@ -11,12 +11,6 @@
 
 namespace alamo::galactic {
 
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit) {
-    commands::EventData e(commands::EventType::FleetManagement);
-    e.set("target", target).set("fleet", fleet).set("unit", unit).set("op", static_cast<uint32_t>(op));
-    return e;
-}
-
 // ---- income ticks --------------------------------------------------------------------------------------------
 
 uint32_t GalacticSim::add_income_hook(IncomeHook hook) {
@@ -26,23 +20,19 @@ uint32_t GalacticSim::add_income_hook(IncomeHook hook) {
     return id;
 }
 
-void GalacticSim::remove_income_hook(uint32_t id) {
-    income_hooks_.erase(std::remove_if(income_hooks_.begin(), income_hooks_.end(),
-                                       [id](const std::pair<uint32_t, IncomeHook>& h) { return h.first == id; }),
-                        income_hooks_.end());
-}
-
-uint32_t GalacticSim::add_production_service_hook(std::function<void(PlanetIndex)> hook) {
+uint32_t GalacticSim::add_credit_notify_hook(CreditNotifyHook hook) {
     const uint32_t id = next_hook_id_++;
     if (next_hook_id_ == 0) next_hook_id_ = 1;
-    production_hooks_.emplace_back(id, std::move(hook));
+    credit_hooks_.emplace_back(id, std::move(hook));
     return id;
 }
 
-void GalacticSim::remove_production_service_hook(uint32_t id) {
-    production_hooks_.erase(std::remove_if(production_hooks_.begin(), production_hooks_.end(),
-                                           [id](const auto& h) { return h.first == id; }),
-                            production_hooks_.end());
+// 0x4b0310 [H]: only for a player with an AI system (player +0x360); the galactic budget is told whatever the current
+// mode is (A2K_T10_CREDIT_NOTIFY_RE Q1).
+void GalacticSim::notify_ai_credits(int32_t player, float applied) {
+    if (!valid_player(player) || !players_[static_cast<size_t>(player)].ai) return;
+    const std::vector<std::pair<uint32_t, CreditNotifyHook>> hooks = credit_hooks_;  // a listener may register another
+    for (const auto& h : hooks) h.second(player, applied);
 }
 
 float GalacticSim::last_income(int32_t player) const {
@@ -89,7 +79,9 @@ ObjectHandle GalacticSim::spawn_unit(int32_t player, PlanetIndex planet, uint32_
         return {};
     last_spawn_ = {};
     if (!create_unit(player, planet, type)) return {};
-    return last_spawn_;
+    const ObjectHandle made = last_spawn_;  // the hook may spawn again
+    if (spawn_hook_) spawn_hook_(player, planet, type);
+    return made;
 }
 
 bool GalacticSim::steal_unit(int32_t player, uint32_t type, PlanetIndex destination, bool include_destination) {

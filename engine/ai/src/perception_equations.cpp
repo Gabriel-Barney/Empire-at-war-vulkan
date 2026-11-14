@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "alamo/ai/ai_definitions.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: crc32 ('#' reseed)
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/xml.hpp"
@@ -24,35 +25,9 @@ constexpr std::string_view kRegistry[] = {
 };
 constexpr uint32_t kRegistrySize = static_cast<uint32_t>(sizeof(kRegistry) / sizeof(kRegistry[0]));
 
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-std::string to_upper(std::string_view s) {
-    std::string r(s);
-    for (char& c : r) c = upper(c);
-    return r;
-}
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
-bool istarts_with(std::string_view s, std::string_view prefix) {
-    return s.size() >= prefix.size() && iequals(s.substr(0, prefix.size()), prefix);
-}
-
-bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
 bool is_digit(char c) { return c >= '0' && c <= '9'; }
 bool is_ident_start(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; }
 bool is_ident(char c) { return is_ident_start(c) || is_digit(c); }
-
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && is_space(s.front())) s.remove_prefix(1);
-    while (!s.empty() && is_space(s.back())) s.remove_suffix(1);
-    return s;
-}
 
 // ---- enum literal converters (A2I_TOKENS_RE §3.1; A2J t07: dynamic ones from Data\XML\Enum, A2J_T07_LITERALS §1) ----
 
@@ -68,9 +43,10 @@ constexpr std::string_view kHardPointNames[] = {
 // A2J_T07_LITERALS §3] (every shipped literal spells the name exactly as registered).
 struct LiteralList {
     std::vector<objects::EnumConverter> conv;
+    // A2k t12 (A2K_T06_RE.md §2) [H]: the converter name is trimmed, then compared exactly (case-sensitive).
     const objects::EnumConverter* find(std::string_view name) const {
         for (const objects::EnumConverter& c : conv)
-            if (iequals(c.enum_name, trim(name))) return &c;
+            if (c.enum_name == ascii_trim(name)) return &c;
         return nullptr;
     }
 };
@@ -152,7 +128,7 @@ bool load_dynamic_enum(const FileProvider& files, std::string_view name, objects
     if (!doc.ok() && diagnostics) diagnostics->push_back("enum file '" + path + "' unreadable: converter discarded");
     uint32_t index = 0;
     for (data::XmlNode e = doc.root().first_child(); e && fresh.valid; e = e.next_sibling(), ++index) {
-        const std::string_view text = trim(e.text());
+        const std::string_view text = ascii_trim(e.text());
         const int64_t value = text.empty() ? static_cast<int64_t>(index) : entry_atoi(text);
         if (!fresh.add(e.name(), value) && diagnostics)
             diagnostics->push_back("ERROR: couldn't add enum entry '" + std::string(e.name()) + "' to " + std::string(name) +
@@ -215,7 +191,7 @@ EnumLiteralError EnumLiteralTable::convert(std::string_view type, std::string_vi
     out.bitfield = c->bitfield;
     out.value = *v;
     if (!c->bitfield) {
-        out.names.emplace_back(trim(text));
+        out.names.emplace_back(ascii_trim(text));
         return EnumLiteralError::None;
     }
     size_t i = 0;
@@ -223,7 +199,7 @@ EnumLiteralError EnumLiteralTable::convert(std::string_view type, std::string_vi
         while (i < text.size() && literal_delim(text[i])) ++i;
         const size_t b = i;
         while (i < text.size() && !literal_delim(text[i])) ++i;
-        const std::string_view tok = trim(text.substr(b, i - b));
+        const std::string_view tok = ascii_trim(text.substr(b, i - b));
         if (!tok.empty()) out.names.emplace_back(tok);
     }
     return EnumLiteralError::None;
@@ -256,7 +232,7 @@ public:
 
 private:
     void ws() {
-        while (pos_ < s_.size() && is_space(s_[pos_])) ++pos_;
+        while (pos_ < s_.size() && ascii_is_space(s_[pos_])) ++pos_;
     }
     bool fail(std::string msg) {
         if (error_.message.empty()) {
@@ -444,7 +420,7 @@ private:
         }
         ExprNode n;
         const std::string_view head = parts[0];
-        if (parts.size() == 1 && iequals(head, "clamp") && peek("(")) {
+        if (parts.size() == 1 && ascii_iequals(head, "clamp") && peek("(")) {
             ++pos_;
             n.op = Op::Clamp;
             if (!expr(n.a)) return false;
@@ -463,7 +439,7 @@ private:
         };
         bool is_root = false;
         for (const auto& [name, root] : kRoots) {
-            if (iequals(head, name)) {
+            if (ascii_iequals(head, name)) {
                 is_root = true;
                 n.op = Op::Token;
                 n.root = root;
@@ -475,13 +451,13 @@ private:
             n.path_begin = static_cast<uint32_t>(out_.path.size());
             for (size_t i = 1; i < parts.size(); ++i) out_.path.push_back(tokens_.intern(parts[i]));
             n.path_len = static_cast<uint32_t>(parts.size() - 1);
-        } else if (istarts_with(head, "Function_") || istarts_with(head, "Script_")) {
-            const bool fn = istarts_with(head, "Function_");
+        } else if (ascii_istarts_with(head, "Function_") || ascii_istarts_with(head, "Script_")) {
+            const bool fn = ascii_istarts_with(head, "Function_");
             n.op = fn ? Op::Function : Op::Script;
             n.name = std::string(head.substr(fn ? 9 : 7));
             n.ref = kUnresolved;
             if (n.name.empty()) return fail("empty function name");
-            if (parts.size() != 2 || !iequals(parts[1], "Evaluate"))
+            if (parts.size() != 2 || !ascii_iequals(parts[1], "Evaluate"))
                 return fail(std::string(head) + ": expected '.Evaluate'");
         } else {
             return fail("unknown reference '" + std::string(head) + "'");
@@ -545,7 +521,7 @@ private:
             const EnumLiteralError e = literals_.convert(id, body, lit);
             if (e == EnumLiteralError::NoConverter) return fail("There is no enum converter named " + std::string(id) + "!");
             if (e != EnumLiteralError::None)
-                return fail("Enum converter(" + std::string(id) + ") was unable to convert " + std::string(trim(body)) +
+                return fail("Enum converter(" + std::string(id) + ") was unable to convert " + std::string(ascii_trim(body)) +
                             " to a valid enum value!");
             p.value.enum_values = std::move(lit.names);
             p.value.enum_value = lit.value;
@@ -700,7 +676,7 @@ TokenTable::TokenTable() {
 }
 
 TokenId TokenTable::intern(std::string_view name) {
-    std::string key = to_upper(name);
+    std::string key = ascii_upper(name);
     const auto it = index_.find(key);
     if (it != index_.end()) return it->second;
     const auto id = static_cast<TokenId>(names_.size());
@@ -710,13 +686,13 @@ TokenId TokenTable::intern(std::string_view name) {
 }
 
 TokenId TokenTable::find(std::string_view name) const {
-    const auto it = index_.find(to_upper(name));
+    const auto it = index_.find(ascii_upper(name));
     return it == index_.end() ? kNoToken : it->second;
 }
 
 TokenId registry_token(std::string_view name) {
     for (uint32_t i = 0; i < kRegistrySize; ++i)
-        if (iequals(kRegistry[i], name)) return i;
+        if (ascii_iequals(kRegistry[i], name)) return i;
     return kNoToken;
 }
 
@@ -781,8 +757,9 @@ bool precedence_sensitive(std::string_view text) {
 uint32_t EquationSet::add(std::string_view name, std::string_view text, LoadReport* report) {
     Equation e;
     e.name = std::string(name);
-    e.text = std::string(trim(text));
-    std::string key = to_upper(name);
+    e.text = std::string(ascii_trim(text));
+    std::string key = ascii_upper(name);
+    declared_.insert(key);  // a2k t12: a Function_ token even when the equation fails to build or is a duplicate
     if (index_.count(key)) {
         if (report) {
             ++report->duplicates;
@@ -836,7 +813,29 @@ void EquationSet::add_file(std::string_view xml, const std::string& file, LoadRe
 
 void EquationSet::link(LoadReport* report) {
     if (report) report->unresolved_functions = 0;
+    // A2k t12 (A2K_T06_RE.md §1.2-1.4) [H]: retail registers Function_<Name> for every root element of every equation file
+    // before it parses any equation, so a reference to a name that no file defines is an invalid token and fails the
+    // referrer's build (dropped like a parse error). A defined name whose equation was dropped stays a valid token: the
+    // referrer builds and the reference evaluates false (unresolved, below). [port] the check runs here, after every
+    // add, so a later duplicate of a referrer dropped by it was already rejected as a duplicate.
+    for (uint32_t i = 0; i < eq_.size(); ++i) {
+        Equation& e = eq_[i];
+        if (!e.parsed) continue;
+        for (const ExprNode& n : e.expr.nodes) {
+            if (n.op != Op::Function || declared_.count(ascii_upper(n.name))) continue;
+            e.parsed = false;
+            e.error = {0, "Invalid perceptual token (Function_" + n.name + ") while trying to parse an equation!"};
+            const auto it = index_.find(ascii_upper(e.name));
+            if (it != index_.end() && it->second == i) index_.erase(it);
+            if (report) {
+                ++report->parse_errors;
+                report->messages.push_back(e.file + "(" + std::to_string(e.line) + "): " + e.name + ": " + e.error.message);
+            }
+            break;
+        }
+    }
     for (Equation& e : eq_) {
+        if (!e.parsed) continue;
         for (ExprNode& n : e.expr.nodes) {
             if (n.op != Op::Function) continue;
             n.ref = find(n.name);
@@ -850,7 +849,7 @@ void EquationSet::link(LoadReport* report) {
 }
 
 uint32_t EquationSet::find(std::string_view name) const {
-    const auto it = index_.find(to_upper(name));
+    const auto it = index_.find(ascii_upper(name));
     return it == index_.end() ? kUnresolved : it->second;
 }
 

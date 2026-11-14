@@ -10,12 +10,11 @@ target_include_directories(alamo_galactic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(alamo_galactic PUBLIC alamo_core)
 
 add_executable(alamo_galactic_tests tests/test_galactic.cpp)
-target_link_libraries(alamo_galactic_tests PRIVATE alamo_galactic Threads::Threads)
+target_link_libraries(alamo_galactic_tests PRIVATE alamo_galactic alamo_test_support)
 add_test(NAME alamo_galactic_tests COMMAND alamo_galactic_tests)
 
 add_executable(alamo_galactic_bench bench/bench_galactic.cpp)
-target_include_directories(alamo_galactic_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(alamo_galactic_bench PRIVATE alamo_galactic Threads::Threads)
+target_link_libraries(alamo_galactic_bench PRIVATE alamo_galactic alamo_test_support)
 
 # S3 - galactic economy & fleets (docs/re/GALACTIC_ECONOMY.md): credits/income/fiscal cycle, production
 # queues, fleet movement over routes, ownership. Needs the data, objects and commands modules, so it is a
@@ -29,16 +28,17 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
     src/auto_resolve.cpp
     src/conflicts.cpp
     src/story_ops.cpp  # L1/S4: Change_Owner, Assemble_Fleet, containment queries
-    src/corruption.cpp  # S4: corruption options / corruption missions (corruption.hpp)
     src/ai_hooks.cpp  # A2 galactic: income ticks, production queries, FleetManagement, AI operations
     src/victory.cpp  # A2 galactic: [port] campaign victory check (victory.hpp)
     src/reveal.cpp     # GALACTIC_REVEAL_CORRUPTION: revealed bytes, pre-step, corruption transitions
     src/visibility.cpp # GALACTIC_REVEAL_CORRUPTION 2: planet visibility modifier lists, sources, fold
     src/fleet_slots.cpp  # Playtest 3 t07: authoritative fleet orbit slots (campaign.hpp FleetState::slot)
+    src/object_names.cpp  # [port: Gabriel 2026-11-13] fleet and ship names (campaign.hpp GalacticSim::rename)
     src/strategic.cpp  # OI galactic: STRATEGIC_GAPS speed M, company transports, buildability, stealth, victory claims
     src/special_rules.cpp    # P4 sim: special-system tables (special_data.hpp)
     src/special_systems.cpp  # P4 sim: hero trigger / respawn, black market, sabotage, hack, income abilities, corruption
     src/galactic_save.cpp    # N1: GalacticSim / ConflictManager write / read
+    src/bounty.cpp           # a2m r2: bounty values (auto-resolve bounty, results screen)
   )
   add_library(alamo::galactic_sim ALIAS alamo_galactic_sim)
   target_link_libraries(alamo_galactic_sim PUBLIC alamo_galactic alamo_objects alamo_commands alamo_data alamo_core)
@@ -48,7 +48,7 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
   # VFS when the vfs module is configured: tests/foc_data.hpp).
   add_executable(alamo_galactic_economy_tests tests/test_economy.cpp)
   target_include_directories(alamo_galactic_economy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  target_link_libraries(alamo_galactic_economy_tests PRIVATE alamo_galactic_sim Threads::Threads)
+  target_link_libraries(alamo_galactic_economy_tests PRIVATE alamo_galactic_sim alamo_test_support)
   if(TARGET alamo_vfs)  # OI galactic: the Thrawn's Revenge checks read the mod through the VFS (skipped without data)
     target_link_libraries(alamo_galactic_economy_tests PRIVATE alamo_vfs)
     target_compile_definitions(alamo_galactic_economy_tests PRIVATE ALAMO_GALACTIC_TESTS_HAVE_VFS=1)
@@ -65,14 +65,14 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
   # S10 - battle transitions, galactic side (docs/re/BATTLE_TRANSITIONS.md): conflict queues + state
   # machine, auto-resolve, force split, battle write-back (conflicts.hpp, auto_resolve.hpp).
   add_executable(alamo_galactic_conflict_tests tests/test_conflicts.cpp)
-  target_link_libraries(alamo_galactic_conflict_tests PRIVATE alamo_galactic_sim)
+  target_link_libraries(alamo_galactic_conflict_tests PRIVATE alamo_galactic_sim alamo_test_support)
   add_test(NAME alamo_galactic_conflict_tests COMMAND alamo_galactic_conflict_tests)
 
   # P4 sim - FoC galactic special systems (docs/re/P4_SIM_SYSTEMS.md): hero trigger / respawn, black market, sabotage,
   # hack, income abilities, corruption requirements; 0/1/4/N-worker CRC check; FoC data with ALAMO_FOC_DATA.
   add_executable(alamo_galactic_special_tests tests/test_special.cpp)
   target_include_directories(alamo_galactic_special_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  target_link_libraries(alamo_galactic_special_tests PRIVATE alamo_galactic_sim Threads::Threads)
+  target_link_libraries(alamo_galactic_special_tests PRIVATE alamo_galactic_sim alamo_test_support)
   if(TARGET alamo_vfs)  # a Steam install keeps no loose XML: tests/foc_data.hpp reads it through the VFS
     target_link_libraries(alamo_galactic_special_tests PRIVATE alamo_vfs)
     target_compile_definitions(alamo_galactic_special_tests PRIVATE ALAMO_GALACTIC_TESTS_HAVE_VFS=1)
@@ -84,7 +84,7 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
   # fold, CRC tail); FoC spy data with ALAMO_FOC_DATA.
   add_executable(alamo_galactic_visibility_tests tests/test_grc_visibility.cpp)
   target_include_directories(alamo_galactic_visibility_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  target_link_libraries(alamo_galactic_visibility_tests PRIVATE alamo_galactic_sim)
+  target_link_libraries(alamo_galactic_visibility_tests PRIVATE alamo_galactic_sim alamo_test_support)
   if(TARGET alamo_vfs)
     target_link_libraries(alamo_galactic_visibility_tests PRIVATE alamo_vfs)
     target_compile_definitions(alamo_galactic_visibility_tests PRIVATE ALAMO_GALACTIC_TESTS_HAVE_VFS=1)
@@ -95,11 +95,22 @@ if("data" IN_LIST ALAMO_ENGINE_MODULES AND "objects" IN_LIST ALAMO_ENGINE_MODULE
   # in lockstep with the original (synthetic, and FoC HotM with ALAMO_FOC_DATA); truncated / corrupted data rejected.
   add_executable(alamo_galactic_save_tests tests/test_save.cpp)
   target_include_directories(alamo_galactic_save_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  target_link_libraries(alamo_galactic_save_tests PRIVATE alamo_galactic_sim Threads::Threads)
+  target_link_libraries(alamo_galactic_save_tests PRIVATE alamo_galactic_sim alamo_test_support)
   if(TARGET alamo_vfs)
     target_link_libraries(alamo_galactic_save_tests PRIVATE alamo_vfs)
     target_compile_definitions(alamo_galactic_save_tests PRIVATE ALAMO_GALACTIC_TESTS_HAVE_VFS=1)
   endif()
   add_test(NAME alamo_galactic_save_tests COMMAND alamo_galactic_save_tests)
   set_tests_properties(alamo_galactic_save_tests PROPERTIES TIMEOUT 600)
+
+  # bkc1 t08 (backlog b0027): auto-resolve outcomes over many seeds for a battle spec; graded against the retail
+  # outcomes in tools/parity/autoresolve_refs.json by tools/parity/autoresolve_check.py (ctest parity_autoresolve,
+  # tools/parity/CMakeLists.txt). Exits 77 without ALAMO_FOC_DATA.
+  add_executable(alamo_galactic_autoresolve_parity tests/autoresolve_parity.cpp)
+  target_include_directories(alamo_galactic_autoresolve_parity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  target_link_libraries(alamo_galactic_autoresolve_parity PRIVATE alamo_galactic_sim alamo_test_support)
+  if(TARGET alamo_vfs)
+    target_link_libraries(alamo_galactic_autoresolve_parity PRIVATE alamo_vfs)
+    target_compile_definitions(alamo_galactic_autoresolve_parity PRIVATE ALAMO_GALACTIC_TESTS_HAVE_VFS=1)
+  endif()
 endif()

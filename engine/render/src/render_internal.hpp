@@ -271,7 +271,8 @@ struct Renderer::BuildCache {
         uint32_t effect_count = 0, mat_count = 0, max_passes = 0;
         bool ranks_valid = false;
     };
-    static constexpr int kSets = 32;  // Lit/Unlit x scene/external render pass x mirrored x background (build_sky) x coverage alpha
+    static constexpr int kSets = 64;  // Lit/Unlit x scene/external render pass x mirrored x background (build_sky) x coverage alpha
+                                      // x [port] multisampled main scene (MSAA)
     MemoSet sets[kSets];
     uint32_t stamp = 0;
     // ---- Scratch (sizes only grow).
@@ -310,6 +311,12 @@ namespace detail {
 void begin_target(const rhi::DeviceFns& fn, VkCommandBuffer cmd, rhi::RenderTarget& t, bool depth, const float* clear_color,
                   bool clear_depth, bool secondaries);
 rhi::CopyImage copy_of(const rhi::RenderTarget& t, rhi::ImageState after);
+// [port] MSAA: resolve the multisampled `ms` (colour average into `color_dst`, depth sample 0 into `depth_dst`; either may be
+// null) with an empty dynamic-rendering pass. Targets are left as attachments.
+void resolve_into(const rhi::DeviceFns& fn, VkCommandBuffer cmd, rhi::RenderTarget& ms, rhi::RenderTarget* color_dst,
+                  rhi::RenderTarget* depth_dst);
+// First item index whose bucket is >= b (items are sorted by bucket).
+size_t bucket_begin(const std::vector<Renderer::Built::Item>& items, PhaseBucket b);
 }  // namespace detail
 
 }  // namespace alamo::render

@@ -39,6 +39,8 @@
 #include "alamo/render/renderer.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 #include "ff_reference.hpp"
 #include "gltf.hpp"
 #include "png_decode.hpp"
@@ -49,14 +51,7 @@ using render::Mat3x4;
 
 namespace {
 
-int g_failures = 0;
-#define CHECK(c)                                                              \
-    do {                                                                      \
-        if (!(c)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);          \
-            ++g_failures;                                                     \
-        }                                                                     \
-    } while (0)
+using ::alamo::test::g_fail;
 
 const std::string kSrcDir = ALAMO_RENDER_SOURCE_DIR;
 
@@ -120,42 +115,9 @@ void test_readers() {
 
 // ------------------------------------------------------------------------------------------- GPU
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
-};
+using Gpu = render::test::GpuCore;
 
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-    const uint8_t* px(uint32_t x, uint32_t y) const {
-        return static_cast<const uint8_t*>(readback.mapped()) + (static_cast<size_t>(y) * w + x) * 4;
-    }
-};
+using Offscreen = render::test::OffscreenWithDepth;  // alamo/render/offscreen.hpp
 
 bool render_frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices& vm,
                   std::span<const render::Instance> inst, render::GpuModel* resident, const float clear[4],
@@ -617,8 +579,7 @@ std::vector<PosedSubmesh> pose_submeshes(const assets::ModelAsset& m, std::span<
 
 bool exported_by_alo2gltf(const assets::ModelAsset& m, const assets::Submesh& sm) {
     if (sm.index_count == 0 || m.meshes[sm.mesh].hidden) return false;
-    std::string sh = sm.material.effect;
-    for (char& c : sh) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string sh = alamo::ascii_lower(sm.material.effect);
     return sh.find("shadow") == std::string::npos && sh.find("collision") == std::string::npos;
 }
 
@@ -950,8 +911,8 @@ int main() {
     test_reference_model();
     test_prim_vertex_layout();
     test_readers();
-    std::printf("cpu: %s\n", g_failures ? "FAILED" : "ok");
+    std::printf("cpu: %s\n", g_fail ? "FAILED" : "ok");
     run_gpu_and_data();
-    std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
-    return g_failures ? 1 : 0;
+    std::printf("%s (%d failures)\n", g_fail ? "FAILED" : "PASSED", g_fail);
+    return g_fail ? 1 : 0;
 }

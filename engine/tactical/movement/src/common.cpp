@@ -17,6 +17,10 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.dynamic_avoidance_rectangle_bound = get_u32(gc, "DynamicAvoidanceRectangleBound", c.dynamic_avoidance_rectangle_bound);
     c.dynamic_obstacle_overlap_penalty = gc.get_float("DynamicObstacleOverlapPenalty", c.dynamic_obstacle_overlap_penalty);
     c.land_destination_proximity = gc.get_float("LandDestinationProximity", c.land_destination_proximity);
+    c.between_formation_spacing = gc.get_float("BetweenFormationSpacing", c.between_formation_spacing);  // s78n t20
+    // s78n t20 batch 2 (MOVEMENT §4.3.1 item 4, GC +0x14f0): E of the destination check's object test
+    c.destination_query_extension =
+        gc.get_float("Destination_Collision_Query_Extension", c.destination_query_extension);
     c.land_temporary_destination_proximity =
         gc.get_float("LandTemporaryDestinationProximity", c.land_temporary_destination_proximity);
     c.max_move_frame_delay = static_cast<int32_t>(get_u32(gc, "Max_Move_Frame_Delay", 6));
@@ -69,11 +73,17 @@ MovementConstants MovementConstants::from_game_constants(const data::GameConstan
     c.vehicle_formation_recruitment_distance =
         gc.get_float("VehicleFormationRecruitmentDistance", c.vehicle_formation_recruitment_distance);
     c.double_click_move_max_speed_ratio = gc.get_float("DoubleClickMoveMaxSpeedRatio", c.double_click_move_max_speed_ratio);
+    c.fleeing_infantry_speed_bonus = gc.get_float("Fleeing_Infantry_Speed_Bonus", c.fleeing_infantry_speed_bonus);  // s78n t14
     c.land_speed_multiplier = gc.get_float("Object_Max_Speed_Multiplier_Land", c.land_speed_multiplier);
     c.space_speed_multiplier = gc.get_float("Object_Max_Speed_Multiplier_Space", c.space_speed_multiplier);
     c.space_guard_range = gc.get_float("Space_Guard_Range", c.space_guard_range);  // S7 t37
     c.land_guard_range = gc.get_float("Land_Guard_Range", c.land_guard_range);
     c.max_waypoints_per_path = get_u32(gc, "MaxWaypointsPerPath", c.max_waypoints_per_path);  // s78f t02
+    c.base_land_targeting_arc_angle_coefficient =  // s78n t25.2
+        gc.get_float("Base_Land_Targeting_Arc_Angle_Coefficient", c.base_land_targeting_arc_angle_coefficient);
+    c.solo_attack_range = gc.get_float("Solo_Attack_Range", c.solo_attack_range);
+    c.short_range_attack_formation_coefficient =
+        gc.get_float("Short_Range_Attack_Formation_Coefficient", c.short_range_attack_formation_coefficient);
     return c;
 }
 

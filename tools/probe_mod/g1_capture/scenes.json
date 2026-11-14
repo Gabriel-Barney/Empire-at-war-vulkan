@@ -19,7 +19,6 @@
    "title": "Space skirmish at Kuat with Thrawn's Star Destroyer (Admonitor) - the main scene",
    "modes": [
     "dxvk",
-    "renderdoc",
     "apitrace"
    ],
    "answers": [
@@ -36,7 +35,6 @@
     "Pick the map Kuat, play as the Empire against one AI, set Starting Credits to the maximum, then Start Game.",
     "Select your space station and build Thrawn's Star Destroyer (Admonitor, 6200 credits, 40 s). Build a few more ships too.",
     "Fly the Admonitor so it is lit by the sun and the planet is in the background. Zoom in so it fills about a third of the screen.",
-    "RenderDoc run: press F12 once here (Thrawn close-up), once while ships fire/explode (heat), once zoomed out (whole battle).",
     "DXVK run: wait for a screenshot (every 15 s), toggle Shadow detail low/high in Options, wait again.",
     "apitrace run: as soon as the Admonitor is on screen, keep it there 10 seconds, then quit the game (Esc > Quit Game). Keep the whole session short."
    ],
@@ -476,7 +474,6 @@
    "title": "Land skirmish on Endor - units next to a building (stencil shadows, occluded silhouettes, decals)",
    "modes": [
     "dxvk",
-    "renderdoc",
     "apitrace"
    ],
    "answers": [
@@ -489,7 +486,7 @@
    "manual": [
     "Main menu > Single Player > Skirmish Battles > Land Battle, map Endor, any faction, Start Game.",
     "Move a few units next to a building so they are partly hidden behind it; make sure building shadows fall on the ground.",
-    "RenderDoc run: press F12 with Soft Shadows on; then turn Soft Shadows off in Options and press F12 again.",
+    "DXVK run: wait for a screenshot with Soft Shadows on; then turn Soft Shadows off in Options and wait for another.",
     "Also capture one frame where a destroyed unit left a scorch mark or a build pad decal is visible."
    ],
    "ui_steps": [
@@ -878,15 +875,14 @@
    "id": "G",
    "title": "Galactic map idle (cheap; galactic camera, no bloom/heat)",
    "modes": [
-    "dxvk",
-    "renderdoc"
+    "dxvk"
    ],
    "answers": [
     "galactic camera (SPACE_AND_OPEN B.8, already answered statically: confirm)",
     "galactic has no bloom/heat passes"
    ],
    "manual": [
-    "Main menu > Single Player > Galactic Conquest > any map > start. Wait for the galaxy view, press F12 (RenderDoc) or wait for a screenshot (DXVK)."
+    "Main menu > Single Player > Galactic Conquest > any map > start. Wait for the galaxy view and for a screenshot (DXVK)."
    ],
    "ui_steps": [
     {

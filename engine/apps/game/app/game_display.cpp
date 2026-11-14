@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <string_view>
 #include <thread>
 
 #include "alamo/render/renderer.hpp"
@@ -76,7 +79,68 @@ int32_t display_mode_index(const std::vector<DisplayMode>& modes, uint32_t w, ui
     return same_size >= 0 ? same_size : best;
 }
 
-bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log) {
+std::u32string clipboard_text() {
+    std::u32string out;
+    if (!OpenClipboard(nullptr)) return out;
+    if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* w = static_cast<const wchar_t*>(GlobalLock(h))) {
+            for (size_t k = 0; w[k] != 0; ++k) {
+                char32_t c = static_cast<char16_t>(w[k]);
+                if (c >= 0xD800 && c < 0xDC00 && w[k + 1] >= 0xDC00 && w[k + 1] < 0xE000) {
+                    c = 0x10000 + ((c - 0xD800) << 10) + (static_cast<char16_t>(w[k + 1]) - 0xDC00u);
+                    ++k;
+                }
+                out.push_back(c);
+            }
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return out;
+}
+
+void set_clipboard_text(std::u32string_view text) {
+    std::u16string w;
+    for (char32_t c : text) {
+        if (c >= 0x10000) {
+            w.push_back(static_cast<char16_t>(0xD800 + ((c - 0x10000) >> 10)));
+            w.push_back(static_cast<char16_t>(0xDC00 + ((c - 0x10000) & 0x3FF)));
+        } else {
+            w.push_back(static_cast<char16_t>(c));
+        }
+    }
+    if (!OpenClipboard(nullptr)) return;
+    EmptyClipboard();
+    if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (w.size() + 1) * sizeof(char16_t))) {
+        if (auto* p = static_cast<char16_t*>(GlobalLock(h))) {
+            std::copy(w.begin(), w.end(), p);
+            p[w.size()] = 0;
+            GlobalUnlock(h);
+            if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
+        } else {
+            GlobalFree(h);
+        }
+    }
+    CloseClipboard();
+}
+
+const char* window_mode_name(ui::WindowMode m) {
+    switch (m) {
+        case ui::WindowMode::Fullscreen: return "fullscreen";
+        case ui::WindowMode::Borderless: return "borderless";
+        case ui::WindowMode::Windowed: break;
+    }
+    return "windowed";
+}
+
+std::optional<ui::WindowMode> parse_window_mode(std::string_view s) {
+    for (const ui::WindowMode m : {ui::WindowMode::Fullscreen, ui::WindowMode::Borderless, ui::WindowMode::Windowed})
+        if (s == window_mode_name(m)) return m;
+    return std::nullopt;
+}
+
+bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log, ui::WindowMode mode) {
+    const bool windowed = mode == ui::WindowMode::Windowed, borderless = mode == ui::WindowMode::Borderless;
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || m.width == 0 || m.height == 0) return false;
     const std::wstring dev = monitor_device(hwnd);
@@ -99,11 +163,18 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log) {
         want.dmPelsWidth = reg.dmPelsWidth;
         want.dmPelsHeight = reg.dmPelsHeight;
         want.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
-        if (!fits) {
+        if (mode == ui::WindowMode::Fullscreen || (windowed && !fits)) {  // UI5 t01: full screen always takes the mode's resolution
             want.dmPelsWidth = m.width;
             want.dmPelsHeight = m.height;
         }
         if (m.hz) want.dmDisplayFrequency = m.hz;
+        // Borderless: the rate only when the monitor offers it at the desktop resolution (a mode picked at another size may
+        // carry a rate that size alone has); otherwise the desktop's own rate.
+        if (borderless && m.hz && (m.width != reg.dmPelsWidth || m.height != reg.dmPelsHeight)) {
+            DEVMODEW probe = want;
+            if (ChangeDisplaySettingsExW(dev.c_str(), &probe, nullptr, CDS_FULLSCREEN | CDS_TEST, nullptr) != DISP_CHANGE_SUCCESSFUL)
+                want.dmDisplayFrequency = reg.dmDisplayFrequency;
+        }
         const bool differs = want.dmPelsWidth != cur.dmPelsWidth || want.dmPelsHeight != cur.dmPelsHeight ||
                              want.dmDisplayFrequency != cur.dmDisplayFrequency;
         if (differs) {
@@ -125,8 +196,18 @@ bool apply_display_mode(void* hwnd, const DisplayMode& m, std::string* log) {
             what = "display unchanged (" + std::to_string(cur.dmDisplayFrequency) + " Hz)";
         }
     }
-    const bool ok = set_window_client_size(hwnd, m.width, m.height);
-    if (log) *log = "window " + std::to_string(m.width) + "x" + std::to_string(m.height) + (ok ? " applied" : " refused") + (what.empty() ? "" : ", " + what);
+    uint32_t cw = m.width, ch = m.height;
+    if (borderless) {  // the whole monitor, at whatever resolution it is on now
+        MONITORINFO now{};
+        now.cbSize = sizeof now;
+        if (GetMonitorInfoW(MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST), &now)) {
+            cw = static_cast<uint32_t>(now.rcMonitor.right - now.rcMonitor.left);
+            ch = static_cast<uint32_t>(now.rcMonitor.bottom - now.rcMonitor.top);
+        }
+    }
+    const bool ok = set_window_client_size(hwnd, cw, ch, !windowed);
+    if (log) *log = std::string(window_mode_name(mode)) + " " + std::to_string(cw) + "x" + std::to_string(ch) +
+                    (ok ? " applied" : " refused") + (what.empty() ? "" : ", " + what);
     return ok;
 }
 
@@ -136,11 +217,23 @@ void restore_display_mode() {
     changed_device.clear();
 }
 
+void minimize_window(void* hwnd) {
+    if (hwnd && !IsIconic(static_cast<HWND>(hwnd))) ShowWindow(static_cast<HWND>(hwnd), SW_MINIMIZE);
+}
+
+void restore_window(void* hwnd) {
+    if (hwnd && IsIconic(static_cast<HWND>(hwnd))) ShowWindow(static_cast<HWND>(hwnd), SW_RESTORE);
+}
+
 void enable_dpi_awareness() {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 }
 
-bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h) {
+void set_process_priority(bool above) {
+    (void)SetPriorityClass(GetCurrentProcess(), above ? ABOVE_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
+}
+
+bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h, bool borderless) {
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || w == 0 || h == 0) return false;
     MONITORINFO mi{};
@@ -156,7 +249,7 @@ bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h) {
     int ww = r.right - r.left, wh = r.bottom - r.top;
     int x = 0, y = 0;
     DWORD style = kFramed;
-    if (ww <= work.right - work.left && wh <= work.bottom - work.top) {
+    if (!borderless && ww <= work.right - work.left && wh <= work.bottom - work.top) {
         // Framed; kept on the work area when the new size would leave it [port].
         RECT cur{};
         GetWindowRect(wnd, &cur);
@@ -255,13 +348,15 @@ struct ProfileAdvBool {
     const char* key;
     bool ui::AdvancedVideoSettings::*field;
 };
+// [port: Gabriel 2026-11-13] "anti_alias" (the old TAA strength) is not written any more; anti-aliasing is "aa_mode".
 constexpr ProfileInt kProfileInts[] = {{"frame_cap", &VideoProfile::frame_cap}, {"detail", &VideoProfile::detail},
-                                       {"anti_alias", &VideoProfile::anti_alias}, {"gamma", &VideoProfile::gamma}};
+                                       {"gamma", &VideoProfile::gamma}};
 constexpr ProfileAdvInt kProfileAdvInts[] = {
     {"particle_detail", &ui::AdvancedVideoSettings::particle}, {"mesh_detail", &ui::AdvancedVideoSettings::mesh},
     {"texture_detail", &ui::AdvancedVideoSettings::texture},   {"water_detail", &ui::AdvancedVideoSettings::water},
     {"shader_detail", &ui::AdvancedVideoSettings::shader},     {"shadow_detail", &ui::AdvancedVideoSettings::shadow},
-    {"environment_detail", &ui::AdvancedVideoSettings::environment}, {"anisotropy", &ui::AdvancedVideoSettings::anisotropy}};
+    {"environment_detail", &ui::AdvancedVideoSettings::environment}, {"anisotropy", &ui::AdvancedVideoSettings::anisotropy},
+    {"render_scale", &ui::AdvancedVideoSettings::render_scale}};
 constexpr ProfileAdvBool kProfileAdvBools[] = {{"soft_shadows", &ui::AdvancedVideoSettings::soft_shadows},
                                                {"heat_distortion", &ui::AdvancedVideoSettings::heat_distortion},
                                                {"bloom", &ui::AdvancedVideoSettings::bloom},
@@ -274,9 +369,12 @@ bool update_video_profile(VideoProfile& p, const ui::VideoSettings& v, const std
     p.vsync = v.vsync;
     p.vsync_mode = v.vsync_mode;
     p.frame_cap = v.frame_cap;
-    p.hardware_mouse = v.hardware_mouse;
+    p.window_mode = v.window_mode;
+    p.ui_scale = std::clamp(v.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     p.detail = v.detail;
     p.anti_alias = v.anti_alias;
+    p.upscaler = v.upscaler >= ui::kUpscalerOff && v.upscaler <= ui::kUpscalerXess ? v.upscaler : ui::kUpscalerOff;
+    p.upscale_quality = std::clamp(v.upscale_quality, ui::kUpscaleNative, ui::kUpscaleUltra);
     p.gamma = v.gamma;
     return true;
 }
@@ -310,14 +408,42 @@ bool load_video_profile(const std::string& path, VideoProfile& p) {
     num("refresh_hz", hz);
     p.mode = {static_cast<uint32_t>(std::max(0, w)), static_cast<uint32_t>(std::max(0, h)), static_cast<uint32_t>(std::max(0, hz))};
     flag("vsync", p.vsync);
-    flag("hardware_mouse", p.hardware_mouse);
+    if (auto it = kv.find("windowed"); it != kv.end())  // a profile from before the display mode list
+        p.window_mode = it->second == "1" || it->second == "true" || it->second == "on" ? ui::WindowMode::Windowed : ui::WindowMode::Fullscreen;
+    if (auto it = kv.find("window_mode"); it != kv.end())
+        if (const std::optional<ui::WindowMode> wm = parse_window_mode(it->second)) p.window_mode = *wm;
+    num("ui_scale", p.ui_scale);
+    p.ui_scale = std::clamp(p.ui_scale, ui::kUiScaleMin, ui::kUiScaleMax);
     if (auto it = kv.find("vsync_mode"); it != kv.end()) p.vsync_mode = it->second == "mailbox" ? ui::VsyncMode::Mailbox : ui::VsyncMode::Fifo;
     for (const ProfileInt& e : kProfileInts) num(e.key, p.*e.field);
     for (const ProfileAdvInt& e : kProfileAdvInts) num(e.key, p.advanced.*e.field);
     for (const ProfileAdvBool& e : kProfileAdvBools) flag(e.key, p.advanced.*e.field);
-    // A profile from before anti-aliasing was one setting also has "anti_aliasing=taa|off" (the Advanced dialog's box) next to the
-    // strength (the Video dialog's slider): either one on meant TAA. A box on over strength 0 is Medium, the old default.
-    if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa" && p.anti_alias <= 0) p.anti_alias = ui::kAntiAliasDefaultSlider;
+    p.advanced.render_scale = std::clamp(p.advanced.render_scale, static_cast<int32_t>(render::kRenderScaleMin * 100.0f), 100);
+    // Anti-aliasing [port: Gabriel 2026-11-13]: "aa_mode" (aa_mode_name). Older profiles: "anti_alias" was the TAA strength
+    // 0..100 (above 0 = TAA, 0 = Off), and before that also "anti_aliasing=taa|off" (the Advanced dialog's box): either one on
+    // meant TAA. "aa_mode" wins when present; an unknown name keeps the value.
+    int32_t strength = -1;
+    num("anti_alias", strength);
+    if (strength >= 0) p.anti_alias = strength > 0 ? ui::kAaTaa : ui::kAaOff;
+    if (auto it = kv.find("anti_aliasing"); it != kv.end() && it->second == "taa") p.anti_alias = ui::kAaTaa;
+    if (auto it = kv.find("aa_mode"); it != kv.end()) {
+        if (const std::optional<int32_t> m = parse_aa_mode(it->second)) {
+            p.anti_alias = *m;
+        } else {  // FSR / XeSS were in the Anti-aliasing list until 2026-11-13: "fsr_<quality>", "xess_<quality>"
+            const std::string& v = it->second;
+            const bool fsr = v.rfind("fsr_", 0) == 0, xess = v.rfind("xess_", 0) == 0;
+            if (const std::optional<int32_t> q = fsr || xess ? parse_upscale_quality(std::string_view(v).substr(fsr ? 4 : 5)) : std::nullopt) {
+                p.anti_alias = ui::kAaTaa;
+                p.upscaler = fsr ? ui::kUpscalerFsr : ui::kUpscalerXess;
+                p.upscale_quality = *q;
+            }
+        }
+    }
+    if (p.anti_alias < ui::kAaOff || p.anti_alias > ui::kAaMsaa8) p.anti_alias = ui::kAaOff;
+    if (auto it = kv.find("upscaler"); it != kv.end())
+        if (const std::optional<int32_t> u = parse_upscaler(it->second)) p.upscaler = *u;
+    if (auto it = kv.find("upscale_quality"); it != kv.end())
+        if (const std::optional<int32_t> q = parse_upscale_quality(it->second)) p.upscale_quality = *q;
     return true;
 }
 
@@ -330,11 +456,124 @@ bool save_video_profile(const std::string& path, const VideoProfile& p) {
     f << "# alamo_game video options (written by the Video / Advanced video dialogs)\n";
     f << "width=" << p.mode.width << "\nheight=" << p.mode.height << "\nrefresh_hz=" << p.mode.hz << "\n";
     f << "vsync=" << (p.vsync ? 1 : 0) << "\nvsync_mode=" << (p.vsync_mode == ui::VsyncMode::Mailbox ? "mailbox" : "fifo") << "\n";
-    f << "hardware_mouse=" << (p.hardware_mouse ? 1 : 0) << "\n";
+    f << "window_mode=" << window_mode_name(p.window_mode) << "\nui_scale=" << p.ui_scale << "\n";
     for (const ProfileInt& e : kProfileInts) f << e.key << "=" << p.*e.field << "\n";
+    f << "aa_mode=" << aa_mode_name(p.anti_alias) << "\n";
+    f << "upscaler=" << upscaler_name(p.upscaler) << "\nupscale_quality=" << upscale_quality_name(p.upscale_quality) << "\n";
     for (const ProfileAdvInt& e : kProfileAdvInts) f << e.key << "=" << p.advanced.*e.field << "\n";
     for (const ProfileAdvBool& e : kProfileAdvBools) f << e.key << "=" << (p.advanced.*e.field ? 1 : 0) << "\n";
     return static_cast<bool>(f);
+}
+
+// ---- ui1 t02 [port] other options file --------------------------------------------------------------------------
+std::string default_options_profile_path() {
+    const char* la = std::getenv("LOCALAPPDATA");
+    if (!la || !*la) return {};
+    return (std::filesystem::path(la) / "alamo" / "game_options.txt").string();
+}
+
+namespace {
+struct OptInt {
+    const char* key;
+    int32_t ui::GameplaySettings::*field;
+};
+struct OptBool {
+    const char* key;
+    bool ui::GameplaySettings::*field;
+};
+struct OptVolume {
+    const char* key;
+    float ui::AudioVolumes::*field;
+};
+constexpr OptInt kOptInts[] = {{"game_speed", &ui::GameplaySettings::game_speed},
+                               {"strategic_speed", &ui::GameplaySettings::strategic_speed},
+                               {"scroll_speed", &ui::GameplaySettings::scroll_speed},
+                               {"difficulty", &ui::GameplaySettings::difficulty}};
+constexpr OptBool kOptBools[] = {{"ask_autoresolve", &ui::GameplaySettings::ask_autoresolve},
+                                 {"delay_tooltips", &ui::GameplaySettings::delay_tooltips},
+                                 {"absolute_scroll", &ui::GameplaySettings::absolute_scroll},
+                                 {"alternate_mouse", &ui::GameplaySettings::alternate_mouse},
+                                 {"right_button_scroll", &ui::GameplaySettings::right_button_scroll},
+                                 {"both_buttons_rotate", &ui::GameplaySettings::both_buttons_rotate},
+                                 {"simplified_colors", &ui::GameplaySettings::simplified_colors},
+                                 {"abilities_autofire", &ui::GameplaySettings::abilities_autofire}};
+constexpr OptVolume kOptVolumes[] = {{"volume_master", &ui::AudioVolumes::master},
+                                     {"volume_sfx", &ui::AudioVolumes::sfx},
+                                     {"volume_speech", &ui::AudioVolumes::speech},
+                                     {"volume_music", &ui::AudioVolumes::music}};
+constexpr std::string_view kKeyPrefix = "key.";
+
+std::string opt_float(float v) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.4f", static_cast<double>(v));
+    return buf;
+}
+}  // namespace
+
+bool load_options_profile(const std::string& path, OptionsProfile& p) {
+    std::ifstream f(path);
+    if (path.empty() || !f) return false;
+    std::map<std::string, std::string> kv;
+    for (std::string line; std::getline(f, line);) {
+        const size_t eq = line.find('=');
+        if (line.empty() || line[0] == '#' || eq == std::string::npos) continue;
+        auto trim = [](std::string t) {
+            while (!t.empty() && (t.back() == ' ' || t.back() == '\r' || t.back() == '\t')) t.pop_back();
+            size_t b = 0;
+            while (b < t.size() && (t[b] == ' ' || t[b] == '\t')) ++b;
+            return t.substr(b);
+        };
+        kv[trim(line.substr(0, eq))] = trim(line.substr(eq + 1));
+    }
+    auto find = [&](const char* k) -> const std::string* {
+        const auto it = kv.find(k);
+        return it != kv.end() && !it->second.empty() ? &it->second : nullptr;
+    };
+    auto flag = [](const std::string& v) { return v == "1" || v == "true" || v == "on"; };
+    for (const OptInt& e : kOptInts)
+        if (const std::string* v = find(e.key)) p.gameplay.*e.field = static_cast<int32_t>(std::strtol(v->c_str(), nullptr, 10));
+    p.gameplay.difficulty = std::clamp(p.gameplay.difficulty, 0, 2);
+    for (const OptBool& e : kOptBools)
+        if (const std::string* v = find(e.key)) p.gameplay.*e.field = flag(*v);
+    for (const OptVolume& e : kOptVolumes)
+        if (const std::string* v = find(e.key)) p.audio.*e.field = std::clamp(std::strtof(v->c_str(), nullptr), 0.0f, 1.0f);
+    if (const std::string* v = find("subtitles")) p.audio.subtitles = flag(*v);
+    if (const std::string* v = find("galactic_fov"))
+        p.camera.galactic_fov_deg = std::clamp(std::strtof(v->c_str(), nullptr), ui::kGalacticFovMinDeg, ui::kGalacticFovMaxDeg);
+    if (const std::string* v = find("tactical_fov"))
+        p.camera.tactical_fov_deg = std::clamp(std::strtof(v->c_str(), nullptr), ui::kTacticalFovMinDeg, ui::kTacticalFovMaxDeg);
+    if (const std::string* v = find("tactical_fov_set")) p.tactical_fov_set = flag(*v);
+    if (const std::string* v = find("queue_mods")) p.camera.queue_mods = static_cast<uint8_t>(std::strtoul(v->c_str(), nullptr, 10) & 0xFFu);
+    if (const std::string* v = find("show_path_lines")) p.camera.show_path_lines = flag(*v);
+    for (const auto& [k, v] : kv)
+        if (k.size() > kKeyPrefix.size() && std::string_view(k).substr(0, kKeyPrefix.size()) == kKeyPrefix && !v.empty())
+            p.keys[k.substr(kKeyPrefix.size())] = static_cast<int32_t>(std::strtol(v.c_str(), nullptr, 10));
+    return true;
+}
+
+bool save_options_profile(const std::string& path, const OptionsProfile& p) {
+    if (path.empty()) return false;
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+    std::ofstream f(path, std::ios::trunc);
+    if (!f) return false;
+    f << "# alamo_game options (audio, gameplay, camera and controls, keyboard dialogs)\n";
+    for (const OptInt& e : kOptInts) f << e.key << "=" << p.gameplay.*e.field << "\n";
+    for (const OptBool& e : kOptBools) f << e.key << "=" << (p.gameplay.*e.field ? 1 : 0) << "\n";
+    for (const OptVolume& e : kOptVolumes) f << e.key << "=" << opt_float(p.audio.*e.field) << "\n";
+    f << "subtitles=" << (p.audio.subtitles ? 1 : 0) << "\n";
+    f << "galactic_fov=" << opt_float(p.camera.galactic_fov_deg) << "\n";
+    f << "tactical_fov=" << opt_float(p.camera.tactical_fov_deg) << "\n";
+    f << "tactical_fov_set=" << (p.tactical_fov_set ? 1 : 0) << "\n";
+    f << "queue_mods=" << static_cast<unsigned>(p.camera.queue_mods) << "\n";
+    f << "show_path_lines=" << (p.camera.show_path_lines ? 1 : 0) << "\n";
+    for (const auto& [k, v] : p.keys) f << kKeyPrefix << k << "=" << v << "\n";
+    return static_cast<bool>(f);
+}
+
+uint32_t game_speed_index(int32_t slider) {
+    // The nearest of the five positions 0, 25, 50, 75, 100.
+    return static_cast<uint32_t>((std::clamp(slider, 0, 100) + 12) / 25);
 }
 
 namespace {
@@ -348,19 +587,86 @@ float particle_detail(int32_t slider) { return static_cast<float>(slider_clamp(s
 float environment_fade_scale(int32_t slider) { return 0.6f + 0.4f * static_cast<float>(slider_clamp(slider)) / 100.0f; }
 float gamma_value(int32_t slider) { return std::exp2((static_cast<float>(slider_clamp(slider)) - 50.0f) / 50.0f); }
 
-bool taa_active(int32_t strength) { return strength > 0; }
+bool taa_active(int32_t mode) { return mode == ui::kAaTaa; }
 
-void apply_aa_options(render::RecordOptions& o, int32_t strength) {
-    o.taa = taa_active(strength);
-    // Off keeps the renderer's tuned default weight for a later switch-on. On: the share of the current frame falls with the
-    // strength (more history = smoother edges, a little more softness / ghosting).
-    o.taa_weight = o.taa ? 0.2f - 0.16f * static_cast<float>(slider_clamp(strength)) / 100.0f : -1.0f;
+uint32_t aa_msaa_samples(int32_t mode) {
+    switch (mode) {
+        case ui::kAaMsaa2: return 2;
+        case ui::kAaMsaa4: return 4;
+        case ui::kAaMsaa8: return 8;
+        default: return 1;
+    }
+}
+
+namespace {
+constexpr const char* kAaModeNames[] = {"off", "smaa", "taa", "msaa2", "msaa4", "msaa8"};  // by mode
+static_assert(std::size(kAaModeNames) == std::size(ui::kAntiAliasChoices));
+constexpr const char* kUpscalerNames[] = {"off", "fsr", "xess"};  // by ui::kUpscaler*
+static_assert(std::size(kUpscalerNames) == std::size(ui::kUpscalerChoices));
+constexpr const char* kUpscaleQualityNames[] = {"native", "quality", "balanced", "performance", "ultra"};  // by ui::kUpscale*
+static_assert(std::size(kUpscaleQualityNames) == std::size(ui::kUpscaleQualityChoices) &&
+              std::size(kUpscaleQualityNames) == render::kUpscaleQualityCount);
+template <size_t N>
+const char* name_of(const char* const (&names)[N], int32_t v) {
+    return v >= 0 && static_cast<size_t>(v) < N ? names[static_cast<size_t>(v)] : names[0];
+}
+template <size_t N>
+std::optional<int32_t> parse_name(const char* const (&names)[N], std::string_view name) {
+    for (size_t i = 0; i < N; ++i)
+        if (name == names[i]) return static_cast<int32_t>(i);
+    return std::nullopt;
+}
+}  // namespace
+
+const char* aa_mode_name(int32_t mode) { return name_of(kAaModeNames, mode); }
+std::optional<int32_t> parse_aa_mode(std::string_view name) { return parse_name(kAaModeNames, name); }
+const char* upscaler_name(int32_t upscaler) { return name_of(kUpscalerNames, upscaler); }
+std::optional<int32_t> parse_upscaler(std::string_view name) { return parse_name(kUpscalerNames, name); }
+const char* upscale_quality_name(int32_t quality) { return name_of(kUpscaleQualityNames, quality); }
+std::optional<int32_t> parse_upscale_quality(std::string_view name) { return parse_name(kUpscaleQualityNames, name); }
+
+namespace {
+render::UpscaleQuality upscale_level(int32_t quality) {
+    if (quality < ui::kUpscaleNative || quality > ui::kUpscaleUltra) quality = ui::kUpscaleQuality;
+    return static_cast<render::UpscaleQuality>(quality);
+}
+}  // namespace
+
+render::Upscaler aa_upscaler(int32_t upscaler) {
+    return upscaler == ui::kUpscalerFsr ? render::Upscaler::Fsr : upscaler == ui::kUpscalerXess ? render::Upscaler::Xess : render::Upscaler::None;
+}
+
+std::optional<render::UpscaleQuality> fsr_quality(int32_t upscaler, int32_t quality) {
+    if (upscaler != ui::kUpscalerFsr) return std::nullopt;
+    return upscale_level(quality);
+}
+
+std::optional<render::UpscaleQuality> xess_quality(int32_t upscaler, int32_t quality) {
+    if (upscaler != ui::kUpscalerXess) return std::nullopt;
+    return upscale_level(quality);
+}
+
+void apply_aa_options(render::RecordOptions& o, int32_t mode, int32_t upscaler, int32_t upscale_quality) {
+    // [port: Gabriel 2026-11-13] One mode, one quality each: TAA keeps the renderer's tuned weight and sharpen. The upscaler,
+    // when on, replaces the mode: FSR or XeSS at its quality, with TAA set for the frames the renderer cannot run it on.
+    const render::Upscaler up = aa_upscaler(upscaler);
+    const bool on = up != render::Upscaler::None;
+    o.upscaler = up;
+    if (on) o.upscale_quality = upscale_level(upscale_quality);
+    o.taa = on || taa_active(mode);
+    o.smaa = !on && mode == ui::kAaSmaa;
+    o.msaa = on ? 1u : aa_msaa_samples(mode);
+    o.taa_weight = -1.0f;
 }
 
 ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int32_t detail) {
     ui::AdvancedVideoSettings r = s;
     ui::set_advanced_detail(r, slider_clamp(detail));
     return r;
+}
+
+float render_scale_value(int32_t percent) {
+    return std::max(render::kRenderScaleMin, static_cast<float>(std::clamp(percent, 0, 100)) / 100.0f);
 }
 
 void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSettings& s) {
@@ -373,41 +679,51 @@ void apply_detail_options(render::RecordOptions& o, const ui::AdvancedVideoSetti
     if (!s.heat_distortion) o.heat_amount = 0.0f;
 }
 
-AutoVideoChoice recommend_video(const GpuClass& gpu) {
-    constexpr uint64_t kGiB = 1024ull * 1024ull * 1024ull;
-    AutoVideoChoice c;
-    int32_t aniso = 0;
-    bool soft_shadows = false, ao = false;
-    switch (gpu.kind) {
-        case GpuKind::Discrete:
-            if (gpu.memory_bytes >= 6 * kGiB) { c.quality = 3; c.anti_alias = ui::kAntiAliasChoices[3].value; aniso = 16; soft_shadows = true; ao = true; }
-            else if (gpu.memory_bytes >= 3 * kGiB) { c.quality = 2; c.anti_alias = ui::kAntiAliasChoices[2].value; aniso = 8; soft_shadows = true; }
-            else { c.quality = 1; c.anti_alias = ui::kAntiAliasChoices[1].value; aniso = 4; }
-            break;
-        case GpuKind::Integrated:
-            c.quality = gpu.memory_bytes >= 2 * kGiB ? 1 : 0;
-            c.anti_alias = 0;
-            aniso = 2;
-            break;
-        case GpuKind::Other: break;  // Low, everything off
+// modc t08: CreateProcessW on GetModuleFileNameW; `args` is already quoted (mod_picker.hpp windows_command_line). The
+// arguments came from main's narrow argv / the file system's narrow paths: the ANSI code page.
+bool relaunch_self(const std::string& args, std::string* err) {
+    std::wstring exe(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
+    if (n == 0 || n >= exe.size()) {
+        if (err) *err = "GetModuleFileNameW failed";
+        return false;
     }
-    // Filtering the device cannot do is not recommended: the largest listed level at or under its limit.
-    if (!gpu.sampler_anisotropy) aniso = 0;
-    while (aniso > 0 && static_cast<float>(aniso) > gpu.max_anisotropy) aniso /= 2;
-    if (aniso < 2) aniso = 0;
-    ui::set_advanced_detail(c.advanced, ui::kQualityPresets[c.quality]);
-    c.advanced.soft_shadows = soft_shadows;
-    c.advanced.heat_distortion = true;
-    c.advanced.bloom = true;
-    c.advanced.ambient_occlusion = ao;
-    c.advanced.anisotropy = aniso;
-    return c;
-}
-
-void apply_auto_video(VideoProfile& p, const AutoVideoChoice& c) {
-    p.advanced = c.advanced;
-    p.anti_alias = c.anti_alias;
-    sync_detail(p);
+    exe.resize(n);
+    std::string narrow_exe(n * 4 + 1, '\0');
+    const int en = WideCharToMultiByte(CP_ACP, 0, exe.c_str(), static_cast<int>(n), narrow_exe.data(), static_cast<int>(narrow_exe.size()),
+                                       nullptr, nullptr);
+    narrow_exe.resize(static_cast<size_t>(std::max(en, 0)));
+    const std::string line = "\"" + narrow_exe + "\"" + (args.empty() ? std::string() : " " + args);
+    const int wn = MultiByteToWideChar(CP_ACP, 0, line.c_str(), static_cast<int>(line.size()), nullptr, 0);
+    std::wstring wline(static_cast<size_t>(std::max(wn, 0)) + 1, L'\0');
+    if (wn > 0) MultiByteToWideChar(CP_ACP, 0, line.c_str(), static_cast<int>(line.size()), wline.data(), wn);
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    // Started without a console (Play.exe: CREATE_NO_WINDOW, output to alamo_game_log.txt): the restarted game keeps
+    // that, instead of a console program without a console getting a new console window, and writes on into the log.
+    const bool no_console = GetConsoleWindow() == nullptr;
+    DWORD flags = 0;
+    BOOL inherit = FALSE;
+    if (no_console) {
+        flags = CREATE_NO_WINDOW;
+        const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        const HANDLE errh = GetStdHandle(STD_ERROR_HANDLE);
+        if (out != nullptr && out != INVALID_HANDLE_VALUE) {
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdOutput = out;
+            si.hStdError = errh;
+            si.hStdInput = nullptr;
+            inherit = TRUE;
+        }
+    }
+    if (!CreateProcessW(exe.c_str(), wline.data(), nullptr, nullptr, inherit, flags, nullptr, nullptr, &si, &pi)) {
+        if (err) *err = "CreateProcessW failed (error " + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
 }
 
 }  // namespace alamo::game

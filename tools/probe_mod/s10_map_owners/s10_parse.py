@@ -34,6 +34,7 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
 TOL = 25.0
 POINT_KINDS = ('reinforcement_point', 'capture_point')
 

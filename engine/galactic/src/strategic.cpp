@@ -8,6 +8,7 @@
 #include <iterator>
 
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 namespace alamo::galactic {
 
@@ -16,13 +17,6 @@ namespace {
 bool contains(const std::vector<uint32_t>& v, uint32_t x) { return std::find(v.begin(), v.end(), x) != v.end(); }
 
 }  // namespace
-
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, uint32_t a,
-                                           uint32_t slot) {
-    commands::EventData e = fleet_management_event(op, target, fleet, unit);
-    e.set("a", a).set("slot", slot);
-    return e;
-}
 
 // ---- SG 2.1 ----------------------------------------------------------------------------------------------------------
 
@@ -186,7 +180,7 @@ BuildCheck GalacticSim::build_check(int32_t player, PlanetIndex planet, uint32_t
     if (t.advances_tech != 0 && (ps.tech_level != t.tech_level || ps.max_tech_level < t.advances_tech)) return fail(7);
     // 8. Lock_Tech list. 9. Build_Initially_Locked.
     if (type_locked(player, type)) return fail(8);
-    if (initial_build_locks_ && t.build_initially_locked && !type_unlocked(player, type)) return fail(9, kBuildInitiallyLocked);
+    if (t.build_initially_locked && !type_unlocked(player, type)) return fail(9, kBuildInitiallyLocked);
     // 10. the planet is the player's.
     if (p.owner != player) return fail(10);
     // 11. not a company / squadron member, not a transport.
@@ -291,6 +285,21 @@ void GalacticSim::set_galactic_stealth(ObjectHandle object, bool on) {
     const bool has = it != stealthed_.end() && *it == id;
     if (on && !has) stealthed_.insert(it, id);
     if (!on && has) stealthed_.erase(it);
+}
+
+void GalacticSim::set_prefer_ground_over_space(ObjectHandle object, bool on) {
+    if (!store_->exists(object)) return;
+    const int32_t id = static_cast<int32_t>(store_->id(object));
+    const auto it = std::lower_bound(ground_shy_.begin(), ground_shy_.end(), id);
+    const bool has = it != ground_shy_.end() && *it == id;
+    if (!on && !has) ground_shy_.insert(it, id);
+    if (on && has) ground_shy_.erase(it);
+}
+
+bool GalacticSim::prefer_ground_over_space(ObjectHandle object) const {
+    if (!store_->exists(object)) return true;
+    const int32_t id = static_cast<int32_t>(store_->id(object));
+    return !std::binary_search(ground_shy_.begin(), ground_shy_.end(), id);
 }
 
 bool GalacticSim::galactic_stealth(ObjectHandle object) const {
@@ -520,8 +529,10 @@ bool GalacticSim::tsw_destroy_planet(PlanetIndex planet, int32_t tsw_owner, bool
 // ---- CRC tail --------------------------------------------------------------------------------------------------------------
 
 bool GalacticSim::oi_state_default() const {
-    if (!claims_.empty() || linked_battle_pending_ || victory_hold_ != 0) return false;
+    if (!claims_.empty() || linked_battle_pending_ || victory_hold_ != 0 || !victory_deferred_.empty()) return false;
     for (int32_t id : stealthed_)
+        if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) return false;
+    for (int32_t id : ground_shy_)  // cu8f t04b
         if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) return false;
     for (const PlayerState& p : players_)
         if (p.max_tech_level != 5 || !p.built.empty()) return false;
@@ -546,6 +557,24 @@ void GalacticSim::hash_oi(StateHasher& h) const {
     if (victory_hold_ != 0) {  // story t11 (only once used, so older captures keep their CRC)
         h.u32(0x56484C44u);  // "VHLD"
         h.i32(victory_hold_);
+    }
+    if (!victory_deferred_.empty()) {  // q6 t21: deferred victory tests (only once used, so older captures keep their CRC)
+        h.u32(0x56444652u);  // "VDFR"
+        h.u32(static_cast<uint32_t>(victory_deferred_.size()));
+        for (const auto& e : victory_deferred_) {
+            h.i32(e.first);
+            h.u8(e.second);
+        }
+    }
+    {  // cu8f t04b: live units with Prefer_Ground_Over_Space false (only once used, so older captures keep their CRC)
+        uint32_t shy = 0;
+        for (int32_t id : ground_shy_) shy += store_->alive(store_->find(static_cast<objects::ObjectId>(id))) ? 1u : 0u;
+        if (shy != 0) {
+            h.u32(0x50474F53u);  // "PGOS"
+            h.u32(shy);
+            for (int32_t id : ground_shy_)
+                if (store_->alive(store_->find(static_cast<objects::ObjectId>(id)))) h.i32(id);
+        }
     }
     for (const PlayerState& p : players_) {
         h.i32(p.max_tech_level);

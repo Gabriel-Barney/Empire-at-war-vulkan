@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 #include "alamo/core/log.hpp"
@@ -42,7 +43,37 @@ VkDebugUtilsMessengerCreateInfoEXT messenger_info(Context* ctx) {
     return ci;
 }
 
+thread_local int t_third_party_depth = 0;  // open Context::ThirdPartyValidation scopes on this thread
+
 }  // namespace
+
+Context::ThirdPartyValidation::ThirdPartyValidation() { ++t_third_party_depth; }
+Context::ThirdPartyValidation::~ThirdPartyValidation() { --t_third_party_depth; }
+
+// [port] FSR: optional extension feature structs for ContextDesc::upscaler_features, handled generically (sType, pNext,
+// then only VkBool32 members; `bools` of them). Raw values so the pinned Vulkan-Headers need not know the newer
+// extensions (VK_EXT_shader_float8 / VK_KHR_shader_bfloat16 came after header 296).
+// `newer`: added after header 296, unknown to the pinned validation layer (kept off while validation is on).
+// [port] XeSS (render/src/xess.cpp) needs VK_EXT_mutable_descriptor_type (mutableDescriptorType) and the core
+// shaderStorageImageWriteWithoutFormat / shaderInt8 / shaderIntegerDotProduct features enabled above.
+struct ExtFeatureSpec {
+    const char* name;
+    VkStructureType stype;
+    uint32_t bools;
+    bool newer;
+};
+constexpr ExtFeatureSpec kUpscalerExt[] = {
+    {"VK_KHR_cooperative_matrix", static_cast<VkStructureType>(1000506000), 2, false},  // cooperativeMatrix, ...RobustBufferAccess
+    {"VK_KHR_shader_bfloat16", static_cast<VkStructureType>(1000141000), 3, true},      // type, dot product, cooperative matrix
+    {"VK_EXT_shader_float8", static_cast<VkStructureType>(1000567000), 2, true},        // shaderFloat8, ...CooperativeMatrix
+    {"VK_EXT_mutable_descriptor_type", static_cast<VkStructureType>(1000351000), 1, false},  // mutableDescriptorType (XeSS)
+};
+constexpr uint32_t kUpscalerExtCount = static_cast<uint32_t>(std::size(kUpscalerExt));
+struct ExtFeatures {
+    VkStructureType sType;
+    void* pNext;
+    VkBool32 b[8];
+};
 
 struct Context::Support {
     VkPhysicalDeviceFeatures2 f2{};
@@ -50,6 +81,7 @@ struct Context::Support {
     VkPhysicalDeviceVulkan12Features f12{};
     VkPhysicalDeviceVulkan13Features f13{};
     std::vector<VkExtensionProperties> extensions;
+    ExtFeatures ext[kUpscalerExtCount]{};  // queried only for extensions the device lists (else sType 0)
 
     void query(const InstanceFns& vki, VkPhysicalDevice pd) {
         f2 = {};
@@ -63,12 +95,28 @@ struct Context::Support {
         f2.pNext = &f11;
         f11.pNext = &f12;
         f12.pNext = &f13;
-        vki.vkGetPhysicalDeviceFeatures2(pd, &f2);
         uint32_t n = 0;
         vki.vkEnumerateDeviceExtensionProperties(pd, nullptr, &n, nullptr);
         extensions.resize(n);
         vki.vkEnumerateDeviceExtensionProperties(pd, nullptr, &n, extensions.data());
         extensions.resize(n);
+        void** tail = &f13.pNext;
+        for (uint32_t i = 0; i < kUpscalerExtCount; ++i) {
+            ext[i] = {};
+            if (!has_extension(extensions, kUpscalerExt[i].name)) continue;
+            ext[i].sType = kUpscalerExt[i].stype;
+            *tail = &ext[i];
+            tail = &ext[i].pNext;
+        }
+        vki.vkGetPhysicalDeviceFeatures2(pd, &f2);
+        f13.pNext = nullptr;  // the copies below must not carry this chain
+        for (ExtFeatures& e : ext) e.pNext = nullptr;
+    }
+    bool ext_supported(uint32_t i) const {
+        if (ext[i].sType == 0) return false;
+        for (uint32_t k = 0; k < kUpscalerExt[i].bools; ++k)
+            if (ext[i].b[k]) return true;
+        return false;
     }
     // Empty string = OK, else the first missing requirement.
     const char* missing_requirement() const {
@@ -101,7 +149,7 @@ VkResult Queue::wait_idle() const {
 }
 
 QueueFamilies select_queue_families(std::span<const VkQueueFamilyProperties> families,
-                                    std::span<const bool> present_ok, bool want_compute, bool want_transfer) {
+                                    std::span<const bool> present_ok, bool want_transfer) {
     QueueFamilies q;
     const auto n = static_cast<uint32_t>(families.size());
     for (uint32_t i = 0; i < n; ++i) {
@@ -114,17 +162,7 @@ QueueFamilies select_queue_families(std::span<const VkQueueFamilyProperties> fam
             q.graphics = i;
     }
     if (!q.valid()) return q;
-    q.compute = q.graphics;
     q.transfer = q.graphics;
-    if (want_compute) {
-        for (uint32_t i = 0; i < n; ++i) {
-            const auto& f = families[i];
-            if (f.queueCount && (f.queueFlags & VK_QUEUE_COMPUTE_BIT) && !(f.queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
-                q.compute = i;
-                break;
-            }
-        }
-    }
     if (want_transfer) {
         for (uint32_t i = 0; i < n; ++i) {
             const auto& f = families[i];
@@ -155,6 +193,10 @@ void Context::on_debug_message(VkDebugUtilsMessageSeverityFlagBitsEXT severity, 
         log::debugf("vk", "%s", message);
         return;
     }
+    if (t_third_party_depth > 0) {  // inside a third-party runtime's own calls (ThirdPartyValidation)
+        if (++third_party_ <= 3) log::infof("vk", "third-party runtime: %s", message);
+        return;
+    }
     if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
         ++errors_;
         log::errorf("vk", "%s", message);
@@ -171,9 +213,9 @@ bool Context::init(const ContextDesc& desc) {
         shutdown();
         return false;
     }
-    log::infof("rhi", "device: %s (api %u.%u.%u)%s%s%s", caps_.name.c_str(), VK_API_VERSION_MAJOR(caps_.api_version),
+    log::infof("rhi", "device: %s (api %u.%u.%u)%s%s", caps_.name.c_str(), VK_API_VERSION_MAJOR(caps_.api_version),
                VK_API_VERSION_MINOR(caps_.api_version), VK_API_VERSION_PATCH(caps_.api_version),
-               has_async_compute() ? ", async compute" : "", has_transfer_queue() ? ", transfer queue" : "",
+               has_transfer_queue() ? ", transfer queue" : "",
                validation_ ? ", validation" : "");
     return true;
 }
@@ -226,6 +268,8 @@ bool Context::create_instance(const ContextDesc& desc) {
             enabled.push_back(e);
         }
         presentation_ = true;
+        // [port] exclusive full screen (Swapchain, SwapchainDesc::exclusive_fullscreen) needs this with VK_EXT_full_screen_exclusive.
+        if (has_extension(exts, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)) enabled.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
     }
     debug_utils_ = has_extension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     if (debug_utils_) enabled.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -313,7 +357,7 @@ bool Context::pick_device(const ContextDesc& desc) {
         std::unique_ptr<bool[]> pok_arr(new bool[qn ? qn : 1]);
         for (uint32_t k = 0; k < qn; ++k) pok_arr[k] = pok[k];
         const QueueFamilies qf = select_queue_families(fams, std::span<const bool>(pok_arr.get(), qn),
-                                                       desc.use_async_compute, desc.use_transfer_queue);
+                                                       desc.use_transfer_queue);
         if (!qf.valid()) {
             log::infof("rhi", "skip %s: no graphics%s queue", props.deviceName, desc.presentation ? "+present" : "");
             continue;
@@ -349,6 +393,8 @@ bool Context::pick_device(const ContextDesc& desc) {
             caps_.non_coherent_atom_size = props.limits.nonCoherentAtomSize;
             caps_.max_push_constants_size = props.limits.maxPushConstantsSize;
             caps_.timestamp_period_ns = props.limits.timestampPeriod;
+            caps_.framebuffer_samples = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
+                                        props.limits.framebufferStencilSampleCounts;
             std::memcpy(caps_.pipeline_cache_uuid, props.pipelineCacheUUID, VK_UUID_SIZE);
             auto p12 = vk_struct<VkPhysicalDeviceVulkan12Properties>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES);
             auto p2 = vk_struct<VkPhysicalDeviceProperties2>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2);
@@ -368,9 +414,9 @@ bool Context::pick_device(const ContextDesc& desc) {
 bool Context::create_device(const ContextDesc& desc) {
     const Support& s = *support_;
     float priority = 1.0f;
-    uint32_t fams[3] = {families_.graphics, families_.compute, families_.transfer};
+    uint32_t fams[2] = {families_.graphics, families_.transfer};
     std::vector<VkDeviceQueueCreateInfo> qci;
-    for (uint32_t i = 0; i < 3; ++i) {
+    for (uint32_t i = 0; i < 2; ++i) {
         bool dup = false;
         for (uint32_t j = 0; j < i; ++j) dup |= fams[j] == fams[i];
         if (dup) continue;
@@ -418,6 +464,41 @@ bool Context::create_device(const ContextDesc& desc) {
     std::vector<const char*> exts;
     if (desc.presentation) exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     if (has_extension(s.extensions, "VK_KHR_portability_subset")) exts.push_back("VK_KHR_portability_subset");
+    // [port] exclusive full screen: optional; Swapchain falls back to a plain swapchain without it.
+    const bool fse = desc.presentation && instance_extension_enabled(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) &&
+                     has_extension(s.extensions, "VK_EXT_full_screen_exclusive");
+    if (fse) exts.push_back("VK_EXT_full_screen_exclusive");
+
+    // [port] FSR (ContextDesc::upscaler_features): every supported core feature (enabling a supported feature is always
+    // valid) except the robustness ones, which only cost time, plus the extension features the ML upscaler may use.
+    ExtFeatures ext[kUpscalerExtCount]{};
+    if (desc.upscaler_features) {
+        f2.features = a;
+        f2.features.robustBufferAccess = VK_FALSE;
+        auto copy_bools = [](auto& dst, const auto& src) {  // keep dst's sType / pNext, take src's VkBool32 members
+            void* next = dst.pNext;
+            const VkStructureType st = dst.sType;
+            dst = src;
+            dst.sType = st;
+            dst.pNext = next;
+        };
+        copy_bools(f11, s.f11);
+        copy_bools(f12, s.f12);
+        copy_bools(f13, s.f13);
+        f13.robustImageAccess = VK_FALSE;
+        void** tail = &f13.pNext;
+        for (uint32_t i = 0; i < kUpscalerExtCount; ++i) {
+            if (!s.ext_supported(i)) continue;
+            // The pinned validation layer (SDK 1.3.296) does not know the structs added after header 296 and reports them as
+            // invalid pNext entries; with validation on, those two extensions stay off (the runtime then uses another model).
+            if (validation_ && kUpscalerExt[i].newer) continue;
+            ext[i] = s.ext[i];
+            ext[i].pNext = nullptr;
+            *tail = &ext[i];
+            tail = &ext[i].pNext;
+            exts.push_back(kUpscalerExt[i].name);
+        }
+    }
 
     auto ci = vk_struct<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
     ci.pNext = &f2;
@@ -430,6 +511,7 @@ bool Context::create_device(const ContextDesc& desc) {
         return false;
     }
     if (!Loader::load_device(vki_, device_, vkd_)) return false;
+    device_extensions_.assign(exts.begin(), exts.end());
 
     caps_.texture_bc = a.textureCompressionBC == VK_TRUE;
     caps_.sampler_anisotropy = a.samplerAnisotropy == VK_TRUE;
@@ -442,6 +524,11 @@ bool Context::create_device(const ContextDesc& desc) {
     caps_.shader_draw_parameters = s.f11.shaderDrawParameters == VK_TRUE;
     caps_.sampler_mirror_clamp_to_edge = s.f12.samplerMirrorClampToEdge == VK_TRUE;
     caps_.host_query_reset = s.f12.hostQueryReset == VK_TRUE;
+    caps_.upscaler_features = desc.upscaler_features;
+    caps_.full_screen_exclusive = fse && vkd_.vkAcquireFullScreenExclusiveModeEXT && vkd_.vkReleaseFullScreenExclusiveModeEXT &&
+                                  vki_.vkGetPhysicalDeviceSurfaceCapabilities2KHR;
+    caps_.cooperative_matrix = desc.upscaler_features && s.ext_supported(0);
+    caps_.shader_float8 = desc.upscaler_features && s.ext_supported(2) && !validation_;
     {
         uint32_t qn = 0;
         vki_.vkGetPhysicalDeviceQueueFamilyProperties(physical_, &qn, nullptr);
@@ -450,7 +537,7 @@ bool Context::create_device(const ContextDesc& desc) {
         if (families_.graphics < qn) caps_.timestamp_valid_bits = qprops[families_.graphics].timestampValidBits;
     }
 
-    // Queues: slot 0 graphics; compute/transfer get their own slot only for a distinct family.
+    // Queues: slot 0 graphics; transfer gets its own slot only for a distinct family.
     auto make_queue = [&](uint32_t slot, uint32_t family) {
         queue_mutex_[slot] = std::make_unique<std::mutex>();
         Queue& q = queues_[slot];
@@ -461,11 +548,7 @@ bool Context::create_device(const ContextDesc& desc) {
     };
     make_queue(0, families_.graphics);
     queue_count_ = 1;
-    slot_compute_ = slot_transfer_ = 0;
-    if (families_.compute != families_.graphics) {
-        slot_compute_ = queue_count_;
-        make_queue(queue_count_++, families_.compute);
-    }
+    slot_transfer_ = 0;
     if (families_.transfer != families_.graphics) {
         slot_transfer_ = queue_count_;
         make_queue(queue_count_++, families_.transfer);
@@ -498,18 +581,25 @@ void Context::shutdown() {
     physical_ = VK_NULL_HANDLE;
     for (auto& q : queues_) q = Queue{};
     for (auto& m : queue_mutex_) m.reset();
-    slot_compute_ = slot_transfer_ = 0;
+    slot_transfer_ = 0;
     queue_count_ = 1;
     support_.reset();
     vki_ = InstanceFns{};
     vkd_ = DeviceFns{};
     presentation_ = validation_ = debug_utils_ = false;
     instance_extensions_.clear();
+    device_extensions_.clear();
     loader_.close();
 }
 
 bool Context::instance_extension_enabled(const char* name) const {
     for (const std::string& e : instance_extensions_)
+        if (e == name) return true;
+    return false;
+}
+
+bool Context::device_extension_enabled(const char* name) const {
+    for (const std::string& e : device_extensions_)
         if (e == name) return true;
     return false;
 }
@@ -559,10 +649,9 @@ void Context::set_name(VkObjectType type, uint64_t handle, const char* name) con
 
 VkResult Context::wait_idle() const {
     if (!device_) return VK_SUCCESS;
-    std::unique_lock<std::mutex> l0, l1, l2;
+    std::unique_lock<std::mutex> l0, l1;
     if (queue_count_ > 0 && queue_mutex_[0]) l0 = std::unique_lock<std::mutex>(*queue_mutex_[0]);
     if (queue_count_ > 1 && queue_mutex_[1]) l1 = std::unique_lock<std::mutex>(*queue_mutex_[1]);
-    if (queue_count_ > 2 && queue_mutex_[2]) l2 = std::unique_lock<std::mutex>(*queue_mutex_[2]);
     return vkd_.vkDeviceWaitIdle(device_);
 }
 

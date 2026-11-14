@@ -146,10 +146,12 @@ struct TacPp {
     }
 
     // ---- contrast (0x72ac70 / 0x6c4b20) ----
+    // a2k t11: the AI PotentialPlan weight 0x5f1f90 (ContrastTable::ai_weight, A2K_T02_RE_ANSWERS Q2(b)) [H], as the galactic
+    // solve (galactic_pp.cpp weight()): the solver 0x6c3da0 is shared by both modes.
     float weight(int32_t t, int32_t row) const {
         if (!in.contrast || row < 0) return 0.0f;
         const auto* x = ti(t);
-        return x ? in.contrast->contrast(static_cast<size_t>(row), x->name, x->category) : 0.0f;
+        return x ? in.contrast->ai_weight(static_cast<size_t>(row), x->name, x->category) : 0.0f;
     }
     bool layer_satisfied(bool space, bool escort = false) const {
         double total = 0.0, residual = 0.0;
@@ -728,16 +730,6 @@ private:
 };
 
 }  // namespace
-
-const char* pp_source_name(PpSource s) {
-    switch (s) {
-        case PpSource::FreeStore: return "free store";
-        case PpSource::Reinforcement: return "reinforcement";
-        case PpSource::Build: return "pad";
-        case PpSource::Produce: return "produce";
-    }
-    return "?";
-}
 
 std::vector<int32_t> pp_team_types(const TaskForceDef& d, const TeamDef& t, const std::vector<PerceptionType>& types,
                                    const std::function<uint64_t(std::string_view)>& category_mask) {

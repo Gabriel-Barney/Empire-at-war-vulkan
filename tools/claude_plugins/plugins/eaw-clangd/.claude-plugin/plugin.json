@@ -1,0 +1,23 @@
+{
+  "name": "eaw-clangd",
+  "version": "1.0.0",
+  "description": "clangd from toolchain/llvm/bin, started by tools/lsp/clangd_launch.py (MSVC header environment, newest compile_commands.json of this checkout's build trees)",
+  "lspServers": {
+    "clangd": {
+      "command": "python",
+      "args": ["-I", "${CLAUDE_PROJECT_DIR}/tools/lsp/clangd_launch.py"],
+      "extensionToLanguage": {
+        ".c": "c",
+        ".h": "cpp",
+        ".hpp": "cpp",
+        ".hxx": "cpp",
+        ".inl": "cpp",
+        ".cpp": "cpp",
+        ".cc": "cpp",
+        ".cxx": "cpp"
+      },
+      "workspaceFolder": "${CLAUDE_PROJECT_DIR}",
+      "startupTimeout": 60000
+    }
+  }
+}

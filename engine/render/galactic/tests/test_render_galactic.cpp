@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
@@ -42,34 +43,15 @@
 #include "alamo/render/sim_view.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 using namespace alamo;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
 
@@ -131,7 +113,10 @@ static void test_r2_records() {
     const render::RouteLineSettings& neutral = s.settings[render::kRouteNeutral];
     CHECK(near(neutral.zoomed_out.x, 0.5f) && near(neutral.width, 0.0f) && neutral.render_mode == "ALPHA");
     CHECK(near(s.color(render::RouteClass::Enemy).x, 225 / 255.0f) && near(s.width(render::RouteClass::Corrupt), 3.0f));  // built-in
-    const render::GalacticLightSettings ls = render::load_galactic_light_settings(mf);
+    std::vector<uint8_t> gc_bytes;  // cu5 t04: the loaders take the parsed <GameConstants> root
+    CHECK(mf.read("Data\\XML\\GameConstants.xml", gc_bytes));
+    const data::XmlDocument gc_doc = data::XmlDocument::parse(gc_bytes, "GameConstants.xml");
+    const render::GalacticLightSettings ls = render::load_galactic_light_settings(gc_doc.root());
     CHECK(near(ls.out_yaw_deg, 90.0f) && near(ls.out_elevation_deg, 30.0f) && near(ls.in_yaw_deg, 180.0f) && near(ls.zoom_light_level, 0.8f));
     const render::Lighting out = render::galactic_lighting(ls, 0.0f), in = render::galactic_lighting(ls, 1.0f);
     const assets::Float3 d = render::light_direction(90.0f * 3.14159265f / 180.0f, 30.0f * 3.14159265f / 180.0f);
@@ -173,7 +158,7 @@ static void test_r2_records() {
         CHECK(render::faction_text_color(tab, "Neutral", c) && near(c.x, 128 / 255.0f));
         CHECK(!render::faction_map_color(tab, "Hutts", c) && !render::faction_text_color(tab, "", c));
     }
-    const render::GalacticCorruptionSettings cs = render::load_galactic_corruption_settings(mf);
+    const render::GalacticCorruptionSettings cs = render::load_galactic_corruption_settings(gc_doc.root());
     CHECK(cs.planet_particle == "Light_Galactic_Corruption_Particles" && cs.line_particle == "Galactic_Corruption_Line_Particles" &&
           near(cs.brightness[0], 0.25f) && near(cs.brightness[1], 0.75f));
     const render::Lighting def = render::galactic_lighting();
@@ -956,35 +941,11 @@ static void test_fleets_and_selection(const render::GalacticWorld& w) {
 }
 
 // ------------------------------------------------------------------------------------------- GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     render::Renderer renderer;
 };
 
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(readback);
-    }
-};
+using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 static void test_gpu(const render::GalacticWorld& w, const std::string& src_dir) {
     const bool strict = render::setup_validation_env(src_dir);
@@ -1246,7 +1207,7 @@ static void test_planet_portrait(const std::string& src_dir) {
         types.build(w->types);
         render::GalacticModels models(g.renderer, streamer.get(), cache.get(), w->files.get());
         render::PlanetPortraits portraits(g.renderer, g.alloc, g.ring, models, types);
-        portraits.set_lighting(render::galactic_lighting(render::load_galactic_light_settings(*w->files), 1.0f));
+        portraits.set_lighting(render::galactic_lighting(render::load_galactic_light_settings(w->gdb->constants().element), 1.0f));
         const std::string name = render::planet_portrait_name("Kuat");
         CHECK(render::is_planet_portrait_name(name) && render::planet_portrait_type(name) == "Kuat" &&
               !render::is_planet_portrait_name("planet_portrait:") && !render::is_planet_portrait_name("load_overlay.tga"));

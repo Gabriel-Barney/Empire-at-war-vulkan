@@ -1,5 +1,5 @@
 // alamo_commands tests (no framework; non-zero exit on failure).
-// Semantics under test: docs/re/COMMANDS.md (event catalogue §2, wire §1.2/§3, scheduling §4).
+// Semantics under test: docs/re/COMMANDS.md (event catalogue §2, quantizers §3.2, scheduling §4).
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -19,21 +19,14 @@
 #include "alamo/commands/pipeline.hpp"
 #include "alamo/commands/recording.hpp"
 #include "alamo/commands/scheduler.hpp"
-#include "alamo/commands/wire_codec.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/hash.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::commands;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -57,7 +50,7 @@ std::vector<uint8_t> scheduled_types() {
     return t;
 }
 
-// Random valid event of `type` (Player fields < 16 so they fit P = 4).
+// Random valid event of `type` (Player fields < 16).
 EventData random_event(Rng& r, uint8_t type) {
     EventData e(static_cast<EventType>(type));
     const EventDef& d = e.def();
@@ -260,8 +253,8 @@ void test_decode_errors() {
     CHECK(sum.valid() && sum.u("count") == 2);
 }
 
-// [port: Gabriel] queueable unit actions: EventData::queued() in the canonical source byte (bit 7) and,
-// opt-in, one bit after a scheduled event on the port wire. Unqueued encodings are unchanged.
+// [port: Gabriel] queueable unit actions: EventData::queued() in the canonical source byte (bit 7).
+// Unqueued encodings are unchanged.
 void test_queued_flag() {
     Command c;
     c.header = CommandHeader{2, CommandSource::AI, 7, 100, 101};
@@ -291,141 +284,10 @@ void test_queued_flag() {
     std::string err;
     CHECK(CommandRecording::from_bytes(rec.to_bytes(), back, &err) && back.batches.size() == 1 &&
           back.batches[0].commands.size() == 1 && back.batches[0].commands[0].payload.queued());
-    // Bit-packed wire: the original layout cannot carry it; the port wire adds one bit.
-    WireConfig orig, port;
-    port.port_queue_bit = true;
-    BitWriter w0, w1, w2;
-    CHECK(pack_event(w0, c, orig) == PackError::InvalidPayload);
-    CHECK(pack_event(w1, c, port) == PackError::None);
-    Command u = c;
-    u.payload.set_queued(false);
-    CHECK(pack_event(w2, u, port) == PackError::None && w2.bit_size() == w1.bit_size());
-    BitReader r1(w1.bytes()), r2(w2.bytes());
-    Command b1, b2;
-    CHECK(unpack_event(r1, b1, port) == DecodeError::None && b1.payload == c.payload && b1.payload.queued());
-    CHECK(unpack_event(r2, b2, port) == DecodeError::None && b2.payload == u.payload && !b2.payload.queued());
     // Equality includes the flag.
     EventData a = ev::stop(), b = ev::stop();
     b.set_queued(true);
     CHECK(!(a == b));
-}
-
-// ---- bit-packed wire --------------------------------------------------------------------------------
-void test_wire_golden() {
-    WireConfig w3;
-    w3.player_bits = 3;
-    // Packet [count 1] StopMovement(29), player 1, frame 7:
-    //   bits: count 1 (5) | type 29 (6) | player 1 (3) | frame 7 (26) = 40 bits.
-    Command stop;
-    stop.header.player = 1;
-    stop.header.scheduled_tick = 7;
-    stop.payload = ev::stop();
-    std::vector<std::vector<uint8_t>> pk;
-    CHECK(pack_packets(std::span<const Command>(&stop, 1), w3, pk) == PackError::None);
-    CHECK(pk.size() == 1 && pk[0] == from_hex("a1cb010000"));
-
-    // MoveToPosition(1), player 0, frame 0, x=0 (code 0x1FFFF), y=10000 (0x3FFFE), z=-10000 (0),
-    // flags 0x08, switch_locomotor 1: 6+3+26+3*18+8+1 = 98 bits, low bit first.
-    Command mv;
-    mv.payload = ev::move_to_position(0.0f, 10000.0f, -10000.0f, 0x08);
-    mv.payload.set("switch_locomotor", 1);
-    BitWriter bw;
-    CHECK(pack_event(bw, mv, w3) == PackError::None);
-    CHECK(bw.bit_size() == 98);
-    CHECK(bw.bytes() == from_hex("01000000f8ffcfff7f00001002"));
-    BitReader br(bw.bytes());
-    Command back;
-    CHECK(unpack_event(br, back, w3) == DecodeError::None);
-    CHECK(back.payload == mv.payload && back.header.source == CommandSource::Network);
-
-    // Non-scheduled: no frame field. FrameInfo: 6 + 3 + 26 + 22 + 16 = 73 bits.
-    Command fi;
-    fi.payload = EventData(EventType::FrameInfo);
-    fi.payload.set("frame", 5).set("command_count", 9).set("crc", 0xBEEF);
-    BitWriter fw;
-    CHECK(pack_event(fw, fi, w3) == PackError::None && fw.bit_size() == 73);
-    // Conditional fields: ControlGroup recall = 5 payload bits, assign = 6.
-    Command cg;
-    cg.payload = ev::control_group(3, false);
-    BitWriter g1, g2;
-    pack_event(g1, cg, w3);
-    cg.payload = ev::control_group(3, true, true);
-    pack_event(g2, cg, w3);
-    CHECK(g1.bit_size() == 35 + 5 && g2.bit_size() == 35 + 6);
-    // SpecialWeaponFire: position branch (3 x 18 bits) vs target branch (32 bits).
-    Command sw;
-    sw.payload = EventData(EventType::SpecialWeaponFire);
-    sw.payload.set("weapon", 4).set("player", 2).set("at_position", 1).set_f("x", 1.0f);
-    BitWriter s1, s2;
-    CHECK(pack_event(s1, sw, w3) == PackError::None);
-    sw.payload.set("at_position", 0).set("target", 77);
-    CHECK(!sw.payload.valid());  // x still set while the position branch is absent
-    CHECK(pack_event(s2, sw, w3) == PackError::InvalidPayload);
-    sw.payload.set("x", 0);
-    CHECK(pack_event(s2, sw, w3) == PackError::None);
-    CHECK(s1.bit_size() == 35 + 32 + 3 + 1 + 54 && s2.bit_size() == 35 + 32 + 3 + 1 + 32);
-    BitReader sr(s2.bytes());
-    Command sb;
-    CHECK(unpack_event(sr, sb, w3) == DecodeError::None && sb.payload == sw.payload);    // Range checks.
-    Command big = stop;
-    big.header.player = 8;  // needs 4 bits
-    BitWriter x;
-    CHECK(pack_event(x, big, w3) == PackError::PlayerOutOfRange);
-    big = stop;
-    big.header.scheduled_tick = 1ull << 26;
-    CHECK(pack_event(x, big, w3) == PackError::FrameOutOfRange);
-}
-
-void test_wire_packets() {
-    const WireConfig cfg;  // P = 4
-    Rng r(11);
-    std::vector<Command> evs;
-    for (int i = 0; i < 200; ++i) {
-        Command c;
-        c.header.player = static_cast<uint8_t>(r.below(16));
-        c.header.scheduled_tick = r.below(1u << 26);
-        c.header.source = CommandSource::Network;
-        c.payload = random_any(r);
-        evs.push_back(std::move(c));
-    }
-    std::vector<std::vector<uint8_t>> pk;
-    CHECK(pack_packets(evs, cfg, pk) == PackError::None);
-    std::vector<Command> back;
-    for (const auto& p : pk) {
-        CHECK(p.size() <= cfg.max_packet_bytes);
-        CHECK((p[0] & 0x1F) >= 1);
-        CHECK(unpack_packet(p, cfg, back) == DecodeError::None);
-    }
-    CHECK(back == evs);  // source Network, sequence/issue 0 on both sides
-
-    // 40 small events -> 31 + 9 (5-bit count).
-    std::vector<Command> stops(40);
-    for (auto& s : stops) s.payload = ev::stop();
-    pk.clear();
-    CHECK(pack_packets(stops, cfg, pk) == PackError::None);
-    CHECK(pk.size() == 2 && (pk[0][0] & 0x1F) == 31 && (pk[1][0] & 0x1F) == 9);
-    // Byte limit: 13-byte moves with a 16-byte limit -> one per packet.
-    WireConfig small;
-    small.max_packet_bytes = 16;
-    std::vector<Command> moves(3);
-    for (auto& m : moves) m.payload = ev::move_to_position(1, 2, 3);
-    pk.clear();
-    CHECK(pack_packets(moves, small, pk) == PackError::None && pk.size() == 3);
-    // Scheduled and non-scheduled never share a packet.
-    std::vector<Command> mixed(2);
-    mixed[1].payload = EventData(EventType::Taunt);
-    pk.clear();
-    CHECK(pack_packets(mixed, cfg, pk) == PackError::InvalidPayload);
-    // Decode errors.
-    pk.clear();
-    pack_packets(moves, cfg, pk);
-    std::vector<uint8_t> cut(pk[0].begin(), pk[0].end() - 3);
-    back.clear();
-    CHECK(unpack_packet(cut, cfg, back) == DecodeError::Truncated && back.empty());
-    BitWriter dead;
-    dead.put(1, 5);
-    dead.put(23, 6);
-    CHECK(unpack_packet(dead.bytes(), cfg, back) == DecodeError::UnknownType);
 }
 
 // ---- scheduling -------------------------------------------------------------------------------------
@@ -456,17 +318,20 @@ std::vector<uint8_t> run_threaded(uint32_t run_seed, uint32_t players, uint32_t 
 }
 
 void test_drain_order() {
-    for (const SchedulerConfig& cfg : {SchedulerConfig::single_player(), SchedulerConfig::internet()}) {
+    SchedulerConfig slow;
+    slow.delay = 3;
+    for (const SchedulerConfig& cfg : {SchedulerConfig::single_player(), slow}) {
         const auto ref = run_threaded(0, 8, 40, cfg);
         for (uint32_t seed = 1; seed < 5; ++seed) CHECK(run_threaded(seed, 8, 40, cfg) == ref);
     }
-    // Network arrival: players' streams interleaved in any order; each player's own order kept.
+    // Replay inserts: players' streams interleaved in any order give the same drained batches.
     Rng r(9);
     std::vector<std::vector<Command>> per_player(8);
     for (uint8_t p = 0; p < 8; ++p)
         for (uint32_t q = 0; q < 6; ++q) {
             Command c;
             c.header.player = p;
+            c.header.sequence = q;
             c.header.scheduled_tick = 1 + q % 3;
             c.payload = random_any(r);
             per_player[p].push_back(c);
@@ -479,7 +344,7 @@ void test_drain_order() {
         while (left) {
             const uint32_t p = r.below(8);
             if (next[p] == per_player[p].size()) continue;
-            CHECK(s.receive(per_player[p][next[p]++]).ok());
+            CHECK(s.insert(per_player[p][next[p]++]).ok());
             --left;
         }
         std::vector<uint8_t> bytes;
@@ -490,30 +355,6 @@ void test_drain_order() {
         else
             CHECK(bytes == first);
     }
-}
-
-void test_schedule_formula() {
-    CHECK(lockstep_execute_frame(10, 1, 2) == 14);  // LAN: exactly +4
-    for (uint64_t cur = 100; cur < 140; ++cur) {
-        const uint64_t f = lockstep_execute_frame(cur, 5, 10);  // internet: +11..+15 on multiples of 5
-        CHECK(f % 5 == 0 && f - cur >= 11 && f - cur <= 15);
-        const uint64_t g = lockstep_execute_frame(cur, 2, 4);  // +5..+6 on even frames
-        CHECK(g % 2 == 0 && g - cur >= 5 && g - cur <= 6);
-    }
-    CHECK(lockstep_execute_frame(10, 1, 0) == 12);
-    CommandScheduler lan(SchedulerConfig::lan());
-    for (uint64_t t = 0; t <= 10; ++t) lan.drain(t);
-    CHECK(lan.submit(0, CommandSource::Player, ev::stop()).scheduled_tick == 14);
-    lan.set_max_ahead(6);
-    CHECK(lan.submit(0, CommandSource::Player, ev::stop()).scheduled_tick == 18);
-    // Lockstep re-alignment of received frames: rounded up to a multiple of T.
-    CommandScheduler inet(SchedulerConfig::internet());
-    Command c;
-    c.header.player = 1;
-    c.header.scheduled_tick = 23;
-    c.payload = ev::stop();
-    const auto rr = inet.receive(c);
-    CHECK(rr.ok() && rr.scheduled_tick == 25);
 }
 
 void test_scheduler_rules() {
@@ -565,19 +406,6 @@ void test_scheduler_rules() {
     const auto b14 = s.drain(14);
     CHECK(b14.commands.size() == 1 && b14.commands[0].header.sequence == 2);
 
-    SchedulerConfig bc;
-    bc.max_players = 2;
-    bc.late = LatePolicy::Bump;
-    CommandScheduler bump(bc);
-    bump.drain(0);
-    bump.drain(1);
-    Command l;
-    l.header = CommandHeader{0, CommandSource::Network, 0, 0, 1};
-    l.payload = ev::stop();
-    const auto br = bump.insert(l);
-    CHECK(br.ok() && br.scheduled_tick == 2);
-    CHECK(bump.drain(2).commands.size() == 1);
-
     threw = false;
     try {
         SchedulerConfig z;
@@ -603,14 +431,8 @@ void test_event_bus() {
         if (const auto* s = std::get_if<SimEvent>(&e)) log.push_back("B" + std::to_string(s->value));
     });
     bus.post(SimEvent{0, 1, 0, 0, 1});
-    bus.open_lanes(4);
-    std::vector<std::thread> th;
-    for (int i = 3; i >= 0; --i)
-        th.emplace_back([&bus, i] {
-            for (int k = 0; k < 2; ++k) bus.lane(static_cast<size_t>(i)).post(SimEvent{0, 2, 0, 0, 10 * (i + 1) + k});
-        });
-    for (auto& x : th) x.join();
-    bus.merge_lanes();
+    for (int i = 0; i < 4; ++i)
+        for (int k = 0; k < 2; ++k) bus.post(SimEvent{0, 2, 0, 0, 10 * (i + 1) + k});
     CHECK(bus.pending().size() == 9);
     bus.deliver();
     const std::vector<std::string> want = {"A1",  "B1",  "A10", "B10", "A11", "B11", "A20", "B20", "A21",
@@ -655,7 +477,8 @@ struct ToySim {
 };
 
 void test_pipeline_replay() {
-    SchedulerConfig cfg = SchedulerConfig::internet();
+    SchedulerConfig cfg;
+    cfg.delay = 3;
     cfg.max_players = 4;
     cfg.first_tick = 5;
     const uint32_t ticks = 300;
@@ -697,7 +520,6 @@ void test_pipeline_replay() {
     CHECK(live.batch_crcs.size() == ticks);
     CHECK(rec.end_tick == cfg.first_tick + ticks);
     CHECK(rec.command_count() + direct == live.results.size());
-    for (const auto& b : rec.batches) CHECK(b.tick % 5 == 0);  // internet: turn-aligned frames
     size_t rejected = 0;
     for (const auto& r : live.results) rejected += r.accepted() ? 0 : 1;
     CHECK(rejected > 0);
@@ -730,22 +552,14 @@ void test_pipeline_replay() {
     CHECK(replay.results == live.results);
     CHECK(rerecord.batches == rec.batches);
 
-    // FrameSync retunes MaxAhead at its synced frame.
-    CommandPipeline fs(SchedulerConfig::lan());
-    EventData sync(EventType::FrameSync);
-    sync.set("max_ahead", 6);
-    CHECK(fs.submit(0, CommandSource::Player, sync).scheduled_tick == 4);
-    for (uint64_t t = 0; t <= 4; ++t) fs.begin_tick(t);
-    CHECK(fs.scheduler().config().max_ahead == 6);
-    CHECK(fs.submit(0, CommandSource::Player, ev::stop()).scheduled_tick == 4 + 1 + 6 + 1);
     // Non-scheduled events cannot take the direct path either; no handler -> Unhandled.
+    CommandPipeline fs;
     CHECK(fs.execute_direct(5, 0, CommandSource::Script, EventData(EventType::Chat)) == RejectReason::NotScheduled);
     CHECK(fs.execute_direct(5, 0, CommandSource::Script, ev::stop()) == RejectReason::Unhandled);
 }
 
 // ---- N1: pipeline save / load, replay from a save ------------------------------------------------------
-// Orders of tick t, the same for every pipeline: local players (lockstep stamping), a network peer
-// (receive keeps the execute frame), a FrameSync that retunes MaxAhead before the save.
+// Orders of tick t, the same for every pipeline: local players' orders.
 void orders_for_tick(CommandPipeline& p, uint64_t t) {
     Rng r(t * 7919u + 13u);
     for (uint8_t pl = 0; pl < 3; ++pl)
@@ -753,20 +567,6 @@ void orders_for_tick(CommandPipeline& p, uint64_t t) {
             EventData e = r.below(3) == 0 ? ev::select({r.bits(8), r.bits(8)}) : r.below(2) ? ev::stop() : random_any(r);
             p.submit(pl, CommandSource::Player, std::move(e));
         }
-    if (t % 9 == 0) {
-        Command c;
-        c.header.player = 3;
-        c.header.source = CommandSource::Network;
-        c.header.issue_tick = t;
-        c.header.scheduled_tick = t + 12;
-        c.payload = random_any(r);
-        p.receive(std::move(c));
-    }
-    if (t == 40) {
-        EventData sync(EventType::FrameSync);
-        sync.set("max_ahead", 6);
-        p.submit(0, CommandSource::Player, sync);
-    }
 }
 
 void sim_event_for_tick(CommandPipeline& p, uint64_t t) {
@@ -790,7 +590,8 @@ void copy_sim_state(ToySim& to, const ToySim& from) {
 }
 
 void test_pipeline_save() {
-    SchedulerConfig cfg = SchedulerConfig::internet();  // T=5, A=10: orders wait 11..15 ticks in the queue
+    SchedulerConfig cfg;  // delay 12: orders wait 12 ticks in the queue, so the save holds some
+    cfg.delay = 12;
     cfg.max_players = 4;
     cfg.first_tick = 1;
     const uint64_t save_tick = 120, end_tick = 300;
@@ -842,7 +643,7 @@ void test_pipeline_save() {
         ToySim branch;
         copy_sim_state(branch, at_save);
         std::vector<SimEvent> sims;
-        CommandPipeline q(SchedulerConfig::lan());
+        CommandPipeline q;  // default config: read() restores the saved one
         branch.hook(q);
         q.events().subscribe([&sims](const Event& e) {
             if (const auto* s = std::get_if<SimEvent>(&e)) sims.push_back(*s);
@@ -852,8 +653,7 @@ void test_pipeline_save() {
         CHECK(pipeline_bytes(q) == saved);
         CHECK(q.scheduler().next_tick() == save_tick + 1 && q.scheduler().pending() == queued_at_save);
         const SchedulerConfig& qc = q.scheduler().config();
-        CHECK(qc.mode == ScheduleMode::Lockstep && qc.turn == 5 && qc.max_players == 4 && qc.first_tick == 1 &&
-              qc.max_ahead == cfg_at_save.max_ahead && qc.delay == cfg_at_save.delay && qc.late == cfg_at_save.late);
+        CHECK(qc == cfg_at_save && qc.delay == 12 && qc.max_players == 4 && qc.first_tick == 1);
         q.record_to(&cont, sp);
         q.events().deliver();  // the save tick's events, as the live run delivered them
         for (uint64_t t = save_tick + 1; t < end_tick; ++t) {
@@ -887,6 +687,13 @@ void test_pipeline_save() {
         bad[6] = 3;  // unknown flag bit
         CommandRecording tmp;
         CHECK(!CommandRecording::from_bytes(bad, tmp, &err));
+        // The retired lockstep bytes (late 13, mode 14, turn 16, max_ahead 20) must hold their constants.
+        CHECK(bytes[13] == kSchedLateByte && bytes[14] == kSchedModeByte && bytes[16] == kSchedTurn && bytes[20] == kSchedMaxAhead);
+        for (const size_t off : {size_t{13}, size_t{14}, size_t{16}, size_t{20}}) {
+            bad = bytes;
+            bad[off] = static_cast<uint8_t>(bad[off] + 1);
+            CHECK(!CommandRecording::from_bytes(bad, tmp, &err));
+        }
         // Truncated anywhere in the header (incl. the save point) or the stream.
         bool refused = true;
         for (size_t n = 0; n < bytes.size(); n += (n < 128 ? 1 : 97))
@@ -938,9 +745,9 @@ void test_pipeline_save() {
         CommandRecording shifted = cont2;
         shifted.config.first_tick += 1;
         CHECK(!rp.replay_from_save(&shifted, sp, &err));
-        CommandRecording other_turn = cont2;
-        other_turn.config.turn = 1;
-        CHECK(!rp.replay_from_save(&other_turn, sp, &err));
+        CommandRecording other_players = cont2;
+        other_players.config.max_players = 8;
+        CHECK(!rp.replay_from_save(&other_players, sp, &err));
         CommandRecording late_full = full;
         late_full.config.first_tick = save_tick + 2;
         CHECK(!rp.replay_from_save(&late_full, sp, &err));
@@ -954,7 +761,7 @@ void test_pipeline_save() {
 
     // Truncated / invalid data: read() false and the pipeline unchanged.
     {
-        CommandPipeline x(SchedulerConfig::lan());
+        CommandPipeline x;
         for (uint64_t t = 0; t < 30; ++t) {
             x.begin_tick(t);
             orders_for_tick(x, t);
@@ -973,9 +780,9 @@ void test_pipeline_save() {
             ByteReader r(bad);
             return !x.read(r) && pipeline_bytes(x) == before;
         };
-        // pipeline version | scheduler version | delay | max_players (0, 17) | late | mode
-        CHECK(refuses(0, 9) && refuses(4, 9) && refuses(8, 0) && refuses(12, 0) && refuses(12, 17));
-        CHECK(refuses(13, 2) && refuses(14, 2));
+        // pipeline version | scheduler version | delay | max_players (0, 33) | retired late / mode / turn / max_ahead
+        CHECK(refuses(0, 9) && refuses(4, 9) && refuses(8, 0) && refuses(12, 0) && refuses(12, 33));
+        CHECK(refuses(13, 1) && refuses(14, 1) && refuses(15, 5) && refuses(19, 3));
         // A bad event kind after a valid scheduler part: the scheduler is not loaded either.
         const size_t first_kind = 4 + sched_bytes + 8;
         CHECK((saved[first_kind] == 0 || saved[first_kind] == 1) && refuses(first_kind, 7));
@@ -1018,10 +825,7 @@ int main() {
     test_golden_canonical();
     test_decode_errors();
     test_queued_flag();
-    test_wire_golden();
-    test_wire_packets();
     test_drain_order();
-    test_schedule_formula();
     test_scheduler_rules();
     test_event_bus();
     test_pipeline_replay();

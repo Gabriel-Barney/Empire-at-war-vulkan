@@ -3,12 +3,11 @@
 // actions (Bindings).
 //
 // MAIN_LOOP.md step 3: window messages are pumped once per loop iteration, BEFORE any tick, so the host
-// calls capture (window_input.hpp, or an InputReplay frame) once right after rhi::Window::pump(), then
+// calls capture (window_input.hpp) once right after rhi::Window::pump(), then
 // InputState::update(), then the camera controllers and the OrderTranslator. Nothing here touches the
 // sim: orders leave as commands::EventData (orders.hpp).
 //
-// Keys are Win32 virtual-key codes (0..255) because that is what rhi::Window reports; the replay format
-// stores them as such on every platform.
+// Keys are Win32 virtual-key codes (0..255) because that is what rhi::Window reports.
 #pragma once
 #include <array>
 #include <cstddef>
@@ -123,13 +122,10 @@ public:
     const ButtonState& button(Button b) const { return buttons_[static_cast<size_t>(b)]; }
     int32_t mouse_x() const { return cur_.mouse_x; }
     int32_t mouse_y() const { return cur_.mouse_y; }
-    int32_t mouse_dx() const { return mdx_; }
-    int32_t mouse_dy() const { return mdy_; }
     float wheel() const { return cur_.wheel; }
     bool shift() const { return key_down(vk::kShift); }
     bool ctrl() const { return key_down(vk::kControl); }
     bool alt() const { return key_down(vk::kAlt); }
-    uint64_t frame_index() const { return frames_; }
 
 private:
     InputConfig cfg_;
@@ -138,7 +134,6 @@ private:
     KeySet pressed_, released_;
     std::array<ButtonState, kButtonCount> buttons_{};
     int32_t mdx_ = 0, mdy_ = 0;
-    uint64_t frames_ = 0;
     int32_t last_press_button_ = -1;  // Win32: a press of another button breaks a double click
 };
 
@@ -196,22 +191,5 @@ private:
     uint8_t queue_mods_ = kModShift;
 };
 uint8_t current_mods(const InputState& in);
-
-// ---- headless input replay ---------------------------------------------------------------------------
-// Binary, little-endian, independent of host endianness and struct layout:
-//   "AUIR" | u32 version (1) | u32 frame count | frames
-//   frame := f64 time | f32 dt | u32 width | u32 height | i32 mouse_x | i32 mouse_y | u8 mouse_inside
-//            | u8 buttons_down | u8 buttons_pressed | u8 buttons_released | f32 wheel
-//            | 4 x u64 keys_down | 4 x u64 keys_pressed                         (= 100 bytes)
-inline constexpr uint32_t kReplayVersion = 1;
-inline constexpr size_t kReplayFrameBytes = 100;
-
-struct InputReplay {
-    std::vector<InputFrame> frames;
-    void record(const InputFrame& f) { frames.push_back(f); }
-    std::vector<uint8_t> serialize() const;
-    // false on bad magic / version / truncation / trailing bytes (out is left empty then).
-    static bool deserialize(std::span<const uint8_t> bytes, InputReplay& out);
-};
 
 }  // namespace alamo::ui

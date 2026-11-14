@@ -29,9 +29,8 @@ target_link_libraries(alamo_tactical_abilities PUBLIC alamo_tactical_combat alam
 # laser defense, opportunity fire), a scripted space battle with abilities and hardpoint kills whose
 # CRC log is identical for 1/4/N threads and matches the golden on every compiler, a per-tick
 # allocation count, FoC data checks (ALAMO_FOC_DATA). Regenerate: --write-golden <file>.
-add_executable(alamo_tactical_abilities_tests tests/test_abilities.cpp)
-target_link_libraries(alamo_tactical_abilities_tests PRIVATE alamo_tactical_abilities alamo_data Threads::Threads)
-target_include_directories(alamo_tactical_abilities_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../tests)
+add_executable(alamo_tactical_abilities_tests tests/test_abilities.cpp tests/test_abilities_part1.cpp tests/test_abilities_part2.cpp)
+target_link_libraries(alamo_tactical_abilities_tests PRIVATE alamo_tactical_abilities alamo_data alamo_test_support)
 # FoC data through the VFS (Data\XML lives in Config.meg in the shipped game).
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_tactical_abilities_tests PRIVATE alamo_vfs)
@@ -44,7 +43,6 @@ set_tests_properties(alamo_tactical_abilities_tests PROPERTIES TIMEOUT 300)
 # L1 systems: special weapons / lobbing superweapons / tactical superweapon (special_weapons.hpp) and the combat
 # pieces they use (launch_projectile, the WEAPON_SPECIAL force-1 fog gate). Hand-computed frames.
 add_executable(alamo_tactical_special_weapons_tests tests/test_special_weapons.cpp)
-target_link_libraries(alamo_tactical_special_weapons_tests PRIVATE alamo_tactical_abilities Threads::Threads)
-target_include_directories(alamo_tactical_special_weapons_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../tests)
+target_link_libraries(alamo_tactical_special_weapons_tests PRIVATE alamo_tactical_abilities alamo_test_support)
 add_test(NAME alamo_tactical_special_weapons_tests COMMAND alamo_tactical_special_weapons_tests)
 set_tests_properties(alamo_tactical_special_weapons_tests PROPERTIES TIMEOUT 120)

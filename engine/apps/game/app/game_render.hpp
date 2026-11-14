@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -135,7 +136,6 @@ private:
     std::vector<render::FactionColor> colors_;
     render::RouteLineStyle style_;
     render::CorruptionPathSettings corruption_path_;  // FIXPASS_GALACTIC §3.2 (GameConstants)
-    std::string evil_side_name_ = "EMPIRE";           // GameConstants Evil_Side_Name (route sides, §3.1)
     ui::GalacticCameraController camera_;
     GpuCore* gpu_ = nullptr;
     int32_t local_ = -1;  // fog viewpoint (attach)
@@ -143,7 +143,6 @@ private:
     // galactic_corruption_effects are synced by key every frame (each Particle type's Galactic_Model_Name).
     render::GalacticCorruptionSettings corruption_;
     std::vector<render::GalacticCorruptionEffect> corruption_fx_;
-    uint32_t corruption_live_ = 0;
     double last_frame_s_ = -1.0;
 #ifdef ALAMO_PARTICLES_HAVE_SIM
     std::unique_ptr<render::particles::ParticleWorld> pworld_;
@@ -151,9 +150,6 @@ private:
     render::particles::ParticleRenderer prender_;
     std::unique_ptr<render::particles::ProxyAttachments> pattach_;
 #endif
-
-public:
-    uint32_t corruption_effects() const { return corruption_live_; }  // effects synced by the last prepare()
 };
 
 // ---- battle -------------------------------------------------------------------------------------------------
@@ -206,6 +202,8 @@ public:
     // P2 selection circles of this frame (TacticalHud::selection_blobs): flat blob instances in the main list (land: at
     // the terrain height under the unit). Set before prepare().
     void set_selection_blobs(std::span<const ui::SelectionBlob> blobs) { blobs_.assign(blobs.begin(), blobs.end()); }
+    // cu9g t03: the bombing-run targeting blob of this frame (HUD_GAPS §9.5; nullopt = none). Set before prepare().
+    void set_bombing_blob(const std::optional<render::JamBlob>& blob) { bombing_blob_ = blob; }
     const render::FogRenderer& fog() const { return fog_; }
     // --- R3/R5 render ---
     // Space reinforcement overlay (palette 3 + W_Space_Reinforce_FOW_Grid): on while the local player picks a space
@@ -219,7 +217,6 @@ public:
     bool spawn_move_ack(std::string_view type, ui::Vec3 p, float scale, bool normal);
     // The nearest live normal move ack to `p` (no radius) is removed silently (hidden, no linger). False when none.
     bool kill_nearest_move_ack(ui::Vec3 p);
-    uint32_t move_acks_spawned() const { return acks_spawned_; }
 
     std::vector<render::Instance> main, sky;
     render::RecordOptions ropt;
@@ -232,6 +229,10 @@ private:
     GpuCore* gpu_ = nullptr;
     const objects::GameObjectTypes* types_ = nullptr;  // S8 t31: the lobbing XML tags
     std::vector<TswCue> lob_chargeups_;               // S8 t31: track_lob_chargeups (battle_fx.hpp)
+    // cu8g t03: the battle's active environment at the last capture (TacticalBattle::environment_index); prepare()
+    // re-applies it on the scene (MapScene::set_environment) and the particle wind when it changed.
+    uint32_t env_wanted_ = 0;
+    void apply_environment();
     bool space_ = true;
     bool blocking_models_ = false;
     int32_t local_ = 0;
@@ -265,10 +266,10 @@ private:
         bool normal = false;
     };
     std::vector<MoveAckFx> acks_;
-    uint32_t acks_spawned_ = 0;
     std::vector<ui::SelectionBlob> blobs_;
     render::GpuModel blob_model_;
     bool blob_ok_ = false;
+    std::optional<render::JamBlob> bombing_blob_;  // cu9g t03: the land bombing-run targeting blob (drawn through jam_models_)
     render::JamBlobModels jam_models_;  // R5 sensor jamming radius blobs (one model per material + colour)
     render::BeamStyleTable beam_styles_;  // R5 ability beams: per-special styles over the GameConstants fallbacks (ABILITY_VISUALS 4.2)
     render::BeamBoneFn beam_bone_;        // bone world positions (HP_trac_bone, hardpoint / muzzle bones)

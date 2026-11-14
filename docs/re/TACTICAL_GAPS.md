@@ -391,7 +391,9 @@ timer, not a combat test.
   (CD +0x108, `Depleted_Shield_Disable_Time`) and the nebula lockout (CD +0x104).
 - **The only writer of CD +0x110** is the behaviour update 0x636260, which is the `Disable_Force_Abilities_Range`
   emitter (type +0x53c, read as a float here although xml_field_tables lists the tag as int [M]). Every update it queries objects within that 3-D range of the emitter that
-  are not owned by the emitter's owner (GOM query 0x2a9ff0 mode 2 [M: "other owners"]). For each object that is
+  are not owned by the emitter's owner (GOM query 0x2a9ff0; corrected 2026-11-07, CU8F_T01_T02_T07_RE.md §3.1: the
+  first argument is the behaviour filter 0x02 SELECTABLE, not a "mode 2", and only objects that carry the
+  DISABLE_FORCE_ABILITIES behaviour emit, so `Rebel_Mobile_Shield_Generator` below does not). For each object that is
   alive (+0x3a0 bits 0x40, 0x80 and 0x02 clear), not a projectile (+0x33a = −1), has a model and a type, and owns at
   least one unit ability whose info-table entry has the **F (Force power)** column set (0x3986b0 × 0x43fa30 over
   types 0..0x4c), it stamps CD +0x110 := NOW.
@@ -592,7 +594,9 @@ container contribution through 0x4160a0 can also accept).
     range (> 0).
   - Melee units (`Targeting_Max_Attack_Distance` ≤ `Melee_Cutoff_Range`, 0x372210) against a team container:
     redo against the member nearest the attacker (0x404fc0).
-  - E without LAND_OBSTACLE (obj +0x346 = 0xFF): +10 for a moving team (locomotor vf +0x230); otherwise the
+  - E without LAND_OBSTACLE (obj +0x346 = 0xFF): +10 for a target with TEAM whose locomotor vf +0x230 is true,
+    i.e. **every land squad container, moving or not** (vf +0x230 is a class constant, MOVEMENT §4.7.1;
+    TACTICAL_COMBAT §5.4.2, s78m t07); otherwise the
     target footprint half-extent along the line of sight: |dot(target facing, direction)| > 0.7071 → X extent
     (0x396a30), else Y extent (0x396b70); each = `Custom_Hard_X/YExtent` × type +0x658 (deployed variants when
     deployed), fallback |model bbox max x/y| × +0x658. With a hardpoint argument: 0x397780 (team radius, else
@@ -601,7 +605,9 @@ container contribution through 0x4160a0 can also accept).
     cell is occupied by the target (0x59efa0), snaps to the cell grid, E = √200 ≈ 14.14.
 - **Slot 45 → slot 46 (0x5683a0):** same geometry with r = slot 41 (0x566eb0) = `Targeting_Min_Attack_Distance`
   (type +0x504) or the pending ability's vfunc +0xd0 (`Activation_Min_Range`); false when r ≤ 0; forwards to
-  the nearest member of a squad-member target's container.
+  the nearest member of a squad-member target's container. Not quite the same geometry (TACTICAL_COMBAT §5.4.4
+  item 1, 2026-11-10): the facing test is unnormalised (so E is in practice the X half-extent), a LAND_OBSTACLE
+  target gets no E, and a land squad container's E is its joint-box half-extent, not +10.
 - **Port:** replace "XY ≤ R + target radius" by R + orientation-dependent footprint half-extent, and add the
   min-range rejection (only types with `Targeting_Min_Attack_Distance` > 0).
   **A1j t04 (2026-11-02):** the extent getters are 0x371e70 (X: `Custom_Hard_XExtent` +0x16bc) and 0x372040 (Y:
@@ -1115,15 +1121,19 @@ already entered orbit (0x4338d0, slot −2), so ground units usually just go up 
 - `Destroyed_Space_Tactical_Map` (planet type +0x6b0): only ctor / dtor / copy (0x2c4370 / 0x2c5b30 /
   0x36c000); no gameplay reader [M]. Corruption maps come through §4.8.
 - Picker table 0x140b311a8, built at boot (0x47cb40) from `Data\Art\Maps\*.TED`, `Data\CustomMaps\*.TED` and the
-  mod paths; per map (0x47b030) a 0xf0-byte entry: +0x00 name, +0x80 path, +0xa0 kind (1 land, 2 space), +0xa4
-  terrain, +0xa8 faction, +0xac player count, +0xb0 max base level [M], +0xb4 / +0xb5 flags.
-- Query from 0x28fda0 (kind, terrain, faction, base level, 2, planet map, 0, 0, 0, 0): kind and terrain equal
-  (terrain bit 31 = any), faction equal or −1, +0xb0 ≥ base level, +0xac ≥ 2, +0xb4 = 0. Game type 4 adds a
+  mod paths; per map (0x47b030) a 0xf0-byte entry: +0x00 path (the picker's answer), +0x80 mode tag (mini `0A`,
+  upper-cased), +0xa0 kind (1 land, 2 space), +0xa4 terrain, +0xa8 faction, +0xac player count, +0xb0 max base level
+  [M], +0xb4 custom flag / +0xb5 has start positions. Fields come from the file's chunk 0 minis (CU8F_T03_T05_RE §1.2,
+  corrected 2026-11-07: the entry has no separate path field at +0x80).
+- Query from 0x28fda0 (kind, terrain, faction, base level, 2, planet map, 0, 0, 0, 0): kind equal; terrain equal when
+  the query's bit 31 is clear, **not equal** to (terrain & 0x7fffffff) when it is set (so 0xffffffff = any; corrected
+  2026-11-07 per CU8F_T03_T05_RE §1.3, earlier read as "bit 31 = any"); query faction −1 or equal (−1 only when the
+  defender id is −1; a candidate value is never a wildcard), +0xb0 ≥ base level, +0xac ≥ 2, +0xb4 = 0. Game type 4 adds a
   `CONTROL` path filter and `Quickmatch_Map_Exclusion_List` (GC +0x119c0). Matches in table order; a matching
   preferred name stops collection after it. Result = one `int(0, n − 1)` from the **free RNG** (QPC-seeded);
-  no match → empty entry.
-- **The original pick is not deterministic.** Port: a seeded deterministic choice; parity only needs a valid
-  map, which is then stored on the planet. TR gives 1386 planets fixed `Land/Space_Tactical_Map`, so the
+  no match → empty entry. The answer is stored on the planet every time, an empty one included (CU8F_T03_T05_RE §1.4).
+- **The original pick is not deterministic.** Port: a seeded deterministic choice (docs/PHASE4.md, cu8f t03); parity
+  only needs a valid map. TR gives 1386 planets fixed `Land/Space_Tactical_Map`, so the
   picker is rare there.
 
 ### 4.11 Pending-dialog command path (item 11) [H MP, M SP, L state 1]

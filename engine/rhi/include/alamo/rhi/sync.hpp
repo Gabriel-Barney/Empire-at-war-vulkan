@@ -13,7 +13,7 @@ class Context;
 // Common image usages. Each maps to (layout, stages, accesses) for barrier building.
 // transition(from, to): from = Undefined discards contents but still waits for the previous use of
 // the same kind (to's stages/writes), so a depth buffer or swapchain image reused across frames in
-// flight is safe. If the previous use was a different state, pass that state as rom.
+// flight is safe. If the previous use was a different state, pass that state as `from`.
 enum class ImageState : uint8_t {
     Undefined,
     TransferDst,

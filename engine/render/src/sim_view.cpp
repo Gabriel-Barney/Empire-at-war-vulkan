@@ -1,28 +1,17 @@
 #include "alamo/render/sim_view.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstring>
 #include <iterator>
 #include <string_view>
 #include <utility>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/render/lod.hpp"
 
 namespace alamo::render {
 
 namespace {
-
-// Case-insensitive substring test (R5 stealth mesh names: BASEMESH / STEALTH).
-bool icontains(std::string_view s, std::string_view needle) {
-    if (needle.size() > s.size()) return false;
-    for (size_t i = 0; i + needle.size() <= s.size(); ++i) {
-        size_t k = 0;
-        while (k < needle.size() && std::toupper(static_cast<unsigned char>(s[i + k])) == std::toupper(static_cast<unsigned char>(needle[k]))) ++k;
-        if (k == needle.size()) return true;
-    }
-    return false;
-}
 
 // R3 muzzle bone test: the named bone, else the bone index, else (own weapon) every bone named Muzzle*.
 bool muzzle_bone(const assets::Skeleton& sk, const SnapshotMuzzle& m, int32_t bone) {
@@ -30,22 +19,14 @@ bool muzzle_bone(const assets::Skeleton& sk, const SnapshotMuzzle& m, int32_t bo
     if (!m.bone.empty()) return sk.find(m.bone) == bone;
     if (m.bone_index >= 0) return m.bone_index == bone;
     const std::string& n = sk.names[static_cast<size_t>(bone)];
-    if (n.size() < 6) return false;
-    for (size_t i = 0; i < 6; ++i)
-        if (std::toupper(static_cast<unsigned char>(n[i])) != "MUZZLE"[i]) return false;
-    return true;
-}
-std::string upper(const std::string& s) {
-    std::string u(s);
-    for (char& c : u) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return u;
+    return ascii_istarts_with(n, "MUZZLE");
 }
 
 }  // namespace
 
 // --------------------------------------------------------------------------------- streamed models
 uint32_t StreamedSimModels::handle(const std::string& name) {
-    auto [it, inserted] = by_name_.try_emplace(upper(name), 0u);
+    auto [it, inserted] = by_name_.try_emplace(ascii_upper(name), 0u);
     if (inserted) {
         it->second = streamer_->request(name);
         handles_.push_back(it->second);
@@ -327,10 +308,10 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
                     // [port: the swap is instant; the Stealth_Transition_Time fade spring is render-side and untraced].
                     for (size_t i = 0; i < ma.meshes.size(); ++i) {
                         const std::string& nm = ma.meshes[i].name;
-                        if (icontains(nm, "BASEMESH") && s.combined[i] == 0) {
+                        if (ascii_icontains(nm, "BASEMESH") && s.combined[i] == 0) {
                             s.combined[i] = 1;
                             ++hidden;
-                        } else if (icontains(nm, "STEALTH") && s.combined[i] != 0) {
+                        } else if (ascii_icontains(nm, "STEALTH") && s.combined[i] != 0) {
                             s.combined[i] = 0;
                             changed = true;
                         }
@@ -453,7 +434,7 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
         if (!m) continue;
         Instance in;
         in.model = m;
-        in.transform = projectile_transform(p, table_->valid(p.type) ? &(*table_)[p.type] : nullptr, m);
+        in.transform = projectile_transform(p, table_->valid(p.type) ? &(*table_)[p.type] : nullptr);
         in.motion_id = motion_key(2, p.serial);
         main.push_back(in);
         ++st.projectiles_drawn;
@@ -462,8 +443,7 @@ void SimInstanceBuilder::build(const InterpolatedFrame& frame, SimModelSource& m
     if (stats) *stats = st;
 }
 
-assets::Mat3x4 projectile_transform(const SnapshotProjectile& p, const SnapshotTypeInfo* type, const GpuModel* model) {
-    (void)model;
+assets::Mat3x4 projectile_transform(const SnapshotProjectile& p, const SnapshotTypeInfo* type) {
     return object_transform(p.position, p.direction, type ? type->scale : 1.0f);
 }
 

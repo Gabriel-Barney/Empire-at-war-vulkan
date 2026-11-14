@@ -9,25 +9,16 @@
 #include <vector>
 
 #include "alamo/game/mod_check.hpp"
+#include "alamo/test/support.hpp"
 
 namespace fs = std::filesystem;
 using alamo::game::ModCheckReport;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 bool has(const std::vector<std::string>& v, const std::string& needle) {
     for (const auto& s : v)
@@ -115,7 +106,8 @@ void test_fake_install() {
         CHECK(art && art->added == 1 && art->overrides == 0);
         CHECK(r.counts.campaigns == 3);
         CHECK(r.campaigns_checked == 3);
-        CHECK(r.campaigns_without_planets == std::vector<std::string>{"Empty_GC"});  // an error
+        CHECK(r.campaigns_without_planets == std::vector<std::string>{"Empty_GC"});  // a warning: two others have planets
+        CHECK(!r.no_startable_campaign());
         CHECK(has(r.campaign_warnings, "MC_Missing"));  // unknown planet skipped: a warning, one line per message
         CHECK(has(r.campaign_warnings, "(1 campaign: Mod_GC)"));
         CHECK(!has(r.campaign_warnings, "Base_GC"));
@@ -124,11 +116,12 @@ void test_fake_install() {
         CHECK(r.lua_errors.size() == 1 && has(r.lua_errors, "MOD_BROKEN.LUA"));  // a warning
         CHECK(r.lua_errors.size() == 1 && r.lua_errors[0].in_mod);
         CHECK(r.lua_run == 2 && r.lua_run_errors.empty());  // the two story scripts that compile
-        CHECK(r.error_count() == 1);  // Empty_GC
+        CHECK(r.error_count() == 0);  // Empty_GC is a menu entry only
         CHECK(r.warning_count() >= 2);
         const std::string text = alamo::game::format_mod_report(r);
         CHECK(text.find("mod files: 4 new, 2 replace") != std::string::npos);
-        CHECK(text.find("== result: ERRORS, 1 errors") != std::string::npos);
+        CHECK(text.find("== result: OK, 0 errors") != std::string::npos);
+        CHECK(text.find("1 without planets (warnings: menu entries") != std::string::npos);
     }
     {  // options off
         alamo::game::ModCheckOptions o;
@@ -146,11 +139,29 @@ void test_fake_install() {
                    "<MC2_Not_A_Real_Tag>1</MC2_Not_A_Real_Tag></SpaceUnit>\n"
                    "<SpaceUnit Name=\"MC2_Ship_B\"><Space_Model_Name>mc2_missing.ALO</Space_Model_Name>"
                    "<MC2_Not_A_Real_Tag>2</MC2_Not_A_Real_Tag></SpaceUnit>\n"
-                   "<SpaceUnit Name=\"MC2_Ok\"><Land_Model_Name>MC2_Present</Land_Model_Name></SpaceUnit></Units>\n");
+                   "<SpaceUnit Name=\"MC2_Ok\"><Land_Model_Name>MC2_Present</Land_Model_Name>"
+                   "<Lua_Script>MC2_Named</Lua_Script></SpaceUnit></Units>\n");
         write_file(mod2 / "Data/Art/Models/MC2_Present.alo", "x");  // no extension in the XML: .ALO tried
+        // modc t25: command bar components (every root child is an entry; tags match case-insensitively) and the
+        // walked RadarMap.xml (known tags at any depth, containers without text skipped).
+        write_file(x / "CommandBarComponentFiles.xml", "<CommandBar_Component_Files><File>MC2Bar.xml</File></CommandBar_Component_Files>\n");
+        write_file(x / "MC2Bar.xml",
+                   "<CommandBarComponents><mc2_button><Type>Button</Type><BASE_LAYER>3</BASE_LAYER><Drag_And_Drop>Yes</Drag_And_Drop>"
+                   "<MC2_Bar_Tag>1</MC2_Bar_Tag></mc2_button></CommandBarComponents>\n");
+        write_file(x / "RadarMap.xml",
+                   "<RadarMap><RadarMapEvents><Radar_Map_Event name=\"E\"><Event_Duration>1</Event_Duration></Radar_Map_Event>"
+                   "</RadarMapEvents><RadarMapSettings><Use_Event_System>Yes</Use_Event_System><MC2_Radar_Tag>1</MC2_Radar_Tag>"
+                   "<Passability_Color_Settings name=\"Default\"><Color name=\"passability_steep\">1,2,3,4</Color>"
+                   "</Passability_Color_Settings></RadarMapSettings></RadarMap>\n");
         // The message carries a byte that is not UTF-8 (Lua \233 = 0xE9, Latin-1 e acute): the JSON must stay valid.
         write_file(mod2 / "Data/Scripts/Story/MC2_Errors.lua", "error(\"MC2 load error caf\\233\")\n");
+        // modc t24: a require of a script no layer has. MC2_Requires is the mod's own story script and nothing names it:
+        // an unused-script lead (info). MC2_Named is a type's Lua_Script: loaded, so a warning.
         write_file(mod2 / "Data/Scripts/Story/MC2_Requires.lua", "require(\"MC2_No_Such_Library\")\n");
+        write_file(mod2 / "Data/Scripts/GameObject/MC2_Named.lua", "-- comment\nrequire \"MC2_No_Such_Library\"\n");
+        // modc t21: .fx sources without a compiled .fxo (source_only), one model effect and one terrain effect.
+        write_file(mod2 / "Data/Art/Shaders/MC2Glow.fx", "// source only\n");
+        write_file(mod2 / "Data/Art/Shaders/Terrain/MC2Ground.fx", "// source only\n");
         const ModCheckReport r = alamo::game::check_mod_data(foc.string(), {"MODPATH=" + mod2.string()});
         CHECK(r.loaded && r.error_count() == 0);
         CHECK(r.missing_files.size() == 2);
@@ -162,18 +173,42 @@ void test_fake_install() {
             CHECK(r.missing_files[1].path == "DATA\\XML\\MC2GHOST.XML");
             CHECK(r.missing_files[1].referenced_by.find("GAMEOBJECTFILES.XML") != std::string::npos);
         }
-        CHECK(r.unknown_xml_tags.size() == 1);
+        CHECK(r.unknown_xml_tags.size() == 3);
+        const auto unknown_in = [&](std::string_view db, std::string_view tag) {
+            for (const auto& t : r.unknown_xml_tags)
+                if (t.database == db && t.tag == tag) return t.occurrences == 1 && t.types == 1 && t.in_mod;
+            return false;
+        };
+        CHECK(unknown_in("command bar components", "MC2_Bar_Tag"));
+        CHECK(unknown_in("radar map", "MC2_Radar_Tag"));
         if (!r.unknown_xml_tags.empty()) {
             CHECK(r.unknown_xml_tags[0].tag == "MC2_Not_A_Real_Tag");
             CHECK(r.unknown_xml_tags[0].occurrences == 2 && r.unknown_xml_tags[0].types == 2);
             CHECK(r.unknown_xml_tags[0].first_file.find("MC2Units.xml") != std::string::npos);
             CHECK(r.unknown_xml_tags[0].in_mod);
         }
-        CHECK(r.lua_scripts == 3 && r.lua_run == 3);
+        CHECK(r.lua_scripts == 4 && r.lua_run == 4);
         CHECK(r.lua_run_errors.size() == 2);
         CHECK(has(r.lua_run_errors, "MC2_ERRORS.LUA") && has(r.lua_run_errors, "MC2 load error"));
-        CHECK(has(r.lua_run_errors, "MC2_REQUIRES.LUA"));
-        for (const auto& e : r.lua_run_errors) CHECK(e.in_mod);
+        CHECK(has(r.lua_run_errors, "MC2_NAMED.LUA") && !has(r.lua_run_errors, "MC2_REQUIRES.LUA"));
+        for (const auto& e : r.lua_run_errors) {
+            CHECK(e.in_mod);
+            const bool named = e.path.find("MC2_NAMED") != std::string::npos;
+            CHECK(e.missing_require == (named ? "MC2_No_Such_Library" : ""));
+            CHECK(named == (e.named_by.find("MC2UNITS.XML (LUA_SCRIPT)") != std::string::npos));
+        }
+        CHECK(r.lua_unused_scripts.size() == 1 && has(r.lua_unused_scripts, "MC2_REQUIRES.LUA"));
+        if (!r.lua_unused_scripts.empty())
+            CHECK(r.lua_unused_scripts[0].missing_require == "MC2_No_Such_Library" && r.lua_unused_scripts[0].named_by.empty());
+        CHECK(r.shaders.checked && r.shaders.effects == 2 && r.shaders.mod_effects == 2 && r.shaders.loaded == 0);
+        CHECK(r.shaders.issues.size() == 2);
+        if (r.shaders.issues.size() == 2) {  // by effect name
+            const auto& glow = r.shaders.issues[0];
+            const auto& ground = r.shaders.issues[1];
+            CHECK(glow.effect == "MC2GLOW" && glow.kind == "source_only" && glow.in_mod && glow.drawn_by == "models");
+            CHECK(glow.models == 0 && glow.first_model.empty());
+            CHECK(ground.effect == "MC2GROUND" && ground.kind == "source_only" && ground.drawn_by == "terrain");
+        }
         CHECK(r.warning_count() >= 5);
         const std::string text = alamo::game::format_mod_report(r);
         CHECK(text.find("== missing files\n2 files") != std::string::npos);
@@ -184,11 +219,17 @@ void test_fake_install() {
         CHECK(js.find("\"error\": ") != std::string::npos);
         CHECK(js.find("MC2 load error caf\\u00e9") != std::string::npos);
         CHECK(js.find('\xE9') == std::string::npos);
+        CHECK(js.find("\"missing_require\": \"MC2_No_Such_Library\"") != std::string::npos);
+        CHECK(js.find("\"unused_scripts\": [\n") != std::string::npos);
+        CHECK(js.find("\"kind\": \"source_only\"") != std::string::npos && js.find("\"drawn_by\": \"terrain\"") != std::string::npos);
+        CHECK(text.find("== shaders\n2 effects (2 from mods)") != std::string::npos);
+        CHECK(text.find("(terrain effect)") != std::string::npos && text.find("(no object type's model names it)") != std::string::npos);
+        CHECK(text.find("1 more fail on a require of a missing script") != std::string::npos);
         alamo::game::ModCheckOptions o;
         o.files = o.xml_tags = o.lua_run = false;
         const ModCheckReport q = alamo::game::check_mod_data(foc.string(), {"MODPATH=" + mod2.string()}, o);
         CHECK(q.missing_files.empty() && q.unknown_xml_tags.empty() && q.lua_run == 0 && q.lua_run_errors.empty());
-        CHECK(q.lua_scripts == 3);
+        CHECK(q.lua_scripts == 4);
     }
     {  // not a folder: load fails, reported as one error
         const ModCheckReport r = alamo::game::check_mod_data((root / "no_such_dir").string(), {});

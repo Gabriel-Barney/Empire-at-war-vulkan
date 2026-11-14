@@ -9,18 +9,23 @@ its kind below and add it there instead of starting a second copy.
 | Kind of information | The one place | Notes |
 |---|---|---|
 | Binding decisions (scope, platform, parity, dependencies, camera / controls, graphics) | [`DECISIONS.md`](DECISIONS.md) | Add a dated row for every new decision; out-of-scope work is recorded here before it is dropped from the roadmap |
+| Side goals deferred until the core game and mod platform are complete (shader precompile, loading and build speed, CPU / GPU efficiency, graphics fidelity): definitions and re-analysis notes | [`DEFERRED_SIDE_GOALS.md`](DEFERRED_SIDE_GOALS.md) | Not scheduled; restart only by a new row in `DECISIONS.md` |
 | Build, test, gate, sanitizers, worker-count check, compiler cache | [`BUILD.md`](BUILD.md) | `CLAUDE.md` keeps only the short rules |
-| Performance measurements and scheduling results | [`PERFORMANCE.md`](PERFORMANCE.md) | Plans and research: [`OPT1_PLAN.md`](OPT1_PLAN.md), [`OPT_RESEARCH.md`](OPT_RESEARCH.md) |
+| Performance measurements and scheduling results | [`PERFORMANCE.md`](PERFORMANCE.md) | Plans and research: [`OPT1_PLAN.md`](OPT1_PLAN.md), [`OPT_RESEARCH.md`](OPT_RESEARCH.md); proposed all-core sim design: [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) |
+| Claude Code features that speed up lanes (`/loop`, `/goal`, `/compact`, `/btw`, shell mode, Remote Control) | [`WORKFLOW_TIPS.md`](WORKFLOW_TIPS.md) | Short form for agents in `.claude/agents/lane.md` |
 | In-game probes: which kit asks what, where findings go | [`PROBES.md`](PROBES.md) | Kit READMEs under `tools/probe_mod/` say how to run; findings go in `docs/re/` |
 | Roadmap rules and field list | [`ROADMAP_PROTOCOL.md`](ROADMAP_PROTOCOL.md) | The roadmap itself is `roadmap-store/` |
 | Behaviour of the original game (specs recovered from the binary) | [`re/`](re/) | Clean-room: engine code is written from these, never from decompiled output. `re/AUDIT_2026-10-30.md` is the status of each file |
-| Mod loading: what makes a mod loadable, file resolution, mechanisms, load reports, the no-mod-specific-code rule | [`MODS.md`](MODS.md) | The decision is in `DECISIONS.md`; status of each part on the roadmap (group `modc`) |
+| Mod loading: what makes a mod loadable, file resolution, mechanisms, load reports, the no-mod-specific-code rule, the compatibility target (near-full, checklist, reference mods: §10) | [`MODS.md`](MODS.md) | The decision is in `DECISIONS.md`; status of each part on the roadmap (group `modc`) |
 | Phase 4 (the game): step map and open per-step port choices | [`PHASE4.md`](PHASE4.md) | Finished-work notes and old build / fix logs: [`PHASE4_HISTORY.md`](PHASE4_HISTORY.md) |
 | Phase 3 (renderer): results, assumptions, reference | [`PHASE3.md`](PHASE3.md) | Details of finished work: `archive/` |
 | Phase 2 (architecture, headless core): results and design notes (determinism contract, file resolution order) | [`PHASE2.md`](PHASE2.md) | |
 | Game asset catalog, file formats, shader catalog and porting notes | [`assets/`](assets/), [`formats/`](formats/), [`shaders/`](shaders/) | Generated catalogs: do not edit by hand |
+| Mod compatibility: hard-coded names in `engine/` (audit, replacements, the name lint) | [`status/modc-audit.md`](status/modc-audit.md) | The mod-loading contract is `MODS.md`; its §7 "Known violations" is the short version and points here |
+| Golden CRC files: the `ALAMO_CRC 2` checkpoint format and the regen workflow | [`status/golden-checkpoints.md`](status/golden-checkpoints.md) | Regenerate with `tools\regen_goldens.cmd` (`BUILD.md`) |
+| Command Center launcher (`launcher/`, Rust): why it is here, its dependencies, how to build it | [`DECISIONS.md`](DECISIONS.md) "Command Center launcher", [`BUILD.md`](BUILD.md) | Code: `launcher/src/` |
 | Playtest QA notes | [`qa/`](qa/) | |
-| Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md) | History, not kept current |
+| Dated one-off reports | [`PRODUCTION_AUDIT_2026-10-30.md`](PRODUCTION_AUDIT_2026-10-30.md), [`PERF_AUDIT_2026-11-07.md`](PERF_AUDIT_2026-11-07.md) (CPU / GPU performance audit and research, input for the deferred side goals), [`PERF_SERIAL_2026-11-14.md`](PERF_SERIAL_2026-11-14.md) (CPU gains beyond parallelism, from a worker-count sweep) | History, not kept current |
 | Old versions of moved or trimmed documents | [`archive/`](archive/) | Zips |
 
 ## Where a new fact goes
@@ -33,5 +38,7 @@ its kind below and add it there instead of starting a second copy.
 - How mods are found, resolved or reported, or a port rule that applies only with a mod loaded → `MODS.md`.
 - A probe result → the `re/` spec the probe names (see `PROBES.md`), not only the kit README.
 - Whether something is done or open → the roadmap, nothing else.
+- A rule or procedure for agents → `CLAUDE.md` only if every task needs it, else a skill or agent file in `.claude/`; style and
+  where-it-goes rules: the `writing-for-agents` skill. A researched question → a cited report from the `research` skill, in the home matching its subject above.
 
 Repository-level files: [`../README.md`](../README.md) (public overview) and [`../CLAUDE.md`](../CLAUDE.md) (working rules for agents).

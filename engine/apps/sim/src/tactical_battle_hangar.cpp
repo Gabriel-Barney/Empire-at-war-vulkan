@@ -18,7 +18,8 @@
 //    (selection / control groups, announcement).
 //  * Engine loops: mode_enter at creation, locomotor_service every SimpleSpace service (not fighters / squadrons),
 //    engines offline / online from the ability events, remove on death / removal; the tick's requests are published
-//    for the audio host (engine_loop_requests()).
+//    for the audio host (engine_loop_requests()). cu8g t01: land Walk-locomotor units get mode enter and walk_service;
+//    HOLSTER_WEAPON heroes are attached before their mode enter and serviced every frame after the hangar services.
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -26,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/objects/behaviors.hpp"
@@ -33,6 +35,7 @@
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
+#include "alamo/tactical/services/stream_rng.hpp"  // SP5 t03: counter-based streams
 
 namespace alamo::sim {
 
@@ -43,12 +46,7 @@ namespace th = alamo::tactical::hangar;
 
 namespace {
 Vec3 hg_sv(tactical::Vec3 v) { return Vec3{v.x, v.y, v.z}; }
-std::string_view hg_trim(std::string_view s) {
-    auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
-    while (!s.empty() && ws(s.front())) s.remove_prefix(1);
-    while (!s.empty() && ws(s.back())) s.remove_suffix(1);
-    return s;
-}
+std::string_view hg_trim(std::string_view s) { return ascii_trim(s); }
 objects::BehaviorTypeId spawn_squadron_behavior() {
     static const objects::BehaviorTypeId id = objects::behavior_type_id("SPAWN_SQUADRON");
     return id;
@@ -62,15 +60,7 @@ objects::BehaviorTypeId dummy_upgrade_behavior() {
     return id;
 }
 bool hg_same(std::string_view a, std::string_view b) {
-    a = hg_trim(a);
-    b = hg_trim(b);
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 32) : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 32) : b[i];
-        if (x != y) return false;
-    }
-    return true;
+    return ascii_iequals(ascii_trim(a), ascii_trim(b));
 }
 constexpr const char* kBuildList = "Tactical_Buildable_Objects_Multiplayer";
 }  // namespace
@@ -135,7 +125,7 @@ void TacticalBattle::hg_add_types() {
 }
 
 void TacticalBattle::hg_setup(TacticalMode& mode) {
-    (void)mode;
+    hg_mode_ = &mode;  // cu8g t01: the HOLSTER_WEAPON attach of map-load objects runs before l1_setup
     const objects::GameObjectTypes& types = catalog_->types();
     engine_loops_.set_space_idle_movement_speed(catalog_->space_idle_movement_speed());
     hg_tech_bonus_.assign(bt_players_, 0);
@@ -201,10 +191,126 @@ bool TacticalBattle::hg_engine_unit(const Unit& u) const {
     return rules_->type(parts_[u.participant].type).members.empty();
 }
 
+bool TacticalBattle::hg_walk_engine_unit(const Unit& u) const {
+    // cu8g t01 (§3.3 last row): the land Walk locomotor (LocomotorKind::Default on land) calls the same switch.
+    if (space_ || !u.movable || !movement_ || !movement_->has_unit(u.id)) return false;
+    return movement_->view(u.id).locomotor == mv::LocomotorKind::Default;
+}
+
+const TacticalBattle::HgHolsterType* TacticalBattle::hg_holster_type(objects::TypeIndex t) {
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (t >= types.size()) return nullptr;
+    if (hg_holster_types_.size() != types.size()) hg_holster_types_.resize(types.size());
+    HgHolsterType& h = hg_holster_types_[t];
+    if (!h.known) {
+        h.known = 1;
+        constexpr uint32_t kFps = 30;
+        h.desc.transition_frames = th::holster_frames(types.get_float(t, "Holster_Transition_Time_In_Secs"), kFps);
+        h.desc.min_drawn_frames = th::holster_frames(types.get_float(t, "Holster_Minimum_Drawn_Time_In_Secs"), kFps);
+        h.desc.disable_engine_loops = types.get_bool(t, "Holster_Disable_Engine_Loops");
+        h.bone = std::string(hg_trim(types.get_string(t, "Holster_Weapon_Bone_Name")));
+        h.has_bone_name = h.bone.empty() ? 0 : 1;
+    }
+    return &h;
+}
+
+void TacticalBattle::hg_holster_attach(const Unit& u) {
+    // Initialise (0x6355c0) / placed (0x635180): only for an object that carries HOLSTER_WEAPON in its current behaviour
+    // list and whose model has Holster_Weapon_Bone_Name (BattleCatalog model data); else the behaviour does nothing.
+    if (!hg_mode_) return;
+    const objects::ObjectStore& st = hg_mode_->primary();
+    if (!st.alive(u.h) || !st.has_behavior(u.h, objects::beh::HolsterWeapon)) return;
+    const HgHolsterType* ht = hg_holster_type(st.type(u.h));
+    if (!ht || !ht->has_bone_name) return;
+    Vec3 unused{};
+    if (model_bone_point(st, u.h, ht->bone, unused) <= 0) return;
+    engine_loops_.holster_attach(u.id, frame_);
+}
+
+void TacticalBattle::saber_throw_service(TacticalMode& mode) {
+    // cu8k t01 (CU8F_T01_T02_T07_RE.md §2.7 items 1, 2, 4): the throw at SWORD_THROW's half (kSaberThrowDelay [M]); from the
+    // throw + 6 SWORD_CONTROL: the saber gone (expired / detonated) -> the ability ends now; within Catch_Dist (3D, the
+    // thrower's position to the saber's) -> SWORD_CATCH (snap drawn now) and the end 11 frames later. A thrower that is
+    // gone drops its record (the saber flies on as a projectile).
+    if (sabers_.empty()) return;
+    const objects::ObjectStore& st = mode.primary();
+    size_t w = 0;
+    for (size_t k = 0; k < sabers_.size(); ++k) {
+        SaberThrowState& s = sabers_[k];
+        const Unit* u = unit_by_id(s.thrower);
+        bool keep = u && u->alive && !u->retreated && st.alive(u->h) && combat_ && combat_->has_unit(s.thrower);
+        if (keep && s.serial == 0) {
+            if (frame_ >= s.throw_frame) {
+                // Spawn_Projectile 0x54ade0: shooter the thrower, target the recorded object, fire-at point T, max travel =
+                // the Saber_Name type's Projectile_Max_Flight_Distance (+ radius + |dz|). [port] spawned at the thrower's
+                // target point (position + Ranged_Target_Z_Adjust): retail's spawn point is about 19 units off (a bone).
+                tc::SaberLaunch l;
+                l.thrower = s.thrower;
+                l.owner = combat_->owner(s.thrower);
+                l.projectile = s.projectile >= 0 ? static_cast<uint32_t>(s.projectile) : 0xFFFFFFFFu;
+                l.from = combat_->target_point(s.thrower);
+                l.fire_at = tactical::Vec3{s.aim.x, s.aim.y, s.aim.z};
+                l.target = s.target;
+                s.serial = s.projectile >= 0 ? combat_->launch_saber(l, frame_) : 0u;
+                if (s.serial == 0) {  // spawn failure: the ability ends
+                    engine_loops_.saber_resolve(s.thrower, 0u, frame_);
+                    keep = false;
+                }
+            }
+        } else if (keep && s.end_frame != 0) {
+            keep = frame_ < s.end_frame;
+        } else if (keep && frame_ >= s.throw_frame + 6) {
+            tactical::Vec3 sp;
+            if (!combat_->saber_position(s.serial, sp)) {  // gone: end now (epsilon 0: the saber stepped before)
+                engine_loops_.saber_resolve(s.thrower, 0u, frame_);
+                keep = false;
+            } else {
+                const tactical::Vec3 me = combat_->position(s.thrower);
+                const float dx = sp.x - me.x, dy = sp.y - me.y, dz = sp.z - me.z;
+                if (s.catch_dist > 0.0f && dx * dx + dy * dy + dz * dz < s.catch_dist * s.catch_dist) {
+                    s.end_frame = frame_ + 11u;  // SWORD_CATCH (30 frames at speed 3) finishes at the 10th advance after its play
+                    engine_loops_.saber_resolve(s.thrower, frame_, s.end_frame);
+                }
+            }
+        }
+        if (!keep) continue;
+        if (w != k) sabers_[w] = sabers_[k];
+        ++w;
+    }
+    sabers_.resize(w);
+}
+
+void TacticalBattle::hg_holster_service() {
+    // Service 0x635750 (interval 1), ascending id. Engaged: a current attack target (0x397a40), a running Berserker (SAP
+    // +0x2cc), the current clip ATTACK / SPINMOVE, or a hero clash (+0x3b4, s78n t06: kUnitHeroClash). cu8j t03
+    // (CU8F_T01_T02_T07_RE §2.6 / §2.7): a thrown saber is in flight from the throw up to and including the ability's end
+    // (the stand-in scheduled by saber_schedule); on the end frame the service still sees it in flight, so the held draw
+    // transition clears and the hum is unsuppressed on the next frame, as in retail.
+    if (!hg_mode_) return;
+    const objects::ObjectStore& st = hg_mode_->primary();
+    for (const Unit& u : units_) {
+        if (!u.alive || u.retreated || !engine_loops_.has_holster(u.id) || !st.alive(u.h)) continue;
+        const HgHolsterType* ht = hg_holster_type(st.type(u.h));
+        if (!ht) continue;
+        const bool engaged = (combat_ && combat_->has_unit(u.id) && combat_->current_target(u.id) != tc::kNoObject) ||
+                             (abilities_ && abilities_->is_active(u.id, ta::kBerserker)) || anim_engaged_clip(u.id) ||
+                             (combat_ && combat_->has_unit(u.id) && (combat_->flags(u.id) & tc::kUnitHeroClash) != 0);
+        // cu8j t03: the scheduled throw, then the service (the saber in flight from the throw to the ability's end), then
+        // the catch snap (only a real catch) and the end.
+        engine_loops_.saber_service(u.id, frame_, true);
+        engine_loops_.holster_service(u.id, ht->desc, engaged, engine_loops_.saber_in_flight(u.id), frame_);
+        engine_loops_.saber_service(u.id, frame_, false);
+    }
+}
+
 void TacticalBattle::hg_adopt(const Unit& u, SimRng& rng) {
-    if (hg_engine_unit(u)) engine_loops_.mode_enter(u.id, frame_);
+    hg_holster_attach(u);  // cu8g t01: before mode enter, so a holster hero starts suppressed (no hum)
+    if (hg_engine_unit(u) || hg_walk_engine_unit(u)) engine_loops_.mode_enter(u.id, frame_);
     if (!hangars_ || u.type >= hangar_desc_.size() || hangar_desc_[u.type] < 0) return;
-    if (hangars_->add_carrier(u.id, static_cast<uint32_t>(hangar_desc_[u.type]), frame_, &rng)) hg_used_ = true;
+    if (hangars_->add_carrier(u.id, static_cast<uint32_t>(hangar_desc_[u.type]), frame_, &rng)) {
+        hg_used_ = true;
+        if (hg_spawn_off_) hangars_->set_spawn_enabled(u.id, false);  // bkg3 b0028: +0x3CB = 0 (tactical_battle.hpp)
+    }
 }
 
 void TacticalBattle::hg_unit_removed(objects::ObjectId id) {
@@ -228,10 +334,35 @@ void TacticalBattle::hg_unit_removed(objects::ObjectId id) {
     if (hangars_->carrier_of(id) != tc::kNoObject) hangars_->squadron_removed(id, frame_);
 }
 
+// SP5 (read old, write new, commit in index order): the per-unit inputs (which service, speed / hyperspace or moving) come
+// from const reads and are gathered in parallel into per-unit slots; EngineLoops (sorted records, an op list) is then
+// serviced serially in unit order, as before.
 void TacticalBattle::hg_engine_service() {
-    for (const Unit& u : units_) {
-        if (!u.alive || u.retreated || !hg_engine_unit(u)) continue;
-        engine_loops_.locomotor_service(u.id, movement_->view(u.id).speed, l1_jumps_.departing(u.id), frame_);
+    struct In {
+        uint8_t kind = 0;  // 0 none, 1 SimpleSpace locomotor service, 2 land Walk service
+        bool flag = false;  // kind 1: in hyperspace (departing); kind 2: moving
+        float speed = 0.0f;
+    };
+    const auto n = static_cast<uint32_t>(units_.size());
+    std::vector<In> in(n);
+    const auto fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            if (!u.alive || u.retreated) continue;
+            if (hg_engine_unit(u)) {
+                in[i] = {1, l1_jumps_.departing(u.id), movement_->view(u.id).speed};
+            } else if (hg_walk_engine_unit(u)) {
+                // cu8g t01 [port]: the Walk "moving" test is untraced (§3.3 [M]); an order in progress or speed, as kUnitMoving.
+                const mv::UnitView v = movement_->view(u.id);
+                in[i] = {2, v.has_goal || v.speed > 0.0f, 0.0f};
+            }
+        }
+    };
+    if (tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, fill);
+    else fill(0, n);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (in[i].kind == 1) engine_loops_.locomotor_service(units_[i].id, in[i].speed, in[i].flag, frame_);
+        else if (in[i].kind == 2) engine_loops_.walk_service(units_[i].id, in[i].flag, frame_);
     }
 }
 
@@ -302,6 +433,7 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
                     md.z = p.z;
                     md.yaw_deg = dmath::atan2(f.y, f.x) * (180.0f / dmath::kPiF);
                     md.owner = owner;
+                    mv_type_extents(md, ut);  // s78n t20
                     movement_->add_unit(md);
                     u->movable = true;
                 }
@@ -316,6 +448,9 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
                 store.destroy(containers_[ci].h);
             } else {
                 abilities_->add_container(containers_[ci].id, desc_of(team_beh), owner, group, frame_, &rng);
+                // cu8j t02 (MOVEMENT §4.7.3): SpawnSquadron 0x593960 runs the team helper 0x2a5a60, which adopts the
+                // container (0x39bcb0, return 0x2a61d5): one ctor draw when it qualifies (space: a fighter member).
+                (void)mv_adopt(mode, containers_[ci].h, rng);
                 bound = containers_[ci].id;
             }
         } else if (!group.empty()) {
@@ -358,7 +493,16 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
 
 void TacticalBattle::hg_tick(TacticalMode& mode, SimRng& rng) {
     if (!hangars_) return;
-    hangars_->update(frame_, rng);
+    // SP5 t03: with the Hangar stream on, each carrier's entry / bay draws come from its own counter-based stream.
+    if (svc_streams_ & (1u << static_cast<uint32_t>(tactical::services::StreamId::Hangar))) {
+        const tactical::hangar::HangarSystem::StreamOf own = [this](tactical::hangar::ObjectId carrier) {
+            return tactical::services::stream_rng(cfg_.session_seed, frame_, tactical::services::StreamId::Hangar,
+                                                  static_cast<uint64_t>(static_cast<uint32_t>(carrier)));
+        };
+        hangars_->update(frame_, rng, &own);
+    } else {
+        hangars_->update(frame_, rng);
+    }
     objects::ObjectStore& store = mode.primary();
     const std::vector<th::LaunchRequest> launches(hangars_->launches().begin(), hangars_->launches().end());
     for (const th::LaunchRequest& r : launches) {
@@ -481,6 +625,18 @@ uint8_t TacticalBattle::hg_build_check(const objects::ObjectStore& st, int32_t p
         for (uint32_t p = 0; p < bt_players_; ++p)
             if (allied(static_cast<int32_t>(p))) n += production_->count_type(static_cast<int32_t>(p), static_cast<int32_t>(type));
         if (n >= static_cast<uint32_t>(limit)) return 5;
+    }
+    // skai t10 (STRATEGIC_GAPS 23, the galactic rule; SKAI_T06_LAND_RUNS 3 item 6: retail fields one Han_Solo_Team_Land_MP,
+    // the port landed a second while the first lived): Build_Limit_Current_Per_Player 0 -> fail; > 0 -> the player's live
+    // count + queued orders < limit. [port] Live count = the player's battle participants of that type (one per galactic-level
+    // object: a company counts once) that wait in the reinforcement pool or are on the field with a live unit.
+    const int32_t per_player = types.get_int(type, "Build_Limit_Current_Per_Player");  // default -1: none
+    if (per_player == 0) return 5;
+    if (per_player > 0) {
+        uint32_t n = production_->count_type(player, static_cast<int32_t>(type));
+        for (const Participant& q : parts_)
+            if (q.owner == player && q.type == static_cast<uint32_t>(type) && ((q.reserve && !q.deployed) || (q.deployed && q.alive > 0))) ++n;
+        if (n >= static_cast<uint32_t>(per_player)) return 5;
     }
     return 0;
 }
@@ -616,6 +772,18 @@ void TacticalBattle::hg_production(TacticalMode& mode, SimRng& rng) {
             const std::vector<tc::ObjectId> none;
             abilities_->add_container(id, desc_of(static_cast<uint32_t>(t)), o.player, none, frame_, &rng);
             hg_upgrade_objs_.push_back(HgUpgradeObject{id, h});
+            // s78n t20 fix (SKIRMISH_SETUP §3 "Completion (0x498f70)": signal 0x22 is raised for every finished build,
+            // before the DUMMY_UPGRADE branch; AI_GALACTIC_3 §1.11: the AI build task waits for it): the upgrade's
+            // completion is reported too (no pool entry). Without it a land task force whose to-produce list holds an
+            // upgrade never finished Produce_Force - Tactical_Multiplayer_Build_Land_Units_Generic (not removable by
+            // the goal system) then held its plan for the rest of the battle and its player built no more units.
+            // [port] land only: in space the AI claims the new object of the type (claim_produced).
+            if (!space_) {
+                ProductionDone d;
+                d.player = o.player;
+                d.type = static_cast<uint32_t>(t);
+                production_done_.push_back(d);
+            }
         } else if (!space_) {
             // q6 t19 (SKIRMISH_SETUP §3 / §3.1 item 1): a finished land build never spawns. 0x27fad0 appends the type to
             // the player's reinforcement pool; the human / AI Reinforce drops it later through its landing object

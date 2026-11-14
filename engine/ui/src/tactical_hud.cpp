@@ -7,40 +7,19 @@
 #include <map>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/hud_font.hpp"
 #include "alamo/ui/picking.hpp"
+#include "ui_strings.hpp"
 
 namespace alamo::ui {
 
 namespace {
 constexpr Rgba8 kPanelBack{12, 18, 28, 190}, kPanelEdge{150, 170, 190, 230};
 constexpr Vec2f kSlotFallback{40, 40};
-constexpr int32_t kShellLayerMin = 2;  // [port] components on a shell bone draw above the first shell half
-
-std::u32string ascii32(std::string_view s) {
-    std::u32string o;
-    for (char c : s) o.push_back(static_cast<char32_t>(static_cast<unsigned char>(c)));
-    return o;
-}
 
 // A rectangle outline of 2-unit lines plus a translucent fill (the [port] stand-in frame).
-void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f c, Vec2f size, Rgba8 back, Rgba8 edge) {
-    HudQuad q;
-    q.min = {c.x - 0.5f * size.x, c.y - 0.5f * size.y};
-    q.max = {c.x + 0.5f * size.x, c.y + 0.5f * size.y};
-    q.color = back;
-    dl.add(layer, HudList::Alpha, q);
-    const float t = 2.0f;
-    const HudQuad edges[4] = {
-        {{q.min.x, q.max.y - t}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.max.x, q.min.y + t}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.min.x + t, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.max.x - t, q.min.y}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-    };
-    for (const HudQuad& e : edges) dl.add(layer, HudList::Alpha, e);
-}
-
 void dot(HudDrawList& dl, uint32_t layer, Vec2f c, float half, Rgba8 color) {
     HudQuad q;
     q.min = {c.x - half, c.y - half};
@@ -49,22 +28,14 @@ void dot(HudDrawList& dl, uint32_t layer, Vec2f c, float half, Rgba8 color) {
     dl.add(layer, HudList::Alpha, q);
 }
 
-int32_t find_fmt(const ComponentTable& t, const char* fmt, int a, int b = -1) {
-    char n[48];
-    if (b < 0) std::snprintf(n, sizeof n, fmt, a);
-    else std::snprintf(n, sizeof n, fmt, a, b);
-    return t.find(n);
-}
-
-uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p) {
-    int32_t l = c.base_layer;
-    if (p.from_bone) l = std::max(l, kShellLayerMin);
-    return static_cast<uint32_t>(std::clamp(l, 0, static_cast<int32_t>(kHudLayers) - 1));
-}
-
 std::vector<uint32_t> capped(std::vector<uint32_t> ids, size_t n = 127) {
     if (ids.size() > n) ids.resize(n);
     return ids;
+}
+// ui3 t07: MasterTextFile text of `key` - a missing key shows as TextDatabase::text gives it, no text database the key
+// itself (as the tooltips), never an English stand-in.
+std::u32string text_or(const TextDatabase* text, const char* key) {
+    return text ? utf16_to_utf32(text->text(key)) : ascii32(key);
 }
 }  // namespace
 
@@ -192,6 +163,14 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
     if (pop_text_ < 0) pop_text_ = table.find("Text_Pop_Cap");
     shell_ = table.find("i_main_skirmish");
     retreat_ = table.find("b_retreat");
+    special_weapon_ = table.find("b_special_weapon");
+    reinforce_button_ = table.find("b_reinforcement");
+    beacon_button_ = table.find("b_special_weapon2");
+    beacon_t_ = table.find("b_beacon_t");
+    camera_t_ = table.find("b_camera_t");
+    reinforce_counter_ = table.find("reinforcement_counter");
+    r_pop_icon_ = table.find("r_pop_icon");
+    r_pop_text_ = table.find("r_pop_text");
     for (int i = 0; i < 6; ++i) order_button_[i] = find_fmt(table, "c_button%02d", i);
     pause_ = table.find("b_play_pause_t");
     pause_g_ = table.find("b_play_pause");
@@ -214,12 +193,7 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
         mark(i);
     for (uint32_t i = 0; i < table.size(); ++i) {
         const std::string& n = table[i].name;
-        auto starts = [&](std::string_view p) {
-            if (n.size() < p.size()) return false;
-            for (size_t k = 0; k < p.size(); ++k)
-                if (std::tolower(static_cast<unsigned char>(n[k])) != p[k]) return false;
-            return true;
-        };
+        auto starts = [&](std::string_view p) { return ascii_istarts_with(n, p); };  // p: lower-case prefixes
         if (starts("st_") || starts("tooltip_") || starts("encyclopedia_") || starts("generic_flytext") ||
             starts("reinforcement_window"))
             dynamic_[i] = 1;
@@ -235,9 +209,7 @@ void TacticalHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
 }
 
 void TacticalHud::resize(uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts_ && next.screen_height != canvas_.screen_height) fonts_->clear();  // pixel sizes follow screenH
-    canvas_ = next;
+    resize_canvas(canvas_, fonts_, width, height);
     if (table_) {
         apply_tactical_fallback_layout(*table_, canvas_, layout_);
         layout_.update(canvas_, *table_);
@@ -245,29 +217,10 @@ void TacticalHud::resize(uint32_t width, uint32_t height) {
 }
 
 void TacticalHud::hit(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot) {
-    HudHitBox h;
-    h.component = component;
-    h.layer = layer;
-    h.min = {center.x - 0.5f * size.x, center.y - 0.5f * size.y};
-    h.max = {center.x + 0.5f * size.x, center.y + 0.5f * size.y};
-    h.slot = slot;
-    hits_.push_back(h);
+    hits_.push_back(make_hit_box(component, layer, center, size, slot));
 }
 
-int32_t TacticalHud::hit_test(int32_t px, int32_t py) const {
-    const Vec2f c = canvas_.pixel_to_canvas(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f);
-    // Topmost: highest layer, then the latest added on that layer.
-    int32_t best = -1;
-    uint32_t best_layer = 0;
-    for (const HudHitBox& h : hits_) {
-        if (c.x < h.min.x || c.x > h.max.x || c.y < h.min.y || c.y > h.max.y) continue;
-        if (best < 0 || h.layer >= best_layer) {
-            best = h.component;
-            best_layer = h.layer;
-        }
-    }
-    return best;
-}
+int32_t TacticalHud::hit_test(int32_t px, int32_t py) const { return topmost_hit(hits_, canvas_, px, py); }
 
 std::vector<uint32_t> TacticalHud::selection_ids() const {
     std::vector<uint32_t> ids;
@@ -277,14 +230,7 @@ std::vector<uint32_t> TacticalHud::selection_ids() const {
 }
 
 Vec2f TacticalHud::component_size(uint32_t component, const ComponentPlacement& p) const {
-    if (p.size.x > 0 && p.size.y > 0) return p.size;
-    const CommandBarComponent& c = (*table_)[component];
-    if (c.has_size) return c.size;
-    for (const auto* list : {&c.blank_texture, &c.icon_texture, &c.icon_alternate_texture})
-        if (!list->empty())
-            if (const AtlasEntry* e = atlas_->find(list->front()))
-                return {static_cast<float>(e->width) * c.scale, static_cast<float>(e->height) * c.scale};
-    return {};
+    return component_art_size((*table_)[component], p, *atlas_, {});
 }
 
 void TacticalHud::on_pointer(std::span<const HudPointerEvent> events, std::vector<commands::EventData>& out) const {
@@ -297,6 +243,47 @@ void TacticalHud::on_pointer(std::span<const HudPointerEvent> events, std::vecto
             }
         }
     }
+}
+
+// An ability button's click: right = autofire toggle; left = targeting mode (targeted) or the mode toggle.
+void TacticalHud::ability_click(const AbilitySlot& a, const std::string& name, Button button, bool queued,
+                                std::vector<commands::EventData>& out, std::vector<HudAction>* actions) {
+    if (button == Button::Right) {
+        out.push_back(ability_autofire_event(a.users, a.ability.ability_type, !a.ability.autofire));
+    } else if (a.ability.targeted) {
+        HudAction h;
+        h.kind = HudAction::Kind::BeginAbilityTargeting;
+        h.component = a.component;
+        h.name = name;
+        h.ability_type = a.ability.ability_type;
+        h.value = a.ability.target_kind != 0 ? a.ability.target_kind : -1;  // TargetingController: -1 = by type
+        h.ids = a.users;
+        h.queued = queued;  // [port: Gabriel] queue modifier at the click (the host may apply its own binding)
+        if (actions) actions->push_back(std::move(h));
+    } else {
+        out.push_back(ability_mode_event(a.users, a.ability.ability_type, !a.ability.active));
+    }
+}
+
+bool TacticalHud::activate_ability(uint8_t ability_type, bool queued, std::vector<commands::EventData>& out,
+                                   std::vector<HudAction>* actions) const {
+    if (!table_ || ability_type == 0) return false;
+    for (const AbilitySlot& a : ability_slots_) {
+        if (a.ability.ability_type != ability_type) continue;
+        if (!a.ability.enabled || a.users.empty()) return false;
+        if (a.component >= 0)
+            if (const ButtonRuntime* r = buttons_.find_state(static_cast<uint32_t>(a.component)); r && (r->disabled || r->hidden)) return false;
+        ability_click(a, a.component >= 0 ? (*table_)[static_cast<uint32_t>(a.component)].name : std::string(), Button::Left,
+                      queued, out, actions);
+        return true;
+    }
+    return false;
+}
+
+bool TacticalHud::order_button_live(uint32_t button) const {
+    if (button >= 6 || order_button_[button] < 0) return false;
+    const ButtonRuntime* r = buttons_.find_state(static_cast<uint32_t>(order_button_[button]));
+    return !r || (!r->hidden && !r->disabled);
 }
 
 void TacticalHud::update_input(const RoutedInput& routed, bool shift, bool ctrl, double now,
@@ -327,6 +314,25 @@ void TacticalHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
         radar_drag_ = false;
     }
 
+    // [port: Gabriel] squadron wing buttons (build_wings): hover look, left click -> WingSelect.
+    wing_hover_ = routed.hover_component >= kWingHitBase &&
+                          routed.hover_component < kWingHitBase + static_cast<int32_t>(wing_ids_.size())
+                      ? routed.hover_component - kWingHitBase
+                      : -1;
+    for (const HudPointerEvent& e : routed.hud) {
+        if (e.kind != HudPointerEvent::Kind::Click || e.button != Button::Left || e.component < kWingHitBase) continue;
+        const auto w = static_cast<size_t>(e.component - kWingHitBase);
+        if (w >= wing_ids_.size() || wing_ids_[w].empty()) continue;
+        HudAction h;
+        h.kind = HudAction::Kind::WingSelect;
+        h.component = e.component;
+        h.value = static_cast<int32_t>(w);
+        h.ids = wing_ids_[w];
+        h.shift = shift;
+        h.ctrl = ctrl;
+        act(std::move(h));
+    }
+
     for (const ButtonClick& k : clicks) {
         const auto ci = static_cast<uint32_t>(k.component);
         const CommandBarComponent& c = (*table_)[ci];
@@ -351,22 +357,7 @@ void TacticalHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
         for (const AbilitySlot& a : ability_slots_) {
             if (a.component != k.component) continue;
             handled = true;
-            if (!a.ability.enabled) break;
-            if (k.button == Button::Right) {
-                out.push_back(ability_autofire_event(a.users, a.ability.ability_type, !a.ability.autofire));
-            } else if (a.ability.targeted) {
-                HudAction h;
-                h.kind = HudAction::Kind::BeginAbilityTargeting;
-                h.component = k.component;
-                h.name = c.name;
-                h.ability_type = a.ability.ability_type;
-                h.value = a.ability.target_kind != 0 ? a.ability.target_kind : -1;  // TargetingController: -1 = by type
-                h.ids = a.users;
-                h.queued = k.shift;  // [port: Gabriel] queue modifier at the click (the host may apply its own binding)
-                act(std::move(h));
-            } else {
-                out.push_back(ability_mode_event(a.users, a.ability.ability_type, !a.ability.active));
-            }
+            if (a.ability.enabled) ability_click(a, c.name, k.button, k.shift, out, actions);
             break;
         }
         if (handled) continue;
@@ -470,6 +461,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
     dl_.clear();
     blobs_.clear();
     hits_.clear();
+    wing_ids_.clear();
     stats_ = {};
     if (!table_ || !atlas_ || !fonts_) return;
     faction_alt_ = frame.faction_alt;
@@ -483,6 +475,10 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
     world_.build(wc, units, types, *atlas_, *fonts_, dl_, &blobs_, flytext);
     stats_.world = world_.stats();
     groups_ = group_selection(units);
+    // ui3 t07 (HUD_GAPS §2.1): Tooltip_Text entry 1 in tactical land mode when the component has a second entry, else
+    // entry 0; the groups that pick an entry by state (buy buttons, the bombing-run button) override it below.
+    for (uint32_t i = 0; i < table_->size(); ++i)
+        if ((*table_)[i].tooltip_text.size() > 1) buttons_.state(i).tooltip_index = frame.world.land ? 1 : 0;
     if (!frame.world.interface_hidden) {
         build_markers(frame, units);
         build_skeleton(frame);
@@ -498,7 +494,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
         };
         set_text(planet_text_, frame.planet_name);
         if (frame.tech >= 0) {
-            std::u32string t = text_ && text_->find("TEXT_TECH") ? utf16_to_utf32(*text_->find("TEXT_TECH")) : std::u32string(U"Tech:");
+            std::u32string t = text_or(text_, "TEXT_TECH");  // ui3 t07: no English stand-in
             char n[16];
             std::snprintf(n, sizeof n, " %d", frame.tech);
             set_text(tech_text_, t + ascii32(n));
@@ -514,6 +510,8 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
             set_text(pop_text_, {});
         }
         apply_order_buttons(frame.order_buttons);
+        apply_bombing_run_button(frame.bombing_run);
+        apply_command_buttons(frame.command_buttons);
         build_buttons(frame);
         // C2 (FIXPASS_GALACTIC §4.2): the name's line is centred on the bone (250, 745 vs bone 252, 744). Drawn here because the
         // generic button text hangs a Max_Text_Width block below its anchor, half a line low (QA D12 on the galactic strip).
@@ -532,6 +530,13 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
                 const TextBlock tb = measure_text_block(*fonts_, canvas_, frame.planet_name, 0.0f, st);
                 add_text_block(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, frame.planet_name,
                                {p.center.x, p.center.y + 0.5f * tb.height}, 0.0f, st);
+                // [port: Gabriel 2026-11-13] fleet cohesion: one line above the name, same style
+                if (!frame.cohesion_text.empty()) {
+                    st.width_scale = fit_width_scale(measure_text_block(*fonts_, canvas_, frame.cohesion_text, 0.0f, st).width,
+                                                     c.max_text_width);
+                    add_text_block(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, frame.cohesion_text,
+                                   {p.center.x, p.center.y - 0.75f * tb.height}, 0.0f, st);
+                }
             }
         }
         // FIXPASS_GALACTIC §4.2 (capture C2): the advisor *_LOOP movie in Movie_tactical (Icon, Size 200 x 200) with its
@@ -549,6 +554,7 @@ void TacticalHud::build(const TacticalHudFrame& frame, std::span<const HudUnit> 
             }
         }
         build_objectives(frame);
+        build_wings(frame);
         build_pause_banner(frame);
         // UI.md §1.1 5h: the drag rectangle is queued with the main HUD pass (not while the interface is hidden).
         if (frame.drag_select) stats_.drag_box = add_drag_box(dl_, canvas_, frame.drag_rect) > 0;
@@ -592,7 +598,7 @@ void TacticalHud::build_skeleton(const TacticalHudFrame& f) {
             add_atlas_quad(dl_, layer, HudList::Alpha, *atlas_, c->icon_texture[0], {at.x + 14.0f, at.y}, {}, c->scale, Rgba8{});
         HudTextStyle st;
         st.font = fonts_->font(c && !c->font_name.empty() ? c->font_name : std::string(kFallbackFontFace),
-                               c && c->font_point_size > 0 ? c->font_point_size : 7.0f, canvas_.screen_height);
+                               c && c->font_point_size > 0 ? c->font_point_size : 7.0f, canvas_.font_height());
         st.color = c && c->has_text_color ? c->text_color : Rgba8{255, 212, 33, 255};
         st.outline = true;
         st.align = c && c->right_justified ? TextAlign::Right : TextAlign::Left;
@@ -747,7 +753,7 @@ void TacticalHud::build_panel(const TacticalHudFrame& f, std::span<const HudType
         if (g.ids.size() > 1) {
             HudTextStyle st;
             st.font = fonts_->font(c.font_name.empty() ? std::string(kFallbackFontFace) : c.font_name,
-                                   c.font_point_size > 0 ? c.font_point_size : 6.0f, canvas_.screen_height);
+                                   c.font_point_size > 0 ? c.font_point_size : 6.0f, canvas_.font_height());
             st.color = c.has_text_color ? c.text_color : Rgba8{};
             st.outline = c.text_outline;
             st.align = TextAlign::Right;
@@ -825,6 +831,7 @@ void TacticalHud::build_abilities(const TacticalHudFrame& f) {
         r.disabled = !s.ability.enabled;
         r.selected = s.ability.active;
         r.icon_override = s.ability.icon;
+        r.tooltip_key = s.ability.tooltip_key;  // ui3 t07: the ability's own text ("" = the component's Tooltip_Text)
         r.build_fill = s.ability.recharge < 1.0f ? std::clamp(s.ability.recharge, 0.0f, 1.0f) * 100.0f : -1.0f;
         r.overlay = s.ability.autofire;
         const CommandBarComponent& c = (*table_)[ci];
@@ -932,8 +939,10 @@ void TacticalHud::build_buy_buttons(const TacticalHudFrame& f) {
             case HudBuildOption::Block::QueueFull: r.tooltip_index = 0; break;
             case HudBuildOption::Block::PopCap: r.tooltip_index = 1; break;
             case HudBuildOption::Block::Funds: r.tooltip_index = 2; break;
+            case HudBuildOption::Block::None: r.tooltip_index = 0; break;  // ui3 t07: the type's own tooltip (tooltip_key)
             default: r.tooltip_index = -1; break;
         }
+        r.tooltip_key = o.block == HudBuildOption::Block::None ? o.tooltip_key : std::string();
         const CommandBarComponent& c = (*table_)[u];
         const Vec2f center{anchor.x + kBone[i].x, anchor.y + kBone[i].y};
         const uint32_t layer = static_cast<uint32_t>(std::clamp(std::max(c.base_layer, kShellLayerMin), 0, static_cast<int32_t>(kHudLayers) - 1));
@@ -994,6 +1003,52 @@ void TacticalHud::apply_order_buttons(const HudOrderButtons& s) {
     }
 }
 
+// HUD_GAPS §9.2: the land bombing-run button (0x312570): never hidden, disabled := !ready, alternate icon 3, tooltip 3,
+// the cooldown on the Build_Texture_Name dial. Lua GUI_Component_Visibility / _Enable (mods) override like the order buttons.
+void TacticalHud::apply_bombing_run_button(const HudBombingRunButton& s) {
+    if (!s.present || special_weapon_ < 0) return;
+    const auto ci = static_cast<uint32_t>(special_weapon_);
+    const CommandBarComponent& c = (*table_)[ci];
+    ButtonRuntime& r = buttons_.state(ci);
+    r.hidden = r.script_visible >= 0 ? r.script_visible == 0 : s.hidden;
+    r.disabled = r.script_enabled >= 0 ? r.script_enabled == 0 : s.disabled;
+    if (s.icon >= 0 && c.icon_alternate_texture.size() > static_cast<size_t>(s.icon))
+        r.icon_override = c.icon_alternate_texture[static_cast<size_t>(s.icon)];
+    r.tooltip_index = s.tooltip >= 0 && c.tooltip_text.size() > static_cast<size_t>(s.tooltip) ? s.tooltip : -1;
+    r.build_fill = s.dial < 0.0f ? -1.0f : std::clamp(s.dial, 0.0f, 1.0f) * 100.0f;
+}
+
+void TacticalHud::apply_command_buttons(const HudCommandButtons& s) {
+    if (!s.present) return;
+    auto set = [&](int32_t ci, bool enabled, bool selected) {
+        if (ci < 0) return;
+        ButtonRuntime& r = buttons_.state(static_cast<uint32_t>(ci));
+        r.hidden = r.script_visible == 0;
+        r.disabled = r.script_enabled >= 0 ? r.script_enabled == 0 : (s.controls_locked || !enabled);
+        r.selected = selected;
+    };
+    set(retreat_, s.retreat_enabled, false);
+    if (retreat_ >= 0)
+        buttons_.state(static_cast<uint32_t>(retreat_)).build_fill = s.retreat_dial < 0.0f ? -1.0f : std::clamp(s.retreat_dial, 0.0f, 1.0f) * 100.0f;
+    set(reinforce_button_, s.reinforce_enabled, s.reinforce_selected);
+    set(beacon_button_, s.beacon_enabled, s.beacon_selected);
+    set(beacon_t_, s.beacon_enabled, s.beacon_selected);
+    if (camera_t_ >= 0) buttons_.state(static_cast<uint32_t>(camera_t_)).selected = s.movie_mode;
+    auto text = [&](int32_t ci, bool shown, std::u32string t) {
+        if (ci < 0) return;
+        ButtonRuntime& r = buttons_.state(static_cast<uint32_t>(ci));
+        r.hidden = r.script_visible >= 0 ? r.script_visible == 0 : !shown;
+        r.text = std::move(t);
+    };
+    char n[32];
+    std::snprintf(n, sizeof n, "%u", s.reinforce_count);
+    text(reinforce_counter_, s.reinforce_count > 0, ascii32(n));
+    const bool pop = s.pop_used >= 0 && s.pop_cap >= 0;
+    if (pop) std::snprintf(n, sizeof n, "%d/%d", s.pop_used, s.pop_cap);
+    text(r_pop_text_, pop, pop ? ascii32(n) : std::u32string());
+    text(r_pop_icon_, pop, {});
+}
+
 void TacticalHud::build_buttons(const TacticalHudFrame& f) {
     for (uint32_t i = 0; i < table_->size(); ++i) {
         if (dynamic_[i]) continue;
@@ -1022,16 +1077,10 @@ void TacticalHud::build_buttons(const TacticalHudFrame& f) {
 int32_t TacticalHud::font_of(int32_t component, float fallback_points) const {
     const CommandBarComponent* c = component >= 0 ? &(*table_)[static_cast<size_t>(component)] : nullptr;
     return fonts_->font(c && !c->font_name.empty() ? c->font_name : std::string(kFallbackFontFace),
-                        c && c->font_point_size > 0 ? c->font_point_size : fallback_points, canvas_.screen_height);
+                        c && c->font_point_size > 0 ? c->font_point_size : fallback_points, canvas_.font_height());
 }
 
 namespace {
-std::u32string text_or(const TextDatabase* text, const char* key, const char32_t* fallback) {
-    if (text)
-        if (const std::u16string* v = text->find(key)) return utf16_to_utf32(*v);
-    return fallback;
-}
-
 // Upper-cases ASCII letters (the original draws the banner / header captions in capitals).
 std::u32string upper32(std::u32string s) {
     for (char32_t& c : s)
@@ -1059,13 +1108,13 @@ void TacticalHud::build_pause_banner(const TacticalHudFrame& f) {
     st.font = font_of(pause_text_, 9.0f);
     st.align = TextAlign::Center;
     st.color = Rgba8{214, 92, 26, 255};
-    add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, upper32(text_or(text_, "TEXT_GAME_PAUSED", U"Game Paused")), bar_c, st);
+    add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, upper32(text_or(text_, "TEXT_GAME_PAUSED")), bar_c, st);
     const CommandBarComponent* rc = resume_ >= 0 ? &(*table_)[static_cast<size_t>(resume_)] : nullptr;
     st.font = font_of(resume_, 9.0f);
     st.color = over ? Rgba8{255, 150, 140, 255} : (rc && rc->has_text_color ? rc->text_color : Rgba8{255, 64, 64, 255});
     st.emboss = rc ? rc->text_emboss : true;
     add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_,
-             upper32(text_or(text_, "TEXT_BUTTON_RESUME_GAME", U"Resume Game")), btn_c, st);
+             upper32(text_or(text_, "TEXT_BUTTON_RESUME_GAME")), btn_c, st);
     if (resume_ >= 0) hit(resume_, kLayer, btn_c, btn_sz);
     stats_.pause_banner = true;
 }
@@ -1074,7 +1123,7 @@ void TacticalHud::build_pause_banner(const TacticalHudFrame& f) {
 // inside the canvas, bottom 30 units above the canvas bottom; header + 1-unit rule + "n. text" lines wrapped to the
 // box (objective_text Size y = line spacing, objective_header_text Size y = header spacing).
 void TacticalHud::build_objectives(const TacticalHudFrame& f) {
-    if (f.objectives.empty()) return;
+    if (f.objectives.empty() || f.objectives_hidden) return;
     const CommandBarComponent* back = obj_back_ >= 0 ? &(*table_)[static_cast<size_t>(obj_back_)] : nullptr;
     const CommandBarComponent* hdr = obj_header_ >= 0 ? &(*table_)[static_cast<size_t>(obj_header_)] : nullptr;
     const CommandBarComponent* txt = obj_text_ >= 0 ? &(*table_)[static_cast<size_t>(obj_text_)] : nullptr;
@@ -1126,7 +1175,7 @@ void TacticalHud::build_objectives(const TacticalHudFrame& f) {
     hs.outline = hdr ? hdr->text_outline : true;
     hs.align = TextAlign::Left;
     std::u32string header = f.objectives_header;
-    if (header.empty()) header = text_or(text_, "TEXT_TEST_OBJECTIVE_HEADER", U"Mission Objectives");
+    if (header.empty()) header = text_or(text_, "TEXT_TEST_OBJECTIVE_HEADER");
     const float hy = top - pad_y - 0.5f * header_h;
     add_text(dl_, tl, HudList::Text, *fonts_, canvas_, upper32(std::move(header)), {left + pad_x, hy}, hs);
     {  // rule under the header
@@ -1154,6 +1203,44 @@ void TacticalHud::build_objectives(const TacticalHudFrame& f) {
         }
         add_text(dl_, tl, HudList::Text, *fonts_, canvas_, l.text, {left + pad_x + 6.0f, y}, st);
         y -= line_h;
+    }
+}
+
+// [port: Gabriel, 2026-11-13] Squadron wing buttons (HudWing): a column at the left edge of the canvas, 40 units below
+// its middle, one 172 x 24 button per wing that has a squadron: "LABEL  n" (n = squadrons) and the key hint at the right.
+// Selected look while the whole wing is selected, brighter while hovered. Hit ids kWingHitBase + wing index.
+void TacticalHud::build_wings(const TacticalHudFrame& f) {
+    const int32_t font = font_of(obj_text_, 8.0f);
+    if (font < 0) return;
+    constexpr uint32_t kLayer = 4;
+    const Vec2f size{172.0f, 24.0f};
+    const float x = -0.5f * canvas_.width + 14.0f + 0.5f * size.x;
+    float y = 40.0f;
+    for (size_t w = 0; w < f.wings.size() && w < kMaxWings; ++w) {
+        const HudWing& wing = f.wings[w];
+        wing_ids_.push_back(wing.squadrons > 0 ? wing.ids : std::vector<uint32_t>{});
+        if (wing.squadrons == 0 || wing.ids.empty()) continue;
+        const bool over = wing_hover_ == static_cast<int32_t>(w);
+        const Rgba8 back = wing.selected ? Rgba8{30, 70, 120, 230} : over ? Rgba8{52, 58, 66, 230} : Rgba8{24, 28, 34, 210};
+        const Rgba8 edge = wing.selected ? Rgba8{120, 190, 255, 255} : Rgba8{96, 102, 110, 255};
+        const Vec2f c{x, y};
+        frame_rect(dl_, kLayer, c, size, back, edge);
+        HudTextStyle st;
+        st.font = font;
+        st.outline = true;
+        st.align = TextAlign::Left;
+        st.color = over || wing.selected ? Rgba8{255, 255, 255, 255} : Rgba8{214, 220, 228, 255};
+        char n[16];
+        std::snprintf(n, sizeof n, "  %u", wing.squadrons);
+        add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, wing.label + ascii32(n), {c.x - 0.5f * size.x + 8.0f, c.y}, st);
+        if (!wing.hotkey.empty()) {
+            st.align = TextAlign::Right;
+            st.color = Rgba8{150, 160, 172, 255};
+            add_text(dl_, kLayer, HudList::Text, *fonts_, canvas_, wing.hotkey, {c.x + 0.5f * size.x - 8.0f, c.y}, st);
+        }
+        hit(kWingHitBase + static_cast<int32_t>(w), kLayer, c, size);
+        ++stats_.wings;
+        y -= size.y + 6.0f;
     }
 }
 

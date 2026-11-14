@@ -4,29 +4,15 @@
 #include <algorithm>
 #include <cmath>
 
+#include "alamo/core/ascii.hpp"
+
 namespace alamo::render {
 
 namespace {
 
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
-
-bool ieq(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'a' && x <= 'z') x = static_cast<char>(x - 'a' + 'A');
-        if (y >= 'a' && y <= 'z') y = static_cast<char>(y - 'a' + 'A');
-        if (x != y) return false;
-    }
-    return true;
-}
-
 constexpr double kTicksPerSecond = 30.0;
+// Tracks whose min_geometry_lod exceeds this are not created (the game's geometry detail is not wired in: always full).
+constexpr float kGeometryDetail = 1.0f;
 
 }  // namespace
 
@@ -119,7 +105,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             }
         }
         // ---- scorch marks (objects new this frame)
-        if (options_.scorch && !ti.scorch_mark.empty() && !std::binary_search(prev_ids_.begin(), prev_ids_.end(), o.id)) {
+        if (!ti.scorch_mark.empty() && !std::binary_search(prev_ids_.begin(), prev_ids_.end(), o.id)) {
             ++stats_.scorch_seen;
             const SurfaceFxDef* fx = lib_->find_surface_fx(ti.scorch_mark);
             const SurfaceSettings* ss = fx ? fx->find(surface) : nullptr;
@@ -135,7 +121,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             }
         }
         // ---- dynamic tracks
-        if (!options_.tracks || ti.surface_fx.empty()) continue;
+        if (ti.surface_fx.empty()) continue;
         const SurfaceSettings* chosen = nullptr;
         const terrain::DynamicTrackParams* params = nullptr;
         for (const std::string& name : ti.surface_fx) {
@@ -143,7 +129,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             const SurfaceSettings* ss = fx ? fx->find(surface) : nullptr;
             if (!ss || ss->dynamic_track.empty()) continue;
             const terrain::DynamicTrackParams* p = lib_->find_track(ss->dynamic_track);
-            if (!p || p->min_geometry_lod > options_.geometry_detail) continue;
+            if (!p || p->min_geometry_lod > kGeometryDetail) continue;
             chosen = ss;
             params = p;
             break;
@@ -169,7 +155,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             if (it == gens_.end()) continue;
             it->second.seen = generation_;
             any = true;
-            const bool active = params && !dying && ((n == 2 && side != 0) || (n == 1 && side == 0)) && it->second.track == upper(params->name);
+            const bool active = params && !dying && ((n == 2 && side != 0) || (n == 1 && side == 0)) && it->second.track == ascii_upper(params->name);
             if (!active) {
                 it->second.gen->advance(dt);
                 ++stats_.faded_only;
@@ -180,7 +166,7 @@ void SimDecorations::update(const InterpolatedFrame& frame) {
             continue;
         }
         ++stats_.track_objects;
-        const std::string key = upper(params->name);
+        const std::string key = ascii_upper(params->name);
         for (int k = 0; k < n; ++k) {
             Gen& g = gens_[{o.id, sides[k]}];
             if (!g.gen || g.track != key) {
@@ -239,7 +225,7 @@ const SurfaceSettings* SimDecorations::foot_settings(const SnapshotTypeInfo& ti,
     const std::string_view other = f.foot == 0 ? "_RIGHT" : "_LEFT";
     const SurfaceSettings* any = nullptr;
     for (const std::string& name : ti.surface_fx) {
-        const std::string up = upper(name);
+        const std::string up = ascii_upper(name);
         if (up.size() >= other.size() && up.compare(up.size() - other.size(), other.size(), other) == 0) continue;  // the other foot
         const SurfaceSettings* ss = usable(lib_->find_surface_fx(name));
         if (!ss) continue;
@@ -275,7 +261,7 @@ SimDecorations::BoneWorldFn model_bone_source(const SnapshotTypeTable& table, Si
         const assets::Skeleton& sk = m->asset->skeleton;
         size_t b = sk.names.size();
         for (size_t i = 0; i < sk.names.size(); ++i)
-            if (ieq(sk.names[i], bone)) {
+            if (ascii_iequals(sk.names[i], bone)) {
                 b = i;
                 break;
             }

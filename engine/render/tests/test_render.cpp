@@ -1,5 +1,6 @@
 // test_render: main and the tests that stayed (see test_render_common.hpp; the others are in test_render_*.cpp).
 #include "test_render_common.hpp"
+#include "alamo/core/host_fs.hpp"
 
 namespace test_render_t {
 
@@ -73,9 +74,7 @@ void test_layouts() {
         CHECK(render::assets_layout_for(l) == (c.skinned ? assets::VertexLayout::Skinned : assets::VertexLayout::Static));
         CHECK(render::vertex_tables_agree(l));
         // Lower-case spelling is accepted too.
-        std::string lc = c.name;
-        for (char& ch : lc) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        CHECK(render::vertex_layout_for(lc) == c.expect);
+        CHECK(render::vertex_layout_for(alamo::ascii_lower(c.name)) == c.expect);
         render::VertexInputDesc vin;
         CHECK(render::build_vertex_input(l, {}, vin));
         CHECK(vin.binding.stride == 64 && vin.attributes.size() == 6);
@@ -251,6 +250,25 @@ void test_camera() {
 
 // [port] SSAO depth reconstruction (ssao.hpp, the CPU mirror of ssao.hlsl's ViewPos): view point -> uv + depth ->
 // view point round trip for a perspective projection (normal and reversed depth, sub-pixel offset) and an orthographic one.
+// [port: Gabriel] Render scale is a share of the pixels: each side x sqrt(scale).
+void test_render_scale_extent() {
+    const VkExtent2D uhd{3840, 2160};
+    const VkExtent2D s75 = render::render_scale_extent(uhd, 0.75f);
+    CHECK(s75.width == 3326 && s75.height == 1871);
+    const VkExtent2D s50 = render::render_scale_extent(uhd, 0.5f);
+    CHECK(s50.width == 2715 && s50.height == 1527);
+    const VkExtent2D same = render::render_scale_extent(uhd, 1.0f);
+    CHECK(same.width == 3840 && same.height == 2160);
+    const VkExtent2D above = render::render_scale_extent(uhd, 2.0f);  // never above native
+    CHECK(above.width == 3840 && above.height == 2160);
+    const VkExtent2D low = render::render_scale_extent(uhd, 0.01f);  // clamped to kRenderScaleMin: half each side
+    CHECK(low.width == 1920 && low.height == 1080);
+    const VkExtent2D fhd = render::render_scale_extent({1920, 1080}, 0.75f);
+    CHECK(fhd.width == 1663 && fhd.height == 935);
+    const VkExtent2D tiny = render::render_scale_extent({1, 1}, 0.25f);
+    CHECK(tiny.width == 1 && tiny.height == 1);
+}
+
 void test_ssao_math() {
     render::Mat4 persp = render::perspective_rh(0.8f, 16.0f / 9.0f, 10.0f, 7000.0f);
     render::Mat4 jitter = persp;
@@ -395,7 +413,7 @@ void test_lod() {
     CHECK(render::choose_lod(2, render::lod_detail(4.0f, 0.1f, 1.0f)) == 1 && render::choose_lod(2, render::lod_detail(1.0f, 0.1f, 1.0f)) == 0);
     // Hidden meshes (B.9): Damage_Decal names (exact, case-insensitive) + STEALTH/buildup/charged substrings;
     // without XML the *_BLAST* fallback.
-    CHECK(render::is_damage_mesh("HP_F-R_Blast") && render::is_damage_mesh("hp_trac_blast") && !render::is_damage_mesh("Girders01"));
+    CHECK(render::fallback_damage_decal_rule("HP_F-R_Blast") && render::fallback_damage_decal_rule("hp_trac_blast") && !render::fallback_damage_decal_rule("Girders01"));
     CHECK(render::is_state_mesh("Hull_STEALTH") && render::is_state_mesh("Gun_BuildUp_01") && render::is_state_mesh("charged_fx") &&
           !render::is_state_mesh("HULL"));
     assets::ModelAsset dm;
@@ -424,15 +442,15 @@ void test_lod() {
         CHECK(near_eq(p.color[1].x, 237.0f / 255.0f) && near_eq(p.color[8].y, 129.0f / 255.0f));                         // Red, Eight
         CHECK(near_eq(render::owner_team_color(9, p).x, p.color[0].x) && render::owner_team_color(7, p).w == 1.0f);
     }
-    // Galactic camera (B.8): horizontal FOV atan(0.5) at every aspect, near 10, far 10000.
+    // Galactic camera (B.8): horizontal FOV atan(0.5) at 4:3, near 10, far 10000; [port: Gabriel] Hor+ above 4:3 - the
+    // vertical FOV stays 4:3's at 16:9 and 32:9.
     {
         render::OrbitCamera gc;
         gc.fov_x = 1.0f;
-        for (const float a : {4.0f / 3.0f, 16.0f / 9.0f}) {
-            const uint32_t w = a > 1.5f ? 1600u : 1200u;
+        const float fy43 = render::fov_y_from_horizontal(std::atan(0.5f), 4.0f / 3.0f);
+        for (const uint32_t w : {1200u, 1600u, 3200u}) {
             const render::ViewMatrices gv = render::make_galactic_view(gc, w, 900);
-            const float fy = render::fov_y_from_horizontal(std::atan(0.5f), static_cast<float>(w) / 900.0f);
-            CHECK(near_eq(gv.proj.m[1][1], 1.0f / std::tan(0.5f * fy)));  // vertical scale from the fixed horizontal FOV
+            CHECK(near_eq(gv.proj.m[1][1], 1.0f / std::tan(0.5f * fy43)));  // vertical scale = 4:3's at every aspect
             CHECK(near_eq(gv.proj.m[0][0] * static_cast<float>(w) / 900.0f, gv.proj.m[1][1]));
             const float zn = gv.proj.m[2][3] / gv.proj.m[2][2], zf = gv.proj.m[2][3] / (gv.proj.m[2][2] + 1.0f);
             CHECK(std::fabs(zn - 10.0f) < 1e-2f && std::fabs(zf - 10000.0f) < 5.0f);
@@ -803,9 +821,104 @@ void test_cloud_slots() {
     CHECK(render::Renderer::cloud_texture_slots(p, none) == 0x2);
 }
 
+// cu8f t05 (CU8F_T03_T05_RE §2.1 / §2.2): the particle scene wind. Land = speed x (cos w, sin w, 0) of the start
+// environment (0 deg = +X, 90 deg = +Y); no environment = the ctor default (0 deg, 2.0); space = zero.
+void test_scene_wind() {
+    terrain::MapData m;
+    m.terrain.present = true;  // land
+    Float3 w = render::scene_wind(m);
+    CHECK(near_eq(w.x, 2.0f) && near_eq(w.y, 0.0f) && w.z == 0.0f);
+    terrain::Environment a, b;
+    a.wind_direction_deg = 0.0f;
+    a.wind_speed = 7.0f;
+    b.wind_direction_deg = 90.0f;
+    b.wind_speed = 10.0f;
+    m.environments.environments = {a, b};
+    m.environments.start_index = 1;
+    w = render::scene_wind(m);
+    CHECK(std::fabs(w.x) < 1e-4f && near_eq(w.y, 10.0f) && w.z == 0.0f);
+    m.environments.start_index = 0;
+    w = render::scene_wind(m);
+    CHECK(near_eq(w.x, 7.0f) && std::fabs(w.y) < 1e-4f);
+    m.terrain.present = false;  // space: never written
+    w = render::scene_wind(m);
+    CHECK(w.x == 0.0f && w.y == 0.0f && w.z == 0.0f);
+    // cu8g t03: the wind of the environment Set_New_Environment made active (index form; clamped to n - 1), space zero.
+    m.terrain.present = true;
+    m.environments.start_index = 0;
+    w = render::scene_wind(m, 1);
+    CHECK(std::fabs(w.x) < 1e-4f && near_eq(w.y, 10.0f));
+    w = render::scene_wind(m, 0);
+    CHECK(near_eq(w.x, 7.0f) && std::fabs(w.y) < 1e-4f);
+    w = render::scene_wind(m, 9);  // clamped to the last environment
+    CHECK(std::fabs(w.x) < 1e-4f && near_eq(w.y, 10.0f));
+    CHECK(render::active_environment(m, 9) == &m.environments.environments[1] && render::active_environment(m, 0) == &m.environments.environments[0]);
+    m.terrain.present = false;
+    w = render::scene_wind(m, 1);
+    CHECK(w.x == 0.0f && w.y == 0.0f && w.z == 0.0f);
+    terrain::MapData none;
+    CHECK(render::active_environment(none, 0) == nullptr);
+    none.terrain.present = true;
+    w = render::scene_wind(none, 3);  // land without environments: the record ctor default
+    CHECK(near_eq(w.x, 2.0f) && w.z == 0.0f);
+    // A scene without a map has no environment to switch to.
+    render::MapScene empty;
+    CHECK(!empty.set_environment(1) && empty.environment_index() == 0 && empty.environment() == nullptr);
+    // WorldRenderer::set_clouds before init: scale / velocity only (the offset keeps accumulating from there).
+    render::WorldRenderer world;
+    world.update(1.0f);  // default velocity (5, 5)
+    terrain::CloudParams cp;
+    cp.scale = 800.0f;
+    cp.velocity[0] = 1.0f;
+    cp.velocity[1] = -2.0f;
+    cp.texture = "W_Clouds01.tga";
+    world.set_clouds(cp);
+    world.update(1.0f);
+    CHECK(near_eq(world.cloud_scale(), 800.0f) && near_eq(world.cloud_velocity_x(), 1.0f) && near_eq(world.cloud_velocity_y(), -2.0f));
+    CHECK(near_eq(world.cloud_offset_x(), 6.0f) && near_eq(world.cloud_offset_y(), 3.0f) && world.cloud_texture_name() == nullptr);
+}
+
+// cu8g t03 (real data): MapScene::set_environment before start() switches the active environment of a loaded land map:
+// lighting(), environment() and scene_wind() follow it; out of range clamps; the same index changes nothing.
+void test_scene_environment_real() {
+    const char* data = std::getenv("ALAMO_FOC_DATA");
+    const std::string root = data ? data : "";
+    if (root.empty()) {
+        std::printf("scene environment: ALAMO_FOC_DATA not set, skipped\n");
+        return;
+    }
+    vfs::VfsConfig cfg;
+    cfg.foc_root = root;
+    std::string err;
+    auto files = vfs::Vfs::create(cfg, &err);
+    CHECK(files != nullptr);
+    if (!files) return;
+    render::MapScene scene;
+    CHECK(scene.load(*files, "_MP_LAND_ENDOR", nullptr, serial_for, &err));  // 4 environments (CU8G_T02_ENV_PICK_RE §7)
+    const std::vector<terrain::Environment>& envs = scene.map().environments.environments;
+    std::printf("scene environment: %zu environments, start %u\n", envs.size(), scene.environment_index());
+    CHECK(envs.size() >= 2 && !scene.space());
+    if (envs.empty()) return;
+    const uint32_t n = static_cast<uint32_t>(envs.size());
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t before = scene.environment_index();
+        CHECK(scene.set_environment(i) == (i != before));
+        CHECK(scene.environment_index() == i && scene.environment() == &envs[i]);
+        CHECK(!scene.set_environment(i));  // already active
+        const std::array<float, 3> wv = envs[i].wind_vector();
+        const Float3 w = scene.scene_wind();
+        CHECK(near_eq(w.x, wv[0]) && near_eq(w.y, wv[1]) && w.z == 0.0f);
+        const render::Lighting l = render::Lighting::from_environment(envs[i], false);
+        CHECK(near_eq(scene.lighting().sun.intensity, l.sun.intensity) && near_eq(scene.lighting().fog_start, l.fog_start) &&
+              scene.lighting().fog_enabled == l.fog_enabled && scene.lighting().skydome[0] == l.skydome[0]);
+    }
+    scene.set_environment(n + 5);
+    CHECK(scene.environment_index() == n - 1);
+}
+
 void test_png() {
     const uint8_t iend[] = {'I', 'E', 'N', 'D'};
-    CHECK(render::crc32(iend) == 0xAE426082u);
+    CHECK(alamo::crc32(iend, sizeof iend) == 0xAE426082u);
     const char* wiki = "Wikipedia";
     CHECK(render::adler32({reinterpret_cast<const uint8_t*>(wiki), 9}) == 0x11E60398u);
     std::vector<uint8_t> px(3 * 2 * 4);
@@ -822,7 +935,7 @@ void test_png() {
         const std::span<const uint8_t> typed(f.data() + pos + 4, len + 4);
         const size_t c = pos + 8 + len;
         const uint32_t crc = (uint32_t(f[c]) << 24) | (uint32_t(f[c + 1]) << 16) | (uint32_t(f[c + 2]) << 8) | f[c + 3];
-        CHECK(render::crc32(typed) == crc);
+        CHECK(alamo::crc32(typed.data(), typed.size()) == crc);
         if (!std::memcmp(f.data() + pos + 4, "IDAT", 4)) idat.assign(f.begin() + static_cast<std::ptrdiff_t>(pos + 8),
                                                                    f.begin() + static_cast<std::ptrdiff_t>(pos + 8 + len));
         if (!std::memcmp(f.data() + pos + 4, "IEND", 4)) saw_iend = true;
@@ -1006,6 +1119,7 @@ int main() {
     test_layouts();
     test_samplers();
     test_camera();
+    test_render_scale_extent();
     test_ssao_math();
     test_idle_spin();
     test_lod();
@@ -1016,9 +1130,11 @@ int main() {
     test_world();
     test_type_resolution();
     test_cloud_slots();
-    std::printf("cpu: %s\n", g_failures ? "FAILED" : "ok");
+    test_scene_wind();
+    test_scene_environment_real();
+    std::printf("cpu: %s\n", g_fail ? "FAILED" : "ok");
     const int gpu = run_gpu(ALAMO_RENDER_SOURCE_DIR);
-    if (gpu) ++g_failures;
-    std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
-    return g_failures ? 1 : 0;
+    if (gpu) ++g_fail;
+    std::printf("%s (%d failures)\n", g_fail ? "FAILED" : "PASSED", g_fail);
+    return g_fail ? 1 : 0;
 }

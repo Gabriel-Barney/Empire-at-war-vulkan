@@ -7,7 +7,7 @@ Standard library only. Reads a Q2TRACE 1 file (or a run folder holding trace.q2t
 then the first tick an AI object comes that close, and every start object of the human that left the store (tick, type).
 
     toolchain\\venv\\Scripts\\python.exe -I tools\\probe_mod\\q2_traces\\analysis\\land_attack.py <trace.q2t | run dir>
-        [--step 1800] [--radius 1500]
+        [--step 1800] [--radius 1500] [--centre X,Y]
 
 Players: the human is the C line with is_human = 1, the AI the C line with has_ai = 1 (the idle Empire and the Rebel AI
 in the probe run).
@@ -32,6 +32,9 @@ def main():
     ap.add_argument("trace")
     ap.add_argument("--step", type=int, default=1800)
     ap.add_argument("--radius", type=float, default=1500.0)
+    # skai t06: a fixed base centre "x,y" (e.g. 5121,1261 = the retail Utapau Empire base). The default centroid includes the
+    # human's start forces, so a port run that spawns them elsewhere moves the centre.
+    ap.add_argument("--centre", default="")
     a = ap.parse_args()
     path = os.path.join(a.trace, "trace.q2t") if os.path.isdir(a.trace) else a.trace
     meta, _, frames, types, end_reason = q2trace.parse(path)
@@ -61,7 +64,9 @@ def main():
         if start is None and fr.key and objs and human is not None:
             start = {i: name.get(o[1], str(o[1])) for i, o in objs.items() if o[0] == human}
             pts = [(objs[i][2], objs[i][3]) for i in start]
-            if pts:
+            if a.centre:
+                centre = tuple(float(v) for v in a.centre.split(","))
+            elif pts:
                 centre = (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
         if centre is None:
             continue

@@ -6,6 +6,7 @@
 // keys, the hot-set program (or "needs translation") and the parameter bindings.
 #pragma once
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -16,6 +17,7 @@
 
 #include "alamo/materials/d3d9_state.hpp"
 #include "alamo/materials/fixed_function.hpp"
+#include "alamo/materials/fx_source.hpp"
 #include "alamo/materials/params.hpp"
 #include "alamo/materials/programs.hpp"
 #include "alamo/materials/pso.hpp"
@@ -42,7 +44,6 @@ const char* phase_effect_file(RenderPhase p);             // "Data\\Art\\Shaders
 
 enum class TechniqueLod : uint8_t { DX9 = 0, DX8ATI, DX8, FixedFunction, FF, Unknown, MaxViewport };
 TechniqueLod technique_lod_from_string(std::string_view lod, std::string_view technique_name);
-const char* technique_lod_name(TechniqueLod l);
 // Index of the best technique (lowest TechniqueLod; first wins on ties), -1 if none.
 int pick_best_technique(const fx::Effect& e);
 
@@ -93,6 +94,12 @@ struct ResolvedPass {
     const PsoKey& select_exact(const ExprInputs& in) const;
 };
 
+// The pass can be drawn as resolved: a restore-only pass, a track-B pass (translated on demand) or one
+// with a hand-written / FF program. False for shader passes track B does not take (shader model 3 mixed
+// with an older stage, a VS without a PS or the reverse, shader + FF mix): the renderer draws those
+// submeshes unlit.
+bool pass_has_program(const ResolvedPass& p);
+
 struct ParamBinding {
     std::string name, semantic;
     uint32_t type = 0, cls = 0, rows = 0, columns = 0, elements = 0;  // fx::ParamType / ParamClass
@@ -132,6 +139,11 @@ struct MaterialEffect {
     std::string technique_name;
     TechniqueLod lod = TechniqueLod::Unknown;
     bool used_ff_fallback = false; // best shader technique needs translation; FF technique used
+    // [port] Best technique skipped because a shader pass has no program (pass_has_program(); vs_3_0 /
+    // ps_3_0 in mods), like a technique failing ValidateTechnique in the original: its name ("" = none).
+    // `technique` is then the next one by LOD / file order whose passes all have a program.
+    std::string skipped_technique;
+    int skipped_technique_index = -1, skipped_pass = -1;  // its index and its first pass without a program
     std::vector<ResolvedPass> passes;
     std::vector<ParamBinding> params;
     GenericLayout generic_layout;  // per-effect material record for non-mesh effects
@@ -173,7 +185,13 @@ struct ShaderFileEntry {
     bool loose = false;    // loose file; false = MEG entry
     int dir_order = 0;     // search position of the directory root holding it: mod dirs 0..n-1,
                            // base install n (MEG entries use n too), fallback dirs n+1...
+    bool from_mod = false; // reached through a mod: a loose file in a mod dir, or an entry of a MEG
+                           // mounted from a mod dir (audit_effects() / load report only; D.1 ignores it)
 };
+
+// True when host path `host` lies inside directory `dir` (case-insensitive, '/' == '\'; `dir` == `host`
+// is not inside). Used to attribute MEG mounts to mod directories.
+bool host_path_under(std::string_view host, std::string_view dir);
 
 // Head of the list (steps 1 and 2), upper-case base names, starting with kDefaultEffectName.
 const std::vector<std::string>& engine_effect_load_sequence();
@@ -198,13 +216,20 @@ private:
 };
 
 // Builds the entries from an alamo::vfs::Vfs (template so materials does not link vfs):
-// lib.set_shader_files(shader_files_from_vfs(*vfs)).
+// lib.set_shader_files(shader_files_from_vfs(*vfs)). The D.1 preload covers Shaders\ and
+// Shaders\Terrain\ only; include_engine = true also lists Shaders\Engine\ (for audit_effects(): engine
+// effects a mod overrides are loaded by name too).
 template <class VfsT>
-std::vector<ShaderFileEntry> shader_files_from_vfs(const VfsT& vfs) {
+std::vector<ShaderFileEntry> shader_files_from_vfs(const VfsT& vfs, bool include_engine = false) {
     std::vector<ShaderFileEntry> out;
     const int mods = static_cast<int>(vfs.mod_dirs().size());
-    for (const char* glob : {"DATA\\ART\\SHADERS\\*.FX", "DATA\\ART\\SHADERS\\*.FXO", "DATA\\ART\\SHADERS\\TERRAIN\\*.FX",
-                             "DATA\\ART\\SHADERS\\TERRAIN\\*.FXO"}) {
+    std::vector<const char*> globs = {"DATA\\ART\\SHADERS\\*.FX", "DATA\\ART\\SHADERS\\*.FXO",
+                                      "DATA\\ART\\SHADERS\\TERRAIN\\*.FX", "DATA\\ART\\SHADERS\\TERRAIN\\*.FXO"};
+    if (include_engine) {
+        globs.push_back("DATA\\ART\\SHADERS\\ENGINE\\*.FX");
+        globs.push_back("DATA\\ART\\SHADERS\\ENGINE\\*.FXO");
+    }
+    for (const char* glob : globs) {
         for (auto& p : vfs.list(glob)) {
             auto r = vfs.resolve(p);
             if (!r) continue;
@@ -213,6 +238,14 @@ std::vector<ShaderFileEntry> shader_files_from_vfs(const VfsT& vfs) {
             if (r->layer == VfsT::Resolution::Mod) e.dir_order = r->layer_index;
             else if (r->layer == VfsT::Resolution::Fallback) e.dir_order = mods + 1 + r->layer_index;
             else e.dir_order = mods;
+            if (r->layer == VfsT::Resolution::Mod) {
+                e.from_mod = true;
+            } else if (r->layer == VfsT::Resolution::Meg && r->layer_index >= 0 &&
+                       static_cast<size_t>(r->layer_index) < vfs.mounts().size()) {
+                const std::string& host = vfs.mounts()[static_cast<size_t>(r->layer_index)].path;
+                for (const auto& d : vfs.mod_dirs())
+                    if (host_path_under(host, d)) e.from_mod = true;
+            }
             e.path = std::move(p);
             out.push_back(std::move(e));
         }
@@ -238,7 +271,7 @@ struct LoadOptions {
     SamplerKey engine_sampler{};
     // When the best technique has no hot-set program but a FIXEDFUNCTION technique exists, use
     // the FF technique through the FF ubershader. Off by default: such passes are now
-    // ProgramStatus::Translated (track B, translate_pass()).
+    // ProgramStatus::Translated (track B, materials::translate_pass() in translated.hpp: on demand in worker jobs, never at load).
     bool ff_fallback_for_untranslated = false;
     // Overrides _ALAMO_RENDER_PHASE (e.g. effects without metadata drawn by the engine).
     std::optional<RenderPhase> phase_override;
@@ -248,6 +281,11 @@ struct LoadOptions {
     // exist but fail to load; a mapped effect that is itself missing still gives the green default.
     // Keys in any form ("FissureMeshGloss.fx", a path): normalised by EffectLibrary.
     EffectRemap missing_effect_remap;
+    // modc t23 (fx_source.hpp): an effect's `<name>.fx` compiled by alamo_fx_prebuild is loaded in place of
+    // its `.fxo`, as the original does. Off = the t11 behaviour (.fxo only; a lone .fx loads as Failed).
+    bool use_fx_sources = true;
+    // Where compiled sources are looked up; empty = FxCache::default_directory().
+    std::filesystem::path fx_cache_dir;
 };
 
 // Loads and caches phase baselines; thread-compatible (not internally synchronised).
@@ -266,7 +304,20 @@ public:
     // Baseline state of a phase: engine_device_defaults() (D3D9 defaults + CULLMODE = CW) <-
     // Phase<phase>.fxo pass 0 (device defaults if missing).
     const DeviceState& phase_baseline(RenderPhase p);
+    // The compiled .fxo of the effect: a game path, never a .fx source (nullopt if none).
     std::optional<std::string> find_effect_path(std::string_view effect) const;
+    // HLSL source `<name>.fx` of the same name, same search order (nullopt if none). The original
+    // compiles it with D3DX at run time and prefers it over the .fxo (RENDER.md 6). The port loads it
+    // when alamo_fx_prebuild has compiled it into the FxCache (fx_source_status() == Compiled; the
+    // effect's path is then the .fx); otherwise the .fxo is loaded, and without one load() fails and
+    // load_or_default() returns the green default under the effect's name (EffectFallback::Failed,
+    // the original's result when its compile fails). docs/MODS.md, shader section.
+    std::optional<std::string> find_effect_source(std::string_view effect) const;
+    // What load() does with the effect's .fx (None without one). Reads the source, its includes and
+    // the cache entry each call; Compiled also means the compiled effect parses. *detail: the fxc
+    // error line (Failed) or the cache folder (NotCompiled).
+    FxSourceState fx_source_status(std::string_view effect, std::string* detail = nullptr) const;
+    const FxCache& fx_cache() const { return fx_cache_; }
 
     // D.3: the built-in green fixed-function effect (fallback = BuiltinDefault), built on first use.
     const MaterialEffect& default_effect();
@@ -274,7 +325,9 @@ public:
     // fallback = Missing (name kDefaultEffectName); a file that exists but fails to load returns
     // the same green effect renamed to the requested effect (fallback = Failed, *err set). A file
     // that parses but has no selectable technique returns the default effect object itself
-    // (fallback = Failed, name kDefaultEffectName, *err set). FissureMeshGloss.fx (no FXO shipped) -> Missing,
+    // (fallback = Failed, name kDefaultEffectName, *err set). A `<name>.fx` source without a .fxo counts as
+    // a file that fails to load (Failed under its own name; see find_effect_source()).
+    // FissureMeshGloss.fx (no FXO shipped) -> Missing,
     // unless options().missing_effect_remap maps it (opt-in, compat_missing_effect_remap()).
     MaterialEffect load_or_default(std::string_view effect, std::string* err = nullptr);
     // Replaces options().missing_effect_remap (keys normalised to upper-case base names; {} = off).
@@ -288,12 +341,6 @@ public:
     const EffectLoadOrder& load_order() const { return order_; }
     uint32_t effect_load_rank(const MaterialEffect& e) const { return order_.rank(e); }
     uint32_t effect_load_rank(std::string_view effect) const { return order_.rank(effect); }
-    // Track B on demand (worker jobs; never at load): see translated.hpp translate_pass().
-    static std::shared_ptr<const TranslatedProgram> translate_pass(const ResolvedPass& pass, const shaderxlat::RuntimeDxc& dxc,
-                                                                   const shaderxlat::ShaderCache* cache,
-                                                                   std::string* err = nullptr) {
-        return materials::translate_pass(pass, dxc, cache, err);
-    }
 
     const LoadOptions& options() const { return options_; }
 
@@ -302,8 +349,10 @@ private:
                                             std::string* err);
     std::optional<MaterialEffect> load_file(std::string_view effect, std::string* err);
     std::optional<MaterialEffect> load_parsed(std::string_view name, std::shared_ptr<fx::Effect> e, std::string* err);
+    FxSourceState source_state(const std::string& src, std::vector<uint8_t>* fxo, std::string* detail) const;
     const alamo::FileProvider& files_;
     LoadOptions options_;
+    FxCache fx_cache_;
     std::map<RenderPhase, DeviceState> baselines_;
     std::optional<MaterialEffect> default_;
     EffectLoadOrder order_;

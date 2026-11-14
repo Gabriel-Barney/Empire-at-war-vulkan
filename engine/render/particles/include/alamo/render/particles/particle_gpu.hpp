@@ -51,6 +51,9 @@ public:
     void shutdown();  // the GPU must be idle
     bool initialized() const { return ctx_ != nullptr; }
 
+    // Scene wind for the Affected_By_Wind particle path (FrameConstants::wind, particles.hlsl: velocity += wind x 0.5 x dt;
+    // weather particles step with velocity + 5 x wind). World space, world units per second. Hosts set it at map load
+    // from render::scene_wind (map_scene.hpp, cu8f t05): land = the active environment's wind, space = zero.
     void set_wind(const Float3& w) { wind_ = w; }
     // Scene fog on the main-scene particle draws (the renderer forwards its lighting's FOG_VALS before prepare; never in
     // the heat pass).
@@ -106,7 +109,7 @@ private:
     VkDescriptorSetLayout set0_ = VK_NULL_HANDLE, set1_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline cs_update_ = VK_NULL_HANDLE, cs_spawn_ = VK_NULL_HANDLE, cs_sort_ = VK_NULL_HANDLE, cs_clear_ = VK_NULL_HANDLE;
-    std::map<std::tuple<uint32_t, VkFormat, VkFormat, VkFormat>, VkPipeline> gfx_;
+    std::map<std::tuple<uint32_t, VkFormat, VkFormat, VkFormat, VkSampleCountFlagBits>, VkPipeline> gfx_;
     rhi::Buffer particles_, order_, death_;
     uint32_t capacity_ = 0;
     GpuTexture default_tex_;

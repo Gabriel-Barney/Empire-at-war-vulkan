@@ -13,10 +13,10 @@ if(WIN32)
 endif()
 
 add_executable(alamo_vfs_tests tests/test_vfs.cpp)
-target_link_libraries(alamo_vfs_tests PRIVATE alamo_vfs)
+target_link_libraries(alamo_vfs_tests PRIVATE alamo_vfs alamo_test_support)
 add_test(NAME alamo_vfs_tests COMMAND alamo_vfs_tests)
 
 # modc t10: the STEAMMOD= resolver (steam_workshop.hpp) on a synthetic Steam layout in its own temp folder.
 add_executable(alamo_vfs_steam_tests tests/test_steam_workshop.cpp)
-target_link_libraries(alamo_vfs_steam_tests PRIVATE alamo_vfs)
+target_link_libraries(alamo_vfs_steam_tests PRIVATE alamo_vfs alamo_test_support)
 add_test(NAME alamo_vfs_steam_tests COMMAND alamo_vfs_steam_tests)

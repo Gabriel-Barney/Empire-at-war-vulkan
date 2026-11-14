@@ -24,14 +24,8 @@ Mat34 to_mat(const alamo::Mat34& m) {
 
 Float3 to_f3(const alamo::Vec3& v) { return {v.x, v.y, v.z}; }
 
-// "EI_TROOPER" -> "DATA\ART\MODELS\EI_TROOPER.ALO"; names with a separator are only normalised.
-std::string model_path(std::string_view name) {
-    std::string n = normalize_path(name);
-    if (n.find('\\') == std::string::npos) n = "DATA\\ART\\MODELS\\" + n;
-    const size_t slash = n.find_last_of('\\');
-    if (n.find('.', slash == std::string::npos ? 0 : slash) == std::string::npos) n += ".ALO";
-    return n;
-}
+// "EI_TROOPER" -> "DATA\ART\MODELS\EI_TROOPER.ALO", the same rule as assets::model_path.
+std::string model_path(std::string_view name) { return with_default_dir_ext(name, "Data\\Art\\Models\\", ".alo"); }
 
 std::string model_dir(std::string_view model) {
     const std::string p = model_path(model);

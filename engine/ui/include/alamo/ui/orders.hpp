@@ -1,12 +1,14 @@
-// P1 click -> order translation. Selection is synced sim state (COMMANDS.md §2.4, §6.2): Select,
-// SelectAll and ControlGroup are SCHEDULED events, so the UI never changes a selection itself - it emits
+// P1 click -> order translation. Selection is synced sim state (COMMANDS.md §2.4, §6.2): Select
+// is a SCHEDULED event, so the UI never changes a selection itself - it emits
 // commands::EventData and the host submits them (CommandPipeline::submit with CommandSource::Player).
 // The translator keeps a local mirror of the selection it last requested (for shift-add and attack
 // lists); the host should overwrite it with set_selection() from the sim's synced selection after the
-// commands execute (SelectAll / control-group recall can only be known there).
+// commands execute (a recalled group can only be known there).
+// Mouse orders only: the keyboard orders (SelectAll / Stop / ControlGroupN and the double-recall camera jump) are
+// HotkeyDispatcher's (hotkeys.hpp, the original 153-slot table).
 //
 // Mapping (tactical; [port] where the docs give no UI rule). Right button = the order button of the default mouse scheme
-// (IDC_ALTERNATE_MOUSE_CONTROLS, orders on the left button, is not implemented). Right-button orders follow
+// (IDC_ALTERNATE_MOUSE_CONTROLS: set_alternate_mouse, below). Right-button orders follow
 // P1_DOUBLE_CLICK_MOVE.md: the order is resolved at the RELEASE from the object under the cursor there; a press that is a
 // Win32 double click (ButtonState::double_press) acts at the press and its release is swallowed.
 //   left click on a selectable object      Select{id}            (shift: toggle id in the mirror -> Select{list})
@@ -26,8 +28,6 @@
 //                                          flags | 0x80, never a facing variant; no voice; double-click ack (MoveAck)
 //   right double click on hostile          Attack{..., flag0 ("double") = 1}
 //   right double click on anything else    nothing (the first click's order stands)
-//   SelectAll / Stop action                SelectAll / StopMovement
-//   ControlGroupN (+Ctrl assign, +Ctrl+Shift add)  ControlGroup{N, assign, add}
 // Move flags (move_flag; spec §2.1): 0x04 always; Ctrl or the attack-move toggle 0x01; Ctrl+Alt or the guard toggle 0x02
 //   (wins over 0x01); 0x80 double click; 0x08 from the second order of an Alt (alone) / waypoint-toggle run (the first
 //   starts a fresh path; any order without Alt ends the run) and [port: Gabriel] whenever the queue modifier is held.
@@ -72,7 +72,11 @@ namespace move_flag {
 inline constexpr uint8_t kAttackMove = 0x01, kGuardMove = 0x02, kPlayerOrder = 0x04, kWaypoint = 0x08, kDoubleClick = 0x80;
 }
 // One-shot HUD toggles (attack-move / guard / waypoint buttons): armed until the next move order is sent.
-enum class MoveToggle : uint8_t { AttackMove, GuardMove, Waypoint };
+// ui3 t01 [port] (the 0x140b29fc1 / fc2 toggles of P1_DOUBLE_CLICK_MOVE.md §2.1 are not traced): Attack (c_button00, the
+// Attack hotkey) - the next right click on any object that is not the local player's attacks it, on the ground it is an
+// attack-move; Move (c_button02, the Move hotkey) - the next right click is a plain ground move at the cursor even over an
+// object (no attack, no move-to-object). Both clear with the next order, as the other toggles.
+enum class MoveToggle : uint8_t { AttackMove, GuardMove, Waypoint, Attack, Move };
 
 // Move acknowledgement (spec §2.3, `0x418b0`), one per ground move order the translator emits; the host spawns it.
 enum class AckEffect : uint8_t { Move, DoubleClickMove, AttackMove, GuardMove };
@@ -135,10 +139,8 @@ public:
 
     const std::vector<commands::EventData>& pending() const { return pending_; }
     // [port: Gabriel] queued flag per pending() entry (1 = queued: Attack / MoveToObject / MoveToPosition / MoveToRay
-    // issued with Bindings::queue_held; selection and keyboard orders are never queued).
+    // issued with Bindings::queue_held; selection orders are never queued).
     const std::vector<uint8_t>& pending_queued() const { return pending_queued_; }
-    // false per pending() entry: no unit voice for that order (the double-click move / attack).
-    const std::vector<uint8_t>& pending_voice() const { return pending_voice_; }
     std::vector<commands::EventData> take() {
         pending_queued_.clear();
         pending_voice_.clear();
@@ -148,6 +150,15 @@ public:
     // Acknowledgements of this frame's move orders, in order (cleared by the call).
     std::vector<MoveAck> take_move_acks() { return std::exchange(acks_, {}); }
     void arm_move_toggle(MoveToggle t);
+    // ui1 t02: IDC_ALTERNATE_MOUSE_CONTROLS (P1_DOUBLE_CLICK_MOVE §1.2, ground orders on the left button). Tactical only
+    // [port: the alternate table's actions 0..8 are not recovered]: a left click on an own selectable object selects as
+    // in the default scheme (shift toggle, double click = same type); any other left click with a selection is the
+    // order click (attack / move to object / ground move, no facing drag - a left drag is the selection box); a left
+    // double press off own units is the double-click order at the press; a right click clears the selection.
+    void set_alternate_mouse(bool on) { alternate_ = on; }
+    bool alternate_mouse() const { return alternate_; }
+    // ui3 t01: an armed toggle (tests, HUD look).
+    bool move_toggle_armed(MoveToggle t) const;
     bool waypoint_mode() const { return waypoint_mode_; }
     // Orders with their queued flags (clears pending()).
     std::vector<UiOrder> take_orders();
@@ -161,13 +172,6 @@ public:
     std::optional<uint32_t> take_planet_zoom() { return std::exchange(planet_zoom_, std::nullopt); }
     // Galactic left click on nothing: besides Select{}, the host clears its planet selection (when not zoomed in).
     bool take_planet_deselect() { return std::exchange(planet_deselect_, false); }
-    // false: the keyboard orders above (SelectAll / Stop / ControlGroupN) are left to HotkeyDispatcher (hotkeys.hpp,
-    // the original 153-slot table: Ctrl+n assign, Shift+n add); mouse orders are unchanged. Default true.
-    void set_keyboard_orders(bool on) { keyboard_orders_ = on; }
-    // Local camera request (UI.md §4.4): the same control group recalled twice within 1 s (InputFrame::time) - the
-    // host looks the camera at the group (TacticalCameraController::jump_to(focus_point(member positions))).
-    std::optional<uint8_t> take_camera_jump() { return std::exchange(camera_jump_, std::nullopt); }
-    static constexpr double kDoubleRecallSeconds = 1.0;
 
 private:
     void emit_select(std::vector<uint32_t> ids);
@@ -190,15 +194,13 @@ private:
     std::vector<MoveAck> acks_;
     bool waypoint_mode_ = false;  // GameModeManager +0xb4: an Alt run has started
     bool toggle_attack_ = false, toggle_guard_ = false, toggle_waypoint_ = false;
+    bool toggle_force_attack_ = false, toggle_force_move_ = false;  // ui3 t01: MoveToggle::Attack / Move
     bool queue_ = false;  // queue modifier held during this update
+    bool alternate_ = false;  // ui1 t02: IDC_ALTERNATE_MOUSE_CONTROLS
     std::vector<uint32_t> sel_;
     std::optional<uint32_t> planet_zoom_;
     bool planet_deselect_ = false;
     tactical::QueryContext qctx_;
-    bool keyboard_orders_ = true;
-    std::optional<uint8_t> camera_jump_;
-    int16_t last_recall_group_ = -1;
-    double last_recall_time_ = -1e30;
 };
 
 }  // namespace alamo::ui

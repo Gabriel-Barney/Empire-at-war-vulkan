@@ -27,7 +27,8 @@ inline constexpr BehaviorTypeId Locomotor = 0x01, Selectable = 0x02, Planet = 0x
                                 Team = 0x16, TacticalSuperWeapon = 0x2C, TransportLanding = 0x36, Hint = 0x4A,
                                 DummyUpgrade = 0x65, Powered = 0x0F, LandObstacle = 0x14, DeployTroopers = 0x1C,
                                 Barrage = 0x1D, Landing = 0x1E, IndigenousUnit = 0x20, Hunt = 0x21,
-                                GuardSpawnHouse = 0x22, Lure = 0x23, BaseShield = 0x39, SelfDestruct = 0x43;
+                                GuardSpawnHouse = 0x22, Lure = 0x23, BaseShield = 0x39, SelfDestruct = 0x43,
+                                HolsterWeapon = 0x4E, DisableForceAbilities = 0x52;  // cu8f (CU8F_T01_T02_T07_RE.md)
 }
 
 // XML behaviour name (ASCII case-insensitive) -> type id; kNoBehavior if unknown.

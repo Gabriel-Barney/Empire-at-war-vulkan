@@ -3,12 +3,10 @@
 #pragma once
 #include <bit>
 #include <cstdint>
-#include <string>
-#include <type_traits>
-#include <utility>
-#include <vector>
 
+#include "ai_save_io.hpp"  // engine/ai/src, through alamo_ai_save_io
 #include "alamo/ai/tactical/hint_zones.hpp"
+#include "alamo/ai/tactical/tactical_pp.hpp"
 #include "alamo/ai/tactical/target_list.hpp"
 #include "alamo/core/bytes.hpp"
 
@@ -26,73 +24,15 @@ inline bool version(ByteReader& r, uint32_t want) {
     return (r.ok() && v == want) || bad(r);
 }
 
-// A count followed by at least `min_bytes` per element: rejected (r.fail(), 0) when the rest of the data cannot hold it.
-inline uint32_t count(ByteReader& r, size_t min_bytes) {
-    const uint32_t n = r.u32();
-    if (!r.ok()) return 0;
-    if (min_bytes > 0 && static_cast<uint64_t>(n) * min_bytes > r.remaining()) {
-        r.fail();
-        return 0;
-    }
-    return n;
-}
-
-inline void put_count(ByteWriter& w, size_t n) { w.u32(static_cast<uint32_t>(n)); }
-
-template <class T>
-void put(ByteWriter& w, const T& v) {
-    if constexpr (std::is_same_v<T, bool>) w.boolean(v);
-    else if constexpr (std::is_same_v<T, uint8_t>) w.u8(v);
-    else if constexpr (std::is_same_v<T, int32_t>) w.i32(v);
-    else if constexpr (std::is_same_v<T, uint32_t>) w.u32(v);
-    else if constexpr (std::is_same_v<T, int64_t>) w.i64(v);
-    else if constexpr (std::is_same_v<T, uint64_t>) w.u64(v);
-    else if constexpr (std::is_same_v<T, float>) w.f32(v);
-    else if constexpr (std::is_same_v<T, double>) w.f64(v);
-    else {
-        static_assert(std::is_same_v<T, std::string>);
-        w.str(v);
-    }
-}
-
-template <class T>
-T get(ByteReader& r) {
-    if constexpr (std::is_same_v<T, bool>) return r.boolean();
-    else if constexpr (std::is_same_v<T, uint8_t>) return r.u8();
-    else if constexpr (std::is_same_v<T, int32_t>) return r.i32();
-    else if constexpr (std::is_same_v<T, uint32_t>) return r.u32();
-    else if constexpr (std::is_same_v<T, int64_t>) return r.i64();
-    else if constexpr (std::is_same_v<T, uint64_t>) return r.u64();
-    else if constexpr (std::is_same_v<T, float>) return r.f32();
-    else if constexpr (std::is_same_v<T, double>) return r.f64();
-    else {
-        static_assert(std::is_same_v<T, std::string>);
-        return r.str();
-    }
-}
-
-template <class T>
-constexpr size_t min_size() {
-    if constexpr (std::is_same_v<T, std::string>) return 4;
-    else return sizeof(T);
-}
-
-template <class T>
-void put_vec(ByteWriter& w, const std::vector<T>& v) {
-    put_count(w, v.size());
-    for (const T& x : v) put<T>(w, x);
-}
-
-template <class T>
-bool get_vec(ByteReader& r, std::vector<T>& out) {
-    const uint32_t n = count(r, min_size<T>());
-    std::vector<T> v;
-    v.reserve(n);
-    for (uint32_t i = 0; i < n && r.ok(); ++i) v.push_back(get<T>(r));
-    if (!r.ok()) return false;
-    out = std::move(v);
-    return true;
-}
+// The shared AI save codec (count, put_count, put / get, min_size, put_vec / get_vec): engine/ai/src/ai_save_io.hpp,
+// exported to this library by the alamo_ai_save_io INTERFACE target. Same byte layout.
+using ai::save::count;
+using ai::save::get;
+using ai::save::get_vec;
+using ai::save::min_size;
+using ai::save::put;
+using ai::save::put_count;
+using ai::save::put_vec;
 
 inline void put_rect(ByteWriter& w, const Rect2& x) {
     w.f32(x.min_x);
@@ -149,6 +89,28 @@ inline bool get_target(ByteReader& r, TacticalTarget& t) {
     t.zone = r.i32();
     t.cell_x = r.i32();
     t.cell_y = r.i32();
+    return r.ok();
+}
+
+// TacticalPpPick (PotentialPlan picks): i32 type, u8 source, i32 ref, i32 task force, i32 team.
+inline constexpr size_t kPickBytes = 4 + 1 + 4 + 4 + 4;
+
+inline void put_pick(ByteWriter& w, const TacticalPpPick& k) {
+    w.i32(k.type);
+    w.u8(static_cast<uint8_t>(k.source));
+    w.i32(k.ref);
+    w.i32(k.tf);
+    w.i32(k.team);
+}
+
+inline bool get_pick(ByteReader& r, TacticalPpPick& k) {
+    k.type = r.i32();
+    const uint8_t source = r.u8();
+    if (source > static_cast<uint8_t>(PpSource::Produce)) r.fail();
+    k.source = static_cast<PpSource>(source);
+    k.ref = r.i32();
+    k.tf = r.i32();
+    k.team = r.i32();
     return r.ok();
 }
 

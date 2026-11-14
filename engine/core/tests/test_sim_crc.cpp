@@ -12,15 +12,9 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/test/support.hpp"
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 template <class F>
 static bool throws(F&& f) {
@@ -443,6 +437,58 @@ static void test_checkpoints() {
     CHECK(alamo::first_divergence(plain, empty).diverged);
 }
 
+// SIMP sp6: tree hash of a per-item loop - the same digest serial, in parallel (any split) and through a ParallelFor that
+// runs blocks backwards; a pinned layout; the dirty-block cache reuses clean blocks and re-hashes marked ones.
+static void test_hash_blocks() {
+    std::vector<uint32_t> items(1000);
+    for (uint32_t i = 0; i < items.size(); ++i) items[i] = i * 2654435761u;
+    const auto fn = [&](alamo::StateHasher& bh, uint32_t first, uint32_t last) {
+        for (uint32_t i = first; i < last; ++i) bh.u32(items[i]);
+    };
+    const auto digest = [&](const alamo::ParallelFor* pf, alamo::CrcBlockCache* cache) {
+        alamo::StateHasher h;
+        h.set_parallel(pf);
+        h.u8(7);
+        alamo::hash_blocks(h, static_cast<uint32_t>(items.size()), fn, cache);
+        return h.digest();
+    };
+    const uint64_t serial = digest(nullptr, nullptr);
+    const alamo::ParallelFor backwards = [](uint32_t n, uint32_t, const alamo::RangeFn& f) {
+        for (uint32_t i = n; i-- > 0;) f(i, i + 1);
+    };
+    const alamo::ParallelFor threads = [](uint32_t n, uint32_t, const alamo::RangeFn& f) {
+        std::vector<std::thread> th;
+        for (uint32_t i = 0; i < n; ++i) th.emplace_back([&f, i] { f(i, i + 1); });
+        for (std::thread& t : th) t.join();
+    };
+    CHECK(digest(&backwards, nullptr) == serial && digest(&threads, nullptr) == serial);
+    // The layout: u8(7), u32(count), then each block's own digest in order (4 blocks of 256, 256, 256, 232).
+    alamo::StateHasher expect;
+    expect.u8(7);
+    expect.u32(1000);
+    for (uint32_t b = 0; b < 4; ++b) {
+        alamo::StateHasher bh;
+        fn(bh, b * alamo::kCrcBlockItems, std::min<uint32_t>(1000, (b + 1) * alamo::kCrcBlockItems));
+        expect.u64(bh.digest());
+    }
+    CHECK(expect.digest() == serial);
+    // Cache: the first call fills it, an unmarked second call reuses all 4 blocks, a marked item re-hashes its block.
+    alamo::CrcBlockCache cache;
+    CHECK(digest(&threads, &cache) == serial && cache.reused() == 0);
+    CHECK(digest(&threads, &cache) == serial && cache.reused() == 4);
+    items[600] ^= 1u;  // block 2
+    cache.mark(600);
+    const uint64_t changed = digest(&threads, &cache);
+    CHECK(changed != serial && cache.reused() == 7 && changed == digest(nullptr, nullptr));
+    items.push_back(5);  // a new count re-hashes everything
+    CHECK(digest(&threads, &cache) == digest(nullptr, nullptr) && cache.reused() == 7);
+    alamo::StateHasher none;
+    alamo::hash_blocks(none, 0u, fn);
+    alamo::StateHasher zero;
+    zero.u32(0);
+    CHECK(none.digest() == zero.digest());  // no items: just the count
+}
+
 int main() {
     test_hasher();
     test_registry_and_log();
@@ -450,6 +496,7 @@ int main() {
     test_bytes();
     test_rng();
     test_parity();
+    test_hash_blocks();
     std::printf(g_fail ? "alamo_core_sim_tests: %d FAILED\n" : "alamo_core_sim_tests: all passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

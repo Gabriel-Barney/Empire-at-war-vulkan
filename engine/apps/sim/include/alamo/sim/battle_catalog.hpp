@@ -31,9 +31,7 @@
 #include "alamo/tactical/abilities/ability_data.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/tactical/combat/combat_system.hpp"
-#ifdef ALAMO_SIM_HAVE_FOG
 #include "alamo/tactical/fog/fog_of_war.hpp"  // fog of war constants (owner: fog agent)
-#endif
 
 namespace alamo::data {
 struct GameConstants;
@@ -86,6 +84,8 @@ public:
     // GameConstants Land_ / Space_Capture_Allowed_Countdown_Seconds, Garrisoned_Max_Attack_Distance_Multiplier
     // (REMAINING_GAPS §3.3); < 0 = not read (the battle keeps its config value).
     float capture_countdown(bool space) const { return space ? space_capture_countdown_ : land_capture_countdown_; }
+    // ccpgt t02 (SKIRMISH_SETUP §4.2): GameConstants Control_Point_Domination_Victory_Time_In_Secs (GC+0x11b30; 30 when unset).
+    float control_point_victory_seconds() const { return control_point_victory_seconds_; }
     float garrisoned_range_multiplier() const { return garrisoned_range_mult_; }
     bool use_reinforcement_points() const { return use_reinforcement_points_; }  // Use_Reinforcement_Points (GC +0x118a0; land drops)
     float threat_decay_step() const { return threat_decay_step_; }  // AI_SpaceThreatDecayStep (DAMAGE_TRACKING)
@@ -153,17 +153,19 @@ public:
     // unit-local frame x Scale_Factor. True with an empty list when the type has no Target_Bones; false without model
     // data (`out` cleared). build_battle (with a mode) stores them in UnitDesc::target_bones.
     bool target_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const;
+    // s78n t20 batch 2 (FIGHTER_FLYING §7.4 item 1, type +0x2390 / +0x2398 resolved at the type model load 0x375380): the
+    // type's Garrison_Bone_Names, as target_bones (list order, names missing on the model dropped, unit-local x
+    // Scale_Factor). True with an empty list when the type names none; false without model data (`out` cleared).
+    bool entry_bones(uint32_t type, bool space, std::vector<tactical::Vec3>& out) const;
     // S8 t10 (LOB_SOLVER §5.1 "Garrison fire bones in detail", type model load 0x375380): the gun-bone table of a type with
     // `guns` = Num_Garrison_Guns != 0 - M = the model's highest _ALT mesh index entries (ALT a = 0..M-1), `guns` bones
     // each: FP_0<i>_ALT<a> (i <= 9) or FP_<i>_ALT<a> (i >= 10), bind pose in the unit-local frame x Scale_Factor, with the
     // yaw of the bone's x axis; a missing bone is invalid (-1). False without model data (`out` cleared).
     bool garrison_bones(uint32_t type, bool space, int32_t guns, std::vector<std::vector<tactical::combat::GarrisonBone>>& out) const;
     // --- end battle host ---
-#ifdef ALAMO_SIM_HAVE_FOG
     // Fog of war GameConstants (Desired{Land,Space}FOWCellSize, {Land,Space}FOWRegrowTime, AIUsesFogOfWar{Land,Space},
     // Tactical_Overrun_Multiple, Minimum_Tactical_Overrun_Time_In_Secs). Owner: fog agent.
     const tactical::fog::FogConstants& fog_constants() const { return fog_constants_; }
-#endif
 
     // Per-battle tables: one UnitDesc per entry of `unit_types` (same order; duplicates allowed), the
     // hardpoints and projectiles they reference. out_unit_index[i] = UnitDesc index of unit_types[i].
@@ -227,6 +229,7 @@ private:
     float space_health_mult_ = 1.5f, land_health_mult_ = 1.0f;
     float space_idle_speed_ = 0.0f;
     float land_capture_countdown_ = -1.0f, space_capture_countdown_ = -1.0f, garrisoned_range_mult_ = -1.0f;
+    float control_point_victory_seconds_ = 30.0f;
     bool use_reinforcement_points_ = true;
     float threat_decay_step_ = 0.05f;
     float engines_disabled_speed_ = 0.4f;
@@ -236,9 +239,7 @@ private:
     const FileProvider* files_ = nullptr;           // battle host: model reads
     struct ModelCache;                              // battle host: (type, mode) -> ModelInfo, mutex-guarded
     std::shared_ptr<ModelCache> model_cache_;
-#ifdef ALAMO_SIM_HAVE_FOG
     tactical::fog::FogConstants fog_constants_;
-#endif
 };
 
 }  // namespace alamo::sim

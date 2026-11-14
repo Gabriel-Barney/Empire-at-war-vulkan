@@ -40,20 +40,14 @@
 #include "alamo/lua/object_bridge.hpp"
 #include "alamo/objects/behaviors.hpp"
 #include "alamo/objects/game_object_types.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::ai;
 using namespace alamo::ai::tactical;
 
-static int g_fail = 0;
+using ::alamo::test::g_fail;
 static bool g_write_golden = false;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
@@ -106,7 +100,10 @@ const char* kTemplates = R"(<AITemplates>
              <Goal_Category>Tactical_Untargeted</Goal_Category></Plans></Turn_On>
   </Syn_Space>
 </AITemplates>)";
+// skai t12: GoalSetExtensionSize 1 keeps these scenarios at one new goal per category and commit (they were written
+// with the goal system's config default 1; the tactical AI now takes the tag from the AIPlayerType, default 2).
 const char* kPlayer = R"(<AIPlayerType><Name>%s</Name>
+  <GoalSetExtensionSize>1</GoalSetExtensionSize>
   <SpaceFreeStoreScript>SynTacticalFreeStore</SpaceFreeStoreScript>
   <GoalProposalFunctionSets>SynSpaceSet</GoalProposalFunctionSets>
   <Templates><Space>Syn_Space</Space></Templates>
@@ -651,6 +648,7 @@ struct MockUnit {
     int32_t ordered = -1;  // ordered attack target
     int32_t target = -1;   // current target
     float hp = 0.0f, max_hp = 1.0f;
+    int32_t reprojection_stamp = 0;  // UnitAI data pack +0x20, drawn at creation (A1_READINGS §14)
 };
 
 // S7 t33: run the same plans as a land battle (Land store and mode; the SpaceMode plans copied to LandMode; the objects
@@ -666,7 +664,7 @@ constexpr uint32_t kLandingDelay = 60;
 
 class MockHost final : public TacticalAiHost {
 public:
-    MockHost(objects::ObjectStore& s) : store_(s) {
+    MockHost(objects::ObjectStore& s, GameRandom& rng) : store_(s), rng_(&rng) {
         const char* names[] = {"Syn_Frigate", "Syn_Corvette", "Syn_Station", "Syn_Pad", "UC_Syn_Turret"};
         const float power[] = {1000.0f, 400.0f, 2000.0f, 0.0f, 0.0f};
         const char* cats[] = {"Frigate", "Corvette", "Structure", "Structure", "Structure"};
@@ -712,6 +710,8 @@ public:
         u.type = type;
         u.pos = {x, y, 0.0f};
         u.max_hp = u.hp = type == tFrigate ? 900.0f : type == tCorvette ? 400.0f : type == tStation ? 4000.0f : 1.0e9f;
+        // cu12 t06: the UnitAI data pack's two synced draws at creation, like the battle host (battle_ai.cpp).
+        if (type != tPad) u.reprojection_stamp = draw_unit_ai_stamps(rng_->synced(), build_frame_).reprojection_check;
         units_.push_back(u);
         if (type != tPad) dt_.enable(u.id, u.max_hp, 0.0f);
         return u.id;
@@ -865,6 +865,7 @@ public:
             a.moving = u.has_goal;
             a.attack_target = u.target;
             a.damage_tracking = u.type != tPad;
+            a.reprojection_stamp = u.reprojection_stamp;
             f.push_back(a);
         }
         w.players[0].pop_used = static_cast<int32_t>(population_used(0));
@@ -1141,6 +1142,7 @@ public:
 
 private:
     objects::ObjectStore& store_;
+    GameRandom* rng_;
     std::vector<PerceptionType> types_;
     std::map<int32_t, std::vector<TacticalReinforcement>> pool_;
     DamageTrackingStore dt_;
@@ -1275,6 +1277,7 @@ using RunHook = std::function<void(int32_t frame, MockHost& host, TacticalAiWorl
 const std::vector<TacticalAiDifficulty>* g_difficulties = nullptr;
 // The SynType object types for the store (variant 7: Syn_Corvette lists SPRINT in Unit_Abilities_Data).
 bool g_hero_frigate = false;  // S7 t26: Syn_Frigate is Is_Named_Hero (test_no_units_remaining_heroes)
+bool g_ai_lane = false;  // sp3: TacticalAiConfig::ai_lane of the SaveSession worlds (test_ai_lane_save)
 bool g_original_timing = false;  // a1k t01: TacticalAiConfig::stagger / pp_streams off (the original's planning timing)
 bool syn_object_types(MemoryFiles& tf, objects::ObjectTypeDatabase& raw, objects::GameObjectTypes& types, bool abilities) {
     const char* names[] = {"Syn_Frigate", "Syn_Corvette", "Syn_Station", "Syn_Pad", "UC_Syn_Turret"};
@@ -1327,7 +1330,7 @@ RunResult run(int32_t frames, int32_t difficulty0, int variant = 0, std::vector<
     objects::IdCounter ids;
     objects::ObjectStore store(g_land ? objects::ModeKind::Land : objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids);
     GameRandom rng(2027u, 5u);
-    MockHost host(store);
+    MockHost host(store, rng);
     host.emit_opportunity = host.allow_hijack = variant == 1;
     host.ring_test = variant == 4;  // refixf t06
     // Player 0 (Empire) at -x, player 1 (Rebel) at +x; a pad; pools.
@@ -1809,6 +1812,34 @@ void test_potential_plan() {
         std::printf(", defenders 3000: solved %d (failed %s)\n", short_of, r.last_veto.c_str());
         CHECK(!short_of && r.last_veto == "Contrast");
     }
+    // 8. a2k t11: the tactical solve weighs with the AI PotentialPlan weight 0x5f1f90 (ContrastTable::ai_weight, the solver
+    //    0x6c3da0 is shared with galactic; A2K_T02_RE_ANSWERS Q2(b)) [H]: the mean of the matching entries != 1.0. Two Frigate
+    //    entries 0.25 and 2.75 -> 1.5: one frigate (1000 x 1.5) meets a corvette target of 400 x 1.5; with only 0.25 it fails.
+    {
+        PpFixture f;
+        f.plan({{"MainForce", "Syn_Frigate = 1"}});
+        auto solve = [&](bool both, TacticalPpResult& r) {
+            galactic::ContrastTable ct;
+            galactic::ContrastRow row;
+            row.enemy = "Corvette";
+            row.enemy_mask = f.mask("Corvette");
+            row.friendly.push_back({"Frigate", f.mask("Frigate"), 0.25f});
+            if (both) row.friendly.push_back({"Frigate", f.mask("Frigate"), 2.75f});
+            ct.rows.push_back(row);
+            CHECK(ct.ai_weight(0, "Syn_Frigate", f.mask("Frigate")) == (both ? 1.5f : 0.25f));
+            TacticalPpInput in = f.input(TacticalMode::Space);
+            in.has_target = true;
+            in.target_object = 900;
+            in.target_position = {0.0f, 0.0f, 0.0f};
+            in.contrast = &ct;
+            in.enemy_strength = [](uint64_t) { return 400.0; };
+            in.free_units = {{11, 0, {100.0f, 0.0f, 0.0f}, 1.0f, false}};
+            return solve_tactical_pp(in, r);
+        };
+        TacticalPpResult r;
+        CHECK(solve(true, r) && r.picks.size() == 1);
+        CHECK(!solve(false, r) && r.last_veto == "Contrast");
+    }
     // 6. Team expansion: category masks over types (mask overlap), names, exclusions.
     {
         PpFixture f;
@@ -2249,7 +2280,7 @@ struct SaveSession {
     objects::IdCounter ids;
     objects::ObjectStore store{g_land ? objects::ModeKind::Land : objects::ModeKind::Space, objects::StoreKind::Primary, types, &ids};
     GameRandom rng{2027u, 5u};
-    MockHost host{store};
+    MockHost host{store, rng};
     std::unique_ptr<TacticalAiWorld> world;
 
     explicit SaveSession(int variant) {
@@ -2295,6 +2326,7 @@ struct SaveSession {
         host.add_pool(1, 2002, tFrigate, 2.0f);
         TacticalAiConfig cfg;
         cfg.mode = g_land ? TacticalMode::Land : TacticalMode::Space;
+        cfg.ai_lane = g_ai_lane;  // sp3
         cfg.players = {{0, "SynEmpire", 1}, {1, "SynRebel", 1}};
         cfg.difficulties = {{"Easy_Default", 15.0f, 15.0f, 0.67f, 0.75f}, {"Normal_Default", 0.0f, 0.0f, 1.0f, 1.0f}};
         lua::LuaPlayerSetup a, b;
@@ -2357,6 +2389,54 @@ struct SaveSession {
 };
 
 std::string decision_line(const TacticalAiDecision& d) { return std::to_string(d.frame) + " p" + std::to_string(d.player) + " " + d.text; }
+
+void test_save_load(int variant, int32_t save_at, int32_t frames);
+uint32_t first_u32(const std::vector<uint8_t>& b) {
+    return b.size() < 4 ? 0u : static_cast<uint32_t>(b[0]) | (static_cast<uint32_t>(b[1]) << 8) | (static_cast<uint32_t>(b[2]) << 16) |
+                                   (static_cast<uint32_t>(b[3]) << 24);
+}
+
+// sp3 (TacticalAiConfig::ai_lane): an AI-lane world draws from its own stream, not the session's, and saves it (version 13)
+// so a load continues identically; a lane-off save (version 12) loads into a lane-on world; a lane-on save does not load
+// into a lane-off world; the lane-off bytes keep version 12.
+void test_ai_lane_save() {
+    const int32_t save_at = 30 * 35;
+    g_ai_lane = false;
+    std::vector<uint8_t> off_image;
+    uint64_t off_session_draws = 0;
+    {
+        SaveSession a(0);
+        for (int32_t f = 1; f <= save_at; ++f) a.step(f);
+        off_image = a.ai_bytes();
+        off_session_draws = a.rng.synced().draws();
+    }
+    CHECK(first_u32(off_image) == 12u);
+    g_ai_lane = true;
+    test_save_load(1, 30 * 30, 30 * 60);  // round trip and continuation with the lane on (variant 0's corruption offsets are v12's)
+    SaveSession a(0);
+    for (int32_t f = 1; f <= save_at; ++f) a.step(f);
+    const std::vector<uint8_t> on_image = a.ai_bytes();
+    CHECK(first_u32(on_image) == 13u);
+    // The AI's own draws left the session stream (what remains are the host's).
+    CHECK(a.rng.synced().draws() < off_session_draws);
+    {
+        SaveSession b(0);  // a lane-off image into a lane-on world
+        g_ai_lane = false;
+        SaveSession from(0);
+        for (int32_t f = 1; f <= save_at; ++f) from.step(f);
+        CHECK(b.restore_host(from) && b.load_ai(off_image));
+        CHECK(first_u32(b.ai_bytes()) == 13u);
+    }
+    {
+        g_ai_lane = false;
+        SaveSession c(0);  // a lane-on image is refused by a lane-off world
+        CHECK(c.restore_host(a) && !c.load_ai(on_image, true));
+    }
+    g_ai_lane = false;
+    std::printf("sp3 ai_lane save: lane-off image %zu bytes (v12), lane-on %zu bytes (v13); session draws %llu off, %llu on\n",
+                off_image.size(), on_image.size(), static_cast<unsigned long long>(off_session_draws),
+                static_cast<unsigned long long>(a.rng.synced().draws()));
+}
 
 // A battle saved mid-fight (plans running with Lua threads suspended in their task-force loops, task forces holding
 // units, free stores, PotentialPlan reservations, the threat grid and leaf cache filled; variant 1 adds opportunity-fire
@@ -2774,10 +2854,12 @@ void test_prepare_ambush() {
     CHECK(count_decisions(r, "p0 tf MainForce ambush: no point") >= 1);  // the "front" call with tolerance -1
     CHECK(rep_line.find("errors=true nopoint=true imm=false fin=true") != std::string::npos);
     CHECK(only_reports(r, "AMBUSH"));
-    // S7 t27: the four argument errors are script errors counted in lua_errors (per reporting instance)
+    // S7 t27: the four argument errors are script errors counted in lua_errors (per reporting instance). An instance whose
+    // target died during the block gets "Target object is already dead" for the calls that take the target.
     const size_t n_amb = script_errors(r, "Invalid number of parameters") + script_errors(r, "Unrecognized direction sideways") +
                          script_errors(r, "Parameter 3 is not a positive number") +
-                         script_errors(r, "Parameter 1 is not a game object or an AI target");
+                         script_errors(r, "Parameter 1 is not a game object or an AI target") +
+                         script_errors(r, "Target object is already dead");
     std::printf("  ambush script errors %zu, reports %zu\n", n_amb, count_reports(r, "AMBUSH"));
     CHECK(n_amb >= 4 && n_amb % 4 == 0);
     bool arrived = false;  // an Empire instance saw its movers arrive (Unit_Move_Finished from the ambush block)
@@ -2824,7 +2906,12 @@ void test_prepare_ambush_land() {
     std::printf("prepare ambush (land): Move_To with the tolerance %zu, ambush moves %zu, paired (target - 1000 x) %zu; %s\n",
                 to_target.size(), ambush.size(), paired, rep_line.c_str());
     CHECK(!to_target.empty() && !ambush.empty() && paired >= 1);
-    CHECK(rep_line.find("errors=true") != std::string::npos && only_reports(r, "AMBUSH"));
+    // The script reaches its report in some instance (either player: which one gets there within 120 s follows the
+    // battle), and every non-script error is such a report.
+    std::string any_rep;
+    for (const std::string& e : r.errors)
+        if (any_rep.empty() && e.find("SCRIPT ERROR: ") == std::string::npos && e.find("AMBUSH player=") != std::string::npos) any_rep = e;
+    CHECK(any_rep.find("errors=true") != std::string::npos && count_reports(r, "AMBUSH") + script_errors(r, "") == r.errors.size());
     CHECK(again.crc == r.crc && again.decisions == r.decisions);
 }
 
@@ -3135,6 +3222,7 @@ int main(int argc, char** argv) {
     test_save_load(1, 30 * 30, 30 * 60);   // opportunity-fire subscriptions, HIJACK spawns
     test_save_load(3, 30 * 40, 30 * 80);   // Script_ evaluator VMs
     test_pp_pending_save();               // OPT2 t10
+    test_ai_lane_save();                  // sp3
     test_order_results_bounded(0, 30 * 120);
     test_order_results_bounded(1, 30 * 60);  // with the opportunity-fire and HIJACK plans
     // S7 t20 / t21 / t15 A1

@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
+
 namespace alamo::ai {
 
 // FPS: the integer logic rate (global 0x140b0a340) [H].
@@ -21,7 +23,6 @@ inline constexpr float kAiBigFloat = 1.0e18f;  // the solver veto / clamp value 
 // Context mode (+0x34): 0 Galactic, 1 Land, 2 Space [H].
 enum class AiMode : uint8_t { Galactic = 0, Land = 1, Space = 2 };
 inline constexpr uint32_t kAiModeCount = 3;
-const char* ai_mode_name(AiMode m);
 // "Galactic" / "Land" / "Space" (case-insensitive); false when unknown.
 bool parse_ai_mode(std::string_view s, AiMode& out);
 
@@ -62,11 +63,11 @@ inline constexpr uint32_t kPlanEventCount = 24;
 std::string_view plan_event_name(PlanEvent e);
 bool plan_event_code(std::string_view name, PlanEvent& out);  // case-insensitive
 
-// ---- text helpers (ASCII, locale-free) ----
-char ai_upper(char c);
-bool ai_iequal(std::string_view a, std::string_view b);
-std::string ai_upper_copy(std::string_view s);
-std::string_view ai_trim(std::string_view s);
+// ---- text helpers (ASCII, locale-free): the core alamo::ascii_* helpers (CU3) ----
+inline char ai_upper(char c) { return ascii_to_upper(c); }
+inline bool ai_iequal(std::string_view a, std::string_view b) { return ascii_iequals(a, b); }
+inline std::string ai_upper_copy(std::string_view s) { return ascii_upper(s); }
+inline std::string_view ai_trim(std::string_view s) { return ascii_trim(s); }  // space, tab, CR, LF
 // Splits at any of `seps` (and trims); empty pieces dropped.
 std::vector<std::string> ai_split(std::string_view s, std::string_view seps = "|, \t\r\n");
 // Locale-free float / int parse of trimmed text; false on garbage.

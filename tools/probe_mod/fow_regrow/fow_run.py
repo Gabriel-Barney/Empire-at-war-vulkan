@@ -26,6 +26,8 @@ import time
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'common'))
+from probe_run import say, running, set_state  # noqa: E402
 import build_fow_mod  # noqa: E402
 import fow_cleanup  # noqa: E402
 import fow_parse  # noqa: E402
@@ -40,22 +42,6 @@ STEPS = r'''
     two Rebel MPTL artillery units appear at the Rebel base, that is the probe).
  3) Esc > Quit (back to the main menu), then main menu > Quit. The run ends by itself.
 '''
-
-
-def say(*a):
-    print(*a, flush=True)
-
-
-def running(name):
-    r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq %s' % name, '/NH'], capture_output=True, text=True)
-    return name.lower() in r.stdout.lower()
-
-
-def set_state(where, **kv):
-    with open(os.path.join(where, 'run_status.txt'), 'w') as f:
-        for k, v in kv.items():
-            f.write('%s=%s\n' % (k, v))
-        f.write('time=%s\n' % time.strftime('%Y-%m-%d %H:%M:%S'))
 
 
 def main():

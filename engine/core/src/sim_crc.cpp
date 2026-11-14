@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/profile.hpp"
 
@@ -106,9 +107,7 @@ uint64_t StateHasher::digest() const noexcept {
 // ---- CrcRegistry -----------------------------------------------------------------------------------
 CrcRegistry::SystemId CrcRegistry::add(std::string name, HashFn fn) {
     if (name.empty()) throw std::invalid_argument("CrcRegistry::add: empty system name");
-    for (char c : name)
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            throw std::invalid_argument("CrcRegistry::add: whitespace in system name '" + name + "'");
+    if (!valid_chunk_name(name)) throw std::invalid_argument("CrcRegistry::add: whitespace in system name '" + name + "'");
     for (const auto& s : systems_)
         if (s.name == name) throw std::invalid_argument("CrcRegistry::add: duplicate system '" + name + "'");
     if (!fn) throw std::invalid_argument("CrcRegistry::add: empty hasher for '" + name + "'");
@@ -120,9 +119,7 @@ CrcRegistry::SystemId CrcRegistry::add(std::string name, HashFn fn) {
 
 void CrcRegistry::add_parity(std::string name, ParityFn fn) {
     if (name.empty()) throw std::invalid_argument("CrcRegistry::add_parity: empty name");
-    for (char c : name)
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            throw std::invalid_argument("CrcRegistry::add_parity: whitespace in '" + name + "'");
+    if (!valid_chunk_name(name)) throw std::invalid_argument("CrcRegistry::add_parity: whitespace in '" + name + "'");
     for (const auto& p : parity_)
         if (p.name == name) throw std::invalid_argument("CrcRegistry::add_parity: duplicate part '" + name + "'");
     if (!fn) throw std::invalid_argument("CrcRegistry::add_parity: empty function for '" + name + "'");
@@ -142,12 +139,40 @@ std::vector<std::string> CrcRegistry::names() const {
     return out;
 }
 
-uint64_t CrcRegistry::hash_system(SystemId id) const {
+uint64_t CrcRegistry::hash_system(SystemId id, const ParallelFor* pf) const {
     const System& s = systems_.at(id);
     const profile::Scope zone(s.zone);
     StateHasher h;
+    h.set_parallel(pf);  // sp6: hash_blocks inside the hasher may fan out (same bytes either way)
     s.fn(h);
     return h.digest();
+}
+
+// ---- CrcBlockCache (sp6) -----------------------------------------------------------------------------
+void CrcBlockCache::mark(uint32_t item) noexcept {
+    const uint32_t b = item / kCrcBlockItems;
+    if (b < blocks_ && dirty_) dirty_[b].store(1, std::memory_order_relaxed);
+}
+
+void CrcBlockCache::prepare(uint32_t count, uint32_t blocks) {
+    if (count != count_ || blocks != blocks_ || !dirty_) {
+        count_ = count;
+        blocks_ = blocks;
+        digest_.assign(blocks, 0);
+        dirty_ = std::make_unique<std::atomic<uint8_t>[]>(std::max<uint32_t>(blocks, 1));
+        valid_ = false;
+    }
+}
+
+bool CrcBlockCache::usable(uint32_t block) const noexcept {
+    return valid_ && block < blocks_ && dirty_[block].load(std::memory_order_relaxed) == 0;
+}
+
+void CrcBlockCache::store(uint32_t block, uint64_t digest) noexcept {
+    if (block >= blocks_) return;
+    if (usable(block)) ++reused_;
+    digest_[block] = digest;
+    dirty_[block].store(0, std::memory_order_relaxed);
 }
 
 CrcRecord CrcRegistry::capture(uint64_t tick, const ParallelFor& pf) const {
@@ -156,7 +181,7 @@ CrcRecord CrcRegistry::capture(uint64_t tick, const ParallelFor& pf) const {
     r.systems.assign(systems_.size(), 0);
     const auto n = static_cast<uint32_t>(systems_.size());
     const RangeFn body = [&](uint32_t b, uint32_t e) {
-        for (uint32_t i = b; i < e; ++i) r.systems[i] = hash_system(i);
+        for (uint32_t i = b; i < e; ++i) r.systems[i] = hash_system(i, pf ? &pf : nullptr);
     };
     if (pf) pf(n, 1, body);
     else serial_for(n, 1, body);

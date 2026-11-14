@@ -46,7 +46,7 @@
 #include <string_view>
 #include <vector>
 
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/core/sim_rng.hpp"
 
 namespace alamo::galactic {
@@ -74,6 +74,12 @@ public:
     // category mask intersects `categories` or whose name equals `type_name` (case-insensitive); 0 if
     // none [M: WeightedTypeList lookup rule not traced].
     float contrast(size_t row, std::string_view type_name, uint64_t categories) const;
+    // The AI PotentialPlan weight 0x5f1f90 (A2K_T02_RE_ANSWERS Q2(b), read from the disassembly) [H]: walking row j's
+    // entries in order, a type-name entry equal to `type_name` returns its weight at once; otherwise every category
+    // entry meeting `categories` counts as matched and, when its weight != 1.0, adds to a float sum and a count.
+    // Result: sum / count when count > 0; else 1.0 if anything matched; else 0 (also for a missing row). [port] Used by
+    // the AI solve only; auto-resolve keeps contrast() (its lookup was not traced).
+    float ai_weight(size_t row, std::string_view type_name, uint64_t categories) const;
     // Parses the Set_Contrast_Values assignments out of PGAICommands.lua. `category_mask` resolves a
     // GameObjectCategoryType name (0 if unknown). False when no row was found.
     bool parse_lua(std::string_view source, const std::function<uint64_t(std::string_view)>& category_mask,

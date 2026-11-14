@@ -189,7 +189,9 @@ take a tag in Reward_Param1 and remove or complete the newest holocron record wi
 
 ### 2.1 Story_Plots file (`0x329aa0`) [H]
 
-Children of `<Story_Mode_Plots>` are read in order:
+Children of `<Story_Mode_Plots>` are read in order. The root's name is not checked, here or in the plot (`<Story>`)
+file [M: like the other XML databases (OBJECT_TYPES.md §0 item 2); a released mod, workshop 2858787558, names the root
+of every plots and story file `AoL_mod_files`, 562 files; modc t06]:
 
 - `<Lua_Script>X</Lua_Script>` stores X as the pending script.
 - Any other tag with text creates a plot from `Data\XML\<text>`. **active = (tag name is exactly `Active_Plot`)**,
@@ -386,9 +388,9 @@ stated otherwise).
 |---|---|---|---|---|---|---|
 | SingleObjectName: CONQUER, CONSTRUCT, CAPTURE/DEFEAT_HERO, REINFORCE, SELECT_UNIT, UNIT_ARRIVED, FULL_STOP, ATTACK_HARDPOINT, GARRISON_UNIT | object/planet type names | counts per name (default 1) | Event_Filter (FILTER_*), **default FILTER_FRIENDLY_ONLY** | – | name equal to the dispatched type name. With no object, fires at once. Otherwise filter on the object's owner vs the plot's player, then decrement that name's counter; fires when it reaches ≤ 0 ("Event didn't trigger because filter did not match") | H (`0x4555f0`, `0x4667e0`, `0x455ce0`) |
 | CONQUER dispatch | – | – | – | – | name = conquered planet's type name; object = planet (filter = new owner); also dispatches CONQUER_COUNT | H (`0x326c00`) |
-| CONSTRUCT dispatch | – | – | – | – | name = built type name; object = planet. If the type is a starbase/ground-base category it also dispatches CONSTRUCT_LEVEL | H (`0x326cd0`) |
+| CONSTRUCT dispatch | – | – | – | – | name = built type name; object = planet. If the type is a ground base (0x5B) / starbase (0x5C) it also dispatches CONSTRUCT_LEVEL (no level value); only starbases reach it, ground bases are never created (`A2K_T07_STORY_LOAD_RE.md` §2-3) | H (`0x326cd0`) |
 | CONQUER_COUNT | count | – | – | – | +1 per dispatched conquest, **no filter**; fires at ≥ Param1 | H (`0x454390`); who counts as conqueror: M |
-| CONSTRUCT_LEVEL | planet names | level | 0 = starbase, 1 = ground base, other/absent = any | – | planet in list (and category matches) and planet level ≥ Param2 | H (`0x4543b0`, `0x464760`) |
+| CONSTRUCT_LEVEL | planet names | level | story enum GROUND = 0 (ground base), SPACE = 1 (starbase); other = any, absent [L] | – (Param4+ ignored) | planet in list, category matches, and Param2 ≤ the constructed type's `Base_Level` (unsigned; not the planet level). No owner filter. Raised only for starbase types in galactic play (corrected by `A2K_T07_STORY_LOAD_RE.md` §3, 2026-11-06) | H (`0x4543b0`, `0x464760`) |
 | Enter family: ENTER, LAND_ON, PLANET_DESTROYED, FLEET_BOUNCED, INVASION_BOUNCED | planet names (empty = any planet) | Event_Filter, **default FILTER_NONE** | unit type names that must **all** be in the fleet | P4 hero/unit names (any one in the fleet); P5 bool; P6 bool "exact composition" (fleet size = P3 count); P7 bool (alternate fleet test) | planet in list, filter, P3, P4 | H structure (`0x454a90`, `0x465380`, `0x451e20`, `0x452170`); P5/P7 meaning L |
 | ACCUMULATE | amount | comparison, **default 0 → behaves as GREATER_THAN** | – | – | dispatched credits `op` amount; player-scoped dispatch | H (`0x453f80`, `0x464150`) |
 | STORY_FLAG | flag names | value | comparison, **default EQUAL_TO** (ctor sets 3) | – | for each name: flag must be defined (undefined ⇒ skip), then `flag op value`. NOT_EQUAL_TO (4) has no case and never fires | H (`0x454c00`, `0x4659a0`, ctor) |

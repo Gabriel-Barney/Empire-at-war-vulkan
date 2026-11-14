@@ -1,0 +1,54 @@
+[package]
+name = "command-center"
+version = "0.1.0"
+edition = "2021"
+description = "Launcher and control panel for the Empire at War Vulkan port"
+
+[[bin]]
+name = "command-center"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = "0.31"
+egui-wgpu = "0.31"
+wgpu = { version = "24", features = ["dx12"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "ico", "dds", "tga", "bmp", "webp"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+encoding_rs = "0.8"
+sha2 = "0.10"
+trash = "5"
+rfd = "0.15"
+winreg = "0.55"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+similar = "2"
+dirs = "6"
+# Steam Workshop details and searches (Steam's web API) and preview images. native-tls =
+# Windows SChannel with the system's root certificates, so there is no C code (ring/aws-lc)
+# to compile.
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
+# Desktop / Start-menu shortcuts (IShellLinkW), exit notifications (WinRT toasts) and bringing
+# the window back when the game exits. Same version the `trash` crate already pulls in.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Data_Xml_Dom",
+    "UI_Notifications",
+] }
+# Only to read the main window's HWND from eframe (already part of the build).
+raw-window-handle = "0.6"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

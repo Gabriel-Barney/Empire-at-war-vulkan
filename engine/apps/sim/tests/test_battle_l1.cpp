@@ -8,6 +8,7 @@
 // With ALAMO_FOC_DATA: the FoC special-weapon types join space / land battle tables; retreat increments from FactionFiles.
 #include <algorithm>
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -16,7 +17,10 @@
 #include <string>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
@@ -24,30 +28,28 @@
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/core/sim_rng.hpp"
+#include "alamo/sim/battle_catalog.hpp"
 #include "alamo/sim/campaign_battles.hpp"
 #include "alamo/sim/sim_host.hpp"
+#include "alamo/tactical/movement/movement_system.hpp"
+#include "alamo/tactical/movement/unit_params.hpp"
+#ifdef ALAMO_SIM_HAVE_ANIM
+#include "alamo/sim/sim_anim.hpp"
+#endif
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::sim;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
+using ::alamo::test::g_fail;
 static bool g_regen = false;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
 
 namespace {
 
-void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 const char* kTypes = R"(<L1>
  <Planet Name="S10_A"><Behavior>PLANET</Behavior><Terrain>Temperate</Terrain><Planet_Credit_Value>10</Planet_Credit_Value></Planet>
@@ -128,6 +130,14 @@ const char* kTypes = R"(<L1>
  <GroundCompany Name="L1_Team_Squad"><Company_Units>L1_Team_Trooper, L1_Team_Trooper</Company_Units><Create_Team_Type>L1_Team</Create_Team_Type>
   <Population_Value>1</Population_Value></GroundCompany>
  <Team Name="L1_Team"><Behavior>TEAM</Behavior></Team>
+ <GroundInfantry Name="L1_Deploy_Wide"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type><Deploys>Yes</Deploys>
+  <Custom_Hard_XExtent>6</Custom_Hard_XExtent><Custom_Hard_YExtent>6</Custom_Hard_YExtent>
+  <Custom_Hard_XExtent_Deployed>40</Custom_Hard_XExtent_Deployed><Custom_Hard_YExtent_Deployed>25</Custom_Hard_YExtent_Deployed>
+  <Unit_Abilities_Data SubObjectList="Yes"><Unit_Ability><Type>DEPLOY</Type></Unit_Ability></Unit_Abilities_Data></GroundInfantry>
+ <GroundInfantry Name="L1_Bare"><Variant_Of_Existing_Type>S10_Trooper</Variant_Of_Existing_Type>
+  <Custom_Hard_XExtent>6</Custom_Hard_XExtent></GroundInfantry>
+ <GroundCompany Name="L1_Deploy_Wide_Squad"><Company_Units>L1_Deploy_Wide, L1_Bare</Company_Units>
+  <Hyperspace>Yes</Hyperspace><Hyperspace_Speed>1.5</Hyperspace_Speed><Population_Value>1</Population_Value></GroundCompany>
 </L1>
 )";
 
@@ -140,10 +150,10 @@ const char* kHardpoints = R"(<HardPoints>
 )";
 
 const char* kFactions = R"(<Factions>
- <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
+ <Faction Name="Empire"><Is_Playable>Yes</Is_Playable><Basic_AI>BasicEmpire</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
   <Space_Tactical_Unit_Cap>20</Space_Tactical_Unit_Cap><Space_Retreat_Unit_Increment_Wait_Frames>3</Space_Retreat_Unit_Increment_Wait_Frames></Faction>
- <Faction Name="Underworld"><Is_Playable>Yes</Is_Playable><Can_Control_Planets>Yes</Can_Control_Planets>
-  <Space_Tactical_Unit_Cap>20</Space_Tactical_Unit_Cap>
+ <Faction Name="Underworld"><Is_Playable>Yes</Is_Playable><Basic_AI>AI_Player_Underworld</Basic_AI><Can_Control_Planets>Yes</Can_Control_Planets>
+  <Space_Tactical_Unit_Cap>20</Space_Tactical_Unit_Cap><Skirmish_Land_Bomber> L1_Bomber </Skirmish_Land_Bomber>
   <Bombardment_Required_Orbital_Ships> S10_Frigate </Bombardment_Required_Orbital_Ships><Bombardment_Projectile> L1_Bombard_Proj </Bombardment_Projectile>
   <Bombardment_Number_Of_Salvos> 2 </Bombardment_Number_Of_Salvos><Bombardment_Shots_Per_Salvo> 3 </Bombardment_Shots_Per_Salvo>
   <Bombardment_Shot_Delay> 0.2 </Bombardment_Shot_Delay><Bombardment_Salvo_Delay> 1 </Bombardment_Salvo_Delay><Bombardment_Initial_Delay> 1.0 </Bombardment_Initial_Delay></Faction>
@@ -288,7 +298,9 @@ struct Run {
 // destruction); 1 = on to the end, the Empire (defender) retreats during the TSW sequence (victory hold, §2); 2 = on to
 // the end, the Empire's Faction_Leader is a member of a company on the battle planet's surface (victory 7 / 0x10, §6);
 // 3 = on to the end, the Underworld escort frigates die (Hyperspace_Away) on the release frame, the Death Star is left.
-Run run(const Data& d, int32_t workers, int follow = 0) {
+// ui1 t04: via_command = the special weapon fires through command 25 (weapon + target object) instead of the direct
+// begin targeting + fire calls; the CRC log and the special-weapon trace must not change.
+Run run(const Data& d, int32_t workers, int follow = 0, bool via_command = false) {
     Run out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
@@ -314,8 +326,8 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
     opt.conflict.human_choice = galactic::BattleChoice::Fight;
     opt.battle.max_frames = 6000;
     opt.battle.order_interval = 0;  // no stand-in orders: the sides stay at their anchors (12000 apart)
-    opt.retreat_increment_frames = load_retreat_increments(*d.files, d.rules);
-    opt.retreat_flight_increments = load_retreat_flight_increments(*d.files, d.rules);
+    opt.retreat_increment_frames = load_retreat_increments(d.rules);
+    opt.retreat_flight_increments = load_retreat_flight_increments(d.rules);
     CampaignBattles battles(host, crules, *d.catalog,
                             [](const std::string& name, terrain::MapData& m) {
                                 if (name != "L1_Space_B") return false;
@@ -388,6 +400,9 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
             // Engines: 2 s timed disable on an Empire frigate.
             CHECK(b->disable_engines(slowed, 2.0f));
             out.engines_off = b->engines_online(slowed) == 0;
+            // cu8f t07 (CU8F_T01_T02_T07_RE.md §3.2): in space the owner of a TACTICAL_SUPER_WEAPON (the Underworld's
+            // L1_Death_Star) cannot retreat; the Empire can.
+            CHECK(b->retreat_prevented(1) && !b->retreat_prevented(0));
             CHECK(b->engines_online(weapon) == -1);
             // Teleport the frigate (store, movement, combat).
             CHECK(b->teleport(*tm, slowed, Vec3{-1000.0f, -2000.0f, 0.0f}, Vec3{0.0f, 1.0f, 0.0f}));
@@ -400,9 +415,15 @@ Run run(const Data& d, int32_t workers, int follow = 0) {
         }
         if (f == 70) out.engines_back = b->engines_online(slowed) == 1;
         if (weapon != objects::kNoObjectId && !out.fired && b->sw_readiness(weapon) >= 1.0f) {
-            CHECK(b->sw_begin_targeting(weapon));
             target_hp0 = b->combat().health(target);
-            out.fired = b->sw_fire_at_object(*tm, weapon, target);
+            if (via_command) {
+                commands::EventData ev(commands::EventType::SpecialWeaponFire);
+                ev.set("weapon", static_cast<uint32_t>(weapon)).set("player", 0).set("at_position", 0).set("target", static_cast<uint32_t>(target));
+                out.fired = b->handle_command(*tm, 0, ev, host.random().synced()) == commands::RejectReason::None;
+            } else {
+                CHECK(b->sw_begin_targeting(weapon));
+                out.fired = b->sw_fire_at_object(*tm, weapon, target);
+            }
             fire_frame = f;
         }
         if (out.fired && !out.hit && b->combat().has_unit(target) && b->combat().health(target) < target_hp0) out.hit = true;
@@ -487,6 +508,12 @@ void test_battle(const Data& d) {
     CHECK(a.increment == 3);
     CHECK(a.ground < -1.0e30f);
     CHECK(a.fields);
+    {  // ui1 t04: the human space special-weapon path (command 25 with a target object) fires exactly as the direct calls
+        const Run c = run(d, 0, 0, true);
+        const auto dv = first_divergence(a.crc, c.crc);
+        std::printf("  via command 25: fired %d hit %d, %s, trace %s\n", c.fired, c.hit, dv.message.c_str(), c.trace == a.trace ? "identical" : "DIFFERENT");
+        CHECK(c.fired && c.hit && !dv.diverged && c.trace == a.trace);
+    }
     for (int32_t w : jobs::determinism_worker_counts()) {
         if (w == 0) continue;
         const Run b = run(d, w);
@@ -534,9 +561,18 @@ struct LandRun {
     bool fought = false, weather_on = false, weather_advanced = false, forced = false, rain_sight = false;
     bool bombard_started = false, bombard_hit = false, bombard_reset = false;
     bool run_started = false, bombers_flew = false, run_done = false, refused_unavailable = false;
+    // cu9 t17: the HUD cooldown query (bombing_run_frames_until_available, 0x4950f0) when the run starts / ends.
+    uint32_t run_wait_at_start = 1, run_wait_after = 0;
+    // cu9g t02: the dial fraction (bombing_run_cooldown_fraction, 0x495250) and command 28 outcomes.
+    float dial_before = -1.0f, dial_at_start = -1.0f, dial_after = -1.0f;
+    uint32_t wait_in_run = 0;
+    bool dial_in_run_ok = true, dial_in_run_partial = false;
+    bool cmd_none_for_defender = false, cmd_in_progress_refused = false, cmd_bad_point_refused = false;
 };
 
-LandRun run_land(const Data& d, int32_t workers) {
+// via_command: the run is started by command 28 BombingRun through TacticalBattle::handle_command (cu9g t02) instead of
+// the direct start_bombing_run call; both must give the same CRC log.
+LandRun run_land(const Data& d, int32_t workers, bool via_command = false) {
     LandRun out;
     jobs::JobSystem js(jobs::JobSystemConfig{workers});
     SimConfig cfg;
@@ -556,7 +592,7 @@ LandRun run_land(const Data& d, int32_t workers) {
     opt.battle.fog = false;
     opt.l1_constants.min_bombard_interval = opt.l1_constants.max_bombard_interval = 3.0f;
     opt.l1_constants.min_bombing_run_interval = opt.l1_constants.max_bombing_run_interval = 3.0f;
-    opt.l1_factions = load_l1_factions(*d.files, d.rules);
+    opt.l1_factions = load_l1_factions(d.rules);
     auto wd = std::make_shared<tactical::combat::WeatherData>();
     CHECK(tactical::combat::load_weather_data(*d.files, *wd));
     opt.weather = wd;
@@ -635,10 +671,33 @@ LandRun run_land(const Data& d, int32_t workers) {
         if (out.bombard_hit && !out.bombard_reset && !b->bombardment_available(1) && bombard_end_ready == 0) bombard_end_ready = f;
         if (out.bombard_hit && b->bombardment_available(1) && f > 120) out.bombard_reset = true;
         if (!out.run_started && out.bombard_hit && b->bombing_run_available(1)) {
-            out.run_started = b->start_bombing_run(*tm, 1, target);
+            out.run_wait_at_start = b->bombing_run_frames_until_available(1);
+            out.dial_before = b->bombing_run_cooldown_fraction(1);
+            // The wire point is quantized (q1..q3): both variants start at the dequantized point, as the original's execute does.
+            commands::EventData ev(commands::EventType::BombingRun);
+            ev.set_f("x", target.x).set_f("y", target.y).set_f("z", target.z);
+            const Vec3 wire{ev.f("x"), ev.f("y"), ev.f("z")};
+            if (via_command) {
+                out.cmd_none_for_defender = b->handle_command(*tm, 0, ev, host.random().synced()) == commands::RejectReason::NotAllowed;
+                out.run_started = b->handle_command(*tm, 1, ev, host.random().synced()) == commands::RejectReason::None;
+                out.cmd_in_progress_refused = b->handle_command(*tm, 1, ev, host.random().synced()) == commands::RejectReason::AbilityNotReady;
+            } else {
+                out.run_started = b->start_bombing_run(*tm, 1, wire);
+            }
+            out.dial_at_start = b->bombing_run_cooldown_fraction(1);
+        }
+        if (out.run_started && !out.run_done) {
+            const float dial = b->bombing_run_cooldown_fraction(1);
+            if (dial < 0.0f || dial > 1.0f) out.dial_in_run_ok = false;
+            if (dial > 0.0f && dial < 1.0f) out.dial_in_run_partial = true;
+            out.wait_in_run = std::max(out.wait_in_run, b->bombing_run_frames_until_available(1));
         }
         if (out.run_started && !b->bombing_run_finished(1)) out.bombers_flew = true;
-        if (out.bombers_flew && b->bombing_run_finished(1)) out.run_done = true;
+        if (out.bombers_flew && !out.run_done && b->bombing_run_finished(1)) {
+            out.run_done = true;
+            out.run_wait_after = b->bombing_run_frames_until_available(1);
+            out.dial_after = b->bombing_run_cooldown_fraction(1);
+        }
         trace.u32(f);
         trace.u32(b->weather().phase_index());
         trace.f32(b->weather().intensity());
@@ -717,9 +776,218 @@ void test_land(const Data& d) {
     CHECK(a.fought && a.weather_on && a.weather_advanced && a.forced && a.rain_sight);
     CHECK(a.refused_unavailable && a.bombard_started && a.bombard_hit && a.bombard_reset);
     CHECK(a.run_started && a.bombers_flew && a.run_done);
+    // Available = no wait; a finished run waits its interval again (ready := end frame + interval).
+    std::printf("  bombing run wait: %u at start, %u after the run\n", a.run_wait_at_start, a.run_wait_after);
+    CHECK(a.run_wait_at_start == 0 && a.run_wait_after > 0);
     const LandRun w = run_land(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
+    // cu9g t02 (HUD_GAPS §9.3): the dial is full when ready, 0 on the start frame, partial during the run (the run
+    // waits its interval, 3 s = 90 frames, plus the remaining flight), and just after the run starts a new sweep from 0.
+    std::printf("  bombing run dial: before %.3f at start %.3f after %.3f; longest wait in run %u\n", static_cast<double>(a.dial_before),
+                static_cast<double>(a.dial_at_start), static_cast<double>(a.dial_after), a.wait_in_run);
+    CHECK(a.dial_before == 1.0f && a.dial_at_start == 0.0f);
+    CHECK(a.dial_in_run_ok && a.dial_in_run_partial && a.wait_in_run >= 90);
+    CHECK(a.dial_after >= 0.0f && a.dial_after < 1.0f);
+    // Command 28 starts the run exactly as the direct call at the same frame; a second one while it runs is refused
+    // AbilityNotReady (the app plays the error SFX), the defender has no record (NotAllowed).
+    const LandRun c = run_land(d, 0, true);
+    CHECK(c.run_started && c.bombers_flew && c.run_done);
+    CHECK(c.cmd_none_for_defender && c.cmd_in_progress_refused);
+    CHECK(!first_divergence(a.crc, c.crc).diverged && a.trace == c.trace);
 }
+// ---- cu8g t03: Set_New_Environment / the typed environment pick (CU8F_T03_T05_RE §2.2, L1_S4_REMAINING §3.2) ----
+// A land map with four environments (0 Rain_Test rain, 1 no scenario CLEAR, 2 Rain_Test rain, 3 "Cinematic" snow). The
+// battle starts on the map's start index 0 (weather on). Frame 60: set_environment(1) -> the next service turns the weather
+// off; frame 120: set_environment(2) -> restarted at phase 0; frame 150: save / load of the battle state keeps the index
+// (hash unchanged); frame 180: set_environment(99) clamps to 3, -5 to 0; frame 240: the typed pick with a fake draw.
+// 0 / 4 workers identical.
+struct EnvRun {
+    CrcLog crc;
+    uint64_t trace = 0;
+    bool fought = false, start_on = false, picked_ok = false, off_after_1 = false, sight_clear = false;
+    bool restarted = false, saved = false, kept = false, clamped = false, typed = false;
+    uint32_t picked = 0;
+};
+
+terrain::MapData env_map() {
+    terrain::MapData m = land_map();
+    terrain::Environment clear, rain2, cine;
+    clear.name = "Clear";
+    clear.field_13 = 0;
+    rain2.name = "Rain2";
+    rain2.weather_effect = "Rain_Test";
+    cine.name = "Cinematic";
+    cine.field_13 = 2;
+    m.environments.environments.push_back(clear);
+    m.environments.environments.push_back(rain2);
+    m.environments.environments.push_back(cine);
+    return m;
+}
+
+EnvRun run_env(const Data& d, int32_t workers) {
+    EnvRun out;
+    jobs::JobSystem js(jobs::JobSystemConfig{workers});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate"), bs = type_of(d, "L1_Bomber_Squadron");
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, bs}, {1, 2, sq}, {1, 2, sq}};  // run_land's forces
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return out;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 6000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    opt.l1_factions = load_l1_factions(d.rules);
+    auto wd = std::make_shared<tactical::combat::WeatherData>();
+    CHECK(tactical::combat::load_weather_data(*d.files, *wd));
+    opt.weather = wd;
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = env_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    bool invaded = false;
+    StateHasher trace;
+    objects::ObjectId unit = objects::kNoObjectId;
+    uint32_t last_frame = 0;
+    for (uint64_t t = 0; t < 6000 && last_frame < 260; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) {
+                CHECK(gs->invade(1, 1, {}) == commands::RejectReason::None);
+                invaded = true;
+            }
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm || b->finished()) continue;
+        out.fought = true;
+        const uint32_t f = b->frame();
+        last_frame = f;
+        if (f == 1) {
+            // cu8g t02: the map-load pick over 4 records (3 = "Cinematic" -> 0); the weather follows the picked one
+            // (Rain_Test on 0 / 2, none on 1 "Clear").
+            out.picked = b->environment_index();
+            out.picked_ok = out.picked < 3;
+            out.start_on = b->weather().active() == (out.picked != 1);
+            const objects::ObjectStore& st = tm->primary();
+            for (const objects::ObjectHandle h : st.owned_by(1))
+                if (st.alive(h) && b->combat().has_unit(st.id(h))) {
+                    unit = st.id(h);
+                    break;
+                }
+        }
+        if (f == 60) CHECK(b->set_environment(1) && b->environment_index() == 1 && b->weather().active() == (out.picked != 1));  // until the next service
+        if (f == 61) {
+            out.off_after_1 = !b->weather().active();
+            out.sight_clear = unit != objects::kNoObjectId && b->weather_sight_modifier(unit) == 1.0f;
+        }
+        if (f == 120) CHECK(b->set_environment(2));
+        if (f == 121) out.restarted = b->weather().active() && b->weather().phase_index() == 0 && b->environment_index() == 2;
+        if (f == 150) {
+            StateHasher h0;
+            b->hash(h0);
+            ByteWriter w;
+            b->write_part(TacticalBattle::SavePart::State, w);
+            ByteReader r(w.bytes());
+            const bool ok = b->read_part(TacticalBattle::SavePart::State, r);
+            StateHasher h1;
+            b->hash(h1);
+            // cu8g t02: the index is not saved; a load takes the map's start index (0) without a draw, the saved
+            // weather stays (bound to it: no restart at the next tick).
+            out.saved = ok && h0.digest() == h1.digest() && b->environment_index() == 0;
+        }
+        if (f == 151) {
+            bool started = false;
+            for (const tactical::combat::WeatherEvent& e : b->weather().events())
+                started = started || e.kind == tactical::combat::WeatherEvent::Kind::Started;
+            out.kept = b->environment_index() == 0 && b->weather().active() && !started;
+        }
+        if (f == 180) out.clamped = b->set_environment(99) && b->environment_index() == 3 && b->set_environment(-5) && b->environment_index() == 0;
+        if (f == 240) {  // vf27 on a scratch stream (the draws are checked against a copy)
+            SimRng r(0x1234u), ref(0x1234u);
+            const uint32_t k1 = ref.range_int(0, 1) == 0 ? 0u : 2u;  // rain (type 1): {0, 2}, one int(0, 1)
+            bool ok = b->set_environment_of_weather_type(1, r) && b->environment_index() == k1 && r == ref;
+            ok = ok && b->set_environment_of_weather_type(0, r) && b->environment_index() == 1 && r == ref;  // clear: {1}, no draw
+            const int32_t k3 = ref.range_int(0, 3);  // type 7 > 4: vf26 over all 4, 3 = Cinematic -> 0
+            ok = ok && b->set_environment_of_weather_type(7, r) && b->environment_index() == (k3 == 3 ? 0u : static_cast<uint32_t>(k3)) && r == ref;
+            const int32_t k4 = ref.range_int(0, 3);  // type 3: no record -> vf26
+            ok = ok && b->set_environment_of_weather_type(3, r) && b->environment_index() == (k4 == 3 ? 0u : static_cast<uint32_t>(k4)) && r == ref;
+            out.typed = ok;
+        }
+        trace.u32(f);
+        trace.u32(b->environment_index());
+        trace.boolean(b->weather().active());
+        trace.u32(b->weather().phase_index());
+        trace.f32(b->weather().intensity());
+    }
+    out.trace = trace.digest();
+    out.crc = host.crc_log();
+    return out;
+}
+
+// cu8g t02: 0x277030 on its own (CU8G_T02_ENV_PICK_RE §1).
+void test_environment_pick() {
+    auto set = [](std::initializer_list<const char*> names) {
+        terrain::EnvironmentSet e;
+        for (const char* n : names) {
+            terrain::Environment r;
+            r.name = n;
+            e.environments.push_back(r);
+        }
+        return e;
+    };
+    SimRng r(99u), ref(99u);
+    CHECK(TacticalBattle::pick_environment(set({}), r) == 0 && r == ref);             // [port] n = 0: no draw
+    CHECK(TacticalBattle::pick_environment(set({"Cinematic"}), r) == 0 && r == ref);  // n = 1: no draw, no skip
+    bool all_ok = true, saw0 = false, saw1 = false;
+    for (int i = 0; i < 64; ++i) {
+        // Kuat: ("Environment 1", "Cinematic") always ends on 0, one draw each.
+        all_ok = all_ok && TacticalBattle::pick_environment(set({"Environment 1", "Cinematic"}), r) == 0;
+        ref.range_int(0, 1);
+        all_ok = all_ok && r == ref;
+        // Case-sensitive: "cinematic" is an ordinary record.
+        const uint32_t k = TacticalBattle::pick_environment(set({"A", "cinematic"}), r);
+        all_ok = all_ok && k == static_cast<uint32_t>(ref.range_int(0, 1)) && r == ref;
+        saw0 = saw0 || k == 0;
+        saw1 = saw1 || k == 1;
+        // No re-check: a Cinematic after a Cinematic is taken.
+        const int32_t d = ref.range_int(0, 2);
+        const uint32_t want = d == 0 ? 1u : 2u;
+        all_ok = all_ok && TacticalBattle::pick_environment(set({"Cinematic", "Cinematic", "B"}), r) == want && r == ref;
+    }
+    std::printf("  environment pick: ok %d both %d\n", all_ok, saw0 && saw1);
+    CHECK(all_ok && saw0 && saw1);
+}
+
+void test_environment(const Data& d) {
+    const EnvRun a = run_env(d, 0);
+    std::printf("  environment: fought %d picked %u (ok %d) start on %d; off after 1 %d sight 1 %d; restarted %d; save %d kept %d; "
+                "clamp %d; typed %d; trace %016" PRIx64 "\n",
+                a.fought, a.picked, a.picked_ok, a.start_on, a.off_after_1, a.sight_clear, a.restarted, a.saved, a.kept,
+                a.clamped, a.typed, a.trace);
+    CHECK(a.fought && a.picked_ok && a.start_on);
+    CHECK(a.off_after_1 && a.sight_clear && a.restarted && a.saved && a.kept && a.clamped && a.typed);
+    const EnvRun w = run_env(d, 4);
+    CHECK(!first_divergence(a.crc, w.crc).diverged && a.trace == w.trace);
+}
+
 // ---- S7 t10 / t14: the MoveToPosition switch-locomotor bit through order_move, weapons suspended on the jetpack ----
 // (MOVEMENT §3.1.1 step 6 / §6.2) A Uses_Multiple_Locomotors trooper (WALK primary, JETPACK secondary, a blaster) is ordered
 // with the switch bit next to an enemy trooper: it swaps, flies and lands, then swaps back to WALK. While on the jetpack
@@ -1105,6 +1373,174 @@ DeployRun run_deploy(const Data& d) {
     return out;
 }
 
+// s78n t10 review (TACTICAL_COMBAT §5.4.6 items 2, 4 and port spec items 2, 3): a Deploys walker with deployed extents
+// (L1_Deploy_Wide: Custom_Hard 6 / 6, _Deployed 40 / 25) in a land battle, ordered DEPLOY on and off. In each Walk state
+//   * its fog footprint 0x38de80 has half extents (6, 6) undeployed and while undeploying (0x1A), (40, 25) while
+//     deploying (0x18) and deployed (0x19) - the 0x371d20 pair;
+//   * as a drop blocker its box is the deployed pair in 0x18 / 0x19 only: of the drop points tried along its facing,
+//     fewer are free then, and as many as undeployed while it undeploys.
+// L1_Bare (one Custom_Hard extent, no land model name): footprint half extents (0, 0).
+// The two transition states last one tick each without a deploy clip; with the animation service the walker gets 12-frame
+// Deploy / Undeploy clips, so they are seen between ticks (without it only the three settled states are checked).
+void test_deploy_extents(const Data& d) {
+    namespace mv = tactical::movement;
+    namespace ab = tactical::abilities;
+    jobs::JobSystem js(jobs::JobSystemConfig{0});
+    SimConfig cfg;
+    cfg.seed = 11;
+    cfg.players = 4;
+    SimHost host(d.types, js, cfg);
+    galactic::GalacticSetup s = make_setup(d);
+    const uint32_t sq = type_of(d, "S10_Squad"), fr = type_of(d, "S10_Frigate"), wsq = type_of(d, "L1_Deploy_Wide_Squad");
+    CHECK(wsq < d.types.size());
+    s.forces = {{0, 1, sq}, {1, 2, fr}, {1, 2, wsq}, {1, 2, wsq}};  // the second Underworld company waits in reserve
+    galactic::GalacticSim* gs = host.start_galactic(d.rules, std::move(s));
+    CHECK(gs != nullptr);
+    if (!gs) return;
+    CampaignBattleOptions opt;
+    opt.conflict.human_choice = galactic::BattleChoice::Fight;
+    opt.battle.max_frames = 3000;
+    opt.battle.order_interval = 0;
+    opt.battle.fog = false;
+    const auto dep_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Deploy_Wide"));
+#ifdef ALAMO_SIM_HAVE_ANIM
+    // One-bone skeleton, clips without tracks: only the frame counts matter (the Walk deploy window is the clip length).
+    anim::AnimModel model;
+    model.model = "L1_SYNTH.ALO";
+    model.base = "L1_SYNTH";
+    model.skeleton.names = {"Root"};
+    model.skeleton.parents = {-1};
+    model.skeleton.billboard_mode = {0u};
+    model.skeleton.bind_local = {anim::Mat34{}};
+    model.has_skeleton = true;
+    for (const auto& [type, frames] : {std::pair<int32_t, uint32_t>{anim::kAnimIdle, 30u}, {anim::kAnimDeploy, 12u}, {anim::kAnimUndeploy, 12u}}) {
+        auto c = std::make_shared<anim::Clip>();
+        c->name = anim::clip_file_name(model.base, type, 0);
+        c->frame_count = frames;
+        c->fps = 30.0f;
+        anim::ClipRef r;
+        r.clip = c;
+        model.clips[static_cast<size_t>(type)].push_back(r);
+    }
+    anim::bind_clips(model);
+    SimAnimation animation(d.types, *d.files);
+    animation.set_model(dep_t, objects::ModeKind::Land, &model);
+    animation.attach(host, true);
+    opt.animation = &animation;
+    const bool transitions = true;
+#else
+    const bool transitions = false;
+#endif
+    CampaignBattles battles(host, d.crules, *d.catalog,
+                            [](const std::string& name, terrain::MapData& m) {
+                                if (name != "L1_Land_B") return false;
+                                m = land_map();
+                                return true;
+                            },
+                            opt);
+    CHECK(battles.attach());
+    std::vector<objects::ObjectHandle> up;
+    for (objects::ObjectHandle h : gs->planets()[2].surface)
+        if (gs->store().owner(h) == 1) up.push_back(h);
+    CHECK(gs->launch_units(1, 2, up) == commands::RejectReason::None);
+    const std::vector<uint32_t> uf = gs->fleets_at(2, 1);
+    CHECK(!uf.empty());
+    if (!uf.empty()) CHECK(gs->move_fleet(1, uf[0], 1) == commands::RejectReason::None);
+    const auto bare_t = static_cast<objects::TypeIndex>(type_of(d, "L1_Bare"));
+    CHECK(d.types.get_float(bare_t, "Custom_Hard_XExtent") == 6.0f && d.types.get_float(bare_t, "Custom_Hard_YExtent") == 0.0f);
+    struct Seen {
+        bool any = false, same = true;
+        float hx = 0.0f, hy = 0.0f;
+        int free_drops = 0;
+    };
+    Seen none_before, deploying, deployed, undeploying, none_after;
+    objects::ObjectId dep = objects::kNoObjectId, bare = objects::kNoObjectId, key = objects::kNoObjectId;
+    bool invaded = false, on = false, off = false, bare_ok = false;
+    for (uint64_t t = 0; t < 6000; ++t) {
+        host.tick_once();
+        if (!invaded && host.modes().depth() == 1) {
+            const std::vector<uint32_t> f = gs->fleets_at(1, 1);
+            if (!f.empty() && !gs->fleets()[f[0]].moving) invaded = gs->invade(1, 1, {}) == commands::RejectReason::None;
+        }
+        TacticalBattle* b = battles.battle();
+        TacticalMode* tm = host.tactical();
+        if (!b || !tm) continue;
+        objects::ObjectStore& st = tm->primary();
+        const uint32_t f = b->frame();
+        if (f == 1) {
+            for (const objects::ObjectHandle h : st.owned_by(1)) {
+                if (!st.alive(h) || !b->combat().has_unit(st.id(h))) continue;
+                if (dep == objects::kNoObjectId && st.type(h) == dep_t) dep = st.id(h);
+                if (bare == objects::kNoObjectId && st.type(h) == bare_t) bare = st.id(h);
+            }
+            for (const TacticalBattle::Reserve& r : b->reserves(1))
+                if (r.type == wsq) key = r.galactic_id;
+            CHECK(dep != objects::kNoObjectId && bare != objects::kNoObjectId && key != objects::kNoObjectId);
+        }
+        if (dep == objects::kNoObjectId || bare == objects::kNoObjectId || key == objects::kNoObjectId) {
+            if (f >= 1) break;
+            continue;
+        }
+        const auto half = [&](objects::ObjectId id, float& hx, float& hy) {
+            const objects::ObjectHandle h = st.find(id);
+            float xy[16] = {};
+            b->fog_footprint(st, h, xy);
+            const Vec3 p = st.position(h);
+            hx = std::hypot(xy[8] - p.x, xy[9] - p.y);    // c + hx a
+            hy = std::hypot(xy[10] - p.x, xy[11] - p.y);  // c - hy b
+        };
+        if (f >= 5) {
+            const mv::LocoState ds = b->movement().deploy_state(dep);
+            Seen& seen = ds == mv::LocoState::WalkDeploying ? deploying
+                         : ds == mv::LocoState::WalkDeployed ? deployed
+                         : ds == mv::LocoState::WalkUndeploying ? undeploying
+                         : off ? none_after : none_before;
+            float hx = 0.0f, hy = 0.0f;
+            half(dep, hx, hy);
+            const objects::ObjectHandle h = st.find(dep);
+            const Vec3 p = st.position(h), face = st.facing(h);
+            const float fl = std::hypot(face.x, face.y);
+            const float ax = fl > 0.0f ? face.x / fl : 1.0f, ay = fl > 0.0f ? face.y / fl : 0.0f;
+            int free_drops = 0;
+            for (int k = 0; k <= 40; ++k) {
+                const float dx = 5.0f * static_cast<float>(k);
+                free_drops += b->land_drop_valid(*tm, 1, key, p.x + ax * dx, p.y + ay * dx, true, false) ? 1 : 0;
+            }
+            if (seen.any && (seen.hx != hx || seen.hy != hy || seen.free_drops != free_drops)) seen.same = false;
+            seen.any = true;
+            seen.hx = hx;
+            seen.hy = hy;
+            seen.free_drops = free_drops;
+            float bx = -1.0f, by = -1.0f;
+            half(bare, bx, by);
+            bare_ok = bx == 0.0f && by == 0.0f;
+        }
+        const objects::ObjectId ids[] = {dep};
+        if (f == 10) on = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, true, f) == 1;
+        if (f == 40) off = b->abilities().set_unit_ability_mode(ids, ab::kDeploy, false, f) == 1;
+        if (f >= 80) break;
+    }
+    std::printf("  deploy extents: fog half / free drop points - undeployed (%.1f, %.1f) / %d, deploying (%.1f, %.1f) / %d, deployed "
+                "(%.1f, %.1f) / %d, undeploying (%.1f, %.1f) / %d, after (%.1f, %.1f) / %d\n",
+                static_cast<double>(none_before.hx), static_cast<double>(none_before.hy), none_before.free_drops,
+                static_cast<double>(deploying.hx), static_cast<double>(deploying.hy), deploying.free_drops,
+                static_cast<double>(deployed.hx), static_cast<double>(deployed.hy), deployed.free_drops,
+                static_cast<double>(undeploying.hx), static_cast<double>(undeploying.hy), undeploying.free_drops,
+                static_cast<double>(none_after.hx), static_cast<double>(none_after.hy), none_after.free_drops);
+    CHECK(on && off && bare_ok);
+    const auto close_to = [](float a, float b) { return std::fabs(a - b) < 0.01f; };
+    for (const Seen* x : {&none_before, &deployed, &none_after}) CHECK(x->any && x->same);
+    for (const Seen* x : {&none_before, &none_after}) CHECK(close_to(x->hx, 6.0f) && close_to(x->hy, 6.0f));
+    CHECK(close_to(deployed.hx, 40.0f) && close_to(deployed.hy, 25.0f));
+    CHECK(none_before.free_drops > 0 && none_before.free_drops == none_after.free_drops);
+    CHECK(deployed.free_drops + 4 <= none_before.free_drops);
+    if (transitions) {  // 0x18 as deployed, 0x1A as undeployed
+        CHECK(deploying.any && deploying.same && undeploying.any && undeploying.same);
+        CHECK(close_to(deploying.hx, 40.0f) && close_to(deploying.hy, 25.0f) && deploying.free_drops == deployed.free_drops);
+        CHECK(close_to(undeploying.hx, 6.0f) && close_to(undeploying.hy, 6.0f) && undeploying.free_drops == none_before.free_drops);
+    }
+}
+
 void test_deploy(const Data& d) {
     const DeployRun r = run_deploy(d);
     std::printf("  deploy: fought %d on %d (frame %u, deployed at %u) repeat refused %d off %d (frame %u, undeployed at %u): %u signals "
@@ -1128,6 +1564,12 @@ struct PadRun {
     // q6 t19 (SKIRMISH_SETUP §3.1): a finished land build is a pool entry (key >= kBuiltReserveKeyBase, no galactic
     // counterpart); in a skirmish a type without a Company_Transport_Unit (S10_Squad) cannot be dropped and stays pooled.
     bool pool_added = false, pool_drop_refused = false;
+    // cu9h t01 (HUD_GAPS §9.8): the skirmish bombing-run records at the first battle frame, per player: bomber type (-1 = no
+    // record), frames until available, dial; any player available.
+    std::vector<int32_t> run_type;
+    std::vector<uint32_t> run_wait;
+    std::vector<float> run_dial;
+    bool run_available = false;
     float sight_clear = -1.0f, sight_rain = -1.0f;
     bool fog_on = false;
     CrcLog crc;
@@ -1189,6 +1631,13 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
         objects::ObjectStore& st = tm->primary();
         const uint32_t f = b->frame();
         if (f == 1) {
+            for (int32_t p = 0; p < 4; ++p) {
+                const objects::TypeIndex bt = b->bombing_run_bomber_type(p);
+                out.run_type.push_back(bt == objects::kNone ? -1 : static_cast<int32_t>(bt));
+                out.run_wait.push_back(b->bombing_run_frames_until_available(p));
+                out.run_dial.push_back(b->bombing_run_cooldown_fraction(p));
+                out.run_available = out.run_available || b->bombing_run_available(p);
+            }
             objects::SpawnParams sp;
             sp.type = static_cast<objects::TypeIndex>(type_of(d, "L1_Build_Pad"));
             sp.owner = 1;
@@ -1238,7 +1687,6 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
             out.cooldown_refused = b->pad_build(*tm, pad, uc_t, false) == -1;
         }
         if (built_frame && f == built_frame + 40) out.rebuilt = b->pad_build(*tm, pad, uc_t, false) == 1;
-#ifdef ALAMO_SIM_HAVE_FOG
         tactical::fog::FogObject fo;
         if (scout != objects::kNoObjectId && b->fog() && b->fog_object(scout, fo)) {
             out.fog_on = true;
@@ -1246,7 +1694,6 @@ PadRun run_pads(const Data& d, int32_t workers, bool skirmish = false) {
             if (rain) out.sight_rain = fo.sight_range;
             else if (b->weather().intensity() <= 0.5f) out.sight_clear = fo.sight_range;
         }
-#endif
         if (out.rebuilt && out.sight_rain >= 0.0f && out.sight_clear >= 0.0f) break;
     }
     out.crc = host.crc_log();
@@ -1261,9 +1708,7 @@ void test_pads(const Data& d) {
                 a.fog_on, static_cast<double>(a.sight_clear), static_cast<double>(a.sight_rain));
     CHECK(a.fought && a.refused_rules && a.started && a.refused_full && a.locked && a.uc_seen && a.built && a.cleared && a.cooldown_refused &&
           a.rebuilt);
-#ifdef ALAMO_SIM_HAVE_FOG
     CHECK(a.fog_on && a.sight_clear == 300.0f && a.sight_rain == 150.0f);  // Land_FOW_Reveal_Range x Sight_Range_Modifier 0.5
-#endif
     CHECK(a.other_list_refused);
     const PadRun w = run_pads(d, 4);
     CHECK(!first_divergence(a.crc, w.crc).diverged);
@@ -1280,6 +1725,24 @@ void test_pads(const Data& d) {
     std::printf("  pads q6 t19: built pool entry %d/%d, skirmish drop without a transport refused %d\n", a.pool_added, k.pool_added,
                 k.pool_drop_refused);
     CHECK(a.pool_added && k.pool_added && k.pool_drop_refused);
+    // cu9h t01: a land skirmish gives every player of a playable faction with a Skirmish_Land_Bomber an enabled record (here
+    // the Underworld players: L1_Bomber); the Empire (no skirmish bomber) and Neutral (not playable) get none. Interval =
+    // int(30 x Max_Bombing_Run_Interval_Seconds 120) = 3600, ready = setup frame + 3600, last start -1: dial 0 (shown full).
+    // The empty gate list refuses runs in a skirmish, so nobody is available. The campaign battle keeps the attacker-only
+    // rule (no bomber in orbit here: no record).
+    const int32_t bomber = static_cast<int32_t>(type_of(d, "L1_Bomber"));
+    int32_t with = 0;
+    for (size_t p = 0; p < k.run_type.size(); ++p) {
+        std::printf("  skirmish bombing run p%zu: type %d wait %u dial %.2f\n", p, k.run_type[p], k.run_wait[p], static_cast<double>(k.run_dial[p]));
+        if (k.run_type[p] < 0) continue;
+        ++with;
+        CHECK(k.run_type[p] == bomber);
+        CHECK(k.run_wait[p] >= 3598u && k.run_wait[p] <= 3600u);
+        CHECK(k.run_dial[p] == 0.0f);
+    }
+    CHECK(k.run_type.size() == 4u && with >= 1 && with < 4);
+    CHECK(!k.run_available);
+    for (const int32_t t : a.run_type) CHECK(t < 0);
 }
 // --- end Int-final ---
 
@@ -1424,21 +1887,7 @@ void test_persist(const Data& d) {
     CHECK(k.fought && !k.restored && k.built && k.added_ok && k.filtered_ok && k.after == k.expect_after);
 }
 
-std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 // ---- s78f t05: command 25 SpecialWeaponFire (TACTICAL_COMBAT §3.1.1 "Fire-at-position order", LOB_SOLVER §9) ----
 // The Empire defends S10_B with a lobbing superweapon (LOBBING_SUPERWEAPON + TURRET + WEAPON, a grenade projectile,
@@ -1653,6 +2102,131 @@ void test_sw_fire() {
     CHECK(r.target_fired && r.target_point);
 }
 
+// s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition" [H]): the shipped AT_ST_Walker sets Walk_Transition
+// and no OverrideAcceleration / OverrideDeceleration; S = Scale_Factor 1.6 x Movement_Animation_Speed 0.8117. With a
+// 16-frame MOVESTART (synthetic clip data) its first moving frame is a = V^2 / (16 S) = 0.168646 (V = 1.2 x 1.56), not V.
+// The Destroyer_Droid does not set the flag.
+void test_foc_walk_transition(const objects::GameObjectTypes& types) {
+    namespace mv = tactical::movement;
+    const objects::TypeIndex ti = types.resolve_name("AT_ST_Walker");
+    const objects::TypeIndex td = types.resolve_name("Destroyer_Droid");
+    CHECK(ti != objects::kNone && ti < types.size() && td != objects::kNone && td < types.size());
+    if (ti == objects::kNone || ti >= types.size() || td == objects::kNone || td >= types.size()) return;
+    mv::UnitDesc d = mv::unit_desc_from_type(types, static_cast<uint32_t>(ti));
+    std::printf("foc AT_ST_Walker: walk transition %d S %.5f speed %.2f accel %.2f decel %.2f\n", d.walk_transition ? 1 : 0,
+                static_cast<double>(d.anim_scale_speed), static_cast<double>(d.max_speed), static_cast<double>(d.accel),
+                static_cast<double>(d.decel));
+    CHECK(d.walk_transition && std::fabs(d.anim_scale_speed - 1.6f * 0.8117f) < 1e-5f && d.max_speed == 1.2f &&
+          !(d.accel > 0.0f) && !(d.decel > 0.0f));
+    CHECK(!mv::unit_desc_from_type(types, static_cast<uint32_t>(td)).walk_transition);
+    mv::MovementSystem sys{mv::MovementConfig{}};
+    mv::PassabilityGrid g;
+    g.init(100, 100);
+    sys.set_grid(std::move(g));
+    sys.set_height_fn([](float, float) { return 0.0f; });
+    sys.set_deploy_clip_fn([](objects::ObjectId, int32_t type, uint32_t& n, float& fps) {
+        fps = 30.0f;
+        n = type == 2 ? 30u : type == 16 ? 16u : type == 17 ? 17u : 0u;
+        return n != 0u;
+    });
+    const mv::V2 p0 = mv::cell_center(20, 50);
+    d.id = 1;
+    d.pos = p0;
+    CHECK(sys.add_unit(d));
+    SimRng rng(2613);
+    mv::MoveOrder o;
+    o.units = {1};
+    o.destination = p0 + mv::V2{600.0f, 0.0f};
+    sys.move(o, rng, 1);
+    float first = 0.0f;
+    for (uint32_t f = 1; f < 200 && !(first > 0.0f); ++f) {
+        sys.tick(f, rng);
+        first = sys.view(1).speed;
+    }
+    CHECK(std::fabs(first - 0.168646f) < 1e-5f && sys.view(1).walk_state == mv::LocoState::WalkStartMove);
+}
+
+// s78n t26.1 (MOVEMENT §3.2.1): the shipped Destroyer_Droid (Underworld; no measured land seed fields one) on the FoC
+// type data - movement parameters from the type, the land speed multiplier 1.56: idle it deploys; an order 100 away
+// (< Max_Dist_Walk_While_Deployed 150) walks deployed at Deployed_Walk_Speed 2.5 (0x19 throughout, no deploy event) and
+// ends deployed with no clip; an order 200 away undeploys first, rolls at 3.6 x 1.56 and deploys at the stop. The combat
+// table carries Shielded_Only_When_Deployed.
+void test_foc_destroyer_droid(const objects::GameObjectTypes& types, const BattleCatalog& catalog) {
+    namespace mv = tactical::movement;
+    const objects::TypeIndex ti = types.resolve_name("Destroyer_Droid");
+    CHECK(ti != objects::kNone && ti < types.size());
+    if (ti == objects::kNone || ti >= types.size()) return;
+    mv::UnitDesc d = mv::unit_desc_from_type(types, static_cast<uint32_t>(ti));
+    std::printf("foc Destroyer_Droid: speed %.2f accel %.2f deploys %d auto %d M %.0f walk speed %.2f anim rate %.1f\n",
+                static_cast<double>(d.max_speed), static_cast<double>(d.accel), d.deploys ? 1 : 0, d.auto_deploys ? 1 : 0,
+                static_cast<double>(d.max_walk_deployed), static_cast<double>(d.deployed_walk_speed),
+                static_cast<double>(d.deployment_anim_rate));
+    CHECK(d.max_speed == 3.6f && d.accel == 0.5f && d.deploys && d.auto_deploys && d.max_walk_deployed == 150.0f &&
+          d.deployed_walk_speed == 2.5f && d.deployment_anim_rate == 3.0f && !d.deploy_ability);
+    {
+        std::vector<uint32_t> idx;
+        const BattleTables bt = catalog.build_battle({static_cast<uint32_t>(ti)}, idx, false);
+        CHECK(idx.size() == 1 && bt.combat.units[idx[0]].shielded_only_when_deployed && bt.combat.units[idx[0]].deploys);
+    }
+    mv::MovementSystem sys{mv::MovementConfig{}};
+    mv::PassabilityGrid g;
+    g.init(100, 100);
+    sys.set_grid(std::move(g));
+    sys.set_height_fn([](float, float) { return 0.0f; });
+    sys.set_deploy_clip_fn([](objects::ObjectId, int32_t, uint32_t& n, float& fps) {
+        n = 30;
+        fps = 30.0f;
+        return true;
+    });
+    const mv::V2 p0 = mv::cell_center(20, 50);
+    d.id = 1;
+    d.pos = p0;
+    d.radius = 6.0f;
+    CHECK(sys.add_unit(d));
+    SimRng rng(26);
+    uint32_t f = 1, events = 0;
+    for (; f < 60; ++f) {
+        sys.tick(f, rng);
+        events += static_cast<uint32_t>(sys.take_deploy_events().size());
+    }
+    CHECK(events == 2 && sys.deploy_state(1) == mv::LocoState::WalkDeployed);
+    mv::MoveOrder o;
+    o.units = {1};
+    o.destination = p0 + mv::V2{100.0f, 0.0f};
+    sys.move(o, rng, f);
+    float vmax = 0.0f;
+    bool deployed = true, walked = false;
+    for (const uint32_t end = f + 200; f < end && !sys.view(1).arrived; ++f) {
+        sys.tick(f, rng);
+        events += static_cast<uint32_t>(sys.take_deploy_events().size());
+        vmax = std::max(vmax, sys.view(1).speed);
+        deployed = deployed && sys.deploy_state(1) == mv::LocoState::WalkDeployed;
+        walked = walked || sys.walking_deployed(1);
+    }
+    CHECK(sys.view(1).arrived && deployed && walked && vmax == 2.5f && events == 2);
+    const uint32_t walk_end = f;
+    for (const uint32_t end = f + 5; f < end; ++f) sys.tick(f, rng);
+    CHECK(!sys.walking_deployed(1) && sys.deploy_state(1) == mv::LocoState::WalkDeployed && sys.take_deploy_events().empty());
+    // 200 away: Undeploy (0x1A), the roll, the deploy at the stop
+    const mv::V2 p1 = sys.view(1).pos;
+    o.destination = p1 + mv::V2{200.0f, 0.0f};
+    sys.move(o, rng, f);
+    float roll = 0.0f;
+    bool undeploying = false, redeployed = false;
+    for (const uint32_t end = f + 400; f < end && !redeployed; ++f) {
+        sys.tick(f, rng);
+        for (const mv::MovementSystem::DeployEvent& e : sys.take_deploy_events()) {
+            undeploying = undeploying || e.to == mv::LocoState::WalkUndeploying;
+            redeployed = redeployed || e.to == mv::LocoState::WalkDeploying;
+        }
+        roll = std::max(roll, sys.view(1).speed);
+    }
+    std::printf("foc Destroyer_Droid: 100 walked deployed at %.2f (arrived frame %u); 200: undeploy %d, rolled at %.3f, deploy at "
+                "the stop %d (frame %u)\n",
+                static_cast<double>(vmax), walk_end, undeploying ? 1 : 0, static_cast<double>(roll), redeployed ? 1 : 0, f);
+    CHECK(undeploying && redeployed && std::fabs(roll - 3.6f * 1.56f) < 1e-4f && sys.view(1).arrived);
+}
+
 void test_foc() {
     const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
@@ -1672,7 +2246,7 @@ void test_foc() {
     std::vector<std::string> diag;
     CHECK(db.load(*files, {}, &diag) && raw.load(*files) && types.build(raw, files.get(), &diag));
     CHECK(galactic::load_galactic_rules(*files, db, types, rules, &diag));
-    const std::vector<int32_t> inc = load_retreat_increments(*files, rules);
+    const std::vector<int32_t> inc = load_retreat_increments(rules);
     int32_t ones = 0;
     for (int32_t v : inc) ones += v == 1 ? 1 : 0;
     const uint32_t rebel = rules.find_faction("Rebel"), empire = rules.find_faction("Empire");
@@ -1699,6 +2273,9 @@ void test_foc() {
     CHECK(ion != objects::kNone && types.get_float(ion, "Projectile_Fire_Recharge_Seconds") == 30.0f &&
           types.get_int(ion, "Projectile_Fire_Pulse_Count") == 3);
     CHECK(ds != objects::kNone && types.get_float(ds, "TSW_Attack_Distance_From_Target") == 5800.0f);
+    const BattleCatalog catalog(types, files.get(), &db.constants(), &diag);
+    test_foc_destroyer_droid(types, catalog);  // s78n t26.1
+    test_foc_walk_transition(types);  // s78n t26 closing review
 }
 
 }  // namespace
@@ -1710,10 +2287,13 @@ int main(int argc, char** argv) {
     test_tsw_follow(*d);
     test_tsw_lost(*d);
     test_land(*d);
+    test_environment_pick();  // cu8g t02
+    test_environment(*d);     // cu8g t02 / t03
     test_pads(*d);  // Int-final
     test_persist(*d);  // q6: persisted tactical built objects
     test_jet(*d);   // S7 t10 / t14
     test_deploy(*d);  // S7 t26
+    test_deploy_extents(*d);  // s78n t10 review
     test_script_spawn(*d);  // q6 t12
     test_sw_fire();   // s78f t05: command 25
     test_foc();

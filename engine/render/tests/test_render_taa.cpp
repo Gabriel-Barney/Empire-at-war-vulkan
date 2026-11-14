@@ -3,11 +3,21 @@
 //     otherwise, carried into background_view), the history rules (cut / resize / FOV / small motion).
 //   GPU (skips cleanly without a Vulkan 1.3 device): an empty scene through Renderer::render with TAA - the resolve
 //     runs, the history restarts on the first frame, after a frame without TAA, on a resize, on a camera jump and on
-//     reset_taa_history(), and the output keeps the clear colour. Validation is required when toolchain\vvl\bin (or
+//     reset_taa_history(), and the output keeps the clear colour; BM2b provisional frames (discard_taa_frame puts the
+//     history back, keep_taa_frame / reset_taa_history / a plain frame leave nothing to undo, a resize inside a
+//     discarded frame still restarts the history). Validation is required when toolchain\vvl\bin (or
 //     VK_LAYER_PATH) has the Khronos layer, and every message fails.
 //   Real data (ALAMO_FOC_DATA): _MP_LAND_ENDOR at 1280x720 under a slowly orbiting tactical camera, TAA off vs on ->
 //     logs/render_taa_off.png, logs/render_taa_on.png (+ 4x crops), edge-energy and frame-to-frame shimmer numbers,
-//     GPU time of the resolve.
+//     GPU time of the resolve; BM2b: the keyed slide with a discarded provisional frame (other camera, objects further on)
+//     before every other step draws byte for byte what the plain slide draws.
+//   [port] SMAA 1x (RecordOptions::smaa) rides along: on the empty scene a flat frame stays flat (alone and after TAA);
+//     on Endor the last orbit view with SMAA -> logs/render_smaa_on.png (+ crops), smoother edges than TAA off, the same
+//     picture, GPU time of the "smaa" scope.
+//   [port] MSAA (RecordOptions::msaa): on the empty scene every count the device has keeps a flat frame flat (alone and with
+//     TAA + SMAA), and switching counts back and forth works; on Endor 4x and 8x of the last orbit view (with SSAO, so its
+//     mid-scene depth resolve runs too) -> logs/render_msaa4_on.png / render_msaa8_on.png (+ crops), smoother edges than
+//     one sample, the same picture, GPU time of the scene and the "msaa" resolve scope.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -31,19 +41,14 @@
 #include "alamo/render/world.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 using namespace alamo;
 
 namespace {
 
-int g_failures = 0;
-#define CHECK(cond)                                                              \
-    do {                                                                         \
-        if (!(cond)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);          \
-            ++g_failures;                                                        \
-        }                                                                        \
-    } while (0)
+using ::alamo::test::g_fail;
 
 bool close_to(float a, float b, float eps = 1e-6f) { return std::fabs(a - b) <= eps; }
 
@@ -142,45 +147,19 @@ void test_cpu() {
         o.depth_b = 1.0f / (1.0f - 101.0f);
         CHECK(close_to(render::taa_linear_depth(o, 0.0f), 1.0f, 1e-4f) && close_to(render::taa_linear_depth(o, 1.0f), 101.0f, 1e-3f));
     }
-    std::printf("cpu: %s\n", g_failures ? "FAILED" : "ok");
+    std::printf("cpu: %s\n", g_fail ? "FAILED" : "ok");
 }
 
 // ------------------------------------------------------------------------------------------- GPU
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     rhi::GpuTimer timer;
 };
 
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback,
-                                     readback);
-    }
-    void destroy(Gpu& g) {
-        if (color) g.alloc.destroy(color);
-        if (readback) g.alloc.destroy(readback);
-    }
-    const uint8_t* data() const { return static_cast<const uint8_t*>(readback.mapped()); }
-};
+using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 struct GpuTimes {
-    double taa = -1, post = -1, scene = -1;
+    double taa = -1, post = -1, scene = -1, smaa = -1, msaa = -1;
     double cpu_ms = 0;  // DrawTiming build + record
 };
 
@@ -224,6 +203,8 @@ bool frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices
             if (res.name == "taa") times->taa = res.ms;
             if (res.name == "post") times->post = res.ms;
             if (res.name == "scene") times->scene = res.ms;
+            if (res.name == "smaa") times->smaa = res.ms;
+            if (res.name == "msaa") times->msaa = res.ms;
         }
     }
     return drawn;
@@ -393,6 +374,81 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
                         st, clear, scene.sky()));
             CHECK(st.taa && st.taa_reset);
 
+            // [port] SMAA 1x on the last orbit view, TAA off: smoother edges than the plain frame, the same picture.
+            {
+                render::RecordOptions so = ro;
+                so.taa = false;
+                so.smaa = true;
+                GpuTimes ts;
+                for (int k = 0; k < 3; ++k) {  // the first frame uploads the lookup textures; time a later one
+                    CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), so, st, clear, scene.sky(), &ts));
+                    CHECK(st.smaa && !st.taa);
+                }
+                const std::vector<uint8_t> smaa_img(o.data(), o.data() + bytes);
+                CHECK(save_png(src_dir + "/logs/render_smaa_on.png", smaa_img, W, H));
+                CHECK(save_crop(src_dir + "/logs/render_smaa_on_crop.png", smaa_img, W, 0, 0, 240, 135, 4));
+                CHECK(save_crop(src_dir + "/logs/render_smaa_on_crop2.png", smaa_img, W, 800, 380, 200, 140, 4));
+                const double e_smaa = edge_energy(smaa_img, W, H);
+                double smaa_diff = 0;
+                for (size_t i = 0; i + 3 < bytes; i += 4) smaa_diff += std::fabs(luma(&last[0][i]) - luma(&smaa_img[i]));
+                smaa_diff /= static_cast<double>(bytes / 4);
+                std::printf("land map SMAA: edge energy off %.3f / smaa %.3f, mean |off - smaa| luma %.2f, GPU smaa %.3f ms\n", e_off,
+                            e_smaa, smaa_diff, ts.smaa);
+                CHECK(e_smaa < e_off);    // smoother edges
+                CHECK(smaa_diff < 3.0);   // only edges change
+                so.taa = true;            // both: TAA restarts its history after the frames without it, SMAA after the resolve
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), so, st, clear, scene.sky()));
+                CHECK(st.smaa && st.taa && st.taa_reset);
+            }
+
+            // [port] MSAA 4x / 8x on the last orbit view (SSAO on, so its depth resolve runs): smoother edges, same picture.
+            {
+                render::RecordOptions base = ro;
+                base.taa = false;
+                base.ambient_occlusion = true;
+                GpuTimes t1;
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), base, st, clear, scene.sky(), &t1));
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), base, st, clear, scene.sky(), &t1));
+                const std::vector<uint8_t> one(o.data(), o.data() + bytes);
+                const double e_one = edge_energy(one, W, H);
+                for (const uint32_t n : {4u, 8u}) {
+                    if (rr.msaa_samples(n) != n) {
+                        std::printf("land map MSAA %ux: not supported, skipped\n", n);
+                        continue;
+                    }
+                    render::RecordOptions mo = base;
+                    mo.msaa = n;
+                    GpuTimes tm;
+                    bool settled = false;  // the multisampled pipelines compile on first use
+                    for (int k = 0; k < 200 && !settled; ++k) {
+                        CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), mo, st, clear, scene.sky(), &tm));
+                        settled = k > 1 && st.pending_pipeline == 0 && st.translation_pending == 0 && st.post_pending == 0;
+                        if (!settled) {
+                            rr.wait_translations();
+                            rr.pipelines().wait_idle();
+                        }
+                    }
+                    CHECK(settled && st.msaa == n);
+                    const std::vector<uint8_t> img(o.data(), o.data() + bytes);
+                    const std::string tag = "msaa" + std::to_string(n);
+                    CHECK(save_png(src_dir + "/logs/render_" + tag + "_on.png", img, W, H));
+                    CHECK(save_crop(src_dir + "/logs/render_" + tag + "_on_crop.png", img, W, 0, 0, 240, 135, 4));
+                    CHECK(save_crop(src_dir + "/logs/render_" + tag + "_on_crop2.png", img, W, 800, 380, 200, 140, 4));
+                    const double e_ms = edge_energy(img, W, H);
+                    double diff = 0;
+                    for (size_t i = 0; i + 3 < bytes; i += 4) diff += std::fabs(luma(&one[i]) - luma(&img[i]));
+                    diff /= static_cast<double>(bytes / 4);
+                    std::printf("land map MSAA %ux (+AO): edge energy 1x %.3f / %ux %.3f, mean |1x - %ux| luma %.2f; GPU scene %.3f ms "
+                                "(1x %.3f ms), resolve %.3f ms\n",
+                                n, e_one, n, e_ms, n, diff, tm.scene, t1.scene, tm.msaa);
+                    CHECK(e_ms < e_one);  // smoother edges
+                    CHECK(diff < 3.0);    // same picture
+                }
+                render::RecordOptions back = base;  // back to one sample: the same frame as before
+                CHECK(frame(g, rr, o, view_at(kFrames - 1), scene.instances(), back, st, clear, scene.sky()));
+                CHECK(st.msaa == 1);
+            }
+
             // Moving objects. The materials have no motion vectors, so the resolve has to tell a mover from the background
             // by depth. Fixed camera; the (up to 8) instances nearest the screen centre slide sideways ~3 px per frame for
             // kSlide frames. Ghost = how far TAA strays from the TAA-off picture over the slid path (mean |on - off| luma),
@@ -499,6 +555,49 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
                                     std::min(by1 - by0, 200u), 3));
                     CHECK(save_crop(src_dir + "/logs/render_taa_move_keyed.png", key_move, W, bx0, by0, std::min(bx1 - bx0, 300u),
                                     std::min(by1 - by0, 200u), 3));
+
+                    // BM2b provisional frames: the keyed slide with TAA, plain, and with a provisional frame before every other
+                    // step (another camera, the objects 7 steps further on) that is then discarded (or, as a control, kept).
+                    // A discarded frame must leave no trace: the last frame matches the plain run byte for byte.
+                    enum class Redraw { None, Discard, Keep };
+                    auto run_redraw = [&](Redraw mode, std::vector<uint8_t>& out) {
+                        ro.taa = true;
+                        rr.reset_taa_history();
+                        for (const Pick& p : picks) moving[p.index].motion_id = render::motion_key(3, p.index + 1);
+                        render::RecordOptions pr = ro;
+                        pr.taa_provisional = mode != Redraw::None;  // a kept provisional frame draws as a plain one
+                        for (int k = 0; k <= kSlide; ++k) {
+                            if (mode != Redraw::None && k % 2 == 1) {
+                                shifted(k + 7);
+                                CHECK(frame(g, rr, o, view_at(40 + k), moving, pr, st, clear, scene.sky()));
+                                CHECK(st.taa);
+                                if (mode == Redraw::Discard) CHECK(rr.discard_taa_frame());
+                                else rr.keep_taa_frame();
+                            }
+                            shifted(k);
+                            CHECK(frame(g, rr, o, v0, moving, pr, st, clear, scene.sky()));
+                            rr.keep_taa_frame();
+                        }
+                        out.assign(o.data(), o.data() + bytes);
+                    };
+                    auto bytes_differ = [&](const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+                        size_t n = 0;
+                        for (size_t i = 0; i < a.size() && i < b.size(); ++i) n += a[i] != b[i];
+                        return n;
+                    };
+                    std::vector<uint8_t> plain, plain2, discarded, kept;
+                    run_redraw(Redraw::None, plain);
+                    run_redraw(Redraw::None, plain2);
+                    run_redraw(Redraw::Discard, discarded);
+                    run_redraw(Redraw::Keep, kept);
+                    const size_t d_repeat = bytes_differ(plain, plain2), d_discard = bytes_differ(plain, discarded);
+                    const size_t d_keep = bytes_differ(plain, kept);
+                    std::printf("provisional frames: %d discarded redraws in a %d-frame keyed slide; bytes differing from the plain run: "
+                                "repeat %zu, discarded %zu, kept (control) %zu\n",
+                                kSlide / 2, kSlide + 1, d_repeat, d_discard, d_keep);
+                    CHECK(d_repeat == 0);   // the renderer draws the same frames run to run (else the next check means nothing)
+                    CHECK(d_discard == 0);  // discarded frames left no trace in the history, jitter or object motion
+                    CHECK(d_keep > 0);      // the redraws would have shown had they stayed in the history
                 }
             }
         } else {
@@ -555,6 +654,38 @@ int run_gpu(const std::string& src_dir) {
             render::RecordOptions ro;
             ro.taa = true;
             render::DrawStats st;
+            {  // [port] SMAA alone and after TAA: a flat frame has no edges and stays exactly flat
+                render::RecordOptions so;
+                so.smaa = true;
+                bool flat = true;
+                for (int k = 0; k < 2; ++k) {
+                    CHECK(frame(g, r, o, v, {}, so, st, clear) && st.smaa && !st.taa);
+                    for (size_t i = 0; i < static_cast<size_t>(o.w) * o.h; ++i) flat = flat && rgb_close_to(o.data() + i * 4, clear, 0);
+                }
+                so.taa = true;
+                CHECK(frame(g, r, o2, render::make_view(cam, 80, 40), {}, so, st, clear) && st.smaa && st.taa);  // other size
+                for (size_t i = 0; i < static_cast<size_t>(o2.w) * o2.h; ++i) flat = flat && rgb_close_to(o2.data() + i * 4, clear, 1);
+                CHECK(flat);
+                render::RecordOptions none;
+                CHECK(frame(g, r, o, v, {}, none, st, clear) && !st.smaa);
+            }
+            {  // [port] MSAA: every supported count keeps a flat frame flat; counts switch back and forth
+                bool flat = true;
+                for (const uint32_t n : {4u, 2u, 8u, 1u, 4u}) {
+                    render::RecordOptions mo;
+                    mo.msaa = n;
+                    CHECK(frame(g, r, o, v, {}, mo, st, clear) && st.msaa == r.msaa_samples(n));
+                    for (size_t i = 0; i < static_cast<size_t>(o.w) * o.h; ++i) flat = flat && rgb_close_to(o.data() + i * 4, clear, 0);
+                }
+                render::RecordOptions all;
+                all.msaa = 4;
+                all.taa = all.smaa = true;
+                CHECK(frame(g, r, o2, render::make_view(cam, 80, 40), {}, all, st, clear) && st.msaa == r.msaa_samples(4) && st.taa &&
+                      st.smaa);
+                for (size_t i = 0; i < static_cast<size_t>(o2.w) * o2.h; ++i) flat = flat && rgb_close_to(o2.data() + i * 4, clear, 1);
+                CHECK(flat);
+                std::printf("gpu: MSAA counts 2 / 4 / 8 -> %u / %u / %u\n", r.msaa_samples(2), r.msaa_samples(4), r.msaa_samples(8));
+            }
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && st.taa_reset);  // first frame: no history
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && !st.taa_reset);
             CHECK(frame(g, r, o, v, {}, ro, st, clear) && st.taa && !st.taa_reset);
@@ -578,6 +709,42 @@ int run_gpu(const std::string& src_dir) {
             same = true;
             for (size_t i = 0; i < static_cast<size_t>(o2.w) * o2.h; ++i) same = same && rgb_close_to(o2.data() + i * 4, clear, 1);
             CHECK(same);
+            // BM2b provisional frames: a discarded one leaves the history as it was.
+            {
+                render::RecordOptions prov = ro;
+                prov.taa_provisional = true;
+                const render::ViewMatrices v2 = render::make_view(turned, 80, 40);
+                render::OrbitCamera cut_cam = turned;
+                cut_cam.orbit(1.0f, 0.0f);
+                const render::ViewMatrices vcut = render::make_view(cut_cam, 80, 40);
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && !st.taa_reset);
+                CHECK(!r.discard_taa_frame());  // a plain frame: nothing to undo
+                CHECK(frame(g, r, o2, vcut, {}, prov, st, clear) && st.taa && st.taa_reset);  // provisional cut
+                CHECK(r.discard_taa_frame());
+                CHECK(!r.discard_taa_frame());  // once only
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && !st.taa_reset);  // as if the cut had not been drawn
+                CHECK(frame(g, r, o2, vcut, {}, prov, st, clear) && st.taa_reset);
+                r.keep_taa_frame();  // the cut stands
+                CHECK(!r.discard_taa_frame());
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa_reset);  // cut back
+                CHECK(frame(g, r, o2, v2, {}, prov, st, clear) && !st.taa_reset);
+                r.reset_taa_history();
+                CHECK(!r.discard_taa_frame());  // a reset after the frame: nothing before it to go back to
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa_reset);
+                CHECK(frame(g, r, o2, v2, {}, prov, st, clear) && !st.taa_reset);
+                CHECK(r.discard_taa_frame());
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && !st.taa_reset);
+                // A provisional frame at another size recreates the history targets: after its discard nothing is left to
+                // reproject from.
+                CHECK(frame(g, r, o, render::make_view(turned, 64, 48), {}, prov, st, clear) && st.taa_reset);
+                CHECK(r.discard_taa_frame());
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && st.taa_reset);
+                CHECK(frame(g, r, o2, v2, {}, ro, st, clear) && st.taa && !st.taa_reset);
+                render::RecordOptions prov_off;  // provisional without TAA: no TAA step to undo
+                prov_off.taa_provisional = true;
+                CHECK(frame(g, r, o2, v2, {}, prov_off, st, clear) && !st.taa);
+                CHECK(!r.discard_taa_frame());
+            }
             g.ring.wait_idle();
         }
         o.destroy(g);
@@ -607,6 +774,6 @@ int run_gpu(const std::string& src_dir) {
 int main() {
     test_cpu();
     run_gpu(ALAMO_RENDER_SOURCE_DIR);
-    std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
-    return g_failures ? 1 : 0;
+    std::printf("%s (%d failures)\n", g_fail ? "FAILED" : "PASSED", g_fail);
+    return g_fail ? 1 : 0;
 }

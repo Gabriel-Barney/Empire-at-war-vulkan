@@ -64,9 +64,6 @@ struct VfsConfig {
     // The mod search list in command-line order (MODPATH= and STEAMMOD= interleaved), earliest
     // wins. parse_command_line appends here.
     std::vector<ModSearchEntry> mod_search;
-    // Simple form for callers that only use plain directories: searched AFTER mod_search, in
-    // order, earliest wins. parse_command_line does not touch it.
-    std::vector<std::string> mod_paths;
     std::vector<std::string> fallback_paths;   // FALLBACKPATH= dirs, in order
     std::optional<std::string> eaw_root;       // nullopt = auto-detect (<foc_root>\..\GameData with
                                                // sweaw.exe), "" = no EaW, else explicit GameData dir
@@ -134,7 +131,7 @@ public:
 
     const std::vector<Mount>& mounts() const;           // mount order (index 0 = lowest priority)
     // The effective mod search list (host dirs, earliest wins): resolved mod_search entries
-    // (unresolved STEAMMOD ids dropped), then mod_paths. Resolution::layer_index indexes this.
+    // (unresolved STEAMMOD ids dropped). Resolution::layer_index indexes this.
     const std::vector<std::string>& mod_dirs() const;
     const std::vector<std::string>& warnings() const;
     const std::string& eaw_root() const;                // "" if none
@@ -149,6 +146,15 @@ private:
 // Tolerant <File>...</File> extractor for MegaFiles.xml (comments skipped, entries trimmed,
 // UTF-8/ASCII or UTF-16LE with BOM). Exposed for tests/diagnostics.
 std::vector<std::string> parse_megafiles_xml(std::span<const uint8_t> bytes);
+
+// The host apps' common mount (CU2 t10): cfg.foc_root = foc_root, then parse_command_line(game_args) (its result is
+// ignored, as every host did: switches with an empty value are skipped, the rest apply), then Vfs::create. eaw_root is
+// VfsConfig::eaw_root, set before the switches are parsed: nullopt = auto-detect (<foc_root>\..\GameData), "" = no EaW,
+// else that folder. Which hosts pass an explicit EaW tier (the ALAMO_EAW_DATA environment route of the galactic AI and
+// save runs) stays each caller's decision: it changes which AI definitions load (ai.goals CRC). On failure returns
+// nullptr and sets *err to "VFS: <reason>". Hosts that must act on a bad switch call parse_command_line themselves.
+std::unique_ptr<Vfs> mount_game(std::string_view foc_root, std::span<const std::string> game_args, std::string* err = nullptr,
+                                std::optional<std::string> eaw_root = std::nullopt);
 
 // Glob used by Vfs::list on normalised paths (case-insensitive, '/' == '\\').
 bool path_glob_match(std::string_view pattern, std::string_view path);

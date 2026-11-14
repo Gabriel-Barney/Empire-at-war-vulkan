@@ -1,12 +1,9 @@
 // Deterministic fixed-step simulation tick.
 //
-// SimClock     - turns real elapsed time into a whole number of fixed ticks (integer accumulator,
-//                no float drift). Real time only decides *how many* ticks run per host frame;
-//                the sequence of sim frames and their contents never depends on it.
 // TickScheduler- frame counter + systems with (period, phase) cadence, run in registration order
-//                on the calling (sim) thread. A system may fan out internally (parallel_for,
-//                TaskGraph). Tracked Deferred results are published at the start of a tick,
-//                before any system runs.
+//                on the calling (sim) thread. A system may fan out internally (parallel_for).
+//                Tracked Deferred results are published at the start of a tick, before any
+//                system runs.
 // Deferred<T>  - kick a background computation at frame T whose result becomes visible exactly
 //                at frame T+k: never earlier (even if it finished early), blocking at T+k if it is
 //                late. Double-buffered: readers before T+k keep seeing the previous result.
@@ -15,7 +12,7 @@
 //
 // Sim rate: kDefaultTicksPerSecond = 30 logic frames/s for galactic and tactical, confirmed by RE
 // (docs/re/PHASE2_ANSWERS.md Q12; single-player fast mode runs 120). All cadences here are in
-// frames, so only the SimClock rate changes between modes.
+// frames, so only the tick rate changes between modes.
 #pragma once
 #include <cstdint>
 #include <exception>
@@ -34,31 +31,6 @@
 namespace alamo::jobs {
 
 inline constexpr uint32_t kDefaultTicksPerSecond = 30;  // confirmed: docs/re/PHASE2_ANSWERS.md Q12
-
-class SimClock {
-public:
-    explicit SimClock(uint32_t ticks_per_second = kDefaultTicksPerSecond,
-                      uint32_t max_ticks_per_advance = 8);
-
-    // Adds real elapsed time and returns how many whole ticks are now due (<= max per advance;
-    // any excess is dropped and counted in dropped_ticks() - this avoids the "spiral of death"
-    // and does not affect determinism, only wall-clock pacing). Negative/NaN input counts as 0.
-    uint32_t advance(double real_seconds);
-    uint32_t advance_ns(int64_t real_ns);
-
-    uint32_t ticks_per_second() const noexcept { return tps_; }
-    double fixed_dt() const noexcept { return 1.0 / static_cast<double>(tps_); }
-    // Fraction [0,1) of the next tick already accumulated (render interpolation).
-    double alpha() const noexcept;
-    uint64_t dropped_ticks() const noexcept { return dropped_; }
-
-private:
-    static constexpr int64_t kNsPerSecond = 1'000'000'000;
-    uint32_t tps_;
-    uint32_t max_per_advance_;
-    int64_t acc_ = 0;  // units of ns * tps; one tick == kNsPerSecond units (exact)
-    uint64_t dropped_ = 0;
-};
 
 class DeferredBase {
 public:
@@ -188,7 +160,8 @@ public:
     using SystemFn = std::function<void(const TickContext&)>;
     using SystemId = uint32_t;
 
-    explicit TickScheduler(JobSystem& js, SimClock clock = SimClock{});
+    // Tick rate (clamped to >= 1) only sets TickContext::dt; the sequence of frames never depends on it.
+    explicit TickScheduler(JobSystem& js, uint32_t ticks_per_second = kDefaultTicksPerSecond);
 
     // Runs on frames f with f % period == phase % period. period >= 1 (throws otherwise).
     // Systems due on the same frame run in registration order.
@@ -199,14 +172,13 @@ public:
     void track(DeferredBase& d);
     void untrack(DeferredBase& d);
 
-    // Feed real elapsed time; runs the whole ticks that are due. Returns ticks run.
-    uint32_t advance(double real_seconds);
     // Run exactly one tick for frame(), then increment frame(). If a system throws, the
     // exception propagates and frame() is not incremented.
     void step();
 
     uint64_t frame() const noexcept { return frame_; }  // next frame to run == ticks completed
-    SimClock& clock() noexcept { return clock_; }
+    uint32_t ticks_per_second() const noexcept { return tps_; }
+    double fixed_dt() const noexcept { return 1.0 / static_cast<double>(tps_); }
     JobSystem& jobs() noexcept { return *js_; }
     size_t system_count() const noexcept { return systems_.size(); }
     const std::string& system_name(SystemId id) const { return systems_.at(id).name; }
@@ -221,7 +193,7 @@ private:
         profile::ZoneId zone;  // OPT1: "sys.<name>"
     };
     JobSystem* js_;
-    SimClock clock_;
+    uint32_t tps_;
     uint64_t frame_ = 0;
     std::vector<System> systems_;
     std::vector<DeferredBase*> tracked_;

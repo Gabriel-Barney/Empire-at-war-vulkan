@@ -7,15 +7,16 @@
 // (COMMANDS.md §1.1 says 56 classes / 52 scheduled; its payload table and the 54 factories give the
 // 54 ids above - the two extra classes have no type id and cannot appear on the wire.)
 //
-// Each type's payload is a list of fields (wire order). Field kinds:
+// Each type's payload is a list of fields (the original's wire order). Field kinds
+// (widths are the original's bit-packed network wire, which is not ported - CU7; they bound valid values):
 //   Bits n     unsigned n-bit value (n <= 32)
 //   Id         32-bit object id (kNoObject = 0x3FFFFF = none; OBJECT_RUNTIME.md id space)
-//   Player     player id, P bits on the wire (P is a WireConfig parameter: unknown, COMMANDS.md §10)
+//   Player     player id (PlayerList index)
 //   Quant i    float quantized with table entry i (§3.2); stored as the integer code
 //   List n     n-bit element count, then that many Id
 //   CountedIds Id list whose count is the value of an earlier Bits field (SetUnitAbilityMode)
-//   Str/WStr   narrow / wide string            [port: 16-bit length + 8/16-bit units; layout unknown]
-//   Opaque     byte blob                       [port: 16-bit byte count + bytes; SpecialAbility kinds]
+//   Str/WStr   narrow / wide string
+//   Opaque     byte blob (SpecialAbility kinds)
 // A field with cond >= 0 is present only when field `cond` == cond_value (ControlGroup's 'add',
 // SpecialWeaponFire's position/target branch).
 #pragma once
@@ -26,9 +27,6 @@
 
 namespace alamo::commands {
 
-inline constexpr unsigned kEventTypeBits = 6;
-inline constexpr unsigned kFrameBits = 26;
-inline constexpr unsigned kPacketCountBits = 5;  // events per packet <= 31
 inline constexpr uint8_t kMaxOriginalEventType = 58;
 inline constexpr uint8_t kMaxEventType = 63;  // 6-bit ids; 59..62 unused, 63 = port extension
 inline constexpr uint32_t kNoObject = 0x3FFFFF;
@@ -94,6 +92,19 @@ enum class EventType : uint8_t {
     // u16 subtype + Opaque data. For engine test hooks / features the original has no event for.
     PortExtension = 63,
 };
+
+// FleetManagement (id 8) payload field "op" (Bits 4): the galactic fleet operations (AI_GALACTIC_2 §5.4, STRATEGIC_GAPS 1.7,
+// executor 0x5af260; rules per op: galactic campaign.hpp). Shared by the sim (engine/galactic), the AI and the galactic HUD.
+// The values are command payload bytes: changing one changes the command stream and its CRCs.
+enum FleetOp : uint8_t {
+    kFleetForm = 0, kFleetJoin = 1, kFleetDetach = 2, kFleetMerge = 3, kFleetLaunch = 4, kFleetLand = 5,
+    kFleetMoveNew = 6, kFleetMoveNewFlag = 7, kFleetSlot = 8
+};
+
+// [port: Gabriel 2026-11-13] Fleet cohesion: PortExtension subtype with one data byte (0 loose, 1 tight) setting the
+// issuing player's cohesion in the running tactical battle (sim::TacticalBattle::set_fleet_cohesion; GameSession's port
+// hook applies it). Shared by the game host and the UI hotkey. Not in retail.
+inline constexpr uint16_t kPortFleetCohesionSubtype = 0x4643;  // "FC"
 
 enum class FieldKind : uint8_t { Bits, Id, Player, Quant, List, CountedIds, Str, WStr, Opaque };
 

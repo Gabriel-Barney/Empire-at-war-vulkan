@@ -2,6 +2,7 @@
 #include "ai_run.hpp"
 #include "crc_out.hpp"
 
+#include <optional>
 #include <algorithm>
 #include <chrono>
 #include <cinttypes>
@@ -15,13 +16,16 @@
 
 #if defined(ALAMO_HEADLESS_HAVE_GALACTIC_AI) && defined(ALAMO_SIM_HAVE_BATTLES)
 #include "alamo/ai/ai_context.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/ai_lua_runtime.hpp"
 #include "alamo/ai/galactic_ai.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/victory.hpp"  // q6 t21: campaign end report
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
@@ -121,21 +125,19 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::printf("--galactic-ai: no --game <corruption dir> and ALAMO_FOC_DATA unset: skipped\n");
         return 0;
     }
-    vfs::VfsConfig vcfg;
-    vcfg.foc_root = root;
     // Text-only data (extracted/foc_data_text.zip unzipped) has no sibling GameData to auto-detect, so the EaW tier would be
     // missing and the AI definitions (ai.goals CRC: the EaW-only Ewok / intervention / sandbox sets) would differ from the
     // goldens, which come from a full install. ALAMO_EAW_DATA (a folder with Data\XML: the install's GameData, or
     // eaw_data_text.zip unzipped) names the EaW tier explicitly. Only on the environment route; --game decides for itself.
+    std::optional<std::string> eaw_root;  // nullopt = auto-detect
     if (opt.game_dir.empty()) {
         const std::string eaw = env_text("ALAMO_EAW_DATA");
-        if (!eaw.empty()) vcfg.eaw_root = eaw;
+        if (!eaw.empty()) eaw_root = eaw;
     }
-    vfs::parse_command_line(opt.game_args, vcfg);
     std::string err;
-    std::unique_ptr<vfs::Vfs> files = vfs::Vfs::create(vcfg, &err);
+    std::unique_ptr<vfs::Vfs> files = vfs::mount_game(root, opt.game_args, &err, eaw_root);
     if (!files) {
-        std::fprintf(stderr, "VFS: %s\n", err.c_str());
+        std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
     std::vector<std::string> diag;
@@ -165,6 +167,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
     const std::vector<ai::GalacticAiDifficulty> difficulties = ai::load_ai_difficulties(*files);
     const std::vector<ai::GalacticAiTypeInfo> tinfo = ai::make_galactic_ai_type_info(types);
 
+    // [name-ok: test host default campaign (--galactic-ai without --map), the galactic_ai_hotm goldens]
     const std::string name = !opt.map.empty() ? opt.map : std::string("Sandbox_Heart_Of_The_Maw_Underworld");
     galactic::GalacticSetup setup = galactic::build_campaign_setup(db, rules, name, {}, &diag);
     if (setup.map.planets.size() == 0) {
@@ -181,12 +184,13 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
     const data::CampaignDef* cdef = db.find_campaign(name);
     const std::vector<std::string> no_pairs;
     const std::vector<std::string>& control = cdef ? cdef->ai_player_control : no_pairs;
-    const std::map<std::string, std::string> basic_ai = ai::load_faction_basic_ai(*files);
+    const std::map<std::string, std::string> basic_ai = ai::load_faction_basic_ai(rules.factions);
     int32_t human = -1;
     for (size_t p = 0; p < setup.players.size(); ++p) {
         galactic::PlayerSetup& ps = setup.players[p];
         const std::string fac = ps.faction < rules.factions.size() ? rules.factions[ps.faction].name : std::string();
-        std::string type = ai::campaign_ai_type(control, basic_ai, fac, true);
+        // bkc1 t03: only the campaign's own factions fill an unassigned slot (the other players are inert, no AI)
+        std::string type = ai::campaign_ai_type(control, basic_ai, fac, ps.named);
         for (const std::string& o : aopt.ai_types) {  // q6 t07 [port] --ai-type FACTION=TYPE (last one wins)
             const size_t eq = o.find('=');
             if (eq != std::string::npos && ai::ai_iequal(ai::ai_trim(std::string_view(o).substr(0, eq)), fac))
@@ -255,6 +259,12 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         host.set_scoring_campaign(name);  // q6 t09: Game_Mode_Starting_Event("Galactic", campaign)
         galactic::GalacticSim* gs = host.start_galactic(rules, setup);
         if (!gs) return false;
+        if (print && aopt.verbose) {  // q6 t22: the victory records (setup 0x289a90) per player
+            std::string vl = "galactic-ai: victory records:";
+            for (const galactic::VictoryRecord& r : gs->victory_records())
+                vl += " p" + std::to_string(r.player) + "=" + std::to_string(static_cast<int>(r.type)) + (r.implicit ? "i" : r.human_side ? "h" : "");
+            std::printf("%s\n", vl.c_str());
+        }
         ai::GalacticAiWorld* world_ptr = nullptr;
 #ifdef ALAMO_SIM_HAVE_STORY
         std::vector<sim::StorySwitchControl> switch_pending;  // q6: SWITCH_CONTROL rewards before the AI world exists
@@ -323,6 +333,10 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         bo.conflict.fight_ai_battles = aopt.battles == "fight-all";
         bo.tactical = aopt.battles != "auto";
         sim::load_tactical_systems(*files, rules, &db.constants(), bo);  // Int-final: weather, retreat, strikes data
+        // cu8f t03: the random map picker's candidate table (CU8F_T03_T05_RE §1.1), built on the first pick [port].
+        bo.map_candidate_source = sim::map_candidate_source(*files, [v = files.get()](std::string_view g, bool mod) {
+            return v->list(g, mod ? vfs::Vfs::kLayerMod : vfs::Vfs::kLayerBase | vfs::Vfs::kLayerMeg);
+        });
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
         // --- A2 hook: the AI's galactic budget categories for the A1 land-battle credit transfer ---
         std::vector<std::vector<ai::tactical::TacticalBudgetCategory>> budget_rows(gs->players().size());
@@ -349,7 +363,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         wcfg.lua_gc_pf = host.parallel_for();  // OPT2 t04: scheduled Lua collections on the host's job system
         wcfg.background = jobs::make_background_start(host.jobs());  // OPT2 t02: background path recomputes
         if (opt.ai_latency >= 0) wcfg.path_latency = static_cast<uint32_t>(opt.ai_latency);  // parity knobs
-        wcfg.stagger = opt.ai_stagger;
+        wcfg.stagger = opt.ai_stagger == 1;  // a2m r4: galactic default = the original timing (AI_GALACTIC §1.3)
         world_holder = std::make_unique<ai::GalacticAiWorld>(
             *gs, host.galactic_mode()->primary(), &types, files.get(), host.random(), defs, eqs, tinfo,
             [&host](uint8_t p, const commands::EventData& ev) { return host.execute_direct(p, commands::CommandSource::AI, ev); },
@@ -452,6 +466,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         for (const galactic::PlanetState& ps : gs->planets()) owner_prev.push_back(ps.owner);
         std::string owner_log;
         uint32_t owner_changes = 0;
+        bool campaign_end = false;  // q6 t21: the galactic victory monitor's result (reported once; the run goes on)
         if (trace.is_open()) trace.start(*gs, cfg.seed);
         while (n < opt.ticks && host.tick_once()) {
             ++n;
@@ -471,6 +486,16 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
                              " -> " + std::to_string(o) + "\n";
                 owner_prev[i] = o;
                 ++owner_changes;
+            }
+            if (!campaign_end) {
+                const galactic::VictoryResult v = galactic::check_victory(*gs);
+                if (v.finished()) {
+                    campaign_end = true;
+                    const std::string l = std::to_string(gs->frame()) + " campaign end: winner p" + std::to_string(v.winner) + " type " +
+                                          std::to_string(static_cast<int>(v.how)) + " (tick " + std::to_string(n) + ")";
+                    owner_log += l + "\n";
+                    if (print) std::printf("galactic-ai: %s\n", l.c_str());
+                }
             }
             if (n % 1800 == 0 || n == opt.ticks) {
                 char line[256];
@@ -561,15 +586,19 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
     }
     bool ok = true;
     if (opt.check_workers) {
-        const auto counts = jobs::determinism_worker_counts();
-        for (size_t i = 1; i < counts.size(); ++i) {
-            Out o;
-            run_one(counts[i], o, false);
-            const auto d = first_divergence(first.crc, o.crc);
-            std::printf("  workers %d vs %d: CRC %s, AI log %s\n", counts.front(), counts[i], d.message.c_str(),
-                        o.ai_text == first.ai_text ? "identical" : "DIFFERS");
-            if (d.diverged || o.ai_text != first.ai_text) ok = false;
-        }
+        ok = jobs::check_worker_counts(
+            first,
+            [&](int32_t w) {
+                Out o;
+                run_one(w, o, false);
+                return o;
+            },
+            [](const Out& o) -> const CrcLog& { return o.crc; },
+            [&](int32_t w, const Out& o, const CrcDivergence& d) {
+                std::printf("  workers %d vs %d: CRC %s, AI log %s\n", w0, w, d.message.c_str(),
+                            o.ai_text == first.ai_text ? "identical" : "DIFFERS");
+                return o.ai_text == first.ai_text;
+            });
     }
     const std::string header = "# galactic-ai campaign " + name + " battles " + aopt.battles + " seed " + std::to_string(opt.seed) +
                                " ticks " + std::to_string(opt.ticks) + (aopt.human.empty() ? "" : " human " + aopt.human) + "\n# " +
@@ -603,16 +632,7 @@ int ai_campaign_run(const MapRunOptions& opt, const AiRunOptions& aopt) {
         std::printf("AI golden %s: %s\n", aopt.ai_golden.c_str(), same ? "MATCH" : "DIFFERS");
         if (!same) ok = false;
     }
-    if (!opt.golden.empty()) {
-        CrcLog golden;
-        if (!CrcLog::load(opt.golden, golden, &err)) {
-            std::fprintf(stderr, "golden: %s\n", err.c_str());
-            return 2;
-        }
-        const auto d = first_divergence(golden, first.crc);
-        std::printf("golden: %s\n", d.message.c_str());
-        if (d.diverged) ok = false;
-    }
+    if (!opt.golden.empty() && alamo_headless::compare_golden(opt.golden, first.crc, ok) != 0) return 2;
     std::printf(ok ? "galactic-ai run: OK\n" : "galactic-ai run: FAILED\n");
     return ok ? 0 : 1;
 }

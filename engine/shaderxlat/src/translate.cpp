@@ -1,4 +1,4 @@
-// D3D9 SM1-2 -> SM6 HLSL emitter. Semantic choices (each mirrored by interpreter.cpp, which is the
+// D3D9 SM1-3 -> SM6 HLSL emitter. Semantic choices (each mirrored by interpreter.cpp, which is the
 // independent CPU reference used by the differential test):
 //
 // | topic                 | choice |
@@ -37,6 +37,11 @@
 // | fog                   | push Flags bit 0: rgb = FogColor + f (rgb - FogColor); f = saturate(oFog) or table EXP/EXP2/LINEAR of SV_Position.z |
 // | rep / loop            | iteration count clamped to [0, 255] (D3D9 limit) |
 // | partial precision     | _pp and min precision are ignored (full float) |
+// | SM3 outputs (vs_3_0)  | o0-o11 by dcl usage: POSITION0 -> oPos, COLOR0/1, TEXCOORD0-7, FOG0 (.x), PSIZE0 (.x); a register keeps its whole float4 (components stay in place); defaults as for SM1-2; no saturation of colors or fog (vs_3_0 outputs are not clamped); other usages, output relative addressing and vertex texture fetch are rejected |
+// | SM3 inputs (ps_3_0)   | v0-v9 by dcl usage from the same varyings, not saturated; FOG = (fog, 0, 0, 0); vPos = (SV_Position.xy - 0.5, 0, 0) (D3D9 pixel centres are integers); vFace = +1 front / -1 back (SV_IsFrontFace) |
+// | SM3 constants         | ps_3_0 c0-c31 from PSConstants plus def literals anywhere in c0-c223; a non-def read of c32+ is rejected (the engine's PS register file is 32) |
+// | SM3 fog               | ps_3_0: no fixed-function fog (D3D9 leaves fog to the ps_3_0 shader); the alpha test still applies |
+// | texldl                | SampleLevel(coord, coord.w) (ps_3_0; vs_3_0 vertex texture fetch is rejected) |
 #include "alamo/shaderxlat/translate.hpp"
 
 #include <algorithm>
@@ -45,6 +50,8 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+
+#include "alamo/core/hash.hpp"
 
 namespace alamo::shaderxlat {
 
@@ -179,6 +186,43 @@ const char* kEpilogue = R"(float4 xl_epilogue(float4 c, float fog, float4 vpos) 
 }
 )";
 
+const char* kEpilogue3 = R"(float4 xl_epilogue(float4 c) {
+    if (PC.AlphaFunc < 7u) {
+        uint a = (uint)floor(saturate(c.w) * 255.0 + 0.5);
+        uint r = PC.AlphaRef;
+        bool pass = false;
+        if (PC.AlphaFunc == 1u) pass = a < r;
+        else if (PC.AlphaFunc == 2u) pass = a == r;
+        else if (PC.AlphaFunc == 3u) pass = a <= r;
+        else if (PC.AlphaFunc == 4u) pass = a > r;
+        else if (PC.AlphaFunc == 5u) pass = a != r;
+        else if (PC.AlphaFunc == 6u) pass = a >= r;
+        if (!pass) discard;
+    }
+    return c;
+}
+)";
+
+// Default value of a vs_3_0 output register by its dcl usage (the SM1-2 defaults of that varying).
+const char* sm3_output_default(Usage u, uint8_t index) {
+    switch (u) {
+    case Usage::Color: return index == 0 ? "float4(1.0, 1.0, 1.0, 1.0)" : "float4(0.0, 0.0, 0.0, 0.0)";
+    case Usage::Texcoord: return "float4(0.0, 0.0, 0.0, 1.0)";
+    case Usage::Fog: case Usage::PSize: return "float4(1.0, 0.0, 0.0, 0.0)";
+    default: return "float4(0.0, 0.0, 0.0, 0.0)";
+    }
+}
+// Fixed register the vs_3_0 output feeds (the SM1-2 output names of the VS epilogue).
+std::string sm3_output_target(Usage u, uint8_t index) {
+    switch (u) {
+    case Usage::Position: return "oPos";
+    case Usage::Color: return "oD" + std::to_string(index);
+    case Usage::Texcoord: return "oT" + std::to_string(index);
+    case Usage::Fog: return "oFog";
+    default: return "oPts";
+    }
+}
+
 struct Decl {
     bool present = false;
     Usage usage = Usage::Position;
@@ -191,7 +235,7 @@ struct Emitter {
     const Program& p;
     const TranslateOptions& opt;
     std::string* err;
-    bool vs = false, ps1 = false, ps14 = false;
+    bool vs = false, ps1 = false, ps14 = false, sm3 = false;
     const char* range = "1.0";
 
     std::array<bool, 256> cdef{};
@@ -199,8 +243,9 @@ struct Emitter {
     std::array<bool, 16> idef{}, bdef{};
     std::array<std::array<int32_t, 4>, 16> ival{};
     std::array<uint32_t, 16> bval{};
-    std::array<Decl, 16> vin{};    // VS inputs; PS v0/v1 (ps_2_x dcl)
+    std::array<Decl, 16> vin{};    // VS inputs; PS v0/v1 (ps_2_x dcl); ps_3_0 v0-v9 (dcl usage)
     std::array<Decl, 8> tin{};     // PS ps_2_x t# dcl
+    std::array<Decl, 12> vout{};   // vs_3_0 o0-o11 (dcl usage)
     std::array<TextureDim, 16> dims{};
 
     uint32_t temps = 0;
@@ -210,7 +255,10 @@ struct Emitter {
     uint8_t tcread = 0;
     std::array<uint8_t, 8> tc_mask{};
     uint16_t samplers = 0;
-    uint16_t sampler_bias = 0, sampler_grad = 0;
+    uint16_t sampler_bias = 0, sampler_grad = 0, sampler_lod = 0;
+    uint16_t oregs = 0;             // vs_3_0 o# written
+    uint16_t sm3_in = 0;            // ps_3_0 v# read
+    bool vpos = false, vface = false;
     uint16_t vin_read = 0;
     uint16_t pads = 0;
     bool a0 = false, aL = false, p0 = false, depth = false, discard_ = false, bump = false, intbool = false,
@@ -240,6 +288,7 @@ struct Emitter {
         vs = p.is_vs();
         ps1 = p.ps1();
         ps14 = ps1 && p.minor >= 4;
+        sm3 = p.major >= 3;
         range = ps14 ? "8.0" : "1.0";
     }
 
@@ -282,7 +331,9 @@ struct Emitter {
             return true;
         }
         const uint32_t idx = s.index + offset;
-        if (idx >= (vs ? 256u : 32u)) return bad(in, "constant register out of range");
+        if (sm3 && !vs && idx < 224u && !cdef[idx] && idx >= 32u)
+            return bad(in, "ps_3_0 constant beyond c31 (the engine's PS register file has 32 registers)");
+        if (idx >= (vs ? 256u : sm3 ? 224u : 32u)) return bad(in, "constant register out of range");
         if (cdef[idx]) {
             out = "k" + std::to_string(idx);
         } else {
@@ -319,7 +370,21 @@ struct Emitter {
             return true;
         case reg::kInput:
             if (offset) return bad(in, "matrix rows on an input register");
-            if (s.index >= (vs ? 16u : 2u)) return bad(in, "input register out of range");
+            if (s.index >= (vs ? 16u : sm3 ? 10u : 2u)) return bad(in, "input register out of range");
+            if (sm3 && !vs) {
+                const Decl& d = vin[s.index];
+                if (!d.present) return bad(in, "input register read without dcl");
+                if (d.usage == Usage::Color) {
+                    vread |= static_cast<uint8_t>(1u << d.index);
+                    vread_mask[d.index] |= d.mask;
+                } else if (d.usage == Usage::Texcoord) {
+                    tcread |= static_cast<uint8_t>(1u << d.index);
+                    tc_mask[d.index] |= d.mask;
+                }
+                sm3_in |= static_cast<uint16_t>(1u << s.index);
+                out = "v" + std::to_string(s.index);
+                return true;
+            }
             if (vs) {
                 if (!vin[s.index].present) return bad(in, "vertex input read without dcl");
                 vin_read |= static_cast<uint16_t>(1u << s.index);
@@ -356,6 +421,12 @@ struct Emitter {
             if (offset) return bad(in, "matrix rows on an integer register");
             if (s.index >= 16) return bad(in, "integer register out of range");
             out = "float4(" + int_reg(s.index) + ")";
+            return true;
+        case reg::kMiscType:
+            if (offset || vs || !sm3 || s.index >= 2) return bad(in, "vPos / vFace outside ps_3_0");
+            if (s.index == 0) vpos = true;
+            else vface = true;
+            out = s.index == 0 ? "vPos" : "vFace";
             return true;
         default:
             return bad(in, "register type not readable in arithmetic");
@@ -450,6 +521,12 @@ struct Emitter {
             out = "oD" + std::to_string(d.index);
             return true;
         case reg::kTexCrdOut:
+            if (sm3) {
+                if (d.index >= 12 || !vout[d.index].present) return bad(in, "output register written without dcl");
+                oregs |= static_cast<uint16_t>(1u << d.index);
+                out = "o" + std::to_string(d.index);
+                return true;
+            }
             if (d.index >= 8) return bad(in, "output register out of range");
             ot[d.index] |= d.mask;
             out = "oT" + std::to_string(d.index);
@@ -680,6 +757,14 @@ struct Emitter {
             if (!use_sampler(in, sm.index) || !tex_src(in, 0, s0) || !src(in, 2, s2) || !src(in, 3, s3)) return false;
             sampler_grad |= static_cast<uint16_t>(1u << sm.index);
             return value("xl_texg" + std::to_string(sm.index) + "(" + s0 + ", " + s2 + ", " + s3 + ")");
+        }
+        case Op::TexLdl: {
+            if (vs) return bad(in, "texldl in a vertex shader (vertex texture fetch) is not supported");
+            const Src& sm = in.src[1];
+            if (sm.type != reg::kSampler) return bad(in, "texldl without a sampler");
+            if (!use_sampler(in, sm.index) || !tex_src(in, 0, s0)) return false;
+            sampler_lod |= static_cast<uint16_t>(1u << sm.index);
+            return value("xl_texl" + std::to_string(sm.index) + "(" + s0 + ")");
         }
         case Op::TexKill: {
             if (vs) return bad(in, "texkill in a vertex shader");
@@ -975,10 +1060,31 @@ struct Emitter {
                 dc.index = in.usage_index;
                 dc.mask = d.mask ? d.mask : 0xF;
                 dc.centroid = d.centroid;
-                if (vs) {
-                    if (d.type != reg::kInput) return bad(in, "output dcl in a vertex shader (SM3)");
+                if (vs && sm3 && d.type == reg::kOutput) {
+                    if (d.index >= 12 || vout[d.index].present) return bad(in, "duplicate or out-of-range output dcl");
+                    const bool known = (in.usage == Usage::Position && in.usage_index == 0) ||
+                                       (in.usage == Usage::Color && in.usage_index < 2) ||
+                                       (in.usage == Usage::Texcoord && in.usage_index < 8) ||
+                                       ((in.usage == Usage::Fog || in.usage == Usage::PSize) && in.usage_index == 0);
+                    if (!known) return bad(in, "vs_3_0 output usage without a varying slot (POSITION0, COLOR0-1, TEXCOORD0-7, FOG, PSIZE)");
+                    for (const Decl& o : vout)
+                        if (o.present && o.usage == in.usage && o.index == in.usage_index) return bad(in, "two outputs declare the same usage");
+                    vout[d.index] = dc;
+                } else if (vs) {
+                    if (d.type != reg::kInput) return bad(in, "output dcl in a vertex shader before SM3");
                     if (vin[d.index].present) return bad(in, "duplicate dcl");
                     vin[d.index] = dc;
+                } else if (sm3 && d.type == reg::kInput) {
+                    if (d.index >= 10 || vin[d.index].present) return bad(in, "duplicate or out-of-range input dcl");
+                    const bool known = (in.usage == Usage::Color && in.usage_index < 2) ||
+                                       (in.usage == Usage::Texcoord && in.usage_index < 8) ||
+                                       (in.usage == Usage::Fog && in.usage_index == 0);
+                    if (!known) return bad(in, "ps_3_0 input usage without a varying slot (COLOR0-1, TEXCOORD0-7, FOG)");
+                    for (const Decl& o : vin)
+                        if (o.present && o.usage == in.usage && o.index == in.usage_index) return bad(in, "two inputs declare the same usage");
+                    vin[d.index] = dc;
+                } else if (sm3 && d.type == reg::kMiscType) {
+                    continue;  // dcl vPos / vFace
                 } else if (d.type == reg::kInput) {
                     vin[d.index] = dc;
                 } else if (d.type == reg::kTexture) {
@@ -995,6 +1101,9 @@ struct Emitter {
                     if (err) *err = "two vertex inputs declare the same usage";
                     return false;
                 }
+        if (vs && sm3)
+            for (const Instr& in : p.instrs)
+                if (in.op == Op::Dcl && in.dst.type == reg::kSampler) return bad(in, "vertex texture fetch (vs_3_0 sampler) is not supported");
         for (uint32_t s = 0; s < 16; ++s) dims[s] = sampler_dim(p, opt, s);
         return true;
     }
@@ -1097,7 +1206,7 @@ struct Emitter {
             o += "    return v;\n}\n";
         } else if (relative) {
             o += "float4 xl_crel(int i) {\n    float4 v = float4(0.0, 0.0, 0.0, 0.0);\n    if (uint(i) < 32u) v = " + crel_read + ";\n";
-            for (uint32_t r = 0; r < 32; ++r)
+            for (uint32_t r = 0; r < (sm3 ? 224u : 32u); ++r)
                 if (cdef[r]) o += "    if (i == " + std::to_string(r) + ") v = k" + std::to_string(r) + ";\n";
             o += "    return v;\n}\n";
         }
@@ -1110,8 +1219,10 @@ struct Emitter {
             if (sampler_grad & (1u << s))
                 o += "float4 xl_texg" + n + "(float4 uv, float4 gx, float4 gy) { return tex" + n + ".SampleGrad(smp" + n +
                      ", uv" + sw + ", gx" + sw + ", gy" + sw + "); }\n";
+            if (sampler_lod & (1u << s))
+                o += "float4 xl_texl" + n + "(float4 uv) { return tex" + n + ".SampleLevel(smp" + n + ", uv" + sw + ", uv.w); }\n";
         }
-        if (!vs) o += kEpilogue;
+        if (!vs) o += sm3 ? kEpilogue3 : kEpilogue;
 
         // Register file (static: shared with subroutines).
         for (uint32_t r = 0; r < 32; ++r)
@@ -1122,6 +1233,16 @@ struct Emitter {
             if (a0) o += "static int4 a0;\n";
             o += "static float4 oPos;\nstatic float4 oFog;\nstatic float4 oPts;\nstatic float4 oD0;\nstatic float4 oD1;\n";
             for (uint32_t r = 0; r < 8; ++r) o += "static float4 oT" + std::to_string(r) + ";\n";
+            for (uint32_t r = 0; r < 12; ++r)
+                if (vout[r].present) o += "static float4 o" + std::to_string(r) + ";\n";
+        } else if (sm3) {
+            for (uint32_t r = 0; r < 10; ++r)
+                if (sm3_in & (1u << r)) o += "static float4 v" + std::to_string(r) + ";\n";
+            if (vpos) o += "static float4 vPos;\n";
+            if (vface) o += "static float4 vFace;\n";
+            const uint32_t ncol = color_count();
+            for (uint32_t r = 0; r < ncol; ++r) o += "static float4 oC" + std::to_string(r) + ";\n";
+            if (depth) o += "static float4 oDepth;\n";
         } else {
             for (uint32_t r = 0; r < 2; ++r)
                 if (vread & (1u << r)) o += "static float4 v" + std::to_string(r) + ";\n";
@@ -1173,25 +1294,32 @@ struct Emitter {
                  "    oPts = float4(1.0, 0.0, 0.0, 0.0);\n    oD0 = float4(1.0, 1.0, 1.0, 1.0);\n"
                  "    oD1 = float4(0.0, 0.0, 0.0, 0.0);\n";
             for (uint32_t r = 0; r < 8; ++r) o += "    oT" + std::to_string(r) + " = float4(0.0, 0.0, 0.0, 1.0);\n";
-            o += "    xl_main();\n    VSOutput OUT;\n    OUT.pos = oPos;\n    OUT.pos.xy = oPos.xy + PC.PixelOffset.xy * oPos.w;\n"
-                 "    OUT.oD0 = saturate(oD0);\n    OUT.oD1 = saturate(oD1);\n";
+            for (uint32_t r = 0; r < 12; ++r)
+                if (vout[r].present) o += "    o" + std::to_string(r) + " = " + sm3_output_default(vout[r].usage, vout[r].index) + ";\n";
+            o += "    xl_main();\n";
+            for (uint32_t r = 0; r < 12; ++r)
+                if (vout[r].present && (oregs & (1u << r)))
+                    o += "    " + sm3_output_target(vout[r].usage, vout[r].index) + " = o" + std::to_string(r) + ";\n";
+            o += "    VSOutput OUT;\n    OUT.pos = oPos;\n    OUT.pos.xy = oPos.xy + PC.PixelOffset.xy * oPos.w;\n";
+            o += sm3 ? "    OUT.oD0 = oD0;\n    OUT.oD1 = oD1;\n" : "    OUT.oD0 = saturate(oD0);\n    OUT.oD1 = saturate(oD1);\n";
             if (opt.instanced) o += "    OUT.xl_inst = IN.xl_iid;\n";
             for (uint32_t r = 0; r < 8; ++r) o += "    OUT.oT" + std::to_string(r) + " = oT" + std::to_string(r) + ";\n";
-            o += "    OUT.oFog = saturate(oFog.x);\n";
+            o += sm3 ? "    OUT.oFog = oFog.x;\n" : "    OUT.oFog = saturate(oFog.x);\n";
             if (opts) o += "    OUT.psize = oPts.x;\n";
             o += "    return OUT;\n}\n";
         } else {
             o += "struct PSInput {\n    float4 vpos : SV_Position;\n";
             for (uint32_t r = 0; r < 2; ++r)
                 if (vread & (1u << r))
-                    o += "    [[vk::location(" + std::to_string(r) + ")]] " + std::string(vin[r].centroid ? "centroid " : "") +
+                    o += "    [[vk::location(" + std::to_string(r) + ")]] " + std::string(centroid_in(Usage::Color, r) ? "centroid " : "") +
                          "float4 v" + std::to_string(r) + " : COLOR" + std::to_string(r) + ";\n";
             for (uint32_t r = 0; r < 8; ++r)
                 if (tcread & (1u << r))
-                    o += "    [[vk::location(" + std::to_string(2 + r) + ")]] " + std::string(tin[r].centroid ? "centroid " : "") +
+                    o += "    [[vk::location(" + std::to_string(2 + r) + ")]] " + std::string(centroid_in(Usage::Texcoord, r) ? "centroid " : "") +
                          "float4 t" + std::to_string(r) + " : TEXCOORD" + std::to_string(r) + ";\n";
             o += "    [[vk::location(10)]] float fog : FOG;\n";
             if (opt.instanced) o += "    [[vk::location(" + std::to_string(kVaryingInstance) + ")]] nointerpolation uint xl_inst : XLINST;\n";
+            if (vface) o += "    bool xl_face : SV_IsFrontFace;\n";
             o += "};\n";
             const uint32_t ncol = ps1 ? 1u : color_count();
             o += "struct PSOutput {\n";
@@ -1200,10 +1328,22 @@ struct Emitter {
             if (depth) o += "    float depth : SV_Depth;\n";
             o += "};\nPSOutput PSMain(PSInput IN) {\n";
             if (opt.instanced) o += "    xl_cb = (PC.Flags & " + std::to_string(kPushInstancedPs) + "u) != 0u ? IN.xl_inst * 32u : 0u;\n";
+            if (sm3) {
+                for (uint32_t r = 0; r < 10; ++r) {
+                    if (!(sm3_in & (1u << r))) continue;
+                    const Decl& d = vin[r];
+                    const std::string src = d.usage == Usage::Color      ? "IN.v" + std::to_string(d.index)
+                                            : d.usage == Usage::Texcoord ? "IN.t" + std::to_string(d.index)
+                                                                         : std::string("float4(IN.fog, 0.0, 0.0, 0.0)");
+                    o += "    v" + std::to_string(r) + " = " + src + ";\n";
+                }
+                if (vpos) o += "    vPos = float4(IN.vpos.xy - 0.5, 0.0, 0.0);\n";
+                if (vface) o += "    vFace = IN.xl_face ? float4(1.0, 1.0, 1.0, 1.0) : float4(-1.0, -1.0, -1.0, -1.0);\n";
+            }
             for (uint32_t r = 0; r < 2; ++r)
-                if (vread & (1u << r)) o += "    v" + std::to_string(r) + " = saturate(IN.v" + std::to_string(r) + ");\n";
+                if (!sm3 && (vread & (1u << r))) o += "    v" + std::to_string(r) + " = saturate(IN.v" + std::to_string(r) + ");\n";
             for (uint32_t r = 0; r < 8; ++r)
-                if (tcread & (1u << r)) o += "    tc" + std::to_string(r) + " = IN.t" + std::to_string(r) + ";\n";
+                if (!sm3 && (tcread & (1u << r))) o += "    tc" + std::to_string(r) + " = IN.t" + std::to_string(r) + ";\n";
             for (uint32_t r = 0; r < 8; ++r)
                 if (tregs & (1u << r)) o += "    t" + std::to_string(r) + " = float4(0.0, 0.0, 0.0, 0.0);\n";
             for (uint32_t r = 0; r < 16; ++r)
@@ -1212,12 +1352,21 @@ struct Emitter {
             for (uint32_t r = 0; r < ncol; ++r) o += "    oC" + std::to_string(r) + " = float4(0.0, 0.0, 0.0, 0.0);\n";
             if (depth) o += "    oDepth = float4(0.0, 0.0, 0.0, 0.0);\n";
             o += "    xl_main();\n    PSOutput OUT;\n";
-            o += std::string("    OUT.color = xl_epilogue(") + (ps1 ? "r0" : "oC0") + ", IN.fog, IN.vpos);\n";
+            o += sm3 ? std::string("    OUT.color = xl_epilogue(oC0);\n")
+                     : std::string("    OUT.color = xl_epilogue(") + (ps1 ? "r0" : "oC0") + ", IN.fog, IN.vpos);\n";
             for (uint32_t r = 1; r < ncol; ++r) o += "    OUT.color" + std::to_string(r) + " = oC" + std::to_string(r) + ";\n";
             if (depth) o += "    OUT.depth = saturate(oDepth.x);\n";
             o += "    return OUT;\n}\n";
         }
         return o;
+    }
+
+    // _centroid on the PS input dcl of COLOR r / TEXCOORD r (ps_3_0: whichever v# declares that usage).
+    bool centroid_in(Usage u, uint32_t r) const {
+        if (!sm3) return u == Usage::Color ? vin[r].centroid : tin[r].centroid;
+        for (const Decl& d : vin)
+            if (d.present && d.usage == u && d.index == r) return d.centroid;
+        return false;
     }
 
     uint32_t color_count() const {
@@ -1235,6 +1384,17 @@ struct Emitter {
         f.inputs.clear();
         f.varyings.clear();
         f.samplers.clear();
+        if (vs && sm3) {
+            for (uint32_t r = 0; r < 12; ++r) {
+                if (!vout[r].present || !(oregs & (1u << r))) continue;
+                const Decl& d = vout[r];
+                if (d.usage == Usage::Color) od[d.index] |= d.mask;
+                else if (d.usage == Usage::Texcoord) ot[d.index] |= d.mask;
+                else if (d.usage == Usage::Fog) ofog |= 1;
+                else if (d.usage == Usage::PSize) opts |= 1;
+                else opos |= d.mask;
+            }
+        }
         if (vs) {
             uint32_t overflow = 16;
             // Fixed locations first, then overflow slots in register order (deterministic).
@@ -1289,11 +1449,8 @@ struct Emitter {
 }  // namespace
 
 uint64_t TranslateOptions::key() const {
-    uint64_t h = 0xcbf29ce484222325ull;
-    auto mix = [&](uint8_t b) {
-        h ^= b;
-        h *= 0x100000001b3ull;
-    };
+    uint64_t h = alamo::kFnv1a64Offset;
+    auto mix = [&](uint8_t b) { h = alamo::fnv1a64(std::span<const uint8_t>(&b, 1), h); };
     for (TextureDim d : sampler_dims) mix(static_cast<uint8_t>(d));
     mix(static_cast<uint8_t>(projected_stages & 0xFF));
     mix(static_cast<uint8_t>(projected_stages >> 8));
@@ -1335,10 +1492,6 @@ TextureDim sampler_dim(const Program& program, const TranslateOptions& options, 
 
 bool translate(const Program& program, const TranslateOptions& options, Translation& out, std::string* err) {
     out = Translation{};
-    if (program.major >= 3) {
-        if (err) *err = "shader model 3 is not supported by the SM1-2 translator (" + program.profile() + ")";
-        return false;
-    }
     Emitter e(program, options, err);
     if (!e.declarations() || !e.body()) return false;
     e.interface(out.iface);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/dmath.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
@@ -11,14 +12,8 @@ namespace alamo::tactical::hangar {
 
 namespace {
 
-std::string_view trim(std::string_view s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
-    return s;
-}
-
 bool parse_int(std::string_view s, int32_t& out) {
-    s = trim(s);
+    s = ascii_trim(s);
     if (s.empty()) return false;
     bool neg = false;
     size_t i = 0;
@@ -58,11 +53,11 @@ uint32_t to_frame(int64_t f) { return f < 0 ? 0u : static_cast<uint32_t>(f); }
 }  // namespace
 
 bool parse_type_count(std::string_view text, std::string& type, int32_t& count) {
-    text = trim(text);
+    text = ascii_trim(text);
     size_t cut = text.find(',');
     if (cut == std::string_view::npos) cut = text.find_last_of(" \t");
     if (cut == std::string_view::npos) return false;
-    const std::string_view t = trim(text.substr(0, cut));
+    const std::string_view t = ascii_trim(text.substr(0, cut));
     if (t.empty() || !parse_int(text.substr(cut + 1), count)) return false;
     type.assign(t);
     return true;
@@ -75,7 +70,7 @@ SpawnList parse_spawn_list(std::span<const std::string_view> tokens, const std::
         int32_t n = 0;
         if (parse_type_count(tokens[i], t, n)) {
         } else if (i + 1 < tokens.size() && parse_int(tokens[i + 1], n)) {
-            t.assign(trim(tokens[i]));
+            t.assign(ascii_trim(tokens[i]));
             ++i;
         } else {
             continue;
@@ -386,7 +381,7 @@ void HangarSystem::launch(Carrier& c, uint32_t frame, SimRng& rng) {
     c.next = next;
 }
 
-void HangarSystem::update(uint32_t frame, SimRng& rng) {
+void HangarSystem::update(uint32_t frame, SimRng& rng, const StreamOf* stream_of) {
     // Dead carriers: tracking stops; spawned units stay.
     for (size_t i = 0; i < carriers_.size();) {
         if (!combat_->alive(carriers_[i].id)) {
@@ -402,7 +397,12 @@ void HangarSystem::update(uint32_t frame, SimRng& rng) {
         if (c.due > frame) continue;
         c.due = frame + cfg_.service_interval;
         if (c.entries.empty()) build(c, frame);
-        if (c.state == 0 && can_spawn(c, frame, rng)) launch(c, frame, rng);
+        if (stream_of && *stream_of) {  // SP5 t03: this carrier's own stream
+            SimRng own = (*stream_of)(c.id);
+            if (c.state == 0 && can_spawn(c, frame, own)) launch(c, frame, own);
+        } else if (c.state == 0 && can_spawn(c, frame, rng)) {
+            launch(c, frame, rng);
+        }
     }
 }
 

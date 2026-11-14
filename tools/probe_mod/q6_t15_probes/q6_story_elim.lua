@@ -6,6 +6,13 @@
 --              Neutral player at t+50 s: the human owned something once and then owns nothing again
 --   C CONTROL  as A, but the AI side's condition is Galactic_Opponent_Controls_No_Planets (control: another player's
 --              condition passes at once)
+--   D AI_GAIN  as A, but this script gives the neutral Abregado Rae to the Rebel at t+20 s: an owner change while the
+--              human owns nothing (q6 t25: retail is expected to end it about 1 s later through the AI's implicit
+--              Opponent_Controls_No_Planets, docs/re/Q6_T15_RETAIL_RUN.md "ELIM C")
+--   E FLEET    the human starts with a Star_Destroyer at Tatooine (a starting fleet does not give the planet: run
+--              20261109-082854), this script gives Tatooine to the human at t+10 s and makes it neutral again at t+40 s:
+--              does a player with units but no planet lose? (q6 t25: expected yes, units do not count)
+-- After the D / E event the heartbeat runs every second for 15 s, so the end time is known to about 1 s.
 -- Port rule (engine/galactic victory.hpp, q6 EliminationLatch): a player is eliminated only after a check has seen it own
 -- something. Port result per campaign: A goes on; B ends (human eliminated) at the first check after t+50 s; C ends at
 -- once (Rebel's Opponent_Controls_No_Planets passes). Literal original reading (STRATEGIC_GAPS sec. 1.4, no
@@ -19,6 +26,9 @@ Q6E_MODE = "@@MODE@@"
 Q6E_PLANETS = { "Tatooine", "Byss", "Abregado_Rae", "Jabiim" }
 Q6E_GIVE_T = 20
 Q6E_TAKE_T = 50
+Q6E_D_T = 20
+Q6E_E_GIVE_T = 10
+Q6E_E_T = 40
 Q6E_END_T = 170
 
 Q6E_LOG = {}
@@ -118,6 +128,7 @@ end
 function Q6E_Run()
 	local empire = Find_Player("Empire")
 	local neutral = Find_Player("Neutral")
+	local rebel = Find_Player("Rebel")
 	local human = "?"
 	pcall(function() human = tostring(empire.Is_Human()) end)
 	Q6E_Rec("START", "human=" .. human .. "|" .. Q6E_Owners(empire))
@@ -125,6 +136,8 @@ function Q6E_Run()
 	local t0 = Q6E_Time() or 0
 	local next_hb = t0
 	local given, taken = false, false
+	local event_done = false
+	local fast_until = -1
 	while true do
 		local dt = (Q6E_Time() or 0) - t0
 		if Q6E_MODE == "B" and not given and dt >= Q6E_GIVE_T then
@@ -139,8 +152,34 @@ function Q6E_Run()
 			Q6E_Rec("TAKE", "ok=" .. tostring(ok) .. "|err=" .. string.sub(Q6E_Str(err), 1, 80) .. "|" .. Q6E_Owners(empire))
 			Q6E_Say("TEXT_Q6_ELIM_TAKEN")
 		end
+		if Q6E_MODE == "D" and not event_done and dt >= Q6E_D_T then
+			event_done = true
+			local ok, err = pcall(function() FindPlanet("Abregado_Rae").Change_Owner(rebel) end)
+			Q6E_Rec("AIGIVE", "ok=" .. tostring(ok) .. "|err=" .. string.sub(Q6E_Str(err), 1, 80) .. "|" .. Q6E_Owners(empire))
+			Q6E_Say("TEXT_Q6_ELIM_AI_GIVEN")
+			fast_until = dt + 15
+			next_hb = Q6E_Time() or 0
+		end
+		if Q6E_MODE == "E" and not given and dt >= Q6E_E_GIVE_T then
+			given = true
+			local ok, err = pcall(function() FindPlanet("Tatooine").Change_Owner(empire) end)
+			Q6E_Rec("GIVE", "ok=" .. tostring(ok) .. "|err=" .. string.sub(Q6E_Str(err), 1, 80) .. "|" .. Q6E_Owners(empire))
+			Q6E_Say("TEXT_Q6_ELIM_E_GIVEN")
+		end
+		if Q6E_MODE == "E" and not event_done and dt >= Q6E_E_T then
+			event_done = true
+			local ok, err = pcall(function() FindPlanet("Tatooine").Change_Owner(neutral) end)
+			Q6E_Rec("TAKE", "ok=" .. tostring(ok) .. "|err=" .. string.sub(Q6E_Str(err), 1, 80) .. "|" .. Q6E_Owners(empire))
+			Q6E_Say("TEXT_Q6_ELIM_E_TAKEN")
+			fast_until = dt + 15
+			next_hb = Q6E_Time() or 0
+		end
 		if (Q6E_Time() or 0) >= next_hb then
-			next_hb = next_hb + 5
+			if dt < fast_until then
+				next_hb = next_hb + 1
+			else
+				next_hb = next_hb + 5
+			end
 			Q6E_Rec("HB", "dt=" .. string.format("%.1f", dt) .. "|" .. Q6E_Owners(empire))
 		end
 		if dt >= Q6E_END_T then

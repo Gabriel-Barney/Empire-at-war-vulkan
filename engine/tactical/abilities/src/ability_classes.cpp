@@ -43,6 +43,21 @@ constexpr int32_t kAnimFlAttack = 0x28;                           // Force_Light
 
 int32_t frames_of(float secs, uint32_t fps) { return static_cast<int32_t>(static_cast<float>(fps) * secs); }
 
+// cu8f t06 (CU8F_T04_T06_RE §3.4): 0x20acd0 - the yaw of an XY direction in degrees, [0, 360); 0 when it is null.
+float yaw_deg_of(float dx, float dy) {
+    if (dx == 0.0f && dy == 0.0f) return 0.0f;
+    float a = dmath::atan2(dy, dx) * (180.0f / dmath::kPiF);
+    if (a < 0.0f) a += 360.0f;
+    if (a >= 360.0f) a -= 360.0f;
+    return a;
+}
+// 0x20af60's difference: wrapped to (-180, 180] (inputs in [0, 360)).
+float wrap_deg(float d) {
+    if (d > 180.0f) d -= 360.0f;
+    if (d <= -180.0f) d += 360.0f;
+    return d;
+}
+
 // |angle between the unit's facing and the direction to p| <= deg (XY), via cosines (no acos).
 bool facing_within(Vec3 f, Vec3 from, Vec3 p, float deg) {
     const float dx = p.x - from.x, dy = p.y - from.y;
@@ -168,6 +183,39 @@ void AbilitySystem::snap_face(Obj& o, ObjectId target) {
     }
 }
 
+void AbilitySystem::super_laser_turn(Obj& o, const SpecialAbilityDesc& s, ObjectId target) {
+    // cu8f t06 (CU8F_T04_T06_RE §3.4 [H]; TSW facing step 0x42b4e0 -> Turn_Toward 0x3abe40): yaw only, the error wrapped
+    // to (-180, 180] and clamped to +-rate degrees per step; rate <= 0 = the type's turn rate (0x372560: Max_Rate_Of_Turn x
+    // the mode multiplier). [port] the step runs in the Super_Laser update (the TSW service is not this system's) and the
+    // new yaw goes through the host's snap (as snap_face) plus the combat facing.
+    if (!o.combat_unit || !combat_->has_unit(o.id) || !alive_unit(target)) return;
+    const Vec3 a = combat_->position(o.id), b = combat_->position(target), f = combat_->facing(o.id);
+    const float own = yaw_deg_of(f.x, f.y);
+    float rate = s.turn_rate;
+    if (rate <= 0.0f) {
+        const combat::CombatConfig& cc = combat_->config();
+        rate = combat_->data().units[combat_->desc_index(o.id)].turn_rate *
+               (cc.mode == GameMode::Space ? cc.turn_multiplier_space : cc.turn_multiplier_land);
+    }
+    const float step = std::clamp(wrap_deg(yaw_deg_of(b.x - a.x, b.y - a.y) - own), -rate, rate);
+    if (!(step != 0.0f)) return;
+    const float yaw = own + step;
+    if (host_.snap_yaw) host_.snap_yaw(o.id, yaw);
+    float sn = 0.0f, cs = 1.0f;
+    dmath::sincos(yaw * (dmath::kPiF / 180.0f), sn, cs);
+    combat_->set_facing(o.id, Vec3{cs, sn, 0.0f});
+}
+
+bool AbilitySystem::super_laser_in_cone(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const {
+    // cu8f t06 (§3.4, update 0x715450): yaw to the target (0x20acd0, XY) against the owner's yaw (obj +0x8c), |wrapped
+    // difference| <= Firing_Cone; a cone of 90 or more reads as 0.01.
+    if (!alive_unit(target)) return false;
+    const Vec3 a = position(o), b = combat_->position(target);
+    const Vec3 f = o.combat_unit ? combat_->facing(o.id) : Vec3{1.0f, 0.0f, 0.0f};
+    const float cone = s.firing_cone >= 90.0f ? 0.01f : s.firing_cone;
+    return std::abs(wrap_deg(yaw_deg_of(b.x - a.x, b.y - a.y) - yaw_deg_of(f.x, f.y))) <= cone;
+}
+
 void AbilitySystem::lock_pair(Obj& o, uint8_t flag, bool lock, uint32_t frame) {
     // OI follow-up t04 (A1_READINGS §28.9 table): one caller's lock / unlock on the shared counter. [port] the flag keeps
     // each pair balanced (the original's unconditional releases are hidden by the clamp at 0).
@@ -185,9 +233,12 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
     const bool live = alive_unit(target);
     const bool dummy = target != kNoObject && combat_->has_unit(target) && (combat_->flags(target) & combat::kUnitSkipTargeting);
     const bool foe = live && !dummy && enemy(o.owner, combat_->owner(target));
+    // s78n t06 (HERO_CLASH §5.2, TACTICAL_COMBAT §5.4.3 item 3): the hero-clash pairing rule 0x39a540 of the accepts that
+    // read +0x3b4 - when the user or the target is in a hero clash, both must be in the same one.
+    const auto paired = [&] { return combat_->clash_allows(o.id, target); };
     switch (s.cls) {
         // 0x6eef00 (Arc_Sweep, Concentrate_Fire, Generic_Attack) and the other enemy-target classes: enemy, applicable
-        // filter (0x48e290) [port: the model / layer tests are not modelled].
+        // filter (0x48e290), the pairing rule (s78n t06) [port: the model test is not modelled].
         case C::ArcSweep:
         case C::GenericAttack:
         case C::EatAttack:
@@ -195,22 +246,31 @@ bool AbilitySystem::class_accepts(const Obj& o, const SpecialAbilityDesc& s, Obj
         case C::Telekinesis:
         case C::GrenadeAttack:
         case C::ForceLightning:
-        case C::DrainLife:
         case C::LeechShields:
         case C::SuperLaser:
-        // Hack 0x6fd610 (TACTICAL_COMBAT §5.4.1): enemy of the user's owner, the filter, a model (+ the layer rule); no
-        // alive / kind / range test [port: "has a model" stands as a live, targetable combat unit; no layer rule].
+        // Hack 0x6fd610 (TACTICAL_COMBAT §5.4.1): enemy of the user's owner, the filter, a model, the pairing rule; no
+        // alive / kind / range test [port: "has a model" stands as a live, targetable combat unit].
         case C::Hack:
-        case C::VehicleThief:
-        case C::Infection:
-        case C::SaberThrow:
         case C::FlameThrower:
         case C::Cable:
-        case C::MaximumFirepower: return foe && target_filter(s, target);
-        case C::Berserker:  // enemy, not a projectile, has a locomotor, filter
-            return foe && combat_->data().units[combat_->desc_index(target)].has_locomotor && target_filter(s, target);
+        case C::MaximumFirepower: return foe && target_filter(s, target) && paired();
+        // Drain_Life / Vehicle_Thief / Infection / Saber_Throw accepts do not read +0x3b4 (HERO_CLASH §5.2 table).
+        case C::DrainLife:
+        case C::VehicleThief:
+        case C::Infection:
+        case C::SaberThrow: return foe && target_filter(s, target);
+        case C::Berserker:  // enemy, not a projectile, has a locomotor, filter; "both 0, or pairing" (s78n t06)
+            return foe && combat_->data().units[combat_->desc_index(target)].has_locomotor && target_filter(s, target) &&
+                   paired();
         case C::TacticalBribe: return bribe_accepts(o, target);  // 0x5b0f70: never the filter (§5.4.1)
-        case C::Repair: return live && !dummy && allied(o.owner, combat_->owner(target)) && target_filter(s, target);  // [inferred]
+        case C::Repair:  // [inferred]; 0x70ca40 pairing rule (s78n t06)
+            return live && !dummy && allied(o.owner, combat_->owner(target)) && target_filter(s, target) && paired();
+        case C::CancelSpecial: {  // cu8f t01, 0x6f4060: the target has a SAP and is not friendly (enemy or neutral; self and
+            // allies refused). No range or type filter. [port] "has a SAP" = an object of this system that is not dead.
+            // s78n t07: "friendly" is 0x39a2c0 (relation 0, `friendly`), so a neutral target is accepted.
+            const Obj* t = obj(target);
+            return t && !t->dead && !friendly(o.owner, t->owner);
+        }
         // 0x712770 (Proximity_Mines, Buzz_Droids, Corrupt_Systems, Summon, Radioactive): the MARKER dummy point object
         // [port: or a live target / none - positions come with the command-57 dummy].
         case C::ProximityMines:
@@ -252,15 +312,15 @@ float AbilitySystem::bribe_cost(const Obj& o, ObjectId target) const {
 
 bool AbilitySystem::bribe_accepts(const Obj& o, ObjectId target) const {
     // TacticalBribeAbilityClass +0x28 (0x5b0f70, TACTICAL_COMBAT §5.4.1). The Applicable_* / Excluded_* tags are never read.
-    // 1. a target with a model [port: a combat unit known here]; 7. not dead / a death clone (+0x3a0 & 0x40) [port: alive;
-    //    the 0x80 / 0x02 bits [M] are not modelled].
+    // 1. a target with a model [port: a combat unit known here]; 7. +0x3a0 bits 0x40 (dying / dead), 0x80 (death clone,
+    //    always with 0x40) and 0x02 (destroyed / removed) clear (§5.4.3 item 2) [port: alive covers all three].
     if (target == kNoObject || target == o.id || !combat_->has_unit(target) || !alive_unit(target)) return false;
     const Obj* x = obj(target);
     if (!x || x->dead) return false;
     // 2. an enemy of the user's owner (0x39a450: the target's owner, a team member's through its container [port: the
     //    combat owner, which change_owner keeps equal to the container's]).
     if (!enemy(o.owner, combat_->owner(target))) return false;
-    // 3. not already converted (+0x3a2 & 0x04 [M]: the converted flag).
+    // 3. not already converted by a convert projectile (+0x3a2 & 0x04, §5.4.3 item 5; bribe / hack never set it).
     if (combat_->flags(target) & combat::kUnitConverted) return false;
     // 4. T = the team container of a member (0x39b1a0), else the target.
     const Obj* t = x->container != kNoObject ? obj(x->container) : nullptr;
@@ -270,22 +330,28 @@ bool AbilitySystem::bribe_accepts(const Obj& o, ObjectId target) const {
     // 5. cost > 0 (c <= 1 rejects). -1 = no cost data [port]: no gate.
     const float cost = bribe_cost(o, target);
     if (cost >= 0.0f && !(cost > 0.0f)) return false;
-    // 6. 0x395c10(T, all categories): CategoryMask != 0 ([inferred] a container desc with mask 0 uses the member's), no
-    //    PROXIMITY_MINE, Friendly_Damage_Amount <= 0, not Is_Named_Hero ([inferred] the member's flag counts too).
-    //    [port] T +0x3a2 & 0x08 and the link block +0x150 ([M]) are not modelled.
+    // 6. 0x395c10(T, all categories), in order (HERO_CLASH §7.3): CategoryMask != 0 ([inferred] a container desc with
+    //    mask 0 uses the member's); s78n t05: not a vehicle taken over by a vehicle thief (T +0x3a2 & 0x08, §5.4.3 item 5);
+    //    no PROXIMITY_MINE; Friendly_Damage_Amount <= 0; not Is_Named_Hero ([inferred] the member's flag counts too);
+    //    s78n t05: T is not a build pad holding a live under-construction or finished object (+0x150, §5.4.3 item 1: the
+    //    host's pad state; no vanilla effect, no shipped pad has a Tactical_Bribe_Cost > 1).
+    const ObjectId tid = t != x ? x->container : target;
     uint64_t mask = td.category_mask;
     if (mask == 0 && t != x) mask = xd.category_mask;
     if (mask == 0) mask = combat_->data().units[combat_->desc_index(target)].category_mask;
     if (mask == 0) return false;
+    if (combat_->has_unit(tid) && (combat_->flags(tid) & combat::kUnitStolenVehicle)) return false;
     if (td.proximity_mine || xd.proximity_mine) return false;
     if (td.friendly_damage_amount > 0.0f) return false;
     if (td.named_hero || xd.named_hero) return false;
+    if (host_.occupied_build_pad && host_.occupied_build_pad(tid)) return false;
     return true;
 }
 
-bool AbilitySystem::range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target) const {
+bool AbilitySystem::range_ok(const Obj& o, const SpecialAbilityDesc& s, ObjectId target, bool with_container) const {
     if (target == kNoObject || target == o.id || !combat_->has_unit(target)) return true;
-    return in_range(o, s, target);
+    const Obj* x = with_container ? obj(target) : nullptr;
+    return in_range(o, s, target, x ? x->container : kNoObject);
 }
 
 // ================================================================================================
@@ -303,8 +369,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
     };
     auto chance_roll_lt = [&](float chance) { return draw_unit() < chance; };  // Earthquake / Telekinesis / Thief / Whirlwind
     switch (s.cls) {
+        case C::EnhanceDefense:  // s78n t04 (§5.4.4 item 3c): per-player entries, not a unit aura
+            enhance_defense_apply(o, sp, frame);
+            return true;
         case C::CombatBonus:
-        case C::EnhanceDefense:
         case C::BattlefieldModifier:
         case C::BasePower:
         case C::Weatherproof:
@@ -335,7 +403,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::ProximityMines: {  // 2.3.3 apply 0x71a4d0 + spawn 0x71a650
             if (target != kNoObject && combat_->has_unit(target) && !range_ok(o, s, target)) return false;
             const Vec3 at = (target != kNoObject && combat_->has_unit(target)) ? combat_->position(target) : me;
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x71a517, CU8K_T02_T06_RE §2)
             start_recharge(o, kProximityMines);
             for (ObjectId m : o.members)
                 if (Obj* mo = obj(m)) start_recharge(*mo, kProximityMines);
@@ -405,7 +473,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             // pending order is not retried) and nothing is thrown [M on the meaning; the port applies the flow as read].
             if (desc(o).countdown && o.cd.counter[kStickyBomb] > 0) return true;
             snap_face(o, target);  // S8 t10: yaw snapped to the target's raw position
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x7009de, CU8K_T02_T06_RE §2)
             lock_pair(o, kLockGrenade, true, frame);  // stop, lock (0x3a8e50 1; A1_READINGS §28.9)
             sp.applied = 1;
             sp.target = target;
@@ -504,14 +572,25 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             return true;
         }
 
-        case C::SuperLaser: {  // 2.3.9
+        case C::SuperLaser: {  // 2.3.9; cu8f t06: apply 0x714fa0 (CU8F_T04_T06_RE §3.4)
             if (!alive_unit(target) || !range_ok(o, s, target) || !has(o, kSuperLaser)) return false;
             sp.applied = 1;
             sp.target = target;
-            sp.phase = 0;
-            sp.next = frame + static_cast<uint32_t>(std::max(0, frames_of(s.fire_delay, fps)));  // GMM frame + int(FPS x delay)
+            sp.next = frame + static_cast<uint32_t>(std::max(0, frames_of(s.fire_delay, fps)));  // SAP +0x304
+            sp.frames = -1;  // SAP +0x308: no continuation
             o.active[kSuperLaser] = 1;
             sync_combat(o);
+            // SuperLaser state: phase 0 = clip not started (+0x301 = 0), 1 = clip running, 2 = fired (+0x300); counter =
+            // the TSW "facing on" (+0x54); cooldown = the clip's start frame; frames = the continuation end (-1 none).
+            if (desc(o).tactical_super_weapon && s.face_target) {
+                sp.phase = 0;  // the TSW pack gets the target and Turn_Rate, facing on; the clip waits for the cone
+                sp.counter = 1;
+            } else {
+                sp.phase = 1;  // type 5 / Attack_Anim_Sub_Index at once
+                sp.counter = 0;
+                sp.cooldown = static_cast<int32_t>(frame);
+                play_anim(o, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index)), false, 1.0f, kAnimStay, frame);
+            }
             event(AbilityEventKind::EffectOn, kSuperLaser, o.id, target, frame);
             return true;
         }
@@ -520,7 +599,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target) || !range_ok(o, s, target)) return false;
             if (s.charging_time > 0.0f && combat::distance_xy(me, combat_->position(target)) > s.targets_radius) return false;
             lightning_targets(o, s, target, sp.victims);
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x71ae72, CU8K_T02_T06_RE §2)
             sp.applied = 1;
             sp.target = target;
             sp.counter = frames_of(s.duration_secs, fps);
@@ -551,7 +630,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             sp.counter = frames_of(s.charging_time, fps);
             sp.phase = 0;
             start_recharge(o, kBlast);
-            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitSkipTargeting, true);  // obj +0x3a1 |= 0x10
+            // s78n t12 (HERO_CLASH §8.4.2): the apply's last step sets +0x3a1 |= 0x10 on the user - the same incognito
+            // bit as the vehicle thief's. Blast never clears it (no remove override, nothing in the update): it goes
+            // only through Take_Damage (§8.4.1) or MaximumFirepower's end.
+            if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitIncognito, true);
             event(AbilityEventKind::EffectOn, kBlast, o.id, kNoObject, frame);
             return true;
         }
@@ -563,7 +645,6 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             const UnitAbilityRecord* r = record_of(o, kForceCloak);
             const float e = r ? r->expiration_seconds : 0.0f;
             float f = 1.0f + player_reduce(o.owner, static_cast<uint8_t>(PlayerList::StealthDuration));
-            if (o.owner >= 0 && static_cast<size_t>(o.owner) < stealth_bonus_.size()) f += stealth_bonus_[static_cast<size_t>(o.owner)];
             if (f <= 0.0f) f = 1.0f;
             o.stealth_frames = static_cast<int32_t>(static_cast<float>(fps) * f * e);
             o.stealthed = 1;
@@ -579,11 +660,13 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::Hack:
         case C::Repair:
         case C::TacticalBribe: {  // the acting member (Team_Member_With_Ability) faces the target; animation 0x5a
-            if (!alive_unit(target) || !range_ok(o, s, target)) return false;
+            // s78m t08: Tactical_Bribe's range (0x5b07c0, TACTICAL_COMBAT §5.4.2) for a squad member X with container T:
+            // in range of T (R + 10) or of X, too close only to both; else X alone.
+            if (!alive_unit(target) || !range_ok(o, s, target, s.cls == C::TacticalBribe)) return false;
             if (s.cls == C::TacticalBribe) {
-                // 0x5b07c0 (TACTICAL_COMBAT §5.4.1): range (above; [port] on the target only, Must_Close_Range not
-                // modelled), the accept, then the credits: too few (or cost <= 0) -> the "cannot" event and return 1
-                // without converting [M: whether the order is consumed]; else break both stealth states, pay, convert.
+                // 0x5b07c0 (TACTICAL_COMBAT §5.4.1): range (above), the accept, then the credits: too few (or cost <= 0)
+                // -> the "cannot" event and return 1 without converting (the order is used up, S78M_T06 Q7); else
+                // break both stealth states, pay, convert.
                 if (!bribe_accepts(o, target)) return false;
                 const float cost = bribe_cost(o, target);  // -1: no cost data [port], free
                 if (cost >= 0.0f && (!(cost > 0.0f) || (host_.pay_credits && !host_.pay_credits(o.owner, cost)))) {
@@ -594,6 +677,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
                 if (o.stealthed) break_stealth(o, frame);
                 if (Obj* x = obj(target))
                     if (x->stealthed) break_stealth(*x, frame);
+                // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x5b0962 / 0x5b096a): the stop-and-holds of the user, then the target
+                // (one draw each when not a squad member).
+                stop_order(o.id, frame, kStopHold);
+                stop_order(target, frame, kStopHold);
             }
             sp.applied = 1;
             sp.target = target;
@@ -604,7 +691,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             }
             sp.next = frame + len;
             start_recharge(o, s.cls == C::Hack ? kTargetedHack : (s.cls == C::Repair ? kTargetedRepair : kTacticalBribe));
-            stop_order(o.id, frame);
+            if (s.cls != C::TacticalBribe) stop_order(o.id, frame);  // the bribe's user is already held (above)
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             if (s.cls == C::TacticalBribe) class_update(o, sp, frame);  // changes the owner at once
             return true;
@@ -616,8 +703,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             const float d = combat::distance_xy(me, combat_->position(target)) - r;
             if (d < s.min_range || d > s.max_range) return false;
             if (!chance_roll_lt(s.activation_chance)) return false;
-            // the victim's capture variant (+0xda8; the host resolves it), at the victim with its owner (one id); the
-            // victim is removed [port: dies without a death clone]; VEHICLE_THIEF boards the thief, CAPTURE_VEHICLE on.
+            // the victim's capture variant (+0xda8; the host resolves it), at the victim with its owner (one id).
+            // s78n t12 (HERO_CLASH §8.4.3): the victim is not killed here - the host spawns the variant, kills the
+            // victim only when that spawn succeeded (without a death clone) and boards the thief; a victim type
+            // without a variant is boarded itself. CAPTURE_VEHICLE on in every case.
             SpawnRequest q;
             q.purpose = SpawnPurpose::CaptureVariant;
             q.position = combat_->position(target);
@@ -627,7 +716,6 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             q.target = target;
             q.ability_type = kCaptureVehicle;
             request_spawn(q);
-            combat_->kill_unit(target, o.id, combat::kKindNoDeathClone, frame);
             if (has(o, kCaptureVehicle)) set_active(o, kCaptureVehicle, true, frame, kNoObject);
             event(AbilityEventKind::EffectOn, kCaptureVehicle, o.id, target, frame);
             return true;
@@ -649,6 +737,8 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             if (!alive_unit(target) || !range_ok(o, s, target)) return false;
             Obj* v = obj(target);
             if (!v) return false;
+            // cu8l t02: stop-and-hold 0x3a9880 (0x71d40f, CU8K_T02_T06_RE §2) when the target is not corrupted yet
+            if (!v->corrupted) stop_order(o.id, frame, kStopHold);
             v->corrupted = 1;
             sp.applied = 1;
             sp.target = target;
@@ -663,6 +753,10 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
         case C::Spawn:
         case C::Radioactive: {  // create Object_Type (one id) after Creation_Delay / Spray_Time / Activation_Time
             if (target != kNoObject && combat_->has_unit(target) && !range_ok(o, s, target)) return false;
+            // cu8l t02 (CU8K_T02_T06_RE §2 rows 0x71c4b2 / 0x71ce72 / 0x712727): Buzz_Droids, Summon and Radioactive_
+            // Contaminate stop and hold the user (one draw when not a squad member). [port] Radioactive's hold is at the
+            // apply (retail: when the throw starts, anim 0x70); the generic Spawn class has none.
+            if (s.cls != C::Spawn) stop_order(o.id, frame, kStopHold);
             sp.applied = 1;
             sp.point = (target != kNoObject && combat_->has_unit(target)) ? combat_->position(target) : me;
             const float delay = s.cls == C::BuzzDroids ? s.activation_time : s.creation_delay;
@@ -706,7 +800,7 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             // the target. No toss and no recharge yet (class_update). [port] Without a target object the bomb is placed at the
             // unit at the toss.
             if (has_target) snap_face(o, target);
-            stop_order(o.id, frame);
+            stop_order(o.id, frame, kStopHold);  // cu8l t02: stop-and-hold 0x3a9880 (0x719db2, CU8K_T02_T06_RE §2)
             lock_pair(o, kLockRemoteBomb, true, frame);
             if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitTargetingSuspended, true);  // S8 t25: TARGETING disabled
             sp.applied = 1;
@@ -739,6 +833,9 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
 
         case C::Infection: {  // throws Infection_Projectile (Causes_Infection: combat attaches INFECTION on the hit, refix t02)
             if (!alive_unit(target) || !range_ok(o, s, target) || s.projectile < 0) return false;
+            // cu8l t02 (CU8K_T02_T06_RE §2 row 0x6cc6eb): stop-and-hold the user (IG-88: one draw). [port] its movement
+            // lock is not modelled (no release traced); after the hold it would draw nothing.
+            stop_order(o.id, frame, kStopHold);
             combat::ProjectileLaunch l;
             l.shooter = o.combat_unit ? o.id : kNoObject;
             l.owner = o.owner;
@@ -757,6 +854,14 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             start_recharge(o, s.cls == C::SaberThrow ? kSaberThrow : kCableAttack);
             if (s.cls == C::Cable && host_.cable_attack) host_.cable_attack(o.id, target, s.min_range, s.max_range);  // §6.5
             event(AbilityEventKind::Unhandled, sp.trigger, o.id, target, frame);
+            // cu8k t01 (CU8F_T01_T02_T07_RE §2.7 item 1): a saber throw records the target point at the apply (0x398440:
+            // position + Ranged_Target_Z_Adjust) in the event's point and value 1; the host throws the Saber_Name
+            // projectile kSaberThrowDelay frames later (SWORD_THROW past its half) and runs the thrower's
+            // SWORD_CONTROL / SWORD_CATCH machine from the projectile (TacticalBattle saber service).
+            if (s.cls == C::SaberThrow) {
+                events_.back().point = combat_->target_point(target);
+                events_.back().value = 1;
+            }
             return true;
         }
 
@@ -771,10 +876,19 @@ bool AbilitySystem::class_apply(Obj& o, SpecialState& sp, ObjectId target, int32
             event(AbilityEventKind::EffectOn, sp.trigger, o.id, kNoObject, frame);
             return true;
 
-        case C::CancelSpecial:  // cancels another named special of the owner [M]
-            for (SpecialState& q : o.specials)
-                if (&q != &sp && q.applied && data_->specials[q.desc].name_crc == s.ability_name_crc) remove_special(o, q, frame);
+        case C::CancelSpecial: {
+            // cu8f t01 (CU8F_T01_T02_T07_RE.md §1.2): CancelSpecialAbilityClass apply 0x6f3fc0 - its own accepts-target
+            // first (refused: nothing), then SAP_Disable_All on the TARGET's manager, Begin_Effect (the target joins the
+            // user's register: sp.victims) and the activation presentation (EffectOn).
+            // (Objects are never added or erased inside this call chain, so `o` / `sp` stay valid.)
+            if (!class_accepts(o, s, target, frame)) return false;
+            set_abilities_disabled(target, true, frame);
+            if (std::find(sp.victims.begin(), sp.victims.end(), target) == sp.victims.end()) sp.victims.push_back(target);
+            sp.applied = 1;
+            sp.target = target;
+            event(AbilityEventKind::EffectOn, sp.trigger, o.id, target, frame);
             return true;
+        }
 
         default: return false;
     }
@@ -1090,28 +1204,48 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
             return;
         }
 
-        case C::SuperLaser: {  // 2.3.9 update
-            if (!alive_unit(sp.target) || !range_ok(o, s, sp.target)) {
+        case C::SuperLaser: {  // 2.3.9 update 0x715450 (cu8f t06: CU8F_T04_T06_RE §3.4)
+            const bool running = o.cd.phase[kSuperLaser] == 1 && o.cd.counter[kSuperLaser] < o.cd.maximum[kSuperLaser];
+            const bool ended = !running && desc(o).countdown && o.cd.maximum[kSuperLaser] > 0;
+            // Fire_Continuation (vf13 0x7151c0, the target link dropped [M: the target is gone]): SAP +0x308 := NOW +
+            // int(FPS x Fire_Continuation). [port] taken when the update finds the target dead.
+            if (sp.frames < 0 && !alive_unit(sp.target)) {
+                sp.frames = static_cast<int32_t>(frame) + std::max(0, frames_of(s.fire_continuation, fps));
+                sp.counter = 0;  // the TSW target no longer resolves: no more turning
+            }
+            if (sp.frames >= 0) {
+                // No-target branch: not fired yet or 55 no longer active -> finish; fired and +0x308 <= NOW -> finish
+                // (+0x308 := -1); else the beam is drawn to the remembered point (presentation) - no damage.
+                if (sp.phase < 2 || ended || frame >= static_cast<uint32_t>(sp.frames)) {
+                    sp.frames = -1;
+                    remove_special(o, sp, frame);
+                }
+                return;
+            }
+            if (!range_ok(o, s, sp.target)) {  // [port] the target left range (TACTICAL_GAPS §2.3.9)
                 remove_special(o, sp, frame);
                 return;
             }
             if (sp.phase == 0) {
-                if (frame < sp.next) return;
-                sp.phase = 1;  // inside the firing cone: the attack animation starts
-                sp.next = frame;
+                // Face_Target with TACTICAL_SUPER_WEAPON: turn (while facing is on), then after Fire_Delay the cone gate.
+                if (sp.counter) super_laser_turn(o, s, sp.target);
+                if (frame < sp.next || !super_laser_in_cone(o, s, sp.target)) return;
+                sp.phase = 1;  // inside the cone: the attack clip starts (+0x301 := 1) and the turning stops
+                sp.counter = 0;
+                sp.cooldown = static_cast<int32_t>(frame);
                 // §4.14: type 5, index Attack_Anim_Sub_Index, one-shot (parks at its end)
                 play_anim(o, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index)), false, 1.0f, kAnimStay, frame);
             }
-            if (sp.phase == 1 &&
-                static_cast<float>(frame - sp.next) *
+            if (sp.phase == 1 && frame >= sp.next &&
+                static_cast<float>(frame - static_cast<uint32_t>(sp.cooldown)) *
                         clip_timing(o.id, kAnimAttack, {}, static_cast<uint32_t>(std::max(0, s.anim_sub_index))).rate >=
-                    static_cast<float>(s.fire_frame)) {  // Fire_Frame on the sub-index variant's clip (§4.13 / §4.14)
+                    static_cast<float>(s.fire_frame)) {  // after Fire_Delay, Fire_Frame on the sub-index clip (§4.13 / §4.14)
                 sp.phase = 2;
                 start_active(o, kSuperLaser);  // 55's active countdown
             }
             if (sp.phase == 2) {
-                const bool running = o.cd.phase[kSuperLaser] == 1 && o.cd.counter[kSuperLaser] < o.cd.maximum[kSuperLaser];
-                if (!running && desc(o).countdown && o.cd.maximum[kSuperLaser] > 0) {
+                const bool still = o.cd.phase[kSuperLaser] == 1 && o.cd.counter[kSuperLaser] < o.cd.maximum[kSuperLaser];
+                if (!still && desc(o).countdown && o.cd.maximum[kSuperLaser] > 0) {
                     remove_special(o, sp, frame);
                     return;
                 }
@@ -1175,7 +1309,6 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                 // shot counting up to 0 (fire_gate / fire_done).
                 sp.phase = 1;
                 sp.counter = o.combat_unit ? -static_cast<int32_t>(combat_->live_hardpoints(o.id, HardpointKind::WeaponSpecial)) : 0;
-                if (o.combat_unit) combat_->set_flag(o.id, combat::kUnitSkipTargeting, false);  // [port] +0x3a1 cleared here
                 event(AbilityEventKind::EffectOn, kBlast, o.id, kNoObject, frame);
                 if (sp.counter == 0) remove_special(o, sp, frame);  // no special hard point: normal fire resumes at once
             }
@@ -1205,8 +1338,15 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
                     combat_->set_health(sp.target, combat_->max_health(sp.target));  // [M] the repair effect
                 } else if (Obj* t = obj(sp.target)) {
                     change_owner(*t, o.owner, frame);
+                    // cu8l t02 (CU8K_T02_T06_RE §2 row 0x5b0c8a): the bribe holds the bribed object after the owner change
+                    // [M: or its team container]
+                    if (s.cls == C::TacticalBribe) stop_order(sp.target, frame, kStopHold);
                 }
             }
+            // cu8l t02 (CU8K_T02_T06_RE §3 row 0x48cecb, rule 7): Hack / Repair release the user at their end (0x48ce70:
+            // leave the coordinator, adopt): the user, or its team container for a squad member (one draw). [port] a
+            // stop-and-hold (the user has stood still since the apply's stop).
+            if (s.cls != C::TacticalBribe) stop_order(o.container != kNoObject ? o.container : o.id, frame, kStopHold);
             remove_special(o, sp, frame);
             return;
         }
@@ -1301,13 +1441,19 @@ void AbilitySystem::class_update(Obj& o, SpecialState& sp, uint32_t frame) {
 void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
     const SpecialAbilityDesc& s = data_->specials[sp.desc];
     switch (s.cls) {
+        case C::EnhanceDefense: return;  // s78n t04 (§5.4.4 item 3c): never removed (0x6fae20 is unreachable)
         case C::CombatBonus:
-        case C::EnhanceDefense:
         case C::BattlefieldModifier:
         case C::BasePower:
         case C::Weatherproof:
         case C::RetreatPrevention:
         case C::EnableAbility: aura_off(o, sp, frame); return;
+        case C::CancelSpecial: {  // cu8f t01: remove 0x6f40c0 - SAP_Enable_All on each disabled target, then End_Effect
+            std::vector<ObjectId> v;
+            v.swap(sp.victims);
+            for (const ObjectId t : v) set_abilities_disabled(t, false, frame);
+            break;
+        }
         case C::SuperLaser:
             o.active[kSuperLaser] = 0;
             start_recharge(o, kSuperLaser);  // recharge at the end (0x42fb70, §1.11)
@@ -1323,15 +1469,17 @@ void AbilitySystem::class_remove(Obj& o, SpecialState& sp, uint32_t frame) {
             o.active[kMaximumFirepower] = 0;
             start_recharge(o, kMaximumFirepower);
             sync_combat(o);
+            // s78n t05 (HERO_CLASH §8.2): 0x707390 clears the incognito flag (+0x3a1 & 0x10) of the team members. [port]
+            // the user itself too (a non-team user stands for its own team).
+            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitIncognito, false);
+            for (const ObjectId m : members_of(o.id))
+                if (combat_->has_unit(m)) combat_->set_flag(m, combat::kUnitIncognito, false);
             break;
         case C::CorruptSystems:
             if (Obj* v = obj(sp.target)) v->corrupted = 0;
             break;
         case C::ForceCloak:
             if (o.stealthed) break_stealth(o, frame);
-            break;
-        case C::Blast:
-            if (o.combat_unit && combat_->has_unit(o.id)) combat_->set_flag(o.id, combat::kUnitSkipTargeting, false);
             break;
         case C::GrenadeAttack:  // vf4 0x700d00: targeting / locomotor re-enabled, unlock (A1_READINGS §28.9)
             lock_pair(o, kLockGrenade, false, frame);
@@ -1477,7 +1625,8 @@ void AbilitySystem::heal_pass(Obj& o, const SpecialAbilityDesc& s, uint32_t fram
         scratch_.clear();
         for (size_t i = 0; i < combat_->unit_count(); ++i) {
             const ObjectId u = combat_->unit_id_at(i);
-            if (!alive_unit(u) || !allied(o.owner, combat_->owner(u))) continue;
+            // s78n t07 (TACTICAL_GAPS §2.3.1): the candidate is allied (0x39a230: relation 0, `friendly`; not a neutral).
+            if (!alive_unit(u) || !friendly(o.owner, combat_->owner(u))) continue;
             if (combat_->flags(u) & (combat::kUnitConverted | combat::kUnitSkipTargeting)) continue;
             if (combat::distance_xy(me, combat_->position(u)) > s.heal_range) continue;
             if (!(s.applicable_categories == 0 && s.applicable_types.empty()) && !target_filter(s, u)) continue;

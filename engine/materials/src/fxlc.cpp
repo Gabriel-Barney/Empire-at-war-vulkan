@@ -7,6 +7,7 @@
 #include <cstring>
 #include <limits>
 
+#include "alamo/core/ascii.hpp"
 #include "fx2_reader.hpp"
 
 namespace alamo::materials {
@@ -426,15 +427,6 @@ bool evaluate(const Expression& e, const fx::Effect& effect, const ParamLookup& 
     return true;
 }
 
-namespace {
-std::string upper_ascii(std::string_view s) {
-    std::string o(s);
-    for (char& ch : o)
-        if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
-    return o;
-}
-}  // namespace
-
 bool CompiledExpression::compile(const Expression& e, const fx::Effect& effect, const ParamLookup& material_lookup,
                                  std::string* err) {
     expr_ = e;
@@ -462,7 +454,7 @@ bool CompiledExpression::compile(const Expression& e, const fx::Effect& effect, 
             const size_t b = (size_t(i.reg) + r) * 4;
             if (b + 3 < baked_.size()) std::memcpy(&baked_[b], &regs[r], 16);
         }
-        const std::string sem = upper_ascii(p->type.semantic);
+        const std::string sem = ascii_upper(p->type.semantic);
         Binding bd;
         bool dyn = true;
         if (sem == "LIGHT_SCALE") bd.source = Source::LightScale;
@@ -472,7 +464,7 @@ bool CompiledExpression::compile(const Expression& e, const fx::Effect& effect, 
         else if (sem == "FOW_TEX_V") bd.source = Source::FowTexV;
         else if (sem == "CLOUD_TEX_U") bd.source = Source::CloudTexU;
         else if (sem == "CLOUD_TEX_V") bd.source = Source::CloudTexV;
-        else if (upper_ascii(p->type.name) == "COLORIZATION") bd.source = Source::Colorization;
+        else if (ascii_iequals(p->type.name, "COLORIZATION")) bd.source = Source::Colorization;
         else dyn = false;
         if (!dyn) continue;
         bd.reg = i.reg;

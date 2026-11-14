@@ -65,7 +65,7 @@ struct SpecConstant {
     uint32_t value = 0;  // bit pattern (bool/int/uint/float)
 };
 
-// VK_EXT_pipeline_creation_feedback (core 1.3). Filled when a desc's eedback is set.
+// VK_EXT_pipeline_creation_feedback (core 1.3). Filled when a desc's `feedback` is set.
 struct PipelineFeedback {
     VkPipelineCreationFeedback pipeline{};
     VkPipelineCreationFeedback stages[2]{};  // graphics: [0] vertex, [1] fragment; compute: [0]

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/terrain/ted.hpp"
 
@@ -634,6 +635,14 @@ bool parse_object(std::span<const uint8_t> node, ObjectPlacement& o, Ctx& c) {
                 if (!read_minis(s.payload, minis)) return c.fail("object owner 0x476/1: malformed");
                 o.owner_raw = copy_minis(minis);
             }
+        } else if (k.id == 0x482 && k.has_children) {  // hint name (TERRAIN_WATER_POST 1.6)
+            if (!read_chunks(k.payload, sub)) return c.fail("object hint 0x482: malformed");
+            for (const ChunkView& s : sub) {
+                if (s.id != 0 || s.has_children) continue;
+                if (!read_minis(s.payload, minis)) return c.fail("object hint 0x482/0: malformed");
+                for (const MiniView& m : minis)
+                    if (m.id == 0x01) o.hint = mini_string(m);
+            }
         }
     }
     return true;
@@ -849,10 +858,7 @@ bool parse_ted(std::span<const uint8_t> bytes, MapData& out, std::string* error,
 
 std::string map_path(std::string_view name) {
     std::string n(name);
-    std::string up = n;
-    for (char& ch : up)
-        if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
-    const bool has_ext = up.size() > 4 && up.compare(up.size() - 4, 4, ".TED") == 0;
+    const bool has_ext = n.size() > 4 && ascii_iends_with(n, ".TED");
     if (!has_ext) n += ".TED";
     if (n.find_first_of("\\/") == std::string::npos) n = "DATA\\ART\\MAPS\\" + n;
     return alamo::normalize_path(n);

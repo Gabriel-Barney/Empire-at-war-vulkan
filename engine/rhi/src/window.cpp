@@ -192,6 +192,12 @@ intptr_t Window::handle_message(uint32_t msg, uintptr_t wparam, intptr_t lparam)
         case WM_SYSKEYUP:
             if (wparam < 256) keys_[wparam] = false;
             break;
+        case WM_ACTIVATEAPP: {
+            const bool active = wparam != 0;
+            if (active != app_active_) activation_changed_ = true;
+            app_active_ = active;
+            break;
+        }
         case WM_KILLFOCUS:
             for (bool& k : keys_) k = false;
             for (size_t i = 0; i < static_cast<size_t>(MouseButton::Count); ++i)
@@ -213,7 +219,6 @@ intptr_t Window::handle_message(uint32_t msg, uintptr_t wparam, intptr_t lparam)
                        msg == WM_XBUTTONDOWN);
             return 1;  // TRUE for X buttons
         case WM_MOUSEWHEEL: wheel_ += static_cast<int16_t>(HIWORD(static_cast<WPARAM>(wparam))); return 0;
-        case WM_MOUSEHWHEEL: hwheel_ += static_cast<int16_t>(HIWORD(static_cast<WPARAM>(wparam))); return 0;
         case WM_CAPTURECHANGED:
             if (reinterpret_cast<HWND>(lparam) != static_cast<HWND>(hwnd_)) capture_count_ = 0;
             break;

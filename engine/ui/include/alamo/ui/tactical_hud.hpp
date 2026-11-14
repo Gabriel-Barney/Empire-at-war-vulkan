@@ -49,13 +49,6 @@ struct SelectedGroup {
 // Selected units grouped by type, groups ordered by their lowest id [port], at most `max_groups`.
 std::vector<SelectedGroup> group_selection(std::span<const HudUnit> units, size_t max_groups = 48);
 
-struct HudHitBox {
-    int32_t component = -1;
-    uint32_t layer = 0;
-    Vec2f min{}, max{};  // canvas units
-    uint32_t slot = 0;   // panel slot (s_select_NN) or 0
-};
-
 // Ability state of a selected group: read-only S9 queries (hud_abilities.hpp abilities_from_s9 fills it from
 // tactical::abilities::AbilitySystem) or any host callback.
 struct HudAbility {
@@ -94,6 +87,7 @@ struct HudBuildOption {
     int32_t cost = -1;          // credits (text2, gold, under the button); < 0 none
     uint32_t queued = 0;        // entries of this type in the builder's queue (text, > 1 shown)
     Block block = Block::None;  // != None: disabled
+    std::string tooltip_key;    // ui3 t07: the type's text (Text_ID) shown as the tooltip of a buyable option
 };
 struct HudReinforcement {
     uint32_t unit = 0;          // reinforcement-pool object (Reinforce event "unit")
@@ -144,6 +138,18 @@ struct HudAction {
                                 // value = type_index, shift: host -> Production {type_index, location = builder}
         TacticalCancel,         // tqueueNN left click: unit = location, value = type_index, ids = {queue, index}: host ->
                                 // Production {type_index, location, cancel = 1, queue, index}
+        // ui4 t02, appended 2026-11-13: a left click on a greyed galactic build pad (GalacticBuildOption::block != None):
+        // value = the Block, name = the pad component; the host plays the GUI negative feedback, no command is sent.
+        BuildRefused,
+        // [port: Gabriel] appended 2026-11-13: a double click on an own galactic organiser pad (fleet header or unit pad):
+        // unit = the fleet object (header) or the pad's unit (a stack: its first unit), ids = {fleet}, value = 1 for a
+        // fleet / 0 for a unit, name = the component name. Host: open the rename prompt (current name from the sim).
+        Rename,
+        // [port: Gabriel] appended 2026-11-13: a squadron wing button (HudWing) clicked: value = the wing index into
+        // TacticalHudFrame::wings, ids = the wing's members, shift = add to the selection, ctrl = centre the camera only
+        // [port]. Host: select them (shift: the selection plus them); a second click within the double-click time also
+        // centres the camera on the wing.
+        WingSelect,
     };
     Kind kind = Kind::Button;
     int32_t component = -1;
@@ -194,6 +200,61 @@ struct HudOrderButtons {
 };
 bool order_button_enabled(uint32_t button, const HudOrderButtons& s);  // button 0..5 = c_button00..05
 
+// Land b_special_weapon = the bombing-run button (HUD_GAPS §9.1 - §9.3, cu9g t03). Never hidden in land, only disabled
+// every frame (controls locked, no bombing-run record, run not available); alternate icon 3, tooltip 3
+// (TEXT_TOOLTIP_BOMBRUN_BUTTON); the Build_Texture_Name dial is the cooldown. `present` false (no tactical HUD feed): the
+// component keeps its data state. ui1 t04: in space the same component is the special-weapon button (HUD_GAPS §9.1,
+// 0x317d00: icon 0..2 = the weapon's Special_Weapon_Index, a station 2; tooltip 0..2, or 4 TEXT_TOOLTIP_REQUIRES_COMM_ARRAY
+// while special weapons are not allowed); `hidden` [port] when the local player has no space special weapon.
+struct HudBombingRunButton {
+    bool present = false;       // a battle: the HUD drives the button
+    bool hidden = false;        // ui1 t04: space without a special weapon
+    int32_t icon = 3;           // Icon_Alternate_Texture_Name index (land 3)
+    int32_t tooltip = 3;        // Tooltip_Text index (land 3)
+    bool disabled = true;       // !ready (0x312570)
+    float dial = -1.0f;         // 0..1 radial dial (Build_Texture_Name); < 0: none. [port] none when ready (the 0x495250 value
+                                // 1.0 draws nothing, as the ability buttons; HUD_GAPS §9.9 item 1 is a probe question)
+};
+
+// ui3 t03 / t04: the other command-bar buttons the land / space HUD update enables in the same pass as c_button00..05
+// (HUD_GAPS §5.1: "reinforcement availability, retreat allowed") and the reinforcement window's texts. `present` false
+// (no battle feed): the components keep their data state. Lua GUI_Component_Visibility / _Enable override (mods).
+struct HudCommandButtons {
+    bool present = false;
+    bool controls_locked = false;    // story LOCK_CONTROLS: all of them disabled
+    // b_retreat: enabled when the retreat request would be accepted (BATTLE_TRANSITIONS §3.4 vf9 reason 0). Its
+    // Build_Texture_Name dial [port]: the retreat-allowed countdown while it runs (0..1), then the running retreat's
+    // countdown; < 0 none.
+    bool retreat_enabled = false;
+    float retreat_dial = -1.0f;
+    // b_reinforcement: enabled when some reinforcement-pad entry can be called (reserve_available); selected look while a
+    // drop point is being picked.
+    bool reinforce_enabled = false;
+    bool reinforce_selected = false;
+    // b_special_weapon2 (TEXT_PLACE_BEACON) / b_beacon_t: enabled when no beacon was placed within BeaconPlaceDelay;
+    // selected while the beacon point is being picked.
+    bool beacon_enabled = false;
+    bool beacon_selected = false;
+    bool movie_mode = false;         // b_camera_t (TEXT_MOVIE_MODE) selected look
+    // ui3 t04: reinforcement_counter = number of pad entries (hidden at 0); r_pop_text = "used/cap" population (hidden
+    // when there is no cap: land); r_pop_icon shown with it.
+    uint32_t reinforce_count = 0;
+    int32_t pop_used = -1, pop_cap = -1;
+};
+
+// [port: Gabriel, 2026-11-13] Squadron wing buttons: the local player's fighter squadrons (and bomber squadrons) form one
+// wing each; a column of buttons at the left edge selects a whole wing with one click (HudAction::WingSelect). Drawn
+// only while the wing has a squadron. The original has no such buttons.
+struct HudWing {
+    std::u32string label;            // "FIGHTERS", "BOMBERS"
+    std::u32string hotkey;           // key hint drawn after the label ("F2"); empty = none
+    uint32_t squadrons = 0;          // squadrons in the wing (drawn as the count)
+    std::vector<uint32_t> ids;       // every member of the wing's squadrons, ascending
+    bool selected = false;           // the whole wing is in the selection (the selected look)
+};
+inline constexpr int32_t kWingHitBase = 0x40000000;  // hit-box ids of the wing buttons (not CommandBarComponents)
+inline constexpr size_t kMaxWings = 4;
+
 struct TacticalHudFrame {
     WorldHudContext world;          // canvas is filled by TacticalHud
     // Radar mapping: world rectangle shown by the radar (the map's playable box).
@@ -202,6 +263,7 @@ struct TacticalHudFrame {
     // [port: Gabriel, original screenshot] planet panel above the radar: Text_Planet_tactical (battle planet name),
     // Text_Tactical_Tech ("Tech: 3", TEXT_TECH), Text_Planetary_Pop ("13/20"; Text_Pop_Cap without it); empty / < 0 = blank.
     std::u32string planet_name;
+    std::u32string cohesion_text;  // [port: Gabriel 2026-11-13] fleet cohesion line above the planet name ("" = none)
     int32_t tech = -1, pop = -1, pop_cap = -1;
     // FIXPASS_GALACTIC §4.2 bottom-left advisor frame (i_main_skirmish = i_tactical_controls.alo bones: Movie_tactical
     // (50, 288), b_droid_help_tactical (19, 255), Text_tactical_help (65, 309), Text_Planet_tactical (179, 239); the
@@ -251,6 +313,9 @@ struct TacticalHudFrame {
     bool paused = false;
     std::span<const HudOrderQueue> order_queues;
     HudOrderButtons order_buttons;  // c_button00..05 enable state (HUD_GAPS §5)
+    HudBombingRunButton bombing_run;  // b_special_weapon in land (HUD_GAPS §9)
+    HudCommandButtons command_buttons;  // ui3 t03 / t04: b_retreat, b_reinforcement, beacon, movie mode, reinforcement texts
+    bool objectives_hidden = false;     // ui3 t01 [port]: the Mission Holocron key (Tab) toggles the objectives box
     // [port: Gabriel, original screenshot] Game Paused banner (pause_shell: yellow TEXT_GAME_PAUSED bar at the top
     // centre, red TEXT_BUTTON_RESUME_GAME button under it - a click emits HudAction::ResumeGame) while `paused`.
     bool pause_banner = true;
@@ -265,6 +330,7 @@ struct TacticalHudFrame {
     // original is the POINTER_DRAG_SELECT_MODE cursor (DragSelectPointer_00), drawn by the cursor pass, not here.
     bool drag_select = false;
     DragRect drag_rect;
+    std::span<const HudWing> wings;  // [port: Gabriel] squadron wing buttons (HudWing); empty = none
 };
 
 struct TacticalHudStats {
@@ -279,6 +345,7 @@ struct TacticalHudStats {
     bool pause_banner = false;          // Game Paused banner drawn
     uint32_t objectives = 0, objective_lines = 0;
     bool drag_box = false;              // drag-select box drawn
+    uint32_t wings = 0;                 // [port: Gabriel] squadron wing buttons drawn
 };
 
 class TacticalHud {
@@ -286,6 +353,9 @@ public:
     // Tables must outlive the HUD. `text` may be null (keys shown as text).
     void init(const ComponentTable& table, const TextureAtlas& atlas, FontCache& fonts, const TextDatabase* text = nullptr);
     void resize(uint32_t width, uint32_t height);
+    // [port: Gabriel] DPI-style UI scale (hud_canvas.hpp; 1 = 100 %, 0 = the original fitted canvas): takes effect on the
+    // next resize().
+    void set_ui_scale(float s) { canvas_.ui_scale = s > 0.0f ? s : 0.0f; }
     const HudCanvas& canvas() const { return canvas_; }
     HudLayout& layout() { return layout_; }
     const HudLayout& layout() const { return layout_; }
@@ -314,6 +384,14 @@ public:
     // layout of the previous build() (what the player sees). `routed.world` gives the cursor for radar drags.
     void update_input(const RoutedInput& routed, bool shift, bool ctrl, double now, std::vector<commands::EventData>& out,
                       std::vector<HudAction>* actions = nullptr);
+    // ui3 t02: an ability hotkey = a left click on the first ability button (selection panel order) showing
+    // `ability_type`: the same command / BeginAbilityTargeting action as the click (`queued` = the queue modifier).
+    // False when no button shows it or it is disabled (nothing emitted). Uses the slots of the previous build().
+    bool activate_ability(uint8_t ability_type, bool queued, std::vector<commands::EventData>& out,
+                          std::vector<HudAction>* actions = nullptr) const;
+    // ui3 t01: c_button00..05 enabled after the previous build() (HUD_GAPS §5.1 rules, Lua overrides); false when the
+    // component is missing or hidden. The order hotkeys (Attack, Move, ...) act only while their button would.
+    bool order_button_live(uint32_t button) const;
     // Stage-1 entry point: left click on a selection portrait -> Select{that group's ids} (no state change).
     void on_pointer(std::span<const HudPointerEvent> events, std::vector<commands::EventData>& out) const;
 
@@ -328,8 +406,14 @@ private:
     void build_skeleton(const TacticalHudFrame& f);
     void build_markers(const TacticalHudFrame& f, std::span<const HudUnit> units);
     void apply_order_buttons(const HudOrderButtons& s);
+    struct AbilitySlot;
+    static void ability_click(const AbilitySlot& a, const std::string& name, Button button, bool queued,
+                              std::vector<commands::EventData>& out, std::vector<HudAction>* actions);
+    void apply_bombing_run_button(const HudBombingRunButton& s);
+    void apply_command_buttons(const HudCommandButtons& s);
     void build_pause_banner(const TacticalHudFrame& f);
     void build_objectives(const TacticalHudFrame& f);
+    void build_wings(const TacticalHudFrame& f);
     int32_t font_of(int32_t component, float fallback_points) const;
     void hit(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot = 0);
     Vec2f component_size(uint32_t component, const ComponentPlacement& p) const;
@@ -377,11 +461,16 @@ private:
     std::vector<uint8_t> dynamic_;  // per component: drawn by a panel (not by build_buttons)
     int32_t radar_ = -1, radar_blip_ = -1, credits_ = -1, shell_ = -1, retreat_ = -1;
     int32_t order_button_[6] = {-1, -1, -1, -1, -1, -1};  // c_button00..05
+    int32_t special_weapon_ = -1;                         // b_special_weapon (land: the bombing-run button)
+    int32_t reinforce_button_ = -1, beacon_button_ = -1, beacon_t_ = -1, camera_t_ = -1;  // ui3 t03
+    int32_t reinforce_counter_ = -1, r_pop_icon_ = -1, r_pop_text_ = -1;                 // ui3 t04
     int32_t planet_text_ = -1, tech_text_ = -1, pop_text_ = -1, movie_ = -1;
     int32_t pause_ = -1, pause_g_ = -1;  // [port: Gabriel] b_play_pause_t / b_play_pause
     bool paused_ = false;
     int32_t pause_text_ = -1, resume_ = -1;  // pause_shell text_attack / attack_button
     int32_t obj_back_ = -1, obj_header_ = -1, obj_text_ = -1, obj_icon_ = -1;
+    std::vector<std::vector<uint32_t>> wing_ids_;  // [port: Gabriel] members per wing button of the last build
+    int32_t wing_hover_ = -1;                      // wing button under the cursor (index), -1 none
     RadarView radar_view_;
     std::vector<HudModelDraw> radar_models_;
     bool radar_drag_ = false;

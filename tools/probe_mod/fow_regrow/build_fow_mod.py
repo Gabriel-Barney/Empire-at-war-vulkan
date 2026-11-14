@@ -21,10 +21,10 @@ import zipfile
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
-S10 = os.path.join(os.path.dirname(HERE), 's10_map_owners')
+COMMON = os.path.join(os.path.dirname(HERE), 'common')
 sys.path.insert(0, HERE)
-sys.path.insert(0, S10)
-import ted_owners  # noqa: E402  (MEG / .ted chunk reader of the S10 kit)
+sys.path.insert(0, COMMON)
+import ted_owners  # noqa: E402  (shared MEG / .ted chunk reader)
 import fow_model  # noqa: E402
 
 MOD_NAME = 'FowRegrowProbe'
@@ -34,15 +34,7 @@ HOOK = os.path.join(HERE, 'fow_hook.lua')
 DEFAULT_MAP = '_MP_LAND_POLUS'
 
 
-def read_shipped(game, name, source_zip=None):
-    if source_zip:
-        z = zipfile.ZipFile(source_zip)
-        want = name.upper().replace('/', '\\')
-        for n in z.namelist():
-            if n.upper().replace('/', '\\') == want:
-                return z.read(n), source_zip + ':' + n
-        return None, None
-    return ted_owners.GameFiles(game).read(name)
+read_shipped = ted_owners.read_shipped
 
 
 def map_info(game, map_name):
@@ -74,12 +66,7 @@ def hook_text(map_name, info):
 
 
 def freestore_text(game, map_name, info, source_zip=None):
-    data, src = read_shipped(game, FREESTORE, source_zip)
-    if data is None:
-        raise SystemExit('shipped BusyTacticalFreeStore.lua not found (game %s, zip %s)' % (game, source_zip))
-    text = data.decode('latin-1').replace('\r\n', '\n')
-    out = text.rstrip('\n') + '\n\n' + hook_text(map_name, info)
-    return out.replace('\n', '\r\n').encode('latin-1'), src
+    return ted_owners.append_to_shipped(game, FREESTORE, hook_text(map_name, info), source_zip)
 
 
 def build(game, out, map_name=DEFAULT_MAP, source_zip=None, info=None):

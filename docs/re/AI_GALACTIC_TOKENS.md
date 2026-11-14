@@ -76,7 +76,7 @@ Every leaf fails when the evaluator has no planet object.
 | TargetPoliticalControl | 0x65f000 | 0 | 0x400 | influence record of behaviour 3 (vf+0x98): v = (int)\|control\| / GC+0xF0; negated when the record's player ≠ Self [H; M Self] | none |
 | TargetPlayerID | 0x65e980 | 0 | 1 | player id of the same influence record (−1 if none) [H] | — |
 | StarbaseLevel / …Unnormalized | 0x65ea30 / 0x65eab0 | 0 / 0 | vis | D+0x148 / GC+0xF4; unnormalised = D+0x148 | — |
-| GroundbaseLevel / …Unnormalized | 0x65c1a0 / 0x65c220 | 0 | vis | D+0x130 / GC+0xF8 | — |
+| GroundbaseLevel / …Unnormalized | 0x65c1a0 / 0x65c220 | 0 | vis | D+0x130 / GC+0xF8. Writer: recount 0x4bdaa0 = live DUMMY_GROUND_STRUCTURE objects in D's ground-structure list (D+0x150), clamped 0..5; queued structures never count (A2M_R2_RE_A §1) [H] | — |
 | MaxStarbaseLevel / …Unn | 0x65e490 / 0x65e4f0 | 0 | vis | 0x372780: D+0x238 (type +0x668 without D) / GC+0xF4 | — |
 | MaxGroundbaseLevel / …Unn | 0x65e3e0 / 0x65e440 | 0 | vis | 0x372400 (D: 0x4b7eb0; else min(5, type+0x92C)) / GC+0xF8 | — |
 | MaxStructureSlots / …Unn | 0x65e540 / 0x65e5a0 | 0 / 0 | vis / 0x200 | D+0x230 (type+0x92C) / GC+0xFC | normalised fails if GC+0xFC = 0 |

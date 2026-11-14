@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/file_provider.hpp"
 #include "alamo/core/parallel.hpp"
 #include "alamo/data/game_database.hpp"
@@ -33,20 +34,14 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "foc_data.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::galactic;
 using commands::RejectReason;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -335,7 +330,7 @@ void run_scenario(const Scenario& sc) {
     int32_t loaded = 0, compared = 0;
     for (size_t i = 0; i < saves.size(); ++i) {
         const SavePoint& sp = saves[i];
-        const ParallelFor pf = (i & 1) ? testing::make_thread_parallel_for(4) : ParallelFor(serial_for);
+        const ParallelFor pf = (i & 1) ? ::alamo::test::make_thread_parallel_for(4) : ParallelFor(serial_for);
         GalacticSim c(*sc.rules, store, rng);
         c.set_parallel_for(pf);
         CHECK(c.start(sc.setup));  // the loader builds the session from the same data first
@@ -584,6 +579,17 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             if (f != kNoFleet) s.move_fleet(pEmpire, f, rB);
             break;
         }
+        case 6:  // [port] fleet / ship names (save v7): the Empire fleet in transit and its first unit
+            for (const FleetState& f : s.fleets())
+                if (f.alive && f.owner == pEmpire && !f.contents.empty()) {
+                    CHECK(s.execute(static_cast<uint8_t>(pUnder), commands::rename_object_event(id(f.object), "Pirates")) ==
+                          RejectReason::NotOwner);
+                    CHECK(s.execute(static_cast<uint8_t>(pEmpire), commands::rename_object_event(id(f.object), " Home Fleet ")) ==
+                          RejectReason::None);
+                    CHECK(s.rename(pEmpire, f.contents[0], "Avenger") == RejectReason::None);
+                    break;
+                }
+            break;
         case 8:
             s.enqueue(pEmpire, rA, tFighters);
             s.enqueue(pEmpire, rA, tFighters);
@@ -597,7 +603,21 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             s.add_visibility_modifier(rC, pEmpire, k, kVisFleetContents, 30.0f, 99u);
             break;
         }
+        case 14:  // a surface unit's name (it launches at t 700 and keeps it)
+            for (ObjectHandle u : s.planets()[rA].surface)
+                if (st.alive(u) && st.owner(u) == pEmpire) {
+                    CHECK(s.rename(pEmpire, u, "Garrison \xC3\x89lite") == RejectReason::None);  // UTF-8 "Garrison Élite"
+                    break;
+                }
+            break;
         case 15: s.set_galactic_stealth(s.planets()[rE].starbase, true); break;
+        case 16:  // cu8f t04b: Set_Prefer_Ground_Over_Space false on one unit (save v5)
+            for (ObjectHandle u : s.planets()[rA].surface)
+                if (st.alive(u)) {
+                    s.set_prefer_ground_over_space(u, false);
+                    break;
+                }
+            break;
         case 20: {
             const uint32_t f = idle_fleet(s, rC, pUnder);
             if (f != kNoFleet) s.move_fleet(pUnder, f, rB);
@@ -650,6 +670,14 @@ void drive_synthetic(GalacticSim& s, ConflictManager& cm, const objects::ObjectS
             if (f != kNoFleet) s.move_fleet(pEmpire, f, rD);  // A -> B -> D
             break;
         }
+        case 1100:  // clear one name again
+            for (const FleetState& f : s.fleets())
+                if (f.alive && f.owner == pEmpire && s.object_name(f.object) == "Home Fleet") {
+                    CHECK(s.rename(pEmpire, f.object, "  ") == RejectReason::None);
+                    CHECK(s.object_name(f.object).empty());
+                    break;
+                }
+            break;
         case 1200: s.queue_linked_battle(); break;
         case 1260: s.clear_linked_battle(); break;
         case 2200:
@@ -688,26 +716,159 @@ void test_synthetic() {
     run_scenario(sc);
 }
 
-// ---- 3. FoC data ----------------------------------------------------------------------------------------------------------
+// A2k t04 (A2J_RE_BUILD_MARKET §4): start() draws each planet's two build-queue phases (synced Get_Int(1, 30), queue 0
+// then 1, row order) at the PRODUCTION attach; nothing else in start() draws, so the RNG after start() is the reference
+// stream after exactly those draws. The phases are saved: a session started from another seed reads the saved values.
+void test_queue_phases() {
+    std::printf("  queue phases\n");
+    const GalacticRules rules = make_rules();
+    const objects::GameObjectTypes types;
+    const GalacticSetup setup = make_setup();
+    for (const uint32_t seed : {0x5A5Eu, 1u, 0xDEADBEEFu}) {
+        objects::IdCounter ids;
+        objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids);
+        SimRng rng(seed), ref(seed);
+        GalacticSim s(rules, store, rng);
+        CHECK(s.start(setup));
+        bool spread = false;
+        for (PlanetIndex p = 0; p < s.planets().size(); ++p) {
+            for (uint32_t q = 0; q < 2; ++q) {
+                const int32_t v = s.build_queue_phase(p, q);
+                if (!s.planets()[p].is_planet) {
+                    CHECK(v == 0);
+                    continue;
+                }
+                CHECK(v == ref.range_int(1, 30) && v >= 1 && v <= 30);
+                spread = spread || v != s.build_queue_phase(rA, 0);
+            }
+            CHECK(s.build_queue_phase(p, 2) == 0);
+        }
+        CHECK(s.build_queue_phase(rCore, 0) == 0 && s.build_queue_phase(static_cast<PlanetIndex>(s.planets().size()), 0) == 0);
+        CHECK(spread);   // ten draws are not all equal
+        CHECK(rng == ref);  // the draws are the only ones in start()
 
-std::string env_or(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
+        // Saved and restored: a session started from another seed (other phases) reads the saved ones.
+        const std::vector<uint8_t> bytes = sim_bytes(s);
+        objects::IdCounter ids2;
+        objects::ObjectStore store2(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids2);
+        SimRng rng2(seed + 7u);
+        GalacticSim c(rules, store2, rng2);
+        CHECK(c.start(setup));
+        bool differ = false;
+        for (PlanetIndex p = 0; p < c.planets().size(); ++p)
+            for (uint32_t q = 0; q < 2; ++q) differ = differ || c.build_queue_phase(p, q) != s.build_queue_phase(p, q);
+        CHECK(differ);
+        store2 = store;  // ObjectStore::read stand-in, as in run_scenario
+        ids2.set_next(ids.next());
+        ByteReader r(bytes);
+        CHECK(c.read(r));
+        for (PlanetIndex p = 0; p < c.planets().size(); ++p)
+            for (uint32_t q = 0; q < 2; ++q) CHECK(c.build_queue_phase(p, q) == s.build_queue_phase(p, q));
+        CHECK(sim_bytes(c) == bytes);
+
+        // Only the current version is read (cu6 rule): the same bytes stamped with v3 are rejected.
+        std::vector<uint8_t> older = bytes;
+        older[0] = 3;
+        objects::IdCounter ids3;
+        objects::ObjectStore store3(objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids3);
+        SimRng rng3(seed + 7u);
+        GalacticSim o(rules, store3, rng3);
+        CHECK(o.start(setup));
+        store3 = store;
+        ids3.set_next(ids.next());
+        ByteReader orr(older);
+        CHECK(!o.read(orr));
+
+        // cu8f t04b: v5 adds the Prefer_Ground_Over_Space false ids at the end; a v4 image is refused (only the current
+        // version is read, cu6). The flag is saved and enters the hash only once a live unit has it false.
+        // q6 t21: v6 adds the deferred victory tests after them (u32 count 0 here); a v5 image is refused.
+        // [port] v7 adds the fleet / ship names after them (u32 count 0 here). v6 is still read (as no names), so saves
+        // from before the names load; v5 and older are refused.
+        CHECK(bytes.size() >= 12 && bytes[0] == 7 && bytes[bytes.size() - 12] == 0 && bytes[bytes.size() - 1] == 0);
+        std::vector<uint8_t> v6(bytes.begin(), bytes.end() - 4);
+        v6[0] = 6;
+        ByteReader r6(v6);
+        CHECK(o.read(r6) && o.object_names().empty() && sim_bytes(o) == bytes);
+        std::vector<uint8_t> v6names = bytes;  // a v6 image with the v7 tail is refused (trailing bytes)
+        v6names[0] = 6;
+        ByteReader r6n(v6names);
+        CHECK(!o.read(r6n));
+        std::vector<uint8_t> v5(bytes.begin(), bytes.end() - 8);
+        v5[0] = 5;
+        ByteReader r5(v5);
+        CHECK(!o.read(r5));
+        std::vector<uint8_t> v4(bytes.begin(), bytes.end() - 12);
+        v4[0] = 4;
+        ByteReader r4(v4);
+        CHECK(!o.read(r4));
+        ObjectHandle unit{};
+        for (const PlanetState& ps : s.planets())
+            for (ObjectHandle u : ps.surface)
+                if (!unit && store.alive(u)) unit = u;
+        CHECK(static_cast<bool>(unit) && s.prefer_ground_over_space(unit));
+        const uint64_t h0 = sim_hash(s);
+        s.set_prefer_ground_over_space(unit, false);
+        CHECK(!s.prefer_ground_over_space(unit) && sim_hash(s) != h0);
+        const std::vector<uint8_t> flagged = sim_bytes(s);
+        ByteReader rf(flagged);
+        CHECK(o.read(rf) && !o.prefer_ground_over_space(o.store().find(store.id(unit))) && sim_bytes(o) == flagged);
+        s.set_prefer_ground_over_space(unit, true);
+        CHECK(s.prefer_ground_over_space(unit) && sim_hash(s) == h0 && sim_bytes(s) == bytes);
+
+        // [port] names: saved, not hashed; round trip; owner / object / name checks.
+        const int32_t owner = store.owner(unit);
+        CHECK(s.rename(owner, unit, "Rogue \xE2\x98\x85") == RejectReason::None);  // UTF-8 star
+        CHECK(s.object_name(unit) == "Rogue \xE2\x98\x85" && sim_hash(s) == h0 && sim_bytes(s) != bytes);
+        const std::vector<uint8_t> named = sim_bytes(s);
+        ByteReader rn(named);
+        CHECK(o.read(rn) && o.object_name(o.store().find(store.id(unit))) == "Rogue \xE2\x98\x85" && sim_bytes(o) == named);
+        const int32_t other = owner == 0 ? 1 : 0;
+        CHECK(s.rename(other, unit, "Mine") == RejectReason::NotOwner);
+        CHECK(s.rename(owner, s.planets()[rA].object, "Planet") == RejectReason::InvalidUnit);  // planets are not renamed
+        CHECK(s.rename(owner, ObjectHandle{}, "None") == RejectReason::InvalidUnit);
+        CHECK(s.rename(owner, unit, "bad\x01") == RejectReason::InvalidTarget);
+        CHECK(s.rename(owner, unit, "\xC3") == RejectReason::InvalidTarget);              // truncated UTF-8
+        CHECK(s.rename(owner, unit, std::string(33, 'x')) == RejectReason::InvalidTarget);  // over 32 characters
+        CHECK(s.rename(owner, unit, std::string(32, 'x')) == RejectReason::None);
+        CHECK(s.execute(static_cast<uint8_t>(owner), commands::rename_object_event(static_cast<uint32_t>(store.id(unit)), "")) ==
+              RejectReason::None);
+        CHECK(s.object_name(unit).empty() && s.object_names().empty() && sim_bytes(s) == bytes);
     }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
 }
 
+// [port] name normalisation and the rename event's wire form (commands::normalize_object_name / rename_object_event).
+void test_name_rules() {
+    std::printf("  name rules\n");
+    std::string out = "keep";
+    CHECK(commands::normalize_object_name("  Home  Fleet  ", out) && out == "Home  Fleet");
+    CHECK(commands::normalize_object_name("   ", out) && out.empty());
+    out = "keep";
+    CHECK(!commands::normalize_object_name("a\tb", out) && out == "keep");
+    CHECK(!commands::normalize_object_name("a\x7F", out));
+    CHECK(!commands::normalize_object_name("\xC2\x85", out));          // U+0085 (C1 control)
+    CHECK(!commands::normalize_object_name("\xC0\xAF", out));          // overlong
+    CHECK(!commands::normalize_object_name("\xED\xA0\x80", out));     // surrogate
+    CHECK(!commands::normalize_object_name("\xF4\x90\x80\x80", out));  // past U+10FFFF
+    CHECK(commands::normalize_object_name("\xF0\x9F\x9A\x80", out) && out.size() == 4);  // U+1F680
+    CHECK(commands::normalize_object_name(std::string(32, 'a'), out) && !commands::normalize_object_name(std::string(33, 'a'), out));
+    const commands::EventData e = commands::rename_object_event(0x01020304u, "Avenger");
+    commands::ObjectId id = 0;
+    std::string name;
+    CHECK(commands::read_rename_event(e, id, name) && id == 0x01020304u && name == "Avenger");
+    std::vector<uint8_t> wire;
+    commands::encode_payload(e, wire);
+    commands::EventData back;
+    CHECK(commands::decode_payload(e.type_id(), wire, back) == commands::DecodeError::None && back == e);
+    CHECK(!commands::read_rename_event(commands::ev::port_extension(commands::kRenameSubtype, std::vector<uint8_t>{1, 2}), id, name));
+    CHECK(!commands::read_rename_event(commands::ev::stop(), id, name));
+}
+
+// ---- 3. FoC data ----------------------------------------------------------------------------------------------------------
+
+using ::alamo::test::env_or_empty;
+
 void test_foc() {
-    const std::string root = env_or("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     std::string how;
     std::unique_ptr<FileProvider> provider = testing::open_foc_data(root, how);
     if (!provider) {
@@ -820,6 +981,8 @@ void test_foc() {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     test_synthetic();
+    test_queue_phases();
+    test_name_rules();
     test_foc();
     if (g_fail) {
         std::printf("%d check(s) failed\n", g_fail);

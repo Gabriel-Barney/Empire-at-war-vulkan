@@ -134,7 +134,4 @@ uint8_t quantize_normal(const std::array<float, 3>& n);
 // diffuse UV of a world position for a material (what the shader computes): u = dot(U, (p, 1)).
 std::array<float, 2> material_uv(const TerrainMaterial& m, const float (&world)[3]);
 
-// Blend texture as R8 (0 / 255), if a renderer prefers an alpha-only format.
-std::vector<uint8_t> blend_texture_r8(const TerrainPass& pass);
-
 }  // namespace alamo::terrain

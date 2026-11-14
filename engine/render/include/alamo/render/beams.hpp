@@ -28,7 +28,7 @@
 #include <vector>
 
 #include "alamo/render/camera.hpp"
-#include "alamo/render/lasers.hpp"  // PrimVertex
+#include "alamo/render/lasers.hpp"  // PrimVertex (and the data::XmlNode declaration)
 
 namespace alamo::render {
 
@@ -56,6 +56,8 @@ struct BeamConstants {
 // Reads Tractor_Beam_Width / _Frames / _Texture / _Color and Energy_Beam_* from GameConstants.xml bytes (missing tags keep
 // `out`'s values). False: not parseable.
 bool parse_beam_constants(std::span<const uint8_t> xml, BeamConstants& out);
+// cu5 t04: the same from the parsed <GameConstants> root (GameDatabase::constants().element); false for a null root.
+bool parse_beam_constants(const data::XmlNode& game_constants_root, BeamConstants& out);
 
 // One resolved beam style (the ability's beam fields over the GC fallbacks, 4.2).
 struct BeamStyle {

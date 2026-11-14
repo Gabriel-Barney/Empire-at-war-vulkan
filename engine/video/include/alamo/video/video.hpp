@@ -127,8 +127,6 @@ public:
     // Appends all queued audio as interleaved float32 (info().channels per sample frame) and returns the
     // number of sample frames appended.
     size_t take_audio(std::vector<float>& interleaved);
-    // Sample frames decoded so far for the selected track (including ones already taken).
-    int64_t audio_frames_decoded() const;
     // Back to frame 0 (reopens the demuxer on the in-memory file); audio queue cleared.
     bool rewind();
     bool at_end() const;

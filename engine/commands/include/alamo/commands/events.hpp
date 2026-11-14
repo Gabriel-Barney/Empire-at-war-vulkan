@@ -3,15 +3,11 @@
 //
 // The original reports nothing back: an invalid command is a silent no-op at execution (COMMANDS.md
 // §6.2). CommandResult is a port DIAGNOSTIC channel (UI feedback, logs, tests) - sim code must never
-// branch on it, and it is never sent over the network or recorded.
+// branch on it, and it is never recorded.
 //
-// ORDER RULE: events are delivered in queue order; subscribers are called in subscription order for
-// each event (event-major). The queue order is
-//   * serial posts (post()) in call order - the command-apply phase is serial, in drain order;
-//   * parallel posts go to per-index lanes (open_lanes(n), lane(i).post(...), merge_lanes()); lanes
-//     are appended in index order 0..n-1, each lane in its own post order. A job writing lane i only
-//     from the work item i is therefore deterministic for any thread count.
-// Events posted from inside a subscriber are queued and delivered by the next deliver().
+// ORDER RULE: events are delivered in post() call order (the command-apply phase is serial, in drain
+// order); subscribers are called in subscription order for each event (event-major). post() is not
+// thread-safe. Events posted from inside a subscriber are queued and delivered by the next deliver().
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -90,19 +86,13 @@ public:
 
     void post(Event e) { queue_.post(std::move(e)); }
 
-    // Parallel posting: n per-index lanes, merged in index order.
-    void open_lanes(size_t n);
-    EventQueue& lane(size_t i) { return lanes_.at(i); }
-    void merge_lanes();
-
     // Events waiting for deliver(), in delivery order.
     std::span<const Event> pending() const noexcept { return queue_.events(); }
     // Delivers every pending event (event-major, subscription order), then clears them.
     void deliver();
 
     // N1 save / load (alamo/core/save_file.hpp contract; no r.done() check, the caller does that):
-    // the events pending delivery, in order. Subscribers (host wiring) and open lanes (a parallel phase
-    // inside a tick; saves are taken between ticks, after merge_lanes()) are not saved. read() replaces
+    // the events pending delivery, in order. Subscribers (host wiring) are not saved. read() replaces
     // the pending events; false and nothing changed on a bad version / event kind or truncated data.
     static constexpr uint32_t kSaveVersion = 1;
     void write(ByteWriter& w) const;
@@ -114,7 +104,6 @@ private:
         Subscriber fn;
     };
     EventQueue queue_;
-    std::vector<EventQueue> lanes_;
     std::vector<Sub> subs_;
     SubscriberId next_id_ = 1;
 };

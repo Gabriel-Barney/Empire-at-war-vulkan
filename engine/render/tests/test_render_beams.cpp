@@ -29,17 +29,12 @@
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 using namespace alamo;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 #define CHECK_NEAR(a, b, eps)                                                                                          \
     do {                                                                                                               \
         const double va_ = static_cast<double>(a), vb_ = static_cast<double>(b);                                       \
@@ -49,21 +44,7 @@ static int g_fail = 0;
         }                                                                                                              \
     } while (0)
 
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 using render::Float3;
 static std::span<const uint8_t> bytes_of(const std::string& s) {
@@ -750,42 +731,8 @@ static void test_apply_beams() {
 }
 
 // ------------------------------------------------------------------------------------------------ GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
-};
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback,
-                                     readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-    std::vector<uint8_t> pixels() const {
-        const auto* p = static_cast<const uint8_t*>(readback.mapped());
-        return std::vector<uint8_t>(p, p + static_cast<size_t>(w) * h * 4);
-    }
-};
+using Gpu = render::test::GpuCore;
+using Offscreen = render::test::OffscreenWithDepth;  // alamo/render/offscreen.hpp
 
 static bool render_frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices& vm, render::DrawStats& stats,
                          const float* clear) {

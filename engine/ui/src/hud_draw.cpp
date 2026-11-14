@@ -40,6 +40,17 @@ void border_point(float a, float& tx, float& ty) {
 }  // namespace
 
 uint32_t radial_wipe(const HudQuad& q, float fill, HudVertex (&out)[11]) {
+    if (q.has_corners) {  // [port] free quad: the given corners, always whole
+        out[0] = corner(q, 0, 0);
+        out[1] = corner(q, 1, 0);
+        out[2] = corner(q, 1, 1);
+        out[3] = corner(q, 0, 1);
+        for (size_t i = 0; i < 4; ++i) {
+            out[i].x = q.corners[i].x;
+            out[i].y = q.corners[i].y;
+        }
+        return 4;
+    }
     if (!(fill > 0.0f)) return 0;
     if (fill >= 100.0f) {
         out[0] = corner(q, 0, 0);
@@ -48,20 +59,21 @@ uint32_t radial_wipe(const HudQuad& q, float fill, HudVertex (&out)[11]) {
         out[3] = corner(q, 0, 1);
         return 4;
     }
+    // cu9h t03: the fan covers the last `fill` % of the clock, i.e. from (100 - fill) % clockwise to 12 o'clock.
     constexpr float kTwoPi = 6.28318530717958647692f;
-    const float sweep = fill / 100.0f * kTwoPi;
+    const float gone = 100.0f - fill;  // the part already wiped away, from 12 o'clock clockwise
     uint32_t n = 0;
     out[n++] = corner(q, 0.5f, 0.5f);
-    out[n++] = corner(q, 0.5f, 0.0f);
+    float tx = 0, ty = 0;
+    border_point(gone / 100.0f * kTwoPi, tx, ty);
+    out[n++] = corner(q, tx, ty);
     // Boundaries at 45-degree steps: exact corner / edge-midpoint positions (no trig rounding).
     static constexpr float kB[7][2] = {{1, 0}, {1, 0.5f}, {1, 1}, {0.5f, 1}, {0, 1}, {0, 0.5f}, {0, 0}};
     for (uint32_t b = 1; b <= 7; ++b) {
         // b * 12.5 % expressed in fill units avoids comparing angles in floating point.
-        if (static_cast<float>(b) * 12.5f < fill) out[n++] = corner(q, kB[b - 1][0], kB[b - 1][1]);
+        if (static_cast<float>(b) * 12.5f > gone) out[n++] = corner(q, kB[b - 1][0], kB[b - 1][1]);
     }
-    float tx = 0, ty = 0;
-    border_point(sweep, tx, ty);
-    out[n++] = corner(q, tx, ty);
+    out[n++] = corner(q, 0.5f, 0.0f);
     return n;
 }
 
@@ -156,6 +168,11 @@ uint64_t HudDrawList::digest() const {
                 if (q.gradient) {
                     const uint32_t cb = pack_rgba(q.color_bottom);
                     h = fnv1a64(&cb, sizeof cb, h);
+                }
+                if (q.has_corners) {
+                    const float cs[8] = {q.corners[0].x, q.corners[0].y, q.corners[1].x, q.corners[1].y,
+                                         q.corners[2].x, q.corners[2].y, q.corners[3].x, q.corners[3].y};
+                    h = fnv1a64(cs, sizeof cs, h);
                 }
             }
         }
@@ -378,6 +395,52 @@ std::span<const HudFrameStep> hud_frame_steps() {
         {HudStepKind::Cursor, 0, 0},
     };
     return kSteps;
+}
+
+HudHitBox make_hit_box(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot) {
+    HudHitBox h;
+    h.component = component;
+    h.layer = layer;
+    h.min = {center.x - 0.5f * size.x, center.y - 0.5f * size.y};
+    h.max = {center.x + 0.5f * size.x, center.y + 0.5f * size.y};
+    h.slot = slot;
+    return h;
+}
+
+int32_t topmost_hit(std::span<const HudHitBox> hits, const HudCanvas& canvas, int32_t px, int32_t py) {
+    const Vec2f c = canvas.pixel_to_canvas(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f);
+    int32_t best = -1;
+    uint32_t best_layer = 0;
+    for (const HudHitBox& h : hits) {
+        if (c.x < h.min.x || c.x > h.max.x || c.y < h.min.y || c.y > h.max.y) continue;
+        if (best < 0 || h.layer >= best_layer) {
+            best = h.component;
+            best_layer = h.layer;
+        }
+    }
+    return best;
+}
+
+void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f c, Vec2f size, Rgba8 back, Rgba8 edge) {
+    HudQuad q;
+    q.min = {c.x - 0.5f * size.x, c.y - 0.5f * size.y};
+    q.max = {c.x + 0.5f * size.x, c.y + 0.5f * size.y};
+    q.color = back;
+    dl.add(layer, HudList::Alpha, q);
+    const float t = 2.0f;
+    const HudQuad edges[4] = {
+        {{q.min.x, q.max.y - t}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
+        {{q.min.x, q.min.y}, {q.max.x, q.min.y + t}, {0, 0}, {1, 1}, edge},
+        {{q.min.x, q.min.y}, {q.min.x + t, q.max.y}, {0, 0}, {1, 1}, edge},
+        {{q.max.x - t, q.min.y}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
+    };
+    for (const HudQuad& e : edges) dl.add(layer, HudList::Alpha, e);
+}
+
+void resize_canvas(HudCanvas& canvas, FontCache* fonts, uint32_t width, uint32_t height) {
+    const HudCanvas next = HudCanvas::make(width, height, canvas.ui_scale);  // the UI scale is kept
+    if (fonts && next.font_height() != canvas.font_height()) fonts->clear();
+    canvas = next;
 }
 
 }  // namespace alamo::ui

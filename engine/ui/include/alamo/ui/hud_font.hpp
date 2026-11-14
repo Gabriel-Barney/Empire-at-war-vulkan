@@ -60,9 +60,6 @@ public:
 std::unique_ptr<GlyphRasterizer> make_system_rasterizer();
 // Deterministic stand-in: every glyph a filled box of 0.5 x 0.7 em, advance 0.6 em, spaces empty.
 std::unique_ptr<GlyphRasterizer> make_box_rasterizer();
-// Windows: makes a TrueType file (e.g. the game's EmpireAtWar TTFs) visible to this process only
-// (AddFontResourceExW FR_PRIVATE; no system change). Other platforms: false.
-bool register_private_font_file(const std::string& path_utf8);
 
 // Game fonts. The data names "EmpireAtWar-Medium", "EmpireAtWar-Bold", "EmpireAtWar-light" (plus Arial faces, which
 // are system fonts). The Steam install has no font files and installs none: the four EmpireAtWar TrueType fonts

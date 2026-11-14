@@ -9,17 +9,11 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::ui {
 
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
 
 std::vector<std::string> names(std::string_view text) {
     std::vector<std::string> out;
@@ -149,19 +143,8 @@ uint32_t rd32(const uint8_t* p) {
 
 }  // namespace
 
-const char* component_type_name(ComponentType t) {
-    switch (t) {
-        case ComponentType::Shell: return "Shell";
-        case ComponentType::Button: return "Button";
-        case ComponentType::TextButton: return "TextButton";
-        case ComponentType::Bar: return "Bar";
-        case ComponentType::Icon: return "Icon";
-        default: return "Unknown";
-    }
-}
-
 std::string_view CommandBarComponent::raw_value(std::string_view tag) const {
-    const auto it = raw.find(upper(tag));
+    const auto it = raw.find(ascii_upper(tag));
     return it == raw.end() ? std::string_view{} : std::string_view(it->second);
 }
 
@@ -176,12 +159,12 @@ size_t ComponentTable::parse(const data::XmlNode& root) {
         CommandBarComponent c;
         c.name = std::string(name);
         for (data::XmlNode f : e.children()) {
-            const std::string tag = upper(f.name());
+            const std::string tag = ascii_upper(f.name());
             const std::string_view text = f.text_trimmed();
             c.raw[tag] = std::string(text);
             apply_field(c, tag, text);
         }
-        const std::string key = upper(c.name);
+        const std::string key = ascii_upper(c.name);
         const auto it = index_.find(key);
         if (it != index_.end()) {
             items_[it->second] = std::move(c);
@@ -195,38 +178,57 @@ size_t ComponentTable::parse(const data::XmlNode& root) {
 }
 
 bool ComponentTable::load(const FileProvider& files, std::string* error) {
-    std::vector<uint8_t> bytes;
-    if (!files.read("Data\\XML\\CommandBarComponentFiles.xml", bytes)) {
-        if (error) *error = "CommandBarComponentFiles.xml not found";
+    // cu5 t02: the shared list walk (list order, empty entries skipped, missing / unparsable files reported).
+    data::ListedXmlOptions lo;
+    lo.visit_missing = true;
+    lo.visit_unparsable = true;
+    lo.name_docs_by_entry = true;
+    std::string listed_errors;
+    const data::ListStatus st = data::for_each_listed_xml(files, "Data\\XML\\CommandBarComponentFiles.xml", [&](data::ListedXmlFile& file) {
+        if (!file.doc) {
+            listed_errors += "missing " + file.entry.path + "; ";
+            return;
+        }
+        if (!file.doc->ok()) {
+            listed_errors += "unreadable " + file.entry.path + "; ";
+            return;
+        }
+        parse(file.doc->root());
+    }, lo);
+    if (st != data::ListStatus::Ok) {
+        if (error) *error = st == data::ListStatus::Missing ? "CommandBarComponentFiles.xml not found" : "CommandBarComponentFiles.xml: no root";
         return false;
     }
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "CommandBarComponentFiles.xml");
-    if (!list.ok()) {
-        if (error) *error = "CommandBarComponentFiles.xml: no root";
-        return false;
-    }
-    for (data::XmlNode f : list.root().children("File")) {
-        const std::string name(f.text_trimmed());
-        if (name.empty()) continue;
-        std::vector<uint8_t> xb;
-        const std::string path = "Data\\XML\\" + name;
-        if (!files.read(path, xb)) {
-            if (error) *error += "missing " + path + "; ";
-            continue;
-        }
-        const data::XmlDocument doc = data::XmlDocument::parse(xb, name);
-        if (!doc.ok()) {
-            if (error) *error += "unreadable " + path + "; ";
-            continue;
-        }
-        parse(doc.root());
-    }
+    if (error) *error += listed_errors;
     return true;
 }
 
 int32_t ComponentTable::find(std::string_view name) const {
-    const auto it = index_.find(upper(data::trim(name)));
+    const auto it = index_.find(ascii_upper(data::trim(name)));
     return it == index_.end() ? -1 : static_cast<int32_t>(it->second);
+}
+
+uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p) {
+    int32_t l = c.base_layer;
+    if (p.from_bone) l = std::max(l, kShellLayerMin);
+    return static_cast<uint32_t>(std::clamp(l, 0, static_cast<int32_t>(kHudLayers) - 1));
+}
+
+Vec2f component_art_size(const CommandBarComponent& c, const ComponentPlacement& p, const TextureAtlas& atlas, Vec2f fallback) {
+    if (p.size.x > 0 && p.size.y > 0) return p.size;
+    if (c.has_size) return c.size;
+    for (const auto* list : {&c.blank_texture, &c.icon_texture, &c.icon_alternate_texture})
+        if (!list->empty())
+            if (const AtlasEntry* e = atlas.find(list->front()))
+                return {static_cast<float>(e->width) * c.scale, static_cast<float>(e->height) * c.scale};
+    return fallback;
+}
+
+int32_t find_fmt(const ComponentTable& t, const char* fmt, int a, int b) {
+    char n[48];
+    if (b < 0) std::snprintf(n, sizeof n, fmt, a);
+    else std::snprintf(n, sizeof n, fmt, a, b);
+    return t.find(n);
 }
 
 // ---- Atlas --------------------------------------------------------------------------------------
@@ -236,7 +238,7 @@ std::string atlas_key(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     const size_t dot = n.find('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    return upper(n);
+    return ascii_upper(n);
 }
 
 bool TextureAtlas::parse(std::span<const uint8_t> bytes, std::string* error) {
@@ -483,12 +485,12 @@ std::u16string pseudo_localize(std::u16string_view s) {
 }
 
 std::string master_text_path(std::string_view language) {
-    return "Data\\Text\\MasterTextFile_" + upper(language) + ".DAT";
+    return "Data\\Text\\MasterTextFile_" + ascii_upper(language) + ".DAT";
 }
 
 bool load_master_text(const FileProvider& files, std::string_view language, TextDatabase& out, std::string* log) {
     std::vector<uint8_t> bytes;
-    std::string lang = upper(language.empty() ? std::string_view("ENGLISH") : language);
+    std::string lang = ascii_upper(language.empty() ? std::string_view("ENGLISH") : language);
     if (!files.read(master_text_path(lang), bytes)) {
         if (log) *log += "No " + lang + " MasterTextFile exists. Falling back to ENGLISH\n";
         lang = "ENGLISH";
@@ -548,7 +550,7 @@ Vec2f shell_anchor_offset(const CommandBarComponent& shell, std::span<const Shel
     // are full-screen dialog scenes whose meshes span the 1024-unit base area around the model origin (x -512..512 in
     // i_black_market.alo / i_hack.alo): the origin is the canvas centre, Model_Offset_X / _Y notwithstanding.
     if (const std::string_view ds = shell.raw_value("DIALOG_SCENE");
-        !ds.empty() && (ds[0] == 'T' || ds[0] == 't' || ds[0] == 'Y' || ds[0] == 'y' || ds[0] == '1'))
+        data::parse_flag_char(ds))
         return off;
     // GALACTIC_DIALOGS §1.2 / §4: horizontally centred shells stuck to the top edge (Model_Offset_X False, _Y True).
     //   Tutorial_Scene banners (pending_battle_shell, story_pending_battle_shell, pause_shell, autoresolve_shell): model
@@ -557,7 +559,7 @@ Vec2f shell_anchor_offset(const CommandBarComponent& shell, std::span<const Shel
     //   canvas) [port: calibrated on 26.jpg: Text_Fleet at y 90 is 295 units below the top].
     if (!shell.model_offset_x && shell.model_offset_y) {
         const std::string_view ts = shell.raw_value("TUTORIAL_SCENE");
-        if (!ts.empty() && (ts[0] == 'T' || ts[0] == 't' || ts[0] == 'Y' || ts[0] == 'y' || ts[0] == '1'))
+        if (data::parse_flag_char(ts))
             return {0.0f, 0.5f * canvas.height - 92.0f};
         if (!shell.manual_offset) return {0.0f, 0.5f * canvas.height - 384.0f};
     }
@@ -607,13 +609,13 @@ void HudLayout::update(const HudCanvas& canvas, const ComponentTable& table) {
     std::map<std::string, std::pair<uint32_t, const ShellBone*>> bone_index;  // lookup only
     for (const auto& [idx, shell] : shells_) {
         if (idx >= table.size() || !shell.active) continue;
-        for (const ShellBone& b : shell.bones) bone_index.emplace(upper(b.name), std::make_pair(idx, &b));
+        for (const ShellBone& b : shell.bones) bone_index.emplace(ascii_upper(b.name), std::make_pair(idx, &b));
     }
     for (uint32_t i = 0; i < table.size(); ++i) {
         ComponentPlacement& p = placements_[i];
         const CommandBarComponent& c = table[i];
         if (c.type == ComponentType::Shell) continue;
-        const auto it = c.no_shell ? bone_index.end() : bone_index.find(upper(c.name));
+        const auto it = c.no_shell ? bone_index.end() : bone_index.find(ascii_upper(c.name));
         if (it != bone_index.end()) {
             const Vec2f off = shells_[it->second.first].offset;
             const ShellBone& b = *it->second.second;

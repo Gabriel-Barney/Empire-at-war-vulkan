@@ -35,7 +35,7 @@
 // plus the object id. Is_Valid() is false once the object is dead (destroyed, even before the
 // flush) or gone; every other method then raises "GameObjectWrapper::<Method> -- this object is
 // dead!" (docs/re/OBJECT_RUNTIME.md §1.5). One script gets the same userdata for the same object
-// (cache keyed by object id, never iterated for logic; sweep_dead_wrappers() drops dead entries).
+// (cache keyed by object id, never iterated for logic; an entry lives as long as the VM [port]).
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -148,8 +148,6 @@ public:
     void post_event(std::string_view name);
     // Sets a host value global (Object, Target, ...) to the wrapper of `h` (null handle -> nil).
     void set_object_global(std::string_view name, objects::ObjectHandle h);
-    // Drops cached wrappers of dead objects (call at a deterministic point, e.g. after a flush).
-    void sweep_dead_wrappers();
 
     // ---- q6 script pool (docs/re/OBJECT_SCRIPTS.md §1.3, §1.4, §2.3; the host is engine/apps/sim object_scripts) ----
     // Release steps 1-3 of 0x2488e0: the exit flag set, every thread killed and removed (thread ids restart at 0, as the

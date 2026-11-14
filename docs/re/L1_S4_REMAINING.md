@@ -537,6 +537,8 @@ type, intensity +0x448 := `Emitter_Intensity`, transition flag +0x454 := 0, weat
 Duration) × FPS frames; environment lightning (record +0x138) := `Lightning_Intensity`; fog-plane alpha
 (record +0xfc, when the record has a fog plane +0xf8) := `Fog_Plane_Interpolation_Alpha`; emitter
 intensity := `Emitter_Intensity`. The `emitter_name` particle is added to the scene.
+**Correction (2026-11-08, CU8G_T02_ENV_PICK_RE §4):** a (re-)init with phases runs the start phase **twice** (2 synced
+draws; the second timer stays); only the advance / `Force_Weather` costs one.
 
 **Service** (0x46a0c0, from land-mode service 0x3bb440 when land mode +0x328 ≠ 0):
 1. Return unless re-init (force 0) reports a scenario and a current phase.
@@ -911,7 +913,9 @@ group move (0x2a7b80) entry → exit, target := marker. Allied with the local pl
 entry i; when no bombers remain: kill every DUMMY_DESTROY_AFTER_BOMBING_RUN (0x66) object of that
 player, ready := now + interval, available := 0, in progress := 0 [M: LandBomber removes itself at the
 exit]. Save: manager chunk 5 (micro 0 enabled, 1 mode, 2 +0x10, 3 +0x14, 6 count), record chunk 4
-(0x4958c0), type saved by CRC. UI query 0x4950f0 (frames until available).
+(0x4958c0), type saved by CRC. UI query 0x4950f0: the **frame** the run is available again (absolute, not a
+count; −1 without a record; in progress: now + interval + remaining flight) and the HUD dial 0x495250 built on it
+(HUD_GAPS §9.3, corrected cu9g t01).
 
 Lua: `LandTaskForceClass.Bombing_Run` §2.10; `PlayerWrapper.Disable_Bombing_Run(bool)` (0x601aa0, bound)
 pushes the bool with no expiry into tactical list +0x1c8 under key 0x1407ff8a8 (0x3a8cb0) [M: whether
@@ -1047,6 +1051,14 @@ obj +0x1e0: +8 pending controller player id (−1 none), +0xc progress 0..1) [H 
   complete** (0x500e30, old → new owner), owner change (0x38e5a0 with pending), progress := 0. An
   enemy-held point therefore goes owner → neutral → capturer in two full transitions. Shader
   "MeshAdditiveOffset" UV offset shows progress (1 − progress when the controller is neutral).
+- **Empty-pad revert** (bkg1 b0001, `BKG1_RE_ANSWERS.md` 7.4) [H unless tagged]: an owned CAPTURE_POINT pad whose
+  TACTICAL_BUILD_OBJECTS pack is empty and with no candidate in the radius gets the neutral controller by (d) and
+  decays owner → Neutral in one transition: T = 5.0 s (150 frames; float accumulation of 1/150 reaches 1.0 on the
+  151st service) for SKIRMISH_BUILD_PAD, BUNKER_PAD and SKIRMISH_MINERAL_PROCESSOR_PAD, 8.0 s (240 frames) for
+  SKIRMISH_OUTPOST_PAD; retail traces saw 148..151 frames after the owner's last unit left (SKAI_T06 §2). An owner
+  candidate in the radius walks the progress back down step by step. REINFORCEMENT_POINT and `Ownership_Sticks`
+  types never decay; the faction base `*_BUILD_PAD` types have no CAPTURE_POINT behaviour and keep their owner. A
+  destroyed child still sends the pad to Neutral at once (SKIRMISH_SETUP §8).
 - **Capture complete** 0x500e30, in order: refresh team colour; mode notification 0x360d90(mode, object,
   old, new) [M: stats / victory]; **dispatch STORY_CAPTURE_STRUCTURE**; local SFX (type +0x1788 via
   0x355ca0) when the local player is old or new owner; faction speech from faction tables (0x33e8b0,

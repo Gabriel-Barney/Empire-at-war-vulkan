@@ -7,9 +7,11 @@
 //                normal rendering; the report gives frame-time median / p99 / worst.
 //                FixedFrames: exactly frames_per_tick counted frames per sim tick, the presentation clock driven by the
 //                counted frames (frames / (30 x frames_per_tick) s), V-sync off (Immediate) and no frame cap, models loaded
-//                blocking, TAA off; a frame counts only when the presentation is settled (no pending pipeline, model,
-//                texture or terrain work), an unsettled frame is drawn again with the same sim state and sub-frame, so
-//                every run draws the same counted frames.
+//                blocking; a frame counts only when the presentation is settled (no pending pipeline, model, texture or
+//                terrain work), an unsettled frame is drawn again with the same sim state and sub-frame, so every run
+//                draws the same counted frames. TAA keeps the preset's setting (BM2b): every measured frame is drawn
+//                TAA-provisional and a frame that does not count is taken back out of the TAA history and jitter cycle
+//                (Renderer::discard_taa_frame); the history restarts with the measurement.
 //   PRESETS      BenchPreset: the window size and the video / audio settings of a run, by name (bench_presets). Nothing
 //                is read from the player's video options file.
 //   STATS        frame_time_stats: count, mean, median, p99 and worst of the counted frames' times (nearest-rank
@@ -36,8 +38,8 @@ const char* bench_mode_name(BenchMode m);  // "off" / "realtime" / "fixed"
 enum class BenchAudio : uint8_t { Null, Off };  // never the device: no output timing in a benchmark
 
 // A named benchmark preset. Detail levels are the Video dialog's 0..100 values (ui::kQualityPresets: 0, 40, 75, 100 =
-// Low / Medium / High / Ultra; all seven advanced detail options take that value); anti_alias is the TAA strength
-// (0 = off; ui::kAntiAliasChoices), gamma 50 = identity, anisotropy one of ui::kAnisotropyChoices.
+// Low / Medium / High / Ultra; all seven advanced detail options take that value); anti_alias is the Anti-aliasing list's
+// mode (ui::kAaOff .. kAaMsaa8, ui::kAntiAliasChoices), gamma 50 = identity, anisotropy one of ui::kAnisotropyChoices.
 struct BenchPreset {
     std::string_view name;
     std::string_view description;
@@ -70,7 +72,10 @@ struct BenchmarkOptions {
     std::string crc_out;                                // --bench-crc-out FILE: the run's per-tick CRC log (CrcLog::save)
     std::string png_dir;                                // --bench-png-dir DIR: PNG of every Nth counted frame
     uint32_t png_every = 0;                             // --bench-png-every N (0 = none)
+    uint32_t trace_every = 0;                           // --bench-trace N (BM3): print the live objects per owner every N measured ticks (scene authoring)
     bool verify = true;                                 // --bench-no-verify: skip the presentation on/off replay check
+    uint32_t redraw_every = 0;                          // --bench-redraw-every N (tests, fixed frames): every Nth settled
+                                                        // measured frame is treated as unsettled and drawn again (0 = off)
     bool active() const { return mode != BenchMode::Off; }
     bool fixed() const { return mode == BenchMode::FixedFrames; }
 };
@@ -78,7 +83,7 @@ struct BenchmarkOptions {
 // Parses the benchmark flag at args[i] (advancing i past its value). 1 = consumed, 0 = not a benchmark flag, -1 = bad
 // value (*err says why). Flags: --benchmark realtime|fixed, --bench-save, --bench-preset, --bench-ticks,
 // --bench-frames-per-tick, --bench-settle, --bench-max-unsettled, --bench-report, --bench-crc-out, --bench-png-dir,
-// --bench-png-every, --bench-no-verify.
+// --bench-png-every, --bench-no-verify, --bench-redraw-every.
 int parse_benchmark_arg(std::span<const std::string> args, size_t& i, BenchmarkOptions& o, std::string* err = nullptr);
 // After parsing: "" when the options can run, else why not (no save, unknown preset, a value out of range).
 std::string check_benchmark_options(const BenchmarkOptions& o);
@@ -130,6 +135,8 @@ struct BenchReport {
     bool taa = false;
     uint64_t start_tick = 0, end_tick = 0, ticks = 0, target_ticks = 0;
     uint64_t frames = 0, unsettled_frames = 0, excluded_frames = 0, warmup_frames = 0;
+    uint64_t forced_redraws = 0;  // unsettled_frames forced by --bench-redraw-every
+    uint64_t taa_discarded = 0;   // measured frames taken back out of the TAA history (fixed frames with TAA)
     double wall_seconds = 0;
     FrameTimeStats frame_ms, render_ms, sim_ms;  // sim: the counted frames that ran a tick
     uint64_t final_crc = 0;
@@ -146,7 +153,19 @@ struct BenchReport {
     bool gpu_timestamps = false;
     uint64_t gpu_frames = 0;
     std::vector<std::pair<std::string, FrameTimeStats>> gpu_ms;
+    // bm3 t04: load and first-use cost. load_ms = from the save's load start to the first measured tick (the load screen, the
+    // warm-up frames and every pipeline / model / texture the first view waits for); early_ms = the first kEarlyFrames counted
+    // frames; hitches = counted frames over hitch_threshold_ms (4 x the median, at least 25 ms): their count and the worst
+    // kMaxHitches as {frame index, ms}, worst first.
+    double load_ms = 0;
+    FrameTimeStats early_ms;
+    double hitch_threshold_ms = 0;
+    uint64_t hitch_count = 0;
+    std::vector<std::pair<uint64_t, float>> hitches;
 };
+inline constexpr size_t kEarlyFrames = 300, kMaxHitches = 8;
+// Fills early_ms, hitch_threshold_ms, hitch_count and hitches from the counted frames' times (frame_ms.median must be set).
+void bench_hitches(std::span<const float> frame_ms, BenchReport& r);
 std::string bench_report_json(const BenchReport& r);
 
 }  // namespace alamo::game

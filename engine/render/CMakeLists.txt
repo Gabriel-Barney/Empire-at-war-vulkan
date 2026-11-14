@@ -111,6 +111,7 @@ endif()
 set(_render_taa_headers)
 # name : entry : profile : define : source (default taa.hlsl); taa_velocity.hlsl is the object-motion pass
 foreach(spec "taa_vs:VSMain:vs_6_0:" "taa_ps_resolve:PSResolve:ps_6_0:RESOLVE" "taa_ps_sharpen:PSSharpen:ps_6_0:SHARPEN" "taa_ps_depth:PSDepth:ps_6_0:DEPTH"
+             "taa_ps_motion:PSMotion:ps_6_0:MOTION"
              "taa_vel_vs:VSMain:vs_6_0::taa_velocity.hlsl" "taa_vel_vs_skin:VSMain:vs_6_0:SKINNED:taa_velocity.hlsl"
              "taa_vel_ps:PSMain:ps_6_0::taa_velocity.hlsl")
   string(REPLACE ":" ";" parts "${spec}")
@@ -143,6 +144,60 @@ add_custom_target(alamo_render_taa_shaders DEPENDS ${_render_taa_headers})
 target_sources(alamo_render PRIVATE src/taa.cpp ${_render_taa_headers})
 add_dependencies(alamo_render alamo_render_taa_shaders)
 
+# ---------------------------------------------------------------- [port] FSR upscaling (src/fsr.cpp, src/upscale.cpp)
+# AMD FidelityFX SDK 2.4.0 (approved by Gabriel 2026-11-13, docs/DECISIONS.md): the C API headers and the two signed
+# Vulkan DLLs fetched by toolchain\11_fidelityfx.cmd (SHA-256 pinned there). Without the headers the renderer builds
+# without FSR (Upscaler::Fsr frames fall back to TAA). The DLLs are loaded at run time from the executable's folder;
+# alamo_render_copy_ffx(<target>) copies them (and the SDK licence) there.
+set(ALAMO_FFX_DIR "${PROJECT_SOURCE_DIR}/toolchain/fidelityfx-2.4.0" CACHE PATH "FidelityFX SDK subset (toolchain/11_fidelityfx.cmd)")
+target_sources(alamo_render PRIVATE src/upscale.cpp src/fsr.cpp)
+if(WIN32 AND EXISTS "${ALAMO_FFX_DIR}/upscalers/include/ffx_upscale.h" AND EXISTS "${ALAMO_FFX_DIR}/api/include/vk/ffx_api_vk.h")
+  target_include_directories(alamo_render SYSTEM PRIVATE "${ALAMO_FFX_DIR}/api/include" "${ALAMO_FFX_DIR}/upscalers/include")
+  target_compile_definitions(alamo_render PRIVATE ALAMO_RENDER_HAVE_FFX=1)
+  set(ALAMO_RENDER_HAVE_FFX ON CACHE INTERNAL "FSR runtime headers found")
+else()
+  message(STATUS "alamo_render: FidelityFX SDK not found in ${ALAMO_FFX_DIR} (run toolchain/11_fidelityfx.cmd); FSR upscaling off")
+  set(ALAMO_RENDER_HAVE_FFX OFF CACHE INTERNAL "FSR runtime headers found")
+endif()
+function(alamo_render_copy_ffx target)
+  if(ALAMO_RENDER_HAVE_FFX AND EXISTS "${ALAMO_FFX_DIR}/bin/amd_fidelityfx_loader_vk.dll")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_FFX_DIR}/bin/amd_fidelityfx_loader_vk.dll"
+              "${ALAMO_FFX_DIR}/bin/amd_fidelityfx_upscaler_vk.dll" "$<TARGET_FILE_DIR:${target}>"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_FFX_DIR}/license.md"
+              "$<TARGET_FILE_DIR:${target}>/amd_fidelityfx_license.md"
+      VERBATIM)
+  endif()
+endfunction()
+
+# ---------------------------------------------------------------- [port] XeSS upscaling (src/xess.cpp)
+# Intel XeSS SDK 3.0.2 (approved by Gabriel 2026-11-13, docs/DECISIONS.md "XeSS upscaling"): the C API headers and the
+# Intel-signed libxess.dll fetched by toolchain\13_xess.cmd (SHA-256 pinned there; binary-only, Intel Simplified
+# Software License). Without the headers the renderer builds without XeSS (Upscaler::Xess frames fall back to TAA). The
+# DLL is loaded at run time from the executable's folder; alamo_render_copy_xess(<target>) copies it and the licence +
+# third-party notices there (the licence asks for its notice with every redistribution).
+set(ALAMO_XESS_DIR "${PROJECT_SOURCE_DIR}/toolchain/xess-3.0.2" CACHE PATH "XeSS SDK subset (toolchain/13_xess.cmd)")
+target_sources(alamo_render PRIVATE src/xess.cpp)
+if(WIN32 AND EXISTS "${ALAMO_XESS_DIR}/inc/xess/xess_vk.h")
+  target_include_directories(alamo_render SYSTEM PRIVATE "${ALAMO_XESS_DIR}/inc")
+  target_compile_definitions(alamo_render PRIVATE ALAMO_RENDER_HAVE_XESS=1)
+  set(ALAMO_RENDER_HAVE_XESS ON CACHE INTERNAL "XeSS runtime headers found")
+else()
+  message(STATUS "alamo_render: XeSS SDK not found in ${ALAMO_XESS_DIR} (run toolchain/13_xess.cmd); XeSS upscaling off")
+  set(ALAMO_RENDER_HAVE_XESS OFF CACHE INTERNAL "XeSS runtime headers found")
+endif()
+function(alamo_render_copy_xess target)
+  if(ALAMO_RENDER_HAVE_XESS AND EXISTS "${ALAMO_XESS_DIR}/bin/libxess.dll")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_XESS_DIR}/bin/libxess.dll" "$<TARGET_FILE_DIR:${target}>"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_XESS_DIR}/LICENSE.txt"
+              "$<TARGET_FILE_DIR:${target}>/intel_xess_license.txt"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ALAMO_XESS_DIR}/third-party-programs.txt"
+              "$<TARGET_FILE_DIR:${target}>/intel_xess_third-party-programs.txt"
+      VERBATIM)
+  endif()
+endfunction()
+
 # ---------------------------------------------------------------- [port] output gamma (shaders/gamma.hlsl, src/gamma.cpp)
 set(_render_gamma_headers)
 foreach(spec "gamma_vs:VSMain:vs_6_0" "gamma_ps:PSMain:ps_6_0")
@@ -163,18 +218,65 @@ endforeach()
 add_custom_target(alamo_render_gamma_shaders DEPENDS ${_render_gamma_headers})
 target_sources(alamo_render PRIVATE src/gamma.cpp ${_render_gamma_headers})
 add_dependencies(alamo_render alamo_render_gamma_shaders)
+
+# ---------------------------------------------------------------- [port] SMAA 1x (shaders/smaa_pass.hlsl, src/smaa.cpp)
+# third_party/smaa: the reference SMAA (Jimenez et al., MIT licence, LICENSE.txt), approved by Gabriel 2026-11-13.
+# No -WX: the reference shader is kept unmodified.
+set(_render_smaa_dir ${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa)
+set(_render_smaa_headers)
+foreach(spec "smaa_vs:VSFull:vs_6_0" "smaa_ps_edge:PSEdge:ps_6_0" "smaa_ps_weights:PSWeights:ps_6_0" "smaa_ps_blend:PSBlend:ps_6_0")
+  string(REPLACE ":" ";" parts "${spec}")
+  list(GET parts 0 _name)
+  list(GET parts 1 _entry)
+  list(GET parts 2 _profile)
+  set(_hdr ${_render_gen_dir}/${_name}.h)
+  add_custom_command(
+    OUTPUT ${_hdr}
+    COMMAND "${_render_dxc}" -nologo -spirv -fvk-use-dx-layout -fspv-target-env=vulkan1.3 -O3
+            -T ${_profile} -E ${_entry} -I "${_render_smaa_dir}" -Fh ${_hdr} -Vn g_${_name} "${_render_shader_dir}/smaa_pass.hlsl"
+    DEPENDS ${_render_shader_dir}/smaa_pass.hlsl ${_render_smaa_dir}/SMAA.hlsl
+    COMMENT "DXC ${_name} (smaa_pass.hlsl ${_entry} ${_profile})"
+    VERBATIM)
+  list(APPEND _render_smaa_headers ${_hdr})
+endforeach()
+add_custom_target(alamo_render_smaa_shaders DEPENDS ${_render_smaa_headers})
+target_sources(alamo_render PRIVATE src/smaa.cpp ${_render_smaa_headers})
+target_include_directories(alamo_render PRIVATE ${_render_smaa_dir})
+add_dependencies(alamo_render alamo_render_smaa_shaders)
 # Halton / jitter / history rules (CPU) + the resolve on the GPU (empty scene, validation required when available) and,
 # with ALAMO_FOC_DATA, a land map under a slowly moving camera, TAA off vs on -> logs\render_taa_*.png.
 add_executable(alamo_render_taa_tests tests/test_render_taa.cpp)
-target_link_libraries(alamo_render_taa_tests PRIVATE alamo_core alamo_render)
+target_link_libraries(alamo_render_taa_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_taa_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 alamo_shaderxlat_copy_dxc(alamo_render_taa_tests)
 add_test(NAME alamo_render_taa_tests COMMAND alamo_render_taa_tests)
 set_tests_properties(alamo_render_taa_tests PROPERTIES TIMEOUT 900 ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
 
+# [port] FSR upscaling: quality modes / jitter / camera rules (CPU), the upscale of an empty scene and its history rules
+# (GPU, through the real AMD runtime; skipped with the reason when it cannot run here), with ALAMO_FOC_DATA a land map
+# drawn with TAA vs FSR Quality / Performance -> logs\render_fsr_*.png.
+add_executable(alamo_render_fsr_tests tests/test_render_fsr.cpp)
+target_link_libraries(alamo_render_fsr_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
+target_compile_definitions(alamo_render_fsr_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
+alamo_shaderxlat_copy_dxc(alamo_render_fsr_tests)
+alamo_render_copy_ffx(alamo_render_fsr_tests)
+add_test(NAME alamo_render_fsr_tests COMMAND alamo_render_fsr_tests)
+set_tests_properties(alamo_render_fsr_tests PROPERTIES TIMEOUT 900 LABELS slow ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
+
+# [port] XeSS upscaling: preset ratios (CPU), the upscale of an empty scene and its history rules (GPU, through Intel's
+# runtime; skipped with the reason when it cannot run here), with ALAMO_FOC_DATA a land map drawn with TAA vs XeSS
+# Quality / Performance -> logsender_xess_*.png.
+add_executable(alamo_render_xess_tests tests/test_render_xess.cpp)
+target_link_libraries(alamo_render_xess_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
+target_compile_definitions(alamo_render_xess_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
+alamo_shaderxlat_copy_dxc(alamo_render_xess_tests)
+alamo_render_copy_xess(alamo_render_xess_tests)
+add_test(NAME alamo_render_xess_tests COMMAND alamo_render_xess_tests)
+set_tests_properties(alamo_render_xess_tests PROPERTIES TIMEOUT 900 LABELS slow ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
+
 # Soft shadows must not darken the unshadowed frame (playtest 3); real data: _MP_LAND_ENDOR shadows off / hard / soft.
 add_executable(alamo_render_shadow_tests tests/test_render_shadow.cpp)
-target_link_libraries(alamo_render_shadow_tests PRIVATE alamo_core alamo_render)
+target_link_libraries(alamo_render_shadow_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_shadow_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 alamo_shaderxlat_copy_dxc(alamo_render_shadow_tests)
 add_test(NAME alamo_render_shadow_tests COMMAND alamo_render_shadow_tests)
@@ -188,10 +290,14 @@ set_target_properties(alamo_render_app PROPERTIES OUTPUT_NAME alamo_render)
 # when MSVC pulls formats' COMDATs first (LNK2005; same workaround as alamo_headless).
 target_link_libraries(alamo_render_app PRIVATE alamo_core alamo_render)
 target_compile_definitions(alamo_render_app PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
+# app/app_common.hpp: helpers shared by main.cpp and the sim / galactic / particles sub-mains (CU4 t03).
+target_include_directories(alamo_render_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app)
 if(WIN32)
   target_link_libraries(alamo_render_app PRIVATE user32)
 endif()
 alamo_shaderxlat_copy_dxc(alamo_render_app)  # runtime dxcompiler.dll + dxil.dll for track B
+alamo_render_copy_ffx(alamo_render_app)      # [port] FSR runtime DLLs
+alamo_render_copy_xess(alamo_render_app)     # [port] XeSS runtime DLL
 # Smoke run of the frame graph into a real swapchain with synchronization validation (0 hazards required:
 # the app exits non-zero on any validation message). 30 frames into a never-shown (hidden) window: the
 # swapchain, acquire / present and the sync validation stay covered without a window popping up.
@@ -199,8 +305,14 @@ add_test(NAME alamo_render_app_sync COMMAND alamo_render_app --clear --frame-gra
 set_tests_properties(alamo_render_app_sync PROPERTIES TIMEOUT 120 ENVIRONMENT "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true")
 
 # ---------------------------------------------------------------- tests
+# CU4 t02: header-only GPU test scaffolding (GpuCore, GpuOffscreen over alamo/render/offscreen.hpp) for the render-side
+# test exes here, in galactic/ and particles/ and in engine/ui; brings alamo_test_support (CHECK, env helpers).
+add_library(alamo_render_test_support INTERFACE)
+target_include_directories(alamo_render_test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/test_support/include)
+target_link_libraries(alamo_render_test_support INTERFACE alamo_test_support)
+
 add_executable(alamo_render_tests tests/test_render.cpp tests/test_render_gpu.cpp)
-target_link_libraries(alamo_render_tests PRIVATE alamo_render)
+target_link_libraries(alamo_render_tests PRIVATE alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 # CPU checks always; GPU checks skip cleanly without a Vulkan 1.3 device. The test sets
 # VK_LAYER_PATH (toolchain\vvl\bin) itself and then requires validation with 0 messages.
@@ -210,7 +322,7 @@ set_tests_properties(alamo_render_tests PROPERTIES TIMEOUT 600)
 
 # Space background scene order on real data (planets vs nebula domes, SPACE_AND_OPEN.md D.7 3); PNGs to logs\.
 add_executable(alamo_render_space_tests tests/test_render_space.cpp)
-target_link_libraries(alamo_render_space_tests PRIVATE alamo_render)
+target_link_libraries(alamo_render_space_tests PRIVATE alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_space_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
 alamo_shaderxlat_copy_dxc(alamo_render_space_tests)
 add_test(NAME alamo_render_space_tests COMMAND alamo_render_space_tests)
@@ -238,7 +350,7 @@ function(alamo_render_add_sim_targets)
   target_compile_definitions(alamo_render_app PRIVATE ALAMO_RENDER_HAVE_SIM=1)
 
   add_executable(alamo_render_sim_tests ${_dir}/tests/test_render_sim.cpp)
-  target_link_libraries(alamo_render_sim_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)  # core first: see alamo_render_app
+  target_link_libraries(alamo_render_sim_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_render_test_support)  # core first: see alamo_render_app
   target_compile_definitions(alamo_render_sim_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
   add_test(NAME alamo_render_sim_tests COMMAND alamo_render_sim_tests)
   set_tests_properties(alamo_render_sim_tests PROPERTIES TIMEOUT 900)
@@ -253,7 +365,7 @@ function(alamo_render_add_sim_targets)
   # Phase 4 R3 / R4 / R5 render-side additions: fog of war from the sim's grids, runtime decals / unit tracks, _ALT swap,
   # per-bone clip visibility, HideWhenFogged fade. PNGs (real data) go to the build directory.
   add_executable(alamo_render_r5_tests ${_dir}/tests/test_render_r5.cpp)
-  target_link_libraries(alamo_render_r5_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)
+  target_link_libraries(alamo_render_r5_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_render_test_support)
   target_compile_definitions(alamo_render_r5_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
                              "ALAMO_R5_OUT_DIR=\"${CMAKE_BINARY_DIR}\"")
   if(TARGET alamo_tactical_fog)
@@ -271,7 +383,7 @@ function(alamo_render_add_sim_targets)
   # Phase 4 R5 t04 ability beams (beams.hpp / sim_beams.hpp): ribbon / dot / lightning geometry, animation, snapshot records
   # from a real battle's abilities; GPU draw with Engine\PrimAdditive when ALAMO_FOC_DATA is set (validation required).
   add_executable(alamo_render_beams_tests ${_dir}/tests/test_render_beams.cpp)
-  target_link_libraries(alamo_render_beams_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)
+  target_link_libraries(alamo_render_beams_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_render_test_support)
   target_compile_definitions(alamo_render_beams_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")
   alamo_shaderxlat_copy_dxc(alamo_render_beams_tests)
   add_test(NAME alamo_render_beams_tests COMMAND alamo_render_beams_tests)
@@ -279,7 +391,7 @@ function(alamo_render_add_sim_targets)
 
   # Phase 4 R5 t05 sensor jamming visual (jam_fx.hpp): blob visibility rule / model / instance, snapshot jamming digest, interpolation.
   add_executable(alamo_render_jam_tests ${_dir}/tests/test_render_jam.cpp)
-  target_link_libraries(alamo_render_jam_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags)
+  target_link_libraries(alamo_render_jam_tests PRIVATE alamo_core alamo_render_sim alamo_vfs alamo_engine_flags alamo_test_support)
   add_test(NAME alamo_render_jam_tests COMMAND alamo_render_jam_tests)
   set_tests_properties(alamo_render_jam_tests PROPERTIES TIMEOUT 300)
 endfunction()

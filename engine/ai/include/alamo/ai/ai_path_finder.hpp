@@ -31,7 +31,7 @@
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/parallel.hpp"
 #include "alamo/ai/latency_job.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/galactic/all_pairs.hpp"
 #include "alamo/galactic/bitset.hpp"
 #include "alamo/galactic/cadence.hpp"
@@ -118,7 +118,6 @@ private:
     // One recompute's input, owned (N1: the matrices are rebuilt from it on load; OPT2 t02: a background job's copy).
     struct Input {
         std::vector<double> value;
-        std::vector<int32_t> cost;
         galactic::Bitset revealed;
         bool has_revealed = false;
         std::vector<float> zoff;

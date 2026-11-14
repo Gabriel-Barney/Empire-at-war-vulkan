@@ -7,7 +7,27 @@
 #include "alamo/core/log.hpp"
 #include "alamo/rhi/context.hpp"
 
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+
 namespace alamo::rhi {
+
+namespace {
+// The application-controlled exclusive-mode chain (swapchain create info and surface capability query share it).
+struct ExclusiveChain {
+    VkSurfaceFullScreenExclusiveInfoEXT info{};
+    VkSurfaceFullScreenExclusiveWin32InfoEXT win32{};
+    explicit ExclusiveChain(void* hwnd) {
+        info.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
+        info.fullScreenExclusive = VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
+        info.pNext = &win32;
+        win32.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
+        win32.hmonitor = MonitorFromWindow(static_cast<HWND>(hwnd), MONITOR_DEFAULTTONEAREST);
+    }
+    ExclusiveChain(const ExclusiveChain&) = delete;  // info.pNext points into this object
+    ExclusiveChain& operator=(const ExclusiveChain&) = delete;
+};
+}  // namespace
 
 Swapchain::~Swapchain() { shutdown(); }
 
@@ -61,6 +81,7 @@ void Swapchain::destroy_retired() {
 void Swapchain::shutdown() {
     if (!ctx_) return;
     ctx_->wait_idle();
+    release_exclusive();
     destroy_images();
     destroy_retired();
     if (swapchain_) ctx_->vkd().vkDestroySwapchainKHR(ctx_->device(), swapchain_, nullptr);
@@ -71,6 +92,39 @@ void Swapchain::shutdown() {
 }
 
 void Swapchain::set_present_mode(PresentMode mode) { desc_.mode = mode; }
+
+void Swapchain::set_exclusive_fullscreen(bool on) { desc_.exclusive_fullscreen = on; }
+
+bool Swapchain::exclusive_supported() const {
+    if (!ctx_->caps().full_screen_exclusive) return false;
+    ExclusiveChain chain(desc_.hwnd);
+    auto si = vk_struct<VkPhysicalDeviceSurfaceInfo2KHR>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR);
+    si.surface = surface_;
+    si.pNext = &chain.info;
+    auto fse = vk_struct<VkSurfaceCapabilitiesFullScreenExclusiveEXT>(VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_FULL_SCREEN_EXCLUSIVE_EXT);
+    auto caps = vk_struct<VkSurfaceCapabilities2KHR>(VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR);
+    caps.pNext = &fse;
+    if (ctx_->vki().vkGetPhysicalDeviceSurfaceCapabilities2KHR(ctx_->physical_device(), &si, &caps) != VK_SUCCESS) return false;
+    return fse.fullScreenExclusiveSupported == VK_TRUE;
+}
+
+bool Swapchain::acquire_exclusive() {
+    if (!swapchain_ || !exclusive_built_) return false;
+    if (exclusive_held_) return true;
+    auto acquire = reinterpret_cast<PFN_vkAcquireFullScreenExclusiveModeEXT>(ctx_->vkd().vkAcquireFullScreenExclusiveModeEXT);
+    const VkResult r = acquire(ctx_->device(), swapchain_);
+    exclusive_held_ = r == VK_SUCCESS;
+    log::infof("rhi", "exclusive full screen %s (%s)", exclusive_held_ ? "acquired" : "not acquired", vk_result_name(r));
+    return exclusive_held_;
+}
+
+void Swapchain::release_exclusive() {
+    if (swapchain_ && exclusive_held_) {
+        auto release = reinterpret_cast<PFN_vkReleaseFullScreenExclusiveModeEXT>(ctx_->vkd().vkReleaseFullScreenExclusiveModeEXT);
+        release(ctx_->device(), swapchain_);
+    }
+    exclusive_held_ = false;
+}
 
 bool Swapchain::supports(PresentMode mode) const {
     const VkPresentModeKHR m = mode == PresentMode::Mailbox ? VK_PRESENT_MODE_MAILBOX_KHR
@@ -98,7 +152,9 @@ bool Swapchain::build(uint32_t width, uint32_t height) {
         ext.width = std::clamp(width, caps.minImageExtent.width, caps.maxImageExtent.width);
         ext.height = std::clamp(height, caps.minImageExtent.height, caps.maxImageExtent.height);
     }
+    release_exclusive();  // held by the swapchain about to be replaced
     if (ext.width == 0 || ext.height == 0) {  // minimized: drop the swapchain until restored
+        exclusive_built_ = false;
         destroy_images();
         if (swapchain_) fn.vkDestroySwapchainKHR(dev, swapchain_, nullptr);
         swapchain_ = VK_NULL_HANDLE;
@@ -169,6 +225,9 @@ bool Swapchain::build(uint32_t width, uint32_t height) {
     ci.presentMode = mode;
     ci.clipped = VK_TRUE;
     ci.oldSwapchain = swapchain_;
+    const ExclusiveChain chain(desc_.hwnd);
+    const bool exclusive = desc_.exclusive_fullscreen && exclusive_supported();
+    if (exclusive) ci.pNext = &chain.info;
     VkSwapchainKHR fresh = VK_NULL_HANDLE;
     const VkResult r = fn.vkCreateSwapchainKHR(dev, &ci, nullptr, &fresh);
     destroy_images();
@@ -213,6 +272,7 @@ bool Swapchain::build(uint32_t width, uint32_t height) {
         return false;
     }
     swapchain_ = fresh;
+    exclusive_built_ = exclusive;
     format_ = chosen.format;
     extent_ = ext;
     present_mode_ = mode;
@@ -220,7 +280,9 @@ bool Swapchain::build(uint32_t width, uint32_t height) {
     views_ = std::move(views);
     render_finished_ = std::move(sems);
     if (!retired_semaphores_.empty()) retire_acquires_left_ = n;
-    log::debugf("rhi", "swapchain %ux%u, %u images, present mode %d", ext.width, ext.height, n, static_cast<int>(mode));
+    log::debugf("rhi", "swapchain %ux%u, %u images, present mode %d%s", ext.width, ext.height, n, static_cast<int>(mode),
+                exclusive ? ", exclusive full screen" : "");
+    if (exclusive) acquire_exclusive();
     return true;
 }
 
@@ -234,6 +296,7 @@ SwapchainStatus Swapchain::acquire(VkSemaphore signal, uint32_t& image_index, ui
         case VK_SUCCESS: return SwapchainStatus::Ok;
         case VK_SUBOPTIMAL_KHR: return SwapchainStatus::Suboptimal;
         case VK_ERROR_OUT_OF_DATE_KHR: return SwapchainStatus::OutOfDate;
+        case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT: exclusive_held_ = false; return SwapchainStatus::OutOfDate;  // recreate re-acquires
         default: vk_check(r, "vkAcquireNextImageKHR"); return SwapchainStatus::Error;
     }
 }
@@ -256,6 +319,7 @@ SwapchainStatus Swapchain::present(uint32_t image_index) {
         case VK_SUCCESS: return SwapchainStatus::Ok;
         case VK_SUBOPTIMAL_KHR: return SwapchainStatus::Suboptimal;
         case VK_ERROR_OUT_OF_DATE_KHR: return SwapchainStatus::OutOfDate;
+        case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT: exclusive_held_ = false; return SwapchainStatus::OutOfDate;
         default: vk_check(r, "vkQueuePresentKHR"); return SwapchainStatus::Error;
     }
 }

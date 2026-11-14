@@ -103,6 +103,7 @@ class ContrastTable;
 namespace alamo::lua {
 class ObjectBridge;
 class GlobalValueStore;  // Int-final
+struct AiGlobalValue;     // ai_bridge.hpp (sp3: TacticalAiWorld::GlobalWrite)
 enum class PreventAiResult : uint8_t;  // object_bridge.hpp
 }  // namespace alamo::lua
 
@@ -127,12 +128,11 @@ struct TacticalAiObject {
     // Collidable_By_Projectile_Living and Is_Valid_Target; not garrisoned / hidden (+0x3a7), not dead, not carried in a
     // transport, not in a hero clash (+0x3b4, `hero_clash`), and no SPECIAL_WEAPON unless it is a DUMMY_STAR_BASE.
     bool valid_target = true;
-    bool hero_clash = false;  // obj +0x3b4 [port: no hero clashes yet, always false; kept so it can be wired]
+    bool hero_clash = false;  // obj +0x3b4 (s78n t06: the combat flag kUnitHeroClash; skipped by free store Setup A)
     // UnitAI data-pack re-projection stamp (+0x20, A1_READINGS §14): UnitAiStamps::reprojection_check drawn by the host
-    // when the UNIT_AI object was created (draw_unit_ai_stamps). kNoReprojectionStamp: the host does not carry it, the
-    // grid uses its [port] legacy registration + 300.
-    static constexpr int32_t kNoReprojectionStamp = INT32_MIN;
-    int32_t reprojection_stamp = kNoReprojectionStamp;
+    // when the UNIT_AI object was created (draw_unit_ai_stamps). Every host draws it; the default 0 (a stamp at or
+    // before the first service) makes the first check run at the object's first service, as a drawn stamp does.
+    int32_t reprojection_stamp = 0;
 };
 
 // One entry of a player's reinforcement pool (campaign: units in orbit = the battle's reserves; skirmish: the
@@ -314,6 +314,7 @@ public:
 
 // OPT2 t10: frames from a proposal slice to the apply of its PotentialPlan solves (TacticalAiConfig::pp_latency).
 inline constexpr uint32_t kDefaultPpLatency = 1;
+inline constexpr uint32_t kDefaultAiLaneLatency = 2;  // sp3: k_ai (SIM_PARALLEL_DESIGN 5.1 "Why k_ai = 2")
 
 struct TacticalAiPlayerConfig {
     int32_t player = -1;
@@ -335,6 +336,11 @@ struct TacticalAiConfig {
     std::vector<TacticalAiPlayerConfig> players;
     std::vector<TacticalAiDifficulty> difficulties;
     std::vector<lua::LuaPlayerSetup> lua_players;   // players of the Lua player world (PlayerObject, ...)
+    // skai t12 (AI_GALACTIC §1.3 [H]): N of the goal quota's cap (int)(20 / max(1, N - H) + 0.5) is the whole PlayerList
+    // (session players, then one player per faction that has none), not the battle's players. Retail land skirmish:
+    // 7 players, one human -> cap 3, a proposal pass of about 430 frames on Utapau (SKAI_T06_LAND_RUNS §7).
+    // 0 = the perception world's players [port: hosts without a faction table].
+    int32_t player_list_size = 0;
     int32_t attacker = -1, defender = -1;           // conflict record (opponent preference, §1.2)
     bool campaign = false;                          // galactic parent (campaign battle)
     TacticalAiConstants constants;
@@ -365,7 +371,16 @@ struct TacticalAiConfig {
     // pp_latency frames after the slice. false = the original synced draws in proposal order (pp_latency unused).
     bool pp_streams = true;
     uint32_t pp_latency = kDefaultPpLatency;
+    // sp3 (docs/SIM_PARALLEL_DESIGN.md 5.1, 11.3): the AI lane. On, the world's own draws (goals, plan picks, FindTarget,
+    // Script_ evaluators, Guard / "Random" hard point, Most_Defended, the AI Lua VMs' GameRandom) come from an AI-owned
+    // GameRandom seeded from game_seed (ai_lane_seeds) and saved with the world, not from the session's streams; k_ai is the
+    // number of ticks between an AI update and the apply of its command batch (saved per world, a load keeps the saved
+    // value). Off = today's behaviour; a world saved with the lane on loads only into a world with it on, and vice versa.
+    bool ai_lane = false;
+    uint32_t k_ai = kDefaultAiLaneLatency;
 };
+// sp3: the AI-owned stream's (synced, free) seeds of an AI-lane world (splitmix64 of the session seed and a lane salt).
+std::pair<uint32_t, uint32_t> ai_lane_seeds(uint32_t game_seed);
 
 struct TacticalAiDecision {
     int64_t frame = 0;
@@ -402,6 +417,13 @@ public:
     // Int-final: the session-wide GlobalValue table (L1_S4_REMAINING §1.5) for GlobalValue.Get / Set of every AI VM;
     // null (default) = the world's own map (hashed in its CRC section). Hosted battles attach SimHost::global_values().
     void set_global_values(lua::GlobalValueStore* store);
+    // sp3 slice 4e (part 3): with the lane on, the AI's GlobalValue.Get / Set use a private copy of the session table,
+    // rebuilt at each publish() (and at start()) as the table plus `overlay` - the AI's own writes not applied yet, in
+    // issue order (the host passes them before publish). A Set changes the copy and is handed out by
+    // take_lane_global_writes() (in issue order) for the host to apply to the session table at the due tick.
+    using GlobalWrite = std::pair<std::string, lua::AiGlobalValue>;
+    void set_lane_global_overlay(std::vector<GlobalWrite> overlay);
+    std::vector<GlobalWrite> take_lane_global_writes();
 
     // Loads the plan scripts (cfg.plan_files). False when none loaded.
     bool load_plans(std::vector<std::string>* diagnostics = nullptr);
@@ -409,6 +431,14 @@ public:
     bool start(std::vector<std::string>* diagnostics = nullptr);
     // One AI frame (see the header comment). `now` = global frame (service clocks), `mode_frame` = F.
     void update(int64_t now, uint32_t mode_frame);
+    // sp3 t02 (AI lane, docs/SIM_PARALLEL_DESIGN.md 5.1): update() split at the lane boundary, used with ai_lane on (there
+    // update() = publish() + think()). publish() runs on the critical lane at the end of tick N: the host's fill
+    // (PerceptionWorld + facts), this tick's host event lists (opportunity targets, attack states, ability ends, landings,
+    // production) and the snapshot store - a copy of the battle store taken now, which the world and its Lua VMs read
+    // (and, until t05 turns them into commands, the Lua bindings that create objects write) with the lane on. think() runs
+    // the rest of update() from those inputs. Lane off: unused, update() is unchanged.
+    void publish(int64_t now, uint32_t mode_frame);
+    void think();
     // Battle end (slot 7 / context teardown): every running plan ends (released by the goal system).
     void end_battle();
     // OPT3 t11: closes every Lua VM of this world (running plans, free stores, evaluators, plan pools) instead of one by
@@ -417,7 +447,6 @@ public:
     // the job's wait function (empty when nothing is left running): call it before the job system goes away. Call
     // after end_battle(), right before destroying the world: no script may run afterwards. Owner thread of the VMs.
     std::function<void()> release_scripts();
-    void set_suspended(bool suspended);
     // S7 t26 (AI_TACTICAL §7.3.3 item 2) - object signal 0xb "a new order replaces this unit's order", raised by the host
     // when it executes an order on `object_id` (A1_READINGS §33.3: task-force movement collectors, unit Move_To /
     // Attack_Move, MoveToObject, attack orders, ...): the Activate_Ability blocks waiting on the unit (or its team
@@ -449,6 +478,10 @@ public:
     const std::vector<TacticalAiDecision>& decision_log() const;
     std::vector<std::string> lua_errors() const;
     uint64_t orders_issued() const;
+    bool ai_lane() const;    // sp3: TacticalAiConfig::ai_lane
+    // sp3 t02: the store the world reads - the snapshot store with the lane on (as of the last publish()), else the battle's.
+    const objects::ObjectStore& view_store() const;
+    uint32_t k_ai() const;   // sp3: TacticalAiConfig::k_ai (a load keeps the saved value)
     uint64_t orders_rejected() const;
     // Results left on the AI pipeline's event bus: 0 after every update().
     size_t pending_order_results() const;

@@ -1,21 +1,34 @@
-# bm2: alamo_game scenario runs (ctest alamo_game_bench_scenario).
-#   cmake -DGAME=<alamo_game> -DSAVE=<.alsv> -DRECIPE=<recipe .abench> -DOUT=<dir> -P bench_scenario_check.cmake
+# bm2: alamo_game scenario runs (ctest alamo_game_bench_scenario; bm2c t03: alamo_game_bench_scenario_taa with -DTAA=1).
+#   cmake -DGAME=<alamo_game> -DSAVE=<.alsv> -DRECIPE=<recipe .abench> -DOUT=<dir> [-DTAA=1] -P bench_scenario_check.cmake
 # 1. make:  --bench-make on a copy of the recipe from the battle save: the run passes and writes a `host game` scenario
 #           (save, orders, fingerprint pinned; the recipe's camera, mode, preset and frames per tick kept).
 # 2. a, b:  two --bench-scenario runs of it (PNG every 10th counted frame): both pass, the fingerprint matches, the GPU
 #           timer scopes are reported (when the queue has timestamps), the PNGs of the two runs are identical, and the
 #           camera moved (the first and last PNG differ).
 # 3. pins:  a scenario whose fingerprint file changed is refused before anything loads.
+# -DTAA=1 (bm2c t03): the recipe is on bm-high (TAA Medium); make and runs at 640x360, run b with --bench-redraw-every 3 (a
+#           third of its settled frames drawn again and taken back out of the TAA history, as alamo_game_bench_fixed_taa):
+#           both reports say "taa": true, run b reports the forced redraws and TAA discards, and the PNGs still match run a's.
+# The scenario files are named after the recipe's `name` (battle_orbit, battle_orbit_taa).
 # Without the save (no ALAMO_FOC_DATA: the saveload smoke skipped) the check is skipped.
 if(NOT EXISTS "${SAVE}")
   message(STATUS "alamo_game bench scenario: ${SAVE} missing (saveload smoke skipped?): skipped")
   return()
 endif()
+include("${CMAKE_CURRENT_LIST_DIR}/bench_common.cmake")  # json_field, compare_png_sets
 
+file(STRINGS "${RECIPE}" name_line REGEX "^name ")
+string(REPLACE "name " "" name "${name_line}")
 set(scen "${OUT}/scenario")
 file(REMOVE_RECURSE "${OUT}")
 file(MAKE_DIRECTORY "${scen}")
-file(COPY_FILE "${RECIPE}" "${scen}/battle_orbit.abench")
+file(COPY_FILE "${RECIPE}" "${scen}/${name}.abench")
+set(size_args "")
+set(preset bm-smoke)
+if(TAA)
+  set(size_args --width 640 --height 360)
+  set(preset bm-high)
+endif()
 
 function(game_run tag out_var)
   set(dir "${OUT}/${tag}")
@@ -31,22 +44,17 @@ function(game_run tag out_var)
   set(${out_var} "${report}" PARENT_SCOPE)
 endfunction()
 
-function(json_field report key out_var)
-  string(JSON v GET "${report}" ${key})
-  set(${out_var} "${v}" PARENT_SCOPE)
-endfunction()
-
 # 1. make
-game_run(make rm --bench-make "${scen}/battle_orbit.abench" --bench-save "${SAVE}")
+game_run(make rm --bench-make "${scen}/${name}.abench" --bench-save "${SAVE}" ${size_args})
 json_field("${rm}" result res_m)
 json_field("${rm}" scenario_made made)
 json_field("${rm}" presentation_check check_m)
 if(NOT res_m STREQUAL "ok" OR NOT check_m STREQUAL "match" OR made STREQUAL "")
   message(FATAL_ERROR "alamo_game bench scenario make: result ${res_m}, presentation check ${check_m}, made '${made}'\n${rm}")
 endif()
-file(READ "${scen}/battle_orbit.abench" manifest)
-foreach(line "ALAMO_BENCH 2" "name battle_orbit" "version 1" "save battle_orbit.alsv " "orders battle_orbit.acmd "
-             "fingerprint battle_orbit.crc " "ticks 60" "host game" "mode fixed" "preset bm-smoke" "frames_per_tick 2"
+file(READ "${scen}/${name}.abench" manifest)
+foreach(line "ALAMO_BENCH 2" "name ${name}" "version 1" "save ${name}.alsv " "orders ${name}.acmd "
+             "fingerprint ${name}.crc " "ticks 60" "host game" "mode fixed" "preset ${preset}" "frames_per_tick 2"
              "camera_anchor start" "camera 0 0 0 0 0 35 900" "camera 60 0 0 0 180 20 600 60")
   string(FIND "${manifest}" "${line}" at)
   if(at LESS 0)
@@ -56,7 +64,11 @@ endforeach()
 
 # 2. two runs of the scenario
 foreach(tag a b)
-  game_run(${tag} r${tag} --bench-scenario "${scen}/battle_orbit.abench" --bench-png-dir "${OUT}/${tag}" --bench-png-every 10)
+  set(redraw "")
+  if(TAA AND tag STREQUAL "b")
+    set(redraw --bench-redraw-every 3)
+  endif()
+  game_run(${tag} r${tag} --bench-scenario "${scen}/${name}.abench" --bench-png-dir "${OUT}/${tag}" --bench-png-every 10 ${size_args} ${redraw})
   json_field("${r${tag}}" result res)
   json_field("${r${tag}}" fingerprint fp)
   json_field("${r${tag}}" frames frames)
@@ -77,26 +89,23 @@ foreach(tag a b)
   else()
     set(gpu_note "no GPU timestamps")
   endif()
-endforeach()
-file(GLOB pngs_a RELATIVE "${OUT}/a" "${OUT}/a/bench_*.png")
-file(GLOB pngs_b RELATIVE "${OUT}/b" "${OUT}/b/bench_*.png")
-list(SORT pngs_a)
-list(SORT pngs_b)
-list(LENGTH pngs_a n)
-if(NOT pngs_a STREQUAL pngs_b OR n LESS 12)
-  message(FATAL_ERROR "alamo_game bench scenario: PNG sets differ or too few (${n}): ${pngs_a} vs ${pngs_b}")
-endif()
-set(diff "")
-foreach(p IN LISTS pngs_a)
-  file(SHA256 "${OUT}/a/${p}" ha)
-  file(SHA256 "${OUT}/b/${p}" hb)
-  if(NOT ha STREQUAL hb)
-    list(APPEND diff ${p})
+  json_field("${r${tag}}" taa taa)
+  if((TAA AND NOT taa STREQUAL "ON") OR (NOT TAA AND NOT taa STREQUAL "OFF"))
+    message(FATAL_ERROR "alamo_game bench scenario run ${tag}: report taa ${taa} with preset ${preset}\n${r${tag}}")
   endif()
 endforeach()
-if(diff)
-  message(FATAL_ERROR "alamo_game bench scenario: frames differ between the two runs: ${diff}")
+set(taa_note "")
+if(TAA)
+  # 120 counted frames, every 3rd settled one forced: about 60 redraws, each taken back out of the TAA history.
+  json_field("${rb}" forced_redraws forced_b)
+  json_field("${rb}" taa_discarded discarded_b)
+  if(forced_b LESS 50 OR discarded_b LESS forced_b)
+    message(FATAL_ERROR "alamo_game bench scenario TAA: run b forced ${forced_b} redraws, ${discarded_b} TAA discards\n${rb}")
+  endif()
+  set(taa_note ", TAA on, run b forced ${forced_b} redraws / ${discarded_b} TAA discards")
 endif()
+compare_png_sets("${OUT}/a" "${OUT}/b" "alamo_game bench scenario" pngs_a)
+list(LENGTH pngs_a n)
 list(GET pngs_a 0 first)
 list(GET pngs_a -1 last)
 file(SHA256 "${OUT}/a/${first}" h_first)
@@ -106,11 +115,11 @@ if(h_first STREQUAL h_last)
 endif()
 
 # 3. a changed pinned file is refused before the run
-file(APPEND "${scen}/battle_orbit.crc" "# changed\n")
-execute_process(COMMAND "${GAME}" --hidden --bench-scenario "${scen}/battle_orbit.abench" RESULT_VARIABLE rc OUTPUT_VARIABLE out
+file(APPEND "${scen}/${name}.crc" "# changed\n")
+execute_process(COMMAND "${GAME}" --hidden --bench-scenario "${scen}/${name}.abench" RESULT_VARIABLE rc OUTPUT_VARIABLE out
                 ERROR_VARIABLE err)
 string(FIND "${err}" "not comparable" at)
 if(rc EQUAL 0 OR at LESS 0)
   message(FATAL_ERROR "alamo_game bench scenario: a changed fingerprint file was not refused (exit ${rc})\n${out}\n${err}")
 endif()
-message(STATUS "alamo_game bench scenario: OK (made version 1, two runs: fingerprint match, ${n} identical PNGs, camera moved, ${gpu_note})")
+message(STATUS "alamo_game bench scenario: OK (made version 1, two runs: fingerprint match, ${n} identical PNGs, camera moved, ${gpu_note}${taa_note})")

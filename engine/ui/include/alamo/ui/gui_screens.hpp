@@ -1,5 +1,5 @@
 // P4 in-game screens (docs/re/UI.md §3.2 "Screens by dialog"): message boxes, battle end, campaign score, retreat,
-// in-game chat, planet info, auto-resolve, advanced video options and map selection, as flows over GuiManager dialogs.
+// in-game chat, planet info, advanced video options and map selection, as flows over GuiManager dialogs.
 // Host API: show_*() with plain data in, GuiManager::update events in (update()), ScreenActions + commands out. The
 // screens never read or write sim state; the only sim-affecting click (Retreat) leaves as a commands::EventData.
 //
@@ -15,13 +15,14 @@
 //                                  Cancel / Esc -> RetreatCancelled
 //   IDD_INGAME_CHAT_DIALOG         Enter -> SendChat{text, team_only} (the network layer turns it into the non-scheduled
 //                                  Chat event 16); Esc -> ChatClosed; IDC_TEAM_MEMBERS_ONLY check box = team_only
-//   IDD_PLANET_INFO                GALACTIC_DIALOGS §9 (the organiser's planet_info button; IDD_PLANET_DIALOG is dead):
+//   IDD_PLANET_INFO                GALACTIC_DIALOGS §9 (the organiser's planet_info button):
 //                                  "Planet Info <name>" in the owner colour, planet render + load_overlay.tga, wrapped
 //                                  tactical (50 200 255) / advantages / history lists, population / terrain / weather texts
 //                                  and icons; single instance, no pause; Close / Esc -> PlanetInfoClosed {object = planet}
-//   IDD_AUTO_RESOLVE_DIALOG        invading / defending force lists and progress bars; Withdraw -> Withdraw
+//   (IDD_AUTO_RESOLVE_DIALOG is not modelled: retail shows it only in multiplayer, which is out of scope)
 //   (IDD_ADVANCED_VIDEO_OPTIONS_DIALOG belongs to the options flow: FrontEnd, gui_menus.hpp)
 //   IDD_SELECT_MAP_DIALOG          maps list; Select / double click -> MapSelected{map}; Cancel -> MapSelectCancelled
+//   IDD_RETRY_DIALOG               ui1 t05: Retry (load autosave) / Quit -> MessageBoxResult{"retry", 0 / 1}
 //
 // [port] choices: battle-end lists show "name" or "name x N", icons on the PETROGLYPH_DIALOG_IMAGE controls, a
 // trackbar value v (0..100) scrolls the 12 rows by round(v / 100 * (n - 12)); IDC_COUNTDOWN_TIMER shows whole seconds
@@ -109,14 +110,6 @@ std::string planet_info_weather_icon(std::string_view encyclopedia_weather_icon)
 // (Data\Art\Textures\ [M]).
 std::string planet_info_map_icon(std::string_view land_tactical_map);
 
-struct AutoResolveInfo {
-    std::vector<std::u32string> invaders, defenders;
-    std::string invader_icon, defender_icon;
-    // P4_SIM_SYSTEMS §9.2: the local player is the conflict's attacker or defender. Otherwise the force texts are blanked
-    // and IDC_WITHDRAW_BUTTON is switched off.
-    bool local_side = true;
-};
-
 struct ScreenAction {
     enum class Kind : uint8_t {
         MessageBoxResult,     // tag, button (-1 = Esc)
@@ -130,7 +123,6 @@ struct ScreenAction {
         SendChat,             // text, team_only
         ChatClosed,
         PlanetInfoClosed,
-        Withdraw,
         MapSelected,          // map
         MapSelectCancelled,
         // P4 completion 2 (gui_info_screens.hpp), appended:
@@ -143,11 +135,7 @@ struct ScreenAction {
         StoryCancelled,       // tag
         StoryClosed,          // tag
         StorySummaryFilter,   // button 0 = active, 1 = completed stories
-        StoryAbandon,         // never emitted: the retail Abandon is dead (P4_SIM_SYSTEMS §9.1); kept for the enum order
         StorySummaryClosed,
-        PlanetOrganize,       // object = planet
-        PlanetProduction,     // object = planet
-        PlanetDialogClosed,   // object = planet
         InfoPageChanged,      // button = InfoPage
         InfoClosed,
         InfoHintsToggled,     // button = 1 on / 0 off
@@ -171,8 +159,8 @@ inline constexpr const char* kCampaignScore = "IDD_CAMPAIGN_SCORE_DIALOG";
 inline constexpr const char* kRetreat = "IDD_RETREAT_DIALOG";
 inline constexpr const char* kChat = "IDD_INGAME_CHAT_DIALOG";
 inline constexpr const char* kPlanetInfo = "IDD_PLANET_INFO";
-inline constexpr const char* kAutoResolve = "IDD_AUTO_RESOLVE_DIALOG";
 inline constexpr const char* kSelectMap = "IDD_SELECT_MAP_DIALOG";
+inline constexpr const char* kRetry = "IDD_RETRY_DIALOG";  // ui1 t05
 }  // namespace dlg
 
 class GameScreens {
@@ -185,6 +173,9 @@ public:
     void set_countdown(float seconds);  // battle end
     bool show_campaign_score(const CampaignScoreInfo& info);
     bool show_retreat_confirm();
+    // ui1 t05 (Lua Activate_Retry_Dialog, LUA_API.md): IDD_RETRY_DIALOG - TEXT_MISSION_FAILED, IDC_RETRY_BUTTON
+    // (TEXT_LOAD_AUTOSAVE) -> MessageBoxResult{tag "retry", button 0}, IDC_QUIT_BUTTON -> button 1; Esc does nothing.
+    bool show_retry();
     bool open_chat(bool team_only = false);
     bool chat_open() const;
     // GALACTIC_DIALOGS §9.4: opens IDD_PLANET_INFO (no pause). Single instance: while it is open another call does nothing
@@ -193,8 +184,6 @@ public:
     bool show_planet_info(const PlanetInfoData& info);
     bool planet_info_open() const;
     void close_planet_info();
-    bool show_auto_resolve(const AutoResolveInfo& info);
-    void set_auto_resolve_progress(float invader, float defender);  // 0..1
     bool show_select_map(std::span<const SkirmishMapInfo> maps);
     void close(std::string_view dialog);
     void close_all();  // every dialog this class opened

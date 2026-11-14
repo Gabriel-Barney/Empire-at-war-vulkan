@@ -1,10 +1,10 @@
 // alamo_render - terrain decorations and fog of war on the GPU (docs/re/DECORATIONS.md; CPU side in
 // engine/terrain decorations.hpp / fow.hpp). See world.hpp for what draws where.
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/convert.hpp"
 #include "alamo/render/world.hpp"
@@ -380,13 +380,8 @@ bool WorldRenderer::build_dynamic(const rhi::Frame& frame, std::vector<DecoDraw>
     };
     auto tex_of = [&](const std::string& name) {
         if (name.empty()) return -1;
-        std::string k = name;
-        for (char& c : k) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        for (int t : slot_textures_) {
-            std::string n = textures_[static_cast<size_t>(t)].name;
-            for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (n == k) return t;
-        }
+        for (int t : slot_textures_)
+            if (ascii_iequals(textures_[static_cast<size_t>(t)].name, name)) return t;
         return -1;
     };
     // Type 2: dynamic tracks.
@@ -547,7 +542,7 @@ uint32_t Renderer::ff_geometry_draws(rhi::Frame& frame, VkCommandBuffer cmd, con
     for (size_t i = 0; i < n; ++i) {
         const FfGeoDraw& d = draws[i];
         materials::PsoKey key = d.pass->pso[0];
-        key.render_pass = rp_scene_;
+        key.render_pass = rp_world_;  // [port] MSAA: the pass being recorded
         key.vertex_layout = d.layout;
         const materials::Program prog = materials::ff_program(materials::ff_inputs_for_layout(d.layout));
         if (prog.vs) key.vs_id = prog.vs->id;
@@ -669,7 +664,7 @@ void Renderer::world_draw_decorations(rhi::Frame& frame, VkCommandBuffer cmd, co
         PostSpec ps;
         ps.fx = w.prim_fx_[m];
         ps.pass = pass;
-        ps.render_pass = rp_scene_;
+        ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
         ps.width = width;
         ps.height = height;
         ps.view = &dv;
@@ -703,7 +698,7 @@ void Renderer::world_draw_decorations(rhi::Frame& frame, VkCommandBuffer cmd, co
     PostSpec ps;
     ps.fx = w.fow_fx_;
     ps.pass = w.fow_pass_;
-    ps.render_pass = rp_scene_;
+    ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
     ps.width = width;
     ps.height = height;
     ps.view = &dv;

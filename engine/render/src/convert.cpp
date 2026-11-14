@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cctype>
 #include <cstring>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 
 namespace alamo::render {
@@ -38,19 +38,6 @@ bool to_rhi_swizzle(const assets::ComponentMapping& m, rhi::Swizzle& out) {
 }
 
 namespace {
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
-bool icontains(std::string_view s, std::string_view needle) {
-    if (needle.size() > s.size()) return false;
-    for (size_t i = 0; i + needle.size() <= s.size(); ++i)
-        if (iequals(s.substr(i, needle.size()), needle)) return true;
-    return false;
-}
 
 using ML = materials::VertexLayout;
 
@@ -87,9 +74,9 @@ ML from_traits(const assets::VertexFormatTraits& t) {
 
 materials::VertexLayout vertex_layout_for(std::string_view name, const assets::VertexFormatTraits& traits) {
     for (const NameMap& n : kNames)
-        if (iequals(name, n.name)) return n.layout;
+        if (ascii_iequals(name, n.name)) return n.layout;
     if (!traits.known && !traits.skinned && !traits.tangent_frame && traits.uv_sets == 0 && !traits.color &&
-        !icontains(name, "alD3dVert"))
+        !ascii_icontains(name, "alD3dVert"))
         return ML::Unknown;
     return from_traits(traits);
 }
@@ -97,10 +84,10 @@ materials::VertexLayout vertex_layout_for(std::string_view name, const assets::V
 materials::VertexLayout vertex_layout_for(std::string_view name) {
     assets::VertexFormatTraits t;
     t.known = false;
-    t.skinned = icontains(name, "RSkin") || icontains(name, "B4I4");
-    t.tangent_frame = icontains(name, "U3U3");
-    t.uv_sets = icontains(name, "U2") ? 1 : 0;
-    t.color = !name.empty() && (name.back() == 'C' || name.back() == 'c') && icontains(name, "alD3dVert");
+    t.skinned = ascii_icontains(name, "RSkin") || ascii_icontains(name, "B4I4");
+    t.tangent_frame = ascii_icontains(name, "U3U3");
+    t.uv_sets = ascii_icontains(name, "U2") ? 1 : 0;
+    t.color = !name.empty() && (name.back() == 'C' || name.back() == 'c') && ascii_icontains(name, "alD3dVert");
     return vertex_layout_for(name, t);
 }
 

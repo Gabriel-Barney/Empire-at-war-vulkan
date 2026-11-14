@@ -1,9 +1,10 @@
 #include "alamo/game/story_ui.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <iterator>
 #include <span>
+
+#include "alamo/core/ascii.hpp"
 
 namespace alamo::game {
 
@@ -17,6 +18,8 @@ commands::EventData story_ui_event(const sim::StoryUiNotification& n) {
     for (size_t i = 0; i < len; ++i) b.push_back(static_cast<uint8_t>(n.name[i]));
     return commands::ev::port_extension(kStoryUiSubtype, std::span<const uint8_t>(b));
 }
+
+commands::EventData story_esc_event() { return commands::ev::port_extension(kStoryEscSubtype, {}); }
 
 bool read_story_ui_event(const commands::EventData& ev, sim::StoryUiNotification& n) {
     if (ev.type() != commands::EventType::PortExtension || ev.u("subtype") != kStoryUiSubtype) return false;
@@ -45,12 +48,8 @@ void story_reward_media(std::string_view reward_type, const std::vector<std::str
     if (reward_type == "START_MOVIE" && !param(0).empty()) out.push_back({StoryMediaCue::Kind::Movie, std::string(param(0))});
     if (reward_type == "MULTIMEDIA" && !param(7).empty()) out.push_back({StoryMediaCue::Kind::Speech, std::string(param(7))});
     // FIXPASS_GALACTIC §4.2 (capture C2): Reward_Param9 = the talking head; the data also holds "" and "-1" (no head).
-    if (reward_type == "MULTIMEDIA" && param(8).size() > 5) {
-        const std::string_view tail = param(8).substr(param(8).size() - 5);
-        bool loop = true;
-        for (size_t i = 0; i < 5; ++i) loop = loop && std::tolower(static_cast<unsigned char>(tail[i])) == "_loop"[i];
-        if (loop) out.push_back({StoryMediaCue::Kind::AdvisorMovie, std::string(param(8))});
-    }
+    if (reward_type == "MULTIMEDIA" && param(8).size() > 5 && ascii_iends_with(param(8), "_loop"))
+        out.push_back({StoryMediaCue::Kind::AdvisorMovie, std::string(param(8))});
     if (reward_type == "STOP_COMMANDBAR_MOVIE") out.push_back({StoryMediaCue::Kind::AdvisorStop, {}});
 }
 

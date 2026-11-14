@@ -8,54 +8,21 @@ times; oi_run.py calls it at the end of every run (also after an error or Ctrl+C
 That folder is the only thing the probe adds; no retail file is touched and nothing else is deleted (other probe
 kits' folders, e.g. Mods\\A1TacticalProbe, are left alone).
 """
-import argparse
 import os
-import shutil
 import sys
-import time
 
 sys.dont_write_bytecode = True
-DEFAULT_GAME = r'F:\SteamLibrary\steamapps\common\Star Wars Empire at War'
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'common'))
+import probe_cleanup  # noqa: E402
+
+DEFAULT_GAME = probe_cleanup.DEFAULT_GAME
 MOD_NAME = 'OIAbilityProbe'
 MARKER = 'OI_PROBE_MARKER.txt'
 
 
 def cleanup(game, log=None, dry_run=False):
-    mod = os.path.join(game, 'corruption', 'Mods', MOD_NAME)
-    rep = {'ok': True, 'actions': []}
-    if os.path.isdir(mod):
-        if os.path.exists(os.path.join(mod, MARKER)):
-            if not dry_run:
-                shutil.rmtree(mod, ignore_errors=True)
-            gone = dry_run or not os.path.exists(mod)
-            rep['actions'].append('%s %s' % ('would delete' if dry_run else ('deleted' if gone else 'COULD NOT DELETE'),
-                                             mod))
-            rep['ok'] = gone
-        else:
-            rep['actions'].append('left %s: no %s, not made by the probe' % (mod, MARKER))
-    else:
-        rep['actions'].append('nothing to remove (%s absent)' % mod)
-    if log:
-        with open(log, 'a') as f:
-            f.write('%s cleanup ok=%s\n' % (time.strftime('%Y-%m-%d %H:%M:%S'), rep['ok']))
-            for a in rep['actions']:
-                f.write('  ' + a + '\n')
-    return rep
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--game', default=DEFAULT_GAME)
-    ap.add_argument('--dry-run', action='store_true')
-    ap.add_argument('--log')
-    ap.add_argument('--no-pause', action='store_true', help='for the .cmd wrapper: end without waiting for a key')
-    a = ap.parse_args()
-    rep = cleanup(a.game, a.log, a.dry_run)
-    for x in rep['actions']:
-        print(x)
-    print('OI_CLEANUP %s' % ('OK' if rep['ok'] else 'INCOMPLETE'))
-    return 0 if rep['ok'] else 1
+    return probe_cleanup.cleanup(game, (MOD_NAME,), MARKER, log, dry_run)
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(probe_cleanup.run_main(__doc__, cleanup, 'OI_CLEANUP'))

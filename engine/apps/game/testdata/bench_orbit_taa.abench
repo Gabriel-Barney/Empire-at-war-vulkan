@@ -1,0 +1,14 @@
+ALAMO_BENCH 2
+# bm2c t03 test recipe (alamo_game_bench_scenario_taa, bench_scenario_check.cmake -DTAA=1): bench_orbit.abench on bm-high
+# (TAA Medium), so a scenario run exercises the fixed-frames TAA path (bm2b): alamo_game --bench-make reads it, runs the
+# saveload smoke's battle save and writes the full scenario over a copy of it; the test runs it at 640x360.
+name battle_orbit_taa
+description bm2c test: the saveload smoke's battle save, 60 fixed-frames ticks on bm-high (TAA), the camera half way round the start view
+ticks 60
+host game
+mode fixed
+preset bm-high
+frames_per_tick 2
+camera_anchor start
+camera 0 0 0 0 0 35 900
+camera 60 0 0 0 180 20 600 60

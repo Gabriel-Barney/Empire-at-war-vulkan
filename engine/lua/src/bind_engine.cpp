@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "alamo/core/log.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #if defined(ALAMO_LUA_PLAYERS)
@@ -103,9 +104,7 @@ int m_type_get_name(Call& c) {
         lua_pushlstring(c.L, n.data(), n.size());
         return 1;
     }
-    std::string up(n);
-    for (char& ch : up)
-        if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+    const std::string up = ascii_upper(n);
     lua_pushlstring(c.L, up.data(), up.size());
     return 1;
 }
@@ -452,14 +451,7 @@ int g_get_game_mode(Call& c) {
 // (GameScoring.lua tests it with `if`, so it is a boolean, not a strcmp-style number); non-strings: false.
 int g_string_compare(Call& c) {
     if (c.nargs != 2 || !c.is_string(1) || !c.is_string(2)) return push_bool(c, false);
-    const std::string_view a = c.string(1), b = c.string(2);
-    if (a.size() != b.size()) return push_bool(c, false);
-    for (size_t i = 0; i < a.size(); ++i) {
-        const char x = (a[i] >= 'a' && a[i] <= 'z') ? static_cast<char>(a[i] - 'a' + 'A') : a[i];
-        const char y = (b[i] >= 'a' && b[i] <= 'z') ? static_cast<char>(b[i] - 'a' + 'A') : b[i];
-        if (x != y) return push_bool(c, false);
-    }
-    return push_bool(c, true);
+    return push_bool(c, ascii_iequals(c.string(1), c.string(2)));
 }
 
 constexpr BindingKind G = BindingKind::Global;

@@ -5,19 +5,11 @@
 #include <utility>
 
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/ascii.hpp"
 
 namespace alamo::ai::tactical {
 
 namespace {
-
-char lower_ascii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower_ascii(a[i]) != lower_ascii(b[i])) return false;
-    return true;
-}
 
 int32_t cell_count(float extent, float size) {
     if (!(extent > 0.0f) || !(size > 0.0f)) return 0;
@@ -129,7 +121,7 @@ int32_t TacticalTargetList::find_object(int32_t object_id) const {
 
 int32_t TacticalTargetList::find_region(std::string_view name) const {
     for (size_t i = 0; i < targets_.size(); ++i)
-        if (targets_[i].kind == TargetKind::Region && iequals(targets_[i].name, name)) return static_cast<int32_t>(i);
+        if (targets_[i].kind == TargetKind::Region && ascii_iequals(targets_[i].name, name)) return static_cast<int32_t>(i);
     return -1;
 }
 

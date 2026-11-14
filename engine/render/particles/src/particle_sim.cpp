@@ -79,7 +79,6 @@ ParticleWorld::Handle ParticleWorld::create(SystemPtr def, const Mat3x4& transfo
     s.generation = gen;
     s.def = std::move(def);
     s.cur = s.prev = transform;
-    s.has_transform = true;
     s.alive = true;
     init_emitters(s);
     return (static_cast<uint64_t>(gen) << 32) | index;
@@ -109,10 +108,6 @@ void ParticleWorld::set_fade(Handle h, float f) {
 }
 void ParticleWorld::set_water(Handle h, bool w) {
     if (auto* s = const_cast<SystemState*>(system(h))) s->water = w;
-}
-void ParticleWorld::set_scales(Handle h, float emission, float detail) {
-    set_scalar(h, SystemScalar::Emission, std::span<const float>(&emission, 1), 0.0f);
-    set_scalar(h, SystemScalar::Detail, std::span<const float>(&detail, 1), 0.0f);
 }
 
 namespace {

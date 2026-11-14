@@ -110,7 +110,6 @@ struct Registry {
     std::vector<detail::ImplFn> global_fn;  // per table row (globals only)
     std::vector<detail::ModeGate> global_gate;  // per table row (globals only)
     std::map<std::string, uint32_t, std::less<>> global_rows;
-    std::vector<uint32_t> extra_counter;  // per slot: counter index for extra slots
     uint32_t user_var = detail::kNoClass;
 
     Registry() {
@@ -148,10 +147,6 @@ struct Registry {
             if (methods_by_class[c].count(e.name)) continue;
             add_slot(detail::kNoBinding, c, e.name, e.fn);
         }
-        extra_counter.assign(slots.size(), detail::kNoBinding);
-        uint32_t next = static_cast<uint32_t>(std::size(kTable));
-        for (uint32_t s = 0; s < slots.size(); ++s)
-            if (slots[s].row == detail::kNoBinding) extra_counter[s] = next++;
     }
     uint32_t id(std::string_view c) const {
         const auto it = std::lower_bound(classes.begin(), classes.end(), c);
@@ -275,15 +270,6 @@ uint32_t global_row(std::string_view name) {
     return it == reg().global_rows.end() ? kNoBinding : it->second;
 }
 
-size_t counter_slots() {
-    size_t n = std::size(kTable);
-    for (const MethodSlot& s : reg().slots)
-        if (s.row == kNoBinding) ++n;
-    return n;
-}
-
-uint32_t extra_counter_slot(uint32_t method_slot) { return reg().extra_counter[method_slot]; }
-
 uint32_t cls_game_object() {
     static const uint32_t c = class_id("GameObjectWrapper");
     return c;
@@ -304,20 +290,20 @@ uint32_t cls_user_var() {
     static const uint32_t c = class_id("LuaUserVar");
     return c;
 }
+uint32_t cls_position() {
+    static const uint32_t c = class_id("PositionWrapper");
+    return c;
+}
+uint32_t cls_target() {
+    static const uint32_t c = class_id("AITargetLocationWrapper");
+    return c;
+}
 
 int32_t to_int(double d) {
     if (!(d == d)) return 0;
     if (d >= 2147483647.0) return 2147483647;
     if (d <= -2147483648.0) return -2147483647 - 1;
     return static_cast<int32_t>(d);
-}
-
-int Call::fail(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    std::vsnprintf(err, err_cap, fmt, ap);
-    va_end(ap);
-    return -1;
 }
 
 int Call::script_error_stop(const char* fmt, ...) {
@@ -365,7 +351,7 @@ objects::ObjectStore* parent_store_of(LuaVm::Impl& vm) {
     return b ? b->parent_store : nullptr;
 }
 
-// The store a game-object wrapper belongs to, from outside a binding (tostring, sweep).
+// The store a game-object wrapper belongs to, from outside a binding (tostring).
 const objects::ObjectStore* wrapper_store(LuaVm::Impl& vm, const Ud& ud) {
     if (store_tag_of(ud) == vm.store_tag) return vm.host.store;
     return store_tag_of(ud) == kParentStoreTag ? parent_store_of(vm) : nullptr;
@@ -396,7 +382,7 @@ struct Invocation {
     LuaVm::Impl* vm;
     const Ud* self;
     ImplFn fn;
-    uint32_t counter;   // unbound counter slot
+    uint32_t counter;   // unbound counter slot: the binding row (kNoBinding = none)
     const char* label;  // binding name for messages
     ModeGate gate;      // q6 t11: tested first
     bool object;        // a GameObjectWrapper method: `dead` applies
@@ -435,10 +421,10 @@ struct StoreSwap {
 
 // q6 t11 (LUA_API.md "Binding error model across all bindings"): the mode gate (a script error), then a dead
 // GameObjectWrapper's rule, then the implementation. Only the port's own failures return -1 (raised by the caller): an
-// unbound binding, a C++ exception, a legacy Call::fail.
+// unbound binding or a C++ exception; `err` then holds the message.
 int invoke(lua_State* L, const Invocation& inv, char* err, size_t cap) noexcept {
     const StoreSwap swap(inv.vm, inv.self);
-    Call c{L, inv.vm, inv.self, inv.first, inv.nargs, err, cap};
+    Call c{L, inv.vm, inv.self, inv.first, inv.nargs};
     if (gate_fails(*inv.vm, inv.gate)) {
         for (const auto& [name, text] : kGateTexts)
             if (name == inv.method) return c.script_error_stop("%s", text);
@@ -504,8 +490,8 @@ int method_call(lua_State* L) {
     // q6 t11: the gate and the dead-wrapper rule of the slot (kMethodGates / kDeadRules above). The receiver's class
     // decides whether the dead rule applies (a GameObjectWrapper); the slot's class only names the rule.
     const bool object = ud->cls == cls_game_object();
-    const uint32_t counter = s.row != kNoBinding ? s.row : extra_counter_slot(slot);
-    const Invocation inv{vm, ud, s.fn, counter, s.label.c_str(), s.gate, object, s.dead, name, 1, lua_gettop(L)};
+    // An extra (implemented-only) method is never unbound, so it has no counter.
+    const Invocation inv{vm, ud, s.fn, s.row, s.label.c_str(), s.gate, object, s.dead, name, 1, lua_gettop(L)};
     const int n = invoke(L, inv, err, sizeof err);
     if (n < 0) return raise(L, err);
     return n;
@@ -766,28 +752,6 @@ std::span<const NamedCFunction> runtime_cfunctions_bindings() {
 }
 
 }  // namespace detail
-
-// Drops cache entries of dead objects. Removal only (assigning nil to existing keys during next()
-// is allowed), so the visiting order cannot change any result.
-void LuaVm::sweep_dead_wrappers() {
-    check_owner();
-    lua_State* L = impl_->L;
-    for (const char* key : {detail::kObjCacheKey, detail::kObjCacheParentKey}) {
-        lua_pushstring(L, key);
-        lua_rawget(L, LUA_REGISTRYINDEX);
-        lua_pushnil(L);
-        while (lua_next(L, -2) != 0) {
-            const auto* ud = static_cast<const detail::Ud*>(lua_touserdata(L, -1));
-            lua_pop(L, 1);
-            if (!ud || !detail::alive_in(detail::wrapper_store(*impl_, *ud), *ud)) {
-                lua_pushvalue(L, -1);
-                lua_pushnil(L);
-                lua_rawset(L, -4);
-            }
-        }
-        lua_pop(L, 1);
-    }
-}
 
 void LuaVm::reinstall_engine_globals() {
     check_owner();

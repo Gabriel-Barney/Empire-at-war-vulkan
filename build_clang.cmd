@@ -17,6 +17,8 @@ set CMAKE=%TC%\venv\Scripts\cmake.exe
 set CTEST=%TC%\venv\Scripts\ctest.exe
 call "%~dp0tools\test_env.cmd"
 call "%~dp0tools\cache_env.cmd"
+rem Which code this run builds (commit, worktree, source hash), copied into the build record with the outcome.
+python -I tools\lint\build_state.py begin build-clang --modules all --tests all
 > logs\clang_configure.txt (
   "%TC%\llvm\bin\clang++.exe" --version 2>&1
   rem -U drops a cached module list so the full build always gets every module (engine/CMakeLists.txt default).
@@ -31,10 +33,11 @@ call "%~dp0tools\cache_env.cmd"
   if not exist build-clang\tmp mkdir build-clang\tmp
   set "TMP=%~dp0build-clang\tmp"
   set "TEMP=%~dp0build-clang\tmp"
-  "%CTEST%" --test-dir build-clang --output-on-failure --output-junit "%~dp0build-clang\ctest_junit.xml" -j 8 2>&1
+  python -I tools\lint\test_slot.py -- "%CTEST%" --test-dir build-clang --output-on-failure --output-junit "%~dp0build-clang\ctest_junit.xml" -j 8 2>&1
   echo ctest exit !ERRORLEVEL!
   python tools\lint\ctest_skips.py "%~dp0build-clang\ctest_junit.xml"
 )
 echo BUILD_DONE>> logs\clang_configure.txt
-python tools\lint\build_summary.py logs\clang_configure.txt logs\clang_build.txt
+python tools\lint\build_summary.py --state build-clang\build_state.json logs\clang_configure.txt logs\clang_build.txt
+set "ALAMO_BUILD_EXTRA=%~dp0build-clang\build_state.json"
 python roadmap-store\roadmap_store.py record-build clang build-clang logs\clang_configure.txt logs\clang_build.txt

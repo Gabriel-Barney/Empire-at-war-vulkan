@@ -75,24 +75,6 @@ void OrderTranslator::update(const InputState& in, const Bindings& keys, const O
     } else {
         tactical(in, ctx);
     }
-    // keyboard orders (both modes)
-    if (!keyboard_orders_) {
-        sync_meta();
-        return;
-    }
-    if (keys.pressed(in, Action::SelectAll)) pending_.push_back(ev::select_all());
-    if (keys.pressed(in, Action::Stop) && !sel_.empty()) pending_.push_back(ev::stop());
-    for (uint8_t g = 0; g < 10; ++g) {
-        const auto a = static_cast<Action>(static_cast<uint8_t>(Action::ControlGroup0) + g);
-        if (!keys.pressed(in, a)) continue;
-        const bool assign = in.ctrl();
-        pending_.push_back(ev::control_group(g, assign, assign && in.shift()));
-        if (assign) continue;
-        const double now = in.frame().time;
-        if (last_recall_group_ == g && now - last_recall_time_ <= kDoubleRecallSeconds) camera_jump_ = g;
-        last_recall_group_ = g;
-        last_recall_time_ = now;
-    }
     sync_meta();
 }
 
@@ -138,9 +120,29 @@ void OrderTranslator::tactical(const InputState& in, const OrderContext& ctx) {
             } else {
                 emit_select({hit->id});
             }
+        } else if (alternate_ && !sel_.empty()) {
+            // ui1 t02 [port] alternate scheme (P1_DOUBLE_CLICK_MOVE §1.2: ground orders on the left button): a left click
+            // that does not hit an own selectable object is the order click; the release of a double press is swallowed.
+            if (!lb.in_double_press) {
+                if (!((in.alt() && !in.ctrl()) || toggle_waypoint_)) waypoint_mode_ = false;
+                right_release(in, ctx);
+            }
         } else if (!hit && !in.shift()) {  // P1_CAMERA_INPUT.md §5: a plain click on nothing submits Select{} [port: Shift]
             emit_select({});
         }
+    }
+    if (alternate_) {
+        if (!((in.alt() && !in.ctrl()) || toggle_waypoint_)) waypoint_mode_ = false;
+        if (sel_.empty()) return;
+        if (lb.double_press) {
+            // The double click of the order button acts at the press (action 2 in the alternate table), unless the press
+            // is on an own selectable object (that double click selects every one of its type on the release).
+            const auto hit = pick_world(all, ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_, ctx.pick_tests);
+            if (!(hit && is_selectable(ctx, hit->id))) right_double(in, ctx);
+        } else if (rb.click && !rb.in_double_press) {
+            emit_select({});  // [port] a right click clears the selection (the alternate table's right actions 3..5 are not recovered)
+        }
+        return;
     }
 
     // Waypoint mode lasts while Alt (without Ctrl) or the waypoint toggle is held (spec §2.1 step 3).
@@ -158,7 +160,20 @@ void OrderTranslator::arm_move_toggle(MoveToggle t) {
         case MoveToggle::AttackMove: toggle_attack_ = true; break;
         case MoveToggle::GuardMove: toggle_guard_ = true; break;
         case MoveToggle::Waypoint: toggle_waypoint_ = true; break;
+        case MoveToggle::Attack: toggle_force_attack_ = true; toggle_force_move_ = false; break;
+        case MoveToggle::Move: toggle_force_move_ = true; toggle_force_attack_ = false; break;
     }
+}
+
+bool OrderTranslator::move_toggle_armed(MoveToggle t) const {
+    switch (t) {
+        case MoveToggle::AttackMove: return toggle_attack_;
+        case MoveToggle::GuardMove: return toggle_guard_;
+        case MoveToggle::Waypoint: return toggle_waypoint_;
+        case MoveToggle::Attack: return toggle_force_attack_;
+        case MoveToggle::Move: return toggle_force_move_;
+    }
+    return false;
 }
 
 uint8_t OrderTranslator::move_flags(const InputState& in, bool dbl) {
@@ -167,7 +182,7 @@ uint8_t OrderTranslator::move_flags(const InputState& in, bool dbl) {
     const bool guard = (in.ctrl() && in.alt()) || toggle_guard_;
     if (guard) {
         f |= kGuardMove;
-    } else if (in.ctrl() || toggle_attack_) {
+    } else if (in.ctrl() || toggle_attack_ || toggle_force_attack_) {
         f |= kAttackMove;
     }
     if (dbl) f |= kDoubleClick;
@@ -180,10 +195,15 @@ uint8_t OrderTranslator::move_flags(const InputState& in, bool dbl) {
 
 // Order button release (default scheme action 13 -> `0x41f70`): the cursor action at the release point.
 void OrderTranslator::right_release(const InputState& in, const OrderContext& ctx) {
-    const auto hit = pick_world(ctx.trees->all(), ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()), ctx.pick_filter, qctx_, ctx.pick_tests);
+    const auto hit = toggle_force_move_ ? std::nullopt  // ui3 t01: the Move toggle - a ground move whatever is under the cursor
+                                        : pick_world(ctx.trees->all(), ctx.view, pixel_ray(ctx.view, in.mouse_x(), in.mouse_y()),
+                                                     ctx.pick_filter, qctx_, ctx.pick_tests);
     if (hit) {
         waypoint_mode_ = false;  // any other order ends an Alt run
-        if (is_hostile(ctx, hit->id)) {
+        // ui3 t01: the Attack toggle attacks any object that is not the local player's (hostile or not).
+        const bool attack = is_hostile(ctx, hit->id) || (toggle_force_attack_ && !is_selectable(ctx, hit->id));
+        toggle_attack_ = toggle_guard_ = toggle_waypoint_ = toggle_force_attack_ = toggle_force_move_ = false;
+        if (attack) {
             commands::EventData e = ev::attack(hit->id, sel_);
             e.set("flag1", in.ctrl() ? 1u : 0u);  // +0x51 Ctrl (spec §3.4)
             push_order(std::move(e), queue_);
@@ -211,7 +231,7 @@ void OrderTranslator::right_double(const InputState& in, const OrderContext& ctx
 
 // `0x3b360`: one move order at pixel (px, py), its flags and its acknowledgement (spec §2).
 void OrderTranslator::ground_move(const InputState& in, const OrderContext& ctx, int32_t px, int32_t py, bool dbl) {
-    const ButtonState& rb = in.button(Button::Right);
+    const ButtonState& rb = in.button(alternate_ ? Button::Left : Button::Right);  // ui1 t02: the order button
     // Facing variant: a press anchor and a Chebyshev drag > MinimumDragDistance. A double click never has an anchor.
     const int32_t ddx = rb.drag.x1 - rb.drag.x0, ddy = rb.drag.y1 - rb.drag.y0;
     const int32_t cheb = std::max(ddx < 0 ? -ddx : ddx, ddy < 0 ? -ddy : ddy);
@@ -266,7 +286,7 @@ void OrderTranslator::ground_move(const InputState& in, const OrderContext& ctx,
     if (e.type() != commands::EventType::Facing) e.set("flags", flags);
     ack.attack = (flags & move_flag::kAttackMove) != 0;
     ack.guard = (flags & move_flag::kGuardMove) != 0;
-    toggle_attack_ = toggle_guard_ = toggle_waypoint_ = false;  // one-shot toggles
+    toggle_attack_ = toggle_guard_ = toggle_waypoint_ = toggle_force_attack_ = toggle_force_move_ = false;  // one-shot toggles
     push_order(std::move(e), (flags & move_flag::kWaypoint) != 0, !dbl, dbl);
     acks_.push_back(ack);
 }

@@ -8,6 +8,7 @@
 #include <iterator>
 #include <mutex>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/ui/hud_canvas.hpp"
 
@@ -16,13 +17,6 @@
 namespace alamo::ui {
 
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
 
 // ---- sfnt (TrueType / OpenType) parsing ----
 
@@ -122,7 +116,8 @@ bool parse_sfnt(const uint8_t* b, size_t avail, TrueTypeFontInfo& out) {
     return !out.family.empty() || !out.full_name.empty();
 }
 
-bool iequal(std::string_view a, std::string_view b) { return !a.empty() && upper(a) == upper(b); }
+// ASCII case-insensitive, but an empty name never matches (not even another empty one).
+bool iequal(std::string_view a, std::string_view b) { return !a.empty() && ascii_iequals(a, b); }
 
 struct FontRegistry {
     std::mutex m;
@@ -286,11 +281,6 @@ std::unique_ptr<GlyphRasterizer> make_system_rasterizer() {
     return std::make_unique<GdiRasterizer>();
 }
 
-bool register_private_font_file(const std::string& path_utf8) {
-    const std::wstring w = widen(path_utf8);
-    return AddFontResourceExW(w.c_str(), FR_PRIVATE, nullptr) > 0;
-}
-
 std::vector<TrueTypeFontInfo> find_truetype_fonts(const uint8_t* bytes, size_t size) {
     std::vector<TrueTypeFontInfo> out;
     if (!bytes) return out;
@@ -319,7 +309,7 @@ bool read_host_file(const std::filesystem::path& p, std::vector<uint8_t>& out) {
 }
 
 bool font_file_ext(const std::filesystem::path& p) {
-    const std::string e = upper(narrow(p.extension().wstring().c_str()));
+    const std::string e = ascii_upper(narrow(p.extension().wstring().c_str()));
     return e == ".TTF" || e == ".OTF";
 }
 
@@ -402,12 +392,12 @@ bool find_game_font(std::string_view face, GameFont* out) {
     return false;
 }
 
-bool face_is_bold(std::string_view face) { return upper(face).find("BOLD") != std::string::npos; }
+bool face_is_bold(std::string_view face) { return ascii_upper(face).find("BOLD") != std::string::npos; }
 
 int32_t FontCache::font(std::string_view face, float point_size, uint32_t screen_height, float stretch) {
     if (face.empty()) face = kFallbackFontFace;
     const int32_t px = font_pixel_height_int(point_size > 0.0f ? point_size : 8.0f, screen_height);
-    const auto key = std::make_tuple(upper(face), px, static_cast<int32_t>(std::lround(stretch * 1000.0f)));
+    const auto key = std::make_tuple(ascii_upper(face), px, static_cast<int32_t>(std::lround(stretch * 1000.0f)));
     const auto it = by_key_.find(key);
     if (it != by_key_.end()) return it->second;
     FontRequest req;
@@ -417,13 +407,13 @@ int32_t FontCache::font(std::string_view face, float point_size, uint32_t screen
     req.stretch = stretch;
     Font f;
     f.raster_id = r_->create_font(req, f.metrics);
-    if (f.raster_id < 0 && upper(face) != upper(kFallbackFontFace)) {
+    if (f.raster_id < 0 && ascii_upper(face) != ascii_upper(kFallbackFontFace)) {
         req.face = kFallbackFontFace;
         req.bold = false;
         f.raster_id = r_->create_font(req, f.metrics);
     }
     if (f.raster_id < 0) return -1;
-    if (!f.metrics.actual_face.empty() && upper(f.metrics.actual_face) != upper(req.face)) {
+    if (!f.metrics.actual_face.empty() && ascii_upper(f.metrics.actual_face) != ascii_upper(req.face)) {
         ++substitutions_;
         if (substitutions_ <= 4)
             log::warnf("ui", "font '%s' substituted by '%s'", req.face.c_str(), f.metrics.actual_face.c_str());

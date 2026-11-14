@@ -346,6 +346,21 @@ bool AnimBehaviors::deploy(AnimWorld& w, ObjectId id, bool undeploy, float rate,
     return w.play(id, r, &rng, frame) == PlayResult::Played;
 }
 
+bool AnimBehaviors::deploy_at_end(AnimWorld& w, ObjectId id, uint64_t frame) {
+    if (is_corpse(id) || !w.contains(id)) return false;
+    const AnimModel* m = w.model(id);
+    const ClipRef* c = m ? m->clip(kAnimDeploy, 0) : nullptr;
+    if (!c || !c->clip) return false;
+    PlayRequest r;
+    r.type = kAnimDeploy;
+    r.index = 0;
+    r.loop = false;
+    r.blend_seconds = 0.2f;
+    r.speed = 1.0f;
+    r.start_frame = c->clip->frame_count > 0 ? static_cast<float>(c->clip->frame_count - 1) : 0.0f;
+    return w.play(id, r, nullptr, frame) == PlayResult::Played;
+}
+
 // ---- death / corpse ----------------------------------------------------------------------------------
 
 uint64_t one_shot_frames(uint32_t frame_count, float fps, float speed) {

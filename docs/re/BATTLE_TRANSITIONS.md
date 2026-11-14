@@ -211,8 +211,10 @@ it is 0), and every exit releases it (0x28c720). [H]
       `Data\Art\Maps\<name>`; otherwise ask the random map picker 0x47bf40 (object 0x140b311a8) with
       (2 + space, terrain index from the type's `Terrain` +0x848 — TEMPERATE 0, ARCTIC 1, DESERT 2,
       FOREST 3, SWAMP 4, VOLCANIC 5, URBAN 6, SPACE 7 —, defender faction index — Rebel 0, Empire 1,
-      Pirates 2, Underworld 4, Hutts 5, other 0 —, base level, 2) and store its answer back into
-      planet data +0x1e0, so the planet keeps the same map for later battles;
+      Pirates 2, Underworld 4, Hutts 5, other 0 —, base level, 2, preferred = planet data +0x1e0) and store its
+      answer back into planet data +0x1e0 every time, an empty one included. The stored name only stops the
+      picker's scan after it, so the planet does not simply keep its map (corrected 2026-11-07,
+      CU8F_T03_T05_RE §1.3 / §1.4; the defender faction is −1 only when the defender id is −1);
    3. a story override (`SET_TACTICAL_MAP` / `STORY_LOAD_TACTICAL_MAP`: string at 0x140b30450 land,
       0x140b30430 space) as `Data\Art\Maps\<name>`; it is consumed (cleared) [M];
    4. the conflict record's explicit map (+0x30) as `Data\Art\Maps\<name>`;
@@ -675,7 +677,8 @@ declared; +0x24 countdown; +0x28 declared record (copy); +0x58 last frame seen; 
   the 210-frame end countdown.
 
 **Open items:** writer of 0x140b303c1; the +0x79 end-wait callbacks 0x140b30720 / 0x140b30718; the galactic-only
-gate (0x35f6b0 argument); whether a hero death (Tyber) is caught by the plot before any 0xb test of the
+gate (0x35f6b0 argument; 2026-11-09: 0x35f6b0 = multiplayer game type 1 / 2 / 4, so the gate only stops an AI player in
+multiplayer galactic; galactic triggers: STRATEGIC_GAPS §1.4 correction); whether a hero death (Tyber) is caught by the plot before any 0xb test of the
 Empire — with the hold up it is only queued, so the plot's VICTORY decides [M].
 
 ### 3.2 Planet write-back — 0x2bff60(winner) [H]
@@ -797,7 +800,14 @@ it sets the auto-resolve retreat instead) and AI task forces (0x5fdd50).
 
 ### 3.5 Credits, loot, heroes
 
-- No credit reward is paid by the battle code itself. A planet captured through the ownership change
+- **Corrected 2026-11-12 (`A2M_R2_RE_B.md` §2) [H]:** units killed by the auto-resolve pay a **bounty**.
+  - The path is the death handler 0x39bdb0 → 0x392600. The killer is the other side's first combatant.
+  - In galactic mode the killer is paid when two conditions hold: its faction has `Benefits_From_Corruption`, and the
+    dying object's planet is corrupted with Racketeering (type 3).
+  - Alternatively, when the victim is Underworld, the killer is paid if it owns NalHutta.
+  - The amount is the full type bounty, paid per object.
+  - Galactic starbases and the planet's structure lists pay nothing.
+  The sentence "No credit reward is paid by the battle code itself" is wrong for bounty. A planet captured through the ownership change
   pays the capture bonus of GALACTIC_ECONOMY §4.2 (step 6). [M]
 - Heroes are ordinary units for survival; auto-resolve picks hero-carrying combatants first (§4.4) and
   the result text adds `TEXT_AR_HERO_LOSS` per dead named hero. Overrun is blocked by a hero (§1.6).

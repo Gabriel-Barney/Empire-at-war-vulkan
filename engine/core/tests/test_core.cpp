@@ -1,4 +1,5 @@
 // alamo_core unit tests (no framework; returns non-zero on failure).
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -6,12 +7,15 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <span>
 #include <string>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/parallel.hpp"
+#include "alamo/test/support.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -22,14 +26,7 @@
 #include <windows.h>
 #include <winioctl.h>
 
-static int g_fail = 0;
-#define CHECK(c)                                                       \
-    do {                                                               \
-        if (!(c)) {                                                    \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);   \
-            ++g_fail;                                                  \
-        }                                                              \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // Turns the empty directory `link` into a junction (IO_REPARSE_TAG_MOUNT_POINT) to `target` with
 // FSCTL_SET_REPARSE_POINT. Junctions need no privilege (unlike symlinks).
@@ -144,7 +141,56 @@ int main() {
     CHECK(alamo::name_crc("data/xml/planets.xml") == alamo::name_crc("DATA\\XML\\PLANETS.XML"));
     CHECK(alamo::iequals("Data/Xml", "DATA\\XML"));
     CHECK(!alamo::iequals("abc", "abd"));
+    // CU2: one CRC-32 table: crc32 == ~crc32_raw(~seed), including a chained seed.
+    CHECK(alamo::crc32("123456789", 9, alamo::crc32("abc", 3)) == alamo::crc32("abc123456789", 12));
+    CHECK(alamo::crc32("", 0) == 0u);
+    // CU2: exact ASCII helpers ('/' != '\\', non-ASCII bytes unchanged, whitespace = space/tab/CR/LF).
+    static_assert(alamo::ascii_iequals("Data\\Xml", "DATA\\XML"));
+    static_assert(!alamo::ascii_iequals("Data/Xml", "DATA\\XML"));
+    static_assert(!alamo::ascii_iequals("ab", "abc"));
+    static_assert(alamo::ascii_to_upper('z') == 'Z' && alamo::ascii_to_upper('{') == '{' && alamo::ascii_to_upper('/') == '/');
+    static_assert(alamo::ascii_to_lower('A') == 'a' && alamo::ascii_to_lower('@') == '@' && alamo::ascii_to_lower('[') == '[');
+    static_assert(alamo::ascii_trim(" \t\r\nab c\n ") == "ab c");
+    static_assert(alamo::ascii_trim("\v x \f") == "\v x \f");  // \v / \f are not stripped (data::trim does)
+    static_assert(alamo::ascii_trim(" \t ").empty());
+    static_assert(alamo::ascii_istarts_with("Data\\Art", "DATA") && !alamo::ascii_istarts_with("Da", "DATA"));
+    static_assert(alamo::ascii_iends_with("x.ALO", ".alo") && !alamo::ascii_iends_with("o", ".alo"));
+    static_assert(alamo::ascii_icontains("Rebel_X-Wing", "x-wing") && alamo::ascii_icontains("a", "") &&
+                  !alamo::ascii_icontains("ab", "abc"));
+    static_assert(alamo::ascii_iless("abc", "ABD") && !alamo::ascii_iless("ABC", "abc") && alamo::ascii_iless("ab", "ABC"));
+    static_assert(alamo::valid_chunk_name("GALAXY_1") && !alamo::valid_chunk_name("") && !alamo::valid_chunk_name("a b") &&
+                  !alamo::valid_chunk_name("a\n"));
+    {
+        const std::string hi = "\xC3\xA9tat/Ab";
+        CHECK(alamo::ascii_upper(hi) == "\xC3\xA9TAT/AB");
+        CHECK(alamo::ascii_lower(hi) == "\xC3\xA9tat/ab");
+        std::string s = "mIxEd";
+        alamo::ascii_upper_in_place(s);
+        CHECK(s == "MIXED");
+        alamo::ascii_lower_in_place(s);
+        CHECK(s == "mixed");
+        // Same results as std::toupper / std::tolower in the "C" locale for every byte value.
+        for (int b = 0; b < 256; ++b) {
+            const char c = static_cast<char>(b);
+            CHECK(alamo::ascii_to_upper(c) == static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+            CHECK(alamo::ascii_to_lower(c) == static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+    }
+    // CU2 t09: the constexpr FNV-1a overloads give the same values as the pointer form.
+    static_assert(alamo::fnv1a64(std::string_view()) == alamo::kFnv1a64Offset);
+    static_assert(alamo::fnv1a64(std::string_view("a")) == 0xaf63dc4c8601ec8cull);  // FNV-1a 64 test vector
+    {
+        const std::string t = "The quick brown fox";
+        const std::vector<uint8_t> v(t.begin(), t.end());
+        CHECK(alamo::fnv1a64(t.data(), t.size()) == alamo::fnv1a64(std::string_view(t)));
+        CHECK(alamo::fnv1a64(t.data(), t.size(), 7) == alamo::fnv1a64(std::string_view(t), 7));
+        CHECK(alamo::fnv1a64(std::span<const uint8_t>(v)) == alamo::fnv1a64(std::string_view(t)));
+        CHECK(alamo::fnv1a64(nullptr, 0) == alamo::kFnv1a64Offset);
+    }
     CHECK(alamo::normalize_path(".\\Data//XML\\x.xml") == "DATA\\XML\\X.XML");
+    CHECK(alamo::with_default_dir_ext("ei_trooper", "Data\\Art\\Models\\", ".alo") == "DATA\\ART\\MODELS\\EI_TROOPER.ALO");
+    CHECK(alamo::with_default_dir_ext("Data/Art/Models/x.ALO", "Data\\Art\\Models\\", ".alo") == "DATA\\ART\\MODELS\\X.ALO");
+    CHECK(alamo::with_default_dir_ext("w.v1", "D\\", ".alo") == "D\\W.V1");
 
     // DirectoryProvider: case-insensitive.
     namespace fs = std::filesystem;

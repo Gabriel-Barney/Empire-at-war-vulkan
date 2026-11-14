@@ -40,18 +40,12 @@
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::audio;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -207,6 +201,7 @@ const char* kFactions = R"(<?xml version="1.0" ?>
     <Music_Event_Tactical_Lose> Lose </Music_Event_Tactical_Lose>
     <Music_Event_Space_Battle_Super_Weapon> Bat_Space_DS </Music_Event_Space_Battle_Super_Weapon>
     <Music_Event_Space_Ambient_Super_Weapon> </Music_Event_Space_Ambient_Super_Weapon>
+    <Faction_Super_Weapon> Death_Star </Faction_Super_Weapon>
     <SFX_Event_Tactical_Land_Battle_Pending> HUD_Pending </SFX_Event_Tactical_Land_Battle_Pending>
     <Music_Event_Tactical_Land_Battle_Pending> Pending </Music_Event_Tactical_Land_Battle_Pending>
     <Music_Event_List_Ambient> Space, Amb_Space </Music_Event_List_Ambient>
@@ -328,6 +323,7 @@ void test_data() {
     CHECK(f && f->get("Strategic_Map_Music_Event") == "Gal_Rebel");  // the duplicate faction is not kept
     CHECK(f->get("Credits").empty());                                 // only SFX/Music/Speech tags are kept
     CHECK(f->get("Music_Event_Space_Ambient_Super_Weapon").empty());
+    CHECK(f->get("Faction_Super_Weapon") == "Death_Star");  // b0286: kept for the super-weapon music choice
     CHECK((f->pair_values("Music_Event_List_Ambient", "temperate") ==
            std::vector<std::string>{"Amb_Temperate", "Amb_Temperate_2"}));
     CHECK(f->pair_values("SFXEvent_Weather_End", "RAIN").empty());  // "RAIN, " = no event
@@ -602,10 +598,18 @@ void test_music_modes() {
     g.enter_tactical(space);
     g.combat({true, false});
     CHECK(a.current_music() == "Bat_Space");
+    // b0286: the host's first battle report (presence learnt one tick after enter_tactical) re-picks the mode's event;
+    // later reports only change the flag, read at the next mode switch.
+    g.set_super_weapon_present(true, true);
+    CHECK(g.super_weapon_present() && a.current_music() == "Bat_Space_DS" && a.music_mode() == music_mode::kTacticalBattle);
+    g.set_super_weapon_present(false, false);
+    CHECK(!g.super_weapon_present() && a.current_music() == "Bat_Space_DS");
+    g.set_super_weapon_present(false, true);  // no change: nothing restarts
+    CHECK(a.current_music() == "Bat_Space_DS");
     // An unknown faction resolves nothing (music unchanged).
     g.set_local_faction("Nobody");
     g.enter_galactic();
-    CHECK(a.current_music() == "Bat_Space");
+    CHECK(a.current_music() == "Bat_Space_DS");
 }
 
 // STRATEGIC_GAPS §7.4: modes 4, 8, 11, 13 (lock), 14, 17.
@@ -1170,10 +1174,7 @@ void test_determinism() {
 
 // ------------------------------------------------------------------ real data
 
-std::string env(const char* name) {
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-}
+using ::alamo::test::env_or_empty;
 
 void test_real(const std::string& game, const std::string& root, bool is_eaw) {
     vfs::VfsConfig vc;
@@ -1457,7 +1458,7 @@ int main() {
     std::printf("lua bridge: lua module not configured, skipped\n");
 #endif
     test_determinism();
-    const std::string foc = env("ALAMO_FOC_DATA"), eaw = env("ALAMO_EAW_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA"), eaw = env_or_empty("ALAMO_EAW_DATA");
     if (foc.empty() && eaw.empty()) std::printf("real data: ALAMO_FOC_DATA / ALAMO_EAW_DATA not set, skipped\n");
     if (!foc.empty()) test_real("foc", foc, false);
     if (!eaw.empty()) test_real("eaw", eaw, true);

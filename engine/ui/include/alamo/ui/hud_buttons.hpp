@@ -51,6 +51,8 @@ struct ButtonRuntime {
     double blink_start = -1.0;     // < 0: not blinking (Lua Blink / host): started at this time
     int32_t alt = -1;              // alternate texture index (-1: the HUD's faction index)
     int32_t tooltip_index = 0;     // Tooltip_Text entry (< 0: no tooltip)
+    std::string tooltip_key;       // ui3 t07: replaces the Tooltip_Text entry (ability / unit text); "" = data
+    std::u32string tooltip_text;   // [port] literal tooltip text (a player-given fleet / ship name), shown after the key text
     std::string icon_override;     // replaces the icon texture ("" = data)
     std::u32string text;           // drawn with the component's font ("" = none)
     std::u32string text2;          // second text (Text_Offset2)

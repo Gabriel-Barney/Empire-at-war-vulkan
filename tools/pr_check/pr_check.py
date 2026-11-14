@@ -6,7 +6,7 @@ Usage (from the project / worktree root):
 
   PR          PR number; default: the open PR of the current branch (`gh pr view`).
   --compiler  default msvc; `both` also runs clang (use it for sim code: CLAUDE.md "Platform and compilers").
-  --modules   default: every module (the ALAMO_ENGINE_MODULES default).
+  --modules   default `all`: every module (build_agent.cmd configures the ALAMO_ENGINE_MODULES default).
   --tests     default fast (ctest -LE slow); `all` runs the slow tier too (what the pre-merge gate does).
   --post      post the summary as a PR comment with `gh pr comment`. Without it the summary is only printed and written to
               logs\pr_check_<PR>.md (posting is visible to others, so it is opt-in).
@@ -24,8 +24,6 @@ import sys
 import time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-DEFAULT_MODULES = ("core;vfs;data;jobs;galactic;objects;anim;commands;tactical;lua;ai;assets;rhi;shaderxlat;"
-                   "materials;terrain;render;ui;audio;video;apps")
 
 
 def run(cmd, **kw):
@@ -52,13 +50,13 @@ def build_one(compiler, tree, modules, tests):
     if tests != 'fast':
         args.append(tests)
     t0 = time.time()
-    r = run(args)
+    run(args)  # build_agent's own exit code is its last line's; build_summary's below is the result
     secs = time.time() - t0
     s = run([sys.executable, os.path.join('tools', 'lint', 'build_summary.py'), log])
     return s.returncode, (s.stdout + s.stderr).strip(), secs
 
 
-def format_comment(pr, sha, dirty, tests, results):
+def format_comment(sha, dirty, tests, results):
     ok = all(code == 0 for _, code, _, _ in results)
     lines = [f"**PR check {'PASS' if ok else 'FAIL'}** for `{sha[:10]}`" + (' (working tree had uncommitted edits)' if dirty else ''),
              f"tier: `{tests}` (fast = tests without the `slow` label; the pre-merge gate runs everything)", '']
@@ -69,9 +67,9 @@ def format_comment(pr, sha, dirty, tests, results):
 
 
 def selftest():
-    c = format_comment('1', 'abcdef0123456789', True, 'fast', [('msvc', 0, 'ok', 12.0), ('clang', 1, 'boom', 9.0)])
+    c = format_comment('abcdef0123456789', True, 'fast', [('msvc', 0, 'ok', 12.0), ('clang', 1, 'boom', 9.0)])
     assert 'FAIL' in c.splitlines()[0] and 'uncommitted' in c and 'clang: FAIL' in c and 'msvc: pass' in c
-    c = format_comment('1', 'abcdef0123456789', False, 'all', [('msvc', 0, 'ok', 1.0)])
+    c = format_comment('abcdef0123456789', False, 'all', [('msvc', 0, 'ok', 1.0)])
     assert 'PASS' in c.splitlines()[0] and 'uncommitted' not in c
     assert re.search(r'abcdef0123', c)
     print('pr_check selftest ok')
@@ -84,7 +82,7 @@ def main():
     p = argparse.ArgumentParser(add_help=True)
     p.add_argument('pr', nargs='?')
     p.add_argument('--compiler', default='msvc', choices=['msvc', 'clang', 'both'])
-    p.add_argument('--modules', default=DEFAULT_MODULES)
+    p.add_argument('--modules', default='all')
     p.add_argument('--tests', default='fast')
     p.add_argument('--post', action='store_true')
     p.add_argument('--tree', default='wt')
@@ -101,7 +99,7 @@ def main():
         code, text, secs = build_one(compiler, a.tree, a.modules, a.tests)
         print(text)
         results.append((compiler, code, text, secs))
-    comment = format_comment(pr, sha, dirty, a.tests, results)
+    comment = format_comment(sha, dirty, a.tests, results)
     os.makedirs(os.path.join(ROOT, 'logs'), exist_ok=True)
     out = os.path.join(ROOT, 'logs', f'pr_check_{pr}.md')
     with open(out, 'w', encoding='utf-8', newline='\n') as f:

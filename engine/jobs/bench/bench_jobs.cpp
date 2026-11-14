@@ -91,7 +91,10 @@ int main(int argc, char** argv) {
     std::printf("%-8s %14s %16s %18s %16s\n", "workers", "submit ns/job", "pfor ns/chunk", "pfor call us(64)",
                 "spawn ns/job");
     for (uint32_t w = 0; w <= max_workers; ++w) {
-        JobSystem js({static_cast<int32_t>(w)});
+        JobSystemConfig cfg;
+        cfg.workers = static_cast<int32_t>(w);
+        cfg.inline_small = false;  // sp1: measure the fork path, not the inline shortcut
+        JobSystem js(cfg);
         // raw submit + wait of empty jobs, batches of 4096
         const uint32_t jobs = 1u << 20;
         JobCounter c;
@@ -135,7 +138,10 @@ int main(int argc, char** argv) {
     std::printf("%-8s %10s %10s %10s %12s\n", "workers", "ms", "speedup", "eff/thr", "checksum");
     double base_ms = 0.0, ref_sum = 0.0;
     for (uint32_t w = 0; w <= max_workers; ++w) {
-        JobSystem js({static_cast<int32_t>(w)});
+        JobSystemConfig cfg;
+        cfg.workers = static_cast<int32_t>(w);
+        cfg.inline_small = false;  // sp1: measure the fork path, not the inline shortcut
+        JobSystem js(cfg);
         std::vector<double> per(sources);
         double best = 1e30;
         for (int rep = 0; rep < 3; ++rep) {
@@ -163,7 +169,10 @@ int main(int argc, char** argv) {
     std::printf("\nparallel_reduce float sum of %zu values (chunk 4096)\n%-8s %10s %14s\n", v.size(), "workers",
                 "ms", "result");
     for (uint32_t w = 0; w <= max_workers; ++w) {
-        JobSystem js({static_cast<int32_t>(w)});
+        JobSystemConfig cfg;
+        cfg.workers = static_cast<int32_t>(w);
+        cfg.inline_small = false;  // sp1: measure the fork path, not the inline shortcut
+        JobSystem js(cfg);
         double best = 1e30;
         float r = 0.0f;
         for (int rep = 0; rep < 3; ++rep) {

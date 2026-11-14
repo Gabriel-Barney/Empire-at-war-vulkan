@@ -113,6 +113,10 @@ struct SnapshotTypeInfo {
 // alt 3 at full health.
 int8_t damage_alt_index(const SnapshotTypeInfo& t, float health_fraction);
 
+// Text of a tag on a type: the merged typed view when the tag is a GameObjectType field, else the raw store along the
+// variant chain (own value first). Shared with the galactic snapshot (R2).
+std::string type_text(const objects::GameObjectTypes& types, objects::TypeIndex t, std::string_view tag);
+
 class SnapshotTypeTable {
 public:
     // One entry per TypeIndex of `types`. With a GameTypeResolver (the same one MapScene uses) the model, scale,
@@ -547,7 +551,7 @@ void set_snapshot_projectiles(SimSnapshot& snap, const ViewRange& views, std::sp
     }
     sort_snapshot_projectiles(snap);
 }
-#if defined(ALAMO_SIM_HAVE_BATTLES) && defined(ALAMO_SIM_HAVE_FOG)
+#ifdef ALAMO_SIM_HAVE_BATTLES
 // R5: the battle's fog of war for `local_player` (FogOfWar::render_view copied into snap.fog; null when the battle has
 // no fog or the player no grid) and kSnapFogHidden on every object TacticalBattle::fog_object_hidden(local, id, false)
 // reports hidden, or that is an enemy (not FogOfWar::allied) of the local player and AbilitySystem::is_stealthed (FOG_OF_WAR

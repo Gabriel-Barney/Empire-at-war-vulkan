@@ -150,8 +150,39 @@ struct GalPp {
             if (w.store.type(u) == t) return true;
         return false;
     }
-    double power_eff(uint32_t r) const {  // P = power(T) x health of the chosen free unit [port: health 1]
-        return static_cast<double>(w.power_of(recs[r].type));
+    // A2k t02 (A2K_T02_RE_ANSWERS Q2(b)) [H]: P = AI_Combat_Power(T) x the hull fraction (0x396df0) of the chosen free
+    // unit (`unit` = index into `units`; -1 = a produced unit, full hull).
+    double power_eff(uint32_t r, int32_t unit) const {
+        double p = static_cast<double>(w.power_of(recs[r].type));
+        if (unit >= 0 && static_cast<size_t>(unit) < units.size()) p *= hull_fraction(units[static_cast<size_t>(unit)].h);
+        return p;
+    }
+    double hull_fraction(ObjectHandle u) const {  // galactic_ai_hull_fraction on the store's health
+        if (!w.types || !w.store.alive(u)) return 1.0;
+        const uint32_t t = w.store.type(u);
+        const auto& th = w.types->columns().tactical_health;
+        return galactic_ai_hull_fraction(w.store.health(u), t < th.size() ? th[t] : 0.0f);
+    }
+    // The source planets of the production estimates (0x6639f0 / 0x664210 -> 0x665160 of the TARGET's reachability,
+    // A2K_T02_RE_ANSWERS Q1 port change 3) [H]: the per-target list at the goal level; [port] a goal without a target
+    // keeps the player-level flood (no target reachability object).
+    // Production Setup C queue time (A2M_T04_RE_ANSWERS Q2.2 step 3) [H]: first solve (flag 0x140b3a524 = 1) the planet
+    // production's current item remaining time 0x401ba0; re-solves the AIPlanetBuildQueue time 0x53bb20(q, 1, 0).
+    // bkg3 b0103 (A2M_R2_RE_A §1.5, AI_GALACTIC_2 §2.3 corrected [H]): 0x401ba0 is the current item's remaining time plus
+    // the build times of the rest of that queue; the head's remaining time is read from its timer at this frame [M: the
+    // timer object's own getter], not BuildEntry::remaining (the value cached when the queue last advanced).
+    float queue_time(PlanetIndex p, uint32_t q) const {
+        if (!first_solve) return w.planet_queue_time(p, q);
+        const auto queue = w.sim.queue_of(p, q);
+        float t = 0.0f;
+        for (size_t i = 0; i < queue.size(); ++i)
+            t += i == 0 ? gal::econ::timer_remaining_seconds(queue[0].start, queue[0].duration, w.sim.frame())
+                        : queue[i].build_time;
+        return t;
+    }
+    const std::vector<PlanetIndex>& source_list() const {
+        const int level = std::min(reach_level, 5);
+        return has_target() ? pa.stage_list(tplanet(), level) : pa.source_planets(level);
     }
 
     // ---- ETA (0x6bfcf0 -> 0x6639f0, §2.1) [H; source list M] ----
@@ -162,17 +193,19 @@ struct GalPp {
             return;
         }
         const auto planets = w.sim.planets();
-        // Source planets: the reachability object's list for the level (0x665160, AI_GALACTIC_3 §8): the flood from
-        // the player's planets in flood output order, cached 10 s.
-        const std::vector<PlanetIndex> list = pa.source_planets(reach_level);
+        // Source planets: the target reachability object's list for the level (0x665160, AI_GALACTIC_3 §8), cached 10 s.
+        const std::vector<PlanetIndex> list = source_list();
         struct Pool {
             bool used = false;
             float time = 0.0f;
         };
         std::vector<Pool> pool_a(list.size()), pool_b(list.size());
+        // a2m r2 (A2M_R2_RE_A §1.5, AI_GALACTIC_2 §2.1) [H]: the start time is the planet production queue's own time
+        // (0x401ba0: the current item's remaining time + the rest's build times) on the first solve (Init at proposal),
+        // the AIPlanetBuildQueue time 0x53bb20(q, 1, 0) on re-solves. [M] the queue argument of 0x401ba0 is the pool's.
         for (size_t k = 0; k < list.size(); ++k) {
-            pool_a[k].time = w.planet_queue_time(list[k], 0);
-            pool_b[k].time = w.planet_queue_time(list[k], 1);
+            pool_a[k].time = first_solve ? w.production_queue_time(list[k], 0) : w.planet_queue_time(list[k], 0);
+            pool_b[k].time = first_solve ? w.production_queue_time(list[k], 1) : w.planet_queue_time(list[k], 1);
         }
         float structure_sum = 0.0f;
         const gal::FactionRules* fr = nullptr;
@@ -187,11 +220,18 @@ struct GalPp {
             sel_queue[i] = queue_a ? 0 : 1;
             std::vector<Pool>& pool = queue_a ? pool_a : pool_b;
             if (is_structure(t)) {
-                const float bt = w.btime_at(player, t, tplanet());
+                // a2m r2 (A2M_R2_RE_A §1.5) [H]: the build time is taken at list[0] (the target whenever the player holds
+                // it: the flood starts there); when list[0] is the target its pool entry is also marked used, so the
+                // structure's ETA includes the target queue's wait (the accept test 0 < AllowedTime < ETA then sees it).
+                const PlanetIndex at = list.empty() ? tplanet() : list[0];
+                const float bt = w.btime_at(player, t, at);
                 sel_source[i] = tplanet();
                 sel_btime[i] = bt;
                 structure_sum += bt;
-                if (!list.empty() && list[0] == tplanet()) pool[0].time += bt;
+                if (!list.empty() && list[0] == tplanet()) {
+                    pool[0].used = true;
+                    pool[0].time += bt;
+                }
                 continue;
             }
             const gal::TypeInfo* tx = ti(w.travel_type_of(t));  // a company travels as its transport (SG 1.7)
@@ -203,8 +243,9 @@ struct GalPp {
             for (size_t k = 0; k < list.size(); ++k) {
                 const PlanetIndex p = list[k];
                 const gal::PlanetState& ps = planets[p];
-                const bool surface = w.sim.surface_accessible(p);  // 0x375220
-                if (!surface || !w.can_build_at(player, t, p)) continue;  // 0x3fa420 + 0x2804d0
+                // a2m t05 (A2M_T04_RE_ANSWERS Q2.3) [H]: revealed 0x3fa420 + the can-build gate 0x2804d0 (its step 24 is
+                // the only surface rule); no +0xd0 test in this loop.
+                if (!w.sim.is_planet_revealed(p) || !w.can_build_at(player, t, p)) continue;
                 float c = pool[k].time;
                 if (has_target() && speed > 0.0f) {
                     const Vec3 a = planets[static_cast<size_t>(target)].position, b = ps.position;
@@ -238,10 +279,13 @@ struct GalPp {
     }
 
     // ---- contrast helpers (0x6c5de0 / 0x72ac70 / 0x6c4b20) ----
-    float weight(uint32_t t, int32_t row) const {  // 0x5f1f90 x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3)
+    // 0x5f1f90 (ContrastTable::ai_weight) x the terrain factor 0x5f22c0 when PP+0x19C != -1 (§6.3). The commit 0x6bf840
+    // applies the terrain factor to ground rows only (A2K_T02_RE_ANSWERS Q2(b)) [H]: it passes ground_row = false for a
+    // space row. The score pairs (Setup C 0x72aad0) keep the factor on every row [M: not re-read].
+    float weight(uint32_t t, int32_t row, bool ground_row = true) const {
         if (!w.cfg.contrast || row < 0) return 0.0f;
-        const float c = w.cfg.contrast->contrast(static_cast<size_t>(row), w.type_name(t), w.mask_of(t));
-        return terrain < 0 ? c : static_cast<float>(static_cast<double>(c) * effectiveness(t));
+        const float c = w.cfg.contrast->ai_weight(static_cast<size_t>(row), w.type_name(t), w.mask_of(t));
+        return terrain < 0 || !ground_row ? c : static_cast<float>(static_cast<double>(c) * effectiveness(t));
     }
     bool layer_satisfied(bool space) const {  // 0x72ac70, in float (AI_GALACTIC_TOKENS §9.8 item 4)
         return galactic_contrast_layer_satisfied(entries, remaining, space, tolerance);
@@ -251,11 +295,14 @@ struct GalPp {
         for (size_t e = 0; e < entries.size(); ++e) remaining[e] = entries[e].target;
         for (size_t i = 0; i < sel_rec.size(); ++i) {
             const PpRec& r = recs[sel_rec[i]];
-            const double P = power_eff(sel_rec[i]);
-            // 0x6bf840: the selection's weighted contribution against its chosen entry, and its power against the
-            // untyped total of its layer [M].
+            const double P = power_eff(sel_rec[i], sel_unit[i]);
+            // 0x6bf840: the selection's weighted contribution against its chosen entry only, and its raw power against
+            // the untyped total of its layer [H].
             const int32_t e = sel_entry[i];
-            if (e >= 2 && static_cast<size_t>(e) < entries.size()) remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, entries[static_cast<size_t>(e)].row)) * P;
+            if (e >= 2 && static_cast<size_t>(e) < entries.size()) {
+                const ContrastEntry& ce = entries[static_cast<size_t>(e)];
+                remaining[static_cast<size_t>(e)] -= static_cast<double>(weight(r.type, ce.row, !ce.space)) * P;
+            }
             if (entries.size() > 1) {
                 if (r.space) remaining[total_entry(true)] -= P;
                 if (r.ground) remaining[total_entry(false)] -= P;
@@ -285,41 +332,103 @@ struct GalPp {
 class FreeStoreM final : public PpMarshaller {
 public:
     explicit FreeStoreM(GalPp& p) : p_(p) {}
-    void setup_a() override {  // 0x7287a0 [H]
+    // 0x7287a0 [H] (A2K_T02_RE_ANSWERS Q2(c), A2K_T08_RE_ANSWERS Q3.1 / Q3.5). Stages: per TF the target's reachability
+    // slot 6 at the goal Reachability with the RequireUniqueStage / RequireMatchingStage lists (PlayerAi::setup_stage; no
+    // result -> the target; IgnoreTarget is not read). Units (galactic branch, goal with a target):
+    //   * a hidden unit (0x3a9760, GalacticSim::hidden) keeps key 0 and stays eligible;
+    //   * else the unit's planet must be revealed (Is_Planet_Revealed 0x3fa420), else the unit is dropped;
+    //   * per stage c = stage_cost (0 at the stage; else the AI all-pairs path unit planet -> stage when every planet
+    //     after the start has node cost 0, c = (low 16 bits of the hop-weight sum) / 10; else none);
+    //   * key = (sum of finite c^2 + sum of 2-D distance^2 unit -> stage) / TFs when any c was finite; a unit with no
+    //     finite c is dropped.
+    // a2l t03 (A2L_T03_RE_ANSWERS Q4):
+    //   * health [H]: a candidate whose hull fraction (0x396470) is below GameConstants Health_Low_Percent_Threshold is
+    //     dropped. The test runs for candidates with PP +0x104 == 0 or entry +0x30 == 0, i.e. every candidate left by
+    //     the reservation test above. [port] the galactic store keeps no hardpoint health, so the min with 0x396070 is
+    //     the hull fraction itself;
+    //   * the "engaged" clauses (dogfight cell, special-weapon recharge) are tactical state and pass for every galactic
+    //     unit [M]; not modelled.
+    // a2m t05 (A2M_T04_RE_ANSWERS Q1, health section) [H order]: reservation -> health -> stage key -> exclusions.
+    //   * health = the hull fraction alone, clamped to [0, 1]: retail takes min(hull, destroyable-hardpoint fraction)
+    //     only for a type with Should_Be_Destroyed_When_All_Hardpoints_Destroyed and a destroyable hardpoint; the
+    //     galactic store keeps no hardpoint health [M, open item 2];
+    //   * the planet is needed only for the stage key (a goal target and a unit that is not hidden); a unit in a moving
+    //     fleet takes FleetDataPack +0x50 = the move's FINAL destination (FleetState::path.back()) [H], for the reach row
+    //     and the revealed test. [port] the distance term uses the fleet's position: retail reads the unit object's own
+    //     +0x78 / +0x7c, which the fleet move does not update [M; stale value L, open item 1];
+    //   * the running maximum is raised before the exclusions [H];
+    //   * the garrison / limbo / hero-clash / lock / build-pad exclusions are written only by tactical code and never
+    //     fire for a galactic unit [M, open item 4]: a unit in a moving fleet is kept. INDIGENOUS_UNIT types never
+    //     reach the galactic free store [port].
+    void setup_a() override {
         p_.stages.assign(p_.def.task_forces.size(), p_.tplanet());
+        if (p_.has_target()) {
+            const int level = static_cast<int>(p_.w.defs.goals[p_.goal_type].reachability);
+            std::vector<PlanetIndex> chosen;
+            for (size_t tf = 0; tf < p_.stages.size(); ++tf) {
+                p_.stages[tf] = p_.pa.setup_stage(p_.tplanet(), level, p_.def.task_forces[tf], chosen);
+                chosen.push_back(p_.stages[tf]);
+            }
+        }
         if (!(p_.def.allow_free_store_units && !p_.def.magic_plan)) return;
-        const std::vector<int32_t> hops = p_.has_target() ? p_.w.hops_to(p_.tplanet()) : std::vector<int32_t>{};
+        const auto& planets = p_.w.sim.planets();
+        const float health_floor = p_.w.sim.rules().constants.health_low_percent_threshold;
+        const int path_level = p_.has_target() && p_.w.defs.goals[p_.goal_type].reachability == Reachability::SingleHopDisconnected ? 4 : 3;
         for (const ObjectHandle u : p_.w.free_units(p_.player)) {
             const objects::ObjectId id = p_.w.store.id(u);
             // A candidate needs PP+0x104 == 0 (the first solve) or +0x30 == 0 (A1_READINGS §28.5).
             if (!p_.first_solve && p_.w.unit_reserved.count(id) != 0) continue;
-            const PlanetIndex at = p_.w.planet_of_unit(u);
-            if (at == kInvalidPlanet) continue;  // moving / in transit
+            if (static_cast<float>(std::min(p_.hull_fraction(u), 1.0)) < health_floor) continue;  // Health_Low_Percent_Threshold
             const gal::TypeInfo* x = p_.ti(p_.w.store.type(u));
             if (!x || structure_kind(x->kind)) continue;
             FsUnit f;
             f.h = u;
             f.type = p_.w.store.type(u);
-            if (p_.has_target()) {
+            if (p_.has_target() && !p_.w.sim.hidden(u)) {
+                PlanetIndex at = p_.w.planet_of_unit(u);
+                Vec3 pos = at != kInvalidPlanet ? planets[at].position : Vec3{};
+                if (at == kInvalidPlanet) {  // in transit: FleetDataPack +0x50, the move's final destination [H]
+                    const uint32_t fl = p_.w.fleet_of_unit(u);
+                    if (fl == gal::kNoFleet || !p_.w.sim.fleets()[fl].moving) continue;
+                    const gal::FleetState& fs = p_.w.sim.fleets()[fl];
+                    at = fs.path.empty() ? fs.to : fs.path.back();
+                    pos = fs.position;
+                    if (!p_.w.valid_planet(at)) continue;
+                }
+                if (!p_.w.sim.is_planet_revealed(at)) continue;
                 double sum = 0.0;
                 bool finite = false;
-                const auto& planets = p_.w.sim.planets();
-                for (size_t tf = 0; tf < p_.stages.size(); ++tf) {
-                    const int32_t c = at < hops.size() ? hops[at] : -1;
-                    if (c >= 0) {
-                        sum += static_cast<double>(c) * static_cast<double>(c);
+                for (const PlanetIndex st : p_.stages) {
+                    if (st == kInvalidPlanet) continue;
+                    const double c = stage_cost(at, st, path_level);
+                    if (c >= 0.0) {
+                        sum += c * c;
                         finite = true;
                     }
-                    const double dx = static_cast<double>(planets[at].position.x) - planets[static_cast<size_t>(p_.target)].position.x;
-                    const double dy = static_cast<double>(planets[at].position.y) - planets[static_cast<size_t>(p_.target)].position.y;
+                    const double dx = static_cast<double>(pos.x) - planets[st].position.x;
+                    const double dy = static_cast<double>(pos.y) - planets[st].position.y;
                     sum += dx * dx + dy * dy;
                 }
-                if (finite && !p_.stages.empty()) sum /= static_cast<double>(p_.stages.size());
-                f.key = sum;
+                if (!finite) continue;  // galactic: no finite stage cost -> not eligible
+                f.key = sum / static_cast<double>(p_.stages.size());
             }
             p_.max_key = std::max(p_.max_key, f.key);
             p_.units.push_back(f);
         }
+    }
+    // Stage reachability slot 7 (0x663810, A2L_T03_RE_ANSWERS Q1.2) from the unit's planet at level 3, or 4 for a
+    // Reachability-4 goal (Q4.3; level 4 does not count the final hop): 0 at the stage; else ai_reach_path_cost on the
+    // player's all-pairs path (threshold 1e-4); -1 = none (1e18).
+    double stage_cost(PlanetIndex from, PlanetIndex stage, int level) const {
+        if (from == stage) return 0.0;
+        const AiPathFinder* f = p_.w.ensure_path_finder(p_.player);  // 0x690f10 on the player's matrix (lazy 0x524c10)
+        if (!f || !f->created()) return -1.0;
+        std::vector<PlanetIndex> path;
+        std::vector<uint32_t> wts;
+        f->get_path(from, stage, path, &wts);
+        if (path.size() < 2) return -1.0;
+        const double c = ai_reach_path_cost(wts, path.size(), level, p_.w.sim.rules().constants.threat_reachability_tolerance);
+        return c >= kReachNone ? -1.0 : c;
     }
     float score(uint32_t i) override {  // 0x728560 [H]
         PpRec& r = p_.recs[i];
@@ -366,7 +475,10 @@ public:
         float c = 0.0f, available = 0.0f;
         if (p_.eta == 0.0f) {
             float t = 0.0f;
-            if (!p_.has_target() || p_.is_structure(r.type)) {
+            // A2K_T01_BUILD_COST_RE 3.1 [H] (AI_GALACTIC_2 1.4 corrected): no target, or an ordinary unit (none of
+            // 0x60 / 0x5F / 0x5C / 0x5B) -> the base price and half the base time; only a structure type with a target
+            // uses the target planet's price and time.
+            if (!p_.has_target() || !p_.is_structure(r.type)) {
                 t = 0.5f * p_.w.btime_none(r.type);
                 c = p_.w.cost_none(r.type);
             } else {
@@ -441,9 +553,12 @@ public:
                 // DUMMY_GROUND_BASE variant (0x3f8c40) is not modelled [port: no team names one].
                 const bool generic = p_.is_orbital_structure(t);
                 if (generic) {
-                    // Replaced by the planet-specific variant (0x3f8fd0 / 0x3f8c40 on the target) [M].
-                    t = p_.has_target() ? p_.w.next_starbase_type(p_.player, p_.tplanet()) : gal::kNoIndex;
-                    if (t == gal::kNoIndex) continue;
+                    // Replaced by the planet-specific variant 0x3f8fd0 on the goal's target planet (IgnoreTarget plans
+                    // too); every generic entry maps to the same type and dedupes through ensure_rec (A2M_R3_RE_A §1.2)
+                    // [H]. No replacement -> the generic expansion itself stays a candidate (A2M_R3_RE_A §1.3) and
+                    // Production Setup C vetoes it when 0x2804d0 refuses it (wrong faction: step 2; level: step 20).
+                    const uint32_t rep = p_.has_target() ? p_.w.next_starbase_type(p_.tplanet()) : gal::kNoIndex;
+                    if (rep != gal::kNoIndex) t = rep;
                 }
                 if (!(p_.affiliated(t) || generic || p_.free_store_holds(t))) continue;
                 PpRec& r = p_.recs[p_.ensure_rec(t)];
@@ -539,15 +654,24 @@ public:
             const uint32_t t = r.type;
             if (!(p_.has_target() && p_.is_structure(t))) {
                 // "travel estimate" 0x664210(target reachability, T, level) (AI_GALACTIC_3 §8) [H]: not a travel time
-                // but the mean, over the level's source planets (0x665160) with a usable surface and a production
-                // queue that can build T, of btime(T, planet) + that planet's queue time; no planet -> 1e18.
+                // but the mean, over the level's source planets (0x665160) that pass the tests below, of btime(T, planet)
+                // + that planet's queue time; no planet -> 1e18.
+                // a2m t05 (A2M_T04_RE_ANSWERS Q2) [H]: a planet counts when it is revealed (0x3fa420), has a production
+                // object (+0xd0; every port planet has its production queues [port]) and passes the full can-build gate
+                // 0x2804d0, whose step 24 is the only surface rule (land-only kinds). No separate surface veto: a space
+                // unit is estimated at a planet with a destroyed surface (Interceptor4_Frigate at The_Maw).
+                // Queue time by the first-solve flag 0x140b3a524: the first solve (PP Init 0x6c0d00) reads the production
+                // behaviour's current item remaining time (0x401ba0); the re-solves the AIPlanetBuildQueue time
+                // (0x559b40 -> 0x53bb20(q, 1, 0), planet_queue_time).
                 double sum = 0.0;
                 int32_t n = 0;
-                const uint32_t q = p_.w.sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
-                for (const PlanetIndex k : p_.pa.source_planets(std::min(p_.reach_level, 5))) {
-                    const bool surface = p_.w.sim.surface_accessible(k);  // 0x375220
-                    if (!surface || !p_.w.can_build_at(p_.player, t, k)) continue;
-                    sum += static_cast<double>(p_.w.btime_at(p_.player, t, k)) + static_cast<double>(p_.w.planet_queue_time(k, q));
+                // bkg3 b0103 (A2M_T04_RE_ANSWERS Q2.2 step 3 [H]): sel = 1 when T +0x86c (build cost) < 1, else by the
+                // queue kind (+0xf0c / kind 0x5F; the port's queue_kind).
+                const gal::TypeInfo* tx = p_.ti(t);
+                const uint32_t q = tx && tx->build_cost >= 1 && p_.w.sim.queue_kind(t) == gal::kGroundQueue ? 0u : 1u;
+                for (const PlanetIndex k : p_.source_list()) {
+                    if (!p_.w.sim.is_planet_revealed(k) || !p_.w.can_build_at(p_.player, t, k)) continue;
+                    sum += static_cast<double>(p_.w.btime_at(p_.player, t, k)) + static_cast<double>(p_.queue_time(k, q));
                     ++n;
                 }
                 const double est = n > 0 ? sum / static_cast<double>(n) : kInf;
@@ -658,7 +782,7 @@ private:
 // Hero marshaller (AI_GALACTIC_3 §2) [H]. Hero records need an AI script; their Commit's escort accumulation is
 // dead code in the shipped binary (§2.4), so rec+0x40 stays 0 and a hero record never scores finite in a non-magic
 // plan: it is vetoed (non-permanent) every iteration. Heroes therefore join plans only as plain units (every TF
-// DenyHeroAttach, or no script / record) or through MagicPlans with a team. [port] The record's Lua calls
+// DenyHeroAttach, or no live script, so no record: A2M_R2_RE_B §3) or through MagicPlans with a team. [port] The record's Lua calls
 // (PlayerObject, MinPlanAttachCost, MaxPlanAttachCost, Evaluate_Attack_Ability, Get_Escort_Ability_Weights) are not
 // run: none of their values can change a score while rec+0x40 is 0, and the hero object scripts are not hosted.
 class HeroM final : public PpMarshaller {
@@ -673,6 +797,7 @@ public:
         }
         // (pool entries: tactical only) commander teams: Field_Com_* (not space), Fleet_Com_* (not land) -> both in
         // galactic, each when affiliated with the player's faction.
+        // [name-ok: retail type names in 0x726410 (strings 0x8ce5c8..0x8ce610), docs/re/AI_GALACTIC_3.md setup B]
         if (p_.any_hero_attach)
             for (const char* n : {"Field_Com_Rebel_Team", "Field_Com_Empire_Team", "Fleet_Com_Rebel_Team", "Fleet_Com_Empire_Team"}) {
                 const uint32_t t = p_.w.sim.rules().find_type(n);
@@ -685,15 +810,22 @@ public:
             const uint32_t h = rep(r.type);
             if (!(named(h) || generic(h) || special(h))) continue;  // (+ behaviour 0x37: land mode only)
             if (!allowed(h)) continue;
-            // A unit: the first eligible free-store unit of the type (galactic: no pool); none -> the type itself.
-            bool unit = false;
-            for (const FsUnit& f : p_.units) unit = unit || f.type == r.type;
-            // The script: the unit's per-object script (its type's or representative's Lua_Script [M]), else the type
-            // instance, which exists only with Execute_Script_On_Type.
-            const GalacticAiTypeInfo* a = info(r.type);
+            // A unit: the first eligible free-store unit of the type (galactic: no pool).
+            ObjectHandle unit{};
+            bool have_unit = false;
+            for (const FsUnit& f : p_.units)
+                if (f.type == r.type) {
+                    unit = f.h;
+                    have_unit = true;
+                    break;
+                }
+            // The script (A2M_R2_RE_B §3.1 step 4) [H]: the unit's LIVE object script (0x6c0020(u)'s +0x2D8; the port's
+            // galactic unit is its own object [M]); without one, H's type-level instance, which exists only with
+            // Execute_Script_On_Type. The Lua_Script tag alone does not make a record: a galactic object whose script
+            // exits at its first galactic pump (Home_One, Sundered_Heart) is a plain unit (§3.2, [port] option 2).
             const GalacticAiTypeInfo* b = info(h);
-            const bool script = unit ? ((a && !a->lua_script.empty()) || (b && !b->lua_script.empty()))
-                                     : ((a && !a->lua_script.empty() && a->script_on_type) || (b && !b->lua_script.empty() && b->script_on_type));
+            const bool script = (have_unit && p_.w.galactic_object_script_live(unit)) ||
+                                (b && !b->lua_script.empty() && b->script_on_type);
             if (!script) continue;
             r.is_hero = true;
         }
@@ -837,7 +969,7 @@ public:
         if (r.is_hero || p_.entries.empty()) return 0.0f;
         double v = -1.0;
         r.contrast_entry = -1;
-        const double P = p_.power_eff(i);
+        const double P = p_.power_eff(i, r.free_unit);
         const bool free = r.free_unit >= 0;
         // 0x72b6a0: no pair counts when P <= 0; a pair counts only with w > 0 and R > 0, and a free unit then skips
         // the tolerance / pop-cap test. The main list is scored only for a candidate with a non-escort team (rec+0xB0), the
@@ -1110,6 +1242,20 @@ void GalacticAiWorld::Impl::pp_unit_left(int32_t plan_id, ObjectHandle u) {
     v.erase(std::remove(v.begin(), v.end(), id), v.end());
 }
 
+// a2m t03: 0x6c27d0 (PP, unit) for a claimed unit a null-destination build task gives back (A2M_T03_PRODUCE_FORCE_CLAIMS
+// Q3) [H]: the reservation goes, the unit leaves PP +0x108 and its selection slot leaves the PP's lists (PP +0x58 ...),
+// so Are_All_Units_On_Free_Store, AllowedTime and the validity test no longer see it.
+void GalacticAiWorld::Impl::pp_handed_back(int32_t plan_id, ObjectHandle u) {
+    pp_unit_left(plan_id, u);
+    const auto pit = plans.find(plan_id);
+    if (pit == plans.end() || pit->second.pp < 0) return;
+    const auto it = pps.find(pit->second.pp);
+    if (it == pps.end()) return;
+    auto& sel = it->second.sel;
+    const auto s = std::find_if(sel.begin(), sel.end(), [u](const PpSelection& x) { return x.unit == u; });
+    if (s != sel.end()) sel.erase(s);
+}
+
 void GalacticAiWorld::Impl::release_pp(int32_t handle) {
     const auto it = pps.find(handle);
     if (it == pps.end()) return;
@@ -1126,30 +1272,65 @@ void GalacticAiWorld::Impl::release_pp(int32_t handle) {
     it->second.queues_reserved = false;
 }
 
+// a2m r4: 0x6c2d60 makes the PP's AIPlanetBuildQueue slots at accept, inside Resolve_Category (A1_READINGS §28.6
+// step 3; it is the PP function that calls the slot insert 0x53b810, 0x6c0be0 calls only the flag 0x53bee0). They were
+// made at the next Commit's step 4 before, after the plan had started, so the production start (market step 5,
+// AI_GALACTIC_2 §2.3) could not clear them and a finished build kept counting for the goal's whole life. Once per PP
+// (PP+0x100); a later 0x6c2d60 of the kept goal only re-flags its slots 0 (reserve_pp).
 void GalacticAiWorld::Impl::reserve_pp_queues(int32_t handle) {
     const auto it = pps.find(handle);
-    if (it == pps.end() || it->second.queues_reserved) return;  // PP+0x4E guard
+    if (it == pps.end() || it->second.queues_reserved) return;
     it->second.queues_reserved = true;
     for (const PpSelection& s : it->second.sel) {
         if (s.unit || s.source == kInvalidPlanet || s.source >= planet_queues.size()) continue;
-        planet_queues[s.source][s.queue].reservations.push_back({handle, s.type, s.btime});
+        planet_queues[s.source][s.queue].reservations.push_back({handle, s.type, s.btime, false});
     }
+}
+
+// 0x53bee0(slot, flag) over the PP's slots: 1 at Commit start (0x6c0be0), 0 when 0x6c2d60 re-asserts the kept goal.
+static void flag_pp_slots(std::vector<std::array<PlanetBuildQueue, 2>>& queues, int32_t handle, bool flag) {
+    for (auto& pq : queues)
+        for (PlanetBuildQueue& q : pq)
+            for (QueueReservation& r : q.reservations)
+                if (r.pp == handle) r.suspended = flag;
+}
+
+void GalacticAiWorld::Impl::reserve_pp(int32_t handle) {
+    reserve_pp_units(handle);
+    const auto it = pps.find(handle);
+    if (it == pps.end()) return;
+    if (it->second.queues_reserved) flag_pp_slots(planet_queues, handle, false);
+    else reserve_pp_queues(handle);
+}
+
+void GalacticAiWorld::Impl::suspend_pp(int32_t handle) {
+    suspend_pp_units(handle);
+    flag_pp_slots(planet_queues, handle, true);
 }
 
 // The AIPlanetBuildQueue time of a planet queue (0x53bb20(..., 1, 0)) [M]: the sim queue's remaining time (head:
 // its remaining seconds, others their build time) + claimed AI tasks not yet producing + committed reservations.
-float GalacticAiWorld::Impl::planet_queue_time(PlanetIndex p, uint32_t q) const {
+// 0x401ba0 (A2M_R2_RE_A §1.5): the planet production queue's own time, the current item's remaining time plus the build
+// times of the rest of the queue.
+float GalacticAiWorld::Impl::production_queue_time(PlanetIndex p, uint32_t q) const {
     if (!valid_planet(p) || q > 1) return 0.0f;
     float t = 0.0f;
     const auto queue = sim.queue_of(p, q);  // A2 galactic: GalacticSim::queue_of
     for (size_t i = 0; i < queue.size(); ++i) t += i == 0 ? queue[i].remaining : queue[i].build_time;
+    return t;
+}
+
+float GalacticAiWorld::Impl::planet_queue_time(PlanetIndex p, uint32_t q) const {
+    if (!valid_planet(p) || q > 1) return 0.0f;
+    float t = production_queue_time(p, q);
     const PlanetBuildQueue& pq = planet_queues[p][q];
     for (const int32_t id : pq.tasks) {
         const auto it = builds.find(id);
         if (it != builds.end() && it->second.state == BuildState::Queued)
             t += btime_at(it->second.player, it->second.type, p);
     }
-    for (const QueueReservation& r : pq.reservations) t += r.time;
+    for (const QueueReservation& r : pq.reservations)  // 0x53bda0: flag-1 slots left out [M, a2m r4]
+        if (!r.suspended) t += r.time;
     return t;
 }
 

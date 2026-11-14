@@ -1,10 +1,10 @@
 #include "alamo/render/world.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/convert.hpp"
 #include "render_internal.hpp"
@@ -34,22 +34,11 @@ bool patch_outside(const Mat4& vp, const assets::Aabb& b) {
 
 std::vector<float> vec4(const std::array<float, 4>& a) { return {a[0], a[1], a[2], a[3]}; }
 
-std::string lower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-}
-
 const materials::ResolvedPass* first_draw_pass(const materials::MaterialEffect* e) {
     if (!e) return nullptr;
     for (const materials::ResolvedPass& p : e->passes)
         if (!p.restore_only) return p.program_status == materials::ProgramStatus::Translated ? &p : nullptr;
     return nullptr;
-}
-
-size_t first_of_bucket(const std::vector<Renderer::Built::Item>& items, PhaseBucket b) {
-    size_t i = 0;
-    while (i < items.size() && items[i].bucket < b) ++i;
-    return i;
 }
 
 }  // namespace
@@ -115,9 +104,9 @@ WorldRenderer::~WorldRenderer() { shutdown(); }
 
 int WorldRenderer::add_texture(const std::string& name, assets::TextureRole role) {
     if (name.empty()) return -1;
-    const std::string key = lower(name);
+    const std::string key = ascii_lower(name);
     for (size_t i = 0; i < textures_.size(); ++i)
-        if (lower(textures_[i].name) == key && textures_[i].role == role) return static_cast<int>(i);
+        if (ascii_lower(textures_[i].name) == key && textures_[i].role == role) return static_cast<int>(i);
     GpuTexture t;
     t.name = name;
     t.role = role;
@@ -331,6 +320,7 @@ bool WorldRenderer::create_targets() {
 }
 
 bool WorldRenderer::make_resident() {
+    swap_pending_cloud();  // cu8g t03
     if (resident_ || !r_) return resident_;
     uint32_t pending = 0;
     for (const rhi::UploadTicket& t : tickets_) pending += r_->up_->ready(t) ? 0u : 1u;
@@ -402,6 +392,60 @@ void WorldRenderer::set_sky(std::span<const Instance> sky) {
     sky_dirty_ = true;
 }
 
+const std::string* WorldRenderer::cloud_texture_name() const {
+    const int t = pending_cloud_ >= 0 ? pending_cloud_ : cloud_texture_;
+    return t >= 0 && static_cast<size_t>(t) < textures_.size() ? &textures_[static_cast<size_t>(t)].name : nullptr;
+}
+
+void WorldRenderer::set_clouds(const terrain::CloudParams& clouds) {
+    cloud_scale_ = clouds.scale;
+    cloud_vel_[0] = clouds.velocity[0];
+    cloud_vel_[1] = clouds.velocity[1];
+    if (!r_ || clouds.texture.empty()) return;  // [port] an environment without a cloud texture keeps the drawn one
+    const std::string* now = cloud_texture_name();
+    if (now && ascii_lower(*now) == ascii_lower(clouds.texture)) return;
+    const int t = add_texture(clouds.texture, assets::TextureRole::Color);
+    if (t < 0) return;
+    if (t == cloud_texture_) {  // back to the drawn texture while another one was pending
+        pending_cloud_ = -1;
+        return;
+    }
+    GpuTexture& g = textures_[static_cast<size_t>(t)];
+    if (!g.image) {  // a texture the world did not have yet: upload it as init() does
+        std::shared_ptr<const assets::TextureAsset> a = textures_src_ ? textures_src_(g.name, g.role) : nullptr;
+        assets::TextureAsset fb;
+        if (!a) {
+            fb = assets::make_fallback_texture(g.role);
+            g.fallback = true;
+            log::warnf("render", "world: cloud texture %s not found, using a fallback", g.name.c_str());
+        }
+        if (!r_->upload_texture(g, a ? *a : fb)) {
+            log::warnf("render", "world: cloud texture %s upload failed; clouds unchanged", g.name.c_str());
+            return;
+        }
+        tickets_.push_back(g.ticket);
+    }
+    pending_cloud_ = t;
+}
+
+// The pending cloud texture replaces the drawn one once its upload is done (called by make_resident every frame).
+void WorldRenderer::swap_pending_cloud() {
+    if (pending_cloud_ < 0 || !resident_ || !r_) return;
+    GpuTexture& g = textures_[static_cast<size_t>(pending_cloud_)];
+    if (!g.image || !r_->up_->ready(g.ticket)) return;
+    g.resident = true;
+    if (cloud_texture_ >= 0 && cloud_slot_ != 0) {
+        r_->release_texture(cloud_slot_, nullptr);  // the old image stays in textures_ (destroyed at shutdown)
+        GpuTexture& old = textures_[static_cast<size_t>(cloud_texture_)];
+        if (old.slot == cloud_slot_) old.slot = 0;
+    }
+    cloud_texture_ = pending_cloud_;
+    pending_cloud_ = -1;
+    cloud_slot_ = r_->allocate_texture_slot(g.image.view, "world CLOUD_TEXTURE");  // 0 (white) when full
+    if (g.slot == 0) g.slot = cloud_slot_;
+    tex_sets_tp_ = nullptr;  // the batched terrain path writes new texture sets (CLOUD_TEXTURE) on its next draw
+}
+
 void WorldRenderer::shutdown() {
     if (!r_) return;
     rhi::Allocator& a = *r_->alloc_;
@@ -438,6 +482,7 @@ void WorldRenderer::shutdown() {
         r_->release_texture(cloud_slot_, &textures_[static_cast<size_t>(cloud_texture_)].image);  // deferred like model textures
     cloud_slot_ = 0;
     cloud_texture_ = -1;
+    pending_cloud_ = -1;
     for (int ti : slot_textures_) {
         GpuTexture& t = textures_[static_cast<size_t>(ti)];
         if (t.slot != 0 && t.image) r_->release_texture(t.slot, &t.image);
@@ -490,7 +535,7 @@ void Renderer::world_draw_terrain(rhi::Frame& frame, VkCommandBuffer cmd, const 
     PostSpec ps;
     ps.fx = w.terrain_fx_;
     ps.pass = w.terrain_pass_;
-    ps.render_pass = rp_scene_;
+    ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
     ps.width = width;
     ps.height = height;
     ps.view = &view;
@@ -630,7 +675,7 @@ void Renderer::world_draw_water(rhi::Frame& frame, VkCommandBuffer cmd, const Vi
     PostSpec ps;
     ps.fx = w.water_fx_;
     ps.pass = w.water_pass_;
-    ps.render_pass = rp_scene_;
+    ps.render_pass = rp_world_;  // [port] MSAA: the pass being recorded (prepass or main scene)
     ps.width = width;
     ps.height = height;
     ps.view = &view;
@@ -847,7 +892,7 @@ bool Renderer::world_prepass(rhi::Frame& frame, VkCommandBuffer cmd, const ViewM
                                           {PhaseBucket::Transparent, PhaseBucket::Lasers}};
         uint32_t drawn = 0;
         for (const auto& rg : ranges) {
-            const size_t b0 = first_of_bucket(b.items, rg[0]), b1 = first_of_bucket(b.items, rg[1]);
+            const size_t b0 = detail::bucket_begin(b.items, rg[0]), b1 = detail::bucket_begin(b.items, rg[1]);
             if (b1 > b0) {
                 record_range(cmd, b, b0, b1, n, n, true);
                 drawn += static_cast<uint32_t>(b1 - b0);

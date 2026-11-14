@@ -119,7 +119,8 @@ chunk:
 
 Map files (`.ted`) use the same container; their chunk layout (map info, world, terrain `0x101`,
 passability `0x10A`, objects `0x102`, embedded TEM/TEE records) is documented in
-`docs/re/TERRAIN_WATER_POST.md` §1 (added 2026-10-26).
+`docs/re/TERRAIN_WATER_POST.md` §1 (added 2026-10-26); the per-object chunks, including `0x482` (the object's hint name
+read by Lua `Find_Hint`), are in its §1.6 (2026-11-09).
 
 ---
 

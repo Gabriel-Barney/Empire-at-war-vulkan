@@ -41,8 +41,10 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/galaxy.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::data {
 
@@ -184,11 +186,8 @@ public:
 private:
     const XmlDocument* load_file(const FileProvider& provider, const FileProvider* fallback,
                                  std::string_view path, bool required);
-    struct ListEntry {
-        std::string name;  // <File> text as written (trimmed)
-        std::string path;  // "Data\\XML\\" + name
-    };
-    std::vector<ListEntry> read_list(const FileProvider& provider, std::string_view list_path, bool& ok);
+    // <File> entries of a list file (xml_list.hpp: list order, duplicates kept, empty entries skipped).
+    std::vector<ListedXmlEntry> read_list(const FileProvider& provider, std::string_view list_path, bool& ok);
     void load_constants(const FileProvider& provider, bool& ok);
     void load_game_objects(const FileProvider& provider, bool& ok);
     void load_trade_routes(const FileProvider& provider, bool& ok);

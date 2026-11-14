@@ -102,7 +102,9 @@ add_library(alamo_materials STATIC
   src/fixed_function.cpp
   src/programs.cpp
   src/effect_loader.cpp
+  src/effect_audit.cpp
   src/translated.cpp
+  src/fx_source.cpp
   ${_mat_headers}
 )
 add_library(alamo::materials ALIAS alamo_materials)
@@ -116,12 +118,39 @@ if(NOT TARGET alamo_shaderxlat)
 endif()
 target_link_libraries(alamo_materials PUBLIC alamo_core alamo_fx2 alamo_shaderxlat)
 
+# ---------------------------------------------------------------- .fx prebuild (roadmap modc t23)
+# fxc.exe of the project toolchain's Windows SDK (toolchain\2_setup.cmd installs it with MSVC); the newest
+# SDK version folder wins. Only the prebuild tool, the audit tool and the tests run it, never the engine.
+file(GLOB _mat_fxc_candidates "${PROJECT_SOURCE_DIR}/toolchain/msvc/Windows Kits/10/bin/*/x64/fxc.exe")
+set(_mat_fxc "")
+if(_mat_fxc_candidates)
+  list(SORT _mat_fxc_candidates COMPARE NATURAL ORDER DESCENDING)
+  list(GET _mat_fxc_candidates 0 _mat_fxc)
+endif()
+add_library(alamo_fxbuild STATIC tools/fx_compile.cpp)
+target_include_directories(alamo_fxbuild PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+target_link_libraries(alamo_fxbuild PUBLIC alamo_materials)
+if(_mat_fxc)
+  target_compile_definitions(alamo_fxbuild PRIVATE "ALAMO_FXC_PATH=\"${_mat_fxc}\"")
+endif()
+
 # ---------------------------------------------------------------- tests
 add_executable(alamo_materials_tests tests/test_materials.cpp)
-target_link_libraries(alamo_materials_tests PRIVATE alamo_materials)
+target_link_libraries(alamo_materials_tests PRIVATE alamo_materials alamo_fxbuild alamo_test_support)
 if(TARGET alamo_vfs)
   target_link_libraries(alamo_materials_tests PRIVATE alamo_vfs)
   target_compile_definitions(alamo_materials_tests PRIVATE ALAMO_MATERIALS_HAVE_VFS=1)
 endif()
 alamo_shaderxlat_copy_dxc(alamo_materials_tests)  # runtime dxcompiler.dll for the translation sweep
 add_test(NAME alamo_materials_tests COMMAND alamo_materials_tests)
+
+# ---------------------------------------------------------------- effect audit tool (docs/MODS.md shader section)
+#   alamo_effect_audit <FoC dir> [MODPATH=<dir>]... [--no-dxc] [--json <file>|-]
+if(TARGET alamo_vfs)
+  add_executable(alamo_effect_audit tools/effect_audit_tool.cpp)
+  target_link_libraries(alamo_effect_audit PRIVATE alamo_materials alamo_fxbuild alamo_vfs)
+  alamo_shaderxlat_copy_dxc(alamo_effect_audit)
+  #   alamo_fx_prebuild <FoC dir> [MODPATH=<dir>]... [--fxc <exe>] [--cache <dir>] [--force] [--json <file>|-]
+  add_executable(alamo_fx_prebuild tools/fx_prebuild_tool.cpp)
+  target_link_libraries(alamo_fx_prebuild PRIVATE alamo_materials alamo_fxbuild alamo_vfs)
+endif()

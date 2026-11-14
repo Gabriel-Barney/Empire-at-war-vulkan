@@ -59,13 +59,41 @@ Nor can it write a file: in retail 1.121 `_CustomScriptMessage`, `_ScriptMessage
   second, `TSAMPLE` plus a `TPLAYER faction= id= credits= tech= objects=` line per player (taken on those events and
   from a `Create_Thread` loop: retail never calls GameScoring's `GameService`). The original `GameService` would
   still run every 10th service.
-- AI plans (q2f t09, 2026-11-02): unchanged copies of the shipped `BuildSpaceForcesPlan.lua`,
-  `BuildGroundForcesPlan.lua` and `ConquerPiratePlan.lua` (from `extracted/foc_data_text.zip`) with a read-only block
-  appended that wraps the task-force thread: `PSTART` / `PDONE` records with galactic time, frame, plan, faction,
-  target and the task force's unit types, and for Conquer_Pirate a `PFAIL` record per production failure (the names
-  of the handler's arguments). Src `P`; plan scripts are pooled, so one sid covers several plan instances. It shows
-  which units retail's Build_Space_Forces / Build_Ground_Forces pick, when, and why Conquer_Pirate plans fail. A plain
-  `run_lua_probe.cmd` run collects them (`lua_records.txt`, lines `P ... PSTART|PDONE|PFAIL`).
+- AI plans (q2f t09 2026-11-02, rewritten in q2f t08 2026-11-08): unchanged copies of the shipped
+  `BuildSpaceForcesPlan.lua`, `BuildGroundForcesPlan.lua` and `ConquerPiratePlan.lua` (from
+  `extracted/foc_data_text.zip`) with a read-only block appended. Records (src `P`, one sid per pooled script
+  instance): `PSTART` when the task-force thread starts (`n` = run number in the instance, `prev` = how the previous
+  run ended; `none` = its thread was killed when the plan was released), `PBLOCK` after each `BlockOnCommand` returns
+  (after `Produce_Force`: the units just built), `PDONE` when the thread function returns, `PEXIT` on `ScriptExit`,
+  and for Conquer_Pirate `PFAIL` per production failure (the names of the handler's arguments). Each carries
+  galactic time, frame, plan, faction, target, the goal's budget (`spend=` / `unalloc=` from `Budget`), the player's
+  credits and the task force's unit types. It shows which units retail's Build_Space_Forces / Build_Ground_Forces
+  pick, when, and why Conquer_Pirate plans fail.
+  **Extended 2026-11-08** (which plan builds the Rebel's post-Shola infantry): also `ConquerOpponentPlan.lua` (two
+  threads, `SpaceForce` and `GroundForce`) and `CrushPlan.lua` (`MainForce`; its category is Conquer_Opponent too, so
+  its records say `plan=Crush`). Every record now carries `target=` (`Target.Get_Type().Get_Name()`, the goal's planet;
+  `none` = no target; the old accessor read a method game objects do not have, hence the old `target=?`), `tf=` (the
+  task force; with two threads told apart by `GetThreadID()`, `tf=?` when unknown, and then `count=` lists every task
+  force) and `count=` (`<tf>.Get_Force_Count()`: `units=0` was all retail showed at PBLOCK). `PSTART` adds `tname=`
+  (`Target.Get_Name()`). New record `PSTAGE` when `AssembleForce` / `SynchronizedAssemble` is called, before it
+  produces: `via=`, `strongest=` (its second argument), `stage=` (planet of `<tf>.Get_Stage()`; `nil` = no stage, the
+  plan then exits) and `stagestr=` (`tostring` of it). `PFAIL` names the event's first argument `tf` (the task force,
+  which has no `Get_Name`). The plan files are written by `make_plan_hooks.py` (shipped script + generated block);
+  edit the generator, not the files. `lua_summary.json` → `plans` sums them per `player plan tf`: starts, stagings,
+  blocks, first frame, targets, stages and the unit types the task force held.
+  **Also 2026-11-08:** `ContrastToReconnect.lua` (Conquer_To_Reconnect, `SpaceForce` / `GroundForce`, both staged by
+  `SynchronizedAssemble`: the likely plan of retail's Shola attack at ticks 6941-7498) and `LiftBlockadePlan.lua`
+  (Lift_Blockade, `MainForce`), hooked the same way. The galactic script adds `GOALPERC` rows each cycle, after the
+  other rows: the Rebel's `Should_Conquer_Pirate_Planet`, `Is_Good_Invasion_Target`, `Need_To_Reconnect_Islands` and
+  `First_Attack_Allowed` against Shola and Naboo (control), and `Initial_Grace_Period` without a target
+  (`planet=none`), each named once in an `EVAL` record in the first sample. A value `nil` is a failed evaluation; as
+  a binding error it also ends the galactic script after that service pass. Written to `lua_goal_perception.tsv`.
+  **The 2026-11-03 run's plan hooks broke the plans.** Releasing a pooled plan runs PGBase `Flush_G`, which deletes
+  every global table, the old probe's records table included; the next record then raised a Lua error that killed
+  the plan's thread before the shipped code ran (Rebel fleet departures 19 instead of retail's 71). The records now
+  live in a closure, and every probe step is in `pcall` (docs/re/LUA_SCRIPT_OUTPUT.md §4). The galactic and
+  GameScoring scripts no longer use the `math` library, which retail lacks (`math.floor` ended the galactic script at
+  its first `OnUpdate`). `selftest_lua.py` hides `math` and runs each plan twice across an emulated `Flush_G`.
 
 **Lua output channel (q2f t06, 2026-11-02).** The probe scripts keep every line as a Lua string
 `Q2L1|<G, T or P>|<sid>|<seq>|<KIND>|<text>|END` (G = galactic plot, T = GameScoring, P = AI plan hooks) in a table. `q2lua_reader.py`
@@ -118,7 +146,7 @@ galaxy is running.
    - `reference.crc`;
    - `run_status.json`;
    - `cleanup.log`;
-   - with the Lua probe: `lua_summary.json`, `lua_records.txt`, `lua_perception.tsv`, `lua_reader.log`.
+   - with the Lua probe: `lua_summary.json`, `lua_records.txt`, `lua_perception.tsv`, `lua_goal_perception.tsv`, `lua_reader.log`.
 
 ### Story mission run (story t04): steps for Gabriel
 
@@ -128,21 +156,75 @@ campaign starts as a child of its galaxy (mode stack 2): it starts when the batt
 (`reason battle_ended`, a complete trace) or after 18000 ticks (10 min of game time). Nothing is installed in the game folder.
 
 1. Start Steam. Close the game if it is running.
-2. Double-click **`run_story.cmd`** in `tools\probe_mod\q2_traces\`. It rebuilds `q2reader.exe` (needs `toolchain\`), then
-   launches the game **windowed** at 1920x1080. Leave the black command window open.
+2. Double-click **`run_story.cmd`** in `tools\probe_mod\q2_traces\`. It reopens itself in its own console window,
+   rebuilds `q2reader.exe` (needs `toolchain\`), then launches the game **windowed** at 1920x1080. Leave that window open.
+   From a Claude shell: `cmd /c run_story.cmd -NoLaunch`, wait for `out\launch_game.cmd` (the run deletes an old one
+   first and writes it with this run's arguments), then `cmd /c <full path of out\launch_game.cmd>`. It runs
+   `toolchain\venv\Scripts\python.exe -I tools\probe_mod\common\launch_foc.py [MODPATH=...]`: CreateProcess with
+   DEBUG_ONLY_THIS_PROCESS and DebugActiveProcessStop at the first (CREATE_PROCESS) debug event, so the game runs on
+   detached and prints its pid. A StarWarsG.exe started plainly from a Claude shell exits at once, and since 2026-11-09 a
+   `.cmd` started through `Start-Process explorer.exe` dies silently too (storyb t09 / a2m t13 runs used launch_foc.py).
 3. In the game: Esc through the intro movies, then **Single Player** → **Campaigns** (Forces of Corruption) →
-   **Underworld** → difficulty **Normal** → **Start**. Esc through the opening movie. The campaign starts its first
-   mission at once: the Kessel land battle (Tyber Zann's escape, `STORY_UNDERWORLD_M01_LAND.XML`).
-4. When the battle has loaded (the intro cinematic plays), click nothing and press no keys. Without orders Tyber stays in
-   his cell, so the mission does not finish: the trace stops after 10 minutes of game time and the game closes by itself.
-   If a dialog asks something, do not answer it.
-5. The command window ends with `done: exit <n>` (0 = complete). Send back
+   **Underworld** → difficulty **Medium** (the only choice offered) → **Start**. Esc through the opening movie (before the
+   battle's load screen this is allowed). The campaign starts its first mission at once: the Kessel land battle (Tyber
+   Zann's escape, `STORY_UNDERWORLD_M01_LAND.XML`).
+4. From the battle's load screen on, click nothing and press no keys, **not even Esc**: the battle's own intro
+   cinematic must play out. An Esc there runs the mission's `Story_Handle_Esc` and changes the sim on that frame
+   (2026-11-08 runs: cleanup at battle frame 129 and 248, identical before), so the run is no longer hands-off (storyb
+   t09 is the rerun without it). Without orders Tyber stays in his cell, so the mission does not finish: the trace stops
+   after 18000 battle frames (10 minutes of game time, about 11 min wall) and the game closes by itself. If a dialog
+   asks something, do not answer it. Keep the game window in front: the game pauses when it loses focus. Since storyb
+   t09 the run has no time limit while the game runs (`-TimeoutMin 0`): a pause only delays it (the console prints
+   `no new frame for N s ...`; `run_status.json` → `stalled_sec`, `stalls`), it does not end it as on 2026-11-08 22:41
+   (reader timeout after 60 min, paused at frame 1286).
+5. After the game closed, the run cleans up and then summarises (`run_status.json` `state`: `cleanup` → `summarizing`,
+   about 1.5 min → `summarized` → `done`). The window ends with `done: exit <n>` (0 = complete) and
+   `Q2 story run finished`. summary.json is written on every exit path that reaches the cleanup (Ctrl+C included);
+   if validate cannot write it, a partial one (`"partial": true`) is built from `reader_status.json`. Send back
    `tools\probe_mod\q2_traces\out\<yyyymmdd-hhmmss>-story-vanilla\` (zipped): `trace.q2t`, `summary.json`,
-   `run_status.json`, `cleanup.log`.
+   `run_status.json`, `run_trace.log`, `cleanup.log`.
+
+If the window itself was killed before the summary: `toolchain\venv\Scripts\python.exe -I tools\probe_mod\q2_traces\q2trace.py
+validate <run>\trace.q2t --json <run>\summary.json` (a trace cut mid-line by a killed reader validates too: the cut frame is
+dropped and noted).
 
 If the window was closed early or the PC crashed, double-click `cleanup.cmd`. What the trace is compared with: the port's
 Full_Story_Campaign_Underworld linked Kessel battle over the same ticks (RNG draw counts, object counts by type and owner,
-the intro spawns of the M01 Lua, the victory monitor staying held: `story` t04 on the roadmap).
+the intro spawns of the M01 Lua, the victory monitor staying held: `story` t04 on the roadmap). Read a run with
+`analysis\story_battle.py out\<run> [--port-trace port.q2t]`; the first run and its comparison with the port:
+`docs/re/STORY_T04_KESSEL_RUN.md`.
+
+### Rebel slice run (a2m t07 / t13)
+
+`run_rebel_slice.cmd` (details in `rebel_slice\run_rebel_slice.ps1`): Heart of the Maw, human Empire, Medium, hands-off
+for 12 fiscal cycles, with the Rebel `Advance_Tech_Rebel` plan hooked (`Mods\Q2RebelSlice`) and the Rebel credits / tech /
+unlocked-type list watched in memory (`slice_watch.py`). It reopens itself in its own window. From a Claude shell:
+`cmd /c run_rebel_slice.cmd -NoLaunch`, then, once `out\launch_game.cmd` exists (it holds `MODPATH=Mods\Q2RebelSlice`),
+`cmd /c <full path of out\launch_game.cmd>` (`common\launch_foc.py`, see "Story mission run" step 2). Menus: Galactic Conquest → Heart of the Maw → Empire →
+Medium, defaults → Start, close the objectives dialog, then hands off (a battle prompt: Auto-Resolve within 60 s). The
+game closes itself after 12 cycles (about 10 min wall). `rebel_slice\out\latest.txt` names the run folder; the report is
+`slice_report.txt` (rebuild: `python -I rebel_slice\slice_report.py --run-dir <run> --trace-dir <its -galactic-custom
+trace folder>`). Since a2m t13 the watcher names the unlocked types (`slice_watch.jsonl` `list` events: `added` holds
+type names, `ok` true); `rebel_slice\selftest_slice.py` checks the decoder on the raw list bytes of run 20261108-212955,
+and the rerun 20261109-055936 named all five slices (`docs/re/A2M_T07_REBEL_SLICE_RUN.md` §7).
+Since a2m r2 (2026-11-12, open item t14.4 of `docs/re/A2M_T08_T10_T14_RE.md`) the hook also writes one `PCAND` record per
+planet before the shipped `FindTarget`: the planet, its owner and `EvaluatePerception("Is_Good_Slice_Target")`, read-only.
+Report section 4 lists them per plan run and names the enemy planets that score > 0 but are never picked (retail picked
+none of Corellia, Kashyyyk, Shola in 12 runs; the port picks them about a third of the time). One run of 12 cycles is
+enough to tell a perception 0 from a filter in front of the pick.
+
+### Underworld plan hooks (a2m r3, 2026-11-12)
+
+`make_plan_hooks.py` also hooks three Underworld plans, with the same records (`PSTART` with `tname=`, `spend=` /
+`unalloc=` of the plan's budget category and `cr=`, then `PSTAGE` / `PBLOCK` / `PDONE` / `PEXIT` / `PFAIL`):
+`UpgradeStarbasePlan` (Upgrade_Starbase, `BaseForce`), `AI_Plan_Underworld_BuildUnderworldVehicleFactory`
+(Build_Underworld_Vehicle_Factory, `BaseForce`) and `AI_Plan_Underworld_DeploySaboteur` (Deploy_Saboteur, `MainForce`).
+They answer the open parts of `docs/re/A2M_R3_RE_A.md` (§1.5 / §5): which Underworld Infrastructure plans run before
+retail's first starbase upgrade (NalHutta's Underworld_Star_Base_2 at 11059 in all three Empire-human runs), with which
+spendable Infrastructure money, and how the saboteur plans whose production ends early (queue tags 60 / 65 / 68 of run
+20261108-170824) end: `PFAIL` = Production_Failed, `PEXIT` = the script exited, no end record = the goal system released
+it. Run: step 2 above (`run_galactic.cmd`, human Empire, Medium, hands off; it ends after 10 galactic days, frame 13500).
+`lua_summary.json` → `plans` lists them per player and plan; the raw records are in `lua_records.txt`.
 
 ### Lua probe run (q2f t06): steps for Gabriel
 
@@ -171,7 +253,7 @@ How to read the result (`run_status.json` → `lua_canary` and `lua`):
 
 | canary galactic | `lua.galactic` | meaning |
 |---|---|---|
-| deleted | `ran: N cycles, M perception rows` | works; the values are in `lua_perception.tsv` |
+| deleted | `ran: N cycles, M perception rows, G goal rows` | works; the values are in `lua_perception.tsv` and `lua_goal_perception.tsv` |
 | deleted | `ran, but no perception rows` / `ERR` records | script runs; `EvaluatePerception` or `Get_All_Planets` failed (see `errors`). If only the `Q2_*` columns read `ERR` and `Roaming_Empire_Fleet_Target` has values, the mod's equation file was not picked up |
 | deleted | `no records` | script ran, the memory scan missed it: check the `SCAN` lines in `lua_reader.log` |
 | present | `no records` | the plot script never loaded: the override of `Story_Plots_Sandbox_12U_Empire.xml` is not used |
@@ -179,11 +261,14 @@ How to read the result (`run_status.json` → `lua_canary` and `lua`):
 The `scoring` canary and verdict are about the GameScoring hook; in a galactic run it loads too, but only a skirmish
 (`run_skirmish.cmd -LuaProbe`, same clicks as step 4 above) gives it battle events. Optional.
 
-`lua.plans` (q2f t09) reads `loaded: N plan scripts; S thread starts, D ends, F production failures`. What it must
-show for q2f t09 (docs/re/Q2F_T09_REBEL_PRODUCTION.md): the Rebel's first `Build_Space_Forces` `PDONE` (unit types;
-the port picks a Marauder where retail's queue starts a Corellian gunboat at frame 109), the first
-`Build_Ground_Forces` `PSTART` / `PDONE` (retail's queue shows light tank, tank buster and infantry by frame 559), and
-every `Conquer_Pirate` start and failure with its target.
+`lua.plans` (q2f t09) reads `loaded: N plan scripts; S thread starts, D ends, F production failures; G stagings,
+B blocks done, E script exits, R probe errors`. `lua_summary.json` `gaps` (and the `GAPS` line of `lua_reader.log`) must be empty:
+a gap means records were lost. What it must show for q2f t09 (docs/re/Q2F_T09_REBEL_PRODUCTION.md): the Rebel's
+first `Build_Space_Forces` `PBLOCK` (unit types; the port picks a Marauder where retail's queue starts a Corellian
+gunboat at frame 109), the first `Build_Ground_Forces` `PSTART` / `PBLOCK` (retail's queue shows light tank, tank
+buster and infantry by frame 559), and every `Conquer_Pirate` start and failure with its target. Check also that the
+Rebel's fleet departures and queue starts in `parity\parity_report.txt` are close to the run without plan hooks
+(71 / 50): if not, the probe still disturbs the AI.
 
 **Cleanup is automatic.** It runs at the end of every run, even after an error. If a window was closed
 early or the PC crashed, double-click `cleanup.cmd`. It is safe to run any number of times.
@@ -289,6 +374,10 @@ Skirmish (space, 2 players):
 
 ## Files
 
+The per-metric `q2trace.py compare <run dir>` report is superseded for Q4 by the behavioural parity harness
+`tools/parity/` (q4h, 2026-11-07: tolerances per metric, retail run-to-run envelope, skirmish scenario, baseline ctest).
+It imports `analysis/q2_parity.py`, so keep that module's functions stable.
+
 | file | what |
 |---|---|
 | `run_galactic.cmd`, `run_skirmish.cmd` → `run_trace.ps1` | one recorded run: preflight, optional mod install, reader + game start, wait, cleanup, validate, Q1 conversion |
@@ -298,10 +387,11 @@ Skirmish (space, 2 players):
 | `reader\q2_layout.hpp` | every address and offset used, each with its `docs/re` source |
 | `reader\q2reader.cpp`, `reader\fake_game.cpp` | recorder; test target that lays out the same structures, including a real MSVC `unordered_map` |
 | `q2trace.py` | `validate` (rebuild state, recompute every digest, RNG draws per tick, fiscal cycles, credits, ownership), `to-q1`, `compare`, `selftest`, `selftest-fake`. Standard library only (project venv) |
-| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), `Scripts\AI\` copies of three plan scripts (original + plan probe, q2f t09), and the two canary files |
+| `mod\Q2Trace\` | optional Lua probe (vanilla): plot Lua script, `Story_Plots_Sandbox_12U_Empire.xml` with its empty `Lua_Script` set, the galactic equation file plus 4 `Q2_*` equations, `Scripts\Miscellaneous\GameScoring.lua` (original + tactical probe), `Scripts\AI\` copies of seven plan scripts (original + plan probe, q2f t09; Conquer_Opponent, Crush, Conquer_To_Reconnect and Lift_Blockade added 2026-11-08), and the two canary files |
+| `make_plan_hooks.py` | writes the ten `Scripts\AI\` plan hooks from `extracted\foc_data_text.zip` (shipped script, CRLF → LF, + the generated probe block); `--check` compares only (`selftest_lua.py` runs it) |
 | `run_lua_probe.cmd` | `run_trace.ps1 -Scenario galactic -LuaProbe` |
 | `q2lua_reader.py` | `run` (started by the run: read-only memory scan for the probe's `Q2L1` records), `summarize` (rebuild the outputs from `lua_reader.log`), `selftest` |
-| `selftest_lua.py` | runs both probe scripts under stock Lua 5.0.2 (`out\tools\lua50.exe`, built with the project MSVC) with stubbed engine calls, and checks that a memory scan of that process finds every record |
+| `selftest_lua.py` | runs the probe scripts under stock Lua 5.0.2 (`tools\probe_mod\out\tools\lua50.exe`, built by `common\build_lua50.cmd`) with stubbed engine calls, and checks that a memory scan of that process finds every record. Conquer_Opponent, Crush, Conquer_To_Reconnect and Lift_Blockade run as real coroutines with PGBase's yielding `BlockOnCommand` / `Sleep` / `ScriptExit` (a probe `pcall` around a yield would fail; the two-thread plans interleave) |
 | `q2_ui.py`, `q2_scenes.json`, `refs\` | unattended menu driver (see "Unattended runs") |
 | `q2_profile.py` | `snapshot` / `restore` / `diff <run_dir>`: the player's registry settings and saved-games files |
 | `q2common.ps1` | shared paths, game detection, manifest, install |
@@ -430,6 +520,12 @@ GALACTIC_ECONOMY.md §7 items and the other requested data:
 ## Known limits
 
 - **Exe build:** only FoC Steam x64 1.121 (`sha256 07daee…`). Any other build is refused.
+- **Game exits at once (2026-11-08):** if no window appears, `ui_status.json` stays `waiting_window` and the Lua reader
+  ends with `no_game`, StarWarsG.exe quit right after launch (exit code 0, no crash log). Seen when Steam's
+  `HKCU\Software\Valve\Steam\ActiveProcess` `pid` names an old Steam process: steam_api then reports
+  `SteamAPI_IsSteamRunning() failed` (OutputDebugString only) and the game ends. Compare that pid with the running
+  `steam.exe`; restarting Steam (`steam.exe -shutdown`, then start it) fixes it. `steam -applaunch 32470` is no
+  workaround: it starts base EaW (`GameData`), not FoC.
 - **Sampling:** the reader polls about every 1 ms, at above-normal priority in its own process. A tick it
   misses leaves a gap in `global_frame`; the RNG draw count across the gap is still recovered. Torn samples are
   flagged and left out of `reference.crc`. The first real run missed 4% of ticks under heavy machine load, in

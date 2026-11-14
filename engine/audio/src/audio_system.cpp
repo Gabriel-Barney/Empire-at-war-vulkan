@@ -314,8 +314,16 @@ float AudioSystem::stream_gain(uint32_t handle) const {
 }
 
 void AudioSystem::push(LogEntry e) {
+    if (cfg_.log_limit == 0) return;
+    // At the limit, drop the oldest half: amortised O(1) per entry and the capacity stays put (no regrowth copies).
+    if (log_.size() >= cfg_.log_limit) log_.erase(log_.begin(), log_.begin() + static_cast<ptrdiff_t>(log_.size() - cfg_.log_limit / 2));
     e.time_us = now_us_;
     log_.push_back(std::move(e));
+}
+
+void AudioSystem::set_log_limit(size_t limit) {
+    cfg_.log_limit = limit;
+    if (log_.size() > limit) log_.erase(log_.begin(), log_.begin() + static_cast<ptrdiff_t>(log_.size() - limit));
 }
 
 std::string AudioSystem::log_text() const {
@@ -701,6 +709,21 @@ std::string AudioSystem::pick_sample(Instance& in, int stage) {
 // Starts stage 3 (pre), 5 (primary) or 7 (post). false = no voice (the cycle's rest is skipped).
 bool AudioSystem::start_stage(Instance& in, int stage) {
     const std::string sample = pick_sample(in, stage);
+    // §1.7 / §5 (b0282): the sample is loaded before a voice is taken; a missing / undecodable one skips the stage
+    // without taking, stealing or counting a voice (the wait state sees no voice and moves on).
+    const SampleRef ref{in.is3d() ? Bus::Sfx3D : Bus::Sfx2D, sample};
+    if (!backend_->load(ref)) {
+        LogEntry le;
+        le.op = LogOp::SfxVoice;
+        le.event = ev(in).name;
+        le.sample = sample;
+        le.handle = in.handle;
+        le.owner = in.owner;
+        le.reason = "sample_missing";
+        push(std::move(le));
+        in.voice = 0;
+        return true;
+    }
     if (!get_voice(in)) {
         LogEntry le;
         le.op = LogOp::SfxNoVoice;
@@ -714,7 +737,7 @@ bool AudioSystem::start_stage(Instance& in, int stage) {
     in.voice_loop = stage == 5 && ev(in).play_count == -1;
     in.fade_in_level = in.fade_in_seconds > 0.0f ? 0.0f : 1.0f;
     const VoiceParams vp = voice_params(in);
-    const bool ok = backend_->start(in.voice, SampleRef{in.is3d() ? Bus::Sfx3D : Bus::Sfx2D, sample}, vp);
+    const bool ok = backend_->start(in.voice, ref, vp);
     LogEntry le;
     le.op = LogOp::SfxVoice;
     le.event = ev(in).name;
@@ -864,7 +887,8 @@ void AudioSystem::update_sfx(int64_t dt_us) {
             if (in.state == 0 || in.owner == 0) continue;
             if (auto o = object_query_(in.owner)) {
                 in.pos = o->position;
-                in.audible = o->audible || cinematic_;
+                // §1.6 (b0280): a cinematic skips only the fog test; hidden / stealthed / garrisoned objects stay muted.
+                in.audible = !o->hidden && (o->audible || cinematic_);
             }
         }
     }

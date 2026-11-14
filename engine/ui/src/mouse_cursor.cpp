@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "alamo/core/hash.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 
@@ -29,15 +30,6 @@ constexpr const char* kNames[kPointerCount] = {
     "POINTER_TARGET_SPECIAL_ABILITY_TO_BRIBE_ENEMY_OBJECT", "POINTER_TARGET_SPECIAL_ABILITY_CANT_BRIBE_ENEMY_OBJECT",
     "POINTER_TARGET_SPECIAL_ABILITY_BLAST", "POINTER_REPAIR_HARDPOINT"};
 
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const auto lo = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
-        if (lo(a[i]) != lo(b[i])) return false;
-    }
-    return true;
-}
-
 }  // namespace
 
 const char* pointer_name(Pointer p) {
@@ -47,7 +39,7 @@ const char* pointer_name(Pointer p) {
 
 bool pointer_from_name(std::string_view name, Pointer& out) {
     for (size_t i = 0; i < kPointerCount; ++i)
-        if (iequal(name, kNames[i])) {
+        if (iequals(name, kNames[i])) {
             out = static_cast<Pointer>(i);
             return true;
         }
@@ -71,7 +63,7 @@ size_t CursorTable::parse(const data::XmlNode& root) {
 
 void CursorTable::add(CursorDef d) {
     for (CursorDef& e : defs_)
-        if (iequal(e.name, d.name)) {
+        if (iequals(e.name, d.name)) {
             e = std::move(d);  // later duplicates replace
             return;
         }
@@ -105,7 +97,7 @@ size_t CursorTable::resolve_frames(const std::function<bool(std::string_view)>& 
 
 const CursorDef* CursorTable::find(std::string_view name) const {
     for (const CursorDef& d : defs_)
-        if (iequal(d.name, name)) return &d;
+        if (iequals(d.name, name)) return &d;
     return nullptr;
 }
 const CursorDef* CursorTable::find(Pointer p) const { return find(pointer_name(p)); }
@@ -158,8 +150,11 @@ Pointer choose_pointer(const CursorContext& c) {
             if (!c.selection) return Pointer::Normal;
             if (!c.can_attack) return Pointer::CantAttack;
             return c.in_range ? Pointer::Attack : Pointer::AttackOutOfRange;
-        case H::Own: return c.selectable ? Pointer::Select : Pointer::CantSelect;
+        case H::Own:
+            if (c.selection && c.garrisonable) return Pointer::GarrisonIn;  // ui1 t01: an own bunker / transport
+            return c.selectable ? Pointer::Select : Pointer::CantSelect;
         case H::Friendly:
+        case H::Neutral:  // ui1 t01: a neutral garrison structure (capture point) takes garrisons too
             if (c.selection && c.garrisonable) return Pointer::GarrisonIn;
             return Pointer::Normal;
         case H::Ground:

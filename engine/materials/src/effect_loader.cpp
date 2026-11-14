@@ -8,19 +8,13 @@
 #include <utility>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/shaderxlat/bytecode.hpp"
 #include "fx2_reader.hpp"
 
 namespace alamo::materials {
 namespace {
-
-std::string upper(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return o;
-}
 
 struct PhaseInfo { RenderPhase p; const char* name; const char* file; };
 constexpr PhaseInfo kPhases[] = {
@@ -49,14 +43,10 @@ uint32_t blob_id(std::span<const uint8_t> b) {
     return register_program_id(alamo::fnv1a64(b.data(), b.size()));
 }
 
-bool contains_ci(std::string_view hay, std::string_view needle) {
-    return upper(hay).find(upper(needle)) != std::string::npos;
-}
-
 // Lookup that answers LIGHT_SCALE with a fixed value (fade probing) and nothing else.
 ParamLookup light_scale_lookup(float w) {
     return [w](const fx::Parameter& p, std::span<float> out) {
-        if (upper(p.type.semantic) != "LIGHT_SCALE" || out.size() < 4) return false;
+        if (!ascii_iequals(p.type.semantic, "LIGHT_SCALE") || out.size() < 4) return false;
         out[0] = out[1] = out[2] = 1.0f;
         out[3] = w;
         return true;
@@ -73,9 +63,8 @@ int eval_state_int(const fx::Effect& e, const fx::State& s, const ParamLookup& l
 }  // namespace
 
 RenderPhase render_phase_from_name(std::string_view s) {
-    const std::string u = upper(s);
     for (const auto& p : kPhases)
-        if (u == upper(p.name)) return p.p;
+        if (ascii_iequals(s, p.name)) return p.p;
     return RenderPhase::None;
 }
 const char* render_phase_name(RenderPhase p) {
@@ -90,27 +79,15 @@ const char* phase_effect_file(RenderPhase p) {
 }
 
 TechniqueLod technique_lod_from_string(std::string_view lod, std::string_view name) {
-    const std::string u = upper(lod);
+    const std::string u = ascii_upper(lod);
     if (u == "DX9") return TechniqueLod::DX9;
     if (u == "DX8ATI") return TechniqueLod::DX8ATI;
     if (u == "DX8") return TechniqueLod::DX8;
     if (u == "FIXEDFUNCTION") return TechniqueLod::FixedFunction;
     if (u == "FF") return TechniqueLod::FF;
-    if (upper(name) == "MAX_VIEWPORT") return TechniqueLod::MaxViewport;
+    if (ascii_iequals(name, "MAX_VIEWPORT")) return TechniqueLod::MaxViewport;
     return TechniqueLod::Unknown;
 }
-const char* technique_lod_name(TechniqueLod l) {
-    switch (l) {
-    case TechniqueLod::DX9: return "DX9";
-    case TechniqueLod::DX8ATI: return "DX8ATI";
-    case TechniqueLod::DX8: return "DX8";
-    case TechniqueLod::FixedFunction: return "FIXEDFUNCTION";
-    case TechniqueLod::FF: return "FF";
-    case TechniqueLod::MaxViewport: return "max_viewport";
-    default: return "unknown";
-    }
-}
-
 int pick_best_technique(const fx::Effect& e) {
     int best = -1;
     TechniqueLod best_lod = TechniqueLod::MaxViewport;
@@ -122,6 +99,10 @@ int pick_best_technique(const fx::Effect& e) {
         }
     }
     return best;
+}
+
+bool pass_has_program(const ResolvedPass& p) {
+    return p.restore_only || p.program_status == ProgramStatus::Translated || (p.program_status == ProgramStatus::Ok && p.program.vs);
 }
 
 size_t MaterialEffect::draw_pass_count() const {
@@ -144,11 +125,11 @@ ResolvedPass resolve_pass(const fx::Effect& e, int technique, int pass_index, co
         const fx::StateClass c = fx::stateInfo(s.operation).cls;
         if (c != fx::StateClass::Sampler && c != fx::StateClass::SetSampler) only_samplers = false;
     }
-    r.restore_only = pass_index > 0 && (only_samplers || contains_ci(pass.name, "cleanup"));
+    r.restore_only = pass_index > 0 && (only_samplers || ascii_icontains(pass.name, "cleanup"));
     // RENDER.md 2.1: a pass annotated AlamoCleanup = true is excluded from the draw passes; the
     // annotation, when present, overrides the heuristic.
     for (const auto& a : pass.annotations)
-        if (upper(a.type.name) == "ALAMOCLEANUP" && !a.value.words.empty()) r.restore_only = a.value.words[0] != 0;
+        if (ascii_iequals(a.type.name, "ALAMOCLEANUP") && !a.value.words.empty()) r.restore_only = a.value.words[0] != 0;
     r.fixed_function = !st.has_vertex_shader && !st.has_pixel_shader;
     const bool mixed = st.has_vertex_shader != st.has_pixel_shader;
 
@@ -245,8 +226,9 @@ ResolvedPass resolve_pass(const fx::Effect& e, int technique, int pass_index, co
     // pass Translated. No DXC here: translate_pass() compiles on demand.
     if (r.program_status == ProgramStatus::NeedsTranslation && !vsb.empty() && !psb.empty()) {
         shaderxlat::Program vp, pp;
-        if (shaderxlat::parse(vsb, vp) && shaderxlat::parse(psb, pp) && vp.is_vs() && pp.is_ps() && vp.major <= 2 &&
-            pp.major <= 2) {
+        // SM1-2 pairs, or vs_3_0 with ps_3_0 (modc t22; D3D9 draws a shader model 3 stage only with the other at 3 too).
+        if (shaderxlat::parse(vsb, vp) && shaderxlat::parse(psb, pp) && vp.is_vs() && pp.is_ps() &&
+            ((vp.major <= 2 && pp.major <= 2) || (vp.major == 3 && pp.major == 3))) {
             r.vs_bytecode.assign(vsb.begin(), vsb.end());
             r.ps_bytecode.assign(psb.begin(), psb.end());
             if (pp.ps1())
@@ -367,7 +349,7 @@ std::string effect_base_name(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     const size_t dot = n.find_last_of('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    return upper(n);
+    return ascii_upper(n);
 }
 
 EffectRemap normalize_remap(const EffectRemap& in) {
@@ -387,7 +369,9 @@ const EffectRemap& compat_missing_effect_remap() {
 }
 
 EffectLibrary::EffectLibrary(const alamo::FileProvider& files, LoadOptions options)
-    : files_(files), options_(std::move(options)) {
+    : files_(files),
+      options_(std::move(options)),
+      fx_cache_(options_.fx_cache_dir.empty() ? FxCache::default_directory() : options_.fx_cache_dir) {
     options_.missing_effect_remap = normalize_remap(options_.missing_effect_remap);
 }
 EffectLibrary::~EffectLibrary() = default;
@@ -396,21 +380,47 @@ void EffectLibrary::set_missing_effect_remap(EffectRemap remap) {
     options_.missing_effect_remap = normalize_remap(remap);
 }
 
-std::optional<std::string> EffectLibrary::find_effect_path(std::string_view effect) const {
+bool host_path_under(std::string_view host, std::string_view dir) {
+    while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/')) dir.remove_suffix(1);
+    if (dir.empty() || host.size() <= dir.size() + 1) return false;
+    const char sep = host[dir.size()];
+    return alamo::iequals(host.substr(0, dir.size()), dir) && (sep == '\\' || sep == '/');  // case and '/' == '\\' folded
+}
+
+namespace {
+// Candidate game paths of an effect name for one extension (".fxo" / ".fx"): a name with a directory
+// is tried as given (only when its own extension is `ext` or absent) and with `ext`; a bare name under
+// Shaders\, Shaders\Engine\ and Shaders\Terrain\ in that order (RENDER.md 6).
+std::vector<std::string> effect_candidates(std::string_view effect, std::string_view ext) {
     std::string n(effect);
     std::string base = n;
+    std::string own_ext;
     const size_t dot = base.find_last_of('.');
     const size_t slash = base.find_last_of("\\/");
-    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) base = base.substr(0, dot);
+    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+        own_ext = ascii_upper(base.substr(dot));
+        base = base.substr(0, dot);
+    }
     std::vector<std::string> cands;
     if (slash != std::string::npos) {
-        cands.push_back(n);
-        cands.push_back(base + ".fxo");
+        if (own_ext.empty() || ascii_iequals(own_ext, ext)) cands.push_back(n);
+        cands.push_back(base + std::string(ext));
     } else {
         for (const char* dir : {"Data\\Art\\Shaders\\", "Data\\Art\\Shaders\\Engine\\", "Data\\Art\\Shaders\\Terrain\\"})
-            cands.push_back(std::string(dir) + base + ".fxo");
+            cands.push_back(std::string(dir) + base + std::string(ext));
     }
-    for (const auto& c : cands)
+    return cands;
+}
+}  // namespace
+
+std::optional<std::string> EffectLibrary::find_effect_path(std::string_view effect) const {
+    for (const auto& c : effect_candidates(effect, ".fxo"))
+        if (files_.exists(c)) return c;
+    return std::nullopt;
+}
+
+std::optional<std::string> EffectLibrary::find_effect_source(std::string_view effect) const {
+    for (const auto& c : effect_candidates(effect, ".fx"))
         if (files_.exists(c)) return c;
     return std::nullopt;
 }
@@ -444,8 +454,76 @@ std::optional<MaterialEffect> EffectLibrary::load(std::string_view effect, std::
     return std::nullopt;
 }
 
+FxSourceState EffectLibrary::source_state(const std::string& src, std::vector<uint8_t>* fxo, std::string* detail) const {
+    if (!options_.use_fx_sources) return FxSourceState::Disabled;
+    FxSource s;
+    std::string e;
+    if (!collect_fx_source(files_, src, s, &e)) {
+        if (detail) *detail = e;
+        return FxSourceState::Failed;
+    }
+    FxCacheEntry entry;
+    if (!fx_cache_.load(s.key(), entry)) {
+        if (detail) *detail = "no compiled entry in " + alamo::path_to_utf8(fx_cache_.directory()) + " (run alamo_fx_prebuild)";
+        return FxSourceState::NotCompiled;
+    }
+    if (!entry.ok) {
+        if (detail) {
+            // First error line of the fxc log (tools/fx_compile.cpp fx_log_summary(), kept local: no tool dependency).
+            std::string first;
+            size_t i = 0;
+            while (i < entry.log.size()) {
+                const size_t end = std::min(entry.log.find('\n', i), entry.log.size());
+                std::string line = entry.log.substr(i, end - i);
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+                i = end + 1;
+                if (line.empty()) continue;
+                if (line.find("error") != std::string::npos) {
+                    first = line;
+                    break;
+                }
+                if (first.empty()) first = line;
+            }
+            *detail = "fxc failed: " + (first.empty() ? std::string("no output") : first);
+        }
+        return FxSourceState::Failed;
+    }
+    try {
+        (void)fx::parseEffect(entry.fxo.data(), entry.fxo.size());
+    } catch (const std::exception& ex) {
+        if (detail) *detail = std::string("compiled effect does not parse: ") + ex.what();
+        return FxSourceState::Failed;
+    }
+    if (fxo) *fxo = std::move(entry.fxo);
+    return FxSourceState::Compiled;
+}
+
+FxSourceState EffectLibrary::fx_source_status(std::string_view effect, std::string* detail) const {
+    const std::optional<std::string> src = find_effect_source(effect);
+    if (!src) return FxSourceState::None;
+    return source_state(*src, nullptr, detail);
+}
+
 std::optional<MaterialEffect> EffectLibrary::load_file(std::string_view effect, std::string* err) {
     auto path = find_effect_path(effect);
+    if (auto src = find_effect_source(effect)) {
+        // The original compiles the HLSL with D3DX here and prefers it to the .fxo (RENDER.md 6); the port
+        // takes the alamo_fx_prebuild result from the FxCache (modc t23), else keeps the .fxo.
+        std::vector<uint8_t> fxo;
+        std::string why;
+        const FxSourceState st = source_state(*src, &fxo, &why);
+        if (st == FxSourceState::Compiled) {
+            auto r = load_from_memory(*src, fxo, err);
+            if (r) r->path = *src;
+            return r;
+        }
+        if (!path) {
+            if (err)
+                *err = "effect source " + *src + " has no compiled .fxo (" +
+                       (st == FxSourceState::Disabled ? std::string("HLSL .fx compilation is off") : why) + ")";
+            return std::nullopt;
+        }
+    }
     if (!path) {
         if (err) *err = "effect not found: " + std::string(effect);
         return std::nullopt;
@@ -486,7 +564,7 @@ std::optional<MaterialEffect> EffectLibrary::load_parsed(std::string_view name_o
         if (slash != std::string_view::npos) n = n.substr(slash + 1);
         const size_t dot = n.find_last_of('.');
         if (dot != std::string_view::npos) n = n.substr(0, dot);
-        m.name = upper(n);
+        m.name = ascii_upper(n);
         m.path = std::string(name_or_path);
     }
     m.effect = e;
@@ -540,12 +618,53 @@ std::optional<MaterialEffect> EffectLibrary::load_parsed(std::string_view name_o
             }
         }
     }
-    const fx::Technique& tech = e->techniques[static_cast<size_t>(m.technique)];
-    m.technique_name = tech.name;
-
     const DeviceState& base = phase_baseline(m.phase);
-    for (size_t p = 0; p < tech.passes.size(); ++p) {
-        ResolvedPass rp = resolve_pass(*e, m.technique, static_cast<int>(p), base, options_, m.name, m.layout);
+    auto resolve_technique = [&](int t) {
+        std::vector<ResolvedPass> out;
+        const fx::Technique& tq = e->techniques[static_cast<size_t>(t)];
+        for (size_t p = 0; p < tq.passes.size(); ++p)
+            out.push_back(resolve_pass(*e, t, static_cast<int>(p), base, options_, m.name, m.layout));
+        return out;
+    };
+    auto drawable = [](const std::vector<ResolvedPass>& ps) {
+        return std::all_of(ps.begin(), ps.end(), [](const ResolvedPass& p) { return pass_has_program(p); });
+    };
+    std::vector<ResolvedPass> passes = resolve_technique(m.technique);
+    if (!drawable(passes)) {
+        // [port] A technique with a shader pass the port has no program for (vs_3_0 / ps_3_0 in mods) is
+        // skipped like one that fails ValidateTechnique in the original (RENDER.md 6): the next technique
+        // by LOD, then file order, whose passes all have a program (max_viewport never). None: keep the
+        // best one (its submeshes draw unlit). docs/MODS.md, shader section.
+        std::vector<int> order;
+        for (size_t i = 0; i < e->techniques.size(); ++i)
+            if (static_cast<int>(i) != m.technique &&
+                technique_lod_from_string(e->techniqueLod(e->techniques[i]), e->techniques[i].name) != TechniqueLod::MaxViewport)
+                order.push_back(static_cast<int>(i));
+        auto lod_of = [&](int i) {
+            return static_cast<int>(technique_lod_from_string(e->techniqueLod(e->techniques[static_cast<size_t>(i)]),
+                                                              e->techniques[static_cast<size_t>(i)].name));
+        };
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return lod_of(a) < lod_of(b); });
+        for (const int t : order) {
+            std::vector<ResolvedPass> alt = resolve_technique(t);
+            if (!drawable(alt)) continue;
+            m.skipped_technique = e->techniques[static_cast<size_t>(m.technique)].name;
+            m.skipped_technique_index = m.technique;
+            for (const ResolvedPass& rp : passes)
+                if (!pass_has_program(rp)) {
+                    m.skipped_pass = rp.pass_index;
+                    break;
+                }
+            m.technique = t;
+            m.lod = static_cast<TechniqueLod>(lod_of(t));
+            passes = std::move(alt);
+            m.warnings.push_back("technique " + m.skipped_technique + " has a shader pass without a program; using " +
+                                 e->techniques[static_cast<size_t>(t)].name);
+            break;
+        }
+    }
+    m.technique_name = e->techniques[static_cast<size_t>(m.technique)].name;
+    for (ResolvedPass& rp : passes) {
         for (const auto& u : rp.report.unknown) m.warnings.push_back(rp.name + ": unknown state " + u);
         if (rp.ff && !rp.ff->unsupported.empty()) m.warnings.push_back(rp.name + ": FF " + rp.ff->unsupported);
         m.passes.push_back(std::move(rp));
@@ -663,7 +782,13 @@ MaterialEffect EffectLibrary::load_or_default(std::string_view effect, std::stri
     if (auto m = load(effect, &e)) return std::move(*m);
     const bool no_technique = technique_failed_;
     technique_failed_ = false;
-    const bool exists = find_effect_path(effect).has_value();
+    // A .fx source without a .fxo counts as existing: the original compiles it, and when that compile
+    // fails it re-creates the green effect under the effect's name (D.3), which is what the port draws.
+    std::optional<std::string> found;
+    if (fx_source_status(effect) == FxSourceState::Compiled) found = find_effect_source(effect);
+    if (!found) found = find_effect_path(effect);
+    if (!found) found = find_effect_source(effect);
+    const bool exists = found.has_value();
     if (!exists && !no_technique && !options_.missing_effect_remap.empty()) {
         // Opt-in compatibility (not original behaviour): a missing name mapped to a shipped effect.
         const std::string base = effect_base_name(effect);
@@ -694,8 +819,8 @@ MaterialEffect EffectLibrary::load_or_default(std::string_view effect, std::stri
         if (slash != std::string_view::npos) n = n.substr(slash + 1);
         const size_t dot = n.find_last_of('.');
         if (dot != std::string_view::npos) n = n.substr(0, dot);
-        d.name = upper(n);
-        d.path = *find_effect_path(effect);
+        d.name = ascii_upper(n);
+        d.path = *found;
         d.fallback = EffectFallback::Failed;
     } else {
         if (err) err->clear();  // the original logs nothing for a missing file

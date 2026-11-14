@@ -3,6 +3,7 @@
 #include <cmath>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
 
@@ -14,13 +15,6 @@ bool flag(const data::XmlNode& m, std::string_view tag, bool fallback) {
     if (t.empty()) return fallback;
     if (const auto b = data::parse_bool(t)) return *b;
     return fallback;
-}
-char lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower(a[i]) != lower(b[i])) return false;
-    return true;
 }
 std::string_view stem(std::string_view path) {
     const size_t s = path.find_last_of("\\/");
@@ -53,8 +47,8 @@ std::vector<MovieEntry> parse_movies(const data::XmlNode& root) {
 const MovieEntry* find_movie(const std::vector<MovieEntry>& movies, std::string_view key) {
     const MovieEntry* by_file = nullptr;
     for (size_t i = movies.size(); i-- > 0;) {
-        if (iequal(movies[i].name, key)) return &movies[i];
-        if (!by_file && !movies[i].file.empty() && iequal(stem(movies[i].file), stem(key))) by_file = &movies[i];
+        if (ascii_iequals(movies[i].name, key)) return &movies[i];  // exact ASCII fold: `key` may be a path
+        if (!by_file && !movies[i].file.empty() && ascii_iequals(stem(movies[i].file), stem(key))) by_file = &movies[i];
     }
     return by_file;
 }

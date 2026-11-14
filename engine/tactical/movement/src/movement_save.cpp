@@ -10,50 +10,35 @@
 // Units are serialised by one template (io_unit) used for both directions, so the write and read orders cannot drift.
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "alamo/core/bytes.hpp"
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/tactical/save_io.hpp"
+#include "collision_key.hpp"
 #include "alamo/tactical/movement/hyperspace.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
 
 namespace alamo::tactical::movement {
 
+using save_io::get_vec3;
+using save_io::put_vec3;
+
 namespace {
 
 constexpr uint32_t kGridSaveVersion = 1;
 constexpr uint32_t kOccupancySaveVersion = 1;
-constexpr uint32_t kCollisionSaveVersion = 1;
+constexpr uint32_t kCollisionSaveVersion = 5;  // 5: s78n t24 the TerrainCollision kind (one participant, b = kNoParticipant, no pair key; states Active / Resolving); 4: s78n t23 the MovingVsMoving states of every pair (Pass, MovingWithSpeed, FormationFollow, PassFailed, SwapSlots, Starved, StarvedDetour) and record fields failures / early_pop / hold lines / starvation / redecide; 3: s78n t20 the StoppedVsStopped state Resolving and `master` 2 (nobody is moved); 2: s78n t18 the records' speed answers, "at once" flags and master
 constexpr uint32_t kFighterGridSaveVersion = 1;
 constexpr uint32_t kFighterGridsSaveVersion = 1;
 constexpr uint32_t kDeparturesSaveVersion = 1;
 constexpr uint32_t kEnginesSaveVersion = 1;
-constexpr uint32_t kMovementSaveVersion = 12;  // 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
-
-// u32 byte length + the bytes (like apps/sim write_section / read_section, which this module cannot include).
-template <class F>
-void put_section(ByteWriter& w, F&& fn) {
-    ByteWriter sub;
-    fn(sub);
-    w.u32(static_cast<uint32_t>(sub.size()));
-    w.raw(sub.bytes());
-}
-template <class F>
-bool get_section(ByteReader& r, F&& fn) {
-    const uint32_t n = r.u32();
-    const std::span<const uint8_t> d = r.raw(n);
-    if (!r.ok()) return false;
-    ByteReader sub(d);
-    return fn(sub) && sub.ok() && sub.done();
-}
-
-// A count followed by items of at least `min_bytes` each: false when it cannot fit in the remaining data.
-bool get_count(ByteReader& r, size_t min_bytes, uint32_t& n) {
-    n = r.u32();
-    return r.ok() && (min_bytes == 0 || n <= r.remaining() / min_bytes);
-}
+constexpr uint32_t kMovementSaveVersion = 32;  // 32: [port] fleet cohesion Unit::cohesion_speed; 31: bkm1 LandMotion::end_z / end_at, Unit::lane_z (stored waypoint heights), the UseSecondaryFacing state; 30: s78p (b0049) Unit::lane / lane_d (the formation member lanes); 29: s78n t26 closing review UnitDesc::walk_transition / anim_scale_speed, LandMotion::wt_clip / wt_pos / wt_rate / wt_f4 / wt_f0 (Walk_Transition); 28: s78n t25.2 Unit::atk_theta / atk_rho / atk_form / atk_target (the land attack block), MovementStats attack counters (t25 lane, numbered after t26.4 at the merge); 27: s78n t26.4 LandMotion::last_dir / started, Unit::prev_pos, MovementStats::walk_coasts / walk_restarts / walk_tau_skips / walk_degen_skips; 26: s78n t26.3 UnitDesc::min_speed_fraction_for_turn, MovementStats::corner_zero / corner_slowed / corner_stepdowns; 25: s78n t26.2 LandMotion::frac / turn_done, Unit::push_frac / push_turn_done (replace push_turn_first), Unit::aturn_start; 24: s78n t24 Unit::push_turn_first; Unit::blocked_frames / replans / push_blocked dropped (the blocked-frames re-plan); MovementStats::terrain_records / terrain_detours / terrain_stops_cell / terrain_stops_nobase / terrain_stops_failed; 23: s78n t26.1 UnitDesc::deploys / auto_deploys / max_walk_deployed / deployed_walk_speed / deploy_ability, Unit::walk_deployed, garrison deploy records; 22: s78n t23 Unit::speed_cap / hold_until / nudge / nudge_frames dropped (the MovingVsMoving stand-in); 21: s78n t23 UnitDesc::hard_x_deployed / hard_y_deployed; 20: s78n t20 batch 1 UnitDesc::no_locomotor / death_clone_obstacle, the push kills of the tick; 19: s78n t20 F5 Unit::self_goal; 18: s78n t20 the collision-owned top path record (Unit::push_owner / push_weight / push_kind / push_resume / push_tags; Unit::detour_seq / detour_end dropped), Unit::form_id / form_slot / self_arrive and the last formation id, UnitDesc::type_hx / type_hy / box_expansion; 17: s78n t18 collision states (Repulsion / PathAround / Crusher / SpeedSlave) and record answers, Unit::detour_seq / detour_end / around / around_frame / path_change, Unit::coast / fturn / path_started (a squad container's walk), Unit::exit_host / hover / hover_off and UnitDesc::hover_height (pair gates), the parked members' shape / speed data, Unit::waits dropped; 16: s78n t14 part B UnitDesc::movement_prediction_interval / avoidance_disabled, Unit::push_flee (crush-flee push path), Unit::steer_blocked dropped (members are not passability-tested); 15: s78n t14 UnitDesc::container_arrangement, Unit::recovery (u8, replaces recovering) / start_delay / team shape / laid_out / lay_dir / spread / team_target, the parked members' offsets; 14: s78n t03 UnitDesc::team_container, Unit::anchor / tslot / tindex / recovering / steer_blocked (land squad containers), s78n review Unit::team / team_factor / team_cap / team_max and the parked squad members; 13: cu8j t01 / t02 UnitDesc::stationary_space_layer, Unit::pend / adopted, the pending compositions + last serial; 2: S7 t06 multi-locomotor fields (UnitDesc, Unit); 3: S7 t14 alternate speed / turn read raw (no 0 = unset); 4: S7 t15 jetpack turn band rate, S8 t09 jetpack_still_frames; 5: S7 t28 FighterSquad::speed_cap; 6: S8 t11 Walk deploy state + clip, Deployment_Anim_Rate; 7: S8 t24 turret params (UnitDesc) + TURRET state (Unit); 8: S7 t37 fighter object goal blocks (FighterGuard), FighterSquad::guard_follow; 9: a1k t03 pushed move (Unit::pushed / push_path / push_next / push_blocked), MovementStats::pushes / push_failures, UnitDesc::hard_x / hard_y; 10: s78f t02 fighter formation block stacks (FighterFormation replaces FighterGuard), FighterParams / FighterSquad chase ranges, FighterSquad::speed_cap dropped; 11: s78k t01 UnitDesc::stopped_turn_rate / movement_directions, Unit::forced (land straight move); 12: s78l t02 UnitDesc::rotation_animation_speed, the Walk arrival turn state (Unit::aturn / aturn_rate / tclip / tclip_start / tclip_speed / aturn_ended / aturn_end_pending)
 
 // ---- enum validation (switches without default: -Wswitch flags a new enumerator here) ---------------------------
 bool valid_loco_state(uint8_t v) {
@@ -111,7 +96,8 @@ bool valid_collision_kind(uint8_t v) {
     switch (static_cast<CollisionKind>(v)) {
         case CollisionKind::MovingVsMoving:
         case CollisionKind::MovingVsStopped:
-        case CollisionKind::StoppedVsStopped: return true;
+        case CollisionKind::StoppedVsStopped:
+        case CollisionKind::Terrain: return true;
     }
     return false;
 }
@@ -119,7 +105,19 @@ bool valid_collision_state(uint8_t v) {
     switch (static_cast<CollisionState>(v)) {
         case CollisionState::Active:
         case CollisionState::TryAgainLater:
-        case CollisionState::Resolved: return true;
+        case CollisionState::Resolved:
+        case CollisionState::Repulsion:
+        case CollisionState::PathAround:
+        case CollisionState::Crusher:
+        case CollisionState::SpeedSlave:
+        case CollisionState::Resolving:
+        case CollisionState::Pass:
+        case CollisionState::MovingWithSpeed:
+        case CollisionState::FormationFollow:
+        case CollisionState::PassFailed:
+        case CollisionState::SwapSlots:
+        case CollisionState::Starved:
+        case CollisionState::StarvedDetour: return true;
     }
     return false;
 }
@@ -179,6 +177,14 @@ public:
         w_.u32(static_cast<uint32_t>(v.size()));
         for (const ObjectId id : v) w_.i32(id);
     }
+    void f32s(const std::vector<float>& v) {  // s78n t26.2
+        w_.u32(static_cast<uint32_t>(v.size()));
+        for (const float f : v) w_.f32(f);
+    }
+    void tags(const std::vector<HoldTag>& v) {  // s78n t20
+        w_.u32(static_cast<uint32_t>(v.size()));
+        for (const HoldTag& t : v) w_.u32(t.index).i32(t.obstacle).f32(t.pt.x).f32(t.pt.y).f32(t.dir.x).f32(t.dir.y);
+    }
     void wps(const std::vector<SpaceWaypoint>& v) {
         w_.u32(static_cast<uint32_t>(v.size()));
         for (const SpaceWaypoint& p : v) w_.f32(p.pos.x).f32(p.pos.y).f32(p.heading).f32(p.speed).f32(p.time);
@@ -223,25 +229,44 @@ public:
     }
     void v2s(std::vector<V2>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 8, n)) return r_.fail();
+        if (!r_.count(n, 8)) return r_.fail();
         v.assign(n, V2{});
         for (V2& p : v) v2(p);
     }
     void f3s(std::vector<F3>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 12, n)) return r_.fail();
+        if (!r_.count(n, 12)) return r_.fail();
         v.assign(n, F3{});
         for (F3& p : v) f3(p);
     }
     void ids(std::vector<ObjectId>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 4, n)) return r_.fail();
+        if (!r_.count(n, 4)) return r_.fail();
         v.assign(n, 0);
         for (ObjectId& id : v) id = r_.i32();
     }
+    void f32s(std::vector<float>& v) {  // s78n t26.2
+        uint32_t n = 0;
+        if (!r_.count(n, 4)) return r_.fail();
+        v.assign(n, 0.0f);
+        for (float& f : v) f = r_.f32();
+    }
+    void tags(std::vector<HoldTag>& v) {  // s78n t20
+        uint32_t n = 0;
+        if (!r_.count(n, 24)) return r_.fail();
+        v.assign(n, HoldTag{});
+        for (HoldTag& t : v) {
+            t.index = r_.u32();
+            t.obstacle = r_.i32();
+            t.pt.x = r_.f32();
+            t.pt.y = r_.f32();
+            t.dir.x = r_.f32();
+            t.dir.y = r_.f32();
+        }
+    }
     void wps(std::vector<SpaceWaypoint>& v) {
         uint32_t n = 0;
-        if (!get_count(r_, 20, n)) return r_.fail();
+        if (!r_.count(n, 20)) return r_.fail();
         v.assign(n, SpaceWaypoint{});
         for (SpaceWaypoint& p : v) {
             p.pos.x = r_.f32();
@@ -295,6 +320,7 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.f32(d.max_rate_of_roll);
     io.f32(d.bank_turn_angle);
     io.f32(d.min_speed);
+    io.f32(d.min_speed_fraction_for_turn);  // s78n t26.3 (version 26)
     io.f32(d.strafe_distance);
     io.f32(d.prepare_strafe_height);
     io.b(d.has_pre_turn_anim);
@@ -316,6 +342,32 @@ void io_desc(IO& io, D& d) {  // UnitDesc
     io.f32(d.stopped_turn_rate);  // s78k t01 (version 11)
     io.i32(d.movement_directions);
     io.f32(d.rotation_animation_speed);  // s78l t02 (version 12)
+    io.b(d.use_secondary_facing);  // bkm1 t08 (version 31)
+    io.f32(d.secondary_in_place);
+    io.f32(d.secondary_angle);
+    io.f32(d.secondary_min);
+    io.f32(d.secondary_max);
+    io.f32(d.secondary_lookahead);
+    io.u32(d.stationary_space_layer);  // cu8j t01 (version 13)
+    io.b(d.team_container);  // s78n t03 (version 14)
+    io.i32(d.container_arrangement);  // s78n t14 (version 15)
+    io.f32(d.movement_prediction_interval);  // s78n t14 part B (version 16)
+    io.b(d.avoidance_disabled);
+    io.f32(d.hover_height);  // s78n t18 (version 17)
+    io.f32(d.type_hx);  // s78n t20 (version 18)
+    io.f32(d.type_hy);
+    io.f32(d.box_expansion);
+    io.b(d.no_locomotor);  // s78n t20 batch 1 (version 20)
+    io.b(d.death_clone_obstacle);
+    io.f32(d.hard_x_deployed);  // s78n t23 (version 21)
+    io.f32(d.hard_y_deployed);
+    io.b(d.deploys);  // s78n t26.1 (version 23)
+    io.b(d.auto_deploys);
+    io.f32(d.max_walk_deployed);
+    io.f32(d.deployed_walk_speed);
+    io.b(d.deploy_ability);
+    io.b(d.walk_transition);  // s78n t26 closing review (version 29)
+    io.f32(d.anim_scale_speed);
 }
 
 template <class IO, class T>
@@ -403,6 +455,11 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.f32(u.lp.turn_rate);
     io.u32(u.lp.mask);
     io.f32(u.lp.close_enough_angle);
+    io.b(u.lp.secondary);  // bkm1 t08 (version 31)
+    io.f32(u.lp.sec_angle);
+    io.f32(u.lp.sec_min);
+    io.f32(u.lp.sec_max);
+    io.f32(u.lp.sec_lookahead);
     io.i32(u.slot);
     io.v2(u.m.pos);
     io.f32(u.m.yaw);
@@ -411,6 +468,19 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.v2s(u.m.path);
     io.u32(u.m.next);
     io.u32(u.m.escape_until);
+    io.f32s(u.m.frac);  // s78n t26.2 (version 25)
+    io.b(u.m.turn_done);
+    io.v2(u.m.last_dir);  // s78n t26.4 (version 27)
+    io.b(u.m.started);
+    io.i32(u.m.wt_clip);  // s78n t26 closing review (version 29): the Walk_Transition clip state
+    io.f32(u.m.wt_pos);
+    io.f32(u.m.wt_rate);
+    io.f32(u.m.wt_f4);
+    io.f32(u.m.wt_f0);
+    io.f32(u.m.end_z);  // bkm1 t06 (version 31)
+    io.v2(u.m.end_at);
+    io.f32(u.m.yaw2);  // bkm1 t08 (version 31)
+    io.v2(u.prev_pos);
     io.f32(u.z);
     io.b(u.has_goal);
     io.b(u.need_path);
@@ -422,19 +492,40 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.b(u.forced);
     io.u32(u.start_frame);
     io.f32(u.formation_speed);
+    io.f32(u.cohesion_speed);  // [port] fleet cohesion (version 32)
     io.i32(u.large_hover_index);
-    io.u32(u.blocked_frames);
-    io.u32(u.replans);
-    io.u32(u.waits);
     io.i32(u.check_countdown);
-    io.f32(u.speed_cap);
-    io.u32(u.hold_until);
-    io.v2(u.nudge);
-    io.u32(u.nudge_frames);
     io.b(u.pushed);  // a1k t03 (version 9)
     io.v2s(u.push_path);
     io.u32(u.push_next);
-    io.u32(u.push_blocked);
+    io.f32s(u.push_frac);  // s78n t26.2 (version 25; replaces t24's push_turn_first)
+    io.b(u.push_turn_done);
+    io.b(u.push_flee);  // s78n t14 part B (version 16)
+    io.u32(u.push_owner);  // s78n t20 (version 18)
+    io.u8(u.push_weight);
+    io.u8(u.push_kind);
+    io.u32(u.push_resume);
+    io.tags(u.push_tags);
+    io.u32(u.form_id);
+    io.v2(u.form_slot);
+    io.b(u.self_arrive);
+    io.v2(u.self_goal);  // s78n t20 F5 (version 19)
+    io.v2s(u.lane);  // s78p (version 30)
+    io.f32(u.lane_d);
+    io.f32(u.lane_z);  // bkm1 t06 (version 31)
+    io.f32(u.atk_theta);  // s78n t25.2 (version 28)
+    io.f32(u.atk_rho);
+    io.u32(u.atk_form);
+    io.i32(u.atk_target);
+    io.ids(u.around);  // s78n t18 (version 17)
+    io.u32(u.around_frame);
+    io.u32(u.path_change);
+    io.b(u.coast);
+    io.b(u.fturn);
+    io.b(u.path_started);
+    io.i32(u.exit_host);
+    io.u8(u.hover);
+    io.f32(u.hover_off);
     io.wps(u.wps);
     io.u32(u.path_start);
     io.b(u.following);
@@ -458,6 +549,7 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.i32(u.dclip);
     io.u32(u.dclip_start);
     io.f32(u.dclip_pos0);
+    io.b(u.walk_deployed);  // s78n t26.1 (version 23)
     for (size_t k = 0; k < 3; ++k) {  // S8 t24 (version 7)
         io.f32(u.tcur[k]);
         io.f32(u.ttgt[k]);
@@ -466,6 +558,7 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.b(u.thold);
     io.b(u.taim);
     io.e8(u.aturn, valid_loco_state);  // s78l t02 (version 12)
+    io.b(u.aturn_start);  // s78n t26.2 (version 25)
     io.f32(u.aturn_rate);
     io.i32(u.tclip);
     io.u32(u.tclip_start);
@@ -477,6 +570,25 @@ void io_unit(IO& io, U& u) {  // MovementSystem::Unit (deduced: the type is priv
     io.f32(u.fp.min_follow_distance);
     io.f32(u.fp.attack_range);
     io_chase(io, u.fp.chase);  // s78f t02 (version 10)
+    io.u32(u.pend);  // cu8j t01 (version 13)
+    io.b(u.adopted);
+    io.i32(u.anchor);  // s78n t03 (version 14)
+    io.v2(u.tslot);
+    io.u32(u.tindex);
+    io.u8(u.recovery);  // s78n t14 (version 15): replaces the version 14 bool
+    io.u32(u.start_delay);  // s78n t14 (version 15)
+    io.f32(u.team_hx);
+    io.f32(u.team_hy);
+    io.f32(u.team_thx);
+    io.f32(u.team_thy);
+    io.b(u.laid_out);
+    io.v2(u.lay_dir);
+    io.b(u.spread);
+    io.b(u.team_target);
+    io.i32(u.team);  // s78n review (version 14): read by a command before the first tick after a load
+    io.f32(u.team_factor);
+    io.f32(u.team_cap);
+    io.f32(u.team_max);
 }
 
 template <class IO, class C>
@@ -545,20 +657,34 @@ void io_stats(IO& io, S& s) {  // MovementStats
     io.u32(s.jetpack_still_frames);  // S8 t09 (version 4)
     io.u32(s.pushes);  // a1k t03 (version 9)
     io.u32(s.push_failures);
-}
-
-uint64_t collision_pair_key(ObjectId a, ObjectId b) {  // as collision.cpp pair_key
-    const uint32_t x = static_cast<uint32_t>(std::min(a, b)), y = static_cast<uint32_t>(std::max(a, b));
-    return (static_cast<uint64_t>(x) << 32) | y;
-}
-
-void put_vec3(ByteWriter& w, Vec3 v) { w.f32(v.x).f32(v.y).f32(v.z); }
-Vec3 get_vec3(ByteReader& r) {
-    Vec3 v;
-    v.x = r.f32();
-    v.y = r.f32();
-    v.z = r.f32();
-    return v;
+    io.u32(s.terrain_records);  // s78n t24 (version 24)
+    io.u32(s.terrain_detours);
+    io.u32(s.terrain_stops_cell);
+    io.u32(s.terrain_stops_nobase);
+    io.u32(s.terrain_stops_failed);
+    io.u32(s.corner_zero);  // s78n t26.3 (version 26)
+    io.u32(s.corner_slowed);
+    io.u32(s.corner_stepdowns);
+    io.u32(s.walk_coasts);  // s78n t26.4 (version 27)
+    io.u32(s.walk_restarts);
+    io.u32(s.walk_tau_skips);
+    io.u32(s.walk_degen_skips);
+    io.u32(s.attack_orders);  // s78n t25.2 (version 28)
+    io.u32(s.attack_replans);
+    io.u32(s.attack_slotted);
+    io.u32(s.attack_unslotted);
+    io.u32(s.attack_unslotted_cell);
+    io.u32(s.attack_in_range);
+    io.u32(s.attack_stops);
+    io.u32(s.attack_trims);
+    io.u32(s.attack_trims_first);
+    io.u32(s.attack_legs);
+    io.u32(s.attack_leg_refused);
+    io.f32(s.attack_trim_sum);
+    io.u32(s.formation_paths);  // s78p (version 30)
+    io.u32(s.formation_path_failures);
+    io.u32(s.lanes_set);
+    io.u32(s.lanes_taken);
 }
 
 }  // namespace
@@ -602,7 +728,7 @@ bool PassabilityGrid::read(ByteReader& r) {
     if (counted) counts.assign(cells, std::array<uint16_t, 9>{});
     const auto get = [&](std::map<ObjectId, Stamp>& m) {
         uint32_t n = 0;
-        if (!get_count(r, 12, n)) return false;
+        if (!r.count(n, 12)) return false;
         bool first = true;
         ObjectId prev = 0;
         for (uint32_t k = 0; k < n; ++k) {
@@ -610,7 +736,7 @@ bool PassabilityGrid::read(ByteReader& r) {
             Stamp s;
             s.bits = r.u32();
             uint32_t nc = 0;
-            if (!get_count(r, 4, nc) || (!first && id <= prev) || (s.bits & ~0x1FFu) != 0) return false;
+            if (!r.count(nc, 4) || (!first && id <= prev) || (s.bits & ~0x1FFu) != 0) return false;
             if (nc > 0 && counts.empty()) return false;  // stamps always allocate the counts
             s.cells.resize(nc);
             for (uint32_t i = 0; i < nc; ++i) {
@@ -657,7 +783,7 @@ bool SpaceOccupancy::read(ByteReader& r) {
     IdVec<Static> statics;
     IdVec<Track> tracks;
     uint32_t n = 0;
-    if (!get_count(r, 20, n)) return false;
+    if (!r.count(n, 20)) return false;
     for (uint32_t k = 0; k < n; ++k) {
         const ObjectId id = r.i32();
         Static s{};
@@ -668,7 +794,7 @@ bool SpaceOccupancy::read(ByteReader& r) {
         if (!r.ok() || (!statics.empty() && id <= statics.rbegin()->first)) return false;
         statics.emplace_back(id, s);
     }
-    if (!get_count(r, 20, n)) return false;
+    if (!r.count(n, 20)) return false;
     In in(r);
     for (uint32_t k = 0; k < n; ++k) {
         const ObjectId id = r.i32();
@@ -687,6 +813,7 @@ bool SpaceOccupancy::read(ByteReader& r) {
     const bool has_box = r.boolean();
     const uint32_t window = r.u32();
     if (!r.ok()) return false;
+    index_.valid = false;  // OPT3 t12: rebuilt by the next build_index()
     statics_ = std::move(statics);
     tracks_ = std::move(tracks);
     box_min_ = mn;
@@ -704,6 +831,10 @@ void CollisionLayer::write(ByteWriter& w) const {
     for (const CollisionObject& c : list_) {
         w.u32(c.seq).u8(static_cast<uint8_t>(c.kind)).u8(static_cast<uint8_t>(c.state)).u8(c.participants);
         w.i32(c.a).i32(c.b).u32(c.created).u32(c.crowd_frame).f32(c.crowd).f32(c.priority).u32(c.retry);
+        w.f32(c.speed_a).f32(c.speed_b).boolean(c.now_a).boolean(c.now_b).u8(c.master);  // s78n t18
+        w.u32(c.failures).boolean(c.early_pop);  // s78n t23 (version 4)
+        w.f32(c.line_a.x).f32(c.line_a.y).f32(c.line_b.x).f32(c.line_b.y).f32(c.line_dir.x).f32(c.line_dir.y);
+        w.u8(c.starve_next).u8(c.starve).u32(c.redecide);
     }
     w.u32(static_cast<uint32_t>(order_.size()));
     for (const Step& s : order_) w.u32(s.seq).boolean(s.full);
@@ -714,7 +845,8 @@ bool CollisionLayer::read(ByteReader& r) {
     if (r.u32() != kCollisionSaveVersion || !r.ok()) return false;
     const uint32_t next_seq = r.u32();
     uint32_t n = 0;
-    if (!get_count(r, 35, n)) return false;  // u32 seq, 3 x u8, i32 a / b, u32 x 2, f32 x 2, u32 retry
+    // u32 seq, 3 x u8, i32 a / b, u32 x 2, f32 x 2, u32 retry, f32 x 2, 3 x u8; s78n t23: u32, u8, 6 x f32, 2 x u8, u32
+    if (!r.count(n, 81)) return false;
     std::vector<CollisionObject> list(n);
     std::vector<uint64_t> pairs;
     pairs.reserve(n);
@@ -730,16 +862,48 @@ bool CollisionLayer::read(ByteReader& r) {
         c.crowd = r.f32();
         c.priority = r.f32();
         c.retry = r.u32();
-        if (!r.ok() || !valid_collision_kind(kind) || !valid_collision_state(state) || c.seq >= next_seq ||
+        c.speed_a = r.f32();
+        c.speed_b = r.f32();
+        c.now_a = r.boolean();
+        c.now_b = r.boolean();
+        c.master = r.u8();
+        c.failures = r.u32();  // s78n t23
+        c.early_pop = r.boolean();
+        c.line_a.x = r.f32();
+        c.line_a.y = r.f32();
+        c.line_b.x = r.f32();
+        c.line_b.y = r.f32();
+        c.line_dir.x = r.f32();
+        c.line_dir.y = r.f32();
+        c.starve_next = r.u8();
+        c.starve = r.u8();
+        c.redecide = r.u32();
+        if (c.starve_next > 2 || c.starve > 30) return false;
+        if (!r.ok() || !valid_collision_kind(kind) || !valid_collision_state(state) || c.master > 2 || c.seq >= next_seq ||
             (k > 0 && c.seq <= list[k - 1].seq))
+            return false;
+        // s78n t20 F9: Resolving (7) and master 2 ("nobody is moved") belong to StoppedVsStopped (s78n t24: Resolving to
+        // Terrain too); another kind in them would never end (mvs_service has no such state)
+        const bool terrain = kind == static_cast<uint8_t>(CollisionKind::Terrain);
+        if (kind != static_cast<uint8_t>(CollisionKind::StoppedVsStopped) &&
+            ((state == static_cast<uint8_t>(CollisionState::Resolving) && !terrain) || c.master == 2))
+            return false;
+        // s78n t24 (MOVEMENT §5.4.7): a Terrain record has its one participant (b = kNoParticipant) and is None or
+        // Resolving; every other record has two
+        if (terrain != (c.participants == 1) || (terrain && c.b != kNoParticipant) ||
+            (terrain && state != static_cast<uint8_t>(CollisionState::Active) && state != static_cast<uint8_t>(CollisionState::Resolving)))
+            return false;
+        if (!terrain && c.participants != 2) return false;
+        // s78n t23: the MovingVsMoving-only states (Pass .. StarvedDetour) on another kind would never end
+        if (kind != static_cast<uint8_t>(CollisionKind::MovingVsMoving) && state >= static_cast<uint8_t>(CollisionState::Pass))
             return false;
         c.kind = static_cast<CollisionKind>(kind);
         c.state = static_cast<CollisionState>(state);
-        pairs.push_back(collision_pair_key(c.a, c.b));
+        if (!terrain) pairs.push_back(collision_pair_key(c.a, c.b));  // s78n t24: a Terrain record has no pair key
     }
     std::sort(pairs.begin(), pairs.end());
     if (std::adjacent_find(pairs.begin(), pairs.end()) != pairs.end()) return false;  // one collision per pair
-    if (!get_count(r, 5, n)) return false;
+    if (!r.count(n, 5)) return false;
     std::vector<Step> order(n);
     for (Step& s : order) {
         s.seq = r.u32();
@@ -790,12 +954,12 @@ bool FighterCellGrid::read(ByteReader& r) {
     g.build(c, h, size, capacity, extra, flag);  // the same parameters give the same geometry
     if (g.nx_ != nx || g.ny_ != ny) return false;
     uint32_t used = 0;
-    if (!get_count(r, 16, used)) return false;
+    if (!r.count(used, 16)) return false;
     int64_t prev = -1;
     for (uint32_t u = 0; u < used; ++u) {
         const uint32_t k = r.u32();
         uint32_t n = 0;
-        if (!get_count(r, 8, n) || n == 0 || static_cast<int64_t>(k) <= prev || k >= g.cells_.size()) return false;
+        if (!r.count(n, 8) || n == 0 || static_cast<int64_t>(k) <= prev || k >= g.cells_.size()) return false;
         std::vector<Entry>& cell = g.cells_[k];
         cell.resize(n);
         for (uint32_t i = 0; i < n; ++i) {
@@ -847,7 +1011,7 @@ void HyperspaceDepartures::write(ByteWriter& w) const {
 bool HyperspaceDepartures::read(ByteReader& r) {
     if (r.u32() != kDeparturesSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, 37, n)) return false;
+    if (!r.count(n, 37)) return false;
     std::vector<Jump> jumps(n);
     for (uint32_t k = 0; k < n; ++k) {
         Jump& j = jumps[k];
@@ -855,11 +1019,11 @@ bool HyperspaceDepartures::read(ByteReader& r) {
         j.timer = r.i32();
         j.keep = r.u8();
         j.increment = r.f32();
-        j.pos = get_vec3(r);
-        j.dir = get_vec3(r);
+        j.pos = get_vec3<Vec3>(r);
+        j.dir = get_vec3<Vec3>(r);
         if (!r.ok() || j.keep > 1 || (k > 0 && j.id <= jumps[k - 1].id)) return false;  // ascending id
     }
-    if (!get_count(r, 10, n)) return false;
+    if (!r.count(n, 10)) return false;
     std::vector<HyperspaceEvent> events(n);
     for (HyperspaceEvent& e : events) {
         const uint8_t kind = r.u8();
@@ -886,7 +1050,7 @@ void EngineControl::write(ByteWriter& w) const {
 bool EngineControl::read(ByteReader& r) {
     if (r.u32() != kEnginesSaveVersion || !r.ok()) return false;
     uint32_t n = 0;
-    if (!get_count(r, 11, n)) return false;
+    if (!r.count(n, 11)) return false;
     std::vector<Entry> list(n);
     for (uint32_t k = 0; k < n; ++k) {
         Entry& e = list[k];
@@ -897,7 +1061,7 @@ bool EngineControl::read(ByteReader& r) {
         e.reenable = r.u32();
         if (!r.ok() || e.online > 1 || e.destroyed > 1 || e.indefinite > 1 || (k > 0 && e.id <= list[k - 1].id)) return false;
     }
-    if (!get_count(r, 9, n)) return false;
+    if (!r.count(n, 9)) return false;
     std::vector<EngineEvent> events(n);
     for (EngineEvent& e : events) {
         const uint8_t kind = r.u8();
@@ -921,7 +1085,31 @@ void MovementSystem::write_unit(ByteWriter& w, const Unit& u) {
 bool MovementSystem::read_unit(ByteReader& r, Unit& u) {
     In in(r);
     io_unit(in, u);
-    return r.ok() && valid_object_id(u.d.id);
+    // s78n t18 review: the hover state is 0 .. 3 (pack +0x2a8) and the garrison-exit host an object id or -1
+    if (!r.ok() || !valid_object_id(u.d.id) || u.hover > 3 || u.exit_host < -1) return false;
+    // s78n t25.2: the attack slot's ring radius is >= 0 (0 none) and the target an object id or -1
+    if (!(u.atk_rho >= 0.0f) || u.atk_target < -1) return false;
+    if (!(u.cohesion_speed > 0.0f)) return false;  // [port] fleet cohesion: a speed cap, 3e38 = none (NaN refused)
+    // s78o (b0087): a damaged file must not hang or index out of bounds - the slot angle and radius are finite ([port]
+    // no |theta| <= pi bound: Base_Land_Targeting_Arc_Angle_Coefficient is data), the Walk_Transition clip is none (-1),
+    // MOVE (2), MOVESTART (16) or an end clip (17 .. 20), its frame, rate, handed-on frame and latched speed finite (no
+    // sign test: the end-clip phase pos - floor(pos / seg) seg may round a hair below 0 in a good file; the locomotor
+    // clamps the clip index instead)
+    if (!std::isfinite(u.atk_theta) || !std::isfinite(u.atk_rho)) return false;
+    if (u.m.wt_clip != -1 && u.m.wt_clip != 2 && (u.m.wt_clip < 16 || u.m.wt_clip > 20)) return false;
+    for (const float f : {u.m.wt_pos, u.m.wt_rate, u.m.wt_f4, u.m.wt_f0})
+        if (!std::isfinite(f)) return false;
+    // s78n t20: the top record - a kind 1 .. 3 with a weight 1 .. 4 exactly while one is on the stack, its walk index and
+    // every tag inside its points (s78n t24: weight 4 = a TerrainCollision detour)
+    // s78n t23: a record given up by a MovingVsMoving re-decide has no owner and weight 0
+    if (u.pushed != (u.push_kind != 0) || u.push_kind > 3 || u.push_weight > 4 ||
+        (u.pushed && u.push_weight == 0 && u.push_owner != kNoDetour))
+        return false;
+    if (u.pushed && (u.push_path.empty() || u.push_next > u.push_path.size())) return false;
+    if (!u.pushed && (!u.push_tags.empty() || u.push_owner != kNoDetour || u.push_resume != 0)) return false;
+    for (const HoldTag& t : u.push_tags)
+        if (t.index >= u.push_path.size()) return false;
+    return true;
 }
 
 void MovementSystem::write(ByteWriter& w) const {
@@ -941,6 +1129,7 @@ void MovementSystem::write(ByteWriter& w) const {
     put_section(w, [this](ByteWriter& s) { coll_.write(s); });
     w.u32(static_cast<uint32_t>(crush_.size()));
     for (const CrushEvent& e : crush_) w.i32(e.crusher).i32(e.victim);
+    out.ids(push_kills_);  // s78n t20 batch 1 (version 20)
     out.ids(despawned_);
     w.u32(static_cast<uint32_t>(squads_.size()));
     for (const FighterSquad& s : squads_) io_squad(out, s);
@@ -953,6 +1142,23 @@ void MovementSystem::write(ByteWriter& w) const {
         w.u32(static_cast<uint32_t>(g.blocks.size()));
         for (const FighterBlock& b : g.blocks) io_block(out, b);
     }
+    w.u32(form_serial_);  // s78n t20 (version 18): the last formation id given
+    w.u32(pend_serial_);  // cu8j t01 (version 13): the pending compositions, creation order
+    w.u32(static_cast<uint32_t>(pending_.size()));
+    for (const PendingComposition& pc : pending_) {
+        w.u32(pc.serial).boolean(pc.space).boolean(pc.moves).f32(pc.goal.x).f32(pc.goal.y);
+        w.u32(static_cast<uint32_t>(pc.forms.size()));
+        for (const std::vector<ObjectId>& f : pc.forms) out.ids(f);
+        w.u32(static_cast<uint32_t>(pc.offsets.size()));
+        for (const uint32_t o : pc.offsets) w.u32(o);
+    }
+    w.u32(static_cast<uint32_t>(parked_.size()));  // s78n review (version 14): parked squad members, ascending member id
+    for (const LandTeamSlot& p : parked_)  // s78n t14 (version 15): + the offset
+        w.i32(p.member).i32(p.container).u32(p.tindex).f32(p.slot.x).f32(p.slot.y).f32(p.off.x).f32(p.off.y)
+            .f32(p.hx).f32(p.hy).f32(p.max_speed).f32(p.decel);  // s78n t18 (version 17): the absent member's entry data
+    w.u32(static_cast<uint32_t>(deploy_kept_.size()));  // s78n t26.1 review (version 23): garrisoned deploy states
+    for (const DeployKeep& k : deploy_kept_)
+        w.i32(k.id).u8(static_cast<uint8_t>(k.deploy)).boolean(k.walk_deployed).i32(k.dclip).f32(k.dclip_pos);
 }
 
 bool MovementSystem::read(ByteReader& r) {
@@ -973,21 +1179,23 @@ bool MovementSystem::read(ByteReader& r) {
     MovementStats stats;
     io_stats(in, stats);
     uint32_t n = 0;
-    if (!get_count(r, 200, n)) return false;  // a unit is well over 200 bytes
+    if (!r.count(n, 200)) return false;  // a unit is well over 200 bytes
     std::vector<Unit> units(n);
     for (uint32_t k = 0; k < n; ++k)
         if (!read_unit(r, units[k]) || (k > 0 && units[k].d.id <= units[k - 1].d.id)) return false;
     CollisionLayer coll;
     if (!get_section(r, [&](ByteReader& s) { return coll.read(s); })) return false;
-    if (!get_count(r, 8, n)) return false;
+    if (!r.count(n, 8)) return false;
     std::vector<CrushEvent> crush(n);
     for (CrushEvent& e : crush) {
         e.crusher = r.i32();
         e.victim = r.i32();
     }
+    std::vector<ObjectId> push_kills;  // s78n t20 batch 1
+    in.ids(push_kills);
     std::vector<ObjectId> despawned;
     in.ids(despawned);
-    if (!get_count(r, 60, n)) return false;
+    if (!r.count(n, 60)) return false;
     std::vector<FighterSquad> squads(n);
     for (uint32_t k = 0; k < n; ++k) {
         io_squad(in, squads[k]);
@@ -995,7 +1203,7 @@ bool MovementSystem::read(ByteReader& r) {
     }
     FighterCellGrids fgrids;
     if (!get_section(r, [&](ByteReader& s) { return fgrids.read(s); })) return false;
-    if (!get_count(r, 9, n)) return false;
+    if (!r.count(n, 9)) return false;
     std::vector<FighterEvent> fevents(n);
     for (FighterEvent& e : fevents) {
         const uint8_t kind = r.u8();
@@ -1004,7 +1212,7 @@ bool MovementSystem::read(ByteReader& r) {
         if (!valid_fighter_event(kind)) return false;
         e.kind = static_cast<FighterEvent::Kind>(kind);
     }
-    if (!get_count(r, 26, n)) return false;  // s78f t02
+    if (!r.count(n, 26)) return false;  // s78f t02
     std::vector<FighterFormation> fforms(n);
     for (uint32_t k = 0; k < n; ++k) {
         FighterFormation& g = fforms[k];
@@ -1013,7 +1221,7 @@ bool MovementSystem::read(ByteReader& r) {
         if (g.state != kFormationPlan && g.state != kFormationMoving && g.state != kFormationArrived && g.state != kFormationPopped)
             return false;
         uint32_t nb = 0;
-        if (!get_count(r, 29, nb)) return false;
+        if (!r.count(nb, 29)) return false;
         g.blocks.resize(nb);
         for (FighterBlock& b : g.blocks) {
             io_block(in, b);
@@ -1021,6 +1229,58 @@ bool MovementSystem::read(ByteReader& r) {
                 (b.kind == kFighterBlockObject && b.object < 0))
                 return false;
         }
+    }
+    const uint32_t form_serial = r.u32();  // s78n t20 (version 18)
+    const uint32_t pend_serial = r.u32();  // cu8j t01 (version 13)
+    if (!r.count(n, 22)) return false;
+    std::vector<PendingComposition> pending(n);
+    for (uint32_t k = 0; k < n; ++k) {
+        PendingComposition& pc = pending[k];
+        pc.serial = r.u32();
+        pc.space = r.boolean();
+        pc.moves = r.boolean();
+        pc.goal.x = r.f32();
+        pc.goal.y = r.f32();
+        uint32_t nf = 0;
+        if (!r.count(nf, 4)) return false;
+        pc.forms.resize(nf);
+        for (std::vector<ObjectId>& f : pc.forms) in.ids(f);
+        uint32_t no = 0;
+        if (!r.count(no, 4)) return false;
+        pc.offsets.resize(no);
+        for (uint32_t& o : pc.offsets) o = r.u32();
+        if (!r.ok() || pc.serial == 0 || (k > 0 && pc.serial <= pending[k - 1].serial)) return false;
+    }
+    if (!r.count(n, 44)) return false;  // s78n review: parked squad members
+    std::vector<LandTeamSlot> parked(n);
+    for (uint32_t k = 0; k < n; ++k) {
+        LandTeamSlot& p = parked[k];
+        p.member = r.i32();
+        p.container = r.i32();
+        p.tindex = r.u32();
+        p.slot.x = r.f32();
+        p.slot.y = r.f32();
+        p.off.x = r.f32();
+        p.off.y = r.f32();
+        p.hx = r.f32();
+        p.hy = r.f32();
+        p.max_speed = r.f32();
+        p.decel = r.f32();
+        if (!r.ok() || p.member < 0 || p.container < 0 || (k > 0 && p.member <= parked[k - 1].member)) return false;
+    }
+    if (!r.count(n, 14)) return false;  // s78n t26.1 review: garrisoned deploy states
+    std::vector<DeployKeep> kept(n);
+    for (uint32_t k = 0; k < n; ++k) {
+        DeployKeep& d = kept[k];
+        d.id = r.i32();
+        const uint8_t st = r.u8();
+        d.walk_deployed = r.boolean();
+        d.dclip = r.i32();
+        d.dclip_pos = r.f32();
+        d.deploy = static_cast<LocoState>(st);
+        const bool st_ok = d.deploy == LocoState::None || d.deploy == LocoState::WalkDeploying ||
+                           d.deploy == LocoState::WalkDeployed || d.deploy == LocoState::WalkUndeploying;
+        if (!r.ok() || !st_ok || !valid_object_id(d.id) || d.dclip < -1 || (k > 0 && d.id <= kept[k - 1].id)) return false;
     }
     if (!r.ok()) return false;
     // Squadron membership both ways (members are fighter units naming their squadron; a unit naming a squadron is in
@@ -1053,12 +1313,19 @@ bool MovementSystem::read(ByteReader& r) {
     units_ = std::move(units);
     coll_ = std::move(coll);
     crush_ = std::move(crush);
+    push_kills_ = std::move(push_kills);
     despawned_ = std::move(despawned);
     squads_ = std::move(squads);
     fgrids_ = std::move(fgrids);
     fevents_ = std::move(fevents);
     fforms_ = std::move(fforms);
     fform_internal_ = false;
+    pending_ = std::move(pending);
+    pend_serial_ = pend_serial;
+    form_serial_ = form_serial;
+    parked_ = std::move(parked);
+    deploy_kept_ = std::move(kept);
+    team_ix_rebuild();  // s78n review: derived from the units
     // The region map is a cache of the grid's effective values (rebuilt, see the header); the rebuild also re-derives
     // every unit's mask slot.
     regions_ = RegionMap{};

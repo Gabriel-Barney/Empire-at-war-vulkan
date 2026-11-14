@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "alamo/tactical/movement/movement_system.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 namespace alamo::tactical::movement {
 
@@ -13,6 +14,9 @@ bool MovementSystem::is_air(const Unit& u) const {
 }
 
 bool MovementSystem::ground_collider(const Unit& u) const {
+    // s78n t14 part B (FIGHTER_FLYING §7.5 item 1): a squad container is a land collision checker and partner (it registers:
+    // LandTeamContainer vf +0x230); its members are neither (land_layer_object: they are not in tracking layer 0x10). The
+    // crush pass skips the container as a victim (its members are crushed).
     switch (u.d.locomotor) {
         case LocomotorKind::Flying:
         case LocomotorKind::LandBomber: return cfg_.mode != MoveMode::Land;
@@ -53,6 +57,7 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     u.m.escape_until = 0;
     u.m.speed = 0.0f;
     u.m.state = LocoState::WalkStopped;
+    u.m.yaw2 = u.m.yaw;  // bkm1 t08 (MOVEMENT §3.5.3 item 3 [M]): the new locomotor's Initialise copies the orientation
     u.following = false;
     arrival_reset(u);  // s78l t02
     u.wps.clear();
@@ -60,19 +65,19 @@ bool MovementSystem::swap_locomotor(Unit& u, bool secondary) {
     u.on_secondary = secondary;
     if (secondary) {
         // Step 4, before the locomotor changes: the unit leaves its coordinator and Move_To re-issues its current order
-        // block to it alone (no coordinator: a move to its own position, i.e. hold). [port] no stagger draw for the
-        // one-unit Move_To ([M] in the spec); a pending start frame is kept.
+        // block to it alone (no coordinator: a move to its own position, i.e. hold). cu8j t02 (MOVEMENT §4.7.4): the new
+        // coordinator's formation comes at the next coordinator update (compose_land: one ctor draw, plus r' with a
+        // PathFrameDelay); the re-issued order waits for it.
+        const uint32_t serial = compose_register(false, true, u.goal);
+        pending_.back().forms.assign(1, {u.d.id});
+        u.pend = serial;
+        u.adopted = false;
+        if (u.has_goal) u.start_frame = kStartPending;
         u.in_formation = false;
         u.jiggle = V2{};
         u.formation_speed = 3.0e38f;  // alone
         u.large_hover_index = -1;
-        u.speed_cap = 3.0e38f;
-        u.hold_until = 0;
-        u.nudge_frames = 0;
         end_push(u);  // a1k t03 [port]
-        u.blocked_frames = 0;
-        u.replans = 0;
-        u.waits = 0;
         if (u.has_goal) {
             u.need_path = true;
         } else {
@@ -118,8 +123,8 @@ float MovementSystem::loco_turn_rate(const Unit& u) const {
 }
 
 bool MovementSystem::use_secondary_locomotor(ObjectId id, bool secondary) {
-    const int32_t i = find(id);
-    return i >= 0 && swap_locomotor(units_[static_cast<size_t>(i)], secondary);
+    Unit* u = unit_ptr(id);
+    return u && swap_locomotor(*u, secondary);
 }
 
 ThreatFn MovementSystem::owner_threat(const Unit& u) const {
@@ -188,19 +193,29 @@ float MovementSystem::air_altitude(const Unit& u, uint32_t frame) const {
     return step_altitude(u.z, target, u.sp.max_lift, terrain(u.m.pos), map_floor_);
 }
 
+bool MovementSystem::land_layer_object(const Unit& u) const {
+    return ground_collider(u) && u.anchor < 0 && !u.team_suspended && !u.hidden;  // +0x3a7: hidden / garrisoned
+}
+
 bool MovementSystem::land_spot_free(const Unit& u, V2 p) const {
     if (!grid_.passable_world(p, u.lp.mask)) return false;  // movement-class test (0x50e280)
-    const float r = std::max(u.d.radius, 1.0f);
-    const tactical::Aabb q{{p.x - r - 80.0f, p.y - r - 80.0f, -1.0f}, {p.x + r + 80.0f, p.y + r + 80.0f, 1.0f}};
-    for (EntityHandle h : tree_.query_aabb(q, QueryFilter{}, qctx_)) {  // occupancy (0x538200) [port: ground units]
-        const int32_t oi = find(static_cast<ObjectId>(h));
-        if (oi < 0) continue;
-        const Unit& o = units_[static_cast<size_t>(oi)];
-        if (o.d.id == u.d.id || !ground_collider(o)) continue;
-        const float rr = r + o.d.radius;
-        if (length_sq(o.m.pos - p) < rr * rr) return false;
+    // s78n t18 (MOVEMENT §5.3.2): the occupancy query 0x538200 on tracking layer 0x10 - the lander's own footprint
+    // rectangle moved to the point against every layer object's rectangle (separating-axis overlap; moving ones count
+    // too). A squad is there as its container's joint box; a spot where only a squad member stands is free. Nothing is
+    // ignored: the airborne lander is no layer object itself.
+    const FootRect mine = foot_at(u, p);
+    std::vector<uint32_t> cand;
+    layer_box_query(p, foot_radius(u), cand);
+    for (uint32_t oi : cand) {
+        const Unit& o = units_[oi];
+        if (o.d.id != u.d.id && foot_overlap(mine, foot_of(o))) return false;
     }
     return true;
+}
+
+bool MovementSystem::land_spot_clear(ObjectId id, V2 p) const {
+    const Unit* u = unit_ptr(id);
+    return u && land_spot_free(*u, p);
 }
 
 // ---------------------------------------------------------------- §4.3 JETPACK_LOCOMOTOR (vf6 0x641910)
@@ -582,9 +597,9 @@ void MovementSystem::bike_frame(Unit& u, float yaw0, bool walked) const {
 
 // ---------------------------------------------------------------- API
 bool MovementSystem::set_attack_target(ObjectId id, bool has, V2 pos, float z) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    SpecialMotion& s = units_[static_cast<size_t>(i)].sm;
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    SpecialMotion& s = u->sm;
     s.has_target = has;
     s.target = has ? pos : V2{};
     s.target_z = has ? z : 0.0f;
@@ -592,21 +607,20 @@ bool MovementSystem::set_attack_target(ObjectId id, bool has, V2 pos, float z) {
 }
 
 bool MovementSystem::circle(ObjectId id, V2 centre, float z, float rmin, float rmax) {
-    const int32_t i = find(id);
-    if (i < 0) return false;
-    Unit& u = units_[static_cast<size_t>(i)];
-    if (u.d.locomotor != LocomotorKind::Flying || cfg_.mode != MoveMode::Land) return false;
-    u.sm.state = LocoState::FlyCircling;
-    u.sm.circling = true;
-    u.sm.circle_target = -1;
-    u.sm.circle_c = centre;
-    u.sm.circle_z = z;
-    u.sm.circle_rmin = rmin;
-    u.sm.circle_rmax = std::max(rmin, rmax);
-    u.following = false;
-    u.wps.clear();
-    u.has_goal = false;
-    u.need_path = false;
+    Unit* u = unit_ptr(id);
+    if (!u) return false;
+    if (u->d.locomotor != LocomotorKind::Flying || cfg_.mode != MoveMode::Land) return false;
+    u->sm.state = LocoState::FlyCircling;
+    u->sm.circling = true;
+    u->sm.circle_target = -1;
+    u->sm.circle_c = centre;
+    u->sm.circle_z = z;
+    u->sm.circle_rmin = rmin;
+    u->sm.circle_rmax = std::max(rmin, rmax);
+    u->following = false;
+    u->wps.clear();
+    u->has_goal = false;
+    u->need_path = false;
     return true;
 }
 

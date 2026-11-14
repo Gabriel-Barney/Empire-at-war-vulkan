@@ -42,6 +42,7 @@ A1 = os.path.join(os.path.dirname(HERE), 'a1_tactical')
 sys.path.insert(0, HERE)
 sys.path.insert(0, A1)
 import a1mem  # noqa: E402
+from a1mem import Log, kv, wait_for_game, slot_ok, model_candidates, choose_model_offset  # noqa: E402
 
 REC_NEEDLE = b'OIP1|'
 SRC_MARKERS = (b'OIPROBE_SRC_MARK_V1',)
@@ -54,113 +55,11 @@ ANIM_TYPES = 119
 WATCH_RADIUS = 900.0
 
 
-def kv(**k):
-    return ' '.join('%s=%s' % (a, b) for a, b in k.items())
-
-
 def lua_records(hits):
-    out, seen = [], set()
-    for addr, tail in hits:
-        m = RECORD_RE.match(tail)
-        if not m:
-            continue
-        text = m.group(0).decode('ascii')
-        if text not in seen:
-            seen.add(text)
-            out.append((addr, text))
-    return out
-
-
-# ---- model pointer search ------------------------------------------------------------------------------------------
-
-def plausible_ptr(q):
-    return 0x10000 <= q < 0x7FFF00000000 and q % 8 == 0
-
-
-def slot_ok(b, off=SLOT):
-    """The primary animation slot at b[off:off+0x30] looks valid -> (type, mode, frame, speed) or None."""
-    if len(b) < off + 0x20:
-        return None
-    clip, crc, typ, mode, var, fr, sp = struct.unpack_from('<QIiIiff', b, off)
-    if not plausible_ptr(clip) or crc == 0:
-        return None
-    if not (0 <= typ < ANIM_TYPES) or mode not in (0, 1, 2) or not (0 <= var < 16):
-        return None
-    if not (math.isfinite(fr) and 0.0 <= fr < 5000.0 and math.isfinite(sp) and 0.0 < sp <= 20.0):
-        return None
-    return typ, mode, fr, sp
-
-
-def time_ok(b, sim_t):
-    """+0x148 holds the sim time of the last advance (global frame / 30), as f32 or f64."""
-    if sim_t is None or len(b) < MODEL_TIME + 8:
-        return False
-    f32 = struct.unpack_from('<f', b, MODEL_TIME)[0]
-    f64 = struct.unpack_from('<d', b, MODEL_TIME)[0]
-    return (math.isfinite(f32) and abs(f32 - sim_t) < 2.0) or (math.isfinite(f64) and abs(f64 - sim_t) < 2.0)
-
-
-def model_candidates(read, obj, sim_t, span=0x400, span2=0x200):
-    """{(off, off2): score} for one object; off2 = None for a direct pointer. read(addr, n) -> bytes | None."""
-    out = {}
-    ob = read(obj, span)
-    if not ob:
-        return out
-    firsts = []
-    for off in range(0, span, 8):
-        q = struct.unpack_from('<Q', ob, off)[0]
-        if not plausible_ptr(q):
-            continue
-        firsts.append((off, q))
-        b = read(q, MODEL_TIME + 8)
-        if b and slot_ok(b):
-            out[(off, None)] = 2 + (2 if time_ok(b, sim_t) else 0)
-    if any(v >= 4 for v in out.values()):
-        return out
-    for off, q in firsts:
-        qb = read(q, span2)
-        if not qb:
-            continue
-        for off2 in range(0, span2, 8):
-            r = struct.unpack_from('<Q', qb, off2)[0]
-            if not plausible_ptr(r):
-                continue
-            b = read(r, MODEL_TIME + 8)
-            if b and slot_ok(b):
-                out[(off, off2)] = 1 + (2 if time_ok(b, sim_t) else 0)
-    return out
-
-
-def choose_model_offset(per_object):
-    """per_object: [ {(off, off2): score} ] -> (key, objects, score) of the best offset, or None."""
-    tally = {}
-    for cands in per_object:
-        for k, s in cands.items():
-            t = tally.setdefault(k, [0, 0])
-            t[0] += 1
-            t[1] += s
-    if not tally:
-        return None
-    k, (n, s) = max(tally.items(), key=lambda it: (it[1][0], it[1][1], -(it[0][0]), -(it[0][1] or 0)))
-    need = 2 if len(per_object) >= 2 else 1
-    if n < need or (n == 1 and s < 4):
-        return None
-    return k, n, s
+    return a1mem.lua_records(hits, RECORD_RE)
 
 
 # ---- recorder ------------------------------------------------------------------------------------------------------
-
-class Log:
-    def __init__(self, path):
-        self.f = open(path, 'a', encoding='ascii', errors='replace')
-        self.lock = threading.Lock()
-        self.t0 = time.time()
-
-    def __call__(self, line):
-        with self.lock:
-            self.f.write(line + '\n')
-            self.f.flush()
-
 
 class Recorder:
     def __init__(self, a, proc, log, cfg):
@@ -390,30 +289,6 @@ class Recorder:
             self.next_scan = now + self.a.scan_sec
             self.start_scan('periodic')
 
-
-def wait_for_game(a, log):
-    t0 = time.time()
-    ignored = set()
-    while time.time() - t0 < a.wait_process_sec:
-        for pid in a1mem.find_pids():
-            if pid in ignored:
-                continue
-            try:
-                p = a1mem.Proc(pid)
-            except OSError as e:
-                log('OPEN_FAILED ' + kv(pid=pid, error=str(e).replace(' ', '_')))
-                ignored.add(pid)
-                continue
-            if p.pe_identity() or a.allow_unknown_exe:
-                return p
-            log('IGNORED ' + kv(pid=pid, timestamp=hex(p.timestamp or 0), size_of_image=hex(p.size_of_image or 0)))
-            ignored.add(pid)
-            p.close()
-        time.sleep(1.0)
-    return None
-
-
-# ---- selftest ------------------------------------------------------------------------------------------------------
 
 def selftest():
     fails = []

@@ -73,12 +73,9 @@ inline constexpr uint32_t pack_edge_weight(uint32_t node_cost, uint16_t hop) {
 }
 
 struct AllPairsInput {
-    // Node costs as stored by the original's node pass (already node_cost_from_value'd), one per
-    // planet, read as uint32 bit patterns (real values are <= 42949672, so int32 is lossless).
-    // Missing entries => 0. Ignored when node_value is non-empty.
-    std::span<const int32_t> node_cost;
-    // Preferred: raw perception totals (double) per planet; converted with node_cost_from_value.
-    // Q7 assumes element i of the AI's planet-target list is planet i; the caller provides that.
+    // Raw perception totals (double) per planet; converted with node_cost_from_value. Missing
+    // entries => node cost 0. Q7 assumes element i of the AI's planet-target list is planet i; the
+    // caller provides that.
     std::span<const double> node_value;
     // Q8 step 2 fog: per-planet Is_Planet_Revealed (PlayerView::is_planet_revealed). Pass it ONLY
     // when the AI player has an AI system and is not human; nullptr or empty => no fog gate.

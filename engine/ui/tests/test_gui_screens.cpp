@@ -68,52 +68,16 @@ void test_real_data() {
     pi.name = U"Tatooine";
     pi.history = {U"Outer Rim desert world."};
     CHECK(gs.show_planet_info(pi));
-    AutoResolveInfo ar;
-    ar.invaders = {U"Star Destroyer"};
-    CHECK(gs.show_auto_resolve(ar));
-    gs.set_auto_resolve_progress(0.4f, 0.6f);
-    CHECK(gui.find(dlg::kAutoResolve)->get("IDC_AUTO_RESOLVE_PROGRESS_DEFENDER")->value == 60);
     const SkirmishMapInfo maps[1] = {{"_SPACE_PLANET_KUAT_01", U"Kuat", 2}};
     CHECK(gs.show_select_map(maps));
     std::printf("real screens: open %zu dialogs\n", gui.open_count());
     gs.close_all();
     CHECK(gui.open_count() == 0);
-    // Multiplayer screens on the shipped script.
-    LobbyScreens lob;
-    lob.init(gui);
-    lob.show_multiplayer_menu();
-    CHECK(lob.top() == dlg::kMultiplayer);
-    lob.show_lan_lobby();
-    CHECK(lob.top() == dlg::kLanLobby);
-    StagingState st;
-    st.host = true;
-    st.slots.resize(9);
-    st.slots[0].state = SlotState::Human;
-    st.slots[0].local = true;
-    st.slots[0].name = U"Gabriel";
-    CHECK(lob.show_staging(st) && lob.top() == dlg::kLanStaging);
-    st.internet = true;
-    CHECK(lob.show_staging(st) && lob.top() == dlg::kInternetStaging);
-    lob.show_internet_home();
-    CHECK(lob.top() == dlg::kInternetHome);
-    lob.set_internet_stats(12, 3, 4);
-    lob.show_internet_lobby();
-    CHECK(lob.top() == dlg::kInternetLobby);
-    lob.show_direct_connect({U"192.168.1.20"});
-    lob.show_password_prompt("g");
-    lob.show_connecting();
-    const ConnectionRow rows[1] = {{U"Host", 0.5f, true}};
-    lob.show_disconnect(rows);
-    lob.show_vote({});
-    for (const char* n : {dlg::kDirectConnect, dlg::kPassword, dlg::kConnect, dlg::kDisconnect, dlg::kVote}) CHECK(gui.find(n) != nullptr);
-    lob.close_all();
-    CHECK(gui.open_count() == 0);
     // P4 completion 2: the remaining screens on the shipped script.
     {
         InfoScreens is;
         is.init(gui);
-        CHECK(is.show_buy_units({1000, {{"X", U"X", 10, 0, "", true}}}) && is.show_story({}) && is.show_story_summary({}) &&
-              is.show_planet({}));
+        CHECK(is.show_buy_units({1000, {{"X", U"X", 10, 0, "", true}}}) && is.show_story({}) && is.show_story_summary({}));
         // GALACTIC_DIALOGS Â§2.2: chapter TITLE in the IDC_STATIC above the recap, newest chapter preselected, Completed
         // disabled with nothing completed, Abandon hidden.
         {
@@ -150,9 +114,9 @@ void test_real_data() {
             o.icon = "i_x.tga";
             return true;
         };
-        for (TechFaction f : {TechFaction::Rebel, TechFaction::Empire, TechFaction::BlackMarket})
+        for (const char* f : {"IDD_TECH_TREE_REBEL", "IDD_TECH_TREE_EMPIRE", "IDD_TECH_TREE_BLACKMARKET"})
             for (bool space : {false, true}) {
-                tt.faction = f;
+                tt.dialog = f;
                 tt.space = space;
                 is.set_tech_tree(tt);
                 CHECK(is.show_info(InfoPage::TechTree) && is.info_dialog() == tech_tree_dialog(f, space));
@@ -169,8 +133,7 @@ void test_real_data() {
     {
         std::vector<uint8_t> bytes;
         CHECK(files->read("Data\\XML\\MousePointers.xml", bytes));
-        const data::XmlDocument doc = data::XmlDocument::parse(
-            std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), "MousePointers.xml");
+        const data::XmlDocument doc = data::XmlDocument::parse(bytes, "MousePointers.xml");
         CursorTable ct;
         const size_t n = ct.parse(doc.root());
         size_t known = 0;
@@ -590,12 +553,14 @@ namespace test_gui_screens_t {
 void test_skirmish_maps();  // test_gui_skirmish_maps.cpp (p4ui t06)
 void test_skirmish_preview();  // p4uim t03 / t04
 void test_skirmish_colours();  // p4uia t01 / t02
+void test_skirmish_control_points();  // ccpgt t02
 }
 
 int main() {
     test_skirmish_maps();
     test_skirmish_preview();
     test_skirmish_colours();
+    test_skirmish_control_points();
     test_screens();
     test_advanced_video();
     test_video_vsync_mode();
@@ -603,12 +568,12 @@ int main() {
     test_resolution_confirm();
     test_options_polish();
     test_advanced_video_port();
-    test_lobby();
     test_panels();
     test_encyclopedia_fade_anchor();
     test_camera_hotkeys();
     test_info_screens();
     test_cursor();
+    test_credits_roll();
     test_anim_hack_drag();
     test_controls();
     test_targeting();

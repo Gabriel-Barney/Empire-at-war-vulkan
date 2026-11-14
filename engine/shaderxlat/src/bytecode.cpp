@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
+
 namespace alamo::shaderxlat {
 
 namespace {
@@ -82,12 +84,15 @@ bool check_register(const Program& p, uint8_t type, uint32_t index, bool dst, st
     // ps_1_0..1_3: r0-r1, ps_1_4: r0-r5; everything else gets the SM2/3 maximum of 32.
     case reg::kTemp: limit = ps1 ? (p.minor >= 4 ? 6u : 2u) : 32u; writable = true; break;
     case reg::kInput: limit = vs ? 16u : (sm3 ? 10u : 2u); break;
-    // ps_1_x: c0-c7 (the bump-env constants c16+ are engine-supplied, never addressed by the bytecode).
-    case reg::kConst: limit = vs ? 256u : (ps1 ? 8u : 32u); break;
-    case reg::kAddr:  // a0 (VS) / t# (PS)
+    // ps_1_x: c0-c7 (the bump-env constants c16+ are engine-supplied, never addressed by the bytecode);
+    // ps_2_x: c0-c31; ps_3_0: c0-c223 (the translator binds c0-c31 and def literals, translate.cpp).
+    case reg::kConst: limit = vs ? 256u : (ps1 ? 8u : (sm3 ? 224u : 32u)); break;
+    case reg::kAddr:  // a0 (VS) / t# (PS; ps_3_0 has no t#: texture coordinates are v# with a dcl usage)
         if (vs) {
             limit = 1;
             writable = true;
+        } else if (sm3) {
+            return fail(err, "register type %u not valid here", tok, type);
         } else {
             limit = p.major >= 2 ? 8u : (p.minor >= 4 ? 6u : 4u);
             writable = p.major == 1 && p.minor < 4;  // ps_1_1..1_3 texture registers are writable
@@ -102,7 +107,7 @@ bool check_register(const Program& p, uint8_t type, uint32_t index, bool dst, st
     case reg::kSampler: limit = vs ? 4u : 16u; break;
     case reg::kConstBool: limit = 16; break;
     case reg::kLoop: limit = 1; break;
-    case reg::kMiscType: if (vs) return fail(err, "register type %u not valid here", tok, type); limit = 2; break;
+    case reg::kMiscType: if (vs || !sm3) return fail(err, "register type %u not valid here", tok, type); limit = 2; break;  // vPos, vFace
     case reg::kLabel: limit = 2048; break;
     case reg::kPredicate: limit = 1; writable = true; break;
     default:
@@ -646,8 +651,7 @@ std::string disassemble(const Program& p, const Instr& in) {
         if (in.dst.type == reg::kSampler) {
             name = in.tex_dim == TextureDim::Cube ? "dcl_cube" : in.tex_dim == TextureDim::Volume ? "dcl_volume" : "dcl_2d";
         } else if (p.is_vs() || p.major >= 3) {
-            std::string u = usage_name(in.usage);
-            for (char& c : u) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+            const std::string u = ascii_lower(usage_name(in.usage));
             name = "dcl_" + u + (in.usage_index ? std::to_string(in.usage_index) : std::string());
         }
     }

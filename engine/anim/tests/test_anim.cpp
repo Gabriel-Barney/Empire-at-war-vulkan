@@ -36,6 +36,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_ANIM_HAVE_JOBS
 #include "alamo/jobs/job_system.hpp"
 #endif
@@ -48,14 +49,7 @@ using alamo::SimRng;
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                                  \
-    do {                                                                          \
-        if (!(c)) {                                                               \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);              \
-            ++g_fail;                                                             \
-        }                                                                         \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // ---- synthetic data -----------------------------------------------------------------------------------
 
@@ -1131,6 +1125,10 @@ void test_events_and_locomotor() {
         CHECK(b.deploy(w, 3, false, 2.0f, dr, 1) && w.current_type(3) == kAnimDeploy && w.slot(3).speed == 2.0f &&
               w.slot(3).variant == static_cast<uint32_t>(dreplay.range_int(0, 1)) && w.crossfading(3));
         CHECK(b.deploy(w, 3, true, 1.5f, dr, 2) && w.current_type(3) == kAnimUndeploy && w.current_frame_count(3) == 40);
+        // s78n t26.1: a walk that ends deployed sets the Deploy clip on its last frame (variant 0, speed 1, no draw).
+        const SimRng before = dr;
+        CHECK(b.deploy_at_end(w, 3, 3) && w.current_type(3) == kAnimDeploy && w.slot(3).variant == 0 && w.slot(3).speed == 1.0f);
+        CHECK(w.slot(3).frame == static_cast<float>(w.current_frame_count(3) - 1) && dr.state() == before.state());
     }
     {
         // Death type by damage kind (Damage_Fire -> FIRE_DIE when the model has it and the type sets none);
@@ -1172,7 +1170,7 @@ void test_events_and_locomotor() {
 // ---- N1 save / load: AnimWorld + AnimBehaviors round trip ------------------------------------------------
 
 // Record sizes of the documented layouts (anim_state.hpp / anim_behaviors.hpp).
-constexpr size_t kAnimSaveRowBytes = 109;
+constexpr size_t kAnimSaveRowBytes = 108;
 constexpr size_t kAnimSaveEntryBytes = 55;  // + 8 per idle record (s78l t03)
 constexpr size_t kAnimSaveCorpseBytes = 77;
 
@@ -1376,11 +1374,11 @@ void test_save() {
         bad[8 + 17] = 2;  // row 0 frozen flag: not a bool
         CHECK(world_rejects(bad, model_of));
         bad = wb;
-        bad[8 + 30 + 8] = 3;  // row 0 primary slot mode: no SlotMode 3
+        bad[8 + 29 + 8] = 3;  // row 0 primary slot mode: no SlotMode 3
         CHECK(world_rejects(bad, model_of));
         bad = wb;
-        bad[8 + 30] = 0x77;  // row 0 primary type >= 119
-        bad[8 + 30 + 1] = 0x01;
+        bad[8 + 29] = 0x77;  // row 0 primary type >= 119
+        bad[8 + 29 + 1] = 0x01;
         CHECK(world_rejects(bad, model_of));
         bad = wb;
         std::memcpy(bad.data() + 8 + kAnimSaveRowBytes, bad.data() + 8, 4);  // row 1 id == row 0 id: not ascending
@@ -1686,7 +1684,6 @@ void test_death_plan() {
         CHECK(plan_death(nullptr, keep, 1, rng).lifetime == 30 + 7 && rng.state() == st);
     }
 }
-
 
 // s78l t03 (TACTICAL_COMBAT slot 47 "s78l t03"): idle records, the moving gate, the presence idle type, IDLE-only service.
 void test_idle_records() {

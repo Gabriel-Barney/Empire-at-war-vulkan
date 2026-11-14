@@ -79,43 +79,4 @@ std::optional<std::string> Record::str(std::uint8_t id) const {
     return to_cstring(Bytes(d->data(), d->size()));
 }
 
-TerrainMaterial decode_terrain_material(const Record& r) {
-    TerrainMaterial m;
-    if (auto v = r.str(0x0C)) m.diffuse_texture = *v;
-    if (auto v = r.str(0x13)) m.normal_texture = *v;
-    if (auto v = r.f32(0x07)) m.tile_size = *v;
-    if (auto v = r.f32(0x08)) m.uv_rotation_z = *v;
-    if (auto v = r.f32(0x09)) m.uv_rotation_x = *v;
-    if (auto v = r.f32(0x06)) m.specular_power = *v;
-    if (auto v = r.vec3(0x0A)) m.diffuse_color = *v;
-    if (auto v = r.vec3(0x0B)) m.specular_color = *v;
-    if (auto v = r.u32(0x14)) m.surface_type = *v;
-    if (auto v = r.u32(0x0D)) m.flag_0d = static_cast<std::uint8_t>(*v);
-    if (auto v = r.u32(0x12)) m.full_coverage = *v != 0;
-    if (auto v = r.u32(0x23)) m.not_rendered = *v != 0;
-    return m;
-}
-
-Environment decode_environment(const Record& r) {
-    Environment e;
-    if (auto v = r.str(0x14)) e.name = *v;
-    for (std::uint8_t i = 0; i < 3; ++i) {
-        if (auto v = r.vec3(i)) e.light_color[i] = *v;
-        if (auto v = r.f32(std::uint8_t(0x05 + i))) e.light_intensity[i] = *v;
-        if (auto v = r.f32(std::uint8_t(0x08 + i))) e.light_angle_z[i] = *v;
-        if (auto v = r.f32(std::uint8_t(0x0B + i))) e.light_angle_x[i] = *v;
-    }
-    if (auto v = r.vec3(0x03)) e.specular_color = *v;
-    if (auto v = r.vec3(0x04)) e.ambient_color = *v;
-    if (auto v = r.vec3(0x0F)) e.fog_color = *v;
-    if (auto v = r.u32(0x10)) e.fog_enabled = *v != 0;
-    const float a = r.f32(0x11).value_or(0.f), b = r.f32(0x12).value_or(0.f);
-    e.fog_start = a < b ? a : b;
-    e.fog_end = a < b ? b : a;
-    if (auto v = r.str(0x19)) e.preset_name = *v;
-    if (auto v = r.str(0x29)) e.weather_effect = *v;
-    if (auto v = r.str(0x2F)) e.cloud_texture = *v;
-    return e;
-}
-
 }  // namespace alamo::minifile

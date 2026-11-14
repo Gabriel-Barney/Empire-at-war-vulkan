@@ -20,7 +20,8 @@ using save::put;
 using save::put_vec;
 
 namespace {
-constexpr uint32_t kGoalsVersion = 3, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 2, kContextVersion = 1,
+// kGoalsVersion 4 (cu12 t15): the blocked byte (= !block_list_.empty()) removed.
+constexpr uint32_t kGoalsVersion = 4, kTemplatesVersion = 1, kLearningVersion = 1, kBudgetVersion = 2, kContextVersion = 1,
                    kGateVersion = 1, kPathVersion = 2, kPerceptionVersion = 1, kSnapshotVersion = 1;
 
 void put_goal(ByteWriter& w, const Goal& g) {
@@ -156,7 +157,6 @@ void GoalSystem::write(ByteWriter& w) const {
     }
     put_vec(w, exclusion_);
     put_vec(w, block_list_);
-    w.boolean(blocked_);
     w.u32(cursor_source_);
     w.u32(cursor_target_);
     w.u32(quota_);
@@ -195,7 +195,6 @@ bool GoalSystem::read(ByteReader& r) {
     if (!get_vec(r, excl) || excl.size() != exclusion_.size()) return false;
     t.exclusion_ = std::move(excl);
     if (!get_vec(r, t.block_list_)) return false;
-    t.blocked_ = r.boolean();
     t.cursor_source_ = r.u32();
     t.cursor_target_ = r.u32();
     t.quota_ = r.u32();
@@ -215,7 +214,7 @@ bool GoalSystem::read(ByteReader& r) {
         if (g.type >= goal_types || g.source >= sources_.size()) r.fail();
     }
     if (t.pending_ready_ < 0 && (np > 0 || t.pending_pass_done_)) r.fail();
-    if (!r.ok() || t.blocked_ != !t.block_list_.empty()) return false;
+    if (!r.ok()) return false;
     *this = std::move(t);
     return true;
 }
@@ -407,14 +406,15 @@ bool AiEnableGate::read(ByteReader& r) {
 
 void AiPathFinder::Input::write(ByteWriter& w) const {
     put_vec(w, value);
-    put_vec(w, cost);
+    put_vec(w, std::vector<int32_t>{});  // cu15: the removed node_cost input, kept empty so the layout is unchanged
     w.boolean(has_revealed);
     save::put_bitset(w, revealed);
     put_vec(w, zoff);
 }
 
 bool AiPathFinder::Input::read(ByteReader& r) {
-    if (!r.ok() || !get_vec(r, value) || !get_vec(r, cost)) return false;
+    std::vector<int32_t> unused_cost;  // cu15: the removed node_cost input (always empty)
+    if (!r.ok() || !get_vec(r, value) || !get_vec(r, unused_cost)) return false;
     has_revealed = r.boolean();
     return r.ok() && save::get_bitset(r, revealed) && get_vec(r, zoff);
 }

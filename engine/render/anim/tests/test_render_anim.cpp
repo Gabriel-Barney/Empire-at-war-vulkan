@@ -14,8 +14,11 @@
 #include <vector>
 
 #include "alamo/assets/model.hpp"
+#include "alamo/objects/game_object_types.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/render/anim/anim_pose_cache.hpp"
 #include "alamo/render/anim/sim_anim_driver.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_RENDER_ANIM_HAVE_JOBS
 #include "alamo/jobs/job_system.hpp"
 #endif
@@ -25,14 +28,7 @@
 
 namespace {
 
-int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 using namespace alamo;
 

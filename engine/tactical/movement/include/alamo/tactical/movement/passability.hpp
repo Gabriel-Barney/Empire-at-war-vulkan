@@ -31,7 +31,7 @@
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/parallel.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/tactical/movement/common.hpp"
 
 namespace alamo::tactical::movement {
@@ -119,8 +119,9 @@ public:
     // Dynamic stamping (§1.3). stamp() replaces a previous stamp of the same id. Returns the
     // number of distinct cells stamped. A footprint that lands on no cell (water rule, Fine_Tune, off the grid, an empty
     // grid) is still recorded: stamped(id) is true with no cells (S8 t02: the object is a LAND_OBSTACLE occupant of nothing; its
-    // slot-43 aim walk finds no occupied cell, TACTICAL_GAPS 3.1).
-    uint32_t stamp(ObjectId id, const ObstacleFootprint& fp);
+    // slot-43 aim walk finds no occupied cell, TACTICAL_GAPS 3.1). OPT3 t12: with a fine_tune the samples' rays run through
+    // `pf` (fine_tune must then be safe to call concurrently); same cells for any `pf`.
+    uint32_t stamp(ObjectId id, const ObstacleFootprint& fp, const ParallelFor& pf = serial_for);
     // OPT3 t11: stamp() for each entry in list order, with the cells of every entry sampled through `pf` first (the
     // sampling reads only the base grid and the footprint, so the footprints' fine_tune must be safe to call
     // concurrently). Same grid and stamps as the stamp() loop. Returns each entry's stamp() count, list order.
@@ -181,7 +182,7 @@ private:
     };
     std::map<ObjectId, Stamp> stamps_;  // id-keyed, ordered
     std::map<ObjectId, Stamp> secondary_;  // OI tactical: secondary occupants, id-keyed, ordered
-    void sample_cells(const ObstacleFootprint& fp, std::vector<uint32_t>& out) const;
+    void sample_cells(const ObstacleFootprint& fp, std::vector<uint32_t>& out, const ParallelFor* pf = nullptr) const;
     void apply(const Stamp& s, int delta);
     float water_height_ = 0.0f;
     bool has_water_ = false;

@@ -30,7 +30,6 @@
 #include "alamo/ui/galactic_hud.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/gui_info_screens.hpp"
-#include "alamo/ui/gui_lobby.hpp"
 #include "alamo/ui/mouse_cursor.hpp"
 #include "alamo/ui/gui_menus.hpp"
 #include "alamo/ui/gui_resource.hpp"
@@ -43,6 +42,8 @@
 #include "alamo/ui/load_screen.hpp"
 #include "alamo/ui/picking.hpp"
 #include "alamo/ui/render_bridge.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 #ifdef ALAMO_UI_HAVE_VFS
 #include <cstdlib>
 
@@ -55,50 +56,15 @@
 
 using namespace alamo;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     ui::HudRenderer hud;
 };
 
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-};
+using Offscreen = render::test::OffscreenWithDepth;  // alamo/render/offscreen.hpp
 
 // One frame: the renderer clears / renders an empty world (post chain included), then the HUD pass draws `hud` and the
 // dialog list at the Dialogs step. `settle` repeats the frame until shell pipelines are ready. Returns RGBA pixels.
@@ -461,46 +427,6 @@ void test_real(Gpu& g, const std::string& src_dir) {
         CHECK(cov > 0.3);
         gs.close_all();
     }
-    // LAN staging (multiplayer UI): host + AI + a joining player, map list, options.
-    {
-        gui.close_all();
-        ui::LobbyScreens lob;
-        lob.init(gui);
-        lob.show_multiplayer_menu();
-        ui::StagingState st;
-        st.host = true;
-        st.factions = {U"Rebel", U"Empire", U"Underworld"};
-        st.colors = {U"Red", U"Blue", U"Green", U"Yellow"};
-        st.color_values = {{200, 40, 30, 255}, {40, 90, 220, 255}, {40, 180, 60, 255}, {230, 200, 40, 255}};
-        st.teams = {U"1", U"2", U"3", U"4"};
-        st.maps = {U"Kuat (2)", U"Mon Calamari (4)", U"Hoth (2)", U"Coruscant (8)"};
-        st.map = 1;
-        st.options = {{U"Credits", U"10000"}, {U"Pop cap", U"20"}, {U"Heroes", U"On"}};
-        ui::StagingSlot me, ai, other, open;
-        me.state = ui::SlotState::Human;
-        me.name = U"Gabriel";
-        me.local = true;
-        me.faction = 1;
-        ai.state = ui::SlotState::AI;
-        ai.faction = 2;
-        ai.color = 1;
-        ai.team = 1;
-        other.state = ui::SlotState::Human;
-        other.name = U"Wedge";
-        other.accepted = true;
-        other.color = 2;
-        other.team = 1;
-        st.slots = {me, ai, other, open, open};
-        CHECK(lob.show_staging(st));
-        for (const char* l : {"Gabriel: hello", "Wedge: ready when you are"}) lob.add_chat(ui::utf8_to_utf32(l));
-        const std::vector<uint8_t> px = shoot("lan_staging", [&](double) {});
-        const ui::GuiRect r = gui.top()->rect();
-        const double cov = coverage(px, W, H, gui.canvas().canvas_to_pixel(r.min.x, r.max.y), gui.canvas().canvas_to_pixel(r.max.x, r.min.y));
-        std::printf("real gui lan_staging: dialog coverage %.1f%%\n", 100.0 * cov);
-        CHECK(cov > 0.3);
-        lob.close_all();
-        gui.set_backdrop({});
-    }
     // [port: Gabriel] the camera and controls dialog over the options column.
     {
         gui.close_all();
@@ -520,6 +446,19 @@ void test_real(Gpu& g, const std::string& src_dir) {
         };
         clicked("IDD_MAIN_MENU_DIALOG", "IDC_OPTIONS");
         CHECK(gui.top() && gui.top()->get("IDC_MAIN_OPTIONS_MODS")->visible);
+        // [port: Gabriel] Display / Graphics split: Display (the Video button) with Graphics under it, the rest one row lower.
+        if (const ui::GuiDialog* o = gui.top()) {
+            shoot("main_options", [&](double) {});
+            CHECK(o->get("IDC_MAIN_OPTIONS_VIDEO")->text == U"Display" && o->get("IDC_PORT_MAIN_OPTIONS_GRAPHICS")->text == U"Graphics" &&
+                  o->get("IDC_PORT_MAIN_OPTIONS_GRAPHICS")->visible);
+            const char* column[] = {"IDC_MAIN_OPTIONS_AUDIO", "IDC_MAIN_OPTIONS_VIDEO", "IDC_PORT_MAIN_OPTIONS_GRAPHICS", "IDC_MAIN_OPTIONS_MODS",
+                                    "IDC_MAIN_OPTIONS_KEYBOARD", "IDC_MAIN_OPTIONS_GAMEPLAY", "IDC_OK_MAIN"};
+            for (size_t k = 1; k < std::size(column); ++k) {  // one row (36 units) apart, top to bottom
+                const ui::GuiRect a = o->control_rect(static_cast<size_t>(o->find(column[k - 1])));
+                const ui::GuiRect b = o->control_rect(static_cast<size_t>(o->find(column[k])));
+                CHECK(std::fabs((a.max.y - b.max.y) - 36.0f) < 0.01f);
+            }
+        }
         clicked("IDD_MAIN_OPTIONS_DIALOG", "IDC_MAIN_OPTIONS_MODS");
         CHECK(fe2.top() == ui::kPortControlsDialog);
         const std::vector<uint8_t> px = shoot("port_controls", [&](double) {});
@@ -527,25 +466,96 @@ void test_real(Gpu& g, const std::string& src_dir) {
         const double cov = coverage(px, W, H, gui.canvas().canvas_to_pixel(r.min.x, r.max.y), gui.canvas().canvas_to_pixel(r.max.x, r.min.y));
         std::printf("real gui port_controls: dialog coverage %.1f%%\n", 100.0 * cov);
         CHECK(cov > 0.3);
-        // QA D8 / U11: the advanced video page and the pause menu at full size.
+        // QA D8 / U11: the Graphics page (the advanced video dialog) and the pause menu at full size.
         gui.close_all();
-        gui.open("IDD_VIDEO_OPTIONS_DIALOG");
-        clicked("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
+        fe2.show_main_menu();
+        clicked("IDD_MAIN_MENU_DIALOG", "IDC_OPTIONS");  // through the menu, so the options column behind is set up
+        clicked("IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS");
         CHECK(fe2.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
         shoot("advanced_video", [&](double) {});
         for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",
-                               "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL"}) {
+                               "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL", "IDC_PORT_DETAIL_LEVEL", "IDC_PORT_ANTI_ALIASING",
+                               "IDC_PORT_UPSCALER", "IDC_PORT_UPSCALE_QUALITY"}) {
             const int32_t k = gui.top() ? gui.top()->find(id) : -1;
             CHECK(k >= 0 && gui.combo_rows(*gui.top(), static_cast<size_t>(k)) == static_cast<int32_t>(gui.top()->get(id)->items.size()));  // every level reachable
         }
-        if (ui::GuiControl* tex = gui.top() ? gui.top()->get("IDC_PORT_TEXTURE_DETAIL") : nullptr) {  // a list with the longest level names
-            tex->open = true;
-            shoot("advanced_video_texture_open", [&](double) {});
-            tex->open = false;
+        // [port] The Anti-aliasing list open: every row on screen.
+        if (ui::GuiDialog* aa_page = gui.top(); aa_page && aa_page->get("IDC_PORT_ANTI_ALIASING")) {
+            ui::GuiControl* aa = aa_page->get("IDC_PORT_ANTI_ALIASING");
+            aa->open = true;
+            shoot("advanced_video_aa_open", [&](double) {});
+            // The combo's resource rectangle holds the field and the open list.
+            const ui::GuiRect lr = aa_page->control_rect(static_cast<size_t>(aa_page->find("IDC_PORT_ANTI_ALIASING")));
+            const float py0 = gui.canvas().canvas_to_pixel(lr.min.x, lr.min.y).y, py1 = gui.canvas().canvas_to_pixel(lr.max.x, lr.max.y).y;
+            CHECK(std::min(py0, py1) >= 0.0f && std::max(py0, py1) <= static_cast<float>(H));
+            aa->open = false;
+        }
+        // No two visible controls with a caption or a box overlap (the Render Scale list used to sit on Auto Detect).
+        if (const ui::GuiDialog* gd_page = gui.top(); gd_page && fe2.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG") {
+            uint32_t overlaps = 0;
+            const auto box = [&](size_t i) {  // a closed combo is its field (the top of its rc rectangle, which holds the list)
+                ui::GuiRect r = gd_page->control_rect(i);
+                if ((*gd_page)[i].type == ui::GuiGadgetType::ComboBox) r.min.y = r.max.y - std::min(r.height(), gui.combo_field_height(*gd_page, i));
+                return r;
+            };
+            for (size_t i = 0; i < gd_page->size(); ++i)
+                for (size_t j = i + 1; j < gd_page->size(); ++j) {
+                    const ui::GuiControl &a = (*gd_page)[i], &b = (*gd_page)[j];
+                    if (!a.visible || !b.visible || a.id() == "IDC_STATIC_MEDIUM" || b.id() == "IDC_STATIC_MEDIUM") continue;
+                    const ui::GuiRect ra = box(i), rb = box(j);
+                    if (ra.width() <= 0 || rb.width() <= 0) continue;
+                    if (ra.min.x < rb.max.x && rb.min.x < ra.max.x && ra.min.y < rb.max.y && rb.min.y < ra.max.y) {
+                        ++overlaps;
+                        std::printf("real gui advanced_video: %s overlaps %s\n", std::string(a.id()).c_str(), std::string(b.id()).c_str());
+                    }
+                }
+            CHECK(overlaps == 0);
+        }
+        for (const auto& [id, shot] : {std::pair{"IDC_PORT_TEXTURE_DETAIL", "advanced_video_texture_open"},  // the longest level names
+                                       std::pair{"IDC_PORT_ANTI_ALIASING", "advanced_video_aa_open"}, std::pair{"IDC_PORT_DETAIL_LEVEL", "advanced_video_quality_open"},
+                                       std::pair{"IDC_PORT_UPSCALE_QUALITY", "advanced_video_upscale_quality_open"}})
+            if (ui::GuiControl* list = gui.top() ? gui.top()->get(id) : nullptr) {
+                list->open = true;
+                shoot(shot, [&](double) {});
+                list->open = false;
+            }
+        // [port: Gabriel 2026-11-13] The Upscaler Quality list with XeSS picked (its rows carry the ratios: the longest), open.
+        if (ui::GuiDialog* gp = gui.top(); gp && gp->get("IDC_PORT_UPSCALER")) {
+            gp->set_selected("IDC_PORT_UPSCALER", 2);
+            std::vector<ui::GuiEvent> e(1);
+            e[0].kind = ui::GuiEvent::Kind::SelectionChanged;
+            e[0].dialog = "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG";
+            e[0].control = "IDC_PORT_UPSCALER";
+            e[0].value = 2;
+            fe2.update(e, ui::InputFrame{}, acts);
+            ui::GuiControl* q = gp->get("IDC_PORT_UPSCALE_QUALITY");
+            CHECK(q && q->enabled && q->items.size() == 5 && q->items[3] == U"Performance (2.3x)");
+            if (q) {
+                q->open = true;
+                shoot("advanced_video_upscale_quality_xess_open", [&](double) {});
+                q->open = false;
+            }
         }
         gui.close_all();
         fe2.show_pause_menu();
         shoot("pause_menu", [&](double) {});
+        // [port: Gabriel] Display / Graphics split: the in-game options' seven buttons, 36 units apart, inside the dialog.
+        clicked("IDD_GAME_OPTIONS_DIALOG", "IDC_INGAME_OPTIONS");
+        if (const ui::GuiDialog* o = fe2.top() == "IDD_IN_GAME_OPTIONS_DIALOG" ? gui.top() : nullptr) {
+            shoot("in_game_options", [&](double) {});
+            const ui::GuiRect dr = o->rect();
+            const char* column[] = {"IDC_IN_GAME_OPTIONS_AUDIO", "IDC_IN_GAME_OPTIONS_VIDEO", "IDC_PORT_IN_GAME_OPTIONS_GRAPHICS",
+                                    "IDC_IN_GAME_OPTIONS_NETWORK", "IDC_IN_GAME_OPTIONS_KEYBOARD", "IDC_IN_GAME_OPTIONS_GAMEPLAY"};
+            for (size_t k = 1; k < std::size(column); ++k) {
+                const ui::GuiRect a = o->control_rect(static_cast<size_t>(o->find(column[k - 1])));
+                const ui::GuiRect b = o->control_rect(static_cast<size_t>(o->find(column[k])));
+                CHECK(std::fabs((a.max.y - b.max.y) - 36.0f) < 0.01f && b.min.y > dr.min.y);
+            }
+            CHECK(o->get("IDC_IN_GAME_OPTIONS_VIDEO")->text == U"Display" && o->get("IDC_PORT_IN_GAME_OPTIONS_GRAPHICS")->visible);
+        } else {
+            CHECK(false);
+        }
+        gui.close_all();
         gui.close_all();
         gui.set_backdrop({});
     }
@@ -577,16 +587,9 @@ void test_real(Gpu& g, const std::string& src_dir) {
         if (vd && fe3.top() == "IDD_VIDEO_OPTIONS_DIALOG") {
             CHECK(vd->get("IDC_DEVICE_DESC_STATIC") && vd->get("IDC_DEVICE_DESC_STATIC")->text.empty());
             shoot("video_options", [&](double) {});
-            // The two named-level lists open, one at a time (a list covers the rows under it): every level name fits its list.
-            for (const auto& [id, shot] : {std::pair{"IDC_PORT_ANTI_ALIASING", "video_options_aa_open"}, std::pair{"IDC_PORT_DETAIL_LEVEL", "video_options_quality_open"}}) {
-                ui::GuiControl* list = vd->get(id);
-                CHECK(list != nullptr && list->items.size() >= 4);
-                if (!list) continue;
-                CHECK(gui.combo_rows(*vd, static_cast<size_t>(vd->find(id))) == static_cast<int32_t>(list->items.size()));  // no level cut off
-                list->open = true;
-                shoot(shot, [&](double) {});
-                list->open = false;
-            }
+            // [port: Gabriel] Display / Graphics split: this is Display; anti-aliasing and the detail level are on Graphics.
+            CHECK(vd->get("IDC_STATIC_MEDIUM")->text == U"Display" && !vd->get("IDC_ADVANCED")->visible && !vd->get("IDC_AUTO_DETECT")->visible &&
+                  !vd->get("IDC_ANTI_ALIAS_STATIC")->visible && vd->get("IDC_GAMMA_LABEL_STATIC")->visible);
             // Every text glyph of a static lies inside its control rect (x) and inside the dialog.
             ui::HudDrawList dl;
             gui.build(dl, 1.0);
@@ -601,8 +604,7 @@ void test_real(Gpu& g, const std::string& src_dir) {
                 }
             // One static at a time (the others hidden): its glyphs stay inside its rect horizontally.
             uint32_t overflow = 0;
-            const char* ids[] = {"IDC_ANTI_ALIAS_STATIC", "IDC_ANTI_ALIAS_OFF_STATIC", "IDC_ANTI_ALIAS_MAX_STATIC",
-                                 "IDC_GAMMA_LABEL_STATIC", "IDC_GAMMA_LOW_STATIC", "IDC_GAMMA_HIGH_STATIC"};
+            const char* ids[] = {"IDC_GAMMA_LABEL_STATIC", "IDC_GAMMA_LOW_STATIC", "IDC_GAMMA_HIGH_STATIC"};
             std::vector<uint8_t> was(vd->size());
             for (size_t k = 0; k < vd->size(); ++k) was[k] = (*vd)[k].visible ? 1 : 0;
             for (const char* id : ids) {
@@ -628,11 +630,11 @@ void test_real(Gpu& g, const std::string& src_dir) {
         std::map<std::string, std::string> icons;  // upper-case object name -> Icon_Name
         std::vector<uint8_t> list;
         if (files->read("Data\\XML\\GameObjectFiles.xml", list)) {
-            const data::XmlDocument ld = data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(list.data()), list.size()), "g");
+            const data::XmlDocument ld = data::XmlDocument::parse(list, "g");
             for (data::XmlNode f : ld.root().children("File")) {
                 std::vector<uint8_t> bytes;
                 if (!files->read("Data\\XML\\" + std::string(f.text_trimmed()), bytes)) continue;
-                const data::XmlDocument od = data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), "o");
+                const data::XmlDocument od = data::XmlDocument::parse(bytes, "o");
                 for (data::XmlNode o : od.root().children()) {
                     const data::XmlNode ic = o.child("Icon_Name");
                     if (!ic) continue;
@@ -655,7 +657,7 @@ void test_real(Gpu& g, const std::string& src_dir) {
         is.init(gui);
         size_t found = 0, total = 0;
         ui::TechTreeInfo tt;
-        tt.faction = ui::TechFaction::Empire;
+        tt.dialog = "IDD_TECH_TREE_EMPIRE";
         tt.item = [&](std::string_view type, ui::TechTreeItem& out) {
             ++total;
             out.icon = icon_of(type);
@@ -729,18 +731,6 @@ void test_real(Gpu& g, const std::string& src_dir) {
         sd.image = icon_of("Darth_Vader");
         CHECK(is.show_story(sd));
         check_cov(shoot("story", [&](double) {}), "story");
-        is.close_all();
-        ui::PlanetDialogInfo pd;
-        pd.name = U"Kuat";
-        pd.credits = 125;
-        pd.political = {icon_of("Darth_Vader")};
-        pd.starbase = {icon_of("Star_Destroyer"), icon_of("Star_Destroyer")};
-        pd.companies = 4;
-        pd.fleets = 2;
-        pd.producing = U"Star Destroyer";
-        pd.progress = 0.4f;
-        CHECK(is.show_planet(pd));
-        check_cov(shoot("planet_dialog", [&](double) {}), "planet_dialog");
         is.close_all();
     }
     // Galactic HUD: shells, labels, pads, queue, fleets, objectives.
@@ -1035,9 +1025,9 @@ void test_real(Gpu& g, const std::string& src_dir) {
         hf.time = 1.0;
         heroes.build(hf);
         const ui::BlackMarketItem bm_items[3] = {
-            {401, "i_button_EV_TIE_Defender.tga", U"TIE Defender plans", U"Unlocks the TIE Defender at your shipyards.", 3000, true, 1},
-            {402, "i_button_broadside.tga", U"Hull plating", U"", 1200, true, 1},
-            {403, "i_button_victory_class.tga", U"Ion cannon upgrade", U"", 2500, false, -1}};
+            {401, "i_button_EV_TIE_Defender.tga", U"TIE Defender plans", U"Unlocks the TIE Defender at your shipyards.", 3000, true, "i_button_e_tech_upgrade_"},
+            {402, "i_button_broadside.tga", U"Hull plating", U"", 1200, true, "i_button_e_tech_upgrade_"},
+            {403, "i_button_victory_class.tga", U"Ion cannon upgrade", U"", 2500, false, ""}};
         ui::BlackMarketFrame bf;
         bf.open = true;
         bf.planet = 1001;
@@ -1157,7 +1147,7 @@ void test_real(Gpu& g, const std::string& src_dir) {
             // Cursor from the shipped MousePointers.xml; frame textures from the game data (image pages).
             std::vector<uint8_t> mp;
             CHECK(files->read("Data\\XML\\MousePointers.xml", mp));
-            const data::XmlDocument mdoc = data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(mp.data()), mp.size()), "m");
+            const data::XmlDocument mdoc = data::XmlDocument::parse(mp, "m");
             ui::CursorTable ct;
             ct.parse(mdoc.root());
             ct.resolve_frames([&](std::string_view n) {

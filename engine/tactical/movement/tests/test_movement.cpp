@@ -11,7 +11,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -19,12 +21,15 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/movement/movement_system.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 
 #ifdef ALAMO_MOVEMENT_HAVE_TERRAIN
 #include <filesystem>
 #include <fstream>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"
@@ -41,36 +46,9 @@
 using namespace alamo;
 using namespace alamo::tactical::movement;
 
-static int g_fail = 0;
-#define CHECK(c)                                                              \
-    do {                                                                      \
-        if (!(c)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);          \
-            ++g_fail;                                                         \
-        }                                                                     \
-    } while (0)
+using ::alamo::test::g_fail;
 
-static ParallelFor make_thread_pf(unsigned threads) {
-    return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {
-        if (count == 0) return;
-        const uint32_t gr = std::max<uint32_t>(1, grain);
-        const uint32_t chunks = (count + gr - 1) / gr;
-        std::atomic<uint32_t> next{0};
-        auto worker = [&] {
-            for (;;) {
-                const uint32_t c = next.fetch_add(1);
-                if (c >= chunks) break;
-                const uint32_t b = c * gr;
-                fn(b, std::min(count, b + gr));
-            }
-        };
-        const unsigned extra = std::min<unsigned>(std::max(1u, threads), chunks) - 1;
-        std::vector<std::thread> ts;
-        for (unsigned t = 0; t < extra; ++t) ts.emplace_back(worker);
-        worker();
-        for (auto& t : ts) t.join();
-    };
-}
+static ParallelFor make_thread_pf(unsigned threads) { return ::alamo::test::make_thread_parallel_for(threads); }
 
 // ---------------------------------------------------------------- helpers
 static PassabilityGrid random_maze(uint32_t w, uint32_t h, uint32_t seed, int32_t wall_pct) {
@@ -347,6 +325,21 @@ static void test_grid() {
         }
         const auto ea = ser.effective_values(), eb = par.effective_values();
         CHECK(same && std::equal(ea.begin(), ea.end(), eb.begin(), eb.end()));
+        // OPT3 t12: stamp() with a ParallelFor (the fine-tune samples' rays through it, here back to front) stamps the same
+        // cells as the serial stamp().
+        PassabilityGrid one;
+        one.init(32, 32);
+        one.set_base(8, 9, kPassSteep);
+        one.stamp(4, make_footprint({40.0f, 40.0f}, 0.0f, 30.0f, 30.0f, -15.0f, -15.0f, 0, 0, 1.0f, 0));
+        std::vector<uint32_t> counts_pf;
+        for (const auto& [id, f] : list) counts_pf.push_back(one.stamp(id, f, backwards));
+        bool same_pf = counts_pf == counts && ser.stamped_ids() == one.stamped_ids();
+        for (const ObjectId id : ser.stamped_ids()) {
+            const auto a = ser.stamp_cells(id), b = one.stamp_cells(id);
+            same_pf = same_pf && std::equal(a.begin(), a.end(), b.begin(), b.end());
+        }
+        const auto ec = one.effective_values();
+        CHECK(same_pf && std::equal(ea.begin(), ea.end(), ec.begin(), ec.end()));
     }
     // Rotated footprint: 60 x 10 at yaw 90 covers a vertical strip.
     ObstacleFootprint fp3 = make_footprint({300.0f, 300.0f}, 90.0f, 60.0f, 10.0f, 0.0f, -5.0f, 0, 0, 1.0f, 0);
@@ -647,8 +640,19 @@ static void test_locomotion() {
         prev_speed = m.speed;
         arrived = r.arrived;
     }
-    CHECK(arrived && accel_ok && m.pos == (V2{100.0f, 100.0f}) && m.speed == 0.0f);
-    CHECK(frames > 50 && frames < 80);  // 200 units at <= 4 / frame with accel ramp
+    // s78n t26.4 (MOVEMENT 3.5.2 C): no snap - the unit arrives at 0x15 where it stands, past the last line (or within 5
+    // before it); it turns at 15 degrees a frame at the corner and travels along its facing
+    std::printf("locomotion: arrived after %d frames at (%.4f, %.4f)\n", frames, static_cast<double>(m.pos.x), static_cast<double>(m.pos.y));
+    CHECK(arrived && accel_ok && m.speed == 0.0f && m.state == LocoState::WalkStopped && m.next == 3);
+    CHECK(m.pos.y > 95.0f && std::fabs(m.pos.x - 100.0f) < 16.0f);  // the swing: under the turn radius v / R = 4 / 15deg = 15.3
+    CHECK(frames > 50 && frames < 90);  // 200 units at <= 4 / frame with accel ramp
+    // bkm2 t06 (b0042): two-sided. Along the last segment (+y, the last line y = 100): from 5 before it (0x15) to the coast
+    // past it, v^2 / (2a) = 16 / 2 = 8; across (+x), the swing lies outside the corner (x >= 100) and under the turn radius
+    // v / R = 4 / (15 deg in rad) = 15.28. The run is a pure function of its inputs, so the end point and the frame count
+    // are also checked as measured.
+    std::printf("locomotion: end (%.6f, %.6f)\n", static_cast<double>(m.pos.x), static_cast<double>(m.pos.y));
+    CHECK(m.pos.y >= 95.0f && m.pos.y <= 100.0f + 8.0f && m.pos.x >= 100.0f && m.pos.x <= 100.0f + 4.0f / (15.0f * kDegToRad));
+    CHECK(frames == 57 && std::fabs(m.pos.x - 111.2592f) < 1e-3f && std::fabs(m.pos.y - 98.6733f) < 1e-3f);
     // Passability check before commit: a blocked cell stops the unit.
     PassabilityGrid g;
     g.init(16, 16);
@@ -666,7 +670,7 @@ static void test_locomotion() {
     c.next = 1;
     c.state = LocoState::WalkStopped;
     walk_step(c, p, 0.0f, nullptr);
-    CHECK(c.pos == (V2{100.0f, 100.0f}));
+    CHECK(c.pos == m.pos);
 }
 
 // ---------------------------------------------------------------- 7. formations
@@ -690,14 +694,16 @@ static void test_formations() {
     }
     CHECK(buckets.size() >= 2 && pure);
 
-    // Rank / rows: hero first, slowest in front, left/right order kept.
+    // Rank / rows (MOVEMENT §4.3 item 1 and its "Correction, s78n t19" [H]: the rank key 0x3749d0 is the attack range):
+    // hero first, shortest range in front, left/right order kept. The max speeds run the other way and are not read.
     std::vector<FormationMember> s;
-    const float speeds[8] = {3.0f, 1.0f, 2.0f, 1.0f, 3.0f, 2.0f, 2.5f, 1.0f};
+    const float ranges[8] = {3.0f, 1.0f, 2.0f, 1.0f, 3.0f, 2.0f, 2.5f, 1.0f};
     for (int i = 0; i < 8; ++i) {
         FormationMember f;
         f.id = 10 + i;
         f.pos = {static_cast<float>(i) * 40.0f, 0.0f};  // laterally spread along +x
-        f.max_speed = speeds[i];
+        f.attack_range = ranges[i];
+        f.max_speed = 4.0f - ranges[i];
         f.radius = 8.0f;
         f.spacing = 1.0f;
         f.type_name = i % 2 ? "Unit_B" : "unit_a";
@@ -707,7 +713,7 @@ static void test_formations() {
     std::vector<uint32_t> all{0, 1, 2, 3, 4, 5, 6, 7};
     const auto ranked = rank_members(s, all);
     CHECK(ranked.front().member == 4);  // hero first
-    // 4 distinct non-hero speeds (1, 2, 2.5, 3) -> tolerance grows to 15: one rank behind the hero.
+    // 4 distinct non-hero ranges (1, 2, 2.5, 3) -> tolerance grows to 15 (range units): one rank behind the hero.
     bool one_rank = true;
     for (size_t i = 1; i < ranked.size(); ++i) one_rank = one_rank && ranked[i].rank == 1;
     CHECK(one_rank);
@@ -726,13 +732,43 @@ static void test_formations() {
         for (size_t j = i + 1; j < slots.size(); ++j)
             if (std::fabs(slots[i].lateral - slots[j].lateral) < 1.0f && std::fabs(slots[i].back - slots[j].back) < 1.0f) distinct = false;
     CHECK(distinct);
-    // With fewer distinct speeds (no tolerance growth) the slowest rank is in front.
-    for (int i = 0; i < 8; ++i) s[static_cast<size_t>(i)].max_speed = i < 4 ? 2.0f : 1.0f;
+    // With fewer distinct ranges (no tolerance growth) the shortest range is in front (the slower units are behind).
+    for (int i = 0; i < 8; ++i) {
+        s[static_cast<size_t>(i)].attack_range = i < 4 ? 300.0f : 100.0f;
+        s[static_cast<size_t>(i)].max_speed = i < 4 ? 1.0f : 2.0f;
+    }
     s[4].hero = false;
     const auto r2 = rank_members(s, all);
-    CHECK(s[r2.front().member].max_speed == 1.0f && r2.front().rank == 0 && r2.back().rank == 1);
-    // Equal speed ties: case-insensitive type name, then id.
+    CHECK(s[r2.front().member].attack_range == 100.0f && r2.front().rank == 0 && r2.back().rank == 1);
+    // Equal range ties: case-insensitive type name, then id.
     CHECK(s[r2[0].member].type_name == "unit_a" || s[r2[0].member].type_name == "Unit_B");
+    // Real ranges (infantry 100 / 150, tank 300, artillery 600 / 800): five ranks for every tolerance up to the cap, rows
+    // front to back by range - the infantry in front, the artillery at the back (each member in its own rank's row here).
+    {
+        const float rr[5] = {800.0f, 100.0f, 300.0f, 600.0f, 150.0f};
+        std::vector<FormationMember> rm;
+        for (int i = 0; i < 5; ++i) {
+            FormationMember f;
+            f.id = 40 + i;
+            f.pos = {static_cast<float>(i) * 40.0f, 0.0f};
+            f.attack_range = rr[i];
+            f.max_speed = 1.0f + static_cast<float>(i);
+            f.radius = 8.0f;
+            f.spacing = 1.0f;
+            rm.push_back(f);
+        }
+        const std::vector<uint32_t> five{0, 1, 2, 3, 4};
+        const auto rk = rank_members(rm, five);
+        CHECK(rk.size() == 5 && rk[0].member == 1 && rk[1].member == 4 && rk[2].member == 2 && rk[3].member == 3 && rk[4].member == 0);
+        CHECK(rk[0].rank == 0 && rk[4].rank == 4);
+        const auto sl = layout_formation(rm, five, fwd, k);
+        bool front_to_back = sl.size() == 5;
+        for (size_t i = 0; i + 1 < sl.size() && front_to_back; ++i)
+            front_to_back = rm[sl[i].member].attack_range < rm[sl[i + 1].member].attack_range && sl[i].back < sl[i + 1].back;
+        CHECK(front_to_back);
+        // RankKey::MaxSpeed (the [port] space key) ranks by speed: member 0 (speed 1) in front
+        CHECK(rank_members(rm, five, RankKey::MaxSpeed).front().member == 0);
+    }
     // Recruitment: a Solo seed stays alone; far units are not recruited.
     std::vector<FormationMember> rec(4);
     for (int i = 0; i < 4; ++i) {
@@ -822,6 +858,64 @@ static void test_double_click() {
     CHECK(no_hover);
 }
 
+// ---------------------------------------------------------------- 7c. recruitment across classes (s78n t26 review round 2)
+// MOVEMENT §4.2 step 2 item 4 [H]: a candidate joins when it has the seed's locomotor kind (vf +0x240 / +0x238), both are
+// zone-connected to the destination and a straight line or a path <= 1.4 x the distance joins it to the nearest member;
+// the movement masks need not agree (§4.3.1 item 7 (c): the formation's class is the 0x4779e0 class of the mask
+// intersection). So two infantry squads and a tank one formation: one formation id, the slowest member's speed.
+static void test_formation_recruit() {
+    const auto run = [](const std::vector<UnitDesc>& units, const std::vector<uint32_t>* walls, std::vector<UnitView>& out) {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(80, 80);
+        if (walls) g.set_base(*walls);
+        sys.set_grid(std::move(g));
+        for (const UnitDesc& d : units) CHECK(sys.add_unit(d));
+        SimRng rng(77);
+        MoveOrder o;
+        o.units = sys.unit_ids();
+        o.destination = cell_center(12, 60);
+        o.flags = kMoveFlagPlayerOrder;
+        sys.move(o, rng, 0);
+        out.clear();
+        for (ObjectId id : sys.unit_ids()) out.push_back(sys.view(id));
+    };
+    const int32_t kInf = static_cast<int32_t>(MovementClass::Infantry), kTracked = static_cast<int32_t>(MovementClass::Tracked);
+    std::vector<UnitDesc> mixed{land_unit(1, cell_center(10, 10), kInf, 1.5f, 8.0f, kUccInfantry),
+                                land_unit(2, cell_center(12, 10), kInf, 1.5f, 8.0f, kUccInfantry),
+                                land_unit(3, cell_center(14, 10), kTracked, 1.0f, 12.0f, kUccVehicle)};
+    std::vector<UnitView> v;
+    run(mixed, nullptr, v);
+    bool one = v.size() == 3 && v[0].form_id != 0;
+    float slow = 3.0e38f;
+    for (const UnitView& x : v) slow = std::min(slow, x.max_speed);
+    for (const UnitView& x : v) one = one && x.form_id == v[0].form_id && x.formation_speed == slow && x.has_goal;
+    std::printf("  recruitment: infantry x2 + tracked -> form ids %u %u %u, formation speed %.4f (slowest %.4f)\n", v[0].form_id,
+                v[1].form_id, v[2].form_id, static_cast<double>(v[0].formation_speed), static_cast<double>(slow));
+    CHECK(one);
+    // A flying unit (locomotor kind 2) beside them is not recruited by the ground seed: a formation of its own.
+    std::vector<UnitDesc> air = mixed;
+    UnitDesc fl = land_unit(4, cell_center(13, 11), static_cast<int32_t>(MovementClass::Flying), 3.0f, 8.0f, kUccVehicle);
+    fl.locomotor = LocomotorKind::Flying;
+    air.push_back(fl);
+    run(air, nullptr, v);
+    CHECK(v.size() == 4 && v[0].form_id == v[1].form_id && v[1].form_id == v[2].form_id && v[3].form_id != v[0].form_id);
+    // A wall between two tanks 80 apart (within 100) with the way round > 1.4 x 80: no line, no short path -> two formations;
+    // a gap in the wall next to them (a path <= 1.4 x the distance) -> one formation.
+    std::vector<uint32_t> wall(80 * 80, kPassClear);
+    for (int y = 0; y < 40; ++y) wall[static_cast<size_t>(y) * 80 + 12] = kPassImpassable;  // x = 12, open from y = 40
+    std::vector<UnitDesc> two{land_unit(1, cell_center(10, 10), kTracked, 1.0f, 12.0f, kUccVehicle),
+                              land_unit(2, cell_center(14, 10), kTracked, 1.0f, 12.0f, kUccVehicle)};
+    run(two, &wall, v);
+    const bool split = v.size() == 2 && v[0].form_id != v[1].form_id;
+    wall[static_cast<size_t>(11) * 80 + 12] = kPassClear;  // a 1-cell gap at y = 11
+    wall[static_cast<size_t>(12) * 80 + 12] = kPassClear;
+    run(two, &wall, v);
+    const bool joined = v.size() == 2 && v[0].form_id == v[1].form_id;
+    std::printf("  recruitment: wall without a near gap -> split %d; a gap beside them -> joined %d\n", split ? 1 : 0, joined ? 1 : 0);
+    CHECK(split && joined);
+}
+
 // ---------------------------------------------------------------- 8. collision helpers
 static void test_collision_helpers() {
     CHECK(collision_classes_interact(kUccInfantry, kUccVehicle));
@@ -836,21 +930,74 @@ static void test_collision_helpers() {
     CHECK(std::fabs(d - 140.0f) < 1e-3f);
     CHECK(path_contact_distance({0, 0}, path, 1, {300, 300}, 10.0f, 1000.0f) < 0.0f);
     CHECK(overlap_ratio({0, 0}, 10, {30, 0}, 10) == 0.0f && std::fabs(overlap_ratio({0, 0}, 10, {10, 0}, 10) - 0.5f) < 1e-6f);
-    // Dynamic local pathfinder around a blocker on the straight line.
-    PassabilityGrid g;
-    g.init(64, 64);
-    MovementConstants k;
-    std::vector<DynamicObstacle> obs{{{400.0f, 400.0f}, 30.0f}};
-    std::vector<V2> out;
-    uint32_t cx = 0;
-    CHECK(dynamic_repath(g, {200.0f, 400.0f}, {600.0f, 400.0f}, kPassClear, 10.0f, false, obs, k, out, cx));
-    bool avoids = true;
-    for (size_t i = 1; i < out.size(); ++i) {
-        const V2 a = out[i - 1], b = out[i];
-        for (float s = 0.0f; s <= 1.0f; s += 0.02f)
-            if (distance(lerp(a, b, s), obs[0].pos) < 30.0f) avoids = false;
+    {  // s78n t18 (MOVEMENT 5.3.1): footprint rectangles and the three contact tests
+        const auto nearf = [](float x, float y, float eps = 1e-4f) { return std::fabs(x - y) <= eps; };
+        const FootRect r1 = foot_rect({0.0f, 0.0f}, 0.0f, 10.0f, 5.0f);
+        // R(rect, n) = |a . n| hx + |b . n| hy
+        CHECK(nearf(foot_extent(r1, {1.0f, 0.0f}), 10.0f) && nearf(foot_extent(r1, {0.0f, 1.0f}), 5.0f));
+        const FootRect r2 = foot_rect({12.0f, 0.0f}, 0.0f, 10.0f, 5.0f);
+        // overlap coefficient: x axis 1 - 12 / 20, y axis 1 -> 0.4; gap 0
+        CHECK(foot_overlap(r1, r2) && nearf(foot_overlap_coefficient(r1, r2), 0.4f) && foot_gap(r1, r2) == 0.0f);
+        const FootRect r3 = foot_rect({25.0f, 0.0f}, 0.0f, 10.0f, 5.0f);
+        CHECK(!foot_overlap(r1, r3) && foot_overlap_coefficient(r1, r3) == 0.0f && nearf(foot_gap(r1, r3), 5.0f));
+        const FootRect touch = foot_rect({20.0f, 0.0f}, 0.0f, 10.0f, 5.0f);  // touching counts as overlap; coefficient 0
+        CHECK(foot_overlap(r1, touch) && foot_overlap_coefficient(r1, touch) == 0.0f && foot_gap(r1, touch) == 0.0f);
+        const FootRect r4 = foot_rect({12.0f, 0.0f}, 90.0f, 10.0f, 5.0f);  // turned: its x extent is 5 -> 1 - 12 / 15
+        CHECK(nearf(foot_overlap_coefficient(r1, r4), 0.2f, 1e-3f));
+        CHECK(nearf(foot_overlap_coefficient(r1, r1), 1.0f));
+        // directional radius rho = hy + (hx - hy) cos^2
+        CHECK(foot_rho(10.0f, 5.0f, 1.0f) == 10.0f && foot_rho(10.0f, 5.0f, 0.0f) == 5.0f &&
+              nearf(foot_rho(10.0f, 5.0f, 0.70710678f), 7.5f));
+        // the swept point against a radius running linearly r0 -> r1
+        CHECK(std::fabs(foot_swept_contact({-100.0f, 0.0f}, {100.0f, 0.0f}, 18.0f, 18.0f) - 0.82) < 1e-6);
+        CHECK(foot_swept_contact({-10.0f, 0.0f}, {100.0f, 0.0f}, 18.0f, 18.0f) == 0.0);       // already inside
+        CHECK(foot_swept_contact({-100.0f, 30.0f}, {200.0f, 0.0f}, 18.0f, 18.0f) < 0.0);      // passes 30 to the side
+        CHECK(std::fabs(foot_swept_contact({-100.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, 200.0f) - 0.5) < 1e-6);  // the radius grows
+        // MovingVsStopped: a (10, 5) mover along +x; head-on against an (8, 4) box end-on: hx_a + hx_b = 18 -> 82;
+        // against its side (the box turned 90 degrees): hx_a + hy_b = 14 -> 86
+        const std::vector<V2> px{{0.0f, 0.0f}, {200.0f, 0.0f}};
+        const V2 ha{10.0f, 5.0f};
+        CHECK(nearf(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 1000.0f), 82.0f, 1e-2f));
+        CHECK(nearf(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 0.0f}, 90.0f, 8.0f, 4.0f), 1000.0f), 86.0f, 1e-2f));
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 80.0f) < 0.0f);  // beyond the look-ahead
+        // beside the path: hy_a + hy_b = 9 abeam, a little more ahead of abeam (the cos^2 blend): 8.5 touches, 10.5 not
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 8.5f}, 0.0f, 8.0f, 4.0f), 1000.0f) >= 0.0f);
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({100.0f, 10.5f}, 0.0f, 8.0f, 4.0f), 1000.0f) < 0.0f);
+        // turning in place: one zero-length segment at the mover's position
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({17.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 1000.0f, 0.0f) == 0.0f);
+        CHECK(foot_path_contact({0.0f, 0.0f}, px, 1, ha, foot_rect({19.0f, 0.0f}, 0.0f, 8.0f, 4.0f), 1000.0f, 0.0f) < 0.0f);
+        // MovingVsMoving: two (5, 5) movers head-on at speed 2 each, 100 apart: touch at 10 after 22.5 frames (< 45);
+        // 300 apart: not inside 45 frames, inside 90
+        const std::vector<V2> pp{{0.0f, 0.0f}, {400.0f, 0.0f}};
+        const auto track = [](V2 pos, float yaw, const std::vector<V2>& path, float hx, float hy) {
+            FootTrack t;
+            t.pos = pos;
+            t.yaw = yaw;
+            t.path = path;
+            t.next = 1;
+            t.speed = 2.0f;
+            t.max_speed = 2.0f;
+            t.hx = hx;
+            t.hy = hy;
+            return t;
+        };
+        const std::vector<V2> q1{{100.0f, 0.0f}, {-300.0f, 0.0f}}, q2{{300.0f, 0.0f}, {-100.0f, 0.0f}};
+        CHECK(foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 5.0f, 5.0f), track({100.0f, 0.0f}, 180.0f, q1, 5.0f, 5.0f), 45));
+        CHECK(!foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 5.0f, 5.0f), track({300.0f, 0.0f}, 180.0f, q2, 5.0f, 5.0f), 45));
+        CHECK(foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 5.0f, 5.0f), track({300.0f, 0.0f}, 180.0f, q2, 5.0f, 5.0f), 90));
+        // lane rule: (10, 5) movers passing on parallel lines 12 apart keep their side radius hy (5 + 5 < 12): no contact;
+        // 9 apart they touch
+        const std::vector<V2> l12{{100.0f, 12.0f}, {-300.0f, 12.0f}}, l9{{100.0f, 9.0f}, {-300.0f, 9.0f}};
+        CHECK(!foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f), track({100.0f, 12.0f}, 180.0f, l12, 10.0f, 5.0f), 45));
+        CHECK(foot_moving_contact(track({0.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f), track({100.0f, 9.0f}, 180.0f, l9, 10.0f, 5.0f), 45));
+        // neither moves: the rectangle overlap
+        FootTrack s1 = track({0.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f), s2 = track({12.0f, 0.0f}, 0.0f, pp, 10.0f, 5.0f);
+        s1.next = s2.next = 2;
+        CHECK(foot_moving_contact(s1, s2, 45));
+        s2.pos = {25.0f, 0.0f};
+        CHECK(!foot_moving_contact(s1, s2, 45));
     }
-    CHECK(avoids && out.front() == (V2{200.0f, 400.0f}) && out.back() == (V2{600.0f, 400.0f}) && cx == 6);
+    // (the dynamic local pathfinder: test_path_around)
     // Crush victims.
     const std::vector<Box2> crushers{{{0, 0}, {10, 10}}};
     const std::vector<Box2> victims{{{20, 20}, {30, 30}}, {{5, 5}, {6, 6}}, {{9, -5}, {12, 0}}};
@@ -868,6 +1015,7 @@ static void test_collision_layer() {
         CHECK(L.add(CollisionKind::MovingVsMoving, 7, 3, 1) == UINT32_MAX && L.list().size() == 1);
     }
     const auto keep_all = [](CollisionObject&) { return true; };
+    const auto all_quota = [](const CollisionObject&) { return true; };  // every record takes the quota pass
     const auto full_budget = [] { return true; };
     const auto no_resolve = [](CollisionObject&, bool) {};
     // Priority order: ascending crowd - age, ties in insertion order -> older and less crowded first.
@@ -879,7 +1027,7 @@ static void test_collision_layer() {
         L.add(CollisionKind::MovingVsMoving, 3, 4, 0);    // seq 1: crowd 20, created 0
         L.add(CollisionKind::MovingVsStopped, 5, 6, 0);   // seq 2: crowd 10, created 0
         L.add(CollisionKind::StoppedVsStopped, 7, 8, 0);  // seq 3: crowd 10, created 0 (ties with seq 2)
-        L.run(10, keep_all, count, full_budget, no_resolve);
+        L.run(10, keep_all, all_quota, count, full_budget, no_resolve);
         std::vector<uint32_t> order;
         for (const CollisionLayer::Step& s : L.last_order()) order.push_back(s.seq);
         // priorities: seq0 10-5 = 5, seq1 20-10 = 10, seq2 10-10 = 0, seq3 0
@@ -901,7 +1049,7 @@ static void test_collision_layer() {
         bool ok = true;
         for (uint32_t f = 100; f <= 161; ++f) {
             objects = 2 + (f - 100);  // the box keeps filling up; only a refresh sees it
-            L.run(f, keep_all, count, full_budget, no_resolve);
+            L.run(f, keep_all, all_quota, count, full_budget, no_resolve);
             const CollisionObject& c = L.list()[0];
             const uint32_t last_refresh = 100 + ((f - 100) / 30) * 30;
             ok = ok && c.crowd == static_cast<float>(5 * (2 + (last_refresh - 100))) && c.crowd_frame == last_refresh + 30 &&
@@ -923,7 +1071,7 @@ static void test_collision_layer() {
         const auto resolve = [](CollisionObject& c, bool) {
             if (c.seq == 3) c.state = CollisionState::Resolved;
         };
-        L.run(4, keep, count, full_budget, resolve);
+        L.run(4, keep, all_quota, count, full_budget, resolve);
         CHECK((kept_calls == std::vector<uint32_t>{0, 1, 2, 3}));  // keep tests run in list order
         CHECK(L.last_cancelled() == 1 && L.last_resolved() == 1 && L.list().size() == 2);
         CHECK(L.list()[0].seq == 0 && L.list()[1].seq == 2);
@@ -944,12 +1092,38 @@ static void test_collision_layer() {
         };
         // seq i created at frame 10 - 2i: the higher seqs are older, so the priority order is 4, 3, 2, 1, 0.
         for (uint32_t i = 0; i < 5; ++i) L.add(CollisionKind::MovingVsStopped, static_cast<ObjectId>(i), 100, 10 - 2 * i);
-        L.run(20, keep_all, [](const CollisionObject&) { return 2u; }, budget, resolve);
+        L.run(20, keep_all, all_quota, [](const CollisionObject&) { return 2u; }, budget, resolve);
         CHECK((seen == std::vector<std::pair<uint32_t, bool>>{{4, true}, {3, true}, {2, true}, {1, false}, {0, false}}));
         bool same = L.last_order().size() == seen.size();
         for (size_t i = 0; same && i < seen.size(); ++i)
             same = L.last_order()[i].seq == seen[i].first && L.last_order()[i].full == seen[i].second;
         CHECK(same);
+    }
+    // s78n t20 (MOVEMENT 5.4.1 "Per-frame driver"): the records that do not take the quota pass (vf +0x50 false: a decided
+    // MovingVsMoving, every StoppedVsStopped) are serviced first, in creation order and whatever their priority, each with
+    // `full`; the others follow in priority order under the budget. The crowd / priority of a pass-1 record is not touched.
+    {
+        CollisionLayer L;
+        L.add(CollisionKind::MovingVsStopped, 1, 2, 0);    // seq 0: undecided, old (priority 10 - 50)
+        L.add(CollisionKind::MovingVsMoving, 3, 4, 49);    // seq 1: decided below, young
+        L.add(CollisionKind::MovingVsStopped, 5, 6, 40);   // seq 2
+        L.add(CollisionKind::StoppedVsStopped, 7, 8, 50);  // seq 3: never in the quota pass
+        L.add(CollisionKind::MovingVsMoving, 9, 10, 45);   // seq 4: undecided -> quota pass
+        const auto quota = [](const CollisionObject& c) {
+            return c.kind == CollisionKind::MovingVsStopped || (c.kind == CollisionKind::MovingVsMoving && c.state == CollisionState::Active);
+        };
+        L.run(49, keep_all, quota, [](const CollisionObject&) { return 2u; }, full_budget, [](CollisionObject& c, bool) {
+            if (c.seq == 1) c.state = CollisionState::SpeedSlave;  // the MovingVsMoving record is decided
+        });
+        uint32_t budget_calls = 0;
+        std::vector<std::pair<uint32_t, bool>> seen;
+        L.run(50, keep_all, quota, [](const CollisionObject&) { return 2u; }, [&] { return ++budget_calls <= 1; },
+              [&](CollisionObject& c, bool full) { seen.push_back({c.seq, full}); });
+        // pass 1: seq 1 (decided MvM), seq 3 (SvS), creation order, full; pass 2 by priority: seq 0 (10 - 50), seq 2 (10 -
+        // 10), seq 4 (10 - 5); the budget lets only the first decide
+        CHECK((seen == std::vector<std::pair<uint32_t, bool>>{{1, true}, {3, true}, {0, true}, {2, false}, {4, false}}));
+        CHECK(budget_calls == 3);  // asked only for the quota pass
+        CHECK(L.list()[3].crowd == 0.0f && L.list()[3].crowd_frame == 50);  // the SvS record: no crowd refresh, no priority
     }
     // Hash: covers the state.
     {
@@ -960,7 +1134,7 @@ static void test_collision_layer() {
         L1.hash(h1);
         L2.hash(h2);
         CHECK(h1.digest() == h2.digest());
-        L2.run(1, keep_all, [](const CollisionObject&) { return 2u; }, full_budget, [](CollisionObject& c, bool) {
+        L2.run(1, keep_all, all_quota, [](const CollisionObject&) { return 2u; }, full_budget, [](CollisionObject& c, bool) {
             c.state = CollisionState::TryAgainLater;
             c.retry = 5;
         });
@@ -970,9 +1144,471 @@ static void test_collision_layer() {
     }
 }
 
+// s78n t20 (MOVEMENT 1.5.1, 5.4.2, 5.4.3; path_around.hpp): the relation code, the swept box, the ring search and its
+// occupancy test, the rejoin candidates and the dynamic pathfinder's visibility-graph search.
+static void test_path_around() {
+    // ---- relation code 0x679750(p0, p1)
+    {
+        RelationInput in;
+        in.h0 = {1.0f, 0.0f};
+        in.h1 = {1.0f, 0.0f};
+        in.v0 = 1.0f;
+        in.v1 = 2.0f;
+        in.rel = {50.0f, 0.0f};
+        in.hw1 = 6.0f;
+        CHECK(relation_code(in) == kRelStanding);  // p0 does not move
+        in.p0_moving = true;
+        in.p0_cap = 0.0f;
+        CHECK(relation_code(in) == kRelHeld);  // held at speed 0 by its records
+        in.p0_cap = 3.0e38f;
+        CHECK(relation_code(in) == kRelSameWaySlower);  // within 60 degrees, p0 slower
+        in.v0 = 2.0f;
+        CHECK(relation_code(in) == kRelSameWay);        // not slower (equal counts)
+        in.h1 = dir_from_deg(59.0f);
+        CHECK(relation_code(in) == kRelSameWay);
+        in.h1 = dir_from_deg(61.0f);
+        CHECK(relation_code(in) == kRelCrossing);  // past 60 degrees with p1 ahead: crossing
+        in.h1 = dir_from_deg(119.0f);
+        CHECK(relation_code(in) == kRelCrossing);
+        in.h1 = dir_from_deg(121.0f);
+        CHECK(relation_code(in) == kRelHeadOn);  // within 60 degrees of opposed
+        in.rel = {5.9f, 40.0f};  // p1 less than its half width ahead of p0 along h0
+        CHECK(relation_code(in) == kRelSameWay);
+        in.own_record = true;  // ... unless the pair's own record is an undecided / detouring MovingVsMoving
+        CHECK(relation_code(in) == kRelHeadOn);
+        in.rel = {6.0f, 40.0f};
+        in.own_record = false;
+        CHECK(relation_code(in) == kRelHeadOn);
+    }
+    // ---- swept box 0x677650
+    {
+        SweptInput in;
+        in.pos = {500.0f, 400.0f};
+        in.hx = 10.0f;
+        in.hy = 6.0f;
+        FootRect r = swept_box(in);
+        CHECK(r.c == in.pos && r.hx == 11.0f && r.hy == 7.0f && r.a == (V2{1.0f, 0.0f}));
+        in.turning = true;
+        in.wanted = {0.0f, 1.0f};
+        r = swept_box(in);
+        CHECK(r.hx == 11.0f && r.hy == 11.0f && r.a == (V2{0.0f, 1.0f}));  // a square of the larger extent + 1
+        in.turning = false;
+        const std::vector<V2> straight{{500.0f, 400.0f}, {600.0f, 400.0f}};
+        in.poly = straight;
+        in.sweep = 30.0f;
+        r = swept_box(in);
+        // rear centre = 1 + hx behind its position, front centre = chord + hx + 1 ahead (MOVEMENT 5.4.6 "Pass hold lines")
+        CHECK(std::fabs(r.c.x - r.hx - (500.0f - 11.0f)) < 1e-3f && std::fabs(r.c.x + r.hx - (500.0f + 30.0f + 11.0f)) < 1e-3f && r.hy == 7.0f);
+        const std::vector<V2> bend{{500.0f, 400.0f}, {510.0f, 400.0f}, {510.0f, 420.0f}};
+        in.poly = bend;
+        r = swept_box(in);  // 10 along +x, 20 along +y: the chord (10, 20); the corner (510, 400) lies 8.94 beside it
+        const float chord = std::sqrt(500.0f);
+        CHECK(std::fabs(r.hx - (11.0f + 0.5f * chord)) < 1e-3f && std::fabs(r.hy - (7.0f + 200.0f / chord)) < 1e-3f);
+        CHECK(std::fabs(r.a.x - 10.0f / chord) < 1e-4f && std::fabs(r.a.y - 20.0f / chord) < 1e-4f);
+        V2 exit;
+        const FootRect box{{500.0f, 400.0f}, {1.0f, 0.0f}, 11.0f, 7.0f, false};
+        CHECK(ray_leaves_rect(box, {440.0f, 400.0f}, {1.0f, 0.0f}, exit) && std::fabs(exit.x - 511.0f) < 1e-4f && exit.y == 400.0f);
+        CHECK(!ray_leaves_rect(box, {440.0f, 400.0f}, {-1.0f, 0.0f}, exit) && !ray_leaves_rect(box, {440.0f, 420.0f}, {1.0f, 0.0f}, exit));
+        // s78n t20 (MOVEMENT §1.5.1 item 4a, 0x6b1d00): a closed separating-axis test, touching counts
+        CHECK(segment_meets_rect(box, {480.0f, 400.0f}, {520.0f, 400.0f}));
+        CHECK(segment_meets_rect(box, {489.0f, 393.0f}, {511.0f, 393.0f}));  // along its edge
+        CHECK(segment_meets_rect(box, {480.0f, 400.0f}, {489.0f, 400.0f}));  // ending on its side
+        CHECK(segment_meets_rect(box, {505.0f, 401.0f}, {505.0f, 401.0f}));  // a point inside
+        CHECK(!segment_meets_rect(box, {480.0f, 400.0f}, {488.0f, 400.0f}));
+        CHECK(!segment_meets_rect(box, {480.0f, 380.0f}, {530.0f, 392.0f}));  // passes below the corner (511, 393)
+        CHECK(segment_meets_rect(box, {501.0f, 383.0f}, {521.0f, 403.0f}));   // through the corner (511, 393) exactly
+    }
+    // ---- ring search 0x440f90: rings 0, 1, 2.8, 5.4, 8.8, 13, 18 (step 1, + 0.8 per ring, capped at min(1.5 r, 10)); n =
+    // trunc(2 pi R / r) + 1 samples, at least 4 after ring 0; counter-clockwise from the search direction; a sample past
+    // the cone sits at the outside radius
+    {
+        const float r = std::sqrt(136.0f);  // footprint radius of (10, 6)
+        RingSetup s;
+        s.centre = {100.0f, 100.0f};
+        s.dir = {0.0f, 1.0f};
+        s.r = r;
+        std::vector<std::vector<V2>> rings;
+        V2 out;
+        CHECK(!ring_search(s, [&](V2 p, uint32_t ring) {
+            if (rings.size() <= ring) rings.resize(ring + 1);
+            rings[ring].push_back(p);
+            return false;
+        }, out));
+        CHECK(rings.size() == 20 && rings[0].size() == 1 && rings[0][0] == s.centre);
+        float want = 0.0f, step = 1.0f;
+        bool radii = true, counts = true;
+        for (uint32_t k = 0; k < 20; ++k) {
+            radii = radii && std::fabs(distance(rings[k][0], s.centre) - want) < 1e-3f;
+            const uint32_t n = k == 0 ? 1u : std::max(4u, static_cast<uint32_t>(2.0f * 3.1415927f * want / r) + 1u);
+            counts = counts && rings[k].size() == n;
+            want += step;
+            step = std::min(step + 0.8f, 10.0f);
+        }
+        CHECK(radii && counts);
+        CHECK(std::fabs(distance(rings[5][0], s.centre) - 13.0f) < 1e-3f && std::fabs(distance(rings[6][0], s.centre) - 18.0f) < 1e-3f);
+        // sample 0 lies along the direction (+y), sample 1 counter-clockwise from it (toward -x)
+        CHECK(std::fabs(rings[6][0].x - 100.0f) < 1e-3f && rings[6][0].y > 100.0f && rings[6][1].x < 100.0f);
+        // a cone of 3 pi / 4 with the outside radius 0.75 (StoppedVsStopped, not Infantry)
+        s.cone = 2.3561945f;
+        s.outside = 0.75f;
+        std::vector<V2> ring6;
+        (void)ring_search(s, [&](V2 p, uint32_t ring) {
+            if (ring == 6) ring6.push_back(p);
+            return false;
+        }, out);
+        bool cone = ring6.size() == rings[6].size();
+        for (size_t i = 0; cone && i < ring6.size(); ++i) {
+            const float th = 2.0f * 3.1415927f * static_cast<float>(i) / static_cast<float>(ring6.size());
+            cone = std::fabs(distance(ring6[i], s.centre) - (th <= s.cone ? 18.0f : 0.75f)) < 1e-3f;
+        }
+        CHECK(cone);
+        // Occupancy (MOVEMENT 5.4.3): a record blocks a sample when its centre is within (r_X + margin) + rho of the
+        // sample swept one unit along world +x; rho = 10 seen end-on, 6 seen from the side
+        const FootRect rec{{0.0f, 0.0f}, {1.0f, 0.0f}, 10.0f, 6.0f, false};
+        CHECK(ring_blocked({21.6f, 0.0f}, r, rec) && !ring_blocked({22.7f, 0.0f}, r, rec));  // 11.66 + 10 = 21.66
+        CHECK(ring_blocked({0.0f, 17.6f}, r, rec) && !ring_blocked({0.0f, 17.7f}, r, rec));  // 11.66 + 6 = 17.66
+        CHECK(ring_blocked({-22.6f, 0.0f}, r, rec) && !ring_blocked({-22.7f, 0.0f}, r, rec));  // the +x sweep: 1 wider on that side
+    }
+    // ---- s78n t20 batch 1: the path record cut 0x54e780(points, keep) - keep measured from the first point
+    {
+        const std::vector<V2> line{{0.0f, 0.0f}, {10.0f, 0.0f}, {20.0f, 0.0f}};
+        std::vector<V2> p = line;
+        CHECK(cut_points(p, 15.0f) && p.size() == 3 && p[1] == (V2{10.0f, 0.0f}) && p[2] == (V2{15.0f, 0.0f}));
+        p = line;
+        CHECK(!cut_points(p, 10.0f) && p.size() == 2 && p[1] == (V2{10.0f, 0.0f}));  // on a point: none added
+        p = line;
+        CHECK(!cut_points(p, 0.0f) && p.size() == 1 && p[0] == (V2{0.0f, 0.0f}));  // keep <= 0: a one-node path
+        p = line;
+        CHECK(!cut_points(p, -4.0f) && p.size() == 1);
+        p = line;
+        CHECK(!cut_points(p, 20.0f) && p == line);  // keep >= the total: unchanged
+        p = line;
+        CHECK(!cut_points(p, 25.0f) && p == line);
+        p = {{0.0f, 0.0f}, {0.0f, 0.0f}, {10.0f, 0.0f}};  // a zero-length segment is skipped
+        CHECK(cut_points(p, 4.0f) && p.size() == 3 && p[2] == (V2{4.0f, 0.0f}));
+        p = {{3.0f, 4.0f}};
+        CHECK(!cut_points(p, -1.0f) && p.size() == 1);  // fewer than 2 points: left alone
+    }
+    // ---- rejoin candidates along the path (0x67ad20 a)
+    {
+        const std::vector<V2> line{{0.0f, 0.0f}, {300.0f, 0.0f}};
+        std::vector<RejoinPoint> pts;
+        const float d = 71.0f + std::sqrt(136.0f);  // 82.66
+        rejoin_on_path(line, 0, {50.0f, 3.0f}, d, 11, pts);
+        CHECK(pts.size() == 11);  // 134.66, 144.66, ... (17 below 300, 11 tried)
+        bool ok = pts.size() == 11;
+        for (size_t i = 0; ok && i < pts.size(); ++i)
+            ok = std::fabs(pts[i].p.x - (50.0f + d + 2.0f + 10.0f * static_cast<float>(i))) < 1e-3f && pts[i].p.y == 0.0f && pts[i].next == 1;
+        CHECK(ok);
+        rejoin_on_path(line, 0, {250.0f, 0.0f}, 30.0f, 11, pts);
+        CHECK(pts.size() == 2 && std::fabs(pts[0].p.x - 282.0f) < 1e-3f && std::fabs(pts[1].p.x - 292.0f) < 1e-3f);  // < the length
+        rejoin_on_path(line, 0, {280.0f, 0.0f}, 30.0f, 11, pts);
+        CHECK(pts.empty());
+        rejoin_on_path(line, 1, {280.0f, 0.0f}, 5.0f, 11, pts);  // on the last waypoint: none
+        CHECK(pts.empty());
+        const std::vector<V2> corner{{0.0f, 0.0f}, {100.0f, 0.0f}, {100.0f, 200.0f}};
+        rejoin_on_path(corner, 0, {50.0f, 0.0f}, 30.0f, 3, pts);  // 82, 92 on the first segment, 102 on the second
+        CHECK(pts.size() == 3 && pts[0].next == 1 && pts[1].next == 1 && pts[2].next == 2);
+        CHECK(std::fabs(pts[2].p.x - 100.0f) < 1e-3f && std::fabs(pts[2].p.y - 2.0f) < 1e-3f);
+        rejoin_on_path(corner, 1, {100.0f, 50.0f}, 30.0f, 2, pts);  // arcs run from the current waypoint
+        CHECK(pts.size() == 2 && pts[0].next == 2 && std::fabs(pts[0].p.y - 82.0f) < 1e-3f);
+    }
+    // ---- window 0x67a0d0
+    {
+        CellBox w = around_window({200.0f, 200.0f}, {600.0f, 200.0f}, 3, false, 100, 100);  // cells (10, 10) -> (30, 10)
+        CHECK(w.x0 == 7 && w.x1 == 33 && w.y0 == 4 && w.y1 == 16);  // 27 x 7: ratio 3.86 -> k = 3 on both y sides
+        w = around_window({200.0f, 200.0f}, {600.0f, 200.0f}, 3, true, 100, 100);  // Giant: + 2
+        CHECK(w.x0 == 5 && w.x1 == 35 && w.y0 == 3 && w.y1 == 17);  // 31 x 11: ratio 2.82 -> k = 2
+        w = around_window({200.0f, 200.0f}, {200.0f, 600.0f}, 3, false, 100, 100);
+        CHECK(w.x0 == 4 && w.x1 == 13 && w.y0 == 7 && w.y1 == 36);  // 7 x 27: k = 3 on x0 and on y1 (as coded)
+        w = around_window({20.0f, 20.0f}, {60.0f, 60.0f}, 3, false, 100, 100);
+        CHECK(w.x0 == 0 && w.y0 == 0 && w.x1 == 6 && w.y1 == 6);  // clamped to the grid
+    }
+    // ---- the search: one standing obstacle (10, 6) on the mover's line
+    MovementConstants k;
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        const float r_u = std::sqrt(136.0f);
+        // the rejoin distance of the call: the travel ray leaves the obstacle's swept box (11, 7) at x = 511
+        const V2 start{440.0f, 400.0f}, goal{440.0f + (511.0f - 440.0f) + r_u + 2.0f, 400.0f};
+        CHECK(std::fabs(goal.x - 524.6619f) < 1e-3f);
+        SweptInput si;
+        si.pos = {500.0f, 400.0f};
+        si.hx = 10.0f;
+        si.hy = 6.0f;
+        const std::vector<AroundObstacle> obs{{77, swept_box(si), 10.0f, false}};
+        AroundRequest q;
+        q.start = start;
+        q.goal = goal;
+        q.grow = 6.0f + 0.5f;     // the mover's half width + 0.5: rect1 half extents (17.5, 13.5)
+        q.tracker = 6.0f + 0.5f;  // min(10, 6) + 0.5
+        q.mover_hx = 10.0f;
+        q.obstacles = obs;
+        AroundResult res;
+        CHECK(around_search(g, k, q, res));
+        CHECK(res.vertices == 6 && res.complexity == 6 && !res.crossing && res.window.size() == 1);
+        // around the -b side: the two side routes tie and the heap rules take the one expanded first
+        CHECK(res.points.size() == 4 && res.points[0] == start && res.points[3] == goal);
+        if (res.points.size() == 4) {
+            CHECK(res.points[1] == (V2{482.5f, 386.5f}) && res.points[2] == (V2{517.5f, 386.5f}));
+            const float want = std::sqrt(42.5f * 42.5f + 13.5f * 13.5f) + 35.0f +
+                               std::sqrt((goal.x - 517.5f) * (goal.x - 517.5f) + 13.5f * 13.5f);
+            CHECK(std::fabs(res.cost - want) < 1e-3f && std::fabs(want - 94.87f) < 0.01f);
+        }
+        // the front corner (+a -b) carries the obstacle's id and hold line: corner - (hx_o + hx_u) a, direction a
+        CHECK(res.tags.size() == 1);
+        if (res.tags.size() == 1)
+            CHECK(res.tags[0].index == 2 && res.tags[0].obstacle == 77 && res.tags[0].pt == (V2{497.5f, 386.5f}) && res.tags[0].dir == (V2{1.0f, 0.0f}));
+        // no obstacle: start and goal see each other
+        q.obstacles = {};
+        CHECK(around_search(g, k, q, res) && res.points.size() == 2 && res.vertices == 2 && res.complexity == 2);
+        // a goal inside the obstacle's grown rectangle: refused (the caller moves on to the next candidate)
+        q.obstacles = obs;
+        q.goal = {515.0f, 400.0f};
+        CHECK(!around_search(g, k, q, res));
+        // a start inside it: the search starts at the nearest corner; the output begins with the real start and the foot
+        // of the start on the first segment
+        q.start = {484.0f, 388.0f};
+        q.goal = goal;
+        CHECK(around_search(g, k, q, res));
+        CHECK(res.points.size() >= 3 && res.points.front() == q.start && res.points.back() == goal);
+        if (res.points.size() >= 3) CHECK(std::fabs(res.points[1].x - 484.0f) < 1e-3f && std::fabs(res.points[1].y - 386.5f) < 1e-3f);
+    }
+    // ---- s78n t20 (MOVEMENT §1.5.1 item 4a, its worked example moved to (500, 400)): one standing obstacle, rect1 = rect2
+    // = tracker = [-10, 10] x [-5, 5], a = +x; corners k0 (+a +b) = (10, 5), k1 (+a -b), k2 (-a -b), k3 (-a +b) = (-10, 5);
+    // S = (20, 0), G = (-30, 0). No edge from a corner into its inward 44-degree cone (d . n >= 0.71934, n = the unit
+    // vector of (-sa a - sb b)); crossing = touching the tracker rectangle of an obstacle that is neither end's own.
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        const V2 o{500.0f, 400.0f};
+        std::vector<AroundObstacle> obs{{3, FootRect{o, {1.0f, 0.0f}, 10.0f, 5.0f, false}, 10.0f, false}};
+        AroundRequest q;
+        q.start = o + V2{20.0f, 0.0f};
+        q.goal = o + V2{-30.0f, 0.0f};
+        q.grow = 0.0f;
+        q.tracker = 0.0f;
+        q.obstacles = obs;
+        const AroundVertexRef s{-1, 0, q.start}, gl{-1, 0, q.goal}, k0{0, 0, {}}, k1{0, 1, {}}, k2{0, 2, {}}, k3{0, 3, {}};
+        CHECK(around_edge_class(g, q, s, k0) == 2);   // d . n = -0.316: an edge at x 1
+        CHECK(around_edge_class(g, q, s, k3) == 1);   // 0.814: none in either pass (the segment runs through the rectangle)
+        CHECK(around_edge_class(g, q, k0, gl) == 1);  // 0.789: none
+        CHECK(around_edge_class(g, q, k3, gl) == 2);  // -0.514
+        CHECK(around_edge_class(g, q, k0, k3) == 2);  // a side of one rectangle: no cone test, its own rectangle is free
+        CHECK(around_edge_class(g, q, k0, k2) == 1);  // a diagonal
+        CHECK(around_edge_class(g, q, s, gl) == 3);   // two obstacle-less vertices: no cone, the tracker rectangle is met
+        const AroundVertexRef s2{-1, 0, o + V2{20.0f, 10.0f}};
+        CHECK(around_edge_class(g, q, s2, k0) == 2);  // d . n = -0.949 (straight along the outward diagonal)
+        AroundResult res;
+        CHECK(around_search(g, k, q, res) && !res.crossing && res.points.size() == 4);
+        if (res.points.size() == 4) {
+            CHECK(res.points[0] == q.start && res.points[3] == q.goal && res.points[1].x == 510.0f && res.points[2].x == 490.0f);
+            CHECK(std::fabs(res.points[1].y - 400.0f) == 5.0f && res.points[2].y == res.points[1].y);
+        }
+        CHECK(std::fabs(res.cost - (std::sqrt(125.0f) + 20.0f + std::sqrt(425.0f))) < 1e-3f && std::fabs(res.cost - 51.80f) < 0.01f);
+        // a third obstacle B whose tracker rectangle touches the side k0 - k3 (y = 405): that side crosses it; the far
+        // side k1 - k2 does not
+        obs.push_back({4, FootRect{o + V2{0.0f, 10.0f}, {1.0f, 0.0f}, 3.0f, 5.0f, false}, 3.0f, false});
+        q.obstacles = obs;
+        CHECK(around_edge_class(g, q, k0, k3) == 3 && around_edge_class(g, q, k1, k2) == 2);
+        // ... and the front side (k0 - k1) of an obstacle in relation 2 / 4 / 8 / 0x20 costs 1 whatever it meets
+        obs[1].shape.c = o + V2{12.0f, 0.0f};
+        q.obstacles = obs;
+        CHECK(around_edge_class(g, q, k0, k1) == 3);
+        obs[0].front_free = true;
+        q.obstacles = obs;
+        CHECK(around_edge_class(g, q, k0, k1) == 2);
+    }
+    // ---- pass 2: a wall with a gap that a standing obstacle's grown rectangle covers - no way around it, so the second
+    // pass crosses it at x DynamicObstacleOverlapPenalty on the crossing segment only
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        std::vector<uint32_t> cells(64 * 64, kPassClear);
+        for (int y = 0; y < 64; ++y)
+            if (y < 19 || y > 21) cells[static_cast<size_t>(y) * 64 + 25] = kPassImpassable;  // x = 500, gap y 370 .. 430
+        g.set_base(cells);
+        SweptInput si;
+        si.pos = {500.0f, 400.0f};
+        si.hx = 10.0f;
+        si.hy = 26.0f;  // rect1 (17.5, 33.5): wider than the gap
+        const std::vector<AroundObstacle> obs{{5, swept_box(si), 10.0f, false}};
+        AroundRequest q;
+        q.start = {440.0f, 400.0f};
+        q.goal = {560.0f, 400.0f};
+        q.grow = 6.5f;
+        q.tracker = 6.5f;
+        q.obstacles = obs;
+        AroundResult res;
+        CHECK(around_search(g, k, q, res));
+        CHECK(res.crossing && res.complexity == 2 * res.vertices && res.vertices >= 6);
+        const FootRect rect1 = rect_grown(obs[0].shape, q.grow);
+        uint32_t crossing = 0;
+        float want = 0.0f;
+        for (size_t i = 1; i < res.points.size(); ++i) {
+            const bool x = segment_meets_rect(rect1, res.points[i - 1], res.points[i]);
+            crossing += x ? 1u : 0u;
+            want += distance(res.points[i - 1], res.points[i]) * (x ? k.dynamic_obstacle_overlap_penalty : 1.0f);
+        }
+        CHECK(crossing == 1 && std::fabs(res.cost - want) < 1e-2f);
+        // cheaper than crossing in one straight segment (15 x 120): only the stretch across the rectangle is paid for
+        CHECK(res.cost < 15.0f * 120.0f && res.points.size() == 4);
+        std::printf("path around: pass 2 through a covered gap - %zu points, cost %.2f, %u vertices\n", res.points.size(),
+                    static_cast<double>(res.cost), res.vertices);
+    }
+    // ---- s78n t20 F3 [port]: a start inside a long obstacle's grown rectangle (67.5, 13.5) with a wall cell (22, 19)
+    // beside it: the search starts at a vertex the start sees, and every leg of the output (the start's first leg and
+    // the foot included) passes the grid
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        std::vector<uint32_t> cells(64 * 64, kPassClear);
+        cells[static_cast<size_t>(19) * 64 + 22] = kPassImpassable;
+        g.set_base(cells);
+        SweptInput si;
+        si.pos = {500.0f, 400.0f};
+        si.hx = 60.0f;
+        si.hy = 6.0f;
+        const std::vector<AroundObstacle> obs{{9, swept_box(si), 60.0f, false}};
+        AroundRequest q;
+        q.start = {465.0f, 390.0f};
+        q.goal = {380.0f, 400.0f};
+        q.grow = 6.5f;
+        q.tracker = 6.5f;
+        q.mover_hx = 10.0f;
+        q.obstacles = obs;
+        AroundResult res;
+        const bool found = around_search(g, k, q, res);
+        bool legs = res.points.size() >= 2;
+        for (size_t i = 1; i < res.points.size(); ++i) legs = legs && line_passable(g, res.points[i - 1], res.points[i], q.mask);
+        CHECK(found && legs && res.points.front() == q.start && res.points.back() == q.goal);
+        std::printf("path around (s78n t20 F3): a start inside, a wall cell beside it - %zu points, first leg to "
+                    "(%.1f, %.1f)\n", res.points.size(), res.points.size() >= 2 ? static_cast<double>(res.points[1].x) : 0.0,
+                    res.points.size() >= 2 ? static_cast<double>(res.points[1].y) : 0.0);
+    }
+    // ---- a goal walled in: five windows without a feasible flood fill
+    {
+        PassabilityGrid g;
+        g.init(64, 64);
+        std::vector<uint32_t> cells(64 * 64, kPassClear);
+        for (int y = 17; y <= 23; ++y)
+            for (int x = 27; x <= 33; ++x)
+                if (x == 27 || x == 33 || y == 17 || y == 23) cells[static_cast<size_t>(y) * 64 + static_cast<size_t>(x)] = kPassImpassable;
+        g.set_base(cells);
+        AroundRequest q;
+        q.start = {440.0f, 400.0f};
+        q.goal = {600.0f, 400.0f};  // cell (30, 20), inside the ring of walls
+        AroundResult res;
+        CHECK(!around_search(g, k, q, res) && res.complexity == 0 && res.points.empty());
+    }
+}
+
+// s78n t20 (MOVEMENT 4.3.1 item 4, 0x43d6a0): the try offsets of one formation's destination check, against the spec's own
+// procedure - t = 0 at first; tries with k mod 8 < 4 use t and then t += 7; tries 4 .. 7 use t - 28 plus min(HX + S, HY + S)
+// on the four world axes; the order's first formation, until impassable ground was met, halves the v term and gives it
+// the factor +1 (even k) / -0.75 (odd k).
+static void test_destination_offsets() {
+    const V2 v{-1.0f, 0.0f};  // one formation: back along the final direction +x
+    const float m = 20.0f;
+    const V2 axes[4] = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}, {0.0f, -1.0f}};
+    for (int mode = 0; mode < 2; ++mode) {
+        const bool first = mode == 0;
+        float t = 0.0f;
+        bool ok = true;
+        for (uint32_t k = 0; k < 40; ++k) {
+            const float half = first ? 0.5f * ((k % 2u) == 0u ? 1.0f : -0.75f) : 1.0f;
+            V2 want;
+            if (k % 8u < 4u) {
+                want = v * (t * half);
+                t += 7.0f;
+            } else {
+                want = v * ((t - 28.0f) * half) + axes[k % 8u - 4u] * m;
+            }
+            const V2 got = destination_try_offset(k, first, v, m);
+            ok = ok && std::fabs(got.x - want.x) < 1e-4f && std::fabs(got.y - want.y) < 1e-4f;
+        }
+        CHECK(ok);
+    }
+    // the list of the spec: 0, 2.625 beyond, 7 short, 7.875 beyond, four sideways, 14 short, 13.125 beyond, 21 short,
+    // 18.375 beyond (v points back, so "short" is +v and "beyond" is -v)
+    const float along[12] = {0.0f, 2.625f, -7.0f, 7.875f, 0.0f, 0.0f, 0.0f, 0.0f, -14.0f, 13.125f, -21.0f, 18.375f};
+    for (uint32_t k = 0; k < 12; ++k) CHECK(std::fabs(destination_try_offset(k, true, v, m).x - (k % 8u == 4u ? m : k % 8u == 6u ? -m : along[k])) < 1e-4f);
+    const V2 k12 = destination_try_offset(12, true, v, m), k13 = destination_try_offset(13, true, v, m), k22 = destination_try_offset(22, true, v, m);
+    CHECK(std::fabs(k12.x - (-14.0f + m)) < 1e-4f && k12.y == 0.0f);          // 14 short + m east
+    CHECK(std::fabs(k13.x - 10.5f) < 1e-4f && std::fabs(k13.y - m) < 1e-4f);  // 10.5 beyond + m north
+    CHECK(std::fabs(k22.x - (-28.0f - m)) < 1e-4f && k22.y == 0.0f);          // 28 short + m west
+    // not the first formation: t v and (t - 28) v as they are
+    CHECK(std::fabs(destination_try_offset(1, false, v, m).x + 7.0f) < 1e-4f && std::fabs(destination_try_offset(3, false, v, m).x + 21.0f) < 1e-4f);
+    CHECK(std::fabs(destination_try_offset(13, false, v, m).x + 28.0f) < 1e-4f);
+}
+
+// s78n t20 (MOVEMENT 3.5 step 2, 1.5.1 item 5): the walk step's "at once" collision cap and the record on top of a
+// started path (no braking for its end, the speed kept when its last waypoint is passed; s78n t26.4: popped in the walk).
+static void test_walk_step_t20() {
+    LocomotorParams p;
+    p.max_speed = 1.0f;
+    p.accel = 0.1f;
+    p.decel = 0.1f;
+    p.turn_rate = 10.0f;
+    const auto walker = [] {
+        LandMotion m;
+        m.pos = {0.0f, 0.0f};
+        m.path = {{0.0f, 0.0f}, {400.0f, 0.0f}};
+        m.next = 1;
+        m.speed = 1.0f;
+        m.state = LocoState::WalkMoving;
+        return m;
+    };
+    {  // the cap 0.2 is taken at the deceleration without the flag, in one frame with it
+        LandMotion a = walker(), b = walker();
+        WalkExtras now;
+        now.cap_now = true;
+        walk_step(a, p, 0.2f, nullptr, nullptr);
+        walk_step(b, p, 0.2f, nullptr, &now);
+        CHECK(std::fabs(a.speed - 0.9f) < 1e-6f && b.speed == 0.2f);
+        // the flag never raises the speed: a higher target is still reached at the acceleration
+        b.speed = 0.1f;
+        walk_step(b, p, 0.6f, nullptr, &now);
+        CHECK(std::fabs(b.speed - 0.2f) < 1e-6f);
+    }
+    {  // s78n t26.4 (MOVEMENT 3.5.2 C.4 / C.11, 3.5.1 "Arrival turn, details" item 1): a 6-unit record alone enters End
+       // Move when v^2 / (2a) = 5 exceeds the rest, brakes at a to v = a, crosses its last line, coasts and arrives at 0x15
+       // (speed 0, no snap onto its point); on top of a started path (Q below) it keeps full speed, and the call that finds
+       // the record finished pops it and goes on along Q (no braking, no turn in that call)
+        LandMotion a = walker(), b = walker();
+        a.path = b.path = {{0.0f, 0.0f}, {6.0f, 0.0f}};
+        LandMotion q;
+        q.path = {{0.0f, 0.0f}, {400.0f, 0.0f}};
+        q.next = 1;
+        WalkExtras top;
+        top.below = &q;
+        WalkResult ra, rb;
+        float min_b = 1.0f;
+        uint32_t fa = 0, fb = 0;
+        for (; fa < 200 && !ra.arrived; ++fa) ra = walk_step(a, p, 3.0e38f, nullptr, nullptr);
+        for (; fb < 200 && !rb.popped; ++fb) {
+            rb = walk_step(b, p, 3.0e38f, nullptr, &top);
+            min_b = std::min(min_b, b.speed);
+        }
+        std::printf("t20 walk step: record alone arrives after %u frames at x %.6f; on a started path popped after %u frames at x %.6f\n",
+                    fa, static_cast<double>(a.pos.x), fb, static_cast<double>(b.pos.x));
+        CHECK(ra.arrived && a.speed == 0.0f && a.state == LocoState::WalkStopped && a.next == 2 && fa > 6);
+        CHECK(std::fabs(a.pos.x - 6.0f) < 0.01f);  // crossed its line at 6 (a.last_dir is zero: the coast stays put)
+        CHECK(rb.popped && fb <= 7 && min_b == 1.0f && b.speed == 1.0f && b.state == LocoState::WalkMoving);
+        CHECK(b.path.size() == 2 && b.path[1] == (V2{400.0f, 0.0f}) && b.next == 1 && b.pos.x > 6.0f);
+        CHECK(q.path.size() == 2 && q.path[1] == (V2{6.0f, 0.0f}));  // the finished record, for the caller to pop
+    }
+}
+
 // Collision objects inside MovementSystem: creation, crowd box / refresh, cancellation, budget fallback.
 static void test_collision_system() {
-    // StoppedVsStopped: two overlapping parked units; crowd = 5 x ground units in the 160 x 160 box on their midpoint.
+    // StoppedVsStopped (s78n t20, MOVEMENT 5.4.3): two overlapping parked units of radius 40. No instant displacement: the
+    // cheaper one to move - both would back straight away from the other; unit 2 already faces that way, unit 1 would
+    // have to turn 180 degrees first - walks a path to the first free spot of the ring search around itself (rings 0, 1,
+    // 2.8, 5.4, 8.8, 13, 18, 23.8, 30.4, 37.8, 46, 55, 64.8, 74.8, 84.8: the step grows by 0.8 up to 10; the first ring
+    // whose sample along its escape direction is more than 40 + 40 from the other's centre, 5 behind it, is 84.8). The
+    // record is Resolving while it walks and gone when the path is popped.
     {
         MovementSystem s{MovementConfig{}};
         PassabilityGrid g;
@@ -980,39 +1616,52 @@ static void test_collision_system() {
         s.set_grid(std::move(g));
         s.add_unit(land_unit(1, {400.0f, 400.0f}, 7, 1.0f, 40.0f, kUccVehicle));
         s.add_unit(land_unit(2, {405.0f, 400.0f}, 7, 1.0f, 40.0f, kUccVehicle));
-        s.add_unit(land_unit(3, {402.0f, 470.0f}, 0, 1.0f, 6.0f, kUccInfantry));  // inside the box (y 320 .. 480)
-        s.add_unit(land_unit(4, {600.0f, 400.0f}, 0, 1.0f, 6.0f, kUccInfantry));  // outside
         SimRng rng(1);
         s.tick(0, rng);
         CHECK(s.collisions().list().size() == 1);
         if (s.collisions().list().size() == 1) {
             const CollisionObject& c = s.collisions().list()[0];
-            CHECK(c.kind == CollisionKind::StoppedVsStopped && c.a == 1 && c.b == 2 && c.created == 0);
-            CHECK(c.crowd == 15.0f && c.crowd_frame == 30 && c.state == CollisionState::Active);
+            CHECK(c.kind == CollisionKind::StoppedVsStopped && c.a == 1 && c.b == 2 && c.created == 0 && c.retry == 30);
+            // a StoppedVsStopped record never takes the quota pass: no crowd, no priority; decided on its first service
+            CHECK(c.crowd == 0.0f && c.crowd_frame == 0 && c.state == CollisionState::Resolving && c.master == 1);
         }
-        // Both were pushed apart (each on its own check frames: one push per FramesPerCollisionCheck frames).
-        CHECK(s.view(1).pos.x < 400.0f && s.view(2).pos.x > 405.0f);
-        // A unit entering the box is seen only at the 30-frame refresh.
-        CHECK(s.teleport(4, {402.0f, 330.0f}, 0.0f, 0.0f, 10));
-        bool before = true;
-        for (uint32_t f = 1; f < 30; ++f) {
-            s.tick(f, rng);
-            before = before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 15.0f;
+        // nobody was displaced in the decision frame; unit 2 holds the record's path (kind 3) to the spot
+        // s78n t26.4 (MOVEMENT 5.4.3 "The move", 3.5.2 C.6 / C.7): its first step - turned by at most the rate toward
+        // the wanted direction (the path's plus the side-step away from unit 1) and moved along the new facing
+        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && distance(s.view(2).pos, V2{405.0f, 400.0f}) <= 1.56f + 1e-3f &&
+              s.view(2).pos.x > 405.0f);
+        CHECK(s.view(2).pushed && s.view(2).push_kind == 3 && !s.view(1).pushed);
+        float ring = 0.0f, step = 1.0f;
+        while (5.0f + ring <= 80.0f) {
+            ring += step;
+            step = std::min(step + 0.8f, 10.0f);
         }
-        s.tick(30, rng);
-        CHECK(before && s.collisions().list().size() == 1 && s.collisions().list()[0].crowd == 20.0f &&
-              s.collisions().list()[0].priority == 20.0f - 30.0f);
-        // Pushed apart until the overlap ratio drops to 0.15: the collision no longer applies and is cancelled.
-        for (uint32_t f = 31; f < 200 && !s.collisions().list().empty(); ++f) s.tick(f, rng);
-        CHECK(s.collisions().list().empty() && s.stats().collisions_cancelled == 1 && s.stats().collisions_created == 1);
+        CHECK(std::fabs(ring - 84.8f) < 1e-3f);
+        const std::span<const V2> top = s.top_path(2);
+        CHECK(top.size() >= 2 && std::fabs(top.back().x - (405.0f + ring)) < 1e-2f && std::fabs(top.back().y - 400.0f) < 1e-3f);
+        uint32_t f = 1;
+        for (; f < 300 && !s.collisions().list().empty(); ++f) s.tick(f, rng);
+        CHECK(s.collisions().list().empty() && s.stats().collisions_created == 1 && s.stats().collisions_resolved == 1 &&
+              s.stats().collisions_cancelled == 0);
+        // s78n t26.4: past the spot's line (+x), off the line by the side-steps (no lane term without an order, no snap)
+        CHECK(s.view(1).pos == (V2{400.0f, 400.0f}) && !s.view(2).pushed && s.view(2).pos.x > 405.0f + ring - 5.0f);
+        // bkm2 t06 (b0042): two-sided along the last segment (+x, the spot's line x = 405 + ring): from 5 before the line
+        // (0x15) to the coast past it, v^2 / (2a) = vmax / 2 = 0.78 (1.0 x LandSpeedMultiplier 1.56; decel unset = vmax,
+        // §3.4); the end point itself is deterministic and checked as measured
+        const V2 e2 = s.view(2).pos;
+        std::printf("StoppedVsStopped: unit 2 ended at (%.4f, %.4f), %.4f past the spot's line\n", static_cast<double>(e2.x),
+                    static_cast<double>(e2.y), static_cast<double>(e2.x - (405.0f + ring)));
+        CHECK(e2.x >= 405.0f + ring - 5.0f && e2.x <= 405.0f + ring + 0.5f * 1.56f + 1e-4f);
+        CHECK(std::fabs(e2.x - 489.3083f) < 1e-3f && std::fabs(e2.y - 360.0799f) < 1e-3f);
         CHECK(overlap_ratio(s.view(1).pos, 40.0f, s.view(2).pos, 40.0f) <= 0.15f);
+        // no new record afterwards (they no longer overlap)
+        for (uint32_t n = 0; n < 20; ++n) s.tick(++f, rng);
+        CHECK(s.collisions().list().empty() && s.stats().collisions_created == 1);
     }
-    // MovingVsStopped kept while it applies (zero quota: it waits in try-again-later), cancelled once it no longer
-    // does - the mover stops, or the blocker starts moving.
-    for (int variant = 0; variant < 2; ++variant) {
-        MovementConfig cfg;
-        cfg.constants.dynamic_land_complexity_quota = 0;
-        MovementSystem s(cfg);
+    // s78n t18 (MOVEMENT 5.4.1): a MovingVsStopped record lives across frames in its state - Path Around while the mover
+    // holds the detour made for it - and ends by its state: once the mover is stopped (no path left) it is Resolved.
+    {
+        MovementSystem s{MovementConfig{}};
         PassabilityGrid g;
         g.init(60, 40);
         s.set_grid(std::move(g));
@@ -1032,29 +1681,17 @@ static void test_collision_system() {
                 if (s.collisions().list()[0].seq == seq && ++kept == 3) break;  // persisted across frames
             }
         }
-        CHECK(seq != UINT32_MAX && kept == 3 && s.collisions().list()[0].state == CollisionState::TryAgainLater);
-        const uint32_t cancelled0 = s.stats().collisions_cancelled;
-        if (variant == 0) {
-            const ObjectId one = 1;
-            s.stop(std::span<const ObjectId>(&one, 1));
-            s.tick(++f, rng);
-            CHECK(s.collisions().list().empty() && s.stats().collisions_cancelled == cancelled0 + 1);
-        } else {
-            MoveOrder away;
-            away.units = {2};
-            away.destination = cell_center(12, 35);
-            s.move(away, rng, f + 1);
-            bool gone = false;
-            for (uint32_t n = 0; n < 20 && !gone; ++n) {
-                s.tick(++f, rng);
-                gone = true;
-                for (const CollisionObject& c : s.collisions().list()) gone = gone && c.seq != seq;
-            }
-            CHECK(gone && s.stats().collisions_cancelled >= cancelled0 + 1 && s.view(2).has_goal);
-        }
+        CHECK(seq != UINT32_MAX && kept == 3 && s.collisions().list()[0].state == CollisionState::PathAround);
+        CHECK(s.stats().dynamic_repaths == 1);  // one search for the record, not one per check
+        const uint32_t resolved0 = s.stats().collisions_resolved;
+        const ObjectId one = 1;
+        s.stop(std::span<const ObjectId>(&one, 1));
+        s.tick(++f, rng);
+        CHECK(s.collisions().list().empty() && s.stats().collisions_resolved == resolved0 + 1 && s.stats().collisions_cancelled == 0);
     }
-    // Budget fallback: with a zero quota every MovingVsStopped resolution is the fallback (try again later, then push
-    // the blocker aside); no dynamic search runs, and the mover still gets through.
+    // Quota (s78n t18, MOVEMENT 5.4.1 driver step 2): with a zero quota a record is never decided - it stays in state
+    // None, which answers max speed, so the mover walks on through the blocker's footprint; no dynamic search runs and
+    // nothing is displaced (retail has no instant shove).
     {
         MovementConfig cfg;
         cfg.constants.dynamic_land_complexity_quota = 0;
@@ -1079,7 +1716,7 @@ static void test_collision_system() {
         }
         CHECK(all_fallback && s.stats().dynamic_repaths == 0 && s.stats().quota_deferrals > 0);
         CHECK(ground && s.view(1).arrived && distance(s.view(1).pos, cell_center(55, 20)) < 1.0f);
-        CHECK(distance(s.view(2).pos, cell_center(30, 20)) > 1.0f);  // the blocker was pushed aside
+        CHECK(s.view(2).pos == cell_center(30, 20));  // the blocker stands where it stood
     }
 }
 
@@ -1103,13 +1740,66 @@ static void build_land_scenario(MovementSystem& sys, uint32_t units) {
     }
 }
 
+// bkm2 t01 / t02 (b0040 / b0041; MOVEMENT §5.4.7 items 3.4 / 3.5 / 4): the units stopped by their own TerrainCollision
+// record, observed per tick through the public views. A Terrain record in state None (0, waiting for its decision)
+// before a tick that is gone after it, while its unit walks no detour (a taken detour moves the record to Resolving and
+// keeps it), stopped its unit: own cell impassable, Path Around failed, or no base path. One unit can lose several
+// records in one tick (no duplicate rule, item 1: the first decision stops it and clears its paths, the next one then
+// has no base path). The kinds are the stats counters that moved in that tick, named only when one unit stopped in it.
+// Observation only: nothing here feeds the simulation.
+struct TerrainStop {
+    ObjectId id = -1;
+    uint32_t frame = 0;
+    std::string kind;  // one letter per record: 'c' own cell, 'f' failed detour, 'n' no base path; "?" several units
+};
+struct TerrainStopLog {
+    std::vector<TerrainStop> stops;
+    std::vector<std::pair<uint32_t, ObjectId>> waiting;  // scratch: (record seq, unit) in state None before the tick
+};
+static void terrain_stops_before(const MovementSystem& sys, TerrainStopLog& t) {
+    t.waiting.clear();
+    for (const CollisionObject& c : sys.collisions().list())
+        if (c.kind == CollisionKind::Terrain && c.state == CollisionState::Active) t.waiting.push_back({c.seq, c.a});
+}
+static void terrain_stops_after(const MovementSystem& sys, TerrainStopLog& t, uint32_t frame, const MovementStats& s0) {
+    const MovementStats& s1 = sys.stats();
+    const uint32_t dc = s1.terrain_stops_cell - s0.terrain_stops_cell, df = s1.terrain_stops_failed - s0.terrain_stops_failed,
+                   dn = s1.terrain_stops_nobase - s0.terrain_stops_nobase;
+    const size_t first = t.stops.size();
+    for (const auto& [seq, id] : t.waiting) {
+        bool kept = false;
+        for (const CollisionObject& c : sys.collisions().list()) kept = kept || c.seq == seq;
+        if (kept || !sys.has_unit(id) || sys.view(id).pushed) continue;
+        bool seen = false;
+        for (size_t i = first; i < t.stops.size(); ++i) seen = seen || t.stops[i].id == id;
+        if (!seen) t.stops.push_back({id, frame, "?"});
+    }
+    if (t.stops.size() == first + 1) t.stops.back().kind = std::string(dc, 'c') + std::string(df, 'f') + std::string(dn, 'n');
+    if ((dc + df + dn > 0 || t.stops.size() != first) && std::getenv("BKM2_DEBUG")) {
+        std::printf("  [stop] frame %u: d cell %u failed %u nobase %u, waiting", frame, dc, df, dn);
+        for (const auto& [seq, id] : t.waiting) std::printf(" %d(#%u)", id, seq);
+        std::printf(", found");
+        for (size_t i = first; i < t.stops.size(); ++i) std::printf(" %d", t.stops[i].id);
+        std::printf("; records now:");
+        for (const CollisionObject& c : sys.collisions().list())
+            if (c.kind == CollisionKind::Terrain) std::printf(" %d/%u/c%u", c.a, static_cast<unsigned>(c.state), c.created);
+        std::printf("\n");
+    }
+}
+
 // Runs until every unit stopped; returns frames. Checks passability every frame.
 static uint32_t run_land(MovementSystem& sys, uint32_t first, uint32_t max_frames, SimRng& rng, const ParallelFor& pf,
-                         bool& on_ground, CrcLog* log = nullptr, CrcRegistry* reg = nullptr) {
+                         bool& on_ground, CrcLog* log = nullptr, CrcRegistry* reg = nullptr, TerrainStopLog* stops = nullptr) {
     on_ground = true;
     uint32_t f = first;
+    MovementStats s0;
     for (; f < first + max_frames; ++f) {
+        if (stops) {
+            terrain_stops_before(sys, *stops);
+            s0 = sys.stats();
+        }
         sys.tick(f, rng, pf);
+        if (stops) terrain_stops_after(sys, *stops, f, s0);
         bool any = false;
         for (ObjectId id : sys.unit_ids()) {
             const UnitView v = sys.view(id);
@@ -1133,24 +1823,92 @@ static void test_land_group() {
     sys.move(o, rng, 0);
     CHECK(rng.draws() >= 36);  // one start delay per unit
     bool ground = true;
-    const uint32_t frames = run_land(sys, 0, 6000, rng, serial_for, ground);
+    // s78n t23 review fix 2: 6101 frames. Units 13 and 49 stand from frame ~300 to ~4800 as M of Starved records (state
+    // 15, MOVEMENT 5.4.6) with 85: M stands while it has more than one collision record (13 is also S of a Path Around
+    // record of 19), and a Starved record has no contact or end test of its own - it ends by validity when 85 stops at
+    // its goal. Retail-literal by the spec; the bound allows that one hold.
+    // s78n t26 review round 2: with infantry and vehicles in one formation (MOVEMENT §4.2 step 2 item 4 [H]: recruitment
+    // by locomotor kind, not by movement mask) the run ends in a jam of four units in the maze, from frame ~1000 to the
+    // cap: vehicle 19 is M of a Starved record (state 15) with its formation mate 55 and also M of a Pass record (state 4)
+    // with 37 of another formation; state 15 answers M 0 and path-arounds it only while M has exactly one collision
+    // record (MOVEMENT §5.4.6 state table, row 15 [H]), so 19 stands; the Pass records hold their S (37 behind 19, 55 behind
+    // 37, 16 held by 55) at speed 0 while M passes, and no record of the four ends (Starved has no contact or end test;
+    // no jam breaker in retail, RE f36dc98b). The jammed units are counted apart and checked to be exactly that cycle.
+    // s78p (b0049): with one formation path per formation and each member on its lane the formations no longer cross in
+    // the maze, so the cycle does not form; all 36 arrive at frame ~8460 (the lanes are longer than the singly planned
+    // paths). The cap is 9000; the jam bound stays for the record.
+    // bkm2 t01 (b0040): the run is deterministic, so its counts are checked exactly as measured (dev 7f063b20, MSVC and
+    // clang): see the checks below the summary line.
+    TerrainStopLog tlog;
+    const uint32_t frames = run_land(sys, 0, 9000, rng, serial_for, ground, nullptr, nullptr, &tlog);
     uint32_t arrived = 0, near = 0;
+    std::vector<ObjectId> far_ids;
     for (ObjectId id : sys.unit_ids()) {
         const UnitView v = sys.view(id);
         if (v.arrived) ++arrived;
         if (distance(v.pos, cell_center(75, 80)) < 400.0f) ++near;
+        else far_ids.push_back(id);
         if (!v.arrived && std::getenv("MOVEMENT_DEBUG"))
-            std::printf("  unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f replans %u path %zu\n", id,
+            std::printf("  unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f pushed %d path %zu\n", id,
                         static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), static_cast<double>(v.goal.x),
-                        static_cast<double>(v.goal.y), v.has_goal ? 1 : 0, v.failed ? 1 : 0, static_cast<double>(v.speed), v.replans,
+                        static_cast<double>(v.goal.y), v.has_goal ? 1 : 0, v.failed ? 1 : 0, static_cast<double>(v.speed), v.pushed ? 1 : 0,
                         sys.land_path(id).size());
     }
     const MovementStats& st = sys.stats();
+    // s78n t24 (MOVEMENT §5.4.7 item 3.5 and "Rejoin candidates of a kind-3 Path Around" item 5): a failed step makes a
+    // TerrainCollision record; when its Path Around fails, the unit is stopped where it stands, its order is lost, and it
+    // counts as arrived (the formation's member is done). Retail: no retry. Those units are counted apart; every other
+    // unit arrives at the destination.
+    const uint32_t stops = st.terrain_stops_failed + st.terrain_stops_nobase + st.terrain_stops_cell;
     std::printf("land group: 36 units, %u frames, %u arrived, %u near destination; paths %u (fail %u), replans %u, "
-                "collision checks %u, dynamic repaths %u, quota deferrals %u, early arrivals %u, blocked steps %u\n",
+                "collision checks %u, dynamic repaths %u, quota deferrals %u, early arrivals %u, blocked steps %u; terrain "
+                "records %u, detours %u, stops %u (failed detour %u, no base %u, cell %u)\n",
                 frames, arrived, near, st.paths_planned, st.path_failures, st.replans, st.collision_checks, st.dynamic_repaths,
-                st.quota_deferrals, st.early_arrivals, st.blocked_steps);
-    CHECK(ground && arrived == 36 && near == 36 && frames < 6000);
+                st.quota_deferrals, st.early_arrivals, st.blocked_steps, st.terrain_records, st.terrain_detours, stops,
+                st.terrain_stops_failed, st.terrain_stops_nobase, st.terrain_stops_cell);
+    uint32_t jammed = 0;
+    bool cycle = true;
+    for (ObjectId id : sys.unit_ids()) {
+        const UnitView v = sys.view(id);
+        if (v.arrived) continue;
+        ++jammed;
+        // held at speed 0 by a MovingVsMoving record in state 15 (as its M, which has another record) or in Pass (as S)
+        bool held = false;
+        for (const CollisionObject& c : sys.collisions().list()) {
+            if (c.kind != CollisionKind::MovingVsMoving || (c.a != id && c.b != id)) continue;
+            const bool is_a = c.a == id;
+            const bool zero = (is_a ? c.speed_a : c.speed_b) == 0.0f;
+            const bool is_m = (c.master == 0) == is_a;
+            if (c.state == CollisionState::Starved && is_m && zero) {
+                uint32_t n = 0;
+                for (const CollisionObject& k : sys.collisions().list()) n += (k.a == id || k.b == id) ? 1u : 0u;
+                held = held || n > 1;
+            }
+            if (c.state == CollisionState::Pass && !is_m && zero) held = true;
+        }
+        cycle = cycle && held && v.has_goal && v.speed == 0.0f;
+    }
+    std::printf("land group: %u unit(s) jammed in a Starved / Pass cycle (MOVEMENT 5.4.6 row 15), cycle %d\n", jammed, cycle ? 1 : 0);
+    for (const TerrainStop& t : tlog.stops) {
+        const UnitView v = sys.view(t.id);
+        std::printf("land group: unit %d stopped by its TerrainCollision record(s) at frame %u (kinds %s) at (%.3f, %.3f), %.1f "
+                    "from the destination\n",
+                    t.id, t.frame, t.kind.c_str(), static_cast<double>(v.pos.x), static_cast<double>(v.pos.y),
+                    static_cast<double>(distance(v.pos, cell_center(75, 80))));
+    }
+    for (ObjectId id : far_ids) std::printf("land group: unit %d ended 400 or more from the destination\n", id);
+    // bkm2 t01 (b0040): exact, as measured (a port measurement; retail's count for this maze is unknown). The jam check is
+    // PROVISIONAL (b0034): the Starved / Pass cycle of the s78n t26 review formed without the formation path / lanes
+    // (s78p, b0049) and may have been a port artefact rather than retail; with them no unit jams. Every unit arrives
+    // (36), one of them only as "done": unit 1 is stopped at frame 365 by its own TerrainCollision records (MOVEMENT
+    // §5.4.7 item 7: its order is lost and the member counts as arrived) - it had two records waiting (no duplicate rule,
+    // item 1); the first decision's kind-3 Path Around failed (the "failed detour" stop), which cleared its paths, so the
+    // second found no base path (the "no base" stop). It is the one unit that ends 400 or more from the destination.
+    CHECK(ground && frames == 8402 && arrived == 36 && jammed == 0 && cycle);
+    CHECK(near == 35 && stops == 2 && st.terrain_stops_failed == 1 && st.terrain_stops_nobase == 1 && st.terrain_stops_cell == 0);
+    CHECK(st.terrain_records == 22 && st.terrain_detours == 20);
+    CHECK(tlog.stops.size() == 1 && far_ids == std::vector<ObjectId>{1});
+    if (tlog.stops.size() == 1) CHECK(tlog.stops[0].id == 1 && tlog.stops[0].frame == 365 && tlog.stops[0].kind == "fn");
 
     // Head-on corridor: two units swap ends through a 3-cell-wide corridor.
     MovementSystem s2{MovementConfig{}};
@@ -1191,21 +1949,28 @@ static void test_land_group() {
     CHECK(g3ok && s3.view(1).arrived && distance(s3.view(1).pos, cell_center(55, 20)) < 1.0f && s3.stats().dynamic_repaths >= 1);
     CHECK(distance(s3.view(2).pos, cell_center(30, 20)) < 1.0f);  // the blocker was not pushed
 
-    // Destination occupied by a stopped unit: early arrival within LandDestinationProximity.
+    // Destination occupied by a stopped unit (s78n t18, MOVEMENT 5.4.1 0x684710 / 0x685e10): the early-arrival cut - the
+    // path ends at the last point where the mover's box (hx + 5, hy) is clear of the standing unit (18 + 5 + 18 = 41,
+    // found in steps of 5, cut 3 more).
     MovementSystem s4{MovementConfig{}};
     PassabilityGrid g4;
     g4.init(40, 40);
     s4.set_grid(std::move(g4));
     s4.add_unit(land_unit(1, cell_center(5, 5), 7, 1.5f, 18.0f, kUccVehicle));
-    s4.add_unit(land_unit(2, cell_center(30, 30), 7, 1.5f, 18.0f, kUccVehicle));
     MoveOrder d;
     d.units = {1};
     d.destination = cell_center(30, 30);
-    d.flags = kMoveFlagSkipValidation;
     s4.move(d, rng, 0);
+    // (s78n t20: the blocker comes after the order - the destination check 0x439360 of the order would move the goal off
+    // a unit that already stands there)
+    s4.add_unit(land_unit(2, cell_center(30, 30), 7, 1.5f, 18.0f, kUccVehicle));
     bool g4ok = true;
     run_land(s4, 0, 2000, rng, serial_for, g4ok);
-    CHECK(s4.view(1).arrived && distance(s4.view(1).pos, cell_center(30, 30)) < 36.0f + 60.0f + 1.0f && s4.stats().early_arrivals == 1);
+    // s78n t18 review: the bound the comment derives - the first clear point is 41 .. 46 before the standing unit (steps of
+    // 5 from the path end), the cut takes 3 more, and the walker stops on the cut path's end: 44 .. 49
+    const float d4 = distance(s4.view(1).pos, cell_center(30, 30));
+    std::printf("early arrival: stopped %.3f before the standing unit\n", static_cast<double>(d4));
+    CHECK(s4.view(1).arrived && d4 >= 44.0f - 1e-3f && d4 <= 49.0f + 1e-3f && s4.stats().early_arrivals == 1);
 
     // a1j t02 (A1_READINGS §36.4): a Giant Vehicle pushes a stopped unit it does not crush aside (0x684f90 -> 0x6859a0)
     // and keeps its path: no path-around, it arrives at its destination, the parked infantry stands off the line.
@@ -1262,7 +2027,18 @@ static void test_push_search() {
                     end_frame, static_cast<double>(spot.x), static_cast<double>(spot.y), static_cast<double>(b0.x),
                     static_cast<double>(b0.y));
         CHECK(s.stats().pushes == 1 && s.stats().push_failures == 0 && push_frame > 0 && end_frame > push_frame);
-        CHECK(std::fabs(spot.x - (b0.x + ring)) < 0.5f && std::fabs(spot.y - (b0.y - ring)) < 0.5f);
+        // s78n t26.4 (MOVEMENT 3.5.1 item 1, 3.5.2 C.7): where 0x15 stopped it on its push path (no snap), within a
+        // step plus the side-step drift of the spot
+        // bkm2 t06 (b0042): two-sided along the push path's last segment b0 -> spot T (open ground: one straight leg, unit
+        // dir): from 5 before T's line (0x15's -5) to the coast past it, v^2 / (2a) = vmax / 2 = 1.17 (Infantry 1.5 x
+        // LandSpeedMultiplier 1.56 = 2.34; decel unset = vmax, §3.4); across, the side-step drift is the measured exact value
+        const V2 tgt{b0.x + ring, b0.y - ring};
+        const V2 pdir = normalize_retail(tgt - b0);
+        const float along = dot(spot - tgt, pdir), across = dot(spot - tgt, V2{-pdir.y, pdir.x});
+        std::printf("push search: end %.4f along the last segment past the spot's line, %.4f across\n", static_cast<double>(along),
+                    static_cast<double>(across));
+        CHECK(along >= -5.0f && along <= 0.5f * 2.34f + 1e-4f);
+        CHECK(std::fabs(spot.x - 643.97f) < 5e-3f && std::fabs(spot.y - 358.45f) < 5e-3f);
         CHECK(order_kept && s.view(1).arrived && distance(s.view(1).pos, cell_center(55, 20)) < 1.0f && s.stats().dynamic_repaths == 0);
         // No return move (MinimumPushReturnDistance / RepushDistance have no reader): the idle unit stays at the spot.
         for (uint32_t n = 0; n < 300; ++n) s.tick(++f, rng);
@@ -1311,10 +2087,12 @@ static void test_push_search() {
         o.units = {1};
         o.destination = cell_center(55, 20);
         s.move(o, rng, 0);
+        s.coordinator_update(0, 0, rng);  // cu8j: each order composes at its own (next) coordinator update
         MoveOrder later;
         later.units = {2};
         later.destination = cell_center(30, 35);
         s.move(later, rng, 900);
+        s.coordinator_update(900, 900, rng);
         CHECK(s.view(2).has_goal && s.view(2).start_frame >= 900);
         uint32_t push_frame = 0, end_frame = 0;
         bool kept = true;
@@ -1415,6 +2193,52 @@ static void test_space() {
     tight.space_pathfind_max_expansions = 20;
     q.goal = {1500.0f, 0.0f};
     CHECK(plan_space_path(occ, tight, q, sc, p) && p.tries > 1);
+    {
+        // SIMP sp2: retries run in parallel give the serial result exactly (tries, pushes, fallback, waypoint bits), with the
+        // ranges run backwards and on threads, for budgets from "every try fails" to "try 1 succeeds".
+        const alamo::ParallelFor reversed = [](uint32_t n, uint32_t, const alamo::RangeFn& fn) {
+            for (uint32_t i = n; i-- > 0;) fn(i, i + 1);
+        };
+        const alamo::ParallelFor threaded = [](uint32_t n, uint32_t, const alamo::RangeFn& fn) {
+            std::vector<std::thread> th;
+            for (uint32_t i = 0; i < n; ++i) th.emplace_back([&fn, i] { fn(i, i + 1); });
+            for (std::thread& t : th) t.join();
+        };
+        const alamo::ParallelFor halves = [](uint32_t n, uint32_t, const alamo::RangeFn& fn) {  // several tries per chunk
+            std::thread a([&fn, n] { fn(0, n / 2); });
+            fn(n / 2, n);
+            a.join();
+        };
+        const auto bits = [](float x, float y) { return std::memcmp(&x, &y, sizeof x) == 0; };
+        const auto same = [&bits](const SpacePath& a, const SpacePath& b) {
+            if (a.ok != b.ok || a.fallback != b.fallback || a.tries != b.tries || a.pushes != b.pushes || a.wps.size() != b.wps.size())
+                return false;
+            for (size_t i = 0; i < a.wps.size(); ++i)
+                if (!bits(a.wps[i].pos.x, b.wps[i].pos.x) || !bits(a.wps[i].pos.y, b.wps[i].pos.y) ||
+                    !bits(a.wps[i].heading, b.wps[i].heading) || !bits(a.wps[i].time, b.wps[i].time) ||
+                    !bits(a.wps[i].speed, b.wps[i].speed))
+                    return false;
+            return true;
+        };
+        uint32_t multi = 0;
+        for (const uint32_t budget : {5u, 20u, 60u, 200u, 800u, 3500u}) {
+            MovementConstants kb = k;
+            kb.space_pathfind_max_expansions = budget;
+            for (const V2 goal : {V2{1500.0f, 0.0f}, V2{0.0f, 900.0f}, V2{1500.0f, 300.0f}}) {
+                q.goal = goal;
+                SpacePath serial, par_rev, par_thr, par_half;
+                SpaceScratch s1, s2, s3, s4;
+                plan_space_path(occ, kb, q, s1, serial);
+                plan_space_path(occ, kb, q, s2, par_rev, &reversed);
+                plan_space_path(occ, kb, q, s3, par_thr, &threaded);
+                plan_space_path(occ, kb, q, s4, par_half, &halves);
+                CHECK(same(serial, par_rev) && same(serial, par_thr) && same(serial, par_half));
+                if (serial.tries > 1) ++multi;
+            }
+        }
+        CHECK(multi >= 3);  // the comparison covered the retry path
+        q.goal = {1500.0f, 0.0f};
+    }
     // Destination search: a goal inside the asteroid moves to a free ring point biased toward the ship.
     const V2 dst = find_space_destination(occ, k, {0.0f, 0.0f}, {-2000.0f, 0.0f}, 60.0f, kLayerFrigate, 1, 0, {});
     CHECK(distance(dst, {0.0f, 0.0f}) >= 400.0f + 72.0f && dst.x < 0.0f);
@@ -1424,6 +2248,113 @@ static void test_space() {
     turn[1].heading = 90.0f;
     turn[1].time = 10.0f;
     CHECK(std::fabs(eval_space_path(turn, 5.0f).heading - 45.0f) < 1e-4f);
+    // Path line samples: a turn in place adds nothing; a 90-degree curve is cut into 9 pieces (heading rule beats
+    // ceil(141 / 25) = 6) that leave the chord; the ends are the waypoints; empty in, empty out.
+    {
+        std::vector<SpaceWaypoint> curve(3);
+        curve[0].heading = 0.0f;
+        curve[1].heading = 0.0f;  // same position as [0]: a turn in place
+        curve[1].time = 2.0f;
+        curve[2].pos = {100.0f, 100.0f};
+        curve[2].heading = 90.0f;
+        curve[2].time = 17.0f;
+        curve[1].speed = curve[2].speed = 10.0f;
+        const std::vector<V2> s = sample_space_path(curve, 25.0f);
+        CHECK(s.size() == 10 && s.front() == V2{} && s.back() == curve[2].pos);
+        float off = 0.0f;
+        for (const V2 sp : s) off = std::max(off, std::fabs(sp.x - sp.y));
+        CHECK(off > 10.0f);
+        CHECK(sample_space_path({}, 25.0f).empty());
+    }
+}
+
+// OPT3 t12: SpaceOccupancy::build_index (query_segment visits only the entries near the query) answers every query as the
+// full scan does: random statics and tracks, random segments, layers, self ids and times, static / no static; a mutation
+// drops the index (full scan again) until the next build; a non-finite query scans everything.
+static void test_space_index() {
+    SimRng r(1234);
+    auto rf = [&r](float lo, float hi) { return r.range_float(lo, hi); };
+    SpaceOccupancy occ;
+    occ.set_box({-6000.0f, -6000.0f}, {6000.0f, 6000.0f});
+    for (int32_t i = 0; i < 40; ++i)
+        occ.add_static(-1 - i, {rf(-5000.0f, 5000.0f), rf(-5000.0f, 5000.0f)}, rf(20.0f, 600.0f),
+                       i % 3 == 0 ? (kSpaceStatic | kSpaceAsteroid) : kSpaceStatic);
+    for (int32_t i = 0; i < 30; ++i) {
+        std::vector<SpaceWaypoint> wps(static_cast<size_t>(r.range_int(1, 5)));
+        float t = 0.0f;
+        V2 p{rf(-5000.0f, 5000.0f), rf(-5000.0f, 5000.0f)};
+        for (SpaceWaypoint& w : wps) {
+            w.pos = p;
+            w.time = t;
+            p = p + V2{rf(-900.0f, 900.0f), rf(-900.0f, 900.0f)};
+            t += rf(10.0f, 200.0f);
+        }
+        occ.set_track(10 + i, i % 2 ? kLayerFrigate : kLayerCapital, rf(20.0f, 150.0f), static_cast<uint32_t>(r.range_int(0, 300)), wps);
+    }
+    auto compare = [&](const SpaceOccupancy& indexed, int32_t n) {
+        bool same = true;
+        int32_t hits = 0;
+        for (int32_t k = 0; k < n; ++k) {
+            const V2 a{rf(-6500.0f, 6500.0f), rf(-6500.0f, 6500.0f)};
+            const V2 b = k % 4 == 0 ? a : a + V2{rf(-2500.0f, 2500.0f), rf(-2500.0f, 2500.0f)};
+            const float t0 = rf(0.0f, 900.0f), t1 = t0 + rf(-50.0f, 300.0f), radius = rf(0.0f, 300.0f);
+            const uint32_t layer = k % 3 == 0 ? kLayerFrigate : (k % 3 == 1 ? kLayerCapital : (kLayerFrigate | kLayerCapital));
+            const ObjectId self = k % 5 == 0 ? static_cast<ObjectId>(10 + k % 30) : (k % 5 == 1 ? static_cast<ObjectId>(-1 - k % 40) : 999);
+            const bool with_static = k % 2 == 0;
+            const auto now = static_cast<uint32_t>(r.range_int(0, 600));
+            const uint32_t x = indexed.query_segment(a, b, t0, t1, radius, layer, self, with_static, now);
+            same = same && x == occ.query_segment(a, b, t0, t1, radius, layer, self, with_static, now);
+            hits += x != 0 ? 1 : 0;
+        }
+        return same && hits > n / 20;
+    };
+    CHECK(!occ.index_valid());
+    SpaceOccupancy ix = occ;
+    ix.build_index();
+    CHECK(ix.index_valid() && compare(ix, 4000));
+    // A mutation drops the index; queries stay right; the rebuild indexes the new entries.
+    ix.add_static(-100, {0.0f, 0.0f}, 300.0f, kSpaceStatic);
+    occ.add_static(-100, {0.0f, 0.0f}, 300.0f, kSpaceStatic);
+    CHECK(!ix.index_valid() && compare(ix, 500));
+    ix.build_index();
+    std::vector<SpaceWaypoint> w2(2);
+    w2[0].pos = {-4000.0f, 4000.0f};
+    w2[1].pos = {4000.0f, -4000.0f};
+    w2[1].time = 400.0f;
+    ix.clear_track(12);
+    occ.clear_track(12);
+    ix.set_track(77, kLayerFrigate, 80.0f, 50, w2);
+    occ.set_track(77, kLayerFrigate, 80.0f, 50, w2);
+    CHECK(!ix.index_valid());
+    ix.build_index();
+    CHECK(ix.index_valid() && compare(ix, 2000));
+    // Non-finite query: the full scan (no cell lookup).
+    const float inf = std::numeric_limits<float>::infinity();
+    CHECK(ix.query_segment({-inf, 0.0f}, {0.0f, 0.0f}, 0.0f, 10.0f, 10.0f, kLayerFrigate, 999, true, 0) ==
+          occ.query_segment({-inf, 0.0f}, {0.0f, 0.0f}, 0.0f, 10.0f, 10.0f, kLayerFrigate, 999, true, 0));
+    // An empty occupancy indexes to nothing.
+    SpaceOccupancy empty;
+    empty.build_index();
+    CHECK(empty.query_segment({0.0f, 0.0f}, {100.0f, 0.0f}, 0.0f, 10.0f, 50.0f, kLayerFrigate, 1, true, 0) == 0);
+
+    // SpaceScratch::VisitTable: find after emplace, overwrite, growth past the sized capacity, clear forgets everything.
+    SpaceScratch::VisitTable vt;
+    CHECK(vt.find(5) == nullptr);
+    bool ok = true;
+    for (uint32_t round = 0; round < 300; ++round) {
+        vt.clear(8);
+        const uint64_t base = static_cast<uint64_t>(round) * 1000003ull;
+        const uint32_t n = round % 7 == 0 ? 500u : 20u;  // some rounds grow the table
+        for (uint32_t i = 0; i < n; ++i) vt.emplace(base + i * 977ull, {static_cast<float>(i), i % 2 == 0});
+        vt.emplace(base, {-1.0f, true});  // overwrite
+        for (uint32_t i = 0; i < n; ++i) {
+            const SpaceScratch::Visit* v = vt.find(base + i * 977ull);
+            ok = ok && v && v->g == (i == 0 ? -1.0f : static_cast<float>(i)) && v->closed == (i == 0 || i % 2 == 0);
+        }
+        ok = ok && vt.find(base + 1) == nullptr && vt.find(base + 977ull * n) == nullptr;
+        if (round > 0) ok = ok && vt.find((static_cast<uint64_t>(round) - 1) * 1000003ull + 977ull) == nullptr;  // last round's
+    }
+    CHECK(ok);
 }
 
 static void build_space_scenario(MovementSystem& sys, uint32_t ships) {
@@ -1484,10 +2415,129 @@ static void test_space_group() {
     CHECK(arrived == 12 && facing && frames < 12000);
 }
 
+// s78n t10 (TACTICAL_COMBAT §5.4.6 port spec item 4, MOVEMENT §4.6.4): the space composition's recruit test reads the
+// world AABB 0x3982b0 of the seed and the candidate (the host's model data through set_model_bound_fn) and compares the
+// box centres: |cc - cs| <= max(2 es, 0.33 D) + ec per axis. Seed S at (0, 0), candidate C at (0, 150), both role 0, goal
+// (300, 0): D = 300, reach 99. One draw per formation, so the draw count is the formation count.
+static void test_space_compose_boxes() {
+    // Facing +x (yaw 0) the model's half x lies across (world y) and its half y along (world x): models face -Y.
+    AvoidModel m30, m60, mshift;
+    m30.bound_h = {30.0f, 30.0f, 10.0f};
+    m60.bound_h = {60.0f, 30.0f, 10.0f};  // world half y 60
+    mshift.bound_h = {30.0f, 30.0f, 10.0f};
+    mshift.bound_c = {-25.0f, 0.0f, 0.0f};  // world centre y = 150 - 25 = 125
+    struct Case {
+        const AvoidModel* c_model;  // candidate's model (the seed has m30); null with `hook` = a type without a model
+        bool hook;
+        float c_radius;
+        int formations;
+    };
+    const Case cases[] = {
+        {&m30, true, 8.0f, 2},     // 150 > 99 + 30
+        {&m60, true, 8.0f, 1},     // 150 <= 99 + 60
+        {&mshift, true, 8.0f, 1},  // box centre at y 125 <= 99 + 30
+        {nullptr, true, 8.0f, 2},  // no model: the 0.1 box at the position, 150.05 > 99 + 0.05
+        {&m60, false, 8.0f, 2},    // no hook: the older stand-in, the radius - 150 > 99 + 8
+        {&m30, false, 60.0f, 1},   // no hook: 150 <= 99 + 60 (the radius, not the model)
+    };
+    for (const Case& c : cases) {
+        MovementConfig cfg;
+        cfg.mode = MoveMode::Space;
+        MovementSystem sys(cfg);
+        sys.space().set_box({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
+        for (const ObjectId id : {ObjectId{1}, ObjectId{2}}) {
+            UnitDesc d;
+            d.id = id;
+            d.pos = id == 1 ? V2{0.0f, 0.0f} : V2{0.0f, 150.0f};
+            d.max_speed = 4.0f;
+            d.turn_rate = 1.5f;
+            d.radius = id == 1 ? 8.0f : c.c_radius;
+            d.space_layer = kLayerFrigate;
+            d.space_layer_type = 0;  // role 0
+            CHECK(sys.add_unit(d));
+        }
+        if (c.hook)
+            sys.set_model_bound_fn([&](ObjectId id, const AvoidModel*& model, float& scale) {
+                model = id == 1 ? &m30 : c.c_model;
+                scale = 1.0f;
+                return true;
+            });
+        SimRng rng(31);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = {300.0f, 0.0f};
+        sys.move(o, rng, 100);
+        CHECK(rng.draws() == 0 && sys.pending_compositions() == 1);
+        sys.coordinator_update(100, 100, rng);
+        CHECK(sys.pending_compositions() == 0);
+        CHECK(rng.draws() == static_cast<uint64_t>(c.formations));
+    }
+    {  // a hook that has no data for the candidate (false): that candidate keeps the stand-in, the seed its box
+        MovementConfig cfg;
+        cfg.mode = MoveMode::Space;
+        MovementSystem sys(cfg);
+        sys.space().set_box({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
+        for (const ObjectId id : {ObjectId{1}, ObjectId{2}}) {
+            UnitDesc d;
+            d.id = id;
+            d.pos = id == 1 ? V2{0.0f, 0.0f} : V2{0.0f, 150.0f};
+            d.max_speed = 4.0f;
+            d.turn_rate = 1.5f;
+            d.radius = id == 1 ? 8.0f : 55.0f;
+            d.space_layer = kLayerFrigate;
+            CHECK(sys.add_unit(d));
+        }
+        sys.set_model_bound_fn([&](ObjectId id, const AvoidModel*& model, float& scale) {
+            model = &m30;
+            scale = 1.0f;
+            return id == 1;
+        });
+        SimRng rng(31);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = {300.0f, 0.0f};
+        sys.move(o, rng, 100);
+        sys.coordinator_update(100, 100, rng);
+        CHECK(rng.draws() == 1);  // 150 <= max(2 x 30, 99) + 55
+    }
+}
+
+// bkm1 t05 (b0037, MOVEMENT §4.3 item 1 with its s78n t19 correction [H]): a space formation ranks its rows by the attack
+// range 0x3749d0 (shortest range in front), as on land. Two frigates of one formation with equal speed and type: by the
+// older speed key the tie goes to the lower id (1 in front); by range the 80-range unit 2 leads, 200-range unit 1 behind.
+static void test_space_rank_key() {
+    MovementConfig cfg;
+    cfg.mode = MoveMode::Space;
+    MovementSystem sys(cfg);
+    sys.space().set_box({-5000.0f, -5000.0f}, {5000.0f, 5000.0f});
+    for (const ObjectId id : {ObjectId{1}, ObjectId{2}}) {
+        UnitDesc d;
+        d.id = id;
+        d.pos = id == 1 ? V2{0.0f, 0.0f} : V2{0.0f, 40.0f};
+        d.max_speed = 4.0f;
+        d.turn_rate = 1.5f;
+        d.radius = 8.0f;
+        d.space_layer = kLayerFrigate;
+        d.space_layer_type = 0;
+        CHECK(sys.add_unit(d));
+    }
+    sys.set_attack_range_query([](ObjectId id) { return id == 2 ? 80.0f : 200.0f; });
+    SimRng rng(31);
+    MoveOrder o;
+    o.units = {1, 2};
+    o.destination = {1000.0f, 20.0f};
+    o.flags = kMoveFlagSkipValidation;  // the slot points themselves
+    sys.move(o, rng, 100);
+    const UnitView a = sys.view(1), b = sys.view(2);
+    CHECK(b.goal.x > a.goal.x);  // unit 2 (range 80) is the front row
+}
+
 // ---------------------------------------------------------------- OI tactical (PHASE4 S7 open items)
 static void test_oi_land() {
-    // PathFrameDelay stagger (§1.6): two Solo formations; one synced draw each, in formation order; the second starts
-    // after the first formation's accumulated PathFrameDelay.
+    // PathFrameDelay stagger (§1.6) with the FormationClass ctor draw (cu8j t01, correcting cu8i t02): the order draws
+    // nothing; the next coordinator update draws r' = int(0, PathFrameDelay) per staggered formation (formation order),
+    // then one int(1, FPS) per formation. The plan gate is now + accumulated PathFrameDelay + r' - 2 FPS, so the first
+    // plan frame is now + acc + r' + 1; the ctor draw only sets the next-check timer.
     {
         MovementSystem sys{MovementConfig{}};
         PassabilityGrid g;
@@ -1495,7 +2545,7 @@ static void test_oi_land() {
         sys.set_grid(std::move(g));
         UnitDesc a = land_unit(1, cell_center(10, 10), 0, 1.0f, 6.0f, kUccInfantry);
         a.grouping = kGroupingSolo;
-        a.path_frame_delay = 10;
+        a.path_frame_delay = 40;
         UnitDesc b = land_unit(2, cell_center(10, 30), 0, 1.0f, 6.0f, kUccInfantry);
         b.grouping = kGroupingSolo;
         b.path_frame_delay = 4;
@@ -1505,18 +2555,180 @@ static void test_oi_land() {
         o.units = {1, 2};
         o.destination = cell_center(50, 20);
         sys.move(o, rng, 100);
-        const uint32_t d1 = static_cast<uint32_t>(ref.range_int(0, 6)), d2 = static_cast<uint32_t>(ref.range_int(0, 6));
-        CHECK(rng.draws() == ref.draws());  // exactly two Get_Int(0, Max_Move_Frame_Delay)
+        CHECK(rng.draws() == 0 && sys.pending_compositions() == 1);  // composed at the next coordinator update
+        CHECK(sys.view(1).start_frame == kStartPending && sys.has_coordinator(1) && sys.has_coordinator(2));
+        sys.coordinator_update(100, 100, rng);
         // Formation order = seed nearest the bucket centroid first (equal here: the earlier unit, id 1).
-        CHECK(sys.view(1).start_frame == 100 + d1);
-        CHECK(sys.view(2).start_frame == 100 + 10 + d2);
-        // Queued orders keep the per-unit delay (no stagger accumulator).
+        const int32_t p1 = ref.range_int(0, 40), p2 = ref.range_int(0, 4);
+        const int32_t d1 = ref.range_int(1, 30), d2 = ref.range_int(1, 30);
+        CHECK(rng.draws() == ref.draws() && rng.state() == ref.state());  // two r', then two int(1, FPS)
+        CHECK(d1 >= 1 && d1 <= 30 && d2 >= 1 && d2 <= 30 && sys.pending_compositions() == 0);
+        CHECK(sys.view(1).start_frame == static_cast<uint32_t>(100 + p1 + 1));
+        CHECK(sys.view(2).start_frame == static_cast<uint32_t>(100 + 40 + p2 + 1));
+        // Queued orders keep the per-unit delay (no stagger accumulator) and create no formation: no ctor draw.
         MoveOrder q = o;
         q.flags = kMoveFlagQueue;
         SimRng r2(5), r2ref(5);
         sys.move(q, r2, 200);
+        CHECK(sys.pending_compositions() == 0);
         CHECK(sys.view(1).start_frame == 200 + static_cast<uint32_t>(r2ref.range_int(0, 6)));
         CHECK(sys.view(2).start_frame == 200 + static_cast<uint32_t>(r2ref.range_int(0, 6)));
+        CHECK(r2.draws() == r2ref.draws());
+    }
+    // cu8j t01 [M]: an unstaggered formation created at frame <= 2 FPS plans at frame 61 (F +0x1dc = 0); later, at once.
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        CHECK(sys.add_unit(land_unit(1, cell_center(12, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+        SimRng rng(3), ref(3);
+        MoveOrder o;
+        o.units = {1};
+        o.destination = cell_center(40, 10);
+        sys.move(o, rng, 10);
+        sys.coordinator_update(10, 10, rng);
+        ref.range_int(1, 30);
+        CHECK(sys.view(1).start_frame == 61 && rng.state() == ref.state() && rng.draws() == 1);
+        sys.move(o, rng, 70);
+        sys.coordinator_update(70, 70, rng);
+        CHECK(sys.view(1).start_frame == 70 && rng.draws() == 2);
+        // Global frame (the battle's) decides the gate, not the movement frame.
+        sys.move(o, rng, 5);
+        sys.coordinator_update(5, 200, rng);
+        CHECK(sys.view(1).start_frame == 5 && rng.draws() == 3);
+    }
+    // cu8i t02 / cu8j t02: the FormationClass ctor draw is one int(1, FPS); a unit with an order has a coordinator, others
+    // (and unknown ids) do not. Adopt (0x39bcb0) draws once for a coordinator-less unit and nothing for one with a
+    // coordinator; stop-and-hold (0x3a9880) leaves the coordinator first, so it always draws.
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        CHECK(sys.add_unit(land_unit(1, cell_center(12, 10), 0, 1.0f, 6.0f, kUccInfantry)) &&
+              sys.add_unit(land_unit(2, cell_center(14, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+        SimRng rng(11), ref(11);
+        MoveOrder o;
+        o.units = {2};
+        o.destination = cell_center(40, 10);
+        sys.move(o, rng, 100);
+        sys.coordinator_update(100, 100, rng);
+        ref.range_int(1, 30);  // unit 2's formation
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
+        CHECK(!sys.has_coordinator(1) && sys.has_coordinator(2) && !sys.has_coordinator(99));
+        const int32_t r = MovementSystem::formation_ctor_draw(rng);
+        CHECK(r == ref.range_int(1, 30) && r >= 1 && r <= 30 && rng.state() == ref.state());
+        CHECK(sys.adopt(1, rng) && sys.has_coordinator(1));
+        ref.range_int(1, 30);
+        CHECK(!sys.adopt(1, rng) && !sys.adopt(2, rng) && !sys.adopt(99, rng) && rng.state() == ref.state());
+        CHECK(sys.stop_and_hold(2, rng) && !sys.view(2).has_goal && sys.has_coordinator(2));
+        CHECK(sys.stop_and_hold(1, rng) && sys.has_coordinator(1));
+        ref.range_int(1, 30);
+        ref.range_int(1, 30);
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
+    }
+    // cu8l t01 (CU8K_T02_T06_RE §4 rules 1 / 4): a land team container's own coordinator from birth (hold_from_birth with
+    // its members): no draw at registration, the adopt then finds a coordinator; at the next coordinator update one
+    // int(1, FPS) per held container, in registration order, no r' (even with a member PathFrameDelay) and no start
+    // change; a container whose members were ordered first composes nothing (the order's own composition draws).
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        for (int32_t i = 1; i <= 6; ++i) {
+            UnitDesc d = land_unit(i, cell_center(10 + 2 * i, 10), 0, 1.0f, 6.0f, kUccInfantry);
+            d.path_frame_delay = 4;
+            d.team_member = true;
+            CHECK(sys.add_unit(d));
+        }
+        SimRng rng(21), ref(21);
+        const ObjectId c1[] = {1, 2}, c2[] = {3, 4, 99}, c3[] = {5, 6}, none[] = {98};
+        CHECK(sys.hold_from_birth(c1) && sys.hold_from_birth(c2) && sys.hold_from_birth(c3) && !sys.hold_from_birth(none));
+        CHECK(rng.draws() == 0 && sys.pending_compositions() == 3 && sys.has_coordinator(1) && sys.has_coordinator(4));
+        CHECK(!sys.adopt(1, rng) && rng.draws() == 0);
+        const uint32_t s1 = sys.view(1).start_frame;
+        const ObjectId stop2[] = {3, 4};  // container 2 leaves its birth coordinator first (a stop): it composes nothing
+        sys.stop(stop2);
+        sys.coordinator_update(1, 1, rng);
+        ref.range_int(1, 30);  // container 1
+        ref.range_int(1, 30);  // container 3
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws() && sys.pending_compositions() == 0);
+        CHECK(sys.view(1).start_frame == s1 && !sys.view(1).has_goal && !sys.has_coordinator(1) && !sys.has_coordinator(5));
+    }
+    {  // an order before the update: the birth coordinator composes nothing, the order's own composition draws as alone.
+        const auto run = [](bool born) {
+            MovementSystem sys{MovementConfig{}};
+            PassabilityGrid g;
+            g.init(64, 64);
+            sys.set_grid(std::move(g));
+            for (int32_t i = 1; i <= 2; ++i) CHECK(sys.add_unit(land_unit(i, cell_center(10 + 2 * i, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+            const ObjectId c[] = {1, 2};
+            if (born) CHECK(sys.hold_from_birth(c));
+            SimRng rng(9);
+            MoveOrder o;
+            o.units = {1, 2};
+            o.destination = cell_center(40, 40);
+            sys.move(o, rng, 1);
+            sys.coordinator_update(1, 1, rng);
+            CHECK(sys.pending_compositions() == 0 && sys.view(1).start_frame != kStartPending);
+            return rng.state();
+        };
+        CHECK(run(true) == run(false));
+    }
+    {  // space: a SimpleSpace ship's birth coordinator is one space composition (one draw), its start untouched.
+        MovementConfig cfg;
+        cfg.mode = MoveMode::Space;
+        MovementSystem sys{cfg};
+        UnitDesc d;
+        d.id = 7;
+        d.pos = {100.0f, 100.0f};
+        d.max_speed = 2.0f;
+        d.radius = 20.0f;
+        CHECK(sys.add_unit(d));
+        SimRng rng(5), ref(5);
+        const ObjectId one[] = {7};
+        CHECK(sys.hold_from_birth(one) && rng.draws() == 0 && sys.has_coordinator(7));
+        const uint32_t s0 = sys.view(7).start_frame;
+        sys.coordinator_update(1, 1, rng);
+        ref.range_int(1, 30);
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws() && sys.pending_compositions() == 0);
+        CHECK(sys.view(7).start_frame == s0 && !sys.has_coordinator(7));
+    }
+    // cu8l t02 (CU8K_T02_T06_RE §3 rule 6, A1_READINGS §28.8 / §28.9): the first lock's split and the coordinator-system
+    // stop. A composed group move: each member is in a formation, the split draws one int(1, FPS) and leaves the unit
+    // alone with its move (still in a coordinator: no second split); waiting for the composition or held by an adopt: no
+    // formation, no draw; stop_and_leave drops every coordinator without a draw.
+    {
+        MovementSystem sys{MovementConfig{}};
+        PassabilityGrid g;
+        g.init(64, 64);
+        sys.set_grid(std::move(g));
+        for (int32_t i = 1; i <= 3; ++i) CHECK(sys.add_unit(land_unit(i, cell_center(10 + 2 * i, 10), 0, 1.0f, 6.0f, kUccInfantry)));
+        using Hold = MovementSystem::CoordinatorHold;
+        SimRng rng(31), ref(31);
+        MoveOrder o;
+        o.units = {1, 2};
+        o.destination = cell_center(40, 40);
+        sys.move(o, rng, 100);
+        CHECK(sys.coordinator_hold(1) == Hold::NoFormation && sys.coordinator_hold(3) == Hold::None);
+        CHECK(sys.coordinator_hold(99) == Hold::None);
+        CHECK(!sys.split_from_formation(1, rng) && rng.draws() == 0);  // waiting for its composition
+        sys.coordinator_update(100, 100, rng);
+        ref.range_int(1, 30);  // the order's formation
+        CHECK(sys.coordinator_hold(1) == Hold::Formation && sys.view(1).has_goal);
+        CHECK(sys.split_from_formation(1, rng));
+        ref.range_int(1, 30);  // the split's formation
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
+        CHECK(sys.view(1).has_goal && sys.has_coordinator(1) && sys.coordinator_hold(1) == Hold::NoFormation);
+        CHECK(!sys.split_from_formation(1, rng) && !sys.adopt(1, rng) && rng.draws() == ref.draws());
+        CHECK(!sys.split_from_formation(3, rng) && sys.adopt(3, rng));  // no formation: the adopt draws
+        ref.range_int(1, 30);
+        CHECK(sys.coordinator_hold(3) == Hold::NoFormation && !sys.split_from_formation(3, rng));
+        CHECK(sys.stop_and_leave(2) && !sys.view(2).has_goal && !sys.has_coordinator(2) && !sys.stop_and_leave(99));
+        CHECK(sys.stop_and_leave(3) && !sys.has_coordinator(3));
+        CHECK(rng.state() == ref.state() && rng.draws() == ref.draws());
     }
     // Formation jiggle (§3.5 step 6): 2 synced draws per moving member per frame, offset clamped to MaxJiggleDistance;
     // members without FormationRaggedness draw nothing.
@@ -1535,6 +2747,7 @@ static void test_oi_land() {
         o.units = {1, 2};
         o.destination = cell_center(70, 20);
         sys.move(o, rng, 0);
+        sys.coordinator_update(0, 0, rng);  // the composition's draws (cu8j t01) before the jiggle count
         const uint64_t after_move = rng.draws();
         uint32_t moving_frames = 0;
         float max_off = 0.0f;
@@ -1554,8 +2767,9 @@ static void test_oi_land() {
         CHECK(ground && sys.view(1).arrived && sys.view(2).arrived);
         CHECK(sys.view(2).jiggle == (V2{0.0f, 0.0f}));
     }
-    // Side-error steering (§4.4): a member 12 units off its segment converges back; without it the unit heads
-    // straight for the waypoint.
+    // Side-error steering (§4.4; s78n t26.4: the lane term of MOVEMENT §5.4.1 "How Walk combines" item 2): a member 12 units
+    // off its segment converges back; without it the unit walks along its facing, parallel to the segment (the wanted yaw
+    // is the segment direction, MOVEMENT §3.5.2 C.7).
     {
         LocomotorParams p;
         p.max_speed = 2.0f;
@@ -1567,7 +2781,7 @@ static void test_oi_land() {
         m.next = 1;
         LandMotion plain = m;
         WalkExtras x;
-        x.side_error = true;
+        x.lane = true;
         float e_prev = 12.0f;
         bool monotone = true;
         for (int i = 0; i < 60; ++i) {
@@ -1592,6 +2806,9 @@ static void test_oi_land() {
         PassabilityGrid g;
         g.init(80, 40);
         sys.set_grid(std::move(g));
+        // (s78n t20, MOVEMENT 5.4.5 item 4: a victim whose faction scatters from crushers is pushed out of the way on a
+        // crush-flee path; these victims belong to one that does not - FoC: the Empire - so the crusher drives over them)
+        sys.set_scatters_fn([](int32_t) { return false; });
         UnitDesc atat = land_unit(1, cell_center(5, 20), 11, 1.0f, 30.0f, kUccGiantVehicle);
         atat.crusher = true;
         atat.owner = 0;
@@ -1611,7 +2828,7 @@ static void test_oi_land() {
         MoveOrder o;
         o.units = {1};
         o.destination = cell_center(70, 20);
-        o.flags = kMoveFlagSkipValidation;
+        // (an ordinary order: on a forced path, flag 0x20, decision step 2 pushes every blocker aside instead)
         sys.move(o, rng, 0);
         std::vector<CrushEvent> all;
         for (uint32_t f = 0; f < 2000 && sys.view(1).has_goal; ++f) {
@@ -2153,7 +3370,9 @@ static CrcLog fighter_crc_run(const ParallelFor& pf) {
 // Golden digest of the fighter scenario (FIGHTER_FLYING 2026-10-29); MSVC and clang must both produce it. s78f t02: the
 // fighter 31's move now builds a fighter formation, hashed with the fighters ("FFOR"); without that section the digest is
 // still the 2026-10-29 value 0x5a7df50c208f33b1 (the motion is unchanged).
-static constexpr uint64_t kGoldenFighter = 0x083eba7df930d85bull;
+// cu8j t01 (2026-11-08): the fighter formations compose at the next coordinator update (one draw each, first check at
+// creation + 30 + r) and the hash gains the pending composition / adopt state.
+static constexpr uint64_t kGoldenFighter = 0x2035d7c0eba33d23ull;  // sp6: tree-hash layout (movement / combat / objects hashes)
 
 static void test_fighter_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
@@ -2213,8 +3432,29 @@ static CrcLog space_crc_run(const ParallelFor& pf) {
 // (PathFrameDelay stagger draws on the plain return move, hash adds jiggle / formation flag / crush events), space moved
 // (hash format; ops 5 / 6 and the doc's re-expansion list). S7 collision layer (2026-10-29): land moved (persistent
 // collision objects hashed, priority-ordered resolution; units act on their own check frames); space unchanged.
-static constexpr uint64_t kGoldenLand = 0x8077ca79b9713e8eull;
-static constexpr uint64_t kGoldenSpace = 0x243123bd32d07accull;
+// cu8i t02 (2026-11-08): land moved (the return move's formations draw the FormationClass ctor int(1, 30) and start at
+// now + acc + r - 30, not before now); space unchanged.
+// cu8j t01 (2026-11-08): both moved: the hash gains the units' pending composition / adopt state, the compositions (and
+// their draws) come at the next coordinator update, land orders before frame 61 plan at 61, space ships draw per formation.
+// s78n t20 F5 (2026-11-10): moved (checked orders take no cell snap; the exact single-member goal is hashed).
+// s78n t20 batch A (2026-11-10): moved (the path stack top, the destination check, Path Around, the early-arrival cut,
+// StoppedVsStopped; MOVEMENT 1.5.1 / 4.3.1 / 5.4.3 - 5.4.5). s78n t20 batch 2 item 2.1 (2026-11-10): moved - the return
+// move's 11 formations fail all 41 passes of the destination check and now take its forced pass (MOVEMENT 4.3.1 item 3)
+// instead of keeping the ordered point.
+// s78n t20 batch 1 item 1.4 (2026-11-10): moved (the early-arrival cut 0x54e780 on the path stack top, MOVEMENT 5.4.4
+// item 5); merged with batch 2.
+// s78n t23 (2026-11-10): land moved (MovingVsMoving chooser and states for every pair, MOVEMENT 5.4.2 / 5.4.6; the
+// finished records leave the speed fold).
+// s78n t23 review fix 1: the re-decide stamp by role (MOVEMENT 5.4.1 "The stamp in full" items 2 - 3).
+// s78n t23 review fix 2: a re-decided record waits (case 0 in its stamped frame; a set-up decision under quota).
+// s78n t23 follow-ups (MOVEMENT 5.4.2 / 5.4.6 "State 2 service", RE 2): MovingVsMoving answers start at 0; case 6 resets
+// before its chooser re-run.
+// s78n t24 (MOVEMENT §5.4.7): TerrainCollision replaces the blocked-frames re-plan; the rejoin generator scans the whole
+// path (11 accepted goals); MovingVsMoving answers follow the role slots.
+// s78n t26.2 (MOVEMENT §3.5.2 A / B): the speed controller (End Move T = a, 0x15 restarts), the start turn in place.
+// s78n t26 closing review (FIGHTER_FLYING §7.5 item 4): formation mates side-step by their footprint overlap.
+static constexpr uint64_t kGoldenLand = 0xd4626c4a21629e46ull;  // sp6: tree-hash layout (movement / combat / objects hashes); bkm1: lane fallback / stop point, shield-free class, recruitment, stored z, secondary facing; s78p: formation path and lanes; s78n t26 review round 2 (mixed formations, range rank); closing review; t26.4 the move step C; t26.3 the corner pass
+static constexpr uint64_t kGoldenSpace = 0x8fc952146335d9dbull;  // sp6: tree-hash layout (movement / combat / objects hashes)
 
 static void test_determinism() {
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
@@ -2275,11 +3515,28 @@ static void test_real_data() {
         CHECK(dt3.has_secondary_locomotor && dt3.alt_max_speed == 1.8f && dt3.alt_turn_rate == 2.0f);
         CHECK(!dt1.uses_multiple_locomotors && !dt1.has_secondary_locomotor);
         CHECK(locomotor_kind_from_type(types, types.resolve_name("Dark_Trooper_PhaseII"), MoveMode::Land) == LocomotorKind::Default);
+        // s78n t18 review (MOVEMENT 5.3 "Hover state"): the FoC hover types are the Lancet and the HTT (Hover_Height 80, Walk
+        // locomotor: raised from their first move on - no MovingVsStopped record against grounded standing units, no
+        // MovingVsMoving record with grounded movers). MAL_Rocket_Vehicle's tag is commented out in
+        // UNITS_LAND_UNDERWORLD_MAL.XML (<!--<Hover_Height>3.0</Hover_Height> -->): not read, the MAL does not hover.
+        const UnitDesc mal = desc("MAL_Rocket_Vehicle"), lancet = desc("Lancet_Air_Artillery"), htt = desc("Gallofree_HTT_Transport");
+        CHECK(mal.hover_height == 0.0f && lancet.hover_height == 80.0f && htt.hover_height == 80.0f);
+        for (const char* name : {"MAL_Rocket_Vehicle", "Lancet_Air_Artillery", "Gallofree_HTT_Transport"}) {
+            CHECK(types.resolve_name(name) < types.size());
+            CHECK(locomotor_kind_from_type(types, types.resolve_name(name), MoveMode::Land) == LocomotorKind::Default);
+        }
     }
     const auto maps = fs->list("Data\\Art\\Maps\\*.ted");
-    uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0;
+    uint32_t land_maps = 0, space_maps = 0, land_units = 0, land_arrived = 0, off_ground = 0, stamped_total = 0, land_stopped = 0;
     uint32_t space_units = 0, space_arrived = 0, space_hits = 0, space_obstacles = 0, plan_fail = 0, plan_invalid = 0, plans = 0;
     uint32_t group_units = 0, group_arrived = 0, space_fallbacks = 0;
+    struct NotArrived {
+        std::string map;
+        ObjectId id = -1;
+        std::string kind = "-";
+    };
+    std::vector<NotArrived> not_arrived;  // bkm2 t02 (b0041)
+    uint32_t all_stops = 0, stopped_units = 0;  // terrain stops observed per unit (TerrainStopLog), every map
     for (const std::string& path : maps) {
         std::vector<uint8_t> bytes;
         terrain::MapData map;
@@ -2340,26 +3597,41 @@ static void test_real_data() {
             }
             bool ground = true;
             SimRng tick_rng(1);
-            run_land(sys, 0, 12000, tick_rng, serial_for, ground);
+            TerrainStopLog tlog;
+            run_land(sys, 0, 12000, tick_rng, serial_for, ground, nullptr, nullptr, &tlog);
             if (!ground) ++off_ground;
             uint32_t arrived = 0;
             for (const auto& [id, goal] : goals) {
                 const UnitView v = sys.view(id);
                 // Arrived at the goal, or early at a blocked destination (contact + LandDestinationProximity).
-                if (v.arrived && distance(v.pos, goal) < 160.0f) ++arrived;
+                if (v.arrived && distance(v.pos, goal) < 160.0f) {
+                    ++arrived;
+                    continue;
+                }
+                // bkm2 t02 (b0041): each unit that did not arrive was stopped by its own TerrainCollision record
+                const auto it = std::find_if(tlog.stops.begin(), tlog.stops.end(), [&](const TerrainStop& t) { return t.id == id; });
+                const std::string m = path.substr(path.find_last_of('\\') + 1);
+                const std::string kind = it != tlog.stops.end() ? it->kind : std::string("-");
+                std::printf("  not arrived: %s unit %d, own terrain stop %d (frame %u, kinds %s), has_goal %d\n", m.c_str(), id,
+                            it != tlog.stops.end() ? 1 : 0, it != tlog.stops.end() ? it->frame : 0u, kind.c_str(), v.has_goal ? 1 : 0);
+                not_arrived.push_back({m, id, kind});
             }
+            for (const TerrainStop& t : tlog.stops)
+                all_stops += t.kind.find('?') == std::string::npos ? static_cast<uint32_t>(t.kind.size()) : 0u;
+            stopped_units += static_cast<uint32_t>(tlog.stops.size());
             land_units += static_cast<uint32_t>(goals.size());
             land_arrived += arrived;
+            land_stopped += sys.stats().terrain_stops_failed + sys.stats().terrain_stops_nobase + sys.stats().terrain_stops_cell;
             if (arrived != goals.size()) {
                 std::printf("  %s: %u / %zu arrived (paths %u, replans %u, failures %u)\n", path.c_str(), arrived, goals.size(),
                             sys.stats().paths_planned, sys.stats().replans, sys.stats().path_failures);
                 for (const auto& [id, goal] : goals) {
                     const UnitView v = sys.view(id);
                     if (v.arrived && distance(v.pos, goal) < 160.0f) continue;
-                    std::printf("    unit %d mask %x at (%.1f,%.1f) cell %d,%d goal (%.1f,%.1f) used (%.1f,%.1f) arrived %d failed %d replans %u\n",
+                    std::printf("    unit %d mask %x at (%.1f,%.1f) cell %d,%d goal (%.1f,%.1f) used (%.1f,%.1f) arrived %d failed %d pushed %d\n",
                                 id, sys.mask_of(id), static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), world_to_cell(v.pos.x),
                                 world_to_cell(v.pos.y), static_cast<double>(goal.x), static_cast<double>(goal.y),
-                                static_cast<double>(v.goal.x), static_cast<double>(v.goal.y), v.arrived ? 1 : 0, v.failed ? 1 : 0, v.replans);
+                                static_cast<double>(v.goal.x), static_cast<double>(v.goal.y), v.arrived ? 1 : 0, v.failed ? 1 : 0, v.pushed ? 1 : 0);
                 }
             }
             // Group move: 12 infantry from the first unit's start to the last unit's goal.
@@ -2409,11 +3681,11 @@ static void test_real_data() {
                         for (ObjectId id : ids) {
                             const UnitView v = gs.view(id);
                             if (v.arrived) continue;
-                            std::printf("    unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f replans %u, "
+                            std::printf("    unit %d at (%.1f,%.1f) goal (%.1f,%.1f) has_goal %d failed %d speed %.2f pushed %d, "
                                         "collisions %zu\n",
                                         id, static_cast<double>(v.pos.x), static_cast<double>(v.pos.y), static_cast<double>(v.goal.x),
                                         static_cast<double>(v.goal.y), v.has_goal ? 1 : 0, v.failed ? 1 : 0,
-                                        static_cast<double>(v.speed), v.replans, gs.collisions().list().size());
+                                        static_cast<double>(v.speed), v.pushed ? 1 : 0, gs.collisions().list().size());
                             for (const CollisionObject& c : gs.collisions().list())
                                 std::printf("      collision %u kind %u state %u %d-%d created %u retry %u\n", c.seq,
                                             static_cast<unsigned>(c.kind), static_cast<unsigned>(c.state), c.a, c.b, c.created, c.retry);
@@ -2503,7 +3775,22 @@ static void test_real_data() {
                 off_ground, space_maps, space_obstacles, space_arrived, space_units, space_hits, space_fallbacks, secs);
     CHECK(land_maps >= 40 && space_maps >= 20);
     CHECK(plan_fail == 0 && plan_invalid == 0 && off_ground == 0);
-    CHECK(land_arrived == land_units && group_arrived == group_units);
+    // s78n t26.4 (MOVEMENT 5.4.7 item 3): a unit whose blocked step gets no TerrainCollision detour is stopped where it
+    // stands (no retry) - every unit that did not arrive was stopped so (a full-speed swing at a detour corner into a
+    // wall's clearance, then no rejoin; see docs/PHASE4.md s78n t26.4).
+    // bkm2 t02 (b0041): exact, as measured (dev 7f063b20, MSVC and clang): 3 of 3240 do not arrive - EM01_TRAIL_OF_A_JEDI unit
+    // 18, EM08_SITH_TOMBS unit 15, _MP_LAND_NABOO unit 13 - and each was stopped by its own TerrainCollision record whose
+    // kind-3 Path Around failed (kind 'f'); no other unit on any map was stopped by a terrain record. A port measurement:
+    // why these three swing into the clearance (and whether retail does) is not settled (b0041's replay / RE part is open).
+    std::printf("real maps: %u units stopped by a failed TerrainCollision detour (%u stop(s) of %u unit(s) observed per unit)\n",
+                land_stopped, all_stops, stopped_units);
+    CHECK(group_arrived == group_units && land_units - land_arrived == 3u && land_stopped == 3u && all_stops == 3u && stopped_units == 3u);
+    CHECK(not_arrived.size() == 3);
+    if (not_arrived.size() == 3) {
+        CHECK(not_arrived[0].map == "EM01_TRAIL_OF_A_JEDI.TED" && not_arrived[0].id == 18 && not_arrived[0].kind == "f");
+        CHECK(not_arrived[1].map == "EM08_SITH_TOMBS.TED" && not_arrived[1].id == 15 && not_arrived[1].kind == "f");
+        CHECK(not_arrived[2].map == "_MP_LAND_NABOO.TED" && not_arrived[2].id == 13 && not_arrived[2].kind == "f");
+    }
     CHECK(space_arrived == space_units && space_hits == 0);
 }
 #endif
@@ -2823,14 +4110,21 @@ int main() {
     test_locomotion();
     test_formations();
     test_double_click();
+    test_formation_recruit();  // s78n t26 review round 2
     test_collision_helpers();
     test_collision_layer();  // S7 collision priority sort
+    test_path_around();          // s78n t20
+    test_destination_offsets();  // s78n t20
+    test_walk_step_t20();        // s78n t20
     test_collision_system();
     test_land_group();
     test_push_search();
     test_space();
+    test_space_index();
     test_space_group();
     test_oi_land();  // OI tactical
+    test_space_compose_boxes();  // s78n t10
+    test_space_rank_key();       // bkm1 t05
     test_oi_space();
     test_determinism();
     test_fighter_primitives();  // FIGHTER_FLYING §1-§5

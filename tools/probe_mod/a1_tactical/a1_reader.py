@@ -39,25 +39,10 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import a1mem  # noqa: E402
+from a1mem import Log, kv, wait_for_game  # noqa: E402
 
 SRC_MARKERS = (b'A1PROBE_SRC_MARK_FREESTORE_V1',)
 REC_NEEDLE = b'A1P1|'
-
-
-class Log:
-    def __init__(self, path):
-        self.f = open(path, 'a', encoding='ascii', errors='replace')
-        self.lock = threading.Lock()
-        self.t0 = time.time()
-
-    def __call__(self, line):
-        with self.lock:
-            self.f.write(line + '\n')
-            self.f.flush()
-
-
-def kv(**k):
-    return ' '.join('%s=%s' % (a, b) for a, b in k.items())
 
 
 class Recorder:
@@ -220,28 +205,6 @@ class Recorder:
         if (self.frame or 0) >= self.a.first_scan_frame and now >= self.next_scan:
             self.next_scan = now + self.a.scan_sec
             self.start_scan('periodic')
-
-
-def wait_for_game(a, log):
-    t0 = time.time()
-    ignored = set()
-    while time.time() - t0 < a.wait_process_sec:
-        for pid in a1mem.find_pids():
-            if pid in ignored:
-                continue
-            try:
-                p = a1mem.Proc(pid)
-            except OSError as e:
-                log('OPEN_FAILED ' + kv(pid=pid, error=str(e).replace(' ', '_')))
-                ignored.add(pid)
-                continue
-            if p.pe_identity() or a.allow_unknown_exe:
-                return p
-            log('IGNORED ' + kv(pid=pid, timestamp=hex(p.timestamp or 0), size_of_image=hex(p.size_of_image or 0)))
-            ignored.add(pid)
-            p.close()
-        time.sleep(1.0)
-    return None
 
 
 def main():

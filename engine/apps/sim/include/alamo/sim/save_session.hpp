@@ -170,57 +170,23 @@ struct LoadReport {
     std::string text() const;             // one line
 };
 
-// ---- helpers for nested sections inside a chunk ----
-// u32 byte length + the bytes `fn` writes (a sub-system's own write), so the outer reader stays aligned even when the
-// sub-system writes nothing (stubs).
-template <class F>
-void write_section(ByteWriter& w, F&& fn) {
-    ByteWriter sub;
-    fn(sub);
-    w.u32(static_cast<uint32_t>(sub.size()));
-    w.raw(sub.bytes());
-}
-// Reads a write_section blob and hands `fn` a reader over exactly those bytes; true when fn succeeds and consumed
-// them all.
-template <class F>
-bool read_section(ByteReader& r, F&& fn) {
-    const uint32_t n = r.u32();
-    const std::span<const uint8_t> d = r.raw(n);
-    if (!r.ok()) return false;
-    ByteReader sub(d);
-    return fn(sub) && sub.ok() && sub.done();
-}
+// Nested sections inside a chunk use alamo::put_section / get_section (alamo/core/bytes.hpp), found by ADL on ByteWriter.
 
-// True for a type with the save_file.hpp system methods (write / read). Used to pick up implementations in other
-// modules as they land (sections whose system lacks them are written empty and fail to read: "pending").
+// A type with the save_file.hpp system methods (write / read).
 template <class T>
 concept SaveableSystem = requires(const T& c, T& m, ByteWriter& w, ByteReader& r) {
     c.write(w);
     { m.read(r) } -> std::same_as<bool>;
 };
-// write / read when T has them; otherwise nothing is written and the read fails (the chunk reports "pending").
-template <class T>
-void write_if_saveable(const T& system, ByteWriter& w) {
-    if constexpr (SaveableSystem<T>) {
-        system.write(w);
-    } else {
-        (void)system;
-        (void)w;
-    }
+// A module system's write / read. cu9 t16: every saved system has them now, so a type without them is a build error
+// (the migration fallback that wrote nothing and failed the read, "pending until the module lands", is gone).
+template <SaveableSystem T>
+void write_system(const T& system, ByteWriter& w) {
+    system.write(w);
 }
-template <class T>
-bool read_if_saveable(T& system, ByteReader& r) {
-    if constexpr (SaveableSystem<T>) {
-        return system.read(r);
-    } else {
-        (void)system;
-        (void)r;
-        return false;
-    }
-}
-template <class T>
-constexpr bool is_saveable(const T*) {
-    return SaveableSystem<T>;
+template <SaveableSystem T>
+bool read_system(T& system, ByteReader& r) {
+    return system.read(r);
 }
 
 }  // namespace alamo::sim

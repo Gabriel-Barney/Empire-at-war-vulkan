@@ -2,23 +2,14 @@
 #include <algorithm>
 
 #include "alamo/data/game_database.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/galactic/victory.hpp"
 
 namespace alamo::galactic {
 
 namespace {
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char x = a[i], y = b[i];
-        if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return true;
-}
 
 }  // namespace
 
@@ -57,9 +48,18 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
     // REMAINING_GAPS 3.3 [inferred, probe 2026-10-29]: a Hostile player, so tactical maps' native objects (Hostile /
     // Sarlacc / Hutts owners) survive the battle's owner lookup. Retail campaigns hold a player per faction at its
     // faction index; Hostile's own entry was not logged. It takes no galactic part: no AI (no AI_Player_Control),
-    // no credits, not playable (income, victory and the Holocron skip it), owns nothing.
-    const uint32_t hostile = rules.find_faction("Hostile");
-    if (hostile != kNoIndex && !rules.factions[hostile].is_playable && !rules.factions[hostile].is_neutral) used[hostile] = 1;
+    // no credits, not playable (income, victory and the Holocron skip it), owns nothing. modc t03: that faction by data
+    // (GalacticRules::native_owner_faction; FoC: Hostile), not by name.
+    const uint32_t hostile = rules.native_owner_faction();
+    if (hostile != kNoIndex) used[hostile] = 1;
+    const std::vector<uint8_t> named = used;  // the campaign's own factions (+ Neutral, Hostile)
+    // bkc1 t03 (docs/re/BKC1_RE_ANSWERS.md Q2 [H], Create_Default_Players 0x293390): a campaign has no required-player
+    // list, so retail creates one player for EVERY faction of the faction table, in table order, with no Is_Playable /
+    // Is_Neutral filter: player index = faction index (FoC: 0 Rebel, 1 Empire, 2 Pirates, 3 Neutral, 4 Hostile, 5 Sarlacc,
+    // 6 Underworld, 7 Hutts; the UM01 trace has 8 players, human Underworld at 6). The factions the campaign names only
+    // decide human / AI / credits / tech below. A repeated <Faction> definition is one faction (its first entry).
+    for (uint32_t f = 0; f < rules.factions.size(); ++f)
+        if (rules.find_faction(rules.factions[f].name) == f) used[f] = 1;
 
     const std::string_view human = options.human_faction.empty() ? std::string_view(c->starting_active_player)
                                                                   : std::string_view(options.human_faction);
@@ -69,10 +69,11 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
         if (!used[f]) continue;
         PlayerSetup p;
         p.faction = f;
-        p.human = iequals(rules.factions[f].name, data::trim(human));
+        p.named = named[f] != 0;
+        p.human = ascii_iequals(rules.factions[f].name, data::trim(human));
         for (const std::string& r : c->ai_player_control) {
             const std::vector<std::string_view> fields = data::split_fields(r);
-            if (fields.size() >= 2 && iequals(fields[0], rules.factions[f].name) && !iequals(fields[1], "None"))
+            if (fields.size() >= 2 && ascii_iequals(fields[0], rules.factions[f].name) && !ascii_iequals(fields[1], "None"))
                 p.ai = !p.human;
         }
         if (p.ai) p.difficulty = difficulty;
@@ -121,6 +122,9 @@ GalacticSetup build_campaign_setup(const data::GameDatabase& db, const GalacticR
         }
         s.forces.push_back({player_of[f], p, t});
     }
+    // q6 t22: the victory conditions; the Human_ list goes to the human's faction (Starting_Active_Player, or the
+    // faction the player picked).
+    s.victory = load_victory_rules(db, campaign, s.map, nullptr, human);  // diagnostics: not collected (as before)
     return s;
 }
 

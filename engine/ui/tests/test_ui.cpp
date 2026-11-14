@@ -1,6 +1,6 @@
 // alamo_ui tests (no framework; non-zero exit on failure): input state machine and bindings, camera math
 // (pose, limits, clamping, bounds, Hor+ FOV, splines, galactic zoom), picking against a synthetic TreeSet,
-// box select, click -> command translation with exact quantized payloads, input replay determinism.
+// box select, click -> command translation with exact quantized payloads, session determinism.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -14,18 +14,12 @@
 #include "alamo/ui/input.hpp"
 #include "alamo/ui/orders.hpp"
 #include "alamo/ui/picking.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::ui;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -454,7 +448,8 @@ void test_camera() {
     GalacticCameraController g;
     CameraParams gp = g.params(16.0f / 9.0f);
     CHECK(g.zoom_progress() == 1.0f && g.zoom_blend() == 0.0f && g.zoom_state() == 0);  // settled, zoomed out
-    CHECK(gp.galactic && gp.fov_x == kGalacticFovX && gp.znear == 10.0f && gp.zfar == 10000.0f);
+    CHECK(gp.galactic && gp.fov_x == galactic_fov_x(kGalacticFovX, 16.0f / 9.0f) && gp.znear == 10.0f && gp.zfar == 10000.0f);
+    CHECK(g.params(4.0f / 3.0f).fov_x == kGalacticFovX && gp.fov_x > kGalacticFovX);  // [port: Gabriel] Hor+ above 4:3
     CHECK(g.look_at().z == 10.0f && near(gp.eye.y, -700.0f * std::cos(30.0f * kDegToRad), 0.01f) && near(gp.eye.z, 360.0f, 0.01f));
     g.set_look_at({5, 6, 0});
     CHECK(g.look_at().z == 10.0f);  // set position: z := plane
@@ -733,6 +728,48 @@ void feed(InputState& in, OrderTranslator& ot, const Bindings& b, const OrderCon
     }
 }
 
+// ui1 t02: IDC_ALTERNATE_MOUSE_CONTROLS - left click selects own units, orders elsewhere; right click clears.
+void test_orders_alternate() {
+    World w;
+    const OrderContext c = w.ctx();
+    Bindings keys;
+    InputState in;
+    OrderTranslator ot;
+    ot.set_alternate_mouse(true);
+    CHECK(ot.alternate_mouse());
+    Script s;
+    int32_t x = 0, y = 0;
+    w.screen({60, 0, 0}, x, y);
+    size_t mark = s.frames.size();
+    s.click(Button::Left, x, y);
+    feed(in, ot, keys, c, s, mark);
+    auto out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::Select);
+    // left click on ground -> the move order
+    mark = s.frames.size();
+    for (int i = 0; i < 40; ++i) s.idle();
+    s.click(Button::Left, 650, 150);
+    feed(in, ot, keys, c, s, mark);
+    out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::MoveToRay);
+    ot.take_move_acks();
+    // left click on the enemy -> Attack
+    w.screen({-300, 200, 0}, x, y);
+    mark = s.frames.size();
+    for (int i = 0; i < 40; ++i) s.idle();
+    s.click(Button::Left, x, y);
+    feed(in, ot, keys, c, s, mark);
+    out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::Attack);
+    // a right click clears the selection; the default scheme's right-click order is gone
+    mark = s.frames.size();
+    for (int i = 0; i < 40; ++i) s.idle();
+    s.click(Button::Right, 650, 150);
+    feed(in, ot, keys, c, s, mark);
+    out = ot.take();
+    CHECK(out.size() == 1 && out[0].type() == commands::EventType::Select && out[0].ids("ids").empty());
+}
+
 void test_orders() {
     World w;
     const OrderContext c = w.ctx();
@@ -878,30 +915,6 @@ void test_orders() {
     out = ot.take();
     CHECK(out.size() == 2 && (out[1].ids("ids") == std::vector<uint32_t>{3, 5}));
 
-    // keys: SelectAll (Ctrl+Y [port: Gabriel]), Stop (H since W A S D move [port: Gabriel]), control groups (3 recall, Ctrl+4 assign, Ctrl+Shift+5 add)
-    mark = s.frames.size();
-    s.key(vk::kControl, true);
-    s.tap(vk::key('Y'));
-    s.tap(static_cast<uint16_t>(vk::k0 + 4));
-    s.key(vk::kShift, true);
-    s.tap(static_cast<uint16_t>(vk::k0 + 5));
-    s.key(vk::kShift, false);
-    s.key(vk::kControl, false);
-    s.tap(static_cast<uint16_t>(vk::k0 + 3));
-    s.tap(vk::key('H'));
-    feed(in, ot, keys, c, s, mark);
-    out = ot.take();
-    CHECK(out.size() == 5);
-    if (out.size() == 5) {
-        CHECK(out[0].type() == commands::EventType::SelectAll);
-        CHECK(out[1].type() == commands::EventType::ControlGroup && out[1].u("group") == 4 && out[1].u("assign") == 1 &&
-              out[1].u("add") == 0);
-        CHECK(out[2].u("group") == 5 && out[2].u("assign") == 1 && out[2].u("add") == 1);
-        CHECK(out[3].u("group") == 3 && out[3].u("assign") == 0 && out[3].u("add") == 0);
-        CHECK(out[4].type() == commands::EventType::StopMovement);
-        for (const auto& e : out) CHECK(e.valid() && commands::event_scheduled(e.type_id()));
-    }
-
     // Select is capped at 127 ids (list7), lowest kept
     std::vector<uint32_t> many;
     for (uint32_t i = 0; i < 200; ++i) many.push_back(1000 - i);
@@ -982,7 +995,7 @@ void test_orders() {
     CHECK(batch.commands.size() == 1 && batch.commands[0].payload.type() == commands::EventType::MoveToRay);  // space
 }
 
-// ---- replay determinism ------------------------------------------------------------------------------
+// ---- session determinism ------------------------------------------------------------------------------
 struct SessionResult {
     std::vector<uint8_t> batches;  // canonical batch bytes of every tick
     std::vector<uint32_t> camera;  // float bit patterns of the camera params each frame
@@ -1212,6 +1225,27 @@ void test_double_click_move() {
     s.click(Button::Right, 500, 200);
     o = run(land, mark);
     CHECK(o.size() == 1 && o[0].event.u("flags") == 0x06);
+    // ui3 t01: the attack button / key (MoveToggle::Attack) makes the next ground order an attack-move, once; the move
+    // button / key (MoveToggle::Move) a plain move; arming one clears the other.
+    ot.arm_move_toggle(MoveToggle::Attack);
+    CHECK(ot.move_toggle_armed(MoveToggle::Attack) && !ot.move_toggle_armed(MoveToggle::Move));
+    pause();
+    mark = s.frames.size();
+    s.click(Button::Right, 500, 200);
+    pause();
+    s.click(Button::Right, 500, 200);
+    o = run(land, mark);
+    CHECK(o.size() == 2 && o[0].event.u("flags") == 0x05 && o[1].event.u("flags") == 0x04);
+    CHECK(!ot.move_toggle_armed(MoveToggle::Attack));
+    ot.arm_move_toggle(MoveToggle::Attack);
+    ot.arm_move_toggle(MoveToggle::Move);
+    CHECK(ot.move_toggle_armed(MoveToggle::Move) && !ot.move_toggle_armed(MoveToggle::Attack));
+    pause();
+    mark = s.frames.size();
+    s.click(Button::Right, 500, 200);
+    o = run(land, mark);
+    CHECK(o.size() == 1 && o[0].event.type() == T::MoveToPosition && o[0].event.u("flags") == 0x04);
+    CHECK(!ot.move_toggle_armed(MoveToggle::Move));
 
     // 7. land drag: Chebyshev 3 px (Euclid 4.2 > 4) is still a click; 60 px -> MoveToPositionFacing at the anchor;
     //    a drag starting on a selected unit -> Facing (rotate only).
@@ -1313,7 +1347,7 @@ void test_double_click_move() {
     CHECK(o.empty() && acks.empty());
 }
 
-void test_replay() {
+void test_session() {
     Script s;
     s.idle();
     s.key(vk::kUp, true);
@@ -1333,44 +1367,21 @@ void test_replay() {
     s.move(0, 300);  // edge scroll
     for (int i = 0; i < 5; ++i) s.idle();
     s.move(400, 300);
-    s.key(vk::kControl, true);
-    s.tap(static_cast<uint16_t>(vk::k0 + 2));
-    s.key(vk::kControl, false);
     s.click(Button::Right, 450, 350);
 
-    InputReplay rec;
-    for (const InputFrame& f : s.frames) rec.record(f);
-    const SessionResult live = run_session(rec.frames);
+    // the same frames twice give the same command batches and camera poses
+    const SessionResult live = run_session(s.frames);
     CHECK(!live.batches.empty());
+    CHECK(run_session(s.frames) == live);
 
-    const std::vector<uint8_t> bytes = rec.serialize();
-    CHECK(bytes.size() == 12 + rec.frames.size() * kReplayFrameBytes);
-    InputReplay back;
-    CHECK(InputReplay::deserialize(bytes, back));
-    CHECK(back.frames == rec.frames);
-    const SessionResult replayed = run_session(back.frames);
-    CHECK(replayed == live);
-    CHECK(back.serialize() == bytes);
-
-    // the session produced orders: Select (box), MoveToPosition, ControlGroup, MoveToPosition
+    // the session produced orders: Select (box), MoveToPosition, MoveToPosition
     size_t pos = 0, cmds = 0;
     while (pos < live.batches.size()) {
         commands::CommandBatch b;
         if (commands::decode_batch(live.batches, pos, b) != commands::DecodeError::None) break;
         cmds += b.commands.size();
     }
-    CHECK(pos == live.batches.size() && cmds == 4);
-
-    // corrupt inputs are rejected
-    InputReplay bad;
-    std::vector<uint8_t> trunc(bytes.begin(), bytes.end() - 1);
-    CHECK(!InputReplay::deserialize(trunc, bad) && bad.frames.empty());
-    std::vector<uint8_t> magic = bytes;
-    magic[0] = 'X';
-    CHECK(!InputReplay::deserialize(magic, bad));
-    std::vector<uint8_t> ver = bytes;
-    ver[4] = 9;
-    CHECK(!InputReplay::deserialize(ver, bad));
+    CHECK(pos == live.batches.size() && cmds == 3);
 }
 
 // ---- P1 completion: overview zoom, terrain following, control-group camera jump ------------------------------
@@ -1493,35 +1504,6 @@ void test_camera_p1() {
     const auto fp = focus_point(pts);
     CHECK(fp && near(fp->x, 30.0f) && near(fp->y, 20.0f) && near(fp->z, 3.0f));
     CHECK(!focus_point(std::span<const Vec3>{}));
-
-    // OrderTranslator: recall twice within 1 s -> take_camera_jump(); assign does not count; slow recalls do not.
-    OrderTranslator ot;
-    Bindings keys;
-    InputState in;
-    Script s;
-    OrderContext ctx;
-    ctx.mode = UiMode::Space;
-    s.tap(vk::k0 + 3);
-    s.tap(vk::k0 + 3);
-    for (const InputFrame& f : s.frames) {
-        in.update(f);
-        ot.update(in, keys, ctx);
-    }
-    auto j = ot.take_camera_jump();
-    CHECK(j && *j == 3);
-    CHECK(!ot.take_camera_jump());
-    CHECK(ot.pending().size() == 2);
-    s.frames.clear();
-    for (int i = 0; i < 90; ++i) s.idle();  // 1.5 s
-    s.tap(vk::k0 + 3);
-    s.key(vk::kControl, true);
-    s.tap(vk::k0 + 3);  // Ctrl+3 = assign
-    s.key(vk::kControl, false);
-    for (const InputFrame& f : s.frames) {
-        in.update(f);
-        ot.update(in, keys, ctx);
-    }
-    CHECK(!ot.take_camera_jump());
 }
 
 }  // namespace
@@ -1533,8 +1515,9 @@ int main() {
     test_parse();
     test_picking();
     test_orders();
+    test_orders_alternate();
     test_double_click_move();
-    test_replay();
+    test_session();
     if (g_fail) {
         std::printf("alamo_ui_tests: %d failure(s)\n", g_fail);
         return 1;

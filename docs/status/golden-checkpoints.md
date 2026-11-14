@@ -44,12 +44,13 @@ byte, `--compare`, the game smoke compare).
 | `alamo_headless --crc-convert IN OUT [--crc-checkpoint N] [--crc-keep T,...]` | rewrites a CRC log as a checkpoint log (default N 64) |
 | `python tools/goldens/convert_goldens.py [--all] (--in-place \| --out-dir D) --check FILE...` | the same rule in Python for a list of files (or every tracked ALAMO_CRC file under `engine/` with `--all`); `--check` proves each converted file equals its source on every checkpoint; `--verify GOLDEN SOURCE` compares two files; a ctest checks the two writers agree byte for byte |
 | `tools\regen_goldens.cmd [--only headless\|game\|all] [--dry-run] [--force]` | after an intended behaviour change: runs the golden-backed ctest commands of `build-msvc` through the program's own writer (`--crc-out ... --crc-checkpoint N`), stores the checkpoint goldens (headless; with `--only game` also the three game smoke runs, which need the GPU and the game data) and prints a diff summary: files changed, first changed checkpoint, window, differing columns. It refuses to run when tracked files have uncommitted edits unless `--force` |
+| `tools\regen_goldens.cmd --bench-check` / `--no-bench` / `--only bench` | BM1f: the benchmark scenarios (`tests/benchmark/*.abench`) carry a CRC fingerprint, so a sim behaviour change makes them stale. `regen_goldens` (with `--only headless` or `all`) checks each scenario (`alamo_headless --bench X --runs 1 --warmup 0`, exit 3 = stale) and remakes a stale one through `tools\benchmark\regen_scenario.cmd`; the summary shows `version 1 -> 2`. BM3: a `host game` scenario is checked with a 120-tick hidden `alamo_game --bench-scenario` run (exit 3 = stale) and remade with `alamo_game --hidden --bench-regen` (the tree needs `alamo_game.exe`). `--dry-run` and `--bench-check` only report (exit 4 from `--bench-check` when a scenario is stale); `--no-bench` skips them |
 
 ### Workflow
 
 1. Change behaviour, build (`build_msvc.cmd`); the golden tests fail with the first bad checkpoint and its window.
 2. Commit the code, run `tools\regen_goldens.cmd`; the summary names the first changed checkpoint per file: state the intended behaviour change in
-   the PR from it. Commit the goldens (a few lines each).
+   the PR from it. Commit the goldens (a few lines each) and any remade `tests/benchmark/*` scenario files (the version bump shows in the PR; say "scenario regenerated" there).
 3. Clang must reproduce the MSVC goldens (`build_clang.cmd`).
 
 Goldens the regen script does not cover (the apps/sim goldens written by `alamo_sim_tests --regen`, the module goldens of combat / abilities /

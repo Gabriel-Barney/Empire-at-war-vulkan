@@ -5,19 +5,11 @@
 #include <cstdint>
 
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/core/ascii.hpp"
 
 namespace alamo::ai::tactical {
 
 namespace {
-
-char lower_ascii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (lower_ascii(a[i]) != lower_ascii(b[i])) return false;
-    return true;
-}
 
 constexpr size_t kMaxPathEntries = 1000;  // A1_READINGS §3.3: entries summed (not a path-length refusal)
 
@@ -42,8 +34,6 @@ uint32_t land_zone_node_cost(double threat_sum) {
     const int64_t v = s < 9.0e18 ? static_cast<int64_t>(s) : INT64_MAX;
     return static_cast<uint32_t>(v) / 100u;
 }
-
-uint32_t default_zone_edge_weight(const HintZone& a, const HintZone& b) { return land_zone_edge_weight(a, b, 0); }
 
 int64_t ZoneLocator::cell_of(float x, float y) {
     const float fx = (x + 10.0f) / 20.0f, fy = (y + 10.0f) / 20.0f;
@@ -78,11 +68,11 @@ int32_t ZoneGraph::index_of_id(uint32_t id) const {
 
 int32_t ZoneGraph::index_of_name(std::string_view name) const {
     for (size_t i = 0; i < zones_.size(); ++i)
-        if (iequals(zones_[i].name, name)) return static_cast<int32_t>(i);
+        if (ascii_iequals(zones_[i].name, name)) return static_cast<int32_t>(i);
     return -1;
 }
 
-void ZoneGraph::build(std::span<const HintZone> zones, const ZoneEdgeWeightFn& weight, const ParallelFor& pf) {
+void ZoneGraph::build(std::span<const HintZone> zones, const ParallelFor& pf) {
     zones_.assign(zones.begin(), zones.end());
     locator_.build(zones_);
     link_target_.clear();
@@ -105,7 +95,7 @@ void ZoneGraph::build(std::span<const HintZone> zones, const ZoneEdgeWeightFn& w
             flood_nbr_[static_cast<size_t>(j)].push_back(i);
         }
     node_cost_.assign(zones_.size(), 0u);
-    recompute(weight, pf);
+    recompute(pf);
 }
 
 void ZoneGraph::flood(int32_t start, const std::function<bool(uint32_t)>& passes, std::vector<uint32_t>& out) const {
@@ -165,11 +155,10 @@ std::vector<uint32_t> ZoneGraph::threat_node_costs(const ZoneThreatFn& threat) c
 
 void ZoneGraph::recompute_with_threat(const ZoneThreatFn& threat, const ParallelFor& pf) {
     node_cost_ = threat_node_costs(threat);
-    recompute({}, pf);
+    recompute(pf);
 }
 
-void ZoneGraph::build_raw(const ZoneEdgeWeightFn& weight, std::span<const uint32_t> node_cost,
-                          ::alamo::galactic::detail::RawOwned& raw) const {
+void ZoneGraph::build_raw(std::span<const uint32_t> node_cost, ::alamo::galactic::detail::RawOwned& raw) const {
     const uint32_t n = size();
     struct Edge {
         uint32_t to, w;
@@ -183,7 +172,7 @@ void ZoneGraph::build_raw(const ZoneEdgeWeightFn& weight, std::span<const uint32
             if (i < 0 || static_cast<uint32_t>(i) == j || l.kind == 0) continue;
             const auto from = static_cast<uint32_t>(i);
             const uint32_t cost = j < node_cost.size() ? node_cost[j] : 0u;
-            const uint32_t w = weight ? weight(from, j, l.kind) : land_zone_edge_weight(zones_[from], zones_[j], cost);
+            const uint32_t w = land_zone_edge_weight(zones_[from], zones_[j], cost);
             if (w == ::alamo::galactic::kUnlinked) continue;
             out[from].push_back({j, w});
         }
@@ -209,14 +198,14 @@ void ZoneGraph::build_raw(const ZoneEdgeWeightFn& weight, std::span<const uint32
     raw.node.assign(n, 1);
 }
 
-void ZoneGraph::recompute(const ZoneEdgeWeightFn& weight, const ParallelFor& pf) {
-    build_raw(weight, node_cost_, raw_);
+void ZoneGraph::recompute(const ParallelFor& pf) {
+    build_raw(node_cost_, raw_);
     ::alamo::galactic::detail::reference_raw(raw_.view(), m_, pf);
 }
 
 void ZoneGraph::compute(std::span<const uint32_t> node_cost, ZoneGraphResult& out, const ParallelFor& pf) const {
     out.node_cost.assign(node_cost.begin(), node_cost.end());
-    build_raw({}, out.node_cost, out.raw);
+    build_raw(out.node_cost, out.raw);
     ::alamo::galactic::detail::reference_raw(out.raw.view(), out.m, pf);
 }
 
@@ -248,7 +237,7 @@ double reachability_tolerance(Reachability level, const TacticalAiConstants& c) 
 }
 
 double zone_reachability_cost(const ZoneGraph& graph, int32_t source_zone, int32_t target_zone, Reachability level,
-                              const TacticalAiConstants& c, const ZoneThreatFn&) {
+                              const TacticalAiConstants& c) {
     const double tol = reachability_tolerance(level, c);
     if (tol < 0.0) return kUnreachable;
     const uint32_t n = graph.size();

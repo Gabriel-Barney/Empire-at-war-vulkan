@@ -40,7 +40,7 @@ namespace alamo::ui {
 // wingmen -> Alt+', Alt+S force sight -> Alt+=, Alt+D drain life -> Alt+\, Alt+A FoC full salvo -> Alt+. An original-format
 // profile is migrated on load (HotkeyTable::load).
 inline constexpr uint16_t kOriginalHotkeySlots = 153;
-inline constexpr uint16_t kHotkeySlots = 162;
+inline constexpr uint16_t kHotkeySlots = 166;
 
 enum class HotkeyMod : uint8_t { None = 0, Shift = 1, Ctrl = 2, Alt = 3 };  // profile encoding
 
@@ -83,7 +83,10 @@ inline constexpr uint16_t kSelectAll = 10, kSelectLike = 11, kNextUnit = 12, kPr
                           kAssignBase = 123, kAddBase = 133, kThirdBase = 143,
                           // [port: Gabriel]
                           kPause = 153, kYawLeft = 154, kYawRight = 155, kPitchUp = 156, kPitchDown = 157, kRollLeft = 158,
-                          kRollRight = 159, kZoomIn = 160, kZoomOut = 161;
+                          kRollRight = 159, kZoomIn = 160, kZoomOut = 161,
+                          kFleetCohesion = 162,  // [port: Gabriel 2026-11-13] fleet cohesion toggle (O)
+                          // [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus")
+                          kFleetCreate = 163, kFleetUngroup = 164, kFleetLock = 165;
 }  // namespace hk
 
 // Profile values (name -> integer), e.g. a registry / ini abstraction owned by the host.
@@ -97,6 +100,9 @@ public:
     // Binds `slot` (removing the same key + modifier from every other slot); slots 0..9 also rebind their derived
     // slots. key -1 unbinds.
     void bind(uint16_t slot, HotkeyBinding b);
+    // UI5 t05: the other slots bind(slot, b) would unbind (the same key + modifier, also for the derived slots of 0..9),
+    // ascending; empty for key -1.
+    std::vector<uint16_t> conflicts(uint16_t slot, HotkeyBinding b) const;
     // Profile I/O: save writes all 153 slots; load reads min(KeySettingsCount, 153) slots (missing entries keep
     // the current binding, out-of-range modifiers -> none). False if KeySettingsCount is absent.
     void save(HotkeyProfile& out) const;
@@ -106,16 +112,14 @@ public:
     bool pressed(const InputState& in, uint16_t slot) const;
     // P1 Bindings sync: scroll (69..72) and camera reset (73) become held/pressed actions with kModAny; SelectAll
     // (10), Stop (16), ControlGroup0..9 (slots 9, 0..8), the free camera axes, Pause and zoom (160 / 161) with their
-    // exact modifier. Every camera action then has exactly one key, and no key drives two of them (End = reset only,
+    // exact modifier. Only the camera, pause and zoom actions have a reader; SelectAll / Stop / ControlGroupN stay in the
+    // Bindings table (key-config UI, clash checks) but this dispatcher is what issues those orders. Every camera action then has exactly one key, and no key drives two of them (End = reset only,
     // Home = CameraHome only).
     void apply_to_bindings(Bindings& b) const;
 
 private:
     std::array<HotkeyBinding, kHotkeySlots> slots_{};
 };
-
-uint8_t hotkey_mods(const InputState& in);  // Bindings Modifier bits currently held
-HotkeyMod hotkey_mod_held(const InputState& in);  // exact single modifier, or None when none / several
 
 // A fired slot the HUD / host acts on (targeting modes, camera, menus) - everything that is not a sim command.
 struct HotkeyEvent {
@@ -136,13 +140,29 @@ public:
     // with the sim (e.g. after a HUD pause button).
     void set_paused(bool p) { paused_ = p; }
     bool paused() const { return paused_; }
+    // [port] fleet groups: while `on`, FleetGroupCreate / Ungroup / Lock send fleet group commands (commands/fleet_group.hpp)
+    // for a non-empty selection; Lock sends SetLock(!selection_locked). Off (the default): those slots do nothing. The host
+    // sets it every frame (`selection_locked` = every fleet group of the selection is locked).
+    void set_fleet_groups(bool on, bool selection_locked) {
+        fleet_on_ = on;
+        fleet_locked_ = selection_locked;
+    }
 
 private:
     bool paused_ = false;
+    bool fleet_on_ = false, fleet_locked_ = false;
     int8_t last_group_ = -1;
     double last_recall_ = -1e30;
     std::vector<uint16_t> fired_;
 };
+
+// ui3 t02: the tactical ability (ABILITIES_HARDPOINTS 2.1 type name, e.g. "SPREAD_OUT") an ability slot (24..65, 90..122)
+// or DeploySquad (66) fires; "" for other slots and for the two ability slots no FoC type matches (SystemControl,
+// DestroyPlanet). [port] matched by meaning: the keyboard dialog's edit-box names (UI.md §4.3) against the ability types the
+// FoC data uses; the original's slot -> ability lookup in the hotkey dispatch (0x63f00) is not traced. Slots of one
+// meaning share a type (SelfDestruct / SpaceSelfDestruct, LaserDefense / SpaceLaserDefense, FullSalvo / FoCFullSalvo,
+// SensorJamming / FoCSensorJamming, MinorDrainLife / DrainLife).
+std::string_view hotkey_ability_name(uint16_t slot);
 
 // Group number (0..9) of a group slot (0..9, 123..152), -1 otherwise.
 int8_t hotkey_group(uint16_t slot);

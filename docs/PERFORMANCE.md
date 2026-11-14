@@ -55,6 +55,9 @@ the tactical AI's plan VMs, laying down map objects), already spread over the wo
 **55 ms** on the land campaign battle, **42 ms** in space and about **139 ms** on a land skirmish (was 75 / 57 / 193).
 Getting under 33.3 ms needs setup spread over several ticks or a sim-only model load. Every other tick is under about
 12 ms; the next worst are the battle-end tick (land 5.3 ms) and the second battle tick (first perception, 8-11 ms).
+OPT3 t12 (2026-11-08, golden-neutral) took about a fifth off the land skirmish's first tick and fixed a mid-battle space
+spike (75-130 -> 40-50 ms on a loaded PC); the land campaign and space first ticks did not move. The rest is open in
+roadmap group OPT3f (section "First battle tick and a space spike" below).
 
 ### What changed, and what each fix bought
 
@@ -109,6 +112,21 @@ was never a large cost (under 0.5% of tick time), so this removes spikes rather 
 - With 2,000 ships on screen (2,502 draws): draw-list build **0.88 -> 0.67 ms**, sort **0.19 -> 0.09 ms**; draw lists are
   identical at 1, 4 and 15 threads.
 - TAA costs about **0.10 ms** of GPU time at 720p; SSAO about **0.4 ms** at 1080p.
+- FSR upscaling (2026-11-13, `alamo_render_fsr_tests`, _MP_LAND_ENDOR, output 1280x720, RX 9070 XT, AMD runtime FSR 4.1.2,
+  validation on): the "fsr" scope (motion-vector pass + FSR dispatch) **0.31 ms** at Quality (render 853x480) and
+  Performance (640x360), against TAA's 0.07 ms; the scene itself **0.08 -> 0.05 / 0.04 ms**. A still camera settles to a
+  frame-to-frame luma change of **0.24 / 0.22** (TAA 2.26); mean luma difference from the full-size TAA picture **5.6 / 7.0**.
+  At this scene's cost FSR is a picture-quality option more than a speed-up; it pays at high output resolutions.
+- XeSS upscaling (2026-11-13, `alamo_render_xess_tests`, same scene and GPU, Intel runtime XeSS 2.0.2 on its DP4a path
+  (not an Arc GPU), validation on): the "xess" scope **0.60 / 0.58 ms** at Quality (render 753x424, 1.7x) and Performance
+  (557x314, 2.3x); the scene **0.07 / 0.05 ms**. A still camera settles to **0.45 / 0.36** (TAA 2.26, FSR 0.24); mean luma
+  difference from the TAA picture **6.2 / 7.5**. Edge energy (sharpness) **6.7 / 4.5** against FSR Quality's 9.5 and TAA's
+  11.6: on this AMD GPU XeSS is softer than FSR (larger ratio, no sharpening, DP4a model, LDR input). The three flipped
+  jitter signs were tried: each is softer still (edge energy 4.9-5.8) and does not settle (0.81-0.98).
+- Anti-aliasing list (2026-11-13, `alamo_render_taa_tests`, _MP_LAND_ENDOR 1280x720, RX 9070 XT, validation on): SMAA
+  **0.06-0.12 ms**; MSAA (with SSAO) scene **0.23 -> 0.29 ms at 4x, 0.42 ms at 8x**, the resolve **0.03 ms (4x) / 0.06 ms
+  (8x)**. Edge energy barely moves with MSAA (15.12 -> 15.09): it smooths geometric edges (the landing pad's rim) while the
+  metric is dominated by terrain texture detail and alpha-tested foliage, which MSAA does not touch.
 
 ### Tried and not shipped
 Documented so nobody repeats them without new evidence.
@@ -806,6 +824,48 @@ VFS read, parse, render-vertex packing the sim does not need), and serial steps 
 per-object stamps in RNG order). Getting under 33.3 ms needs setup spread over several ticks or prepared before the battle (moves goldens),
 or a sim-only model load (positions, indices and skeleton only). The second battle tick (first perception, 8-11 ms) is unchanged.
 
+## First battle tick and a space spike (OPT3 t12, 2026-11-08)
+
+Golden-neutral by choice (Gabriel, 2026-11-08: speed-ups and pre-tick preparation only, no golden moves). Proof: the per-tick CRC
+logs of `foc-land` (default workers and W0), `foc-land-campaign` and `foc-station --seed 3` (default and W4) are byte-identical to
+the base commit 03940b9. The PC was fully loaded by other sessions throughout, so the parts were located with temporary
+thread-cycle counters (`QueryThreadCycleTime`, removed again) and the wall times below are an interleaved A/B of the base and the
+new build at W15 (3-5 runs each, same load). Expect lower absolute numbers on a quiet PC.
+
+| Tick (ms, W15, loaded PC) | base 03940b9 | OPT3 t12 |
+|---|---|---|
+| Space station seed 3, frame 9818 (one request's path plan) | 75-130 | 40-50 |
+| Land skirmish, first tick | 154-188 | 123-152 |
+| Land campaign, first battle tick | 59-71 | 59-94 (no change; noise) |
+| Space station, first battle tick | 48-56 | 45-56 (no change) |
+
+- **Space occupancy grid index.** At foc-station seed 3 battle frame 9785 (host frame 9818) one long space path request (many
+  tries) ran 501 million cycles, nearly all of it in `SpaceOccupancy::query_segment` walking every static and track per motion.
+  `SpaceOccupancy::build_index` now builds a uniform grid over the entries' boxes (radius + a 16-unit margin; cell at least 256
+  units, at most 64 cells per axis; CSR lists per kind) once per tick before the parallel planners. A query visits only the entries
+  in the cells its box (segment box + radius) touches, each once (in the cell (max(entry first x, query first x), max(entry first
+  y, query first y))), with the same per-entry tests: the OR of bits is unchanged. Every mutation and a load drop the index (full
+  scan until the next build); non-finite queries scan everything. The planner's visited set (`SpaceScratch::VisitTable`) is now
+  an open-addressing table cleared by a generation counter, replacing a `std::unordered_map` (probed only, never iterated, so no
+  result depends on it). That request: 501 -> 190 million cycles. Tests: `alamo_movement_tests` `test_space_index` (4,000 random
+  queries against the full scan, after mutations, a non-finite query; VisitTable growth, overwrite and clear).
+- **Skirmish structure stamps in parallel.** The land skirmish's `bt_place_forces` was about 178 million cycles on the sim thread,
+  165 of them in `land_obstacles_sync`: four base structures with Fine_Tune_Occupied_Passability, whose ~400 samples each fire a
+  ray against every collision triangle (up to 14,000). `PassabilityGrid::stamp(id, fp, pf)` now runs the samples' rays through the
+  battle's `ParallelFor` (one result per sample, collected in the serial sample order); `land_obstacles_sync` /
+  `land_obstacle_attach` / `bt_place_forces` take the battle's `pf`, also for structures built during the battle. Sim thread: 165 ->
+  about 19 million cycles (about 49 -> 5.5 ms wall on the loaded PC). Test: `test_grid`, `stamp` with a back-to-front `ParallelFor`
+  equals the serial stamps.
+- **Map battle model warm.** `CampaignBattles::start_map_battle` (skirmish and attract demo; called at session load, not in a tick)
+  calls `TacticalBattle::prepare_models`: the bones, avoid models and stamp extents of the forces' types, the map's placement types
+  and their pads' buildable / constructed types load through the host's `ParallelFor`. The catalog cache is a pure memo of the model
+  files, so nothing the battle computes can depend on it. It covers 63 of the land skirmish's ~130 model files; the rest are types
+  the setup only finds later (team-marker pads of the slot factions, base structures, production types).
+
+Still over 33.3 ms (group OPT3f): the land skirmish first tick (the remaining model loads, the table builds of the pad / production
+types, the tactical AI world constructor and plan load), the land campaign and space first battle ticks (plan VM load, about 20 ms
+wall), and the space frame-9818 request on a loaded PC.
+
 ## Benchmark scenario: first numbers (BM1, 2026-11-06)
 
 `alamo_headless --bench tests/benchmark/space_battle.abench` (docs/PHASE4.md "BM - repeatable benchmark"): the FoC `_MP_SPACE_KUAT`
@@ -841,3 +901,514 @@ These saves are light scenes: they show that the tool works and what the frame l
 0 unsettled frames in all three; 17 / 6 / 17 warm-up frames. The real-time worst frame (21 ms) is a single frame in the battle
 run. Fixed-frames runs are bit-identical across runs and across MSVC / clang (same PNGs and CRC log), see the
 `alamo_game_bench_*` ctest entries.
+
+## Effect audit: shipped and mod effects (modc t11, 2026-11-06)
+
+`alamo_effect_audit` (`materials::audit_effects`, docs/MODS.md §4.1) loads every effect the shader directories ship and
+translates each track-B pass, MSVC Release, cold shader cache, single thread. With DXC every pass is also compiled to SPIR-V
+(no disk cache: the cost of a first run with a new mod).
+
+| Set | Effects (from the mod) | Track-B passes | Translate only (materials test) | Translate + DXC |
+|---|---|---|---|---|
+| base FoC | 82 (0) | 46 | 19-22 ms | 1.29 s |
+| Thrawn's Revenge 1125571106 | 85 (84) | 51 | | 1.42 s |
+| 1770851727 | 93 (93) | 56 | | 1.63 s (1.60 s after t22: `sph_t3` translated in place of `sph_t2`) |
+| Fall of the Republic 1976399102 | 86 (85) | 51 | | 1.40 s |
+| 2858787558 | 88 (55) | 51 (52 after t22) | | 1.49 s (1.48 s after t22) |
+| Thrawn's Revenge copy 3622043265 | 86 (85) | 51 | | 1.44 s |
+
+About 28 ms of DXC per pass; parsing and translating the effects is negligible. The renderer does the same work lazily per drawn
+effect on background jobs, cached on disk after the first run (`shaderxlat::ShaderCache`), so a mod adds about 1.5 s of
+translation once, spread over its first frames.
+
+Effect sources (modc t23, 2026-11-06, `alamo_fx_prebuild`, fxc 10.0.28000.0, same machine): `AlamoEngine.fx` + `.fxh`
+(Thrawn's Revenge) 91-106 ms to compile, `_TerrainRenderBump.fx` 51-60 ms to fail; a whole prebuild run including the VFS
+mount 152-174 ms with one or two compiles, 33-42 ms when every source is in the cache (unchanged source and includes). At
+load the cache lookup reads the source and its includes and hashes them (well under 1 ms per `.fx`). Audit with the
+compiled sources: 1125571106 2.39 s, 3622043265 2.46 s, 1976399102 2.34 s (same passes as before; this run's times are
+about 0.9 s above the table's because of other load on the machine, not the sources).
+
+## Benchmark scenes: quiet-machine baseline (bm1f t04, 2026-11-08)
+
+The first baseline: the six committed scenes (`tests/benchmark/`, docs/PHASE4.md "BM3") at dev `6246c61e`, run with
+`tools\benchmark\run_suite.cmd --repeats 5` and `--load --repeats 3` on an **idle PC** (every other session paused, no builds or
+tests; the suite measured 0.1-8.6 % CPU busy before each run, all 45 runs unflagged). MSVC Release (clang ships nothing, so no clang
+timing), Ryzen 7 7800X3D (16 threads, sim-only runs use 15 workers), AMD Radeon RX 9070 XT, rendered scenes `bm-high` 1920x1080 fixed
+frames (2 per tick, TAA on), hidden window. Scenario versions: space_battle 11, land_battle 4, galactic_late 3, the three game scenes 5.
+This replaces BM3's 2026-11-06 table, which was taken with the CPU 95-100 % busy. Result JSON: `logs\bench_suite\2026-11-08_quiet\`
+and `logs\bench_suite\2026-11-08_quiet_load\` on the reference PC (logs are not tracked; compare a later run with
+`tools\benchmark\compare_results.py`).
+
+Medians of the 5 runs' median and p99; worst = the worst tick or frame of all 5 runs.
+
+| Scene | Ticks | Wall per run | Median | p99 | Worst | Ticks/s |
+|---|---|---|---|---|---|---|
+| `space_battle` (sim-only) | 1800 | 2.1-2.2 s | 0.86 ms tick | 2.32 ms | 15.7 ms | 1022 |
+| `galactic_late` (sim-only) | 27000 | 24.3-25.9 s | 0.59 ms tick | 4.04 ms | 21.3 ms | 1135 |
+| `land_battle` (sim-only) | 3600 | 9.5-9.6 s | 2.45 ms tick | 4.08 ms | 8.3 ms | 397 |
+| `space_battle_game` | 1800 (3600 frames) | 17.5-17.6 s | 3.23 ms frame (sim 1.62, GPU 0.74) | 6.60 ms (sim 4.32) | 87.4 ms (sim 19.6) | |
+| `nebula_battle` | 1800 (3600 frames) | 17.3-17.7 s | 3.34 ms frame (sim 1.59, GPU 0.79) | 7.22 ms (sim 5.72) | 52.7 ms (sim 27.8) | |
+| `water_battle` | 1800 (3600 frames) | 30.8-31.4 s | 6.46 ms frame (sim 2.88, GPU 1.16) | 9.67 ms (sim 3.73) | 12.6 ms (sim 5.0) | |
+
+The whole `--repeats 5` session took 578 s, the `--load --repeats 3` session 293 s. The rendered scenes are CPU-bound at this size (the
+GPU frame is a quarter or less of the wall frame). On a quiet machine `land_battle` is no longer the heaviest sim scene: 2.4 ms median
+against BM3's noisy 3.2-6.1 ms, with a 4.1 ms p99 against 93-147 ms.
+
+**Run-to-run noise** (5 runs, `run_suite` noise table: cv = coefficient of variation, spread = (max - min) / mean). A regression gate
+(LP5, deferred) should set its limits above these:
+
+| Scene | Metric | cv | spread |
+|---|---|---|---|
+| `space_battle` | median tick / p99 / ticks per s | 1.7 / 4.1 / 1.5 % | 4.4 / 10.1 / 3.7 % |
+| `galactic_late` | median tick / p99 / ticks per s | 3.7 / 2.2 / 2.8 % | 9.2 / 4.7 / 6.5 % |
+| `land_battle` | median tick / p99 / ticks per s | 0.8 / 0.7 / 0.4 % | 2.2 / 2.0 / 1.1 % |
+| `space_battle_game` | frame median / frame p99 / sim median / GPU frame median | 0.4 / 0.7 / 0.7 / 0.8 % | 0.9 / 2.2 / 1.6 / 2.3 % |
+| `nebula_battle` | frame median / frame p99 / sim median / GPU frame median | 1.8 / 0.6 / 0.4 / 0.3 % | 5.3 / 1.8 / 1.1 / 0.9 % |
+| `water_battle` | frame median / frame p99 / sim median / GPU frame median | 4.4 / 1.4 / 0.3 / 2.5 % | 13.2 / 4.0 / 0.9 / 7.2 % |
+
+So a median moves by up to about 4 % (cv) between quiet runs, `galactic_late` and `water_battle`'s frame median by up to 9-13 % from the
+fastest to the slowest of 5; the worst tick or frame is a single sample and not a gate metric (the game scenes' 50-90 ms worst frames are
+single frames, their p99 stays under 7.3 ms).
+
+**Map load, cold against warm cache** (`run_suite.cmd --load --repeats 3`: real time, 300 ticks, a fresh empty `--cache-dir` for the cold
+run, the same directory for the warm one; `load_ms` = save load start to first measured tick, hitches = counted frames over
+max(25 ms, 4 x median), averaged over the 3 runs):
+
+| Scene | Cache | `load_ms` (min-max) | First 300 frames: median / p99 | Hitches in the run |
+|---|---|---|---|---|
+| `nebula_battle` | cold | 477-488 ms | 2.1 / 4.6 ms | 3.0 |
+| `nebula_battle` | warm | 432-446 ms | 2.0 / 4.8 ms | 3.3 |
+| `space_battle_game` | cold | 503-523 ms | 1.9 / 5.9 ms | 3.3 |
+| `space_battle_game` | warm | 461-481 ms | 1.9 / 5.7 ms | 3.0 |
+| `water_battle` | cold | 744-756 ms | 4.9 / 9.8 ms | 0 |
+| `water_battle` | warm | 705-721 ms | 4.6 / 9.6 ms | 0 |
+
+A cold pipeline cache adds about 40-45 ms to each load; on a quiet machine it no longer causes first-use hitches (BM3's 32 cold nebula
+hitches were the busy machine), and the 3 hitches left in the space and nebula runs happen both cold and warm.
+
+**Visible against hidden window** (bm2b t02, same session): `alamo_game --benchmark realtime --bench-save smoke_battle.alsv
+--bench-preset bm-high --bench-ticks 300` (BM2a's run, the saveload smoke's battle save at dev `6246c61e`), once with `--hidden` and once
+with a visible window, CPU 13-14 % busy before each:
+
+| Window | Frames | Frame ms median / p99 / worst | Render ms median / p99 | Sim ms median / p99 | GPU frame median / p99 |
+|---|---|---|---|---|---|
+| hidden | 7156 | 1.31 / 2.68 / 15.3 | 1.28 / 2.04 | 0.71 / 2.26 | 0.54 / 0.66 |
+| visible | 7259 | 1.29 / 2.56 / 14.9 | 1.25 / 2.01 | 0.72 / 2.50 | 0.54 / 0.68 |
+
+A visible window presents as fast as a hidden one (within 2 %, inside the run-to-run noise above; Immediate present mode, no cap), so
+the hidden-window numbers of BM2a and the suite stand for a visible window too. Both match BM2a's 2026-11-06 row (1.28 / 2.65 / 21.3 ms).
+
+## Game scenes timed sim-only (bm2c t02, 2026-11-08)
+
+`alamo_headless --bench tests/benchmark/<scene>.abench --runs 2 --warmup 1` (docs/PHASE4.md "BM2c"), MSVC Release, Ryzen 7 7800X3D,
+15 workers (machine default), the version-2 scenes regenerated on dev that day. **Not idle: other lanes were building and testing, other
+processes took 92-97 % of the CPU during the timed runs, every result is flagged noisy and none is a baseline.** All runs matched the
+scenes' fingerprints (the rendered runs' CRC logs).
+
+| Scene | Ticks | Median tick | p99 | Worst | Mean | Load per run | Wall per timed run | Biggest zones |
+|---|---|---|---|---|---|---|---|---|
+| `space_battle_game` | 1800 | 1.89 ms | 54 ms | 205 ms | 4.3 ms | 0.65-0.75 s | 5.8-9.8 s | T5.battles / tac.ai 30 %, tac.ai.perception 24 % |
+| `nebula_battle` | 1800 | 1.76 ms | 29 ms | 90 ms | 3.4 ms | 0.57-0.60 s | 5.8-6.6 s | tac.movement 49 %, T5.battles / tac.ai 18 % |
+| `water_battle` | 1800 | 3.19 ms | 87 ms | 510 ms | 5.7 ms | 0.78-0.80 s | 5.8-14.6 s | T5.battles / tac.ai 35 %, tac.ai.perception 29 % |
+
+The medians sit near the rendered runs' `sim_ms` in BM3's 2026-11-06 table (1.0 / 1.0 / 2.9 ms, also noisy; the quiet baseline above has 1.6 / 1.6 / 2.9 ms); the p99 and worst ticks here are the
+busy machine. Rerun on a quiet PC before using any of it as a reference.
+
+## Build times (roadmap group bo1, 2026-11-13)
+
+Repeat with `python tools/benchmark/build_times.py [--tree NAME] [--steps clean,cpp,header] [--cache on|off] [--configure-extra=-D...]` (throw-away tree `build-bench-NAME`, MSVC Release, no tests; prints the slowest .ninja_log steps). Machine: 7800X3D, 16 threads, **other lanes were building at the same time**, so times carry +-20 % noise; the compiler cache was OFF unless stated.
+
+**Baseline (t01, cache off):** clean build 209.6 s (configure 4.4 s); one-line edit of `engine/vfs/src/vfs.cpp` 8.9 s (91 ninja steps, almost all relinks of the test exes that use vfs); one-line edit of `engine/core/include/alamo/core/hash.hpp` 75.1 s (298 steps). Slowest single compiles are test and app TUs: `test_render_gpu.cpp` 23.8 s, `app_options.cpp` 23.6 s, `test_ai_galactic.cpp` 21.3 s, `game_main.cpp` 20.8 s, `test_combat.cpp` 20.2 s (top 15 all 17-24 s; no single file is the bottleneck, the 549 files x ~1-2 s of std headers are).
+
+| Item | Result | Kept? |
+|---|---|---|
+| t02 shared PCH (`engine/pch/pch.hpp`, std headers only, every engine target reuses `alamo_pch`) | cache off: clean **209.6 -> 157.0 s (-25 %)**, .cpp edit 8.9 -> 7.8 s, core-header edit 75.1 -> 61.2 s | **Kept, but `ALAMO_PCH` defaults ON only when no compiler cache is active.** sccache cannot cache a compile that uses `/Fp` (519 of ~880 compiles uncacheable), so with the cache on the PCH loses more cache hits than it saves; the build scripts use the cache whenever sccache is installed, so for them it stays off. `-DALAMO_PCH=ON` forces it. |
+| t02 variant: core headers in the PCH | `bytes.hpp` makes `alamo::ByteReader` ambiguous with `formats_io::ByteReader` in tools/formats; with `hash.hpp` inside, a core-header edit costs 133.7 s (705 steps) instead of 75 s | Rejected: std headers only |
+| t03 `/Z7` | Release objects carry no debug info at all (`/O2 /Ob2 /DNDEBUG`, no `/Zi`, no PDB), so they are already cacheable | Nothing to change |
+| t03 stale header deps | Found: with the cache on, sccache replays the `/showIncludes` output of the compile that filled the entry, so a hit from another checkout path wrote that checkout's header paths (`../../<other-worktree>/engine/core/...`) into this tree's `.ninja_deps`. Missing files made ninja rebuild and relink ~350 targets on **every** no-op build (40 s each); existing files meant header edits were ignored (the 2026-10-31 stale-object crashes). sccache keys on the preprocessed text, so an unused `-D` does not separate checkouts. | **Fixed:** with the cache on, a forced-include header (`<build>/alamo_cache_scope.h`) declares `using alamo_cache_scope_<hash of source path> = int;`, so entries match only inside one checkout (its build trees still share). Verified: fresh tree has no foreign paths in `.ninja_deps`, no-op build is "no work to do", header edits rebuild. Second tree in the same checkout 76 s vs 259 s cold. Cross-worktree hits (which produced the poisoned deps) are gone; that costs a cold first build per worktree. The old advice "build worktrees with the cache off" no longer applies. |
+| t04 drop `-U ALAMO_ENGINE_MODULES` | Reconfigure costs 0.9-2.6 s and, once the cache-scope header is written only when changed, a reconfigure followed by a build is "no work to do" (the 350-step rebuilds seen while measuring were the stale-deps bug above, and an always-rewritten scope header, now fixed). Module scope: `build_agent` / `build_module` already configure only the requested modules, so only their targets and test exes exist. | Rejected (no gain); `-U` stays |
+| t05 gate scope | `tools/lint/gate_scope.py`: clang runs only when sim code changed, ASan only when engine/jobs / engine/core / a changed file mentioning threading primitives, any doubt (build, CMake, script, toolchain file, unknown code path, no diff, git failure) runs both; `ALAMO_GATE_ALL=1` forces both. A docs-only or render-only change gates on MSVC alone. | Kept (saves the clang and ASan builds, about 2/3 of the gate, on those changes) |
+| t06 landing check | `verified_build.py` stamps carry a hash of every tracked build-relevant file; `land-check` accepts a stamp whose hash equals HEAD's, so merging a docs / roadmap-only `origin/dev` does not rebuild. `clean_worktrees --trees` keeps `build-wt-msvc` of every kept worktree warm however idle. | Kept |
+| t07 lld-link | `-DCMAKE_LINKER=lld-link` relinks all 135 exes in **4.5 s vs 8.1 s** (-3.6 s whole tree, about 0.3 s for a typical edit). CMake takes the linker per tree, not per target, so "test exes only" would need a wrapper. Release trees already have no IPO / LTCG and no `/DEBUG` (`/INCREMENTAL:NO` only). | Rejected: gain too small to justify a second linker for the shipped exes |
+
+## Build speed C: header diet and big-file splits (bo3, 2026-11-14)
+
+Static include-closure scan, no compiler: `python tools/analysis/include_cost.py [--top N] [--json f]` (follows project includes under
+`engine/`, std headers by name). Numbers are translation units (TUs) that reach a header, transitively.
+
+| Measure | Before | After |
+|---|---|---|
+| `.cpp` files | 549 | 568 (19 new parts of split files) |
+| TUs reaching `<filesystem>` | 369 | 265 |
+| TUs reaching `sim_crc.hpp` (15 KB) | 269 | 218 |
+| TUs reaching `file_provider.hpp` | 307 | 307 + 19 parts (the header itself fell from 5.1 to 1.8 KB and no longer pulls `<filesystem>`, `<unordered_map>`, `<memory>`) |
+| Project-header bytes over the unchanged TUs | 244.5 MB | 243.5 MB |
+| Largest `.cpp` | 387 KB (`test_movement_gaps`), then 369, 365, 363, 327, 305, 294, 287 | 251 KB (`tactical_ai.cpp`; the eight biggest are now 3-4 parts of at most about 135 KB) |
+
+Widest headers before: `file_provider` 307, `ascii` 309, `bytes` 293, `sim_crc` 269, `galaxy` 263, `xml` 262, `sim_rng` 258; by header bytes parsed
+over all TUs: `combat_system.hpp` 14.9 MB (99 TUs), `movement_system.hpp` 11.3 MB, `tactical_battle.hpp` 11.1 MB, `campaign.hpp` 11.0 MB.
+What changed: `host_fs.hpp` (new; `DirectoryProvider`, path / long-path helpers, host directory ops) split out of `file_provider.hpp`;
+`sim_crc_fwd.hpp` (new) replaces `sim_crc.hpp` in 14 public headers. Test exes and three sim sources were split by position into
+`*_partN.cpp` plus a shared `*_common.hpp` / `*_internal.hpp` in the same CMake target (test names unchanged; one `main` per exe), so an
+edit rebuilds a 120 KB part and the parts compile in parallel. Not done: forward-declaring `game_object_types.hpp` / `game_database.hpp` /
+`campaign.hpp` (their types are used by value), splitting the public `combat_system.hpp` / `movement_system.hpp` / `tactical_battle.hpp`
+(150-200 KB of class body each). Wall-clock effect of the splits and diet is not measured here.
+
+**Unity builds (t04), rejected.** `UNITY_BUILD` (batch 8) on the stable leaf libraries `alamo_data`, `alamo_vfs`, `alamo_assets` (the only leaf libraries with sizeable sources; `core`, `jobs` and the rest are smaller or share anonymous-namespace names), MSVC Release, cache off, shared PCH warmed, `cmake --build --target alamo_data alamo_vfs alamo_assets` from a fresh tree, two runs each, 7800X3D: plain 5.6 s and 5.7 s, unity 5.6 s and 5.4 s. No gain (the three libraries compile in about 6 s wall on 16 threads), and unity would make each edit recompile a batch, so the CMake option was not kept. The gate for revisiting: a library whose sources take over 30 s to compile serially. Also with `game_object_types_fwd.hpp` (new): `garrison_types`, `bounty`, `radar_feed`, `world_pick`, `type_params` and `sim_anim_driver` headers no longer include the 16 KB `game_object_types.hpp`; 8 `.cpp` files include it directly.
+
+## Compiler-cache hits across worktrees (bo2 t01, 2026-11-14)
+
+Full MSVC build (595 compile requests) in a fresh worktree at another path, sccache v0.19.0 with a warm shared cache:
+
+| Case | Hits / requests | Rate |
+|---|---|---|
+| Before: `CHECK` bakes `__FILE__` (baseline tree, other worktrees' objects in the cache) | 252 / 595 | 42 % |
+| After: `CHECK` prints `source_location` basename (third path) | 320 / 595 | 54 % |
+
+Reading the sccache debug log of the third-path build, the 275 remaining misses have two path-dependent causes (neither is `__FILE__`):
+1. **`-external:I<absolute path>`** (249 TUs): every `target_include_directories(... SYSTEM ...)` (Vulkan headers, Lua, VMA, miniaudio, FFmpeg, FidelityFX, XeSS). sccache does not normalise `-external:I`, so the checkout path is part of the key. Top-level / engine CMake (bo1's files).
+2. **`-DALAMO_*_DIR="<absolute path>"` compile definitions** on about 25 test TUs (golden, log and data dirs): the path is in the command line and the code. Fix: tests read the directory at run time (set by the ctest entry), done together with the exe merges (t03/t04).
+Note (bo1, dev 64d1d8ce): the build now scopes cache entries per checkout on purpose (`alamo_cache_scope.h`; cross-checkout hits replayed foreign `/showIncludes` paths into `.ninja_deps`), so these numbers describe the state before that change and neither cause needs fixing for cache sharing.
+Use `SCCACHE_LOG=debug SCCACHE_ERROR_LOG=<file>` and grep `compile result: cache miss` to list the misses.
+
+## Test executables: inventory (bo2 t02, 2026-11-14)
+
+`python tools/analysis/exe_inventory.py <dir> [tree]` (script header has the ctest step) lists every exe of a build tree with size, ninja link-step time and ctest run time. MSVC Release tree, 16 cores, taken after the bo3 splits: **135 exes** (the group text said 115), 120 of them with a ctest entry, 262 ctest entries in all (the "before" list for the merge is `ctest -N`, 262 lines; 227 entries map to an exe by their command).
+
+| Family | exes | with tests | ctest entries | size MB | link steps (s, sum) | test run (s, sum) |
+|---|---|---|---|---|---|---|
+| ai | 6 | 6 | 7 | 10.9 | 4.6 | 56 |
+| anim | 1 | 1 | 1 | 0.8 | 0.6 | 5 |
+| assets | 1 | 1 | 1 | 0.9 | 0.6 | 5 |
+| audio | 2 | 2 | 2 | 2.5 | 1.2 | 3 |
+| commands | 1 | 1 | 1 | 0.4 | 0.5 | 0 |
+| core | 6 | 6 | 6 | 1.8 | 4.0 | 9 |
+| data | 1 | 1 | 1 | 0.7 | 0.6 | 5 |
+| galactic | 8 | 6 | 8 | 9.0 | 5.0 | 62 |
+| game / apps | 21 | 17 | 23 | 75.0 | 28.6 | 27 |
+| jobs | 3 | 2 | 2 | 0.9 | 1.6 | 64 |
+| lua | 12 | 12 | 12 | 24.2 | 11.7 | 17 |
+| materials | 1 | 1 | 1 | 1.5 | 0.8 | 4 |
+| objects | 1 | 1 | 1 | 1.3 | 0.6 | 5 |
+| render | 15 | 15 | 21 | 51.4 | 36.5 | 345 |
+| rhi | 2 | 1 | 2 | 1.0 | 1.0 | 3 |
+| shaderxlat | 2 | 1 | 2 | 2.1 | 1.6 | 70 |
+| sim (apps, `alamo_sim_*`, `alamo_headless`) | 9 | 9 | 99 | 49.5 | 12.1 | 106 |
+| tactical | 22 | 21 | 21 | 24.3 | 15.0 | 61 |
+| terrain | 1 | 1 | 1 | 1.0 | 0.6 | 24 |
+| tools | 7 | 2 | 2 | 2.5 | 5.6 | 1 |
+| ui | 10 | 10 | 10 | 15.2 | 7.5 | 16 |
+| vfs | 2 | 2 | 2 | 1.0 | 1.5 | 2 |
+| video | 1 | 1 | 1 | 0.5 | 0.8 | 13 |
+| **total** | 135 | 120 | 227 | 278 | 143 | 902 |
+
+Reading it:
+- The "link steps" column sums per-step wall time while up to 16 steps ran at once (and compiles competed for the cores), so it overstates the cost. bo1 measured the real number: relinking all 135 exes takes **8.1 s with link.exe, 4.5 s with lld-link** (section "Build times"). A typical single-test edit relinks one exe, about 0.3 s. Merging 80 small exes into 20 runners saves a few seconds of linking on a full relink and nothing on compiling (the same test sources are compiled either way).
+- Test run time is concentrated: render 345 s, sim 106 s, shaderxlat 70 s, jobs 64 s, galactic 62 s, tactical 61 s, ai 56 s (sums of per-test times, run 4 at a time). Merging does not change these.
+- Merge candidates if it is done anyway (one test per exe, small, shared fixtures, in the t03/t04 modules): core 6 (atomic_file, dmath, profile, save, sim, tests), vfs 2, galactic 8, ai 6, lua 12, tactical 22 (movement_b2..b5, bkm, cohesion, gaps, t26, save, fog, fog_save, tree_save, garrison, hangar, hyperspace, ...). The lua and tactical families are the biggest (34 exes, 40 MB of exe files). apps / render / ui / audio / video / game are out of scope for this group.
+
+## Frame time against worker count (2026-11-14)
+
+Question (Gabriel): frame p99 rose with more workers (space battle 16 ms at 0 workers to 177 ms at 15; water battle 32 to 250 ms).
+Setup: MSVC Release, Ryzen 7 7800X3D (16 threads), RX 9070 XT, the BM scenes (`space_battle` sim-only, `space_battle_game`,
+`water_battle` rendered, `bm-high`, fixed frames, hidden window), one process run per cell, two runs each unless noted. "Before" = dev
+`e0342ed8`, "after" = the job-system changes below. "Loaded" = 16 busy-loop processes at normal priority (CPU 100 %), standing in for a
+parallel build. p99 in ms (frame p99 for the rendered scenes, tick p99 for the sim-only one).
+
+| Scene | Machine | 0 workers: before / after | 7 workers: before / after | 15 workers: before / after |
+|---|---|---|---|---|
+| space_battle (sim-only) | idle | 3.5 / 3.4 | 3.2 / 3.2 | 3.1 / 3.1 |
+| space_battle_game | idle | 33.8 (after only, 1 run) | 12.2 / 12.3 | 12.8 / 12.8 |
+| water_battle | idle | (not run) | 10.2 / 9.9 | 10.4 / 9.9 |
+| space_battle (sim-only) | loaded | 21 / 19 | 27 / 29 | 28 / 29 |
+| space_battle_game | loaded | 35 (after) | 41 / 38 | 41 / 40 |
+| water_battle | loaded | 37 (after) | 44 / 43 | 47 / 45 |
+| space_battle (sim-only) | loaded, game above normal | 5.3 | 8.8 | 9.1 |
+| space_battle_game | loaded, game above normal | 19.8 | 18.1 | 18.2 |
+| water_battle | loaded, game above normal | 16.2 | 17.8 | 20.2 |
+
+(Above-normal rows: after, one run each, process started at `ABOVE_NORMAL_PRIORITY_CLASS`.)
+
+Reading it:
+- **Idle, more workers is faster**, also before the change: 15 workers against 0 is 3.1 against 3.4 ms sim-only and 12.8 against
+  33.8 ms in the game. The 0-worker game numbers in the question were not comparable: with a serial job system the renderer's polled
+  background jobs (model streaming, pipeline creation, shader translation) never ran, so nothing was loaded or drawn, and the fixed-frame
+  benchmark failed with "the presentation did not settle within 300 s". Fixed: those call sites run the work inline when the job system
+  is serial (`render/src/pipelines.cpp`, `renderer_xlat.cpp`, `renderer_graph.cpp` `ModelStreamer::request`); the 0-worker run now
+  ends with the same final CRC as 15 workers.
+- **Loaded at normal priority, more workers is slower** (sim-only 19-21 against 27-29 ms): every fork-join waits for the worker the OS
+  gave the smallest share of a core. The job-system changes (a `parallel_for` caller waits for running chunks only, no longer for helper
+  jobs a worker popped but has not started; queued helpers are taken back; at most as many workers are woken as helpers were queued; top-
+  level background jobs capped at half the workers) are neutral idle and within noise loaded: that stall is not what dominates here.
+- **Process priority is the lever**: above-normal priority halves the loaded game p99 (about 40 to 18 ms, 45 to 17-20 ms) and brings 7 and
+  15 workers level with 0 in the game. `alamo_game` now raises itself to above normal at start (`--priority normal` turns it off;
+  `--smoke` test runs stay normal). `alamo_headless` and the tests are unchanged.
+- The question's 177 / 250 ms did not reproduce, not even with all 16 threads busy; a heavier load (memory or disk pressure from
+  several builds) is the likely difference. The 115-230 ms worst frames of `space_battle_game` were the audio event log, fixed
+  the same day (next section).
+- Separately, `space_battle_game`'s idle frame p99 is about 12 ms here against 6.6 ms in the 2026-11-08 baseline (same before and after
+  this change): a regression on dev since then, filed on the backlog.
+
+## Audio event log hitches (2026-11-14)
+
+`space_battle_game`'s worst frames (110-130 ms idle, 190-230 ms loaded) fell on the same measured frames in every run, at every worker
+count and load: 564, 846, 1270, 1905, 2858, each 1.5 x the one before (MSVC's `std::vector` growth). Section timers in the frame loop put
+them in the audio update, and timing `AudioSystem::push` matched each spike: `AudioSystem::log_` (152-byte `LogEntry`, three strings)
+logged every SFX start / reject / steal, about 60,000 entries per second of space battle, and was never cleared in the game. At frame
+2858 it held 3.54 M entries (about 540 MB) and its regrowth copy took 134 ms on the frame thread; an hour of play would have grown it by
+roughly 30 GB.
+
+Fix: `AudioConfig::log_limit` (unlimited by default: the tests read the whole log); at the limit the oldest half is dropped. The live game
+keeps 4096 (`kGameAudioLogLimit`, `GameAudioHost::set_log_limit`).
+
+| `space_battle_game`, 15 workers | Frame p99 (ms) | Worst frame (ms) | Hitches over 25 ms |
+|---|---|---|---|
+| idle, before (dev e0342ed8) | 12.9 / 12.1 | 115.1 / 110.7 | 6 / 6 |
+| idle, after | 12.2 / 11.5 | 26.1 / 25.3 | 1 / 1 |
+| loaded (16 burners), before, normal priority | 40.3 / 41.7 | 189-231 (all runs) | 124-171 |
+| loaded, after (above-normal priority, the new default) | 17.6 | 42.1 | 2 |
+
+Same final CRC before and after (`4d1f861208999872`); `water_battle` unchanged (no hitches either way). The one hitch left idle is a
+single sim tick at measured frame 536 (battle tick 1291): `tac.movement` 20.7 ms, nearly all of it the sim thread waiting on one slow
+`parallel_for` chunk (`jobs.for_wait` 19.8 ms), filed on the backlog.
+
+## Worker-count sweep on the bench scenes (2026-11-14)
+
+`alamo_headless --bench tests/benchmark/<scene>.abench --runs 1 --warmup 0 --workers W` for W = 0, 1, 3, 7, 15, interleaved, two
+rounds, MSVC Release at dev `e0342ed8` (bo3), Ryzen 7 7800X3D. **Not a quiet machine**: other sessions were active (CPU 0-64 %
+busy before each run, most under 20 %), so read the shape, not the absolute numbers; both rounds agree on it. All runs passed the
+scenes' fingerprints. Analysis and what to do about it: [`PERF_SERIAL_2026-11-14.md`](PERF_SERIAL_2026-11-14.md).
+
+Median tick (ms), round 1 / round 2:
+
+| Scene | W0 | W1 | W3 | W7 | W15 |
+|---|---|---|---|---|---|
+| `space_battle` | 1.20 / 1.20 | 1.10 / 1.00 | 1.03 / 0.98 | 1.05 / 1.00 | 1.04 / 1.00 |
+| `land_battle` | 3.48 / 3.46 | 3.00 / 3.34 | 3.06 / 3.39 | 2.97 / 3.26 | 2.94 / 2.87 |
+| `nebula_battle` | 2.54 / 2.04 | 1.97 / 1.96 | 1.65 / 1.79 | 1.81 / 1.65 | 1.82 / 1.71 |
+| `water_battle` | 3.02 / 2.99 | 2.85 / 2.84 | 2.30 / 2.55 | 2.22 / 2.40 | 2.31 / 2.46 |
+| `space_battle_game` | 2.09 / 2.12 | 1.78 / 1.94 | 1.61 / 1.72 | 1.61 / 1.77 | 1.69 / 1.84 |
+| `galactic_late` | 0.63 / 0.65 | 0.74 / 0.67 | 0.66 / 0.64 | 0.69 / 0.68 | 0.83 / 0.71 |
+
+p99 follows the medians (land 7.5-9.3 ms at every count; nebula 22-31 ms, from `tac.movement`).
+
+- Workers save 5-25 % of the battle median; W3 already gets all of it. `galactic_late` is fastest at W0.
+- Biggest zones at W0 (share of tick time): land `tac.ai.perception` 40 %, `crc.battle.ai` 19 %, `ai.goals` 9 %; water
+  `tac.ai.perception` 46 %, `crc.battle.ai` 16 %; space_battle_game `tac.ai` 32 %, `tac.movement` 31 %; nebula `tac.movement` 69 %
+  (p99 24 ms, one 190 ms `ai.planning` tick); galactic_late `ai.goals` 69 % (p99 4.4 ms, max 22 ms). All serial.
+
+## Serial path split: perception and the tactical tick (SIMP sp0, 2026-11-14)
+
+Step P0 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md). New profiler step zones (`profile::Steps`, `ALAMO_PROFILE_STEP`,
+wall clock only): `tac.perc.*` split `tac.ai.perception` (`TacticalAiWorld::Impl::refresh` and the signal passes after it), and
+`tac.s.*` time every step of `TacticalBattle::tick` (63 zones; the old `tac.setup` ... `tac.victory` laps stay). Run with
+`python tools/benchmark/worker_sweep.py --workers 0,15 --rounds 2 --scenes land_battle,water_battle,space_battle_game,galactic_late`
+(sim-only `alamo_headless --bench`, one process per cell, interleaved), MSVC Release at `8a4f44d6`, Ryzen 7 7800X3D, W15 = the
+default worker count then. **Busy machine**: two other lanes were building; CPU busy before the runs 8-100 % (galactic_late 55-100 %),
+so read shares and the shape, not absolute times. Every run matched its fingerprint. Values: mean ms per tick over both rounds
+(zone times are thread time summed over threads).
+
+| Zone (mean ms / tick) | land W0 | land W15 | water W0 | water W15 | space_game W0 | space_game W15 |
+|---|---|---|---|---|---|---|
+| tick (median, round 1 / 2) | 4.15 / 3.83 | 2.98 / 2.79 | 3.21 / 3.22 | 2.71 / 2.50 | 2.16 / 2.83 | 3.16 / 1.94 |
+| `tac.ai.perception` | 1.77 | 0.75 | 1.58 | 0.81 | 0.71 | 0.98 |
+| - `tac.perc.fill` (`host.fill`: `BattleAi::fill`, the per-object snapshot) | **1.64** | 0.62 | **1.46** | 0.68 | **0.64** | 0.90 |
+| - `tac.perc.diff` (sort, removed / added / owner changes) | 0.066 | 0.066 | 0.062 | 0.065 | 0.023 | 0.029 |
+| - `tac.perc.signals` (opportunity, in-range, ability, landing, production, status) | 0.026 | 0.026 | 0.013 | 0.014 | 0.019 | 0.022 |
+| - `tac.perc.grid` (UNIT_AI service) | 0.008 | 0.007 | 0.025 | 0.028 | 0.015 | 0.020 |
+| - `tac.perc.dying` / `index` / `orders` / `tf_prune` | 0.024 | 0.023 | 0.019 | 0.021 | 0.011 | 0.015 |
+| `crc.battle.ai` (inside `T13.end_tick`) | 0.89 | 0.81 | 0.56 | 0.62 | 0.18 | 0.24 |
+| `T13.end_tick` (all CRC capture) | 1.09 | 0.85 | 0.71 | 0.67 | 0.41 | 0.72 |
+| `ai.goals` | 0.42 | 0.34 | 0.17 | 0.16 | 0.07 | 0.10 |
+| all `tac.s.*` (the tactical tick) | 0.99 | 0.89 | 0.88 | 0.93 | 1.76 | 2.86 |
+| - `tac.s.move_tick` | 0.25 | 0.19 | 0.07 | 0.07 | 0.98 | 1.19 |
+| - `tac.s.abilities_combat` (combat + abilities tick) | 0.18 | 0.18 | 0.31 | 0.32 | 0.16 | 0.90 |
+| - `tac.s.fog` | 0.15 | 0.13 | 0.11 | 0.11 | 0.02 | 0.03 |
+| - `tac.s.anim` (drive_animation) | < 0.01 | < 0.01 | 0.09 | 0.09 | 0.10 | 0.12 |
+| - `tac.s.speed_factors` | 0.07 | 0.07 | 0.06 | 0.06 | 0.08 | 0.10 |
+| - `tac.s.combat_flags` (the combat_pre per-unit loop) | 0.05 | 0.05 | 0.04 | 0.04 | 0.12 | 0.14 |
+| - `tac.s.collision_feed` / `attack_targets` / `attack_block` | 0.10 | 0.10 | 0.06 | 0.06 | 0.05 | 0.06 |
+| - the other steps together | 0.19 | 0.17 | 0.15 | 0.16 | 0.26 | 0.32 |
+
+`galactic_late` (no tactical zones; median 1.26 / 0.74 ms at W0 and 1.25 / 0.69 ms at W15, the busiest cells): `ai.goals` 69 % of the
+tick at W0 (1.33 ms mean, p50 0.50 ms), `T13.end_tick` 7.7 % at W0 and 18 % at W15 (0.15 against 0.44 ms: the CRC capture forks
+one job per system, the first sign of the fork cost sp1 removes).
+
+Reading it:
+- **Perception is the snapshot fill.** `tac.perc.fill` is 92-93 % of `tac.ai.perception`; the diff, the threat-grid service and the
+  signal passes are 0.1 ms together. The fill already runs per object on workers (W15 halves it on land and water), so its cost is
+  the per-object work itself: the S6 string-keyed type lookups (`PERF_SERIAL_2026-11-14.md` option 2, the `TypeFacts` table) and what
+  P3's snapshot `S_N` replaces. (sp3 t01 has since cut `tac.ai.perception` by about 60 % with `TypeFacts`: next section.)
+- **The tactical tick is not a long serial chain of services** at today's scene sizes: 63 steps total 0.9-1.0 ms on land / water,
+  and four of them (movement, combat / abilities, fog, speed factors) are 60-80 % of that; the other ~55 steps are each below
+  0.05 ms. Space: movement dominates (`tac.s.move_tick` 0.98 ms mean, its p99 is the nebula-style spike).
+- **The checksum is the third serial block**: `crc.battle.ai` 0.6-0.9 ms on land / water at both worker counts (one system = one job),
+  the target of sp2 (game checkpoint cadence) and sp6 (tree hash).
+- Raw results: `worker_sweep.py` JSON per cell (not tracked); rerun on a quiet PC for absolute numbers (sp6 t04).
+
+## TypeFacts in the battle AI's perception fill (sp3 t01, 2026-11-14)
+
+`BattleAi::fill` (and the population-cap / space-prevention scans) read a per-battle `TypeFacts[type]` table built once instead
+of ~15 string-keyed `GameObjectTypes::get_*` calls per object (PERF_AUDIT S6). Golden-neutral (CRC logs unchanged, MSVC and clang).
+`land_battle`, `alamo_headless --bench --profile`, default workers, 3 rounds interleaved old / new on one build tree while two
+other lanes built (other-process CPU 10-49 %, printed per run):
+
+| p50 ms | before (3 runs) | after (3 runs) | change |
+|---|---|---|---|
+| tick median | 2.79 / 2.89 / 3.04 | 2.31 / 2.36 / 2.45 | about -17 % |
+| `tac.ai` | 1.03 / 1.10 / 1.18 | 0.54 / 0.56 / 0.61 | about -48 % |
+| `tac.ai.perception` | 0.68 / 0.73 / 0.77 | 0.27 / 0.28 / 0.28 | about -62 % |
+| `crc.battle.ai` | 0.75 / 0.77 / 0.82 | 0.79 / 0.80 / 0.81 | unchanged |
+
+`crc.battle.ai` is now the largest single zone of a land battle tick (simp-core's sp2 / sp6).
+
+## Topology-aware job system: worker-count sweep (SIMP sp1, 2026-11-14)
+
+Step P1 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (4.1, "as built" there). `tools/benchmark/worker_sweep.py --workers
+0,1,3,6,7,15` (sim-only `alamo_headless --bench`, one process per cell, interleaved), MSVC Release, Ryzen 7 7800X3D; W6 is the new
+default (8 physical cores minus the sim and AI threads). **The machine was saturated by two other lanes' builds** for most of the
+afternoon (whole-machine CPU up to 100 %, other processes up to 93 % during runs), so each cell below is the quietest of its runs from two
+sweeps (round 1 / 2 of the first sweep at `a9f8db02`, round 1 of a second at `9cd35429` with `--max-busy 25` retries; the review fixes
+between them do not touch the paths the sim uses), with the other-process CPU during that run. Every run matched its fingerprint.
+
+Median tick ms (other-process CPU during the run), ratio to W0:
+
+| Scene | W0 | W1 | W3 | W6 (default) | W7 | W15 |
+|---|---|---|---|---|---|---|
+| `space_battle` | 1.140 (3 %) | 0.976 (2 %) 0.86 | 0.967 (5 %) 0.85 | 0.991 (14 %) 0.87 | 0.995 (11 %) 0.87 | 1.010 (8 %) 0.89 |
+| `land_battle` | 2.382 (2 %) | 2.228 (9 %) 0.94 | 2.171 (4 %) 0.91 | 2.190 (3 %) 0.92 | 2.208 (3 %) 0.93 | 2.217 (4 %) 0.93 |
+| `nebula_battle` | 1.815 (3 %) | 1.626 (4 %) 0.90 | 1.569 (4 %) 0.87 | 1.562 (4 %) 0.86 | 1.533 (6 %) 0.85 | 1.558 (3 %) 0.86 |
+| `water_battle` | 1.990 (4 %) | 1.853 (1 %) 0.93 | 1.833 (3 %) 0.92 | 1.824 (4 %) 0.92 | 1.858 (6 %) 0.93 | 1.857 (5 %) 0.93 |
+| `space_battle_game` | 1.922 (8 %) | 1.669 (10 %) 0.87 | 1.579 (5 %) 0.82 | 1.548 (6 %) 0.81 | 1.559 (3 %) 0.81 | 1.570 (4 %) 0.82 |
+| `galactic_late` | 0.638-0.661 | 0.627 (4 %) | 0.631 (15 %) | 0.661 (6 %) | 0.675 (8 %) | 0.662 (4 %) |
+
+`galactic_late`, same round only (the scene's quiet run-to-run cv is 3.7 %, bm1f t04): first sweep round 1 W0 0.661, W1 0.674 (+2.0 %),
+W6 0.661 (0.0 %), W7 0.675 (+2.1 %), W15 0.662 (+0.2 %); second sweep round 1 W0 0.638, W1 0.627 (-1.8 %), W3 0.631 (-1.1 %). Before sp1
+(the 2026-11-14 sweep above) the same scene was 0.63 at W0 against 0.71-0.83 ms at W15: forks of small work now run inline, and what
+remains is `jobs.for_wait` 0.03-0.04 ms per tick (the per-system CRC capture fork, sp2 / sp6).
+
+- **Every count is at most W0's time plus noise**; battles gain 7-19 %, still all of it by W3 (the serial path, sp0, is what is left).
+- The battles' W0 medians are also 5-35 % below the morning sweep: most of that is sp3 t01 (`TypeFacts`, landed on dev between the two),
+  not sp1; the like-for-like quiet-PC comparison is sp6 t04.
+- Not measured here: a hybrid or dual-CCD CPU (pool choice is unit-tested on synthetic topologies), and the effect of the OS hints alone.
+
+## Checkpoint-only checksum in the game, parallel space path tries (SIMP sp2, 2026-11-14)
+
+Step P2 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (4.5 first half, as built there).
+
+**Checksum cadence.** `alamo_game` now hashes the sim only on checkpoint ticks: every 64 in live play (the newest ~4096 records
+kept), at the scenario's fingerprint cadence (16) in a benchmark with a scenario, every tick for `--smoke`, `--bench-make` and
+`--bench-crc-out`; plus the initial state, every save and on demand (a benchmark's last tick, the presentation on/off check).
+`alamo_headless`, the tests and every golden keep every tick. `alamo_game --hidden --bench-scenario <scene> --bench-no-verify
+--profile`, MSVC Release, before = dev `be146e12`, after = sp2, interleaved, 2 rounds each; **busy machine** (other lanes building:
+whole-machine CPU 30-90 %), so the zone times are the reliable part:
+
+| Scene | `T13.end_tick` (all CRC capture) mean ms, before / after | `crc.battle.ai` mean ms, before / after | profiled tick mean ms, before / after |
+|---|---|---|---|
+| `water_battle` | 1.04 / 0.80 → 0.066 / 0.064 | 0.99 / 0.76 → 0.062 / 0.061 | 3.20 / 2.38 → 2.05 / 1.85 |
+| `space_battle_game` | 0.26 / 0.25 → 0.025 / 0.020 | 0.23 / 0.21 → 0.022 / 0.017 | 2.39 / 2.37 → 2.77 / 2.12 |
+
+The capture cost falls by the expected 15/16 (cadence 16). On the tick, `water_battle` gains about the capture's 25-33 % share;
+`space_battle_game`'s capture was ~10 % of its tick and the busy machine's noise is larger than that. Every run (with and without
+`--profile`, 12 + 8 runs, `space_battle_game`, `water_battle`, `nebula_battle`) matched the scenario fingerprint, and the 12 runs with
+the presentation check (the save replayed without rendering) matched it, at the new cadence.
+
+**Parallel space path tries** (`nebula_battle`, sim-only `alamo_headless --bench`, default workers, before = sp1 `9cd35429`, after = sp2
+`8f9d8cf3`, interleaved, 4 rounds, each run started when the machine was below 35 % busy; other processes then took 28-42 % of the CPU
+during the runs):
+
+| `nebula_battle` | before (4 runs) | after (4 runs) |
+|---|---|---|
+| tick p99 ms | 25.1 / 24.0 / 24.1 / 28.0 | 16.9 / 17.2 / 17.1 / 16.5 |
+| `tac.movement` p99 ms | 23.4 / 22.2 / 22.5 / 25.3 | 15.3 / 15.5 / 15.3 / 15.0 |
+| tick mean ms | 6.22 / 6.17 / 6.15 / 6.61 | 4.44 / 4.50 / 4.44 / 4.44 |
+| tick median ms | 1.69 / 1.68 / 1.69 / 1.77 | 1.68 / 1.69 / 1.65 / 1.65 |
+
+All runs matched the fingerprint (the paths are the serial loop's, see SIM_PARALLEL_DESIGN.md 4.5 "as built"). The spikes were single
+requests failing 4-6 tries (up to 55 ms for one request); the tries now overlap. The 16.7 ms p99 target is reached in 1 of 4 runs on
+this loaded machine and missed by less than 0.5 ms in the others; a quiet-PC confirmation is open (sp2 t03). The worst tick (190-300 ms)
+is unchanged: it is a plan load in `ai.planning`, not movement.
+
+## Services graph on the 4x land stress scene (SIMP sp5, 2026-11-14)
+
+Step P5 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (section 12). Scene `foc-land-army4` (~700 live units, no tactical AI;
+`tools/benchmark/stress_land4.cmd <W>`), MSVC Release at `130f2ab6` (sp5 merged with sp1 / sp3 slice 4b), Ryzen 7 7800X3D, 400 ticks per
+run, W0 and W7 interleaved in 3 rounds (`--runs 1 --warmup 0`). Services zone = sum of the `tac.s.*` zones without movement, combat
+and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched its fingerprint.
+
+| Round | W0 services mean / sum of medians (ms per tick) | W7 | W7 / W0 mean | W7 / W0 sum of medians | other-process CPU W0 / W7 |
+|---|---|---|---|---|---|
+| 0 | 1.747 / 1.717 | 1.108 / 1.037 | 0.634 | 0.604 | 3 % / 4 % |
+| 1 | 1.722 / 1.692 | 1.107 / 1.036 | 0.643 | 0.612 | 2 % / 4 % |
+| 2 | 1.742 / 1.709 | 1.337 / 1.179 | (0.768) | (0.690) | 2 % / **42 %** (another lane's build; not counted) |
+
+- **Just above the exit bar (0.6)** in the quiet rounds. What does not scale at W7 (round 1): `trees` 0.106 -> 0.111 ms, `garrisons`
+  0.077 -> 0.078, `victory` 0.04, `swap_back` 0.036, `reinforce` 0.03; the converted per-unit services went to 0.31-0.60 of W0 (combat
+  sync 0.31, attack targets 0.45, engine loops 0.51, speed factors 0.55, collision feed 0.56, fog 0.60).
+- After this run `c97fb194` applies the tree boxes tree by tree in parallel (`TreeSet::update_batch`) and caches
+  `Influences_Capture_Point` per type in the capture pass (two string lookups per unit per tick before). **Not measured yet**: the
+  machine stayed loaded by other lanes; the re-run is an open sp5 task for the coordinator's quiet window.
+- The whole tick (median 10.3-10.6 ms at W0, 9.1-9.3 at W7) is dominated by movement and combat (`tac.s.abilities_combat` ~1.3 ms at
+  W0 and W7: combat's own phases, not a service).
+- **Combat** (new `cmb.*` zones, one per phase of `CombatSystem::tick`): on this scene nearly all of it was phase D (the serial unit
+  walk), and in it the land team targeting's member search, an exact `land_team_head` test of every unit for every team
+  (O(teams x units)): 1.07 of 1.26 ms. `a5600d5e` / `baa131c6` find the members and team slots by team value first (same
+  members, same order; Empire-Underworld seed 2's final CRC unchanged): combat 1.26 -> 0.63-0.64 ms per tick at W0 (one run each,
+  10 % and 65 % other-process CPU). The window has no shots (no projectiles): damage records (sp5 t08) do not touch this cost.
+- **Quiet-window re-run (sp5 t09, 2026-11-14, exe at `40a2bac1`)**: the coordinator held the other lanes (machine ~8 % busy before
+  the run), 5 interleaved rounds of 400 ticks, stress save remade with this exe (the sp6 tree hash changed the fingerprint):
+
+  | Round | W0 services mean / sum of medians | W7 | W7 / W0 mean | W7 / W0 sum of medians | other CPU W0 / W7 |
+  |---|---|---|---|---|---|
+  | 0 | 1.683 / 1.646 | 1.004 / 0.928 | 0.597 | 0.564 | 3 % / 5 % |
+  | 1 | 1.677 / 1.644 | 1.012 / 0.940 | 0.604 | 0.572 | 3 % / 3 % |
+  | 2 | 1.661 / 1.637 | 1.024 / 0.948 | 0.617 | 0.580 | 4 % / 3 % |
+  | 3 | 1.685 / 1.639 | 1.021 / 0.945 | 0.606 | 0.576 | 4 % / 5 % |
+  | 4 | 1.710 / 1.651 | 1.077 / 0.989 | 0.630 | 0.599 | 10 % / 11 % |
+
+  **Borderline: sum of medians 0.564-0.599 in every round (under the 0.6 bar); mean 0.597-0.630 (rounds 0-3 pooled 0.605, over
+  it).** The earlier sp5 numbers led with the mean, so sp5 stays open on this (roadmap sp5 t12).
+- **t12 pass (mean is the exit metric; loaded machine, 7-14 % other CPU, indicative only)**: per-zone W7 time left after the
+  re-run: fog 0.26-0.28 ms (two player grids: the per-grid apply is at most two-wide), speed factors 0.15-0.16, collision feed
+  0.10, trees 0.10 (0.08 of it `update_batch`: the `all` tree takes every unit's box in order, its refits depend on that order),
+  and ~0.25 ms of small services under sp1's 50 us inline threshold (victory, swap-back signals, reinforce, ...). Tried: fog
+  apply in cell bands per grid (each band rescans every list: fog 0.44 -> 0.57 ms at W0, 0.26 -> 0.31 at W7; reverted); tree
+  lookups in parallel (no change; reverted); container Max_Speed per type and the container tail in parallel (kept, `speed
+  factors` W0 0.31 -> 0.28, W7 0.16 -> 0.15). A cut that removes serial work from W0 as well does not lower W7 / W0, so the
+  mean stays at about 0.61 (two loaded runs: 0.62-0.64). Below 0.6 needs between-service concurrency (narrow declarations for
+  the small services, sp5 b0411) or splitting the `all` tree's update order (moves the spatial CRC, a golden change).
+  The tick median fell from ~10.5 / 9.2 ms (W0 / W7, first run) to 9.7-9.9 / 8.3-8.8 ms, mostly the combat fix below.
+- **Where damage would go** (sp5 t08, W0, one run each, 42-46 % other-process CPU, fingerprints OK): `land_battle` combat 0.147 ms
+  per tick (unit walk `cmb.d_units` 0.096, projectile commit `cmb.f_projectiles` 0.004), `space_battle` 0.361 ms (projectile
+  sweep `cmb.e_sweep` 0.277, already parallel; walk 0.064; commit 0.007). The serial commit that deferred damage records would
+  parallelise is under 0.01 ms per tick on every bench scene, so t08 is not worth its draw-order change today.
+
+## Tree-hash checksum, slice 1: movement, combat, objects (SIMP sp6, 2026-11-14)
+
+Step P6 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (4.5 "as built, second half"). The `objects`, `battle.movement` and
+`battle.combat` hashes are now trees: blocks of 256 items, hashed in parallel during the capture. Sim-only
+`alamo_headless --bench <scene> --runs 1 --warmup 0 --profile`, MSVC Release. Before = the sp2 build `8f9d8cf3`; the hash code of
+these three systems and of core did not change between that build and this slice's base. After = sp6 slice 1. Runs are interleaved,
+2 rounds per scene and worker count. Each run started after the machine was under 35 % busy or after 60 s; other processes then
+took 2-26 % of the CPU (two runs took 35 % and 93 %, see the second galactic_late value). Zone means in ms per profiled tick, round 1 / round 2:
+
+| Scene, workers | `crc.objects` before → after | `crc.battle.movement` before → after | `crc.battle.combat` before → after | `T13.end_tick` (all capture) before → after | `crc.battle.ai` (not converted) |
+|---|---|---|---|---|---|
+| `land_battle` W0 | 0.043 / 0.042 → 0.028 / 0.028 | 0.027 / 0.027 → 0.027 / 0.027 | 0.011 / 0.011 → 0.012 / 0.012 | 1.09 / 0.85 → 0.85 / 0.82 | 0.68-0.93 |
+| `land_battle` default | 0.047 / 0.048 → 0.033 / 0.032 | 0.031 / 0.031 → 0.032 / 0.032 | 0.013 / 0.013 → 0.014 / 0.014 | 0.84 / 0.83 → 0.82 / 0.82 | 0.79-0.80 |
+| `water_battle` W0 | 0.039 / 0.040 → 0.026 / 0.027 | 0.017 / 0.017 → 0.017 / 0.017 | 0.008 / 0.008 → 0.009 / 0.009 | 0.63 / 0.64 → 0.60 / 0.61 | 0.49-0.51 |
+| `water_battle` default | 0.042 / 0.046 → 0.029 / 0.029 | 0.018 / 0.018 → 0.019 / 0.018 | 0.009 / 0.009 → 0.010 / 0.010 | 0.61 / 0.60 → 0.60 / 0.59 | 0.56-0.58 |
+| `space_battle_game` W0 | 0.020 / 0.020 → 0.014 / 0.016 | 0.065 / 0.066 → 0.066 / 0.068 | 0.016 / 0.016 → 0.017 / 0.018 | 0.35 / 0.36 → 0.35 / 0.37 | 0.16-0.17 |
+| `space_battle_game` default | 0.021 / 0.022 → 0.032 / 0.027 | 0.073 / 0.079 → 0.076 / 0.074 | 0.018 / 0.021 → 0.021 / 0.020 | 0.21 / 0.23 → 0.22 / 0.21 | 0.18-0.19 |
+| `galactic_late` W0 | 0.031 / 0.045 → 0.022 / 0.031 | - | - | 0.075 / 0.117 → 0.066 / 0.093 | - |
+| `galactic_late` default | 0.037 / 0.035 → 0.019 / 0.018 | - | - | 0.061 / 0.060 → 0.044 / 0.043 | - |
+
+- **`crc.objects` is 30-50 % cheaper** wherever the scene has several blocks of objects, at W0 too (the per-block hasher stays in
+  registers). It is 0.01 ms slower on `space_battle_game` at default workers, where the fork over a few blocks costs more than it saves.
+- **Movement and combat are unchanged or about 0.001 ms slower.** A battle here has fewer than 256 units, so each is one block (the
+  same work plus one more digest). The tree pays off on larger battles.
+- **The capture is still `crc.battle.ai`:** 85-95 % of `T13.end_tick` in every battle. This slice cannot reach the sp6 exit
+  (capture at most 25 % of today's at default workers). That needs the `battle.ai` slice, which comes after sp3.
+- **Same outcome.** Every after run matched its regenerated fingerprint, and the before runs fail only the fingerprint, as expected.
+  All goldens and fingerprints moved once (commit "sp6 goldens"), identically on MSVC and clang. The movement / gaps determinism
+  checks passed at 1 / 4 / 16 threads, and the worker-count ctest entries passed at every count.

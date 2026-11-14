@@ -15,8 +15,11 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "alamo/core/ascii.hpp"
+#include "alamo/core/galaxy.hpp"  // Vec3
 #include "alamo/core/sim_rng.hpp"
 
 namespace alamo::galactic {
@@ -53,9 +56,16 @@ struct EconomyConstants {
     int32_t max_build_queue = 5;                   // Max_Build_Queue: constructor default, not in vanilla XML [H]
     bool pay_as_you_go = false;                    // Pay_As_You_Go (humans; AI always PAYG) [H]
     float production_speed_factor = 1.0f;          // Production_Speed_Factor
-    // Production_Speed_Mod_Base_Vs_Tech_0.._4 (_0 is never read, GE 2.3).
+    // Production_Speed_Mod_Base_Vs_Tech_0.._4, indexed by d - 1 with d = starbase level - Tech_Level
+    // (d = 1 -> _0, d >= 5 -> _4; A2K_T01_BUILD_COST_RE 2.1).
     std::array<float, 5> base_vs_tech{1.0f, 0.90f, 0.75f, 0.55f, 0.45f};
     int32_t max_ground_forces_on_planet = 10;      // Max_Ground_Forces_On_Planet (+0x10c8)
+    // a2l t03 (A2L_T03_RE_ANSWERS Q4.1): Health_Low_Percent_Threshold (+0x11b38; FoC 0.33, Thrawn's Revenge 0.50), the
+    // galactic free-store Setup A health floor.
+    float health_low_percent_threshold = 0.33f;
+    // a2m t05 (A2M_T04_RE_ANSWERS Q3) [H]: the AI reachability slot 7 (0x663810) thresholds of levels 7 / 8 / 9,
+    // GameConstants +0x157c / +0x1580 / +0x1584 (FoC XML and ctor defaults 1000 / 3000 / 5000).
+    std::array<float, 3> threat_reachability_tolerance{1000.0f, 3000.0f, 5000.0f};
     float corruption_hyperspace_bonus = 1.5f;      // Corruption_Hyperspace_Bonus (+0x1213c)
     float political_control_change_seconds = 7.0f; // Political_Control_Change_Time_Seconds (+0x124)
     float influence_alignment_bonus = 0.5f;        // MaxInfluenceTransitionAlignmentBonus (+0x574)
@@ -75,8 +85,12 @@ struct EconomyConstants {
     // A2 galactic (AI_GALACTIC_3 §3.1): AI_Uses_Galactic_Pop_Cap (+0x11EBC), ctor false, absent from shipped XML.
     bool ai_uses_galactic_pop_cap = false;
     // REMAINING_GAPS 1.5 item 2: Good_Side_Name (+0x12e0; "REBEL" in FoC and TR): story BUILDABLE_UNIT raises this
-    // faction's tech when no sliceable candidate remains.
-    std::string good_side_name = "REBEL";
+    // faction's tech when no sliceable candidate remains. modc t03: no built-in faction name; data without the field
+    // names no faction.
+    std::string good_side_name;
+    // modc t20: Evil_Side_Name ("EMPIRE" in FoC), read for presentation only (route sides FIXPASS_GALACTIC 3.1, the HUD
+    // shell alternate); no sim code reads it. "" = none.
+    std::string evil_side_name;
 };
 
 // Faction fields read by S3 (FactionFiles.xml).
@@ -86,11 +100,19 @@ struct FactionRules {
     bool can_control_planets = false;       // Can_Control_Planets (+0x109)
     bool is_playable = false;               // Is_Playable (+0x20a8)
     bool benefits_from_corruption = false;  // Benefits_From_Corruption (+0x10b)
+    // modc t03: Basic_AI (+0x378, xml_field_tables.md), trimmed as written; the AIPlayerType a skirmish slot of this
+    // faction plays (AI_GALACTIC.md §1.2, SKIRMISH_SETUP.md §2.1). "" = none; the shipped "None" is kept as written.
+    std::string basic_ai;
     float hyperspace_speed_factor = 0.07f;  // Hyperspace_Speed_Factor (+0x3b0); default [L] (every vanilla faction sets 0.07)
     float maintenance_cost = 0.0f;          // Maintenance_Cost (+0x3AC): AI upkeep factor only (A2H_GALACTIC_AI_RE §3) [H]
     ForceSide force_alignment = ForceSide::Neutral;  // Force_Alignment (+0x110)
     std::array<float, 2> corruption_time_mult{1.0f, 1.0f};   // Corruption_Galactic_Production_Time_Multipliers
     std::array<float, 2> corruption_price_mult{1.0f, 1.0f};  // Corruption_Galactic_Production_Price_Multipliers
+    // a2m r2: Automatic_Planetary_Corruption_Upgrade_Type (faction +0x3068): the upgrade type a planet corrupted by this
+    // faction gets, index = corruption type 0..7 (list order); 0xFFFFFFFF = none / unresolved. Resolved by
+    // load_galactic_rules; the names are kept as written in `automatic_corruption_upgrade_names`.
+    std::vector<std::string> automatic_corruption_upgrade_names;
+    std::vector<uint32_t> automatic_corruption_upgrades;
     int32_t base_population_capacity = 0;  // Base_Population_Capacity (+0x2EE8), not in shipped XML; default 0 [H] (A2GAL 2.2)
     int32_t displayed_tech_level_adjustment = 0;  // P4 sim: Displayed_Tech_Level_Adjustment (+0x2FB0; FoC Rebel +1)
     // REMAINING_GAPS 6.3 base-level info fallback: faction +0x20ac <= the base level -> the level is shown [M: field meaning
@@ -107,6 +129,25 @@ struct FactionRules {
     // S7 t30 (TACTICAL_COMBAT §2.10): Allies (+0x3e0) / Enemies (+0x3f8) faction names as written (comma / space
     // separated in the XML); the campaign relation table compares them case-insensitively.
     std::vector<std::string> allies, enemies;
+    // modc t20: presentation fields read by the game host only (never by sim code; not saved, not in the CRC), so the UI
+    // needs no faction names. Text_ID (offset not in xml_field_tables.md, modc t25; FoC TEXT_FACTION_REBELS ...),
+    // Tech_Tree_Dialog_Name (+0x2698: IDD_TECH_TREE_REBEL / _EMPIRE / _BLACKMARKET), Tech_Level_Icon_Name (+0x138:
+    // i_button_r_tech_upgrade_ / _e_), all trimmed as written; "" = none.
+    std::string text_id, tech_tree_dialog, tech_level_icon;
+    // [port: Gabriel] the faction's emblem for the saved games list: Icon_Name, else Alternate_Icon_Name (trimmed; "" = none).
+    std::string icon;
+    // Land_ / Space_Mode_Selection_Blob_Material_Name (+0x2818 / +0x2840; UI.md selection circle's faction default).
+    std::string land_selection_blob, space_selection_blob;
+    // cu5 t01: every child element of this <Faction> definition, (tag, trimmed text) in document order. The loaders of
+    // the other faction tags (Basic_AI map, campaign seed options, skirmish default forces, retreat and bombardment
+    // data, conflict unit caps) read them here instead of parsing FactionFiles.xml again. Not saved, not in the CRC.
+    std::vector<std::pair<std::string, std::string>> xml_fields;
+    // Trimmed text of the first child element named `tag` (case-insensitive), "" if none (XmlNode::child_text).
+    std::string_view xml_text(std::string_view tag) const {
+        for (const auto& [k, v] : xml_fields)
+            if (ascii_iequals(k, tag)) return v;
+        return {};
+    }
 };
 
 // DifficultyAdjustments.xml entry (AI players only). No adjustment = the internal all-1.0 one [H].
@@ -114,6 +155,11 @@ struct DifficultyRules {
     std::string name;
     float credit_multiplier = 1.0f;               // Credit_Multiplier
     float galactic_build_time_multiplier = 1.0f;  // Galactic_Build_Time_Multiplier (+0x28)
+    // cu8 t03 (tactical combat, TACTICAL_COMBAT §3.6 step 12 / §4.3): Damage_Multiplier, Health_Multiplier (+0x50),
+    // Shield_Multiplier (+0x54).
+    float damage_multiplier = 1.0f;
+    float health_multiplier = 1.0f;
+    float shield_multiplier = 1.0f;
 };
 
 namespace econ {
@@ -194,16 +240,10 @@ float hop_factor(bool mover_benefits, bool a_corrupted, bool b_corrupted, bool h
 float base_speed(float slowest_hyperspace_speed, float faction_factor, float m);
 inline float hop_speed(float v0, float r) { return v0 * r; }
 
-struct Vec3f {
-    float x = 0, y = 0, z = 0;
-};
 // One locomotor frame (GE 3.2) [H rule, M geometry]: velocity = unit(target - pos) * v; step; when the
 // remaining distance after the step is < 2 * |velocity| snap to the target. Returns true on arrival.
 // `facing` receives the unit direction (left unchanged when already at the target).
-bool fleet_step(Vec3f& pos, const Vec3f& target, float v, Vec3f* facing);
-// Frames a straight hop of `distance` takes at v (first k with D - k v < 2 v, float accumulation along
-// one axis) - a closed-form helper for tests.
-int32_t hop_frames_1d(float distance, float v);
+bool fleet_step(Vec3& pos, const Vec3& target, float v, Vec3* facing);
 
 // ---- political control (GE 4.2) ---------------------------------------------------------------------
 // Delta = e / (30 * m * Political_Control_Change_Time_Seconds) [H].

@@ -84,20 +84,4 @@ render::Instance selection_blob_instance(const render::GpuModel& model, const Se
     return in;
 }
 
-std::vector<terrain::ShadowBlob> land_selection_blobs(std::span<const SelectionBlob> blobs,
-                                                      const std::vector<terrain::ShadowBlobMaterial>& materials) {
-    std::vector<terrain::ShadowBlob> out;
-    out.reserve(blobs.size());
-    for (const SelectionBlob& b : blobs) {
-        if (!b.land) continue;
-        terrain::ShadowBlob s;
-        s.position[0] = b.center.x;
-        s.position[1] = b.center.y;
-        s.width = s.height = 2.0f * b.radius;
-        s.material = terrain::find_blob_material(materials, b.material);
-        out.push_back(s);
-    }
-    return out;
-}
-
 }  // namespace alamo::ui

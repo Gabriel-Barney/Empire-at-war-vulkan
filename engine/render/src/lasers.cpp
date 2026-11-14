@@ -127,10 +127,12 @@ PrimVertex vertex(const D3& p, uint32_t color, float u, float v) {
 }  // namespace
 
 bool parse_laser_constants(std::span<const uint8_t> xml, LaserConstants& out) {
-    const data::XmlDocument doc =
-        data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), "GameConstants.xml");
-    if (!doc.ok()) return false;
-    const data::XmlNode root = doc.root();
+    const data::XmlDocument doc = data::XmlDocument::parse(xml, "GameConstants.xml");
+    return parse_laser_constants(doc.root(), out);
+}
+
+bool parse_laser_constants(const data::XmlNode& root, LaserConstants& out) {
+    if (!root) return false;
     auto value = [&](std::string_view tag, float& v) {
         const data::XmlNode n = root.child(tag);
         float f = 0.0f;

@@ -269,7 +269,7 @@ struct StoryBattleStart {
 //   Destroyed          STORY_TACTICAL_DESTROY (Destroy: Param1 type names, empty = any; Param3 count) + a named
 //                      hero (or a team carrying one) STORY_DEFEAT_HERO
 //   HardpointDestroyed STORY_ATTACK_HARDPOINT (name = the hardpoint's name; filter owner = the attacker's: `other`
-//                      object or `player`)  [S9 CombatSystem::hardpoint_events / AbilitySystem hardpoint_destroyed]
+//                      object or `player`)  [S9 CombatSystem::hardpoint_events / AbilitySystem hardpoint_offline]
 //   Reinforced         STORY_REINFORCE        UnitArrived  STORY_UNIT_ARRIVED     FullStop  STORY_FULL_STOP
 //   Garrisoned         STORY_GARRISON_UNIT    HeroCaptured STORY_CAPTURE_HERO
 //   StructureCaptured  STORY_CAPTURE_STRUCTURE (generic rule, Param1 = type name)
@@ -396,6 +396,17 @@ public:
     // tactical VMs / plot set are released (their log lines stay). No-op without an attached battle.
     void end_battle(int32_t winner, uint64_t frame);
     bool battle_attached() const;
+    // bkc1 t01 (docs/re/BKC1_RE_ANSWERS.md Q1 [H]): the Esc key during a story cinematic. esc_goes_to_story(): the
+    // cinematic camera is on (Lua Start_Cinematic_Camera: the controller's state 4) and no Lua Bink movie plays (an Esc
+    // then only stops the movie); the host sends the key here instead of opening the pause menu. handle_esc(): for every
+    // active plot of the current mode's story manager (the attached battle's tactical plot set when a battle runs, which
+    // may have none; else the galactic sets in set order), in plot-table order, calls the plot script's global
+    // Story_Handle_Esc() when it is a Lua function: no arguments, results ignored, a missing function is no error.
+    // Returns the number of calls made. Retail calls it from the message pump between ticks; the port applies it as a
+    // port command (game story_ui.hpp kStoryEscSubtype) before the next tick's systems, so threads it creates first
+    // run at that tick's T9, as in retail.
+    bool esc_goes_to_story() const;
+    uint32_t handle_esc();
     // Tactical notification (battle host, sim thread): names / owners resolved now from the battle's store,
     // queued and routed at the next service. Ignored without an attached battle.
     void notify_tactical(const TacticalStoryNotification& n);
@@ -461,8 +472,8 @@ public:
     }
     // --- OI galactic (owner: galactic agent): BT §1.6 story lock 0x4472a0 ("this planet's battle must be fought"),
     // written by the story rewards DISABLE_AUTORESOLVE / ENABLE_AUTORESOLVE (global flag +0x41) and
-    // RESTRICT_AUTORESOLVE (Param1 planet, Param2 1 add / 0 remove: the planet list +0x308) [M: field wiring]. Source for
-    // CampaignBattles' `autoresolve_locked` seam (the host sets it: [&](PlanetIndex p) { return story.autoresolve_locked(p); }).
+    // RESTRICT_AUTORESOLVE (Param1 planet, Param2 1 add / 0 remove: the planet list +0x308) [M: field wiring]. Read by
+    // CampaignBattles' conflict decision through SimHost::story() (a locked human-involved conflict is fought).
     // No source is specified for the story-sequence-active flag (0x140b154d0), so none is offered. Not hashed. ---
     bool autoresolve_locked(PlanetIndex planet) const;
     // --- end OI galactic ---
@@ -524,7 +535,7 @@ public:
     void write_players(ByteWriter& w) const;
     bool read_players(ByteReader& r);
     // "story.presentation" (N1 stage 2): the lua::PresentationLog shared by the story VMs (open / finished blocks the
-    // VMs wait on, presentation state, undrained events); its write / read through write_if_saveable.
+    // VMs wait on, presentation state, undrained events); its write / read through write_system.
     void write_presentation(ByteWriter& w) const;
     bool read_presentation(ByteReader& r);
 
@@ -535,25 +546,25 @@ private:
     std::vector<std::pair<std::string, lua::StoryNotification>> notifications(const StoryTrigger& t) const;
     std::string planet_type_name(uint32_t planet) const;
     void poll(size_t set);
-    // a2j t05: one created object for the load-time CONSTRUCT notifications (starting forces, captured when start() begins).
+    // a2j t05: one created object for the load-time CONSTRUCT notifications (starting forces, captured when start() begins;
+    // a2k t12: in retail L8 order, planet by planet).
     struct LoadConstruct {
-        int32_t player = -1;
         PlanetIndex planet = 0;
         uint32_t type = 0;
-        int32_t level = 0;  // CONSTRUCT_LEVEL value as of the object's creation (starbase level / ground base level)
     };
     std::vector<LoadConstruct> starting_forces() const;
+    int32_t planet_owner(PlanetIndex planet) const;  // a2k t12: the CONSTRUCT filter's owner (kNoPlayer: none)
     // A2i t01 + a2j t05: the load-time story pass at the end of start() (header comment): starting-force CONSTRUCT, then
     // STORY_TECH_LEVEL per player; the stream the load rewards raise is routed after each step.
     void load_pass(const std::vector<LoadConstruct>& forces);
-    // STORY_CONSTRUCT (+ STORY_CONSTRUCT_LEVEL for a starbase / ground structure type) for `type` created by `player` at
-    // `planet` (STORY.md §5, 0x326cd0). level < 0: the planet's current level.
-    void construct_notifications(int32_t player, PlanetIndex planet, uint32_t type, int32_t level,
+    // STORY_CONSTRUCT (+ STORY_CONSTRUCT_LEVEL for a starbase type) for `type` created at `planet`, judged by the planet
+    // owner `owner` (STORY.md §5, 0x326cd0; A2K_T07_STORY_LOAD_RE.md §3, §5).
+    void construct_notifications(int32_t owner, PlanetIndex planet, uint32_t type,
                                  std::vector<std::pair<std::string, lua::StoryNotification>>& out) const;
-    void dispatch_construct(int32_t player, PlanetIndex planet, uint32_t type, int32_t level);  // every plot set, no log
+    void dispatch_construct(PlanetIndex planet, uint32_t type, int32_t owner);  // every plot set, no log
     void route_load_events();               // a2j t05: drain + route the galactic stream inside the load pass
     void collect_all(std::string_view via);  // collect() for every galactic plot set, set order
-    bool loading_ = false;                   // a2j t05: inside load_pass (reward spawns raise CONSTRUCT at once)
+    std::shared_ptr<StorySession*> self_;   // a2k t12: the sim's spawn hook reaches this session through it
     void collect(size_t set, std::string_view via);  // log new fired entries, drain script errors
     void apply_reward(Set& s, const std::string& type, const std::vector<std::string>& params);
     void invade_planet_reward(int32_t plot_player, PlanetIndex planet, const std::string& company);  // a1h t04

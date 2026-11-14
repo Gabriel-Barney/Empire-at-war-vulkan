@@ -177,10 +177,66 @@ bool cell_astar(const PassabilityGrid& grid, const RegionMap& regions, V2 start,
 void smooth_path(const PassabilityGrid& grid, std::vector<V2>& points, uint32_t mask, float clearance = 0.0f,
                  const RegionMap* regions = nullptr, int32_t slot = -1, const ThreatCost* threat = nullptr);
 float path_length(std::span<const V2> points);
+
+// s78p (b0049, MOVEMENT §3.5.2 D, s78n t26 RE 2; 0x413340): the lane of a formation member - one point per waypoint of the
+// formation path `fpath`. Point i: origin fpath[i], direction n = lane_dir(fpath, i) (i = 0: unit(wp1 - wp0), fast then
+// exact normalise; i > 0: the waypoint line's bisector of 0x5c5060, the last waypoint its incoming direction); row k =
+// min(int(s_i / 30), rows - 1), s_i = the 2-D arc length to i; lateral offset L0 = LaneShape::offset(s_i) (+ = toward
+// (-n.y, n.x), retail's sign); point = origin + L (-n.y, n.x); while the point fails the unit's `mask` (0x50e0c0, the
+// cell test) L -= L0 / 5, and once |L| <= |L0 / 5| L = 0 (the origin). z = 0 for every point (the port's paths are 2-D).
+// An empty grid (unit tests without terrain) passes every point. s78p [port]: with a squeeze, inside a segment whose
+// straight lane line fails the class (line_passable), a point is also placed at each row (arc 30 k) whose offset differs
+// from a neighbouring row's - retail's member takes the row's offset as it walks, so a squeeze in the middle of a long
+// segment narrows the lane there too.
+struct LaneShape {
+    float left = 0.0f;                  // the slot's lateral offset (+ = left; a port Slot's lateral is to the right: -lateral)
+    std::span<const float> shift;       // the corridor squeeze's per-row shift F +0xb0[k].+4 (+ = left; empty: no squeeze)
+    std::span<const uint32_t> entry;    // its per-row width-table entry (0: the full width)
+    std::span<const float> entry_left;  // the unit's offset in each entry's pack F +0xe0[k] (+ = left; entry 0 unused)
+    // L0 at arc length s: shift[k] + the unit's offset in row k's pack (`left` for the full-width entry 0).
+    float offset(float s) const;
+};
+V2 lane_dir(std::span<const V2> fpath, size_t i);
+std::vector<V2> formation_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, uint32_t mask);
+// s78p (b0049) [port]: the member's path on its lane - its start (lane_start from the last lane point it has passed), then
+// the lane points whose waypoint it has not passed yet (the leading points with dot(pos - lane[i], lane_dir(i)) >= 0 are
+// skipped: retail steps a waypoint whose line the unit has crossed) and whose rest length on the formation path (2-D)
+// exceeds the member's depth `back` (a point behind the previous one across its own line is skipped: it would turn the
+// member back), then the end point lane_end. bkm1 t01 (b0095): a segment that fails `mask` (line_passable) falls back onto
+// the formation path (its far point to its origin, then backwards), never moving the end. Retail keeps the formation path
+// as the unit's path, steers it onto its lane with the lane term and shifts the waypoint lines within |+0x68| of the end
+// along their segments (MOVEMENT §4.3.3); the port walks the lane itself, and its end is the member's goal.
+std::vector<V2> member_lane(const PassabilityGrid& grid, std::span<const V2> fpath, const LaneShape& shape, float back,
+                            uint32_t mask, V2 pos);
+// bkm1 t02 (b0096, MOVEMENT §4.3.3 items 2 - 5 [H]): where a formation member stops - the last waypoint G moved along the
+// last segment's direction d1 by -back (back >= 0: the member's depth behind the front row, which stops on G) and across
+// it by the shape's L at arc length total - back: G - d1 back + (-d1.y, d1.x) L. Not along the path's arc, not pulled in,
+// not snapped to a cell, not reserved. [port] the final-facing rotation psi (0x411980) is not modelled (psi = 0).
+V2 lane_end(std::span<const V2> fpath, const LaneShape& shape, float back);
+// s78p (b0049) [port]: the start of a lane path for a unit at `pos` - path[0] := the foot of pos on the line path[0] ->
+// path[1] when that foot lies before path[1], else pos. A member off its lane then walks the lane's direction and the lane
+// term (0x41dbb0, error / 30) pulls it onto the line, as retail's member converges on its slot offset from the formation
+// path; a member already past the lane's first point toward its end walks straight to it.
+void lane_start(std::vector<V2>& path, V2 pos);
 // Nearest passable cell (to `p`) with the given component, ring search up to max_rings; ties: the
 // first in (ring, y, x) scan order. False if none.
 bool snap_to_component(const PassabilityGrid& grid, const RegionMap& regions, V2 p, uint32_t mask, int32_t component,
                        int32_t max_rings, V2& out);
+
+// s78n t20 batch 2 (MOVEMENT §4.3.1 item 7, 0x50da90 / 0x50ee10 / 0x50f480): zones are the region components of a mask.
+// zone_at: -1 "none" (no slot for the mask, outside the grid, the uncovered last row / column), 0 a region that fails the
+// mask, else the component + 1. zone_connected (0x50ee10, land): both cells have a region that passes the mask and the
+// zones are equal - an impassable end point is never zone-connected to anything.
+int32_t zone_at(const RegionMap& regions, int32_t slot, int32_t cx, int32_t cy);
+bool zone_connected(const RegionMap& regions, uint32_t mask, V2 a, V2 b);
+// 0x50f480(P, Q, style 0, class, 30, out), cells by world_to_cell: zone(Q) = none with Q's cell outside the grid, or
+// zone(Q) = zone(P) -> out := P, true (passability is not looked at). Otherwise the square rings r = 1 .. 29 around P's
+// cell, candidates in the retail order - for i = -r .. r the cell (px + i, py + r), then its mirror (px - i, py - r);
+// for j = 1 - r .. r - 1 the cell (px + r, py + j), then its mirror (px - r, py - j); a mirror only when the first cell
+// of its pair is inside the grid and has a region - kept when inside the grid with zone(Q). The first ring with a kept
+// cell decides: out := the centre of the kept cell nearest to Q (strict <: the earliest wins a tie), true; no later ring
+// is looked at. None in 29 rings -> false, out untouched.
+bool zone_validate(const RegionMap& regions, V2 p, V2 q, uint32_t mask, V2& out);
 
 // ---------------------------------------------------------------- template implementation
 template <class Fn>
@@ -194,11 +250,11 @@ bool walk_cells(V2 a, V2 b, Fn&& fn) {
     const float dx = bx - ax, dy = by - ay;
     const int32_t sx = dx > 0.0f ? 1 : (dx < 0.0f ? -1 : 0);
     const int32_t sy = dy > 0.0f ? 1 : (dy < 0.0f ? -1 : 0);
-    constexpr float kInf = 3.0e38f;
-    const float tdx = sx != 0 ? static_cast<float>(sx) / dx : kInf;  // t per cell in x
-    const float tdy = sy != 0 ? static_cast<float>(sy) / dy : kInf;
-    float tmx = sx > 0 ? (static_cast<float>(cx + 1) - ax) / dx : (sx < 0 ? (ax - static_cast<float>(cx)) / -dx : kInf);
-    float tmy = sy > 0 ? (static_cast<float>(cy + 1) - ay) / dy : (sy < 0 ? (ay - static_cast<float>(cy)) / -dy : kInf);
+    constexpr float kFar = 3.0e38f;
+    const float tdx = sx != 0 ? static_cast<float>(sx) / dx : kFar;  // t per cell in x
+    const float tdy = sy != 0 ? static_cast<float>(sy) / dy : kFar;
+    float tmx = sx > 0 ? (static_cast<float>(cx + 1) - ax) / dx : (sx < 0 ? (ax - static_cast<float>(cx)) / -dx : kFar);
+    float tmy = sy > 0 ? (static_cast<float>(cy + 1) - ay) / dy : (sy < 0 ? (ay - static_cast<float>(cy)) / -dy : kFar);
     // Bounded walk: at most |ex - cx| + |ey - cy| steps.
     int32_t steps = (ex > cx ? ex - cx : cx - ex) + (ey > cy ? ey - cy : cy - ey);
     while (steps > 0 && (cx != ex || cy != ey)) {
@@ -236,5 +292,52 @@ bool walk_cells(V2 a, V2 b, Fn&& fn) {
     }
     return true;
 }
+
+// s78n t20 (MOVEMENT §1.5.1 item 4, FIGHTER_FLYING §7.5): the terrain line test 0x5a4c10 for a movement class - every
+// cell the segment touches passes the mask (a thin walk, the start cell included).
+inline bool line_passable(const PassabilityGrid& grid, V2 a, V2 b, uint32_t mask) {
+    return walk_cells(a, b, [&](int32_t cx, int32_t cy) { return grid.passable_cell(cx, cy, mask); });
+}
+
+// ---- s78n t26.3 (MOVEMENT §3.5.2 D, s78n t26 RE 2): the corner-speed pass 0x5070b0 ----
+// Inputs of one pass: yaw0 = the unit's facing (degrees; corner 0's incoming direction), vmax = the effective max speed
+// 0x370f00, vmin = Min_Speed x mode (0x3728f0), rate = R in degrees / frame (omega = R pi / 180), f_min =
+// Min_Speed_Fraction_For_Turn, decel = a (the brake pass), seg = the arc probe's segment length (max(2, 10 x 0x397830)).
+// line_ok = the static line test 0x5a4c10 for the unit's movement class, corridor_ok = the corridor test 0x5093c0 over the
+// probe polyline (null: passes).
+struct CornerPassIn {
+    float yaw0 = 0.0f;
+    float vmax = 0.0f;
+    float vmin = 0.0f;
+    float rate = 0.0f;
+    float f_min = 0.0f;
+    float decel = 0.0f;
+    float seg = 2.0f;
+    bool (*line_ok)(const void* ctx, V2 a, V2 b) = nullptr;
+    bool (*corridor_ok)(const void* ctx, const std::vector<V2>& probe) = nullptr;
+    const void* ctx = nullptr;
+};
+// zero / slowed: corners whose written fraction is 0 / in (0, 1) after item 6 (before the brake pass); stepdowns: v /= 1.5.
+struct CornerPassStats {
+    uint32_t zero = 0, slowed = 0, stepdowns = 0;
+};
+// Items 2-7 over the polyline `poly` (point 0 = the unit's own position): one speed fraction per point (the +4 entry; the
+// last point 1.0). Corner j: d_in = the facing (j = 0) or unit(P_j - P_j-1); the leg to P_i (i = j + 1): L, d, theta =
+// acos(clamp(d_in . d)), side = sign(d_in x d); with f_min > 0 the merge (while L < L_turn = 2 vmax sin|theta| / omega
+// and a next point lies on the same side, it is taken) and the aim point A = B + d max(0, |P_i - B| - (L - L_turn)) when
+// L > L_turn (else A = P_i); v = min(vmax, omega r / (1 - cos theta), L omega / (2 sin|theta|)), r = clamp(L / 2, 20,
+// 100), theta = 0 -> vmax; while v > 0 the arc probe must pass the line test and (v < 0.2 vmax and j != 0, or the
+// corridor test), else v /= 1.5 and below vmin or 0.1 vmax v = vmin (the last line test passed) or 0; f = v / vmax, f <
+// f_min -> 0 on waypoint j alone, else f on waypoints j .. i - 1. The brake pass (decel > 0, at least 3 points) from the
+// end: v = sqrt(2 a |seg k| + v^2), f_k = min(f_k, v / vmax), v = vmax f_k. Empty result: vmax or rate not > 0 (no pass).
+std::vector<float> corner_fractions(const std::vector<V2>& poly, const CornerPassIn& in, CornerPassStats* stats = nullptr);
+// The arc probe 0x505870 (s78n t26 RE 2): from P_j toward the aim point A at speed v, omega (radians / frame), signed theta
+// (negative for a left turn, d_in x d > 0), segment length seg: N = (uint)(|theta| v / omega / seg + 3) points p_k = P_j +
+// t (sin|theta| - sin((1 - 2u)|theta|)) v / omega + n (cos((2u - 1)|theta|) - cos|theta|) v / omega, u = k / N, t =
+// unit(A - P_j), n its normal toward the incoming direction; it stops before a p_k past the aim line (cross(A - last, p_k -
+// last) x s < 0), then A is appended. `out` starts with P_j. s78o (b0088) [port]: N is at most kCornerArcProbeMaxPoints
+// (also for a non-finite N), so custom data cannot make the pass hang or the cast overflow.
+inline constexpr uint32_t kCornerArcProbeMaxPoints = 16384;
+void corner_arc_probe(V2 pj, V2 a, float v, float omega, float theta_s, float seg, std::vector<V2>& out);
 
 }  // namespace alamo::tactical::movement

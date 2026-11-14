@@ -282,7 +282,7 @@ the hardpoints live:
 - Online fires no event and no SFX. The "last weapon of its class" event exists only on destruction (0x386660).
 
 ### 9.6 ENABLE_SPECIAL_ABILITY (11) → 0x384bb0(hp, online) [H, M for 0x4c62d0]
-- Logs "Owner's '%s' special ability is enabled". It is skipped when obj +0x3a0 bit 0x80 is set [L meaning].
+- Logs "Owner's '%s' special ability is enabled". It is skipped when obj +0x3a0 bit 0x80 is set (the owner is a death clone; TACTICAL_COMBAT §5.4.3).
 - Reads the hardpoint type's `Special_Ability_Name` (type +0x450). If it is empty, nothing happens.
 - Player-level `Set_Special_Ability_Enabled(player, ownerType, name, disable = !online)` (0x288890):
   1. updates the player's per-type ability set (player +0x378, 0x4c62d0) [M: so that later spawns inherit it];

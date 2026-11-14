@@ -75,6 +75,11 @@ struct HudQuad {
     // P4: vertical gradient (GUIDialogs.xml font Top_Color / Bottom_Color): `color` at max.y, `color_bottom` at min.y.
     bool gradient = false;
     Rgba8 color_bottom{};
+    // [port] free quad (path line segments, hud_markers.hpp): the four corners in canvas units - top-left, top-right,
+    // bottom-right, bottom-left - replace min / max as the vertex positions (uv and colour as for min / max). Drawn as a
+    // plain quad: `fill` is ignored.
+    bool has_corners = false;
+    std::array<Vec2f, 4> corners{};
 };
 
 struct HudVertex {
@@ -89,12 +94,14 @@ inline uint32_t pack_rgba(Rgba8 c) {
            (static_cast<uint32_t>(c.a) << 24);
 }
 
-// Radial "clock wipe" (§2.5 list 2/3): fill 100 (or more) -> the plain quad (4 vertices); otherwise a fan from
-// the centre over the swept part, starting at 12 o'clock and running clockwise [port: start / direction], with
-// one perimeter vertex per 45-degree boundary passed (the corners and edge midpoints of the quad) plus the start
-// and end points: 3 + (45-degree boundaries strictly inside the sweep) vertices for 0 < fill < 100, i.e. 3 at
-// 0..12.5 % up to 10 near 100 % - the vertex count shrinks by one per 12.5 %; fill <= 0 returns 0 (nothing
-// drawn). Writes up to 10 vertices (centre first) and returns the count; triangles are (0, i, i + 1).
+// Radial "clock wipe" (§2.5 list 2/3): fill 100 (or more) -> the plain quad (4 vertices); otherwise a fan over the
+// last `fill` % of the clock: from (100 - fill) % clockwise from 12 o'clock round to 12 o'clock (cu9h t03: the retail
+// bombing-run dial at value v shows the first v % clockwise from 12 o'clock uncovered and the rest under the texture, and
+// UI.md §2.5 says the fan loses one vertex per 12.5 % of the dial value; the dial callers pass 100 - value). One
+// perimeter vertex per 45-degree boundary passed (the corners and edge midpoints of the quad) plus the start and end
+// points: 3 + (45-degree boundaries strictly inside the sweep) vertices for 0 < fill < 100, i.e. 3 at 0..12.5 % up to
+// 10 near 100 %; fill <= 0 returns 0 (nothing drawn). Writes up to 10 vertices (centre first) and returns the count;
+// triangles are (0, i, i + 1), clockwise.
 uint32_t radial_wipe(const HudQuad& q, float fill, HudVertex (&out)[11]);
 
 class HudDrawList {
@@ -128,6 +135,23 @@ public:
 private:
     std::array<std::array<std::vector<HudQuad>, kHudSubLists>, kHudLayers> lists_;
 };
+
+struct HudHitBox {
+    int32_t component = -1;
+    uint32_t layer = 0;
+    Vec2f min{}, max{};  // canvas units
+    uint32_t slot = 0;   // panel slot (s_select_NN) or 0
+};
+
+// Hit box of a component drawn at `center` with `size` (canvas units, +Y up).
+HudHitBox make_hit_box(int32_t component, uint32_t layer, Vec2f center, Vec2f size, uint32_t slot = 0);
+// The topmost box under pixel (px, py): highest layer, then the latest added on that layer; its component, or -1.
+int32_t topmost_hit(std::span<const HudHitBox> hits, const HudCanvas& canvas, int32_t px, int32_t py);
+// A rectangle outline of 2-unit lines plus a translucent fill ([port] stand-in plates).
+void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f center, Vec2f size, Rgba8 back, Rgba8 edge);
+// Window resize: `canvas` becomes HudCanvas::make(width, height, canvas.ui_scale); the font cache is cleared when the text
+// height changed (pixel sizes follow it).
+void resize_canvas(HudCanvas& canvas, FontCache* fonts, uint32_t width, uint32_t height);
 
 // ---- Emitters -------------------------------------------------------------------------------------
 // A texture as the GUI draws it: an atlas entry (page 1 + UVs) or an image page (HudRenderer::set_image_page).

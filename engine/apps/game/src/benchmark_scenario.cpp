@@ -1,5 +1,6 @@
 // bm2: BM1 scenario files in alamo_game, the render-free half (benchmark_scenario.hpp).
 #include "alamo/game/benchmark_scenario.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -173,7 +174,7 @@ bool write_game_scenario(const std::string& path, const bench::Scenario* base, c
         cleanup();
         return false;
     }
-    sc.make_args.clear();  // a game scenario is remade with alamo_game --bench-make S (its own save, settings and camera)
+    // make_args (bm3): kept from the scenario / recipe - the --bench-new-save arguments `alamo_game --bench-regen S` remakes the save with.
     sc.save.path = save_name;
     sc.orders.path = orders_name;
     sc.fingerprint.path = fp_name;

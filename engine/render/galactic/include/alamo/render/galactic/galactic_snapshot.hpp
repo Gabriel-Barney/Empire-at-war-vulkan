@@ -75,8 +75,6 @@ public:
     objects::TypeIndex find(std::string_view name) const;
     // The galactic fleet container (CONTAINERS.XML "Galactic_Fleet", w_planet_fleet.alo); kNone if absent.
     objects::TypeIndex fleet_type() const { return fleet_type_; }
-    // Tests / tools.
-    void set_model(objects::TypeIndex t, std::string model) { info_[t].model = std::move(model); }
 
 private:
     const objects::GameObjectTypes* types_ = nullptr;

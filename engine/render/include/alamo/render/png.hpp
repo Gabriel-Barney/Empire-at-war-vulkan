@@ -8,7 +8,7 @@
 
 namespace alamo::render {
 
-uint32_t crc32(std::span<const uint8_t> bytes, uint32_t crc = 0);
+// Chunk CRCs are alamo::crc32 (core/hash.hpp: CRC-32/IEEE, init / xorout 0xFFFFFFFF).
 uint32_t adler32(std::span<const uint8_t> bytes, uint32_t adler = 1);
 
 // rgba: width*height*4 bytes, top row first. Returns the whole file.

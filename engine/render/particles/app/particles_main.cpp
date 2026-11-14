@@ -27,7 +27,9 @@
 #include <vector>
 
 #include "alamo/assets/asset_cache.hpp"
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/render/particles/particle_attach.hpp"
 #include "alamo/render/particles/particle_data.hpp"
@@ -43,6 +45,7 @@
 #include "alamo/render/renderer.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "app_common.hpp"  // engine/render/app (CU4 t03)
 #if defined(ALAMO_PARTICLES_HAVE_SIM)
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/jobs/crc_recorder.hpp"
@@ -71,21 +74,7 @@ struct Opt {
     float detail = 1.0f;
 };
 
-std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using render_app::env_or_empty;  // app_common.hpp
 
 int usage() {
     std::fprintf(stderr,
@@ -103,8 +92,7 @@ struct Gpu {
     rhi::Uploader up;
     rhi::FrameRing ring;
     render::Renderer renderer;
-    rhi::Image color;
-    rhi::Buffer readback;
+    render::Offscreen target;  // RGBA8 colour + readback (app_common.hpp / alamo/render/offscreen.hpp)
     uint32_t w = 0, h = 0;
     bool ok = false;
     float clear[3] = {0.01f, 0.01f, 0.03f};
@@ -139,19 +127,13 @@ struct Gpu {
         renderer.set_frame_ring(&ring);
         w = width;
         h = height;
-        rhi::ImageDesc id;
-        id.format = rhi::Format::RGBA8;
-        id.width = w;
-        id.height = h;
-        id.mips = 1;
-        id.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        if (!alloc.create_image(id, color) ||
-            !alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback, readback))
-            return false;
+        render::OffscreenDesc od;
+        od.name = "particles.offscreen";
+        if (!target.create(alloc, w, h, od)) return false;
         ok = true;
         return true;
     }
-    // inst / sky are read after efore ran (it may refill them).
+    // inst / sky are read after `before` ran (it may refill them).
     bool frame(const render::ViewMatrices& vm, const std::vector<render::Instance>& inst, const std::vector<render::Instance>& sky = {},
                const std::function<void()>& before = {}) {
         rhi::Frame* f = ring.begin_frame();
@@ -161,8 +143,8 @@ struct Gpu {
         const rhi::AcquireResult acq = up.record_acquires(cmd);
         if (before) before();  // residency / streaming after the acquires
         render::PassTarget pt;
-        pt.color = color.handle;
-        pt.color_view = color.view;
+        pt.color = target.color.handle;
+        pt.color_view = target.color.view;
         pt.extent = {w, h};
         pt.clear[0] = clear[0];
         pt.clear[1] = clear[1];
@@ -173,8 +155,8 @@ struct Gpu {
         VkBufferImageCopy copy{};
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.imageExtent = {w, h, 1};
-        fn.vkCmdCopyImageToBuffer(cmd, color.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.handle, 1, &copy);
-        const VkBufferMemoryBarrier2 hb = rhi::buffer_barrier(readback.handle, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        fn.vkCmdCopyImageToBuffer(cmd, target.color.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.readback.handle, 1, &copy);
+        const VkBufferMemoryBarrier2 hb = rhi::buffer_barrier(target.readback.handle, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                                                               VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
         rhi::cmd_barrier(fn, cmd, {}, std::span<const VkBufferMemoryBarrier2>(&hb, 1));
         VkSemaphoreSubmitInfo wait = rhi::semaphore_info(up.timeline(), acq.wait_value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
@@ -182,17 +164,14 @@ struct Gpu {
         if (acq.wait_value) fs.waits = {&wait, 1};
         if (!ring.end_frame(*f, fs)) return false;
         ring.wait_idle();
-        alloc.invalidate(readback.alloc);
+        alloc.invalidate(target.readback.alloc);
         return drawn;
     }
     bool png(const std::string& path) const {
-        const auto* px = static_cast<const uint8_t*>(readback.mapped());
-        std::vector<uint8_t> rgba(px, px + static_cast<size_t>(w) * h * 4);
-        for (size_t i = 3; i < rgba.size(); i += 4) rgba[i] = 255;
-        return render::write_png_rgba(path, w, h, rgba);
+        return target.write_png(path);
     }
     uint32_t lit_pixels() const {
-        const auto* px = static_cast<const uint8_t*>(readback.mapped());
+        const uint8_t* px = target.data();
         uint8_t base[3];
         for (int c = 0; c < 3; ++c) base[c] = static_cast<uint8_t>(std::lround(clear[c] * 255.0f));
         uint32_t n = 0;
@@ -208,8 +187,7 @@ struct Gpu {
         ctx.wait_idle();
         renderer.set_scene_hook(nullptr);
         pr.shutdown();
-        if (color) alloc.destroy(color);
-        if (readback) alloc.destroy(readback);
+        target.destroy(alloc);
         renderer.shutdown();
         ring.shutdown();
         up.shutdown();
@@ -219,11 +197,6 @@ struct Gpu {
         return v;
     }
 };
-
-std::string upper(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    return s;
-}
 
 // ------------------------------------------------------------------------------------------- dump
 void dump_system(const SystemDef& s) {
@@ -290,7 +263,7 @@ int run_showcase(const Opt& opt) {
             for (const std::string& p : files->list("Data\\Art\\Models\\*.alo")) {
                 std::vector<uint8_t> b;
                 if (!files->read(p, b) || !is_particle_file(b)) continue;
-                std::string n = upper(p.substr(p.find_last_of("\\/") + 1));
+                std::string n = ascii_upper(p.substr(p.find_last_of("\\/") + 1));
                 n.resize(n.size() - 4);
                 all.push_back(n);
             }

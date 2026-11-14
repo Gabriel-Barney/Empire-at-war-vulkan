@@ -22,6 +22,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/terrain/terrain.hpp"
+#include "alamo/test/support.hpp"
 
 #if defined(ALAMO_TERRAIN_HAVE_DATA)
 #include "alamo/data/game_database.hpp"
@@ -32,14 +33,7 @@
 
 using namespace alamo::terrain;
 
-static int g_fail = 0;
-#define CHECK(x)                                                                    \
-    do {                                                                            \
-        if (!(x)) {                                                                 \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);                \
-            ++g_fail;                                                               \
-        }                                                                           \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -237,7 +231,8 @@ void test_chunks() {
 }
 
 void test_round_trip() {
-    const MapData m = make_map(2, 1);
+    MapData m = make_map(2, 1);
+    if (m.objects.size() > 1) m.objects[1].hint = "falcongear1";  // q6 t28: 0x482 hint name
     const std::vector<uint8_t> bytes = write_ted(m);
     MapData r;
     std::string err;
@@ -275,7 +270,9 @@ void test_round_trip() {
         CHECK(std::equal(p.position, p.position + 3, q.position) && std::equal(p.rotation_deg, p.rotation_deg + 3, q.rotation_deg));
         CHECK(p.has_secondary == q.has_secondary && p.attachments == q.attachments && p.attachment_slots == q.attachment_slots);
         CHECK(p.owner_raw == q.owner_raw);
+        CHECK(p.hint == q.hint);
     }
+    CHECK(r.objects.size() > 1 && r.objects[0].hint.empty() && r.objects[1].hint == "falcongear1");
     CHECK(r.playable.has_box && r.playable.box_min[0] == 300.0f && r.playable.box_max[0] == 1000.0f);
     CHECK(r.zones.size() == 1 && r.zones[0].name == "New Zone 1" && r.zones[0].id == 77 && r.zones[0].cells.size() == 2 &&
           r.zones[0].cells[0].x == 38 && r.zones[0].cells[0].y == 59 && r.zones[0].links.size() == 1);
@@ -1707,7 +1704,7 @@ void test_real_data() {
 
     // 1. Every map in the VFS parses and (land) builds.
     const auto maps = vfs->list("Data\\Art\\Maps\\*.ted");
-    uint32_t ok = 0, land = 0, space = 0, legacy = 0;
+    uint32_t ok = 0, land = 0, space = 0, legacy = 0, hints = 0, hint_maps = 0;
     std::map<uint32_t, uint32_t> unknown_ids;
     const auto t_all = std::chrono::steady_clock::now();
     for (const std::string& path : maps) {
@@ -1720,6 +1717,12 @@ void test_real_data() {
             continue;
         }
         ++ok;
+        {  // q6 t28: 0x482 hint names (TERRAIN_WATER_POST 1.6)
+            uint32_t n = 0;
+            for (const ObjectPlacement& o : m.objects) n += o.hint.empty() ? 0u : 1u;
+            hints += n;
+            hint_maps += n ? 1u : 0u;
+        }
         {
             ParseOptions eo;
             eo.environments_only = true;
@@ -1751,6 +1754,19 @@ void test_real_data() {
                 land, space, legacy, all_s);
     for (const auto& [id, n] : unknown_ids) std::printf("  unhandled world chunk 0x%X in %u maps\n", id, n);
     CHECK(ok == maps.size() && ok > 0);
+    std::printf("map hints (0x482): %u in %u maps\n", hints, hint_maps);
+    CHECK(hints > 2000 && hint_maps > 50);  // TERRAIN_WATER_POST 1.6 counts maps.meg alone (2741 in 155 maps)
+    {  // UM01 (Underworld act I mission 1): 154 hints in maps.meg (the patched copy the VFS serves: 152); Find_Hint("UMP_SMALL_GEAR", "falcongear1") needs this one.
+        MapData um;
+        CHECK(load_map(*vfs, "UM01_A_Crimelord_Unleashed", um));
+        uint32_t n = 0, gear = 0;
+        for (const ObjectPlacement& o : um.objects) {
+            n += o.hint.empty() ? 0u : 1u;
+            gear += o.hint == "falcongear1" && o.type_crc == alamo::name_crc("UMP_SMALL_GEAR") ? 1u : 0u;
+        }
+        std::printf("UM01_A_Crimelord_Unleashed: %u hints, falcongear1 on UMP_SMALL_GEAR x%u\n", n, gear);
+        CHECK(n > 150 && gear == 1);
+    }
 
     // 2. The doc table (TERRAIN_WATER_POST 1.9).
     std::printf("\n| map | grid | patches | raw h min..max | mats | layers avg/max | water | env | objects | vs doc |\n");

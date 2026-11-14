@@ -261,7 +261,7 @@ LuaVm::LuaVm(const LuaHost& host_in, LuaVmOptions options_in)
     vm.owner = this;
     vm.host = host_in;
     vm.options = std::move(options_in);
-    vm.unbound.assign(detail::counter_slots(), 0);
+    vm.unbound.assign(binding_table().size(), 0);
     lua_State* L = lua_open();
     if (!L) {
         std::fprintf(stderr, "alamo lua: cannot create a Lua state\n");
@@ -571,13 +571,8 @@ std::vector<UnboundHit> LuaVm::unbound_hits() const {
         if (impl_->unbound[i] == 0) continue;
         UnboundHit h;
         h.count = impl_->unbound[i];
-        if (i < table.size()) {
-            h.name = table[i].kind == BindingKind::Global ? std::string(table[i].name)
-                                                          : std::string(table[i].cls) + "." + table[i].name;
-        } else {
-            for (uint32_t s = 0; s < detail::method_slots().size(); ++s)
-                if (detail::extra_counter_slot(s) == i) h.name = detail::method_slots()[s].label;
-        }
+        h.name = table[i].kind == BindingKind::Global ? std::string(table[i].name)
+                                                      : std::string(table[i].cls) + "." + table[i].name;
         out.push_back(std::move(h));
     }
     std::sort(out.begin(), out.end(), [](const UnboundHit& a, const UnboundHit& b) { return a.name < b.name; });
@@ -707,13 +702,7 @@ const std::string& LuaVm::save_error() const {
 
 LuaVm::HeapInfo LuaVm::heap_info() const {
     check_owner();
-    const detail::HeapStats s = detail::heap_stats(impl_->L);
-    HeapInfo h;
-    h.serial = s.serial;
-    h.bytes = s.bytes;
-    h.threshold = s.threshold;
-    h.strings = s.strings;
-    return h;
+    return detail::heap_stats(impl_->L);
 }
 
 bool LuaVm::gc_busy() const {

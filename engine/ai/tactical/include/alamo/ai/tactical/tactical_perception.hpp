@@ -64,6 +64,9 @@ class StateHasher;
 class ByteWriter;
 class ByteReader;
 }  // namespace alamo
+namespace alamo::objects {
+class EnumRegistry;
+}
 
 namespace alamo::ai::tactical {
 
@@ -80,11 +83,15 @@ struct PerceptionTarget {
 };
 
 struct TacticalPerceptionConfig {
-    // GameObjectCategoryType name -> mask (0 unknown). Default: the objects module's built-in table.
+    // GameObjectCategoryType name -> mask (0 unknown). Default: the objects module's built-in table; TacticalAiWorld sets
+    // tactical_category_resolver(types) = category_mask_from(types->enums()) when it has the types (A2k t06).
     std::function<uint64_t(std::string_view)> category_mask;
-    // [M] cell-force memory quirk (threat_grid.hpp); true = documented behaviour.
-    bool memory_counted_when_not_fogged = true;
 };
+
+// A2k t06: GameObjectCategoryType name -> bits with the converter of `enums` (objects::GameObjectTypes::enums(): loaded from
+// Data\XML\Enum\GameObjectCategoryType.xml through the VFS, so mod categories get their bits); 0 for an unknown name or
+// a discarded converter. `enums` must outlive the returned function.
+std::function<uint64_t(std::string_view)> category_mask_from(const objects::EnumRegistry& enums);
 
 // A1_READINGS §30.1 [H]: the list (iteration) order of the original's MSVC stdext::hash_set<uint32> of zone cells, as a
 // pure function of the insertion sequence (integer code only). h(k) = minstd((k ^ 0xdeadbeef) & 0x7fffffff), bucket =
@@ -169,9 +176,8 @@ public:
     int32_t register_unit(const PerceptionWorld& w, int32_t object_id);  // existing handle if registered
     int32_t register_zone(int32_t zone);
     int32_t register_cell(int32_t x, int32_t y, const Rect2& rect);
-    // Every target of the list, in list order; handles[i] for targets()[i].
-    void register_targets(const PerceptionWorld& w, const TacticalTargetList& list, std::vector<int32_t>* handles = nullptr);
-    int32_t handle_for(const TacticalTarget& t) const;  // -1 if not registered
+    // One target-list entry: a unit (register_unit), a land zone (register_zone) or a space cell (register_cell).
+    int32_t register_target(const PerceptionWorld& w, const TacticalTarget& t);
     // The handle whose evaluator answers for `handle`: for a land zone, the first registered zone with the same name
     // (TACTICAL_GAPS 6.8); every other handle (units, cells, unique zone names, unknown handles) maps to itself.
     int32_t evaluator_handle(int32_t handle) const;

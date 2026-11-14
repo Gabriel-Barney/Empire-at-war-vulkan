@@ -1,11 +1,10 @@
-// Per-tick CRC recording for a TickScheduler (Q1). Plugs core's CrcRegistry (sim_crc.hpp) into
-// the fixed-step tick: step() runs one tick, then captures every registered system's state hash
-// for that frame into a CrcLog.
+// Per-tick CRC recording (Q1). Plugs core's CrcRegistry (sim_crc.hpp) into the fixed-step tick:
+// capture(tick) hashes every registered system's state for that frame into a CrcLog.
 //
 //   alamo::CrcRegistry reg;
 //   reg.add("economy", [&](alamo::StateHasher& h) { h.u32(n); h.span(credits); });
-//   alamo::jobs::CrcRecorder rec(sched, reg);
-//   for (...) rec.step();
+//   alamo::jobs::CrcRecorder rec(js, reg);
+//   for (...) { const uint64_t f = sched.frame(); sched.step(); rec.capture(f); }
 //   rec.log().save("run.crc");
 //
 // Determinism checks run the same sim for every count in determinism_worker_counts() and compare
@@ -18,34 +17,24 @@
 
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/jobs/job_system.hpp"
-#include "alamo/jobs/tick.hpp"
 
 namespace alamo::jobs {
 
 class CrcRecorder {
 public:
     // parallel_capture: run the hashers on the job system (one job per system; result identical).
-    CrcRecorder(TickScheduler& sched, const CrcRegistry& reg, bool parallel_capture = false)
-        : sched_(&sched), reg_(&reg), parallel_(parallel_capture) {
+    CrcRecorder(JobSystem& js, const CrcRegistry& reg, bool parallel_capture = false)
+        : js_(&js), reg_(&reg), parallel_(parallel_capture) {
         log_.systems = reg.names();
         log_.parity_parts = reg.parity_names();
     }
 
-    // Runs tick frame() and records the state after it under that frame number.
-    const CrcRecord& step() {
-        const uint64_t frame = sched_->frame();
-        sched_->step();
-        return capture(frame);
-    }
-    void run(uint64_t ticks) {
-        for (uint64_t i = 0; i < ticks; ++i) step();
-    }
-    // Records the current state under `tick` without stepping (e.g. the initial state). Ticks must
+    // Records the current state under `tick` (after the tick ran, or the initial state). Ticks must
     // increase across records. Systems registered after construction are picked up here.
     const CrcRecord& capture(uint64_t tick) {
         if (log_.systems.size() != reg_->size()) log_.systems = reg_->names();
         log_.parity_parts = reg_->parity_names();
-        if (parallel_) log_.records.push_back(reg_->capture(tick, make_parallel_for(sched_->jobs())));
+        if (parallel_) log_.records.push_back(reg_->capture(tick, make_parallel_for(*js_)));
         else log_.records.push_back(reg_->capture(tick));
         return log_.records.back();
     }
@@ -54,14 +43,15 @@ public:
     const CrcLog& log() const noexcept { return log_; }
 
 private:
-    TickScheduler* sched_;
+    JobSystem* js_;
     const CrcRegistry* reg_;
     bool parallel_;
     CrcLog log_;
 };
 
 // Worker counts every determinism check covers: 0 (serial), 1, 4 and the machine's default
-// (hardware threads - 1), de-duplicated, in that order.
+// (JobSystem::default_worker_count(): physical cores minus the sim and AI threads since SIMP sp1), de-duplicated, in that
+// order. The per-process CMake form also runs hardware threads - 1 and 16.
 inline std::vector<int32_t> determinism_worker_counts() {
     std::vector<int32_t> w = {0, 1, 4};
     const auto n = static_cast<int32_t>(JobSystem::default_worker_count());
@@ -103,6 +93,23 @@ WorkerCountReport check_worker_counts(Run&& run, const std::vector<int32_t>& cou
         rep.runs.push_back(std::move(r));
     }
     return rep;
+}
+
+// The same check for runs whose result is more than a CrcLog (cu9 t18: alamo_headless's --check-workers modes, which
+// also compare their own logs / text). `first` is the first count's result, run by the caller (it may print or fail on
+// its own); `run(workers)` returns a result of the same type for every further count, `log_of(result)` its CrcLog, and
+// `report(workers, result, divergence)` prints what the caller wants and returns whether the extra data matches `first`
+// (the divergence is the CRC log's against first's). True when every further count matched (CRC and extra data).
+template <class Result, class Run, class LogOf, class Report>
+bool check_worker_counts(const Result& first, Run&& run, LogOf&& log_of, Report&& report,
+                         const std::vector<int32_t>& counts = determinism_worker_counts()) {
+    bool ok = true;
+    for (size_t i = 1; i < counts.size(); ++i) {
+        const Result r = run(counts[i]);
+        const CrcDivergence d = first_divergence(log_of(first), log_of(r));
+        if (!report(counts[i], r, d) || d.diverged) ok = false;
+    }
+    return ok;
 }
 
 }  // namespace alamo::jobs

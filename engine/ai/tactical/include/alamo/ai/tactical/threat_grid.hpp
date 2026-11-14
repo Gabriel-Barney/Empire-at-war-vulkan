@@ -45,8 +45,8 @@
 // relation(owner -> Self) == 0 (ally) / != 0 (enemy), live entries skipped when fogged for Self.
 // MEMORY ENTRIES [H] (ATP open item 3a, A1_READINGS 10): the memory branch skips an entry only when it has
 // UNIT_AI and is fogged for Self (the same test as for live entries), so with shipped data an AI player's
-// memory entries are counted a SECOND time. `GridQuery::memory_counted_when_not_fogged` (default true = the
-// original) selects it; false gives the concentration / bitfield rule (memory counted only while fogged).
+// memory entries are counted a SECOND time. This is the only rule (the concentration / bitfield queries differ:
+// they count memory entries only while fogged).
 //
 // Determinism: every list is a vector in insertion order (append on add, ordered erase on remove);
 // per-player loops are in player list order; sums are float in that order. Projection / service /
@@ -98,7 +98,6 @@ struct GridQuery {
     float attenuator = 0.0f;      // Parameter_Attenuator
     int32_t exclude = -1;         // the location's attached object
     std::string_view faction;     // Parameter_Faction (owner faction, case-insensitive [M]); empty = any
-    bool memory_counted_when_not_fogged = true;  // [H] cell-force rule, see the header comment
 };
 
 // One matcher of the *UnitsBitfield tokens: exact type name, or category intersect.
@@ -156,11 +155,7 @@ public:
     // object's data-pack re-projection stamp (UnitAiStamps::reprojection_check, A1_READINGS 14 [H]): the next
     // service at F >= stamp runs the check. False if the object is unknown to the world, has no UNIT_AI, or is
     // registered already.
-    bool register_object(const PerceptionWorld& w, int32_t id, uint32_t frame, int32_t check_stamp);
-    // [port] legacy form for hosts that do not yet carry the data-pack stamp: stamp = frame + reprojection_frames
-    // (the old ATP open item 8 reading). The original checks at the first service (the 4-argument form);
-    // callers move to it once the host draws the stamps at UNIT_AI object creation.
-    bool register_object(const PerceptionWorld& w, int32_t id, uint32_t frame);
+    bool register_object(const PerceptionWorld& w, int32_t id, int32_t check_stamp);
     // UNIT_AI service: fog bytes (every call), then the re-projection gate (stamp <= frame: check, stamp += 300).
     // Returns true when the object was re-projected.
     bool service_object(const PerceptionWorld& w, int32_t id, uint32_t frame);
@@ -257,6 +252,11 @@ private:
     void footprint(float gx, float gy, float r, int32_t& c0, int32_t& c1, int32_t& r0, int32_t& r1) const;
     bool owner_passes(const PerceptionWorld& w, const PerceptionObject& o, const GridQuery& q) const;
     void remove_from_memory(int32_t player, uint32_t ei, int32_t c0, int32_t c1, int32_t r0, int32_t r1);
+    // The query walk of a cell (cell force / concentration / bitfield): fn(entry) for the live entries not fogged for
+    // `self`, then (a valid `self`) `self`'s memory entries whose fogged state equals `memory_while_fogged`, each list
+    // in its order. Defined in threat_grid.cpp (only used there).
+    template <class Fn>
+    void visit_cell_entries(uint32_t cell, int32_t self, bool memory_while_fogged, Fn&& fn) const;
     static void erase_value(std::vector<uint32_t>& v, uint32_t x);
 
     TacticalMode mode_ = TacticalMode::Land;

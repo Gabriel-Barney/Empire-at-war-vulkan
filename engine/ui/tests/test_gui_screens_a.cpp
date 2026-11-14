@@ -147,8 +147,8 @@ void test_screens() {
     gs.update(env.click(dlg::kSelectMap, "IDC_LOAD_MAP_BUTTON"), acts, cmds);
     CHECK(acts.size() == 1 && acts[0].kind == ScreenAction::Kind::MapSelected && acts[0].map == "_LAND_PLANET_TATOOINE_01");
     // Screens not in this script fail cleanly.
-    CHECK(!gs.show_auto_resolve({}) && !gs.show_campaign_score({}));
-    for (int k = 0; k < 14; ++k) std::printf("%s%s", k ? " " : "screen actions: ", screen_action_name(static_cast<ScreenAction::Kind>(k)));
+    CHECK(!gs.show_campaign_score({}));
+    for (int k = 0; k < 13; ++k) std::printf("%s%s", k ? " " : "screen actions: ", screen_action_name(static_cast<ScreenAction::Kind>(k)));
     std::printf("\n");
 }
 
@@ -164,9 +164,11 @@ void test_advanced_video() {
     cur.bloom = false;
     p.advanced_video = [&] { return cur; };
     fe.init(env.gui, {}, p);
-    env.gui.open("IDD_VIDEO_OPTIONS_DIALOG");
+    // [port: Gabriel] Display / Graphics split: the options menu's Graphics button opens it; the Video button is Display.
+    const GuiDialog* options = env.gui.open("IDD_MAIN_OPTIONS_DIALOG");
+    CHECK(options && options->get("IDC_PORT_MAIN_OPTIONS_GRAPHICS")->text == U"Graphics");
     std::vector<MenuAction> acts;
-    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED")}, InputFrame{}, acts);
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS")}, InputFrame{}, acts);
     CHECK(fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
     GuiDialog* d = env.gui.top();
     CHECK(d && d->get("IDC_PORT_PARTICLE_DETAIL")->selected == 1 && d->get("IDC_PORT_MESH_DETAIL")->selected == 2 && !d->get("IDC_BLOOM")->checked);
@@ -178,8 +180,7 @@ void test_advanced_video() {
     CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyAdvancedVideo && acts[0].advanced.particle == kLevels4[2].value &&
           acts[0].advanced.bloom && acts[0].advanced.shader == 100);
     CHECK(acts[0].advanced.mesh == 55);  // a list left on its level keeps the stored value
-    CHECK(fe.top() == "IDD_VIDEO_OPTIONS_DIALOG");
-    CHECK(std::string(menu_action_name(MenuAction::Kind::AutoDetectVideo)) == "AutoDetectVideo");
+    CHECK(fe.top() == "IDD_MAIN_OPTIONS_DIALOG");
 }
 
 // ---- t12 (playtest 3): "keep these settings?" after a resolution change ------------------------------------------
@@ -286,7 +287,7 @@ void test_resolution_confirm() {
     cur.vsync = true;
     raw.time = 500.0;
     GuiDialog* v = env.gui.top();
-    v->set_checked("IDC_VSYNC_ENABLED", true);
+    v->set_selected("IDC_PORT_VSYNC_MODE", 1);
     click_video("IDC_APPLY", 0);
     CHECK(acts.size() == 1 && acts[0].video.vsync);
     acts.clear();
@@ -328,17 +329,18 @@ END
     CHECK(d->get("IDC_PORT_VSYNC_MODE_TEXT")->text == pseudo(U"V-Sync Mode") && d->get("IDC_PORT_FRAME_CAP_TEXT")->text == pseudo(U"Frame Rate Cap"));
     CHECK(d->get("IDC_PORT_VSYNC_MODE")->items[1] == pseudo(U"Standard (FIFO)") && d->get("IDC_PORT_FRAME_CAP")->items[1] == pseudo(U"Display refresh rate"));
     CHECK(d->get("IDC_PORT_DISPLAY_INFO")->text == pseudo(U"160 Hz"));
-    CHECK(d->get("IDC_PORT_ANTI_ALIASING")->items[1] == pseudo(kAntiAliasChoices[1].label) && d->get("IDC_PORT_DETAIL_LEVEL")->items[0] == pseudo(U"Low"));
-    // The sliders of those two rows and the captions at their ends are gone; the rows' titles stay (and Gamma is untouched).
-    CHECK(!d->get("IDC_ANTI_ALIAS_SLIDER")->visible && !d->get("IDC_DETAIL_LEVEL_SLIDER")->visible && !d->get("IDC_ANTI_ALIAS_OFF_STATIC")->visible);
-    CHECK(d->get("IDC_GAMMA_SLIDER")->visible && d->get("IDC_ANTI_ALIAS_STATIC")->visible);
-    size_t titles = 0, ends = 0;
+    // [port: Gabriel] Display / Graphics split: the Anti-Aliasing and Detail Level rows (titles, sliders, end captions) and the
+    // Advanced button are gone from Display; Gamma and the rows under it move up into Anti-Aliasing's place.
+    CHECK(!d->get("IDC_ANTI_ALIAS_SLIDER")->visible && !d->get("IDC_DETAIL_LEVEL_SLIDER")->visible && !d->get("IDC_ANTI_ALIAS_OFF_STATIC")->visible &&
+          !d->get("IDC_ANTI_ALIAS_STATIC")->visible && !d->get("IDC_ADVANCED")->visible);
+    CHECK(d->get("IDC_GAMMA_SLIDER")->visible && d->get("IDC_GAMMA_SLIDER")->offset.y == 51.0f && !d->get("IDC_VSYNC_ENABLED")->visible &&
+          d->get("IDC_RESOLUTION_LIST")->offset.y == 0.0f && d->get("IDC_OK")->offset.y == 0.0f);
+    size_t shown = 0;
     for (size_t i = 0; i < d->size(); ++i) {
         const GuiControl& c = (*d)[i];
-        if (c.type != GuiGadgetType::Text || !c.def || c.def->y != 271) continue;
-        if (c.visible) ++(c.def->x == 41 ? titles : ends);
+        if (c.def && c.def->y >= 240 && c.def->y < 290 && c.visible) ++shown;
     }
-    CHECK(titles == 1 && ends == 0);
+    CHECK(shown == 0);
 }
 
 // ---- [port: Gabriel] V-sync mode combo and display line added to the video dialog ----------------------------------
@@ -347,7 +349,7 @@ void test_video_vsync_mode() {
     const size_t before = env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 8 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
+    CHECK(rd && rd->controls.size() == before + 12 && rd->find("IDC_ADVANCED") >= 0 && rd->find("IDC_PORT_VSYNC_MODE") >= 0 &&
           rd->w == 570 && rd->has_style("DS_CENTER"));  // the shipped header is kept
     FrontEnd fe;
     MenuProviders p;
@@ -361,37 +363,50 @@ void test_video_vsync_mode() {
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_OPTIONS_DIALOG", "IDC_MAIN_OPTIONS_VIDEO")}, InputFrame{}, acts);
     GuiDialog* d = fe.top() == "IDD_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(d && d->get("IDC_PORT_VSYNC_MODE")->selected == 2 && d->get("IDC_PORT_VSYNC_MODE")->items.size() == kVsyncModeCount + 1 &&
-          d->get("IDC_PORT_DISPLAY_INFO")->text == U"160 Hz, Mailbox" && d->get("IDC_PORT_FRAME_CAP")->selected == 6 &&
-          d->get("IDC_PORT_FRAME_CAP")->items[1] == U"Display refresh rate" && d->get("IDC_PORT_FRAME_CAP")->items[3] == U"60 fps");
+          d->get("IDC_PORT_DISPLAY_INFO")->text == U"160 Hz, Mailbox" && d->get("IDC_PORT_FRAME_CAP")->selected == kFrameCapRowCustom &&
+          d->get("IDC_PORT_FRAME_CAP")->items.size() == 3 && d->get("IDC_PORT_FRAME_CAP")->items[1] == U"Display refresh rate" &&
+          d->get("IDC_PORT_FRAME_CAP")->items[2] == U"Custom");
     if (!d) return;
-    // U9: the check box and the mode list are one setting, whichever is used.
+    // [port: Gabriel 2026-11-13] the custom frame cap is a slider (20 .. 500 fps) under the list, its value beside it.
+    CHECK(d->get("IDC_PORT_FRAME_CAP_SLIDER")->value == 144 && d->get("IDC_PORT_FRAME_CAP_SLIDER")->range_min == kFrameCapCustomMin &&
+          d->get("IDC_PORT_FRAME_CAP_SLIDER")->range_max == kFrameCapCustomMax && d->get("IDC_PORT_FRAME_CAP_VALUE")->text == U"144 fps");
+    // U9 (Gabriel 2026-11-13): the mode list is the one v-sync setting; the shipped check box is hidden.
     auto changed = [&](GuiEvent::Kind k, const char* id, int32_t value) {
         GuiEvent e = event(k, "IDD_VIDEO_OPTIONS_DIALOG", id);
         e.value = value;
         fe.update(std::vector<GuiEvent>{e}, InputFrame{}, acts);
     };
-    CHECK(d->get("IDC_PORT_VSYNC_MODE")->items[0] == U"Off (no v-sync)" && d->get("IDC_VSYNC_ENABLED")->checked);
-    d->set_checked("IDC_VSYNC_ENABLED", false);
-    changed(GuiEvent::Kind::Checked, "IDC_VSYNC_ENABLED", 0);
-    CHECK(d->get("IDC_PORT_VSYNC_MODE")->selected == 0);
-    d->set_checked("IDC_VSYNC_ENABLED", true);
-    changed(GuiEvent::Kind::Checked, "IDC_VSYNC_ENABLED", 1);
-    CHECK(d->get("IDC_PORT_VSYNC_MODE")->selected == 2);  // back to the remembered Mailbox
-    d->set_selected("IDC_PORT_VSYNC_MODE", 0);
-    changed(GuiEvent::Kind::SelectionChanged, "IDC_PORT_VSYNC_MODE", 0);
-    CHECK(!d->get("IDC_VSYNC_ENABLED")->checked);
+    CHECK(d->get("IDC_PORT_VSYNC_MODE")->items[0] == U"Off (no v-sync)" && !d->get("IDC_VSYNC_ENABLED")->visible);
     d->set_selected("IDC_PORT_VSYNC_MODE", 1);
     changed(GuiEvent::Kind::SelectionChanged, "IDC_PORT_VSYNC_MODE", 1);
-    CHECK(d->get("IDC_VSYNC_ENABLED")->checked && acts.empty());
-    // U8: the value beside the Gamma slider follows it. Anti-Aliasing and Detail Level are lists of named levels now (Off, Ultra).
+    CHECK(acts.empty());
+    // U8: the value beside the Gamma slider follows it. Anti-Aliasing and Detail Level are on the Graphics page now.
     CHECK(d->get("IDC_PORT_GAMMA_VALUE")->text == U"50");
     changed(GuiEvent::Kind::ValueChanged, "IDC_GAMMA_SLIDER", 80);
     CHECK(d->get("IDC_PORT_GAMMA_VALUE")->text == U"80");
-    CHECK(d->get("IDC_PORT_ANTI_ALIASING")->items.size() == std::size(kAntiAliasChoices) && d->get("IDC_PORT_ANTI_ALIASING")->selected == 0 &&
-          d->get("IDC_PORT_DETAIL_LEVEL")->items.size() == kQualityCount + 1 && d->get("IDC_PORT_DETAIL_LEVEL")->selected == 3);
+    CHECK(d->get("IDC_PORT_ANTI_ALIASING") == nullptr && d->get("IDC_PORT_DETAIL_LEVEL") == nullptr);
+    // [port: Gabriel] Display Mode (Fullscreen / Borderless fullscreen / Windowed) and UI Scale (100 .. 500 %) lists.
+    CHECK(d->get("IDC_PORT_WINDOW_MODE")->items.size() == kWindowModeCount && d->get("IDC_PORT_WINDOW_MODE")->selected == 0 &&
+          d->get("IDC_PORT_WINDOW_MODE")->items[1] == U"Borderless fullscreen");
+    CHECK(d->get("IDC_PORT_UI_SCALE")->items.size() == std::size(kUiScaleChoices) && d->get("IDC_PORT_UI_SCALE")->selected == 0 &&
+          d->get("IDC_PORT_UI_SCALE")->items.back() == U"500 %");
+    d->set_selected("IDC_PORT_WINDOW_MODE", 1);
+    d->set_selected("IDC_PORT_UI_SCALE", 4);
     // Apply leaves the dialog open: the status line picks up the mode the host switched to on the next frame.
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
     CHECK(acts.size() == 1 && acts[0].video.vsync && acts[0].video.vsync_mode == VsyncMode::Fifo);
+    CHECK(acts[0].video.window_mode == WindowMode::Borderless && acts[0].video.ui_scale == 200 && acts[0].video.frame_cap == 144);
+    acts.clear();
+    // Off, then moving the slider: the list goes back to Custom and Apply takes the slider's value.
+    d->set_selected("IDC_PORT_FRAME_CAP", kFrameCapRowOff);
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
+    CHECK(acts.size() == 1 && acts[0].video.frame_cap == 0);
+    acts.clear();
+    d->set_value("IDC_PORT_FRAME_CAP_SLIDER", 237);
+    changed(GuiEvent::Kind::ValueChanged, "IDC_PORT_FRAME_CAP_SLIDER", 237);
+    CHECK(d->get("IDC_PORT_FRAME_CAP")->selected == kFrameCapRowCustom && d->get("IDC_PORT_FRAME_CAP_VALUE")->text == U"237 fps");
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY")}, InputFrame{}, acts);
+    CHECK(acts.size() == 1 && acts[0].video.frame_cap == 237);
     cur.display_info = U"160 Hz, FIFO";
     acts.clear();
     fe.update({}, InputFrame{}, acts);
@@ -404,7 +419,7 @@ void test_video_vsync_mode() {
     acts.clear();
     d->set_selected("IDC_PORT_VSYNC_MODE", 1);
     changed(GuiEvent::Kind::SelectionChanged, "IDC_PORT_VSYNC_MODE", 1);
-    d->set_selected("IDC_PORT_FRAME_CAP", 1);
+    d->set_selected("IDC_PORT_FRAME_CAP", kFrameCapRowDisplay);
     fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_OK")}, InputFrame{}, acts);
     CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.vsync && acts[0].video.vsync_mode == VsyncMode::Fifo &&
           acts[0].video.frame_cap == kFrameCapDisplay);
@@ -438,8 +453,8 @@ void test_options_polish() {
     CHECK(v->get("IDC_PORT_VSYNC_MODE")->ui_font && v->get("IDC_PORT_FRAME_CAP")->ui_font);
     CHECK(env.gui.control_font(*v, static_cast<size_t>(v->find("IDC_PORT_VSYNC_MODE"))) ==
           env.gui.control_font(*v, static_cast<size_t>(v->find("IDC_PORT_VSYNC_MODE_TEXT"))));
-    // Advanced: check rows run up to the combo column, captions clear of their combos, Title Case.
-    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED")}, InputFrame{}, acts);
+    // Graphics: check rows run up to the combo column, captions clear of their combos, Title Case.
+    fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, "IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS")}, InputFrame{}, acts);
     GuiDialog* a = env.gui.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
     CHECK(a != nullptr);
     if (!a) return;
@@ -449,9 +464,9 @@ void test_options_polish() {
         if (k >= 0) CHECK(std::fabs(a->control_rect(static_cast<size_t>(k)).width() - 215.0f) < 0.01f);
     }
     CHECK(a->get("IDC_PORT_AMBIENT_OCCLUSION")->text == U"Ambient Occlusion");
-    CHECK(a->get("IDC_PORT_PARTICLE_DETAIL")->ui_font && a->get("IDC_PORT_ANISOTROPY")->ui_font && v->get("IDC_PORT_ANTI_ALIASING")->ui_font &&
-          v->get("IDC_PORT_DETAIL_LEVEL")->ui_font);
-    for (const auto& [caption, combo] : {std::pair{"IDC_PORT_ANISOTROPY_TEXT", "IDC_PORT_ANISOTROPY"}}) {
+    CHECK(a->get("IDC_PORT_PARTICLE_DETAIL")->ui_font && a->get("IDC_PORT_ANISOTROPY")->ui_font && a->get("IDC_PORT_ANTI_ALIASING")->ui_font &&
+          a->get("IDC_PORT_DETAIL_LEVEL")->ui_font);
+    for (const auto& [caption, combo] : {std::pair{"IDC_PORT_ANISOTROPY_TEXT", "IDC_PORT_ANISOTROPY"}, std::pair{"IDC_PORT_RENDER_SCALE_TEXT", "IDC_PORT_RENDER_SCALE"}}) {
         const GuiRect cap = a->control_rect(static_cast<size_t>(a->find(caption)));
         const GuiRect box = a->control_rect(static_cast<size_t>(a->find(combo)));
         CHECK(cap.min.y >= box.max.y && cap.height() == 18.0f);
@@ -468,49 +483,105 @@ void test_options_polish() {
           column("IDC_EDIT_PORT_PAUSE").min.x == column("IDC_EDIT_PORT_SCROLL_UP").min.x);
 }
 
-// ---- [port: Gabriel] quality lists, anisotropic filtering combo and ambient occlusion check (video + advanced video) -----
+// ---- [port: Gabriel] Graphics page: quality preset, the seven lists, anti-aliasing, anisotropy, render scale, AO ----------
 void test_advanced_video_port() {
     Env env;
     const size_t before = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG")->controls.size();
     CHECK(env.script.extend(kPortDialogExtensionsRc) && env.script.warnings.empty());
     const RcDialog* rd = env.script.find("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG");
-    CHECK(rd && rd->controls.size() == before + 10 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
-          rd->find("IDC_PORT_WATER_DETAIL") >= 0);
-    CHECK(rd->find("IDC_PORT_ANTI_ALIASING") < 0);  // anti-aliasing is one list, in the Video dialog
+    CHECK(rd && rd->controls.size() == before + 20 && rd->find("IDC_BLOOM") >= 0 && rd->find("IDC_PORT_AMBIENT_OCCLUSION") >= 0 &&
+          rd->find("IDC_PORT_WATER_DETAIL") >= 0 && rd->find("IDC_PORT_ANTI_ALIASING") >= 0 && rd->find("IDC_PORT_DETAIL_LEVEL") >= 0);
+    // Display / Graphics split: anti-aliasing and the detail level are on the Graphics page only.
+    CHECK(env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->find("IDC_PORT_ANTI_ALIASING") < 0 &&
+          env.script.find("IDD_VIDEO_OPTIONS_DIALOG")->find("IDC_PORT_DETAIL_LEVEL") < 0);
+    // The shipped Auto Detect button (in the real GUIDialogs.rc), so the test can see it hidden.
+    CHECK(env.script.extend(R"RC(
+IDD_ADVANCED_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
+BEGIN
+    PUSHBUTTON      "TEXT_AUTO_DETECT",IDC_AUTO_DETECT,41,300,60,14
+END
+)RC"));
     FrontEnd fe;
     MenuProviders p;
     AdvancedVideoSettings cur;
     cur.anisotropy = 8;
     cur.mesh = 55;
     VideoSettings applied;
-    applied.anti_alias = 40;  // an older profile's slider position: inside Low's range
+    applied.resolutions = {U"1280 x 720", U"1920 x 1080"};
+    applied.resolution = 1;
+    applied.anti_alias = kAaMsaa4;
     applied.detail = advanced_detail_level(cur);
     p.advanced_video = [&] { return cur; };
     p.video = [&] { return applied; };
     fe.init(env.gui, {}, p);
     std::vector<MenuAction> acts;
     const auto click = [&](const char* dialog, const char* id) { fe.update(std::vector<GuiEvent>{event(GuiEvent::Kind::Clicked, dialog, id)}, InputFrame{}, acts); };
-    click("IDD_MAIN_OPTIONS_DIALOG", "IDC_MAIN_OPTIONS_VIDEO");
-    GuiDialog* video = fe.top() == "IDD_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
-    CHECK(video != nullptr);
-    if (!video) return;
-    // Video: one anti-aliasing list (an old strength of 40 reads as Low), and the quality the options make (mesh 55 is High's range).
-    GuiControl* aa = video->get("IDC_PORT_ANTI_ALIASING");
-    GuiControl* quality = video->get("IDC_PORT_DETAIL_LEVEL");
-    CHECK(aa->selected == 1 && aa->items.size() == 4 && quality->selected == static_cast<int32_t>(kQualityCustom));
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 40 && acts.back().video.detail == applied.detail && !acts.back().video.detail_picked);  // untouched lists change nothing
-    video->set_selected("IDC_PORT_ANTI_ALIASING", 3);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 100 && !acts.back().video.detail_picked);
-    video->set_selected("IDC_PORT_ANTI_ALIASING", 0);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().video.anti_alias == 0);
-    // Advanced: a list per option on the level the stored value is in, the shipped sliders hidden, anisotropy and AO as before.
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
+    env.gui.open("IDD_MAIN_OPTIONS_DIALOG");
+    click("IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS");
     GuiDialog* d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(d != nullptr);
     if (!d) return;
+    const auto changed = [&](const char* id, int32_t row) {
+        d->set_selected(id, row);
+        GuiEvent e = event(GuiEvent::Kind::SelectionChanged, "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", id);
+        e.value = row;
+        fe.update(std::vector<GuiEvent>{e}, InputFrame{}, acts);
+    };
+    // One anti-aliasing list of modes ([port: Gabriel 2026-11-13] Off, SMAA, TAA, MSAA 2x / 4x / 8x), and the quality the
+    // options make (mesh 55 is High's range).
+    GuiControl* aa = d->get("IDC_PORT_ANTI_ALIASING");
+    GuiControl* quality = d->get("IDC_PORT_DETAIL_LEVEL");
+    CHECK(aa->selected == 4 && aa->items.size() == std::size(kAntiAliasChoices) && quality->selected == static_cast<int32_t>(kQualityCustom) &&
+          quality->items.size() == kQualityCount + 1 && quality->items.back() == U"Custom" && aa->ui_font && quality->ui_font);
+    // Untouched anti-aliasing sends nothing for it; a moved list sends an ApplyVideo with the display settings in force.
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyAdvancedVideo);
+    acts.clear();
+    aa->selected = 1;
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 2 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.anti_alias == kAaSmaa && acts[0].video.resolution == 1 &&
+          !acts[0].video.detail_picked && !acts[0].video.unconfirmed && acts[1].kind == MenuAction::Kind::ApplyAdvancedVideo && !fe.resolution_confirm_open());
+    applied.anti_alias = kAaSmaa;  // the host stored it
+    aa->selected = 2;
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts[acts.size() - 2].kind == MenuAction::Kind::ApplyVideo && acts[acts.size() - 2].video.anti_alias == kAaTaa);
+    applied.anti_alias = kAaTaa;
+    aa->selected = 0;
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts[acts.size() - 2].kind == MenuAction::Kind::ApplyVideo && acts[acts.size() - 2].video.anti_alias == kAaOff);
+    applied.anti_alias = kAaOff;
+    // [port: Gabriel 2026-11-13] Upscaler and Upscaler Quality: lists of their own beside Anti-aliasing. Off greys Quality out;
+    // FSR greys Anti-aliasing and Render Scale out (FSR does both jobs). A change sends one ApplyVideo with all three.
+    GuiControl* up = d->get("IDC_PORT_UPSCALER");
+    GuiControl* uq = d->get("IDC_PORT_UPSCALE_QUALITY");
+    CHECK(up && uq && up->items.size() == std::size(kUpscalerChoices) && up->items[1] == U"AMD FSR" && up->items[2] == U"Intel XeSS" &&
+          uq->items[1] == U"Quality" && up->selected == 0 &&
+          uq->items.size() == std::size(kUpscaleQualityChoices) && uq->selected == kUpscaleQuality && up->ui_font && uq->ui_font);
+    CHECK(!uq->enabled && !d->get("IDC_PORT_UPSCALE_QUALITY_TEXT")->enabled && aa->enabled && d->get("IDC_PORT_RENDER_SCALE")->enabled);
+    changed("IDC_PORT_UPSCALER", 2);  // XeSS: its ratios
+    CHECK(uq->enabled && uq->items[1] == U"Quality (1.7x)" && uq->items[3] == U"Performance (2.3x)" && !aa->enabled);
+    changed("IDC_PORT_UPSCALER", 1);
+    CHECK(uq->items[1] == U"Quality (1.5x)" && uq->items[3] == U"Performance (2x)" && uq->selected == kUpscaleQuality);
+    CHECK(uq->enabled && d->get("IDC_PORT_UPSCALE_QUALITY_TEXT")->enabled && !aa->enabled && !d->get("IDC_PORT_ANTI_ALIASING_TEXT")->enabled &&
+          !d->get("IDC_PORT_RENDER_SCALE")->enabled && !d->get("IDC_PORT_RENDER_SCALE_TEXT")->enabled);
+    uq->selected = kUpscalePerformance;
+    acts.clear();
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 2 && acts[0].kind == MenuAction::Kind::ApplyVideo && acts[0].video.upscaler == kUpscalerFsr &&
+          acts[0].video.upscale_quality == kUpscalePerformance && acts[0].video.anti_alias == kAaOff && acts[0].video.resolution == 1);
+    applied.upscaler = kUpscalerFsr;  // the host stored it
+    applied.upscale_quality = kUpscalePerformance;
+    acts.clear();
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 1 && acts[0].kind == MenuAction::Kind::ApplyAdvancedVideo);
+    changed("IDC_PORT_UPSCALER", 0);
+    CHECK(!uq->enabled && aa->enabled && d->get("IDC_PORT_RENDER_SCALE")->enabled);
+    acts.clear();
+    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
+    CHECK(acts.size() == 2 && acts[0].video.upscaler == kUpscalerOff && acts[0].video.upscale_quality == kUpscalePerformance);
+    applied.upscaler = kUpscalerOff;
+    acts.clear();
+    // A list per option on the level the stored value is in, the shipped sliders hidden, anisotropy and AO as before.
     const struct {
         const char* id;
         size_t items;
@@ -523,13 +594,20 @@ void test_advanced_video_port() {
     CHECK(d->get("IDC_PORT_ANISOTROPY")->selected == 3 && d->get("IDC_PORT_ANISOTROPY")->items.size() == std::size(kAnisotropyChoices) &&
           d->get("IDC_PORT_ANISOTROPY")->items[4] == U"16x" && !d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked);
     CHECK(!d->get("IDC_PARTICLE_DETAIL_SLIDER")->visible);
+    // [port: Gabriel] Render Scale: native by default, the listed percentages, 75 picked.
+    const GuiControl* rs = d->get("IDC_PORT_RENDER_SCALE");
+    CHECK(rs && rs->items.size() == std::size(kRenderScaleChoices) && rs->selected == static_cast<int32_t>(std::size(kRenderScaleChoices) - 1) &&
+          rs->items.back() == U"100% (native)" && rs->items[3] == U"75%" && rs->ui_font);
     d->set_selected("IDC_PORT_PARTICLE_DETAIL", 0);
     d->set_selected("IDC_PORT_ANISOTROPY", 4);
+    d->set_selected("IDC_PORT_RENDER_SCALE", 3);
     d->set_checked("IDC_PORT_AMBIENT_OCCLUSION", true);
+    acts.clear();
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().kind == MenuAction::Kind::ApplyAdvancedVideo && acts.back().advanced.particle == 0 && acts.back().advanced.mesh == 55 &&
-          acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion && acts.back().advanced.bloom);
-    // t43: Apply in Advanced moves the Detail Level list underneath to the level the seven make (Low amid Ultra: Custom) ...
+    CHECK(acts.size() == 1 && acts.back().kind == MenuAction::Kind::ApplyAdvancedVideo && acts.back().advanced.particle == 0 &&
+          acts.back().advanced.mesh == 55 && acts.back().advanced.anisotropy == 16 && acts.back().advanced.ambient_occlusion &&
+          acts.back().advanced.bloom && acts.back().advanced.render_scale == 75);
+    // t43: Apply moves Detail Level to the level the seven make (Low amid Ultra: Custom) ...
     CHECK(quality->selected == static_cast<int32_t>(kQualityCustom));
     for (const char* id : {"IDC_PORT_PARTICLE_DETAIL", "IDC_PORT_MESH_DETAIL", "IDC_PORT_TEXTURE_DETAIL", "IDC_PORT_WATER_DETAIL", "IDC_PORT_SHADER_DETAIL",
                            "IDC_PORT_SHADOW_DETAIL", "IDC_PORT_ENVIRONMENT_DETAIL"})
@@ -541,56 +619,26 @@ void test_advanced_video_port() {
     d->set_selected("IDC_PORT_SHADOW_DETAIL", 0);  // everything on its first row: the Low preset
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
     CHECK(quality->selected == 0);
-    // ... and a quality picked in Video, not yet applied, opens Advanced as its preset.
-    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_CANCEL");
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", 1);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
-    d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
-    CHECK(d != nullptr);
-    if (!d) return;
-    for (const auto& e : std::initializer_list<std::pair<const char*, int32_t>>{{"IDC_PORT_PARTICLE_DETAIL", 1}, {"IDC_PORT_TEXTURE_DETAIL", 1}, {"IDC_PORT_WATER_DETAIL", 1},
-                                                                                  {"IDC_PORT_SHADER_DETAIL", 1}, {"IDC_PORT_SHADOW_DETAIL", 1}})
+    // ... picking a level sets the seven to its preset at once, a change in one of them moves Detail Level, Custom changes nothing.
+    changed("IDC_PORT_DETAIL_LEVEL", 1);
+    for (const auto& e : std::initializer_list<std::pair<const char*, int32_t>>{{"IDC_PORT_PARTICLE_DETAIL", 1}, {"IDC_PORT_MESH_DETAIL", 1}, {"IDC_PORT_TEXTURE_DETAIL", 1},
+                                                                                  {"IDC_PORT_WATER_DETAIL", 1}, {"IDC_PORT_SHADER_DETAIL", 1}, {"IDC_PORT_SHADOW_DETAIL", 1}})
         CHECK(d->get(e.first)->selected == e.second);
+    changed("IDC_PORT_MESH_DETAIL", 3);
+    CHECK(quality->selected == static_cast<int32_t>(kQualityCustom));
+    changed("IDC_PORT_MESH_DETAIL", 1);
+    CHECK(quality->selected == 1);
+    changed("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(kQualityCustom));
+    CHECK(d->get("IDC_PORT_PARTICLE_DETAIL")->selected == 1 && d->get("IDC_PORT_MESH_DETAIL")->selected == 1);
     click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_OK");
-    CHECK(acts.back().advanced.particle == kLevels4[1].value && acts.back().advanced.water == kLevels3[1].value && acts.back().advanced.mesh == kLevels4[1].value);
-    // Video Apply: a level picked that differs from what the options make asks for the preset; Custom and the level in force do not.
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", 2);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(acts.back().kind == MenuAction::Kind::ApplyVideo && acts.back().video.detail_picked && acts.back().video.detail == kQualityPresets[2]);
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", static_cast<int32_t>(kQualityCustom));
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(!acts.back().video.detail_picked && acts.back().video.detail == applied.detail);
-    set_advanced_detail(cur, 100);  // the options now sit on the Ultra row: picking Ultra is no change
-    video->set_selected("IDC_PORT_DETAIL_LEVEL", 3);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_APPLY");
-    CHECK(!acts.back().video.detail_picked);
-    // Auto Detect (gfxf t02): the button only asks the host; refresh_video_dialogs shows what the host then set, in the Video
-    // dialog and in an open Advanced dialog, and leaves the rest of the Video dialog (here the gamma slider) as the player had it.
-    video->set_value("IDC_GAMMA_SLIDER", 77);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_AUTO_DETECT");
-    CHECK(acts.back().kind == MenuAction::Kind::AutoDetectVideo);
-    set_advanced_detail(cur, kQualityPresets[1]);
-    cur.anisotropy = 4;
-    cur.ambient_occlusion = true;
-    applied.anti_alias = kAntiAliasChoices[1].value;
-    applied.detail = kQualityPresets[1];
-    fe.refresh_video_dialogs();
-    CHECK(video->get("IDC_PORT_DETAIL_LEVEL")->selected == 1 && video->get("IDC_PORT_ANTI_ALIASING")->selected == 1 &&
-          video->get("IDC_GAMMA_SLIDER")->value == 77);
-    click("IDD_VIDEO_OPTIONS_DIALOG", "IDC_ADVANCED");
+    CHECK(acts.back().advanced.particle == kLevels4[1].value && acts.back().advanced.water == kLevels3[1].value &&
+          acts.back().advanced.mesh == kLevels4[1].value && fe.top() == "IDD_MAIN_OPTIONS_DIALOG");
+    // The shipped Auto Detect button is hidden on the Graphics page (removed 2026-11-13).
+    click("IDD_MAIN_OPTIONS_DIALOG", "IDC_PORT_MAIN_OPTIONS_GRAPHICS");
     d = fe.top() == "IDD_ADVANCED_VIDEO_OPTIONS_DIALOG" ? env.gui.top() : nullptr;
     CHECK(d != nullptr);
     if (!d) return;
-    CHECK(d->get("IDC_PORT_MESH_DETAIL")->selected == 1 && d->get("IDC_PORT_ANISOTROPY")->selected == 2 && d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked);
-    click("IDD_ADVANCED_VIDEO_OPTIONS_DIALOG", "IDC_AUTO_DETECT");  // the same button inside Advanced
-    CHECK(acts.back().kind == MenuAction::Kind::AutoDetectVideo);
-    set_advanced_detail(cur, kQualityPresets[3]);
-    cur.anisotropy = 16;
-    cur.ambient_occlusion = false;
-    applied.detail = kQualityPresets[3];
-    fe.refresh_video_dialogs();
-    CHECK(d->get("IDC_PORT_MESH_DETAIL")->selected == 3 && d->get("IDC_PORT_ANISOTROPY")->selected == 4 && !d->get("IDC_PORT_AMBIENT_OCCLUSION")->checked &&
-          video->get("IDC_PORT_DETAIL_LEVEL")->selected == 3);
+    CHECK(d->get("IDC_AUTO_DETECT") != nullptr && !d->get("IDC_AUTO_DETECT")->visible);
     constexpr AdvancedVideoSettings all100;
     CHECK(advanced_detail_level(all100) == 100 && quality_level(all100) == 3);
     // The levels are consistent: each preset reads back as itself, a mix is Custom, and the anti-aliasing ranges are where they say.
@@ -602,160 +650,14 @@ void test_advanced_video_port() {
     AdvancedVideoSettings mix;
     mix.water = 0;
     CHECK(quality_level(mix) == kQualityCustom);
-    CHECK(level_index(kAntiAliasChoices, 0) == 0 && level_index(kAntiAliasChoices, 1) == 1 && level_index(kAntiAliasChoices, 46) == 1 &&
-          level_index(kAntiAliasChoices, kAntiAliasDefaultSlider) == 2 && level_index(kAntiAliasChoices, 81) == 2 && level_index(kAntiAliasChoices, 100) == 3);
-}
-
-// ---- multiplayer screens (UI only) --------------------------------------------------------------------------------
-void test_lobby() {
-    Env env;
-    LobbyScreens lob;
-    lob.init(env.gui);
-    std::vector<LobbyEvent> ev;
-    lob.show_multiplayer_menu();
-    CHECK(lob.top() == dlg::kMultiplayer);
-    lob.update(env.click(dlg::kMultiplayer, "IDC_MULTIPLAYER_LAN_BUTTON"), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::EnterLanLobby && lob.top() == dlg::kLanLobby);
-    // Network layer pushes games / players / colours / chat.
-    lob.set_local_name(U"Gabriel");
-    lob.set_colors({U"Red", U"Blue"}, 1);
-    lob.set_games({{"g1", U"Fleet battle", U"Kuat", U"Space", 1, 2, 30, false}, {"g2", U"Locked", U"Hoth", U"Land", 3, 4, -1, true}});
-    lob.set_players({{U"Gabriel", 1}, {U"Pilot", 0}});
-    for (int i = 0; i < 205; ++i) lob.add_chat(U"line");
-    GuiDialog* d = env.gui.find(dlg::kLanLobby);
-    CHECK(d && d->get("IDC_GAME_LIST")->items.size() == 2 && d->get("IDC_GAME_LIST")->items[0] == U"Fleet battle  Space  1/2  Kuat  30 ms" &&
-          d->get("IDC_GAME_LIST")->items[1].back() == U'*' && d->get("IDC_PLAYER_LIST")->items.size() == 2 &&
-          d->get("IDC_LAN_CHAT_LIST")->items.size() == kLobbyChatLines && d->get("IDC_LAN_CHAT_LIST")->top > 0 &&
-          d->get("IDC_LAN_NAME_EDIT")->text == U"Gabriel" && d->get("IDC_LAN_COLOR_SELECT")->selected == 1 &&
-          !d->get("IDC_GAME_LIST2")->visible && !d->get("IDC_LAN_JOIN_GAME_BUTTON")->enabled);
-    ev.clear();
-    lob.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, dlg::kLanLobby, "IDC_GAME_LIST", 0),
-                                     event(GuiEvent::Kind::SelectionChanged, dlg::kLanLobby, "IDC_LAN_COLOR_SELECT", 0),
-                                     event(GuiEvent::Kind::Clicked, dlg::kLanLobby, "IDC_INTERNET_PING_BUTTON")},
-               ev);
-    CHECK(ev.size() == 3 && ev[0].kind == LobbyEvent::Kind::SelectGame && ev[0].game == "g1" && ev[1].kind == LobbyEvent::Kind::SetPlayerColor &&
-          ev[1].value == 0 && ev[2].kind == LobbyEvent::Kind::SortGames && ev[2].value == 4);
-    // Chat: type + Enter in the chat edit (real input path).
-    d->focus("IDC_LAN_CHAT_EDIT");
-    ev.clear();
-    lob.update(env.frame({5, 5}, false, {}, U"hello"), ev);
-    lob.update(env.frame({5, 5}, false, {vk::kReturn}), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::Chat && ev[0].text == U"hello" && d->get("IDC_LAN_CHAT_EDIT")->text.empty());
-    // Join a password game -> prompt -> JoinGame with the password.
-    d->set_selected("IDC_GAME_LIST", 1);
-    ev.clear();
-    lob.update(std::vector<GuiEvent>{event(GuiEvent::Kind::DoubleClicked, dlg::kLanLobby, "IDC_GAME_LIST", 1)}, ev);
-    CHECK(ev.empty() && env.gui.find(dlg::kPassword) != nullptr);
-    env.gui.find(dlg::kPassword)->set_text("IDC_INTERNET_GAME_PASSWORD_EDIT", U"sesame");
-    lob.update(env.click(dlg::kPassword, "IDC_OK"), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::JoinGame && ev[0].game == "g2" && ev[0].text == U"sesame" &&
-          env.gui.find(dlg::kPassword) == nullptr);
-    // Host -> the network layer answers with the staging state.
-    ev.clear();
-    lob.update(env.click(dlg::kLanLobby, "IDC_LAN_HOST_GAME_BUTTON"), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::HostGame);
-    StagingState st;
-    st.host = true;
-    st.factions = {U"Rebel", U"Empire", U"Underworld"};
-    st.colors = {U"Red", U"Blue"};
-    st.color_values = {{255, 0, 0, 255}, {0, 0, 255, 255}};
-    st.teams = {U"1", U"2"};
-    st.maps = {U"Kuat", U"Hoth"};
-    st.map = 0;
-    StagingSlot me;
-    me.state = SlotState::Human;
-    me.name = U"Gabriel";
-    me.local = true;
-    me.faction = 1;
-    StagingSlot ai;
-    ai.state = SlotState::AI;
-    ai.faction = 2;
-    st.slots = {me, ai};
-    st.options = {{U"Credits", U"10000"}, {U"Pop cap", U"20"}};
-    CHECK(lob.show_staging(st));
-    GuiDialog* s = env.gui.find(dlg::kLanStaging);
-    CHECK(s && lob.top() == dlg::kLanStaging && s->get("IDC_PLAYER_NAME_0")->items[0] == U"Gabriel" && !s->get("IDC_PLAYER_NAME_0")->enabled &&
-          s->get("IDC_PLAYER_NAME_1")->selected == 2 && s->get("IDC_PLAYER_NAME_1")->enabled && s->get("IDC_PLAYER_FACTION_1")->selected == 2 &&
-          s->get("IDC_PLAYER_FACTION_0")->enabled && s->get("IDC_LAN_START_GAME_BUTTON")->enabled &&
-          s->get("IDC_STAGING_MAP_LIST")->selected == 0 && s->get("IDC_ACCEPT_PLAYER_0")->image == "i_dialogue_check_on.tga" &&
-          s->get("IDC_PLAYER_COLOR_0")->item_colors.size() == 2);
-    {  // the colour combo holds one glyph per colour and draws it (text, no filled box) in the item colour (UI.md §3.7.1)
-        CHECK(s->get("IDC_PLAYER_COLOR_0")->items.size() == 2 && s->get("IDC_PLAYER_COLOR_0")->items[0] == U"■");
-        HudDrawList sdl;
-        env.gui.build(sdl, env.now);
-        bool red_glyph = false, red_box = false;
-        for (uint32_t layer = 0; layer < kHudLayers; ++layer) {
-            for (const HudQuad& q : sdl.items(layer, HudList::Text)) red_glyph = red_glyph || (q.color == Rgba8{255, 0, 0, 255});
-            for (const HudQuad& q : sdl.items(layer, HudList::Alpha)) red_box = red_box || (q.color == Rgba8{255, 0, 0, 255});
-        }
-        CHECK(red_glyph && !red_box);
-    }
-    ev.clear();
-    lob.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, dlg::kLanStaging, "IDC_PLAYER_FACTION_1", 0),
-                                     event(GuiEvent::Kind::SelectionChanged, dlg::kLanStaging, "IDC_PLAYER_NAME_1", 1),
-                                     event(GuiEvent::Kind::SelectionChanged, dlg::kLanStaging, "IDC_PLAYER_TEAM_0", 1),
-                                     event(GuiEvent::Kind::SelectionChanged, dlg::kLanStaging, "IDC_STAGING_MAP_LIST", 1)},
-               ev);
-    CHECK(ev.size() == 4 && ev[0].kind == LobbyEvent::Kind::SetSlotFaction && ev[0].slot == 1 && ev[0].value == 0 &&
-          ev[1].kind == LobbyEvent::Kind::SetSlotState && ev[1].slot == 1 && ev[1].value == static_cast<int32_t>(SlotState::Closed) &&
-          ev[2].kind == LobbyEvent::Kind::SetSlotTeam && ev[2].slot == 0 && ev[3].kind == LobbyEvent::Kind::SelectMap && ev[3].value == 1);
-    ev.clear();
-    lob.update(env.click(dlg::kLanStaging, "IDC_LAN_START_GAME_BUTTON"), ev);
-    lob.update(env.click(dlg::kLanStaging, "IDC_LOAD_GAME"), ev);
-    CHECK(ev.size() == 2 && ev[0].kind == LobbyEvent::Kind::StartGame && ev[1].kind == LobbyEvent::Kind::LoadGame);
-    // A client: own slot only; another human not yet accepted blocks the host's start.
-    st.host = false;
-    st.slots[0].local = false;
-    st.slots[1].state = SlotState::Human;
-    st.slots[1].name = U"Me";
-    st.slots[1].local = true;
-    lob.set_staging(st);
-    CHECK(!s->get("IDC_LAN_START_GAME_BUTTON")->visible && !s->get("IDC_PLAYER_FACTION_0")->enabled && s->get("IDC_PLAYER_FACTION_1")->enabled);
-    ev.clear();
-    lob.update(std::vector<GuiEvent>{event(GuiEvent::Kind::SelectionChanged, dlg::kLanStaging, "IDC_PLAYER_FACTION_0", 0),
-                                     event(GuiEvent::Kind::SelectionChanged, dlg::kLanStaging, "IDC_STAGING_MAP_LIST", 0)},
-               ev);
-    CHECK(ev.empty());
-    st.host = true;
-    st.slots[0].local = true;
-    st.slots[1].local = false;
-    st.slots[1].accepted = false;
-    lob.set_staging(st);
-    CHECK(s->get("IDC_LAN_START_GAME_BUTTON")->visible && !s->get("IDC_LAN_START_GAME_BUTTON")->enabled);
-    // Esc leaves the game -> back to the LAN lobby.
-    ev.clear();
-    lob.update(env.frame({5, 5}, false, {vk::kEscape}), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::LeaveGame && lob.top() == dlg::kLanLobby);
-    // In-game: disconnect (kick) and vote.
-    const ConnectionRow rows[2] = {{U"Host", 1.0f, false}, {U"Lagger", 0.25f, true}};
-    lob.show_disconnect(rows);
-    GuiDialog* dc = env.gui.find(dlg::kDisconnect);
-    CHECK(dc && !dc->get("IDC_BUTTON_KICK_PLAYER0")->visible && dc->get("IDC_BUTTON_KICK_PLAYER1")->visible &&
-          dc->get("IDC_CONNECTION_QUALITY1")->value == 25 && dc->get("IDC_PLAYER_NAME_1")->text == U"Lagger");
-    ev.clear();
-    lob.update(env.click(dlg::kDisconnect, "IDC_BUTTON_KICK_PLAYER1"), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::KickPlayer && ev[0].slot == 1);
-    env.gui.close(dlg::kDisconnect);
-    VoteState v;
-    v.planet = U"Coruscant";
-    v.names = {U"Gabriel"};
-    v.results = {U"Waiting"};
-    v.countdown = 4.5f;
-    lob.show_vote(v);
-    GuiDialog* vd = env.gui.find(dlg::kVote);
-    CHECK(vd && vd->get("IDC_TEXT_MP_VOTE_PLANET_NAME")->text == U"Coruscant" && vd->get("IDC_COUNTDOWN_TIMER")->text == U"5" &&
-          vd->get("IDC_DIALOG_BOX_BUTTON_LEFT")->text == U"Yes");
-    ev.clear();
-    lob.update(env.click(dlg::kVote, "IDC_DIALOG_BOX_BUTTON_LEFT"), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::Vote && ev[0].value == 1 && !vd->get("IDC_DIALOG_BOX_BUTTON_RIGHT")->enabled);
-    env.gui.close(dlg::kVote);
-    // Back from the lobby, then from the multiplayer menu.
-    ev.clear();
-    lob.update(env.click(dlg::kLanLobby, "IDC_LAN_CANCEL_BUTTON"), ev);
-    CHECK(ev.size() == 1 && ev[0].kind == LobbyEvent::Kind::LeaveLobby && lob.top() == dlg::kMultiplayer);
-    lob.update(env.click(dlg::kMultiplayer, "IDC_OK_MAIN"), ev);
-    CHECK(ev.size() == 2 && ev[1].kind == LobbyEvent::Kind::BackToMainMenu && env.gui.open_count() == 0);
-    CHECK(std::string(lobby_event_name(LobbyEvent::Kind::SelectClan)) == "SelectClan");
+    for (size_t i = 0; i < std::size(kAntiAliasChoices); ++i) CHECK(level_index(kAntiAliasChoices, kAntiAliasChoices[i].value) == i);
+    CHECK(kAntiAliasChoices[0].value == kAaOff && kAntiAliasChoices[1].value == kAaSmaa && kAntiAliasChoices[2].value == kAaTaa &&
+          kAntiAliasChoices[5].value == kAaMsaa8);
+    // [port: Gabriel 2026-11-13] FSR is not in the anti-aliasing list: it has the Upscaler / Upscaler Quality lists.
+    CHECK(std::size(kAntiAliasChoices) == 6);
+    for (size_t i = 0; i < std::size(kUpscaleQualityChoices); ++i) CHECK(level_index(kUpscaleQualityChoices, kUpscaleQualityChoices[i].value) == i);
+    for (size_t i = 0; i < std::size(kUpscalerChoices); ++i)
+        CHECK(level_index(kUpscalerChoices, kUpscalerChoices[i].value) == i);
 }
 
 }  // namespace test_gui_screens_t

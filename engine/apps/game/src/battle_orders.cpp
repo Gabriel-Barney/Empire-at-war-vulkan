@@ -49,8 +49,18 @@ cmd::RejectReason route_battle_order(sim::CampaignBattles& battles, sim::SimHost
         if (!finite(x) || !finite(y)) return result(R::InvalidPosition);
         const uint8_t flags = static_cast<uint8_t>(ev.u("flags") & 0xFFu);
         const bool attack_move = (flags & tactical::movement::kMoveFlagAttackMove) != 0;
-        const R r = battle->order_move(*tm, player, list, x, y, rng, finite(facing) ? facing : tactical::movement::kNoFacing,
-                                       attack_move, ev.queued(), flags, switch_locomotor);
+        const float face = finite(facing) ? facing : tactical::movement::kNoFacing;
+        // [port] fleet groups: the selected members of locked groups move as blocks to their slots; the rest move as usual.
+        std::vector<objects::ObjectId> rest;
+        uint32_t blocks = 0;
+        battle->fleet_order_move(*tm, player, list, x, y, rng, face, attack_move, ev.queued(), flags, rest, blocks);
+        battle->fleet_interrupt(rest);
+        if (blocks > 0 && rest.empty()) {
+            if (stats) ++stats->moves;
+            return result(R::None);
+        }
+        R r = battle->order_move(*tm, player, rest, x, y, rng, face, attack_move, ev.queued(), flags, switch_locomotor);
+        if (blocks > 0 && r == R::InvalidUnit) r = R::None;  // the locked groups moved; the rest had nothing to order
         if (r == R::None && stats) ++stats->moves;
         return result(r);
     };
@@ -86,6 +96,7 @@ cmd::RejectReason route_battle_order(sim::CampaignBattles& battles, sim::SimHost
         case T::Escort: {
             const std::vector<objects::ObjectId> list =
                 (ev.type() == T::MoveToObject && !ev.ids("movers").empty()) ? ids_of(ev.ids("movers")) : selection;
+            battle->fleet_interrupt(list);  // [port] fleet groups: another order ends the block move
             const R r = battle->order_move_to_object(*tm, player, list, target_id(ev.u("target")), rng, false, ev.queued());
             if (r == R::None && stats) ++stats->moves;
             return result(r);
@@ -98,11 +109,13 @@ cmd::RejectReason route_battle_order(sim::CampaignBattles& battles, sim::SimHost
             const int32_t hp = ref2 > 0 ? battle->first_hardpoint_of_type(target, static_cast<int32_t>(ref2) - 1) : -1;
             // flag0 ("double", movement byte +0x5d: attackers close at their own speed in formation type 2) and flag1 (Ctrl:
             // the approach move's flags = 0x01) have no consumer in movement / combat yet [port]: not carried.
+            battle->fleet_interrupt(list);  // [port] fleet groups
             const R r = battle->order_attack(*tm, player, list, target, rng, hp, ev.queued());
             if (r == R::None && stats) ++stats->attacks;
             return result(r);
         }
         case T::StopMovement: {
+            battle->fleet_interrupt(selection);  // [port] fleet groups
             const R r = battle->order_stop(*tm, player, selection);
             if (r == R::None && stats) ++stats->stops;
             return result(r);

@@ -13,23 +13,22 @@ namespace alamo::anim {
 
 namespace {
 
-constexpr uint32_t kAnimWorldVersion = 1;
+// 2: frame_changed column dropped (write-only flag)
+constexpr uint32_t kAnimWorldVersion = 2;
 // s78k t02: the u64 is the idle countdown (1: a combat-timer frame); 3: s78l t03 idle records per entry
 constexpr uint32_t kAnimBehaviorsVersion = 3;
 
 // Lower bounds of one saved record (corrupted-count guard: a count larger than the bytes left can hold fails before
 // anything is allocated).
-constexpr size_t kRowBytes = 4 + 1 + 4 + 8 + 5 + 8 + 3 * (4 + 4 + 1 + 4 + 4 + 1 + 4) + 1 + 4 + 4 + 4;
+constexpr size_t kRowBytes = 4 + 1 + 4 + 8 + 4 + 8 + 3 * (4 + 4 + 1 + 4 + 4 + 1 + 4) + 1 + 4 + 4 + 4;
 constexpr size_t kEntryBytes = 4 + 4 + 8 + 8 + 4 + 4 + 1 + 4 + 8 + 4 + 1 + 1;
 constexpr size_t kCorpseBytes = 4 + 1 + 4 + 1 + 1 + 1 + 1 + 8 + 8 + 8 + 8 + 4 + 4 + 12 + 12;
 
+// ByteReader::count, plus fail(): a rejected read leaves the reader !ok() (the tests rely on it).
 bool read_count(ByteReader& r, size_t record_bytes, uint32_t& n) {
-    n = r.u32();
-    if (!r.ok() || static_cast<uint64_t>(n) * record_bytes > r.remaining()) {
-        r.fail();
-        return false;
-    }
-    return true;
+    if (r.count(n, record_bytes)) return true;
+    r.fail();
+    return false;
 }
 
 bool valid_type(int32_t t) { return t == kNoAnimType || (t >= 0 && t < static_cast<int32_t>(kAnimTypeCount)); }
@@ -48,7 +47,6 @@ void AnimWorld::write(ByteWriter& w) const {
         w.f64(last_time_[r]);
         w.boolean(frozen_[r] != 0);
         w.boolean(lock_[r] != 0);
-        w.boolean(frame_changed_[r] != 0);
         w.boolean(near_end_[r] != 0);
         w.boolean(berserk_[r] != 0);
         w.u64(idle_timer_[r]);
@@ -85,7 +83,6 @@ bool AnimWorld::read(ByteReader& r, const std::function<const AnimModel*(ObjectI
     st.last_time_.resize(rows);
     st.frozen_.resize(rows);
     st.lock_.resize(rows);
-    st.frame_changed_.resize(rows);
     st.near_end_.resize(rows);
     st.berserk_.resize(rows);
     st.idle_timer_.resize(rows);
@@ -115,7 +112,6 @@ bool AnimWorld::read(ByteReader& r, const std::function<const AnimModel*(ObjectI
         st.last_time_[i] = r.f64();
         st.frozen_[i] = flag();
         st.lock_[i] = flag();
-        st.frame_changed_[i] = flag();
         st.near_end_[i] = flag();
         st.berserk_[i] = flag();
         st.idle_timer_[i] = r.u64();
@@ -152,7 +148,6 @@ bool AnimWorld::read(ByteReader& r, const std::function<const AnimModel*(ObjectI
     last_time_ = std::move(st.last_time_);
     frozen_ = std::move(st.frozen_);
     lock_ = std::move(st.lock_);
-    frame_changed_ = std::move(st.frame_changed_);
     near_end_ = std::move(st.near_end_);
     berserk_ = std::move(st.berserk_);
     idle_timer_ = std::move(st.idle_timer_);

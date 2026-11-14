@@ -15,6 +15,8 @@
 --   * a2h t02: an MJ record (MajorItem flush / reclaim triggers and inputs) with every Empire sample, and the message
 --     TEXT_A2FB_LONG_DONE (record LONGDONE) at 1500 s = 25 galactic minutes, the length the MajorItem question needs;
 --   * a2j t04: the message TEXT_A2FB_MIN30 (record MIN30) at 1800 s = 30 galactic minutes, the end of the a2j run.
+--   * a2k t05 (only in a --saboteur build): the message TEXT_A2FB_SAB_DONE (record SABDONE) from frame
+--     A2FB_SABCFG.stop2 + 10, the end of the saboteur run (frame 1400 + 10; a2m t12: 54000 + 10 with --sab-long).
 -- The AI's budget is initialised at the first service of its galactic context (AI_GALACTIC 1.1: template init, then
 -- budget init 0x6137b0), which can be after this script's first service: the first samples can therefore show the
 -- state before Init (zero pools: BudgetFractionToBuild 1e18) and the following ones the state after it.
@@ -118,6 +120,12 @@ function A2FB_Update()
 			return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " humanexists=" .. tostring(A2FB_HumanExists())
 		end)
 		pcall(Game_Message, "TEXT_A2FB_LOADED")
+	end
+	-- a2k t05 saboteur run (build --saboteur: A2FB_SAB / A2FB_SABCFG in the header): the short run ends at its stop frame
+	if A2FB_SAB and not A2FB_SAB_MSG and A2FB_Frame(t) >= A2FB_SABCFG.stop2 + 10 then
+		A2FB_SAB_MSG = true
+		A2FB_Rec("SABDONE", function() return "t=" .. A2FB_Num(t) .. " f=" .. A2FB_Frame(t) .. " records=" .. A2FB_Seq end)
+		pcall(Game_Message, "TEXT_A2FB_SAB_DONE")
 	end
 	if t >= 300 then
 		if not A2FB_STOPPED then

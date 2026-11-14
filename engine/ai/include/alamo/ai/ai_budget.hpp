@@ -63,7 +63,10 @@ public:
     bool add_member(int32_t c);
     bool is_member(int32_t c) const;
     const std::vector<int32_t>& members() const { return order_; }  // insertion order
-    void mark_reset() { reset_ = true; }   // +0x74 (§9.5): every insert call and every 0x612ac0
+    // Reset flag +0x74 (a byte): set by every insert call and every 0x612ac0 (§9.5), and on a template switch
+    // (docs/re/A2G_T01_RESET_FLAG_PROBE.md [H correlation, setter unread]). The next tick() sets P = Σ x w before the
+    // drift redistribution, then clears it (AI_GALACTIC_2 §3.1); init() clears it.
+    void mark_reset() { reset_ = true; }
     bool reset_pending() const { return reset_; }
     // Init 0x6137b0: normalised weights from `raw` over the members (negatives 0; w / Σw, 1 / member count when Σw = 0),
     // applied = w, A = P = credits x w, R = I = 0; clears the reset flag.
@@ -87,11 +90,20 @@ public:
     bool can_fund(int32_t c, float cost, float eta, float time_limit) const;
     // With the goal's struct: max(max(h, T) x R + A, 0) >= max(req, 0) + alloc - a.
     bool can_fund_goal(int32_t c, uint32_t goal) const;
+    // Accept-time gross fund test 0x6139f0 (goal service slot 10 only; A2M_R3_RE_A §1.1) [H]: reads the pool P and the
+    // income rate I, not A / R. Without a struct: horizon = min(eta, tl) (tl < 0 = none), at least the period T;
+    // max(horizon x I + P, 0) >= cost.
+    bool can_fund_gross(int32_t c, float cost, float eta, float time_limit) const;
+    // With the goal's struct (0x612bd0) the record's own horizon h and request are used: max(max(h, T) x I + P, 0) >=
+    // max(req, 0) + alloc - a. [port] the record branch mirrors 0x6129c0's struct branch (the RE names "its own horizon
+    // and request"); a fresh accept candidate never has a struct in the port (serial 0).
+    bool can_fund_gross_goal(int32_t c, uint32_t goal) const;
     // Time to afford 0x613720 (seconds; 0 when affordable now or without a struct).
     float time_to_afford(int32_t c, uint32_t goal, float n) const;
     // Spend: req -= n, alloc += n (Allocate_Resources, build-task charge 0x6110e0).
     void spend(int32_t c, uint32_t goal, float n);
-    // Committed spend s += n (production paid, 0x5f9f90) [M].
+    // Committed spend s += n: the market bind at production start 0x64abf0 adds (float)cost(T, none) (A2M_T04_RE_ANSWERS
+    // Q5.2) [H]; 0x5f9f90 is not a budget call.
     void paid(int32_t c, uint32_t goal, float n);
     // Pay-as-you-go installment n (0x53b900, AI_GALACTIC_2 §3.4; q2f t01) [H]. With the goal's struct (an item its build
     // task ordered, 0x64adb0): have = min(alloc, c + a); (int)(have - n) < 0 -> s += n - alloc when alloc < n, returns
@@ -103,11 +115,10 @@ public:
     // Release 0x614880: A += c + a; struct deleted. `reclaimed` = the PAYG reclaim r (A -= r, P -= r, +0x80 += r).
     void release(int32_t c, uint32_t goal, float reclaimed);
     void flush(int32_t c);  // Flush_Category [H]: A = 0
-    // Reset flag +0x74 (a byte): the next tick() sets P = Σ x w before the drift redistribution, then clears it
-    // (AI_GALACTIC_2 §3.1). Set on a template switch (docs/re/A2G_T01_RESET_FLAG_PROBE.md [H correlation, setter unread]);
-    // init() clears it.
-    void request_reset() { reset_ = true; }
-    bool reset_requested() const { return reset_; }
+    // Credit notify 0x615b40 (A2K_T10_CREDIT_NOTIFY_RE Q2) [H]: an Add_Credits with the notify flag passes the applied
+    // amount x; every member category in list order gets P += x * w (normalised weight +0x3C). Nothing else changes; the
+    // next reweight (A = P) makes it spendable and the next accrual starts from P = A, so nothing is counted twice.
+    void notify(float x);
 
     float weight(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].weight : 0.0f; }
     float available(int32_t c) const { return valid(c) ? cat_[static_cast<size_t>(c)].A : 0.0f; }

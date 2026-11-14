@@ -2,6 +2,8 @@
 
 #include <array>
 
+#include "alamo/core/hash.hpp"
+
 namespace alamo::anim {
 
 namespace {
@@ -134,15 +136,6 @@ constexpr std::array<TypeEntry, kAnimTypeCount> kTypes{{
     {"Heal", "HEAL"},  // 118
 }};
 
-char upper(char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; }
-
-bool iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (upper(a[i]) != upper(b[i])) return false;
-    return true;
-}
-
 bool valid(int32_t id) { return id >= 0 && id < static_cast<int32_t>(kAnimTypeCount); }
 
 }  // namespace
@@ -153,7 +146,7 @@ std::string_view anim_type_suffix(int32_t id) { return valid(id) ? kTypes[static
 int32_t find_anim_type(std::string_view xml_name) {
     if (xml_name.empty()) return kNoAnimType;
     for (size_t i = 0; i < kTypes.size(); ++i)
-        if (iequals(kTypes[i].name, xml_name)) return static_cast<int32_t>(i);
+        if (alamo::iequals(kTypes[i].name, xml_name)) return static_cast<int32_t>(i);  // type names hold no '/' or '\\'
     return kNoAnimType;
 }
 

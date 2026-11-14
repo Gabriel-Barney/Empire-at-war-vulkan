@@ -107,7 +107,6 @@ public:
     explicit AnimWorld(AnimTunables tunables = {}) : tunables_(tunables) {}
 
     const AnimTunables& tunables() const { return tunables_; }
-    void set_tunables(const AnimTunables& t) { tunables_ = t; }
 
     // ---- membership ----
     // Model created (§A.7 first row). `model` must outlive the world (or the row). `rng`: synced for
@@ -142,8 +141,6 @@ public:
     // ---- per-frame advance (object Service step 6) ----
     // Advances every unfrozen row to t = frame / 30. Pure per row: run through `pf` with per-index outputs.
     void advance(uint64_t frame, const ParallelFor& pf = serial_for, uint32_t grain = 256);
-    // One row (the Service path when objects are serviced one by one).
-    void advance_one(ObjectId id, uint64_t frame);
 
     // ---- queries (behaviours) ----
     SlotView slot(ObjectId id, Slot s = kPrimary) const;
@@ -151,7 +148,6 @@ public:
     SlotMode current_mode(ObjectId id) const { return slot(id).mode; }  // 0x395660
     bool crossfading(ObjectId id) const;
     float crossfade_weight(ObjectId id) const;  // 1 when no fade
-    bool frame_changed(ObjectId id) const;      // primary frame moved in the last advance (pose dirty)
     bool near_end(ObjectId id) const;           // object +0x74 bit 3 is CLEAR once frame >= count - 2.5
     bool locked(ObjectId id) const;
     // Frame count / fps of the current clip (0 when none).
@@ -193,8 +189,8 @@ public:
     void register_crc(CrcRegistry& registry, const std::string& name = "anim") const;
 
     // ---- N1 save / load (contract: alamo/core/save_file.hpp; src/anim_save.cpp) ----
-    // Layout: u32 version (1), u32 row count, then per row in ascending id: i32 id, bool has-model, u32
-    // name_crc(model->model) (0 without a model), f64 last time, bool frozen / lock / frame-changed / near-end /
+    // Layout: u32 version (2), u32 row count, then per row in ascending id: i32 id, bool has-model, u32
+    // name_crc(model->model) (0 without a model), f64 last time, bool frozen / lock / near-end /
     // berserker, u64 idle timer, the three slots (primary, previous, overlay: i32 type, u32 variant, u8 mode, f32
     // frame, f32 speed, bool timed, f32 timed remaining), then the crossfade (bool active, f32 duration, f32
     // remaining, f32 weight). Floats as bit patterns. Not saved: the tunables (configuration) and the model
@@ -205,7 +201,7 @@ public:
     // field come back as saved: nothing is re-drawn). False and unchanged on bad data; reads its own fields only
     // (the owner checks done()).
     // N1 stage 2: the host does NOT re-create the saved rows after read (SimAnimation restores its max_seen so
-    // sync() skips them) and keeps calling set_tunables() as for a new game.
+    // sync() skips them).
     void write(ByteWriter& w) const;
     bool read(ByteReader& r, const std::function<const AnimModel*(ObjectId id)>& model_of);
 
@@ -225,7 +221,7 @@ private:
     std::vector<const AnimModel*> model_;
     std::vector<uint32_t> model_crc_;  // name_crc(model->model), 0 without a model
     std::vector<double> last_time_;
-    std::vector<uint8_t> frozen_, lock_, frame_changed_, near_end_, berserk_;
+    std::vector<uint8_t> frozen_, lock_, near_end_, berserk_;
     std::vector<uint64_t> idle_timer_;
     // Per slot.
     std::vector<int32_t> type_[kSlotCount];

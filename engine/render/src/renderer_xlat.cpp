@@ -2,7 +2,6 @@
 #include "alamo/render/renderer.hpp"
 #include <algorithm>
 #include <cassert>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -22,6 +21,7 @@
 #include "render_internal.hpp"
 #include "fx2_reader.hpp"
 #include "gamma.hpp"  // [port] output gamma
+#include "smaa.hpp"  // [port] SMAA
 #include "taa.hpp"  // [port] TAA
 #include "renderer_shared.hpp"
 
@@ -71,6 +71,10 @@ const materials::TranslatedProgram* Renderer::translated_program_impl(const std:
         if (slot) return slot->state.load() == 1 ? slot->tp.get() : nullptr;
         slot = std::make_unique<XlatEntry>();
         e = slot.get();
+        if (effect) {
+            e->effect = effect->name;
+            e->path = effect->path;
+        }
     }
     if (instanced) {  // the translation inputs of the pass with the instanced options (kept alive by the job)
         inst_pass = std::make_shared<materials::ResolvedPass>();
@@ -97,7 +101,8 @@ const materials::TranslatedProgram* Renderer::translated_program_impl(const std:
         e->state.store(e->tp ? 1 : 2);
         if (!e->tp) log::warnf("render", "translate %s: %s", effect ? effect->name.c_str() : "?", err.c_str());
     };
-    if (desc_.js) desc_.js->spawn(*xlat_counter_, std::move(job), jobs::Priority::Background);
+    // Serial job system: the result is only polled, so nobody would run the job (see PipelineManager::request).
+    if (desc_.js && !desc_.js->serial()) desc_.js->spawn(*xlat_counter_, std::move(job), jobs::Priority::Background);
     else job();
     std::lock_guard<std::mutex> lock(xlat_mutex_);
     return e->state.load() == 1 ? e->tp.get() : nullptr;
@@ -122,6 +127,32 @@ Renderer::TranslationStats Renderer::translation_stats() const {
         s.translate_ms += e->ms;
     }
     return s;
+}
+
+std::vector<materials::ShaderIssue> Renderer::shader_issues() const {
+    std::vector<materials::ShaderIssue> out;
+    if (desc_.effects) out = desc_.effects->issues();
+    std::vector<materials::ShaderIssue> failed;
+    {
+        std::lock_guard<std::mutex> lock(xlat_mutex_);
+        for (const auto& [k, e] : xlat_)
+            if (e->state.load() == 2) failed.push_back({materials::ShaderIssueKind::TranslateFailed, e->effect, e->path, false, e->error});
+    }
+    // xlat_ is hashed: order by content, drop the instanced / cbuffer twins of one failure.
+    auto less = [](const materials::ShaderIssue& x, const materials::ShaderIssue& y) {
+        if (x.effect != y.effect) return x.effect < y.effect;
+        if (x.kind != y.kind) return x.kind < y.kind;
+        return x.detail < y.detail;
+    };
+    std::sort(failed.begin(), failed.end(), less);
+    failed.erase(std::unique(failed.begin(), failed.end(),
+                             [](const materials::ShaderIssue& x, const materials::ShaderIssue& y) {
+                                 return x.effect == y.effect && x.detail == y.detail;
+                             }),
+                 failed.end());
+    out.insert(out.end(), failed.begin(), failed.end());
+    std::stable_sort(out.begin(), out.end(), less);
+    return out;
 }
 
 materials::PsoKey Renderer::translated_key(const GpuSubmesh& g, const GpuPass& p, const materials::TranslatedProgram& tp,
@@ -189,14 +220,6 @@ void make_engine_draw(const Mat3x4& world3, const Instance& inst, const ViewMatr
     std::copy(l0obj, l0obj + 4, e.l0_obj);
 }
 
-bool iequal(std::string_view a, const char* b) {
-    const size_t n = std::strlen(b);
-    if (a.size() != n) return false;
-    for (size_t i = 0; i < n; ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != static_cast<unsigned char>(b[i])) return false;
-    return true;
-}
-
 void write_matrix(const fx::Parameter& p, const float (&m)[16], std::span<float> out) {
     const uint32_t rows = std::max(1u, p.type.rows), cols = std::max(1u, p.type.columns);
     std::fill(out.begin(), out.end(), 0.0f);
@@ -211,31 +234,31 @@ void write_vec(const float (&v)[4], std::span<float> out) {
 
 Src semantic_src(const std::string& s) {
     if (s.empty()) return Src::Store;
-    if (iequal(s, "WORLD") || iequal(s, "MODEL")) return Src::World;
-    if (iequal(s, "VIEW")) return Src::View;
-    if (iequal(s, "PROJECTION")) return Src::Proj;
-    if (iequal(s, "VIEWPROJECTION")) return Src::ViewProj;
-    if (iequal(s, "WORLDVIEW") || iequal(s, "MODELVIEW")) return Src::WorldView;
-    if (iequal(s, "WORLDVIEWPROJECTION") || iequal(s, "MODELVIEWPROJECTION")) return Src::Wvp;
-    if (iequal(s, "VIEWINVERSE")) return Src::ViewInv;
-    if (iequal(s, "WORLDINVERSE") || iequal(s, "MODELINVERSE")) return Src::WorldInv;
-    if (iequal(s, "WORLDINVERSETRANSPOSE") || iequal(s, "MODELINVERSETRANSPOSE")) return Src::WorldInvT;
-    if (iequal(s, "WORLDVIEWINVERSE")) return Src::WorldViewInv;
-    if (iequal(s, "EYE_POSITION")) return Src::Eye;
-    if (iequal(s, "EYE_OBJ_POSITION")) return Src::EyeObj;
-    if (iequal(s, "LIGHT_SCALE")) return Src::LightScale;
-    if (iequal(s, "TIME")) return Src::Time;
-    if (iequal(s, "RESOLUTION_CONSTANTS")) return Src::Resolution;
-    if (iequal(s, "FOG_VALS")) return Src::Fog;
-    if (iequal(s, "DISTANCE_FADE_VALS")) return Src::Fade;
-    if (iequal(s, "SPH_LIGHT_ALL")) return Src::SphAll;
-    if (iequal(s, "SPH_LIGHT_FILL")) return Src::SphFill;
-    if (iequal(s, "SHADOW_EXTRUSION_DISTANCE")) return Src::Extrusion;
-    if (iequal(s, "CLOUD_TEX_U")) return Src::CloudU;
-    if (iequal(s, "CLOUD_TEX_V")) return Src::CloudV;
-    if (iequal(s, "FOW_TEX_U")) return Src::FowU;
-    if (iequal(s, "FOW_TEX_V")) return Src::FowV;
-    if (iequal(s, "WIND_BEND_VECTOR") || iequal(s, "WIND_GRASS_PARAMS")) return Src::Zero;
+    if (ascii_iequals(s, "WORLD") || ascii_iequals(s, "MODEL")) return Src::World;
+    if (ascii_iequals(s, "VIEW")) return Src::View;
+    if (ascii_iequals(s, "PROJECTION")) return Src::Proj;
+    if (ascii_iequals(s, "VIEWPROJECTION")) return Src::ViewProj;
+    if (ascii_iequals(s, "WORLDVIEW") || ascii_iequals(s, "MODELVIEW")) return Src::WorldView;
+    if (ascii_iequals(s, "WORLDVIEWPROJECTION") || ascii_iequals(s, "MODELVIEWPROJECTION")) return Src::Wvp;
+    if (ascii_iequals(s, "VIEWINVERSE")) return Src::ViewInv;
+    if (ascii_iequals(s, "WORLDINVERSE") || ascii_iequals(s, "MODELINVERSE")) return Src::WorldInv;
+    if (ascii_iequals(s, "WORLDINVERSETRANSPOSE") || ascii_iequals(s, "MODELINVERSETRANSPOSE")) return Src::WorldInvT;
+    if (ascii_iequals(s, "WORLDVIEWINVERSE")) return Src::WorldViewInv;
+    if (ascii_iequals(s, "EYE_POSITION")) return Src::Eye;
+    if (ascii_iequals(s, "EYE_OBJ_POSITION")) return Src::EyeObj;
+    if (ascii_iequals(s, "LIGHT_SCALE")) return Src::LightScale;
+    if (ascii_iequals(s, "TIME")) return Src::Time;
+    if (ascii_iequals(s, "RESOLUTION_CONSTANTS")) return Src::Resolution;
+    if (ascii_iequals(s, "FOG_VALS")) return Src::Fog;
+    if (ascii_iequals(s, "DISTANCE_FADE_VALS")) return Src::Fade;
+    if (ascii_iequals(s, "SPH_LIGHT_ALL")) return Src::SphAll;
+    if (ascii_iequals(s, "SPH_LIGHT_FILL")) return Src::SphFill;
+    if (ascii_iequals(s, "SHADOW_EXTRUSION_DISTANCE")) return Src::Extrusion;
+    if (ascii_iequals(s, "CLOUD_TEX_U")) return Src::CloudU;
+    if (ascii_iequals(s, "CLOUD_TEX_V")) return Src::CloudV;
+    if (ascii_iequals(s, "FOW_TEX_U")) return Src::FowU;
+    if (ascii_iequals(s, "FOW_TEX_V")) return Src::FowV;
+    if (ascii_iequals(s, "WIND_BEND_VECTOR") || ascii_iequals(s, "WIND_GRASS_PARAMS")) return Src::Zero;
     return Src::Store;
 }
 
@@ -243,20 +266,20 @@ Src param_src(const fx::Parameter& p) {
     const Src s = semantic_src(p.type.semantic);
     if (s != Src::Store) return s;
     const std::string& n = p.type.name;
-    if (iequal(n, "SKINMATRIXARRAY")) return Src::Skin;
-    if (iequal(n, "GLOBAL_AMBIENT")) return Src::Ambient;
-    if (iequal(n, "DIR_LIGHT_VEC_0")) return Src::L0Vec;
-    if (iequal(n, "DIR_LIGHT_DIFFUSE_0")) return Src::L0Dif;
-    if (iequal(n, "DIR_LIGHT_SPECULAR_0")) return Src::L0Spec;
-    if (iequal(n, "DIR_LIGHT_VIEW_VEC_0")) return Src::L0View;
-    if (iequal(n, "DIR_LIGHT_OBJ_VEC_0")) return Src::L0Obj;
+    if (ascii_iequals(n, "SKINMATRIXARRAY")) return Src::Skin;
+    if (ascii_iequals(n, "GLOBAL_AMBIENT")) return Src::Ambient;
+    if (ascii_iequals(n, "DIR_LIGHT_VEC_0")) return Src::L0Vec;
+    if (ascii_iequals(n, "DIR_LIGHT_DIFFUSE_0")) return Src::L0Dif;
+    if (ascii_iequals(n, "DIR_LIGHT_SPECULAR_0")) return Src::L0Spec;
+    if (ascii_iequals(n, "DIR_LIGHT_VIEW_VEC_0")) return Src::L0View;
+    if (ascii_iequals(n, "DIR_LIGHT_OBJ_VEC_0")) return Src::L0Obj;
     return Src::Store;
 }
 
 // Parameters whose value depends on the instance (transform, LIGHT_SCALE, pose, team colour): rewritten per
 // draw; everything else is per material or per frame and lives in the pass's cached register images.
 bool draw_param(const fx::Parameter& p) {
-    if (iequal(p.type.name, "COLORIZATION")) return true;  // team colour override (checked before the engine table)
+    if (ascii_iequals(p.type.name, "COLORIZATION")) return true;  // team colour override (checked before the engine table)
     switch (param_src(p)) {
     case Src::World: case Src::WorldView: case Src::Wvp: case Src::WorldInv: case Src::WorldInvT: case Src::WorldViewInv:
     case Src::EyeObj: case Src::LightScale: case Src::Skin: case Src::L0Obj: return true;
@@ -299,7 +322,7 @@ bool engine_write(const EngineParams& e, const materials::ParamStore* store, con
         return true;
     }
     case Src::Extrusion: {
-        const float x[4] = {kShadowExtrusion, kShadowExtrusion, kShadowExtrusion, kShadowExtrusion};
+        const float x[4] = {kShadowExtrusionDistance, kShadowExtrusionDistance, kShadowExtrusionDistance, kShadowExtrusionDistance};
         return write_vec(x, out), true;
     }
     case Src::CloudU: return write_vec(f.cloud_u, out), true;
@@ -332,7 +355,7 @@ bool engine_write(const EngineParams& e, const materials::ParamStore* store, con
 
 
 uint8_t src_code(const fx::Parameter& p) {
-    return static_cast<uint8_t>(static_cast<uint8_t>(param_src(p)) | (iequal(p.type.name, "COLORIZATION") ? kSrcColorization : 0));
+    return static_cast<uint8_t>(static_cast<uint8_t>(param_src(p)) | (ascii_iequals(p.type.name, "COLORIZATION") ? kSrcColorization : 0));
 }
 materials::ParamLookup draw_lookup(const DrawLookupCtx* c) {
     return [c](const fx::Parameter& prm, std::span<float> out) {

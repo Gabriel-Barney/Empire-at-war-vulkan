@@ -2,7 +2,6 @@
 // (app_script_saveload.cpp) are declared in app_script.hpp.
 #include "app_script.hpp"
 
-#include <cctype>
 
 namespace alamo_game_app {
 
@@ -41,11 +40,12 @@ ScriptStep step_wait(std::string name, std::function<bool(App&)> cond, uint32_t 
     return {std::move(name), [cond = std::move(cond)](App& a, ui::InputFrame&) { return cond(a); }, timeout};
 }
 
-ScriptStep step_click_control(std::string dialog, std::string control) {
+// Clicks a control of `dialog` once it is the top dialog: at its centre, or (`first_row`) 6 px above its bottom edge in
+// canvas units, the first row of a list (the skirmish staging game type list: row 0 = Land). cu9 t07: one body for both.
+ScriptStep step_click_in(std::string name, std::string dialog, std::string control, bool first_row) {
     auto st = std::make_shared<ClickState>();
-    std::string name = "click " + dialog + "/" + control;
     auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
-    return {name, [st, px, dialog, control](App& a, ui::InputFrame& f) {
+    return {std::move(name), [st, px, dialog, control, first_row](App& a, ui::InputFrame& f) {
                 if (st->phase > 0) return click_at(*st, f, px->first, px->second, ui::Button::Left);  // the dialog may close on release
                 ui::GuiDialog* d = a.ui_.gui.find(dialog);
                 if (!d || d != a.ui_.gui.top()) return false;  // wait for the dialog
@@ -56,33 +56,22 @@ ScriptStep step_click_control(std::string dialog, std::string control) {
                     return true;
                 }
                 const ui::GuiRect r = d->control_rect(static_cast<size_t>(i));
-                const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), 0.5f * (r.min.y + r.max.y));
+                const float y = first_row ? r.max.y - 6.0f : 0.5f * (r.min.y + r.max.y);
+                const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), y);
                 *px = {static_cast<int32_t>(p.x), static_cast<int32_t>(p.y)};
                 return click_at(*st, f, px->first, px->second, ui::Button::Left);
             },
             600};
 }
 
-// Clicks the first row of a list (the skirmish staging game type list: row 0 = Land).
+ScriptStep step_click_control(std::string dialog, std::string control) {
+    std::string name = "click " + dialog + "/" + control;
+    return step_click_in(std::move(name), std::move(dialog), std::move(control), false);
+}
+
 ScriptStep step_click_first_row(std::string dialog, std::string control) {
-    auto st = std::make_shared<ClickState>();
-    auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
-    return {"click first row of " + dialog + "/" + control, [st, px, dialog, control](App& a, ui::InputFrame& f) {
-                if (st->phase > 0) return click_at(*st, f, px->first, px->second, ui::Button::Left);
-                ui::GuiDialog* d = a.ui_.gui.find(dialog);
-                if (!d || d != a.ui_.gui.top()) return false;
-                const int32_t i = d->find(control);
-                if (i < 0) {
-                    std::fprintf(stderr, "script: %s has no %s\n", dialog.c_str(), control.c_str());
-                    a.script_failed_ = true;
-                    return true;
-                }
-                const ui::GuiRect r = d->control_rect(static_cast<size_t>(i));
-                const ui::Vec2f p = a.ui_.gui.canvas().canvas_to_pixel(0.5f * (r.min.x + r.max.x), r.max.y - 6.0f);
-                *px = {static_cast<int32_t>(p.x), static_cast<int32_t>(p.y)};
-                return click_at(*st, f, px->first, px->second, ui::Button::Left);
-            },
-            600};
+    std::string name = "click first row of " + dialog + "/" + control;
+    return step_click_in(std::move(name), std::move(dialog), std::move(control), true);
 }
 
 // Selects list row `row` like a player: click the first row (selects + focuses the list), then Down until it is reached.
@@ -125,6 +114,51 @@ ScriptStep step_select_row(std::string dialog, std::string control, std::functio
                 return false;
             },
             2000};
+}
+
+// [port: Gabriel, 2026-11-13] a new campaign opens the mission holocron by itself once its first chapter is added, and
+// the open summary holds the ticks: wait until that has happened (or the campaign added no chapter early on), then close
+// the summary with its Close button like a player. Nothing to do when it never opened.
+void close_auto_holocron(std::vector<ScriptStep>& s) {
+    s.push_back(step_wait("campaign-start holocron settled", [](App& a) { return !a.summary_auto_open_; }, 600));
+    ScriptStep click = step_click_control(ui::dlg::kStorySummary, "IDC_SUMMARY_DIALOG_CLOSE_BUTTON");
+    auto skip = std::make_shared<bool>(false);
+    auto checked = std::make_shared<bool>(false);
+    s.push_back({"close the campaign-start holocron", [skip, checked, run = std::move(click.run)](App& a, ui::InputFrame& f) {
+                     if (!*checked) {
+                         *checked = true;
+                         *skip = !a.story_summary_open_;
+                     }
+                     return *skip || run(a, f);
+                 },
+                 click.timeout_frames});
+    s.push_back(step_wait("campaign-start holocron closed", [](App& a) { return !a.story_summary_open_; }, 300));
+}
+
+// Clicks list row `row` itself like a player (scrolled into view first). Unlike step_select_row it never clicks another
+// row on the way: in the saved games tree a click on a group row opens / closes that group.
+ScriptStep step_click_row(std::string dialog, std::string control, std::function<int32_t(App&)> row) {
+    auto st = std::make_shared<ClickState>();
+    auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
+    return {"click row of " + dialog + "/" + control, [st, px, dialog, control, row](App& a, ui::InputFrame& f) {
+                if (st->phase > 0) return click_at(*st, f, px->first, px->second, ui::Button::Left);
+                ui::GuiDialog* d = a.ui_.gui.find(dialog);
+                if (!d || d != a.ui_.gui.top()) return false;  // wait for the dialog
+                const int32_t want = row(a);
+                ui::Vec2f p{};
+                if (!a.ui_.gui.list_row_point(*d, control, want, p)) {
+                    a.ui_.gui.scroll_list_to(*d, control, want);
+                    if (!a.ui_.gui.list_row_point(*d, control, want, p)) {
+                        std::fprintf(stderr, "script: %s/%s has no visible row %d\n", dialog.c_str(), control.c_str(), static_cast<int>(want));
+                        a.script_failed_ = true;
+                        return true;
+                    }
+                }
+                const ui::Vec2f q = a.ui_.gui.canvas().canvas_to_pixel(p.x, p.y);
+                *px = {static_cast<int32_t>(q.x), static_cast<int32_t>(q.y)};
+                return click_at(*st, f, px->first, px->second, ui::Button::Left);
+            },
+            600};
 }
 
 ScriptStep step_shot(std::string file) {
@@ -819,6 +853,13 @@ ScriptStep step_reinforce() {
                         return false;
                     }
                     if (st->n < st->next) return false;
+                    // [port: Gabriel, 2026-11-13] with 12-fighter squadrons the starting fleet can fill the space cap, so
+                    // the pad refuses the pick itself (reinforce_available: QueueFull) and no drop is ever clicked: the
+                    // same answer as a refused drop.
+                    if (st->n > 60 && a.reinforce_drops_ == 0 && !a.reinforce_available(pool[0].galactic_id)) {
+                        std::printf("script: reinforcement drop answered: pick refused (cap full)\n");
+                        return true;
+                    }
                     ui::HudAction act;
                     act.kind = ui::HudAction::Kind::BeginReinforcement;
                     act.unit = static_cast<uint32_t>(pool[0].galactic_id);
@@ -1173,6 +1214,28 @@ void App::make_script() {
     }
     s.push_back(step_shot("game_main_menu.png"));
     if (opt_.smoke == "skirmish") {
+        // modc t08: the mod picker from the main menu's Mods button: the rows (base game first, then whatever mods this
+        // machine has), the base game's load report once its check finished, PNG, Back. Never launches anything; the
+        // skirmish session (and its golden) starts afresh later.
+        s.push_back(step_click_control("IDD_MAIN_MENU_DIALOG", "IDC_PORT_MAIN_MENU_MODS"));
+        s.push_back(step_wait("mod picker: base game report shown", [](App& a) {
+            const ui::GuiDialog* d = a.ui_.gui.find(ui::kPortModsDialog);
+            const ui::GuiControl* list = d ? d->get("IDC_PORT_MODS_LIST") : nullptr;
+            const ui::GuiControl* rep = d ? d->get("IDC_PORT_MODS_REPORT") : nullptr;
+            if (!list || !rep || list->items.empty() || rep->items.empty() || rep->items[0] == U"Checking...") return false;
+            std::printf("script: mod picker - %zu rows, base report: %s\n", list->items.size(), utf8_of(rep->items[0]).c_str());
+            if (rep->items[0].rfind(U"Loads", 0) != 0) {
+                a.notes_.push_back("mod picker: base game report " + utf8_of(rep->items[0]));
+                a.smoke_ok_ = false;
+            }
+            return true;
+        }, 6000));
+        s.push_back(step_shot("game_mod_picker.png"));
+        s.push_back(step_click_control(ui::kPortModsDialog, "IDC_CANCEL_BUTTON"));
+        s.push_back(step_wait("main menu again", [](App& a) {
+            const ui::GuiDialog* d = a.ui_.gui.top();
+            return d && ascii_iequals(d->name(), "IDD_MAIN_MENU_DIALOG");
+        }, 120));
         // OI host: the attract demo behind the main menu (MAIN_MENU_BACKGROUND.md; started here as the menu-open path would,
         // scripted runs never start it on their own): its battle world is drawn under the menu (world draws > 0, no
         // tactical HUD) and keeps ticking under the menu and its sub-dialogs (input never stops it); the skirmish's start
@@ -1384,16 +1447,12 @@ void App::make_script() {
             const std::string want = env_or_empty("ALAMO_SMOKE_BUY_TYPE");
             const std::vector<ui::BuyUnitEntry>& u = a.buy_.units;
             for (size_t i = 0; i < u.size(); ++i)
-                if (!want.empty() && iequal(u[i].type, want)) return i;
+                if (!want.empty() && ascii_iequals(u[i].type, want)) return i;
             if (!space_buy) return size_t{0};
             for (size_t i = 0; i < u.size(); ++i)
                 if (u[i].type == kSmokeSkirmishBuyType) return i;
-            const auto upper_name = [](std::string n) {
-                for (char& c : n) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                return n;
-            };
             for (size_t i = 0; i < u.size(); ++i)
-                if (upper_name(u[i].type).find("_CORVETTE") != std::string::npos) return i;
+                if (ascii_upper(u[i].type).find("_CORVETTE") != std::string::npos) return i;
             for (size_t i = 0; i < u.size(); ++i) {
                 const uint32_t t = a.data_.rules.find_type(u[i].type);
                 if (t != galactic::kNoIndex && !a.data_.rules.types[t].build_initially_locked) return i;
@@ -1412,7 +1471,10 @@ void App::make_script() {
     };
     if (opt_.smoke == "land") {  // land skirmish: the first land map of the list (rows after the space maps)
         s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_SKIRMISH_GAMES_BUTTON"));
-        s.push_back(step_click_first_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST"));  // p4uim t01: the Land game type
+        // p4uim t01: the Land game type (ccpgt t02: its row, the rows are sorted by text).
+        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST", [](App& a) {
+            return static_cast<size_t>(std::max<int32_t>(a.ui_.front.skirmish_game_type_row(ui::kSkirmishGameLand), 0));
+        }));
         s.push_back(step_wait("land game type listed", [](App& a) { return !a.ui_.front.skirmish_space_type(); }, 60));
         s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_STAGING_MAP_LIST", [](App& a) {
             // The first land map by name (the old list's first land row): its row in the staging list as the front end sorted it;
@@ -1431,8 +1493,11 @@ void App::make_script() {
         s.push_back(step_wait("land skirmish over", [](App& a) { return a.session_ && a.skirmish_ended_ && a.screen_ == Screen::Menu; }, 20000));
     } else if (opt_.smoke == "skirmish") {
         s.push_back(step_click_control("IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG", "IDC_SKIRMISH_GAMES_BUTTON"));
-        // The dialog opens on Land (UI.md 9.7): select the Space game type (row 1) so the run starts on Kuat.
-        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST", [](App&) { return size_t{1}; }));
+        // The dialog opens on Land (UI.md 9.7): select the Space game type (its row; ccpgt t02: the rows are sorted by text); the
+        // run starts on its row 0 (modc t19).
+        s.push_back(step_select_row("IDD_SKIRMISH_STAGING_DIALOG", "IDC_GAME_TYPE_LIST", [](App& a) {
+            return static_cast<size_t>(std::max<int32_t>(a.ui_.front.skirmish_game_type_row(ui::kSkirmishGameSpace), 0));
+        }));
         s.push_back(step_wait("space game type listed", [](App& a) { return a.ui_.front.skirmish_space_type(); }, 60));
         s.push_back(step_shot("game_skirmish_staging.png"));
         s.push_back(step_click_control("IDD_SKIRMISH_STAGING_DIALOG", "IDC_SKIRMISH_START_GAME_BUTTON"));
@@ -1471,11 +1536,11 @@ void App::make_script() {
         if (!want.empty()) {
             const ui::CampaignMenu menu = ui::build_campaign_menu(data_.db);
             for (size_t i = 0; i < menu.custom.size() && *custom_row < 0; ++i)
-                if (iequal(menu.custom[i].set, want)) *custom_row = static_cast<int64_t>(i);
+                if (ascii_iequals(menu.custom[i].set, want)) *custom_row = static_cast<int64_t>(i);
             for (size_t i = 0; i < menu.story.size() && *custom_row < 0 && *story_row < 0; ++i) {
-                if (iequal(menu.story[i].set, want)) *story_row = static_cast<int64_t>(i);
+                if (ascii_iequals(menu.story[i].set, want)) *story_row = static_cast<int64_t>(i);
                 for (size_t j = 0; j < menu.story[i].factions.size() && *story_row < 0; ++j)
-                    if (iequal(menu.story[i].factions[j].campaign, want)) *story_row = static_cast<int64_t>(i), story_faction = j;
+                    if (ascii_iequals(menu.story[i].factions[j].campaign, want)) *story_row = static_cast<int64_t>(i), story_faction = j;
                 if (*story_row >= 0 && story_faction < menu.story[i].factions.size()) story_choice = menu.story[i].factions[story_faction];
             }
             if (*custom_row < 0 && *story_row < 0)
@@ -1517,9 +1582,11 @@ void App::make_script() {
             s.push_back(step_click_control("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_PLAY_BUTTON"));
         }
         s.push_back(step_wait("galactic map", [](App& a) { return a.screen_ == Screen::Galactic; }, 600));
+        close_auto_holocron(s);
         s.push_back(step_ticks("galaxy runs", 30));
-        // GALACTIC_DIALOGS §2: no dialog opens at campaign start; the opening Story_Dialog event adds its chapter to the
-        // mission holocron (b_story_arc_g flashes). Clicking the holocron opens the story summary, which holds the ticks.
+        // GALACTIC_DIALOGS §2: the opening Story_Dialog event adds its chapter to the mission holocron (retail: b_story_arc_g
+        // flashes; [port: Gabriel] a new campaign opens the summary by itself). Clicking the holocron (re)opens the story
+        // summary, which holds the ticks.
         {
             auto n = std::make_shared<int>(0);
             s.push_back({"holocron updated", [n](App& a, ui::InputFrame&) { return a.holocron_updates_ > 0 || ++*n > 300; }, 400});

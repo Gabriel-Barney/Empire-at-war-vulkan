@@ -741,7 +741,7 @@ object init 0x3989a0 := 0, and the MISSILE_SHIELD inline +/− in 0x38a350)** [H
 - *Move orders, coordinator level:* `Coordinator::Move_To` (0x4f8200) returns without doing anything when **any**
   member is locked (the whole order is dropped for every member). (Before that it also does nothing when, in space,
   the order's target object (block +0x28) is a TEAM member, or for type 3 with no target.) Coordinator remove-unit (vf+0x20 0x4f7d30, also via the
-  space override 0x5d5130) **refuses a locked unit** unless obj +0x3a0 bit 0x02 is set [M: dying]. Coordinator add
+  space override 0x5d5130) **refuses a locked unit** unless obj +0x3a0 bit 0x02 is set (destroyed / removed by `Detach` 0x3a8380; TACTICAL_COMBAT §5.4.3). Coordinator add
   (0x4f6b60 via 0x438b40) refuses a unit that some coordinator already holds (0x397260 → 0x426140).
 - *Group move* (0x2a7b80, every player move event and most AI moves): has no lock test, but for a locked unit the
   leave-old-coordinator step is refused, so the add to the new coordinator is refused too: **the locked unit is left
@@ -956,7 +956,8 @@ Team data pack = obj +0x110 (TeamDataPackClass, ctor 0x4ec680 zeroes +0x50 / +0x
 - Position = the container's own position (obj +0x78 / +0x7c).
   - At spawn it is the members' centroid.
   - After that, each TEAM service (0x405b10) sets it to the centre of the members' joint bounding box. It is skipped
-    when the locomotor's vf+0x230 says so [M: when that applies].
+    when the locomotor's vf+0x230 is true, i.e. for every land squad container (LandTeamContainer), which its own
+    locomotor moves instead (TACTICAL_COMBAT §5.4.4 item 2, 2026-11-10).
   - Re-projection follows the container's transform (§14).
 
 ### 29.5 Values for one fresh team (9 live members, land)
@@ -1946,7 +1947,7 @@ Flag 0x02 = guard, block +0x24 = kind, +0x28 = object.
           speed it is travelling at).
      3. The cap is min(F speed, 2 × S). If F's path already equals the object's path (0x40ded0), F speed := the cap
         and the update **returns** (no re-issue, no step 4). Else copy the object's current path into F's path
-        (+0x68, 0x40dbc0); F speed := the cap; footprint check 0x40eb90(members, 2, 1).
+        (+0x68, 0x40dbc0); F speed := the cap; the layout driver 0x40eb90(members, 2, 1) (not a footprint check: MOVEMENT §4.3.1 item 1, 2026-11-10).
      4. Every member that is not deployed / deploying (or has type +0x23b0 ≠ 0) gets the new path (locomotor
         vf +0x158(0), vf +0x190(path), vf +0x148(0)). Its waypoint index (path +0x60 / +0x64) is set to the object's,
         so the escort joins the object's path at the object's progress.
@@ -2241,7 +2242,7 @@ the order.
    state 0x19 (Deployed); every other locomotor returns 0 (0x13b7d0). Extents 0x371d20: x = `Custom_Hard_XExtent_Deployed`
    × `Scale_Factor` when > 0, else the normal x (0x371be0); **y = `Custom_Hard_YExtent_Deployed` × `Scale_Factor`
    whenever XExtent_Deployed > 0** (also when YExtent_Deployed ≤ 0), else the normal y. FoC sets no
-   `Custom_Hard_XExtent_Deployed` (one type sets only `Custom_Hard_YExtent_Deployed`), so no FoC footprint changes.
+   `Custom_Hard_XExtent_Deployed` (two types, `MPTL` and `MAL_Rocket_Vehicle`, set only `Custom_Hard_YExtent_Deployed`; TACTICAL_COMBAT §5.4.6), so no FoC footprint changes.
    Port: deploying / deployed = the DEPLOY ability active (`AbilitySystem::deployed`) [M: the +0x2b3 byte];
    `drop_deployed_extents`.
 2. **Persist flag.** `Create_Cinematic_Transport`'s `persist` is TransportDataPack +0xc9 (TACTICAL_GAPS §4.2.2 item 3).
@@ -2598,6 +2599,11 @@ BUSYTACTICALFREESTORE.LUA).
   (`ScriptObjectState::targeting_priorities`, objects outside the combat model); `BattleAi` clears the combat override
   (`CombatSystem::set_priority_override(id, -1)`; hard points share the unit's set there). [port] The stickiness
   threshold has no combat-side override, so there is nothing to reset for it.
+  **Correction (cu8f t04, 2026-11-07):** the last sentence is wrong. The release writes the type's
+  `Targeting_Stickiness_Time_Threshold` into the unit's TD +0x158 and each TEAM member's (`CU8F_T04_T06_RE.md` §1.1
+  writer 3), and that field (spawn value 0.0, not the type's) is what `Is_Target_Sticky` reads. The port now has the
+  override (`CombatSystem` `Unit::stickiness`) and `BattleAi::unit_left_task_force` resets it
+  (`CombatSystem::reset_stickiness`).
 - No save-format change (no saved field added; tactical AI save version stays 8).
 - Test: `alamo_ai_tactical_world_tests` `test_replan_and_priority_lifetime` (variant 9): a sweep plan collects
   `"Corvette"` and must never get a frigate; every unit that carried a plan's set gets `unit_left_task_force` and its
@@ -2784,6 +2790,9 @@ pusher's path test rejects; the next rings are 1, 2.8, 5.4, 8.8, ... units out u
      half size r + 5 × `FormationSpacing` around the sample (the collision tree, AABB overlap) [M: what the object
      grid 0x538330 stores per object was not traced; 0x5d7c00 → 0x6b24f0 is a time-sliced structure per movement
      class];
+     *(settled 2026-11-10, MOVEMENT §5.4.3 "Occupancy": retail's test is a directional-radius distance test
+     against the layer-0x10 rectangles: blocked when a record's centre is within (r + margin) + its directional
+     radius of the sample, the sample swept one unit along world +x.)*
    - paths = the movers of the live MovingVsStopped collisions with b as the stopped participant (collision-list
      order): each mover's **remaining path** from its position (no approximation window), clearance = its hard Y
      extent (0x372040; soft radius when unset) + r + 4; the sample is rejected when its distance to a segment is < the
@@ -2796,3 +2805,38 @@ pusher's path test rejects; the next rings are 1, 2.8, 5.4, 8.8, ... units out u
    `kReplanAfterBlocked` frames ends where it is; a new move, stop or teleport of b ends it. While pushed, b takes no
    part in StoppedVsStopped collisions (its locomotor moves). Saved (movement save version bump); hashed only while a
    push is active.
+
+## 41. foc-land seed 1: an 18600-frame `Clear_Infantry` fight is a terrain-blocked standoff (a2l t04) [port observation]
+
+**Question.** a2k t14 found that in `--skirmish-ai foc-land --seed 1` (dev 9ab7d8bb) the Rebel's first `Clear_Infantry`
+task force (5 Rebel_Trooper_Team) blocked on `Attack_Move(Empire squad 811)` from frame 4674 to 23280. Combat rate or
+attack-move behaviour?
+
+**Trace (port, 9ab7d8bb, headless trace of positions, targets, shots, ground / object hits; not committed).**
+- Neither side moves from about frame 5000: the Empire's 8-10 `Squad_Stormtrooper` (teams 811 / 812, held by their own
+  `Clear_Infantry`) stand on a ledge at z 9.3 around (1720-1780, 4580-4660); the Rebel troopers stand below a cliff at
+  z −43.3 around (1780-1860, 4480-4720), 100-140 apart (XY), all in weapon range (140 / 150).
+- Both sides keep firing at their locked targets (about one shot per 33 frames each, `Projectile_Fire_Recharge_Seconds`
+  1.0), but most shots detonate on the terrain: the ledge troopers' shots hit the ledge top 20-30 units in front of
+  them, the Rebels' shots hit the cliff face (z −9..−4). Only troopers standing at the edge hit. Shots by XY distance,
+  frames 4674-23280: < 80 units 97 % hit; 100-159 units 211 hits in 4470 shots (4.7 %); frames 10500-20000, 100-119
+  units: 22 hits in 2407 shots.
+- Per hit 0.8-1.4 damage (blaster 2.0 / 3.0 × `Damage_Blaster_Hand`-vs-`Armor_Infantry` 1.3 × the 0.5 cover factor and
+  difficulty multipliers) against 40 / 48 health: not the limiting factor. No healing, no reinforcement: squad 811's
+  members only die (10 → 8 by frame 10500, then flat until 21000, when other Rebel units reached the ledge).
+- The block ends only by the target's death (§33.2: an object Attack_Move stays open after arrival while the target is
+  a valid, hostile, unfogged object), so the plan holds its units for the whole standoff.
+
+**Verdict: not a port bug.** The ground test of straight laser shots is retail behaviour (§37.4 [H]) and retail has no
+line-of-fire test before firing (TACTICAL_COMBAT §2.7 [M]), so a unit keeps shooting into a ridge. What is not proven
+is where the original's formation stops: the port's object attack-move moves the formation to the object's position
+and its 2D slots fall below the ledge; TACTICAL_COMBAT §2.8 "Stopping is not traced here [L]". Probe or RE item if
+this matters: does a land object Attack_Move formation in the original end at slots below a ledge (Utapau, Rebel base
+cliff) or climb to the target?
+
+**Later dev.** On 03940b96 (after cu8f / cu8g / cu8i rng-stream changes) seed 1 no longer reaches this standoff: the
+Rebel's first Secure_Contestable succeeds (refinery at frame 1509) and the battle ends at frame 18496 (Rebel win). Other
+seeds on 03940b96 (`--ticks 30000 --workers 4 --expect-battle-end`): 3 ends at 17827, 4 at 28675 (16678 when the test
+was pinned to it), 5 at 20486; seed 2 does not end, for another reason: from about frame 20000 the Rebel sits at 40000
+credits with its units in LANDSCOUT / SECUREBUILDPAD / CLEARVEHICLES plans and never attacks the Empire base (shots at
+100-119 units hit 96 %; no standoff). The test `alamo_headless_skirmish_ai_foc_land_end` stays pinned to `--seed 4`.

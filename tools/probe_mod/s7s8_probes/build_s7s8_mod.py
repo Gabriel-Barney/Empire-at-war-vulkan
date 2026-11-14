@@ -15,7 +15,7 @@ What it writes (nothing from the game is stored in the repository):
   S7S8_PROBE_MARKER.txt                                lets cleanup (s7s8_cleanup.py) recognise the folder as ours
 and, with --config-out, the same sites as JSON for s7s8_reader.py / s7s8_parse.py.
 
-Sites come from the map files (.ted, read through tools/probe_mod/s10_map_owners/ted_owners.py):
+Sites come from the map files (.ted, read through tools/probe_mod/common/ted_owners.py):
   land  one origin O and direction u (a grid axis) such that the strip O + [0, 580] u, |side| <= 60 is Clear, dry and
         flat (every vertex within 4 units of O's height: the SPMAT range-edge test needs the target at the shooter's
         height) and the wider rectangle O + [-220, 700] u, |side| <= 200 is Clear and dry; at least 900 from every
@@ -37,7 +37,7 @@ import zipfile
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE_MOD = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(PROBE_MOD, 's10_map_owners'))
+sys.path.insert(0, os.path.join(PROBE_MOD, 'common'))
 sys.path.insert(0, PROBE_MOD)
 import ted_owners  # noqa: E402
 
@@ -106,18 +106,7 @@ TEXTS = [
 
 # ---- shipped files -------------------------------------------------------------------------------------------------
 
-def read_shipped(game, name, source_zip=None):
-    """(bytes, label) of a shipped Data file: the extracted text zip when given, else the install in FoC order."""
-    if source_zip:
-        with zipfile.ZipFile(source_zip) as z:
-            want = name.upper().replace('/', '\\')
-            for n in z.namelist():
-                if n.upper().replace('/', '\\') == want:
-                    return z.read(n), source_zip + ':' + n
-        return None, None
-    if not os.path.isdir(game):
-        return None, None
-    return ted_owners.GameFiles(game).read(name)
+read_shipped = ted_owners.read_shipped
 
 
 def ted_bytes(game, map_name):
@@ -384,13 +373,8 @@ def lua_config(cfg):
 
 
 def freestore_text(game, cfg, source_zip=None):
-    data, src = read_shipped(game, FREESTORE, source_zip)
-    if data is None:
-        raise SystemExit('shipped BusyTacticalFreeStore.lua not found (game %s, zip %s)' % (game, source_zip))
-    text = data.decode('latin-1').replace('\r\n', '\n')
-    hook = open(HOOK, encoding='ascii').read()
-    out = text.rstrip('\n') + '\n\n' + lua_config(cfg) + '\n' + hook
-    return out.replace('\n', '\r\n').encode('latin-1'), src
+    tail = lua_config(cfg) + '\n' + open(HOOK, encoding='ascii').read()
+    return ted_owners.append_to_shipped(game, FREESTORE, tail, source_zip)
 
 
 def text_file(game):

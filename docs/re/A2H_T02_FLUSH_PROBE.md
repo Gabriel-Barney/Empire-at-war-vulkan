@@ -24,6 +24,11 @@ was gone afterwards.
    The port evaluates NMS = 1 from frame 1 with HST 55775 and SST = FRT 52600 (`A2H_T01_RERUN.md`), so it starts
    `Flush_MajorItem_Budget` all run (144 plan lines in 24000 frames). Cause and port change: `A2H_T02_SPACE_TOTAL.md`.
    No `FlushMajorItemBudget` start for the Empire in 31 min; the Underworld ran it 21 times (frames 847 .. 7198).
+   **Pre-fix recorder artefact (a2m t12):** the Underworld count is not retail's. This run used the kit before its
+   2026-11-08 Flush_G fix, which made the second and later runs of every pooled plan instance die at their first record.
+   With the fixed kit (run 20261108-212556), retail starts the Underworld's FlushMajorItemBudget from frame 52, and every
+   run ends with PEXIT in the same frame. The MJ samples after the first hooked-plan releases (5416 .. 51511) also come
+   from an AI the kit had already disturbed [M]. See `A2K_T05_SABOTEUR_RUN.md` section 5.
 2. **SST − FRT = 4000 = one SpaceHero** (the Accuser, AI_Combat_Power 4000) is already in the retail Empire's total at
    mode frame 1435; the port has no SpaceHero at its first services (SST = FRT).
 3. **`ActiveGoals` without `Parameter_Category` fails** (AG = nil, i.e. the equation had no answer) and
@@ -39,6 +44,18 @@ ConquerPiratePlan 36 (from frame 17404, every ~240 frames, all released without 
 HeavyVehicleFactory 21 (3457 .. 24877), BuildEconomicStructurePlan 34 (44554 .. 55237), UpgradeStarbasePlan 21,
 BuildBaseComponentBarracks 17, BuildBaseComponentLightVehicleFactory 5; no LiftBlockade, no AdvancedVehicleFactory.
 Every start ended without PRET / PEXIT / PFAIL: the goal system released them.
+
+**Pre-fix recorder artefact (a2m t12):** this section is unreliable, the counts and the release reading both. The
+kit's plan hook was fixed on 2026-11-08 (`tools/probe_mod/a2f_budget/README.md`, "a2k t05 fix"). Before that, a pooled
+plan's release ran PGBase Flush_G, which deleted the kit's record table. The next run of that instance then died at its
+first record, before the shipped plan code ran. So:
+- "no end record" here is not evidence of a release, and `prev=none` (the report's `confirmed`) is not either, because
+  Flush_G also wiped the previous-run state;
+- the start counts and the ConquerPirate restart cadence (~240 frames) come from plans that ended at once;
+- the AI after each hooked plan's first release was disturbed.
+
+Run 20261108-212556 (fixed kit) records every restart with its end (`prev=PEXIT` / `prev=none` chains). See
+`A2K_T05_SABOTEUR_RUN.md` section 5.
 
 ## 3. Kit defect found
 

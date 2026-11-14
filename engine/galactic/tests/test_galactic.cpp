@@ -13,19 +13,13 @@
 #include "alamo/galactic/cadence.hpp"
 #include "alamo/galactic/fleet_path.hpp"
 #include "alamo/galactic/planet_graph.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 
 using namespace alamo;
 using namespace alamo::galactic;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -173,7 +167,7 @@ void test_graph_build() {
         p.nonplanet_prob = 0.05f;
         const GalaxyMap gm = random_galaxy(r, p);
         const PlanetGraph s = PlanetGraph::build(gm);
-        const PlanetGraph pp = PlanetGraph::build(gm, {}, testing::make_thread_parallel_for(4));
+        const PlanetGraph pp = PlanetGraph::build(gm, {}, ::alamo::test::make_thread_parallel_for(4));
         CHECK(s.fingerprint() == pp.fingerprint());
         for (uint32_t a = 0; a < s.size(); ++a)
             for (uint32_t e = s.edge_begin(a); e < s.edge_end(a); ++e) {
@@ -673,9 +667,9 @@ void test_weight_arithmetic() {
     add_planet(m, "B", {dd, 0, 0});
     add_route(m, 0, 1, hs);
     const PlanetGraph g = PlanetGraph::build(m);
-    const int32_t costs[2] = {0, 2};
+    const double costs[2] = {0.0, 200.0};  // node costs 0, 2
     AllPairsInput in;
-    in.node_cost = costs;
+    in.node_value = costs;
     AllPairsMatrices mm;
     reference_all_pairs(g, in, mm);
     const float dist = g.distance(g.edge_begin(0));
@@ -683,7 +677,7 @@ void test_weight_arithmetic() {
     CHECK(mm.weight(1, 0) == uint32_t(static_cast<int64_t>((dist / hs) * 10.0f) & 0xFFFF));
     CHECK(mm.pred(0, 1) == 0 && mm.pred(0, 0) == kNoPred && mm.weight(0, 0) == 0);
 
-    // node_value path (Q7) == pre-divided node_cost path.
+    // node_value path (Q7): a negative total wraps.
     const double vals[2] = {-50.0, 299.0};
     AllPairsInput iv;
     iv.node_value = vals;
@@ -698,9 +692,9 @@ void test_weight_arithmetic() {
     add_planet(q, "A", {0, 0, 0});
     add_planet(q, "B", {6553.5f, 0, 0});
     const PlanetGraph gq = PlanetGraph::build(q);
-    const int32_t qc[2] = {0, 0xFFFF};
+    const double qc[2] = {0.0, 6553500.0};  // node costs 0, 0xFFFF
     AllPairsInput iq;
-    iq.node_cost = qc;
+    iq.node_value = qc;
     AllPairsMatrices a, b;
     reference_all_pairs(gq, iq, a);
     fast_all_pairs(gq, iq, b);
@@ -829,7 +823,7 @@ uint32_t random_size(Rng& r) {
 
 void test_all_pairs_equivalence() {
     Rng r(0xA11);
-    const ParallelFor threaded = testing::make_thread_parallel_for(4);
+    const ParallelFor threaded = ::alamo::test::make_thread_parallel_for(4);
     int raw_graphs = 0, geo_graphs = 0, mismatches = 0, path_fail = 0, eligible = 0, fallback = 0, wrapped = 0;
     int par_ref_checked = 0;
     uint64_t entries = 0;
@@ -997,10 +991,10 @@ void test_cache() {
     p.n = 60;
     GalaxyMap gm = random_galaxy(r, p);
     PlanetGraph g = PlanetGraph::build(gm);
-    std::vector<int32_t> cost(p.n, 1);
+    std::vector<double> cost(p.n, 100.0);  // node cost 1
     Bitset fog(p.n, true);
     AllPairsInput in;
-    in.node_cost = cost;
+    in.node_value = cost;
     in.revealed = &fog;
     AllPairsCache cache;
     AllPairsMatrices ref;
@@ -1010,7 +1004,7 @@ void test_cache() {
     CHECK(cache.recompute_count() == 1);
     reference_all_pairs(g, in, ref);
     CHECK(cache.matrices() == ref);
-    cost[3] = 7;
+    cost[3] = 700.0;
     CHECK(cache.update(g, in));
     CHECK(!cache.update(g, in));
     fog.set(5, false);
@@ -1038,7 +1032,7 @@ void test_cache() {
     CHECK(!cache.update(g2, in));
     cache.invalidate();
     cache.set_fast_min_planets(0);
-    CHECK(cache.update(g2, in, testing::make_thread_parallel_for(3)));
+    CHECK(cache.update(g2, in, ::alamo::test::make_thread_parallel_for(3)));
     CHECK(cache.last_method() == AllPairsMethod::Fast);
     reference_all_pairs(g2, in, ref);
     CHECK(cache.matrices() == ref);

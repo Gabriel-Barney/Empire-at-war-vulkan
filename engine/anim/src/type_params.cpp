@@ -1,4 +1,5 @@
 #include "alamo/anim/type_params.hpp"
+#include "alamo/objects/game_object_types.hpp"
 
 #include <cstdlib>
 

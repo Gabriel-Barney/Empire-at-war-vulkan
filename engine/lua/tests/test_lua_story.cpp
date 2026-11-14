@@ -2,6 +2,7 @@
 // order, checksum) and the story bindings (Story_Event, Get_Story_Plot, StoryPlot/EventWrapper,
 // objectives, radar blips, planet highlights, Check_Story_Flag). With ALAMO_FOC_DATA: loads the
 // shipped FoC campaign plot sets through the VFS, runs them and drives PGStoryMode.lua.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -12,6 +13,7 @@
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/lua/ai_bridge.hpp"  // reset_script_threads
@@ -21,6 +23,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_LUA_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -31,14 +34,7 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
@@ -67,10 +63,7 @@ static uint64_t digest(const StoryModel& m) {
     return h.digest();
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 // ------------------------------------------------------------------------------------------
 // Synthetic plot: every firing rule with a hand-computed order.
@@ -230,6 +223,40 @@ static void test_synthetic() {
         }
         std::printf("  t9 timer: ELAPSED 2 fired at frame %u\n", fired_at);
         CHECK(fired_at == 61 && t.fired().size() == 1);
+    }
+    // bkc1 t04 (backlog b0012; Q6_T15_RETAIL_RUN.md row 3 [H]): a Perpetual prereq-less ELAPSED T driven by the host's T9
+    // series. Retail: T = 2 repeats every 61 frames (T x 30 + 1: the re-arm's next T9 only records LastTime), T = 0.7
+    // alternates 22 / 23 frames (T x 30 = 21 is not a whole frame count in float time).
+    {
+        auto periods = [](const char* t_param, uint32_t frames) {
+            const std::string xml = std::string("<Story><Event Name=\"Cycle\"><Event_Type>STORY_ELAPSED</Event_Type><Event_Param1>") +
+                                    t_param + "</Event_Param1><Perpetual>Yes</Perpetual></Event></Story>";
+            StoryModel c;
+            std::string ec;
+            CHECK(c.add_plot("Story_Cycle.xml", xml.c_str(), true, "", &ec) == 0);
+            std::vector<uint32_t> at;
+            size_t seen = 0;
+            for (uint32_t f = 1; f <= frames; ++f) {
+                c.update(f, StoryModel::t9_seconds(f, 1.0f / 30.0f));
+                for (; seen < c.fired().size(); ++seen) at.push_back(f);
+            }
+            std::vector<uint32_t> d;
+            for (size_t i = 1; i < at.size(); ++i) d.push_back(at[i] - at[i - 1]);
+            return d;
+        };
+        const std::vector<uint32_t> two = periods("2", 1300);
+        CHECK(two.size() >= 19);
+        for (uint32_t p : two) CHECK(p == 61 || p == 62);
+        CHECK(std::count(two.begin(), two.end(), 61u) * 10 >= static_cast<std::ptrdiff_t>(two.size()) * 9);  // 38 of 39 in retail
+        const std::vector<uint32_t> cyc07 = periods("0.7", 1300);
+        uint32_t n22 = 0, n23 = 0;
+        for (uint32_t p : cyc07) {
+            CHECK(p == 22 || p == 23);
+            n22 += p == 22;
+            n23 += p == 23;
+        }
+        std::printf("  perpetual ELAPSED: T=2 %zu periods, T=0.7 %u x 22 + %u x 23 frames\n", two.size(), n22, n23);
+        CHECK(n22 > 0 && n23 > 0);  // both lengths occur
     }
     // A2i t01 (A2I_T01_FRAME_ORDER.md §6, 0x454980): a prereq-less ELAPSED 0 only records its start at its first T9 and
     // fires at the second (tick 2 of the host); a prereq-armed ELAPSED 0 was initialised at its arming (vf7) and fires at
@@ -399,6 +426,19 @@ static void test_plots_file() {
     CHECK(sub.load_plots(dp2, "Conquests\\Sub\\Story_Plots_S.xml", &err));
     CHECK(sub.plot_count() == 2 && sub.find_plot("Conquests\\Sub\\S1.xml") == 0 &&
           sub.find_plot("Nowhere/B.xml") == 1 && sub.find_plot("S1.xml") == 0xFFFFFFFFu);
+    // modc t06: the root element's name is not checked, for the plots file and for the story file (a mod uses another
+    // root tag for both).
+    write_file(root / "Data/XML/Story_Plots_R.xml",
+               "<Mod_Files><Lua_Script>Script_R</Lua_Script><Active_Plot>R.xml</Active_Plot></Mod_Files>");
+    write_file(root / "Data/XML/R.xml", "<Mod_Files><Event Name=\"R1\"><Event_Type>STORY_ELAPSED</Event_Type>"
+                                        "<Event_Param1>0</Event_Param1></Event></Mod_Files>");
+    DirectoryProvider dp3(root.string());
+    StoryModel other_root;
+    CHECK(other_root.load_plots(dp3, "Story_Plots_R.xml", &err));
+    CHECK(other_root.plot_count() == 1 && other_root.plot(0).lua_script == "Script_R" && other_root.plot(0).active);
+    other_root.update(0, 0);
+    other_root.update(1, 1.0 / 30.0);
+    CHECK(fired_names(other_root) == "R1,");
     fs::remove_all(root, ec);
 }
 
@@ -1154,24 +1194,10 @@ static void test_coverage() {
 // ------------------------------------------------------------------------------------------
 // Shipped FoC campaigns (ALAMO_FOC_DATA).
 
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static void test_foc_campaigns() {
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     if (root.empty()) {
         std::printf("  ALAMO_FOC_DATA unset: shipped campaign plots skipped\n");
         return;
@@ -1326,7 +1352,7 @@ static void test_unknown_prereq() {
 // printed. Thrawn_Empire's Empire set has the two `Unlock_Wayland` warnings (a data error in the mod, see above).
 static void test_tr_campaign_plots() {
 #ifdef ALAMO_LUA_HAVE_VFS
-    const std::string foc = env("ALAMO_FOC_DATA");
+    const std::string foc = env_or_empty("ALAMO_FOC_DATA");
     const size_t at = foc.find("\\steamapps\\common\\");
     const std::string tr = at == std::string::npos ? std::string() : foc.substr(0, at) + "\\steamapps\\workshop\\content\\32470\\1125571106";
     if (tr.empty() || !fs::exists(path_from_utf8(tr + "\\Data\\XML\\GameObjectFiles.xml"))) {
@@ -1335,7 +1361,7 @@ static void test_tr_campaign_plots() {
     }
     vfs::VfsConfig cfg;
     cfg.foc_root = foc;
-    cfg.mod_paths = {tr};
+    cfg.mod_search = {{vfs::ModSearchEntry::Kind::Path, tr}};
     std::string err;
     std::unique_ptr<vfs::Vfs> files = vfs::Vfs::create(cfg, &err);
     CHECK(files != nullptr);

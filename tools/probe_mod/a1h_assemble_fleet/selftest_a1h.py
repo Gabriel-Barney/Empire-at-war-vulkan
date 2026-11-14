@@ -3,7 +3,7 @@
 with the game's own script library (Data\\Scripts\\Library from extracted/foc_data_text.zip: PGStoryMode, PGBase,
 PGSpawnUnits, ...) and stubbed engine functions, then builds report.txt from the records it produced.
 
-  selftest_a1h.py --lua <lua50.exe>   (tools\\probe_mod\\a1_tactical\\selftest\\build_lua50.cmd builds one)
+  selftest_a1h.py --lua <lua50.exe>   (tools\\probe_mod\\common\\build_lua50.cmd builds one)
 
 Two engine models: "launch" (Assemble_Fleet puts every unit into one new fleet in orbit, the port's rule) must give
 LAUNCHED for every case; "keep" (Assemble_Fleet takes only units already in orbit, i.e. the ship of case D) must give

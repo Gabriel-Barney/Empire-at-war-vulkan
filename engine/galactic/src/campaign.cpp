@@ -1,6 +1,9 @@
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <utility>
 
 #include "alamo/objects/behaviors.hpp"
 
@@ -10,9 +13,6 @@ using objects::SpawnParams;
 namespace beh = objects::beh;
 
 namespace {
-
-Vec3 to_vec(const econ::Vec3f& v) { return {v.x, v.y, v.z}; }
-econ::Vec3f to_vf(const Vec3& v) { return {v.x, v.y, v.z}; }
 
 void note(std::vector<std::string>* diag, std::string msg) {
     if (diag) diag->push_back(std::move(msg));
@@ -98,6 +98,12 @@ float GalacticSim::credit_multiplier(int32_t player) const {
     return d < rules_->difficulties.size() ? rules_->difficulties[d].credit_multiplier : 1.0f;
 }
 
+const DifficultyRules* GalacticSim::ai_difficulty(int32_t player) const {
+    if (!valid_player(player)) return nullptr;
+    const PlayerState& ps = players_[static_cast<size_t>(player)];
+    return ps.ai && !ps.human && ps.difficulty < rules_->difficulties.size() ? &rules_->difficulties[ps.difficulty] : nullptr;
+}
+
 int32_t GalacticSim::player_of_faction(std::string_view faction) const {
     const uint32_t f = rules_->find_faction(faction);
     for (size_t i = 0; i < players_.size(); ++i)
@@ -126,13 +132,14 @@ std::vector<uint32_t> GalacticSim::fleets_at(PlanetIndex planet, int32_t player)
 }
 
 int32_t GalacticSim::ground_base_level(PlanetIndex planet) const {
-    // Ground base level (planet data +0x130) is not modelled as its own counter: it is the number of live ground-family
-    // structures on the surface (is_ground_structure_type, 0x5F); orbital structures do not count [M] (A2f t08;
-    // STRATEGIC_GAPS §1.3 step 18 reads the same surface count, "0 when no ground base").
+    // Ground base level (planet data +0x130) is not kept as its own counter: it is the recount 0x4bdaa0 (A2M_R2_RE_A §1.1-1.2
+    // [H], a2m r2), the number of live, finished ground structures (DUMMY_GROUND_STRUCTURE 0x5F, is_ground_structure_type)
+    // in the planet's ground-structure list, each counting 1, clamped to 5. Queued structures and orbital structures never
+    // count. The original recounts on every add / remove; counting on read gives the same value.
     int32_t n = 0;
     for (ObjectHandle s : planets_[planet].structures)
         if (store_->alive(s) && is_ground_structure_type(rules_->types[static_cast<size_t>(store_->type(s))])) ++n;
-    return n;
+    return std::min(n, 5);
 }
 
 int32_t GalacticSim::planets_owned(int32_t player) const {
@@ -221,9 +228,13 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
     fleet_by_slot_.clear();
     planet_by_slot_.clear();
     stealthed_.clear();  // OI galactic
+    ground_shy_.clear();  // cu8f t04b
     slot_choices_ = false;
     claims_.clear();
     victory_hold_ = 0;  // story t11
+    victory_deferred_.clear();  // q6 t21
+    victory_records_.clear();   // q6 t22: built from setup.victory once the players exist (below)
+    victory_side_.clear();
     frame_ = pause_ = last_cycle_frame_ = next_cycle_frame_ = cycle_counter_ = 0;
     linked_battle_pending_ = false;
     local_player_ = kNoPlayer;  // GRC: pinned below
@@ -278,6 +289,10 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
         sp.position = p.position;
         p.object = store_->create(sp);
         store_->add_behavior(p.object, beh::Planet);
+        // PRODUCTION attach (after SELECTABLE and PLANET; A2J_RE_BUILD_MARKET §4) [H]: the ProductionDataPack builds
+        // AIPlanetBuildQueue 0 then 1, each drawing its last-run frame as synced Get_Int(1, (int)(FPS + 0.5)).
+        constexpr int32_t kPhaseHi = static_cast<int32_t>(static_cast<float>(econ::kFramesPerSecond) + 0.5f);
+        for (int32_t& phase : p.queue_phase) phase = rng_->range_int(1, kPhaseHi);
         if (planet_by_slot_.size() <= p.object.slot()) planet_by_slot_.resize(p.object.slot() + 1, kInvalidPlanet);
         planet_by_slot_[p.object.slot()] = static_cast<PlanetIndex>(i);
     }
@@ -324,15 +339,23 @@ bool GalacticSim::start(const GalacticSetup& setup, std::vector<std::string>* di
     last_cycle_frame_ = 0;
     next_cycle_frame_ = econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
     cycle_counter_ = 1;
+    // q6 t22: the victory records (setup 0x289a90, per player) once the galaxy is built: the first ownership pass above
+    // tests nothing anyway (a planet's first owner assignment never does, Q6_T15 "ELIM C").
+    set_victory_rules(setup.victory);
     return true;
 }
 
 // ---- credits --------------------------------------------------------------------------------------------------
 
-float GalacticSim::add_credits(int32_t player, float amount, bool /*notify_ai: AI budget (engine/ai)*/) {
+float GalacticSim::add_credits(int32_t player, float amount, bool notify_ai) {
     if (!valid_player(player)) return 0.0f;
     PlayerState& p = players_[static_cast<size_t>(player)];
-    return econ::add_credits(p.account, amount, p.ai, credit_multiplier(player));
+    const float applied = econ::add_credits(p.account, amount, p.ai, credit_multiplier(player));
+    if (notify_ai) notify_ai_credits(player, applied);  // GE 1.1 step 5 -> 0x4b0310 (A2K_T10_CREDIT_NOTIFY_RE)
+    // q6 t21 (Q6_T15 "ELIM C") [H]: Add_Credits 0x27f370 tests Credits_Accrued for this player. [port] after the AI
+    // notification (the order inside 0x27f370 is not recorded; the notification only reads).
+    victory_test(player, VictoryCondition::CreditsAccrued);
+    return applied;
 }
 
 void GalacticSim::recompute_credit_caps() {
@@ -425,6 +448,39 @@ float GalacticSim::planet_income(PlanetIndex planet, bool gross) {
     return net;
 }
 
+float GalacticSim::planet_income_preview(PlanetIndex planet) const {
+    // The summation order is part of the AI token values (and so of the AI / campaign CRCs): keep it.
+    if (planet >= planets_.size()) return 0.0f;
+    const PlanetState& p = planets_[planet];
+    if (!p.is_planet || p.type >= rules_->types.size()) return 0.0f;
+    if (frame_ <= p.halt_until) return 0.0f;
+    const EconomyConstants& c = rules_->constants;
+    const int32_t b = p.destroyed ? rules_->types[p.type].destroyed_credit_value : p.base_value;
+    float sum = 0.0f;
+    for (const IncomeEntry& e : p.income)
+        if (e.kind == kIncomeAbility && e.expiry >= frame_) sum += e.value;
+    sum += econ::income_base(b, p.black_market);
+    bool keep = false;
+    const ForceSide owner_side =
+        valid_player(p.owner) && players_[static_cast<size_t>(p.owner)].faction < rules_->factions.size()
+            ? rules_->factions[players_[static_cast<size_t>(p.owner)].faction].force_alignment
+            : ForceSide::Neutral;
+    const float force = econ::income_force(b, owner_side, rules_->types[p.type].the_force, rules_->types[p.type].force_strength,
+                                           c.credit_alignment_bonus, c.credit_alignment_penalty, &keep);
+    if (keep) sum += force;
+    if (p.owner != neutral_player_) sum += econ::income_political(b, p.control, c.political_income_curve);
+    float gain = 0.0f;
+    for (const uint32_t rt : p.links) {
+        const PlanetIndex nb = map_.routes.point_a[rt] == planet ? map_.routes.point_b[rt] : map_.routes.point_a[rt];
+        const float factor = map_.routes.credit_gain_factor[rt];
+        if (nb < planets_.size() && planets_[nb].is_planet && valid_player(p.owner) && planets_[nb].owner == p.owner && factor > 0.0f)
+            gain += factor;
+    }
+    sum += econ::income_trade(b, gain);
+    float siphoned = 0.0f;
+    return econ::income_finish(sum, p.min_income_set, p.min_income, p.max_income_set, p.max_income, false, 0.0f, &siphoned);
+}
+
 float GalacticSim::player_income(int32_t player, bool consume) {
     if (!valid_player(player)) return 0.0f;
     const FactionRules& fr = faction_of(player);
@@ -460,7 +516,7 @@ void GalacticSim::fiscal_cycle() {
     // that player's Add_Credits, with the raw Player_Income I (before the AI Credit_Multiplier, the zero floor and the
     // cap clamp), only for a non-human AI player, and never on a zero-income cycle. The accrual (0x614340) belongs to
     // engine/ai: it listens through the income hooks; listeners only read the sim.
-    const std::vector<std::pair<uint32_t, IncomeHook>> hooks = income_hooks_;  // a listener may unregister
+    const std::vector<std::pair<uint32_t, IncomeHook>> hooks = income_hooks_;  // a listener may register another
     IncomeTick tick;
     tick.period_seconds = rules_->constants.fiscal_cycle_seconds;  // T = Fiscal_Cycle_Time_In_Secs (AI_GALACTIC_3 §8)
     tick.day = cycle_counter_ + 1;  // the day this cycle completes (the counter itself increments after the loop)
@@ -478,6 +534,9 @@ void GalacticSim::fiscal_cycle() {
     last_cycle_frame_ = next_cycle_frame_;
     next_cycle_frame_ += econ::fiscal_period_frames(rules_->constants.fiscal_cycle_seconds);
     ++cycle_counter_;
+    // q6 t21 (Q6_T15 "ELIM C") [H]: Cycles_Elapsed is tested at each week rollover, every player in order, first pass
+    // wins. [port] right after the counter increments (before the black-market reroll and the day event).
+    victory_tests({VictoryCondition::CyclesElapsed});
     // Black-market reroll, planet order, one draw per qualifying planet. OPEN ITEM [M] (GE 7 item 2): the
     // original draws from the LCG at 0x140a13e24; MAIN_LOOP 3.x calls it "a per-planet random value from the
     // synchronized RNG", so the port uses the session's synced SimRng.
@@ -495,6 +554,16 @@ void GalacticSim::fiscal_cycle() {
 // ---- ownership ----------------------------------------------------------------------------------------------
 
 int32_t GalacticSim::derive_owner(PlanetIndex planet) const {
+    const int32_t o = physical_owner(planet);
+    if (o != kNoPlayer) return o;
+    const PlanetState& p = planets_[planet];
+    if (valid_player(p.leaning)) return p.leaning;  // 6. political leaning [L: updated on capture]
+    return neutral_player_;                         // 7.
+}
+
+// Steps 1-5 of GE 4.1 (0x3f3830): the owner from a physical source, kNoPlayer when none (bkg2 b0125: the clamp floor of the
+// target political control is 1 only with such an owner).
+int32_t GalacticSim::physical_owner(PlanetIndex planet) const {
     // GE 4.1 precedence [M].
     const PlanetState& p = planets_[planet];
     for (ObjectHandle s : p.structures)  // 1. ground base (level = structure count [M])
@@ -509,22 +578,102 @@ int32_t GalacticSim::derive_owner(PlanetIndex planet) const {
     if (!surface_accessible(planet))
         for (uint32_t f : p.orbit)
             if (fleets_[f].alive && !fleets_[f].moving) return fleets_[f].owner;
-    if (valid_player(p.leaning)) return p.leaning;  // 6. political leaning [L: updated on capture]
-    return neutral_player_;                         // 7.
+    return kNoPlayer;
 }
 
+// bkg2 b0125 (BKG1_RE_ANSWERS 9: 0x3f3830 / 0x3f6af0 / 0x3f6df0) [H]: the target is the planet's breakdown map reduced as
+// "the largest entry of each group, summed over the groups", clamped to [lo, hi] and then to [0, 5]:
+//   group 0 leaning: the planet type's Political_Control v (0..5), -v when the owner's faction is not Political_Faction;
+//   group 1 presence: the ground-base level, ground troops (1 when a non-hidden unit is on the surface), the starbase
+//     level, the orbital claim (1 when the owner came from orbit), capital ships min(s, 1) for s >= 0, where s is the
+//     Political_Control of the units in orbit, + for the owner's and - for anyone else's;
+//   group 2 enemy fleets: -1 when s <= -1;
+//   groups 5..12: one per ground structure, then orbital structure (the starbase), with Political_Control != 0 (8 at most);
+//   group 13 trade routes: Political_Control_Gain of each route whose neighbour is held by the owner or an ally with
+//     control > 0, when both controls are >= 1.
+// lo = 1 with a physical owner (GE 4.1 steps 1-5), else 0; hi = the owner faction's Planet_Max_Political_Control_For_Faction
+// (5 when absent or below lo). FoC data sets every Political_Control and route gain to 0 and lists no maximum, so an owned
+// planet gets max(1, ground-base level, starbase level, troops). The leaning sign and the orbit sum s use the physical
+// owner (0x3f3830), so neutral troops count as an owner and no physical owner gives +v. [port] The residual-influence
+// owner rule is not modelled (derive_owner keeps the leaning owner on an emptied planet, backlog b0158): such a planet
+// counts as owned (lo = 1, orbital-claim entry 1), as retail's residual-influence entry gives it.
+int32_t GalacticSim::target_political_control(PlanetIndex planet, int32_t derived) const {
+    const PlanetState& p = planets_[planet];
+    const TypeInfo* pt = p.type < rules_->types.size() ? &rules_->types[p.type] : nullptr;
+    const int32_t physical = physical_owner(planet);
+    const int32_t owner = physical != kNoPlayer ? physical
+                          : (valid_player(derived) && derived != neutral_player_ ? derived : kNoPlayer);  // [port] residual
+    // group 1 presence
+    int32_t presence = ground_base_level(planet);
+    bool troops = false;
+    for (ObjectHandle u : p.surface) troops = troops || (store_->alive(u) && !hidden(u));
+    if (troops) presence = std::max(presence, 1);
+    if (p.starbase_level > 0) presence = std::max(presence, p.starbase_level);
+    const bool owned_on_ground = ground_base_level(planet) > 0 || troops || p.starbase_level > 0;
+    bool from_ground = owned_on_ground;
+    for (uint32_t q = 0; q < 2 && !from_ground; ++q) from_ground = !p.queue[q].empty();
+    if (!from_ground && owner != kNoPlayer) presence = std::max(presence, 1);  // ORBITAL_CONTROL (or residual [port])
+    int32_t s = 0;
+    for (uint32_t f : p.orbit) {
+        if (!fleets_[f].alive) continue;
+        for (ObjectHandle u : fleets_[f].contents) {
+            if (!store_->alive(u)) continue;
+            const uint32_t ut = static_cast<uint32_t>(store_->type(u));
+            const int32_t pc = ut < rules_->types.size() ? rules_->types[ut].political_control : 0;
+            s += physical != kNoPlayer && store_->owner(u) == physical ? pc : -pc;
+        }
+    }
+    int32_t sum = 0;
+    if (s >= 0) presence = std::max(presence, std::min(s, 1));  // CAPITAL_SHIPS
+    // group 0 leaning
+    if (pt) {
+        const int32_t v = std::clamp(pt->political_control, 0, 5);
+        if (v > 0) {
+            const bool other = valid_player(physical) && players_[static_cast<size_t>(physical)].faction != pt->political_faction;
+            sum += other ? -v : v;
+        }
+    }
+    sum += presence;
+    if (s <= -1) sum += -1;  // group 2 ENEMY_FLEETS
+    // groups 5..12 structures
+    int32_t groups = 0;
+    std::vector<ObjectHandle> structs = p.structures;
+    if (p.starbase) structs.push_back(p.starbase);
+    for (ObjectHandle o : structs) {
+        if (groups >= 8 || !store_->alive(o)) continue;
+        const uint32_t ot = static_cast<uint32_t>(store_->type(o));
+        const int32_t pc = ot < rules_->types.size() ? rules_->types[ot].political_control : 0;
+        if (pc == 0) continue;
+        sum += pc;
+        ++groups;
+    }
+    // group 13 trade routes
+    for (uint32_t r : p.links) {
+        const PlanetIndex nb = map_.routes.point_a[r] == planet ? map_.routes.point_b[r] : map_.routes.point_a[r];
+        if (!valid_planet(nb)) continue;
+        const PlanetState& n = planets_[nb];
+        const Relation rel = valid_player(derived) && valid_player(n.owner) ? relation(derived, n.owner) : Relation::Enemy;
+        if ((rel == Relation::Self || rel == Relation::Ally) && n.control > 0.0f && n.control >= 1.0f && p.control >= 1.0f)
+            sum += static_cast<int32_t>(map_.routes.political_control_gain[r]);
+    }
+    const int32_t lo = owner != kNoPlayer ? 1 : 0;
+    int32_t hi = 5;
+    if (valid_player(owner) && pt) {
+        const uint32_t fi = players_[static_cast<size_t>(owner)].faction;
+        for (const auto& [f, m] : pt->max_political_control)
+            if (f == fi) {
+                hi = m;
+                break;
+            }
+        if (hi < lo) hi = 5;
+    }
+    return std::clamp(std::clamp(sum, lo, hi), 0, 5);
+}
 void GalacticSim::apply_ownership(PlanetIndex planet, int32_t derived) {
     PlanetState& p = planets_[planet];
     const EconomyConstants& c = rules_->constants;
-    // Target control [L]: 1.0 + Political_Control_Gain of routes to same-owner planets with control >= 1
-    // (vanilla gains are 0), clamped to [0, 5] (hard-coded 5 [M]).
-    float target = 1.0f;
-    for (uint32_t r : p.links) {
-        const PlanetIndex nb = map_.routes.point_a[r] == planet ? map_.routes.point_b[r] : map_.routes.point_a[r];
-        if (valid_planet(nb) && planets_[nb].owner == derived && planets_[nb].control >= 1.0f && p.control >= 1.0f)
-            target += map_.routes.political_control_gain[r];
-    }
-    p.target_control = std::clamp(target, 0.0f, 5.0f);
+    // bkg2 b0125: the breakdown target (target_political_control), passed on as float(target) (0x3fe529) [H].
+    p.target_control = static_cast<float>(target_political_control(planet, derived));
     if (!p.initialised) {
         p.initialised = true;
         p.owner = derived;
@@ -605,6 +754,11 @@ void GalacticSim::on_owner_change(PlanetIndex planet, int32_t old_owner) {
     g.erase(std::remove_if(g.begin(), g.end(), [now_owner](const BuildEntry& e) { return e.player != now_owner; }),
             g.end());
     if (head_gone && !g.empty()) restart_head(g[0]);
+    // q6 t21 (Q6_T15 "ELIM C", 0x3fb040 tail) [H]: the planet's derived owner changed (never at its first assignment,
+    // apply_ownership's `initialised` branch): types 0 / 1 / 4 / 5 / 9 for every player in player order, first pass wins.
+    victory_tests({VictoryCondition::AllPlanetsControlled, VictoryCondition::OpponentControlsNoPlanets,
+                   VictoryCondition::PercentageControl, VictoryCondition::ConquerEnemyHomeworldAndLeader,
+                   VictoryCondition::ControlNamedPlanets});
 }
 
 // ---- production -----------------------------------------------------------------------------------------------
@@ -633,6 +787,73 @@ bool GalacticSim::prerequisites_met(int32_t player, PlanetIndex planet, const Ty
     return true;
 }
 
+float GalacticSim::production_bonus(int32_t player, PlanetIndex planet, uint32_t type, bool time) const {
+    // A2K_T01_BUILD_COST_RE 1.2 / 1.3. Retail keeps per-type tables (player +0x238, planet production behaviour +0x88 /
+    // +0x48) written by Reduce_Production_Price / _Time abilities on apply and cleared on remove. [port choice, RE open
+    // points 2-3] The tables are not stored: they are derived here from the holders present at query time, which is
+    // the same as "applied while the holder is there" with add / remove on creation, arrival, departure, death and
+    // owner change, and needs no save state:
+    //   * planet-local (Galaxy_Wide No): the planet's own abilities (PLANETS.XML) and the live objects at the planet
+    //     owned by the planet owner (structures, starbase, surface, stationary orbit fleets); none on a destroyed planet;
+    //   * player-wide (Galaxy_Wide Yes): the live objects of `player` anywhere (planets and every fleet, moving too)
+    //     and the abilities of the planets `player` owns (also for planets: Galaxy_Wide is honoured as written).
+    //   * applicability 0x48d070: excluded types never, listed types, else the category mask; "All" = every type; only
+    //     types with Build_Cost_Credits > 0 (as the apply loop).
+    // The fold is order independent within a category (max) and runs in ascending category order across categories.
+    if (special().production.empty() || !valid_planet(planet) || type >= rules_->types.size()) return 0.0f;
+    const TypeInfo& t = rules_->types[type];
+    if (t.build_cost <= 0) return 0.0f;
+    const SpecialAbilityClass want = time ? SpecialAbilityClass::ReduceTime : SpecialAbilityClass::ReducePrice;
+    std::vector<std::pair<int32_t, float>> best;  // stacking category -> largest value
+    bool local_record = false;
+    const auto take = [&](const TypeSpecial& ts, bool galaxy) {
+        for (uint32_t ai : ts.production) {
+            const SpecialAbilityDef& a = special().production[ai];
+            if (a.cls != want || a.galaxy_wide != galaxy || !SpecialRules::production_applies(a, type, t.categories)) continue;
+            if (!galaxy) local_record = true;
+            auto it = std::find_if(best.begin(), best.end(), [&](const auto& b) { return b.first == a.stacking_category; });
+            if (it == best.end()) best.emplace_back(a.stacking_category, a.production_reduction);
+            else it->second = std::max(it->second, a.production_reduction);
+        }
+    };
+    const auto holder = [&](ObjectHandle h, int32_t owner, bool galaxy) {
+        const TypeSpecial& ts = special_type(h);
+        if (ts.production.empty() || !store_->alive(h) || store_->owner(h) != owner) return;
+        take(ts, galaxy);
+    };
+    const auto at_planet = [&](const PlanetState& q, int32_t owner, bool galaxy) {
+        for (ObjectHandle s : q.structures) holder(s, owner, galaxy);
+        holder(q.starbase, owner, galaxy);
+        for (ObjectHandle u : q.surface) holder(u, owner, galaxy);
+    };
+    const PlanetState& p = planets_[planet];
+    if (!p.destroyed && valid_player(p.owner)) {
+        take(special().type(p.type), false);
+        at_planet(p, p.owner, false);
+        for (uint32_t f : p.orbit)
+            if (fleets_[f].alive && !fleets_[f].moving && fleets_[f].owner == p.owner)
+                for (ObjectHandle m : fleets_[f].contents) holder(m, p.owner, false);
+    }
+    if (valid_player(player)) {
+        for (const PlanetState& q : planets_) {
+            if (!q.is_planet) continue;
+            if (q.owner == player && !q.destroyed) take(special().type(q.type), true);
+            at_planet(q, player, true);
+        }
+        for (const FleetState& f : fleets_)
+            if (f.alive && f.owner == player)
+                for (ObjectHandle m : f.contents) holder(m, player, true);
+    }
+    if (best.empty()) return 0.0f;
+    std::sort(best.begin(), best.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    float bonus = best.front().second;
+    for (size_t i = 1; i < best.size(); ++i) bonus = bonus + best[i].second;
+    // Bounds (step 5): a planet-local record carries the upper bound 0x3f7fffef (~0.999999); bonus >= 1 is capped too.
+    const float cap = std::bit_cast<float>(0x3f7fffefu);
+    if ((local_record && bonus > cap) || bonus >= 1.0f) bonus = cap;
+    return bonus;
+}
+
 float GalacticSim::build_time_for(int32_t player, PlanetIndex planet, uint32_t type) const {
     const TypeInfo& t = rules_->types[type];
     const PlanetState& p = planets_[planet];
@@ -641,8 +862,10 @@ float GalacticSim::build_time_for(int32_t player, PlanetIndex planet, uint32_t t
     econ::BuildTimeInputs in;
     in.build_time_seconds = t.build_time_seconds;
     in.production_speed_factor = rules_->constants.production_speed_factor;
-    in.planet_bonus = p.build_time_bonus;
-    in.tech_factor_applies = t.build_cost >= 1 && t.kind != UnitKind::GroundStructure;
+    in.planet_bonus = production_bonus(player, planet, type, true);  // m_planet = 1 - bonus (0x55a010)
+    // A2K_T01_BUILD_COST_RE 2.1 step 4 [H]: m_tech only for space-queue items (cost >= 1, no ground base level, not a
+    // ground structure, and a star base level or a level-1 starbase type), never ground units.
+    in.tech_factor_applies = t.build_cost >= 1 && queue_kind_of(t) == kSpaceQueue;
     in.starbase_level = p.starbase_level;
     in.tech_level = t.tech_level;
     in.base_vs_tech = &rules_->constants.base_vs_tech;
@@ -667,7 +890,8 @@ int32_t GalacticSim::build_cost_for(int32_t player, PlanetIndex planet, uint32_t
     const FactionRules& fr = faction_of(player);
     const float m_corr = fr.benefits_from_corruption ? 1.0f : fr.corruption_price_mult[corrupted(planet) ? 1 : 0];
     const float m_tech = t.advances_tech != 0 ? std::max(0.0001f, players_[static_cast<size_t>(player)].tech_cost_mult) : 1.0f;
-    return econ::build_cost(t.build_cost, 1.0f - planets_[planet].build_cost_bonus, m_corr, m_tech);
+    // A2K_T01_BUILD_COST_RE 1.1: cost = m_planet_cost x base x m_corr x m_techupg, max(1, x), round half away.
+    return econ::build_cost(t.build_cost, 1.0f - production_bonus(player, planet, type, false), m_corr, m_tech);
 }
 
 void GalacticSim::restart_head(BuildEntry& e) const {
@@ -713,7 +937,7 @@ RejectReason GalacticSim::enqueue(int32_t player, PlanetIndex planet, uint32_t t
     e.player = player;
     e.cost = static_cast<float>(cost);
     restart_head(e);  // timer starts at the current frame for T [H]
-    if (!payg) add_credits(player, -e.cost, true);
+    if (!payg) add_credits(player, -e.cost, false);  // 0x3fff70: notify off (A2K_T10_CREDIT_NOTIFY_RE Q3)
     queue.push_back(e);
     emit_production(GalacticEventKind::ProductionBegin, planet, static_cast<uint32_t>(q), e, -1);
     return RejectReason::None;
@@ -837,10 +1061,6 @@ void GalacticSim::service_production(PlanetIndex planet) {
 // ProductionBehavior::Service (AI_GALACTIC_3 §5): the AI market of the planet (A2 galactic hook), then its queues.
 void GalacticSim::planet_production(PlanetIndex planet) {
     if (production_hook_) production_hook_(planet);
-    if (!production_hooks_.empty()) {
-        const auto hooks = production_hooks_;  // a listener may unregister
-        for (const auto& h : hooks) h.second(planet);
-    }
     if (valid_planet(planet)) service_production(planet);
 }
 
@@ -1237,9 +1457,15 @@ RejectReason GalacticSim::begin_move(uint32_t fleet, std::vector<PlanetIndex> pa
 void GalacticSim::depart_hop(uint32_t fleet, PlanetIndex from, PlanetIndex to, bool leave_orbit) {
     FleetState& f = fleets_[fleet];
     // 5. hop factor R (0x397470) and 6. hop speed [H].
+    // bkg3 b0115 [H]: the link gate uses the listed route, the factor the lowest-CRC TradeRoute joining the two planet
+    // types (GalacticRules::hop_routes; the listed route when the rules carry no table).
     const uint32_t r = route_between(from, to);
-    const float r_factor = econ::hop_factor(benefits(f.owner), corrupted(from), corrupted(to), r != kNoRoute,
-                                            r != kNoRoute ? map_.routes.hs_speed_factor[r] : 0.0f,
+    float route_hs = 0.0f;
+    if (r != kNoRoute) {
+        const GalacticRules::HopRoute* h = rules_->find_hop_route(map_.planets.name_crc[from], map_.planets.name_crc[to]);
+        route_hs = h ? h->hs : map_.routes.hs_speed_factor[r];
+    }
+    const float r_factor = econ::hop_factor(benefits(f.owner), corrupted(from), corrupted(to), r != kNoRoute, route_hs,
                                             rules_->constants.corruption_hyperspace_bonus);
     f.hop_speed = econ::hop_speed(f.base_speed, r_factor);
     f.from = from;
@@ -1268,12 +1494,8 @@ void GalacticSim::depart_hop(uint32_t fleet, PlanetIndex from, PlanetIndex to, b
 void GalacticSim::service_fleet(uint32_t fleet) {
     FleetState& f = fleets_[fleet];
     if (!f.alive || !f.moving) return;
-    econ::Vec3f pos = to_vf(f.position);
-    econ::Vec3f facing = to_vf(f.facing);
     // Turning toward the target is not modelled: the facing snaps to the hop direction [M].
-    const bool arrived = econ::fleet_step(pos, to_vf(planets_[f.to].position), f.hop_speed, &facing);
-    f.position = to_vec(pos);
-    f.facing = to_vec(facing);
+    const bool arrived = econ::fleet_step(f.position, planets_[f.to].position, f.hop_speed, &f.facing);
     store_->set_position(f.object, f.position);
     store_->set_facing(f.object, f.facing);
     if (arrived) arrive(fleet);
@@ -1333,33 +1555,46 @@ void GalacticSim::arrive(uint32_t fleet) {
         depart_hop(fleet, at, f.path[f.path_index], true);
         return;
     }
-    // 4. final hop or stopped: speed 0, path cleared, merge into a friendly fleet already in orbit [H].
+    // 4. final hop or stopped (0x56a1e0, A2K_T08_RE_ANSWERS Q1.3) [H]: speed 0, path cleared; the fleet takes a slot of
+    // its own and merges only for a requested slot.
     f.hop_speed = 0.0f;
     f.path.clear();
     f.path_index = 0;
     const int32_t mover = f.owner;
-    // Playtest 3 t07: a slot requested for this planet (FleetManagement op 8 with a destination): the fleet merges into
-    // the owner's fleet in that slot, or takes the slot when it is free. Without a request it merges into the first
-    // friendly fleet in orbit and otherwise takes the lowest free slot.
+    // The request (fleet data +0x90, written only by FleetManagement op 8 = the galaxy-map GUI drop, Playtest 3 t07) is
+    // read and reset at every final arrival. AI fleets never request one.
     const int32_t want = f.want_planet == at ? f.want_slot : -1;
     f.want_planet = kInvalidPlanet;
     f.want_slot = -1;
     if (conflict && conflicts_) conflicts_->on_space_conflict(at, mover);  // S10: Initiate_Space_Conflict
+    // Merge partner (no conflict, requested slot 1 or 2 only): the first fleet in orbit order holding that slot (0x3f9370,
+    // any owner); merged (0x433dd0) only when it has the same owner. A requested slot 0 is a notification only, and no
+    // request or a conflict never merges.
     uint32_t into = kNoFleet;
-    if (want >= 0) {
-        into = slot_occupant(at, mover, want, fleet);
-    } else {
-        for (uint32_t g : p.orbit)
-            if (g != fleet && fleets_[g].alive && fleets_[g].owner == mover && !fleets_[g].moving) {
-                into = g;
-                break;
-            }
+    if (!conflict && (want == 1 || want == 2)) {
+        for (uint32_t g : p.orbit) {
+            const FleetState& o = fleets_[g];
+            if (g == fleet || !o.alive || o.moving || o.slot != want) continue;
+            if (o.owner == mover) into = g;
+            break;
+        }
     }
     if (into != kNoFleet) {
         merge_fleet(fleet, into);
         return;
     }
-    if (want >= 0) place_in_slot(fleet, want);
+    // Slot (0x3f7d70): a free requested slot when one was asked for [port: Playtest 3 t07]; otherwise the first of
+    // 1, 2, 0 that no other fleet of the owner holds there, and slot 0 (shared) when all three are held [H].
+    FleetState& arrived = fleets_[fleet];
+    if (!(want >= 0 && !conflict && place_in_slot(fleet, want))) {
+        int32_t slot = 0;
+        for (const int32_t s : {1, 2, 0})
+            if (slot_occupant(at, mover, s, fleet) == kNoFleet) {
+                slot = s;
+                break;
+            }
+        arrived.slot = static_cast<int8_t>(slot);
+    }
     settle_slots(at);
 }
 
@@ -1432,6 +1667,9 @@ void GalacticSim::update() {
     if (conflicts_) conflicts_->on_service_tail();
     // 4. fiscal cycle [H].
     if (next_cycle_frame_ <= frame_) fiscal_cycle();
+    // q6 t21 (Q6_T15 "ELIM C", galactic tick 0x4b2ef0) [H]: Kill_Enemy_Leader every 30 frames, every player in order,
+    // first pass wins. [port] on frames that are multiples of 30, after the fiscal cycle (the phase is not recorded).
+    if (frame_ % 30 == 0) victory_tests({VictoryCondition::KillEnemyLeader});
     // 5. T12: the mode frame advances.
     ++frame_;
 }
@@ -1440,10 +1678,6 @@ void GalacticSim::update() {
 
 RejectReason GalacticSim::handle_command(uint64_t /*tick*/, const commands::Command& cmd) {
     return execute(cmd.header.player, cmd.payload);
-}
-
-std::function<RejectReason(uint64_t, const commands::Command&)> GalacticSim::command_handler() {
-    return [this](uint64_t tick, const commands::Command& c) { return handle_command(tick, c); };
 }
 
 RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& ev) {
@@ -1534,6 +1768,14 @@ RejectReason GalacticSim::execute(uint8_t player_id, const commands::EventData& 
         return fleet_management(player, ev);
     case EventType::SpecialAbility:  // P4 sim: kinds 1 / 4 / 5 / 7 (kind 6 and others: Unhandled -> host hooks)
         return special_command(player, ev);
+    case EventType::PortExtension: {  // [port: Gabriel] fleet and ship names (src/object_names.cpp)
+        if (ev.u("subtype") != commands::kRenameSubtype) return RejectReason::Unhandled;
+        commands::ObjectId id = commands::kNoObject;
+        std::string name;
+        if (!commands::read_rename_event(ev, id, name)) return RejectReason::Malformed;
+        const ObjectHandle h = id == commands::kNoObject ? ObjectHandle{} : store_->find(static_cast<objects::ObjectId>(id));
+        return rename(player, h, name);
+    }
     default:
         return RejectReason::Unhandled;
     }
@@ -1789,8 +2031,10 @@ void GalacticSim::hash_state(StateHasher& h) const {
         h.boolean(p.max_income_set);
         h.f32(p.min_income);
         h.f32(p.max_income);
-        h.f32(p.build_time_bonus);
-        h.f32(p.build_cost_bonus);
+        // The two former PlanetState build bonus floats (always 0, now derived: production_bonus), hashed as 0 so the
+        // CRC stream keeps its layout.
+        h.f32(0.0f);
+        h.f32(0.0f);
         h.boolean(p.hidden);
         h.boolean(p.in_battle);
         h.u32(static_cast<uint32_t>(p.income.size()));

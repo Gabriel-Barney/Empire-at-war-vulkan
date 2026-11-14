@@ -250,6 +250,12 @@ void write_object(ChunkWriter& w, const ObjectPlacement& o) {
     }
     w.end();
     w.end();  // 0x459
+    if (!o.hint.empty()) {  // 0x482 before 0x476, as the shipped maps order them
+        w.begin(0x482);
+        const RawMini m[] = {mk_string(1, o.hint)};
+        w.mini_leaf(0, m);
+        w.end();
+    }
     w.begin(0x476);
     w.mini_leaf(1, o.owner_raw);
     w.end();

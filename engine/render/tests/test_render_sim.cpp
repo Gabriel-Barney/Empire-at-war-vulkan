@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_crc.hpp"
@@ -35,34 +36,15 @@
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/terrain/placement.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 using namespace alamo;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
-static std::string env_or_empty(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static bool near(float a, float b, float eps = 1e-5f) { return std::fabs(a - b) <= eps; }
 
@@ -324,7 +306,7 @@ static void test_projectiles(const render::SyntheticSimWorld& w) {
     p.type = frig;
     p.position = {100, 0, 0};
     p.direction = {0, 1, 0};
-    CHECK(near3(render::projectile_transform(p, &table[frig], &box).transform_dir({0, -1, 0}), 0, table[frig].scale, 0));
+    CHECK(near3(render::projectile_transform(p, &table[frig]).transform_dir({0, -1, 0}), 0, table[frig].scale, 0));
     render::Laser laser;
     CHECK(!render::projectile_laser(p, table[frig], laser));
     // Builder: model projectiles after the objects; fogged ones are hidden.
@@ -637,40 +619,11 @@ static void test_instances(const render::SyntheticSimWorld& w) {
 }
 
 // ------------------------------------------------------------------------------------------- GPU
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
+struct Gpu : render::test::GpuCore {
     render::Renderer renderer;
 };
 
-struct Offscreen {
-    rhi::Image color, depth;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        rhi::ImageDesc dd = cd;
-        dd.format = rhi::Format::D32F;
-        dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        return g.alloc.create_image(cd, color) && g.alloc.create_image(dd, depth) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     rhi::MemoryUsage::Readback, readback);
-    }
-    void destroy(Gpu& g) {
-        g.alloc.destroy(color);
-        g.alloc.destroy(depth);
-        g.alloc.destroy(readback);
-    }
-};
+using Offscreen = render::test::OffscreenWithDepth;  // alamo/render/offscreen.hpp
 
 static bool render_frame(Gpu& g, Offscreen& o, const render::ViewMatrices& vm, std::span<const render::Instance> inst,
                          render::GpuModel& resident, render::DrawStats& stats) {

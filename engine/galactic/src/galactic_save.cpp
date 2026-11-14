@@ -5,16 +5,19 @@
 //   u32 version
 //   definition fingerprint (checked, not restored): u32 planet rows, u32 routes, u32 type count, u32 player count
 //   mode: i32 frame, pause, last_cycle_frame, next_cycle_frame, cycle_counter; bool linked_battle_pending;
-//         i32 neutral_player, local_player; bool auto_reveal, reveal_sfx, initial_build_locks, emit_events, slot_choices
+//         i32 neutral_player, local_player; bool auto_reveal, reveal_sfx, initial_build_locks (cu15: a constant true
+//         placeholder, ignored on read; the locks are always on), emit_events, slot_choices
 //   players (player order): PlayerState field by field + f32 last_income
 //   u32 relation count (0 or P x P) + u8 each
 //   planets (row order): bool is_planet + u32 type (checked against the session), then every other PlanetState field
 //         except the definition-derived position and links (visibility lists, income breakdown, both build queues,
-//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list; v3: the persisted
-//         tactical built objects {u32 type, f32 x, y, z, i32 base level, i32 owner}, list order)
+//         starbase / structures / surface handles, influence ids, orbit fleet indices, respawn list, the persisted
+//         tactical built objects {u32 type, f32 x, y, z, i32 base level, i32 owner} in list order, i32 x 2 build
+//         queue phases)
 //   u32 fleet count + every FleetState (dead ones too: fleet indices are stable references) incl. path and slots
-//   u32 + i32 stealthed ids; u32 + victory claims; (v2) i32 victory hold; u32 + pending S4 events (GalacticEvent,
-//   emission order)
+//   u32 + i32 stealthed ids; u32 + victory claims; i32 victory hold; u32 + pending S4 events (GalacticEvent,
+//   emission order); u32 + i32 ids with Prefer_Ground_Over_Space false (v5); u32 + {i32 player, u8 type} deferred
+//   victory tests (v6); u32 + {i32 id, str name} fleet / ship names, id-ascending, live objects only (v7, [port])
 // Object references: a handle whose object exists (live or dead-not-flushed) is written as its ObjectId and resolved
 // with ObjectStore::find on read (the store is restored first; an unknown id fails the read). A handle that refers to
 // no object any more (stale, or null) is written as kNoObjectId + its raw value, which read keeps as the same stale
@@ -33,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "alamo/galactic/campaign.hpp"
@@ -42,16 +46,14 @@ namespace alamo::galactic {
 
 namespace {
 
-// v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects. Reads v1 / v2.
-constexpr uint32_t kGalacticSaveVersion = 3;
+// v2 (story t11): + i32 victory hold; v3 (q6, AI_GALACTIC_TOKENS §9.4): + PlanetState::built_objects; v4 (A2k t04 /
+// t01): + i32 x 2 build queue phases per planet, - the two PlanetState build bonus floats (the production modifiers are
+// derived, GalacticSim::production_bonus); v5 (cu8f t04b): + the Prefer_Ground_Over_Space false ids; v6 (q6 t21): + the
+// deferred victory tests; v7 (2026-11-13, [port: Gabriel]): + the fleet / ship names. Only the current version is read,
+// and v6 (no names: read as none), so saves from before the names still load.
+constexpr uint32_t kGalacticSaveVersion = 7;
+constexpr uint32_t kGalacticSaveVersionNoNames = 6;
 constexpr uint32_t kConflictSaveVersion = 3;  // v2: BattleRequest::linked (story t10); v3: BattleRequest::sandbox (q6)
-
-// Element count, bounded by the bytes left (each element takes at least `min_bytes`), so corrupt counts never
-// allocate.
-bool get_count(ByteReader& r, uint32_t& n, size_t min_bytes) {
-    n = r.u32();
-    return r.ok() && static_cast<uint64_t>(n) * static_cast<uint64_t>(min_bytes) <= static_cast<uint64_t>(r.remaining());
-}
 
 void put_handle(ByteWriter& w, const objects::ObjectStore& s, ObjectHandle h) {
     if (s.exists(h)) {
@@ -82,7 +84,7 @@ void put_handles(ByteWriter& w, const objects::ObjectStore& s, const std::vector
 
 bool get_handles(ByteReader& r, const objects::ObjectStore& s, std::vector<ObjectHandle>& v) {
     uint32_t n = 0;
-    if (!get_count(r, n, 4)) return false;
+    if (!r.count(n, 4)) return false;
     v.assign(n, ObjectHandle{});
     for (ObjectHandle& h : v)
         if (!get_handle(r, s, h)) return false;
@@ -96,7 +98,7 @@ void put_u32s(ByteWriter& w, const std::vector<uint32_t>& v) {
 
 bool get_u32s(ByteReader& r, std::vector<uint32_t>& v) {
     uint32_t n = 0;
-    if (!get_count(r, n, 4)) return false;
+    if (!r.count(n, 4)) return false;
     v.assign(n, 0u);
     for (uint32_t& x : v) x = r.u32();
     return r.ok();
@@ -132,7 +134,7 @@ void GalacticSim::write(ByteWriter& w) const {
     w.i32(frame_).i32(pause_).i32(last_cycle_frame_).i32(next_cycle_frame_).i32(cycle_counter_);
     w.boolean(linked_battle_pending_);
     w.i32(neutral_player_).i32(local_player_);
-    w.boolean(auto_reveal_).boolean(reveal_sfx_).boolean(initial_build_locks_).boolean(emit_events_).boolean(slot_choices_);
+    w.boolean(auto_reveal_).boolean(reveal_sfx_).boolean(true).boolean(emit_events_).boolean(slot_choices_);
 
     for (size_t i = 0; i < players_.size(); ++i) {
         const PlayerState& p = players_[i];
@@ -175,7 +177,7 @@ void GalacticSim::write(ByteWriter& w) const {
         }
         w.f32(p.piracy_pool).i32(p.siphon_player).f32(p.siphon_fraction).i32(p.siphon_until).f32(p.siphon_amount);
         w.i32(p.halt_until).boolean(p.min_income_set).boolean(p.max_income_set).f32(p.min_income).f32(p.max_income);
-        w.f32(p.build_time_bonus).f32(p.build_cost_bonus).boolean(p.hidden).boolean(p.in_battle);
+        w.boolean(p.hidden).boolean(p.in_battle);
         w.u32(static_cast<uint32_t>(p.income.size()));
         for (const IncomeEntry& e : p.income) {
             w.u8(e.kind).f32(e.value).i32(e.expiry);
@@ -197,8 +199,9 @@ void GalacticSim::write(ByteWriter& w) const {
         w.i32(p.sabotage_count);
         w.u32(static_cast<uint32_t>(p.respawns.size()));
         for (const RespawnEntry& e : p.respawns) w.i32(e.due).u32(e.type).i32(e.owner).u8(e.flag);
-        w.u32(static_cast<uint32_t>(p.built_objects.size()));  // v3
+        w.u32(static_cast<uint32_t>(p.built_objects.size()));
         for (const PersistedBuiltObject& b : p.built_objects) w.u32(b.type).f32(b.x).f32(b.y).f32(b.z).i32(b.base_level).i32(b.owner);
+        w.i32(p.queue_phase[0]).i32(p.queue_phase[1]);
     }
 
     w.u32(static_cast<uint32_t>(fleets_.size()));
@@ -230,12 +233,21 @@ void GalacticSim::write(ByteWriter& w) const {
         w.i32(e.frame).u8(static_cast<uint8_t>(e.kind)).i32(e.player).i32(e.other_player);
         w.u32(e.planet).u32(e.other_planet).u32(e.fleet).u32(e.type).i32(e.object).i32(e.value);
     }
+    w.u32(static_cast<uint32_t>(ground_shy_.size()));  // cu8f t04b (v5)
+    for (int32_t id : ground_shy_) w.i32(id);
+    w.u32(static_cast<uint32_t>(victory_deferred_.size()));  // q6 t21 (v6)
+    for (const auto& e : victory_deferred_) w.i32(e.first).u8(e.second);
+    uint32_t live_names = 0;  // v7: names of live objects only (a dead object's name is dropped)
+    for (const auto& e : names_) live_names += st.alive(st.find(e.first)) ? 1u : 0u;
+    w.u32(live_names);
+    for (const auto& e : names_)
+        if (st.alive(st.find(e.first))) w.i32(e.first).str(e.second);
 }
 
 bool GalacticSim::read(ByteReader& r) {
     const objects::ObjectStore& st = *store_;
     const uint32_t version = r.u32();
-    if (version < 1 || version > kGalacticSaveVersion || !r.ok()) return false;
+    if ((version != kGalacticSaveVersion && version != kGalacticSaveVersionNoNames) || !r.ok()) return false;
     const uint32_t rows = r.u32(), routes = r.u32(), types = r.u32(), np = r.u32();
     if (!r.ok() || rows != planets_.size() || routes != map_.routes.size() || types != rules_->types.size() ||
         np != players_.size())
@@ -252,8 +264,9 @@ bool GalacticSim::read(ByteReader& r) {
     const int32_t frame = r.i32(), pause = r.i32(), last_cycle = r.i32(), next_cycle = r.i32(), cycle = r.i32();
     const bool linked = r.boolean();
     const int32_t neutral = r.i32(), local = r.i32();
-    const bool auto_reveal = r.boolean(), reveal_sfx = r.boolean(), build_locks = r.boolean(), emit = r.boolean(),
-               slot_choices = r.boolean();
+    const bool auto_reveal = r.boolean(), reveal_sfx = r.boolean();
+    r.boolean();  // initial_build_locks placeholder (cu15: always on)
+    const bool emit = r.boolean(), slot_choices = r.boolean();
     if (!r.ok() || pause < 0 || !player_ok(neutral) || !player_ok(local)) return false;
 
     std::vector<PlayerState> players(np);
@@ -277,7 +290,7 @@ bool GalacticSim::read(ByteReader& r) {
         if (!types_ok(p.locked_types) || !types_ok(p.unlocked_types) || !types_ok(p.production_disabled)) return false;
         p.max_tech_level = r.i32();
         uint32_t nb = 0;
-        if (!get_count(r, nb, 8)) return false;
+        if (!r.count(nb, 8)) return false;
         p.built.resize(nb);
         for (auto& [type, count] : p.built) {
             type = r.u32();
@@ -288,7 +301,7 @@ bool GalacticSim::read(ByteReader& r) {
         if (!r.ok()) return false;
     }
     uint32_t nrel = 0;
-    if (!get_count(r, nrel, 1) || (nrel != 0 && nrel != np * np)) return false;
+    if (!r.count(nrel, 1) || (nrel != 0 && nrel != np * np)) return false;
     std::vector<uint8_t> relations(nrel);
     for (uint8_t& rel : relations) {
         rel = r.u8();
@@ -325,11 +338,11 @@ bool GalacticSim::read(ByteReader& r) {
         p.revealed = r.boolean();
         p.reveal_delay = r.i32();
         uint32_t nlists = 0;
-        if (!get_count(r, nlists, 4) || nlists > np) return false;
+        if (!r.count(nlists, 4) || nlists > np) return false;
         p.visibility.assign(nlists, {});
         for (std::vector<VisibilityModifier>& l : p.visibility) {
             uint32_t nm = 0;
-            if (!get_count(r, nm, 28)) return false;
+            if (!r.count(nm, 28)) return false;
             l.resize(nm);
             for (VisibilityModifier& m : l) {
                 m.value = r.u32();
@@ -351,8 +364,6 @@ bool GalacticSim::read(ByteReader& r) {
         p.max_income_set = r.boolean();
         p.min_income = r.f32();
         p.max_income = r.f32();
-        p.build_time_bonus = r.f32();
-        p.build_cost_bonus = r.f32();
         p.hidden = r.boolean();
         p.in_battle = r.boolean();
         if (!r.ok()) return false;
@@ -360,7 +371,7 @@ bool GalacticSim::read(ByteReader& r) {
             !player_ok(p.corruption_pending_player) || !player_ok(p.siphon_player))
             return false;
         uint32_t ni = 0;
-        if (!get_count(r, ni, 29)) return false;
+        if (!r.count(ni, 29)) return false;
         p.income.resize(ni);
         for (IncomeEntry& e : p.income) {
             e.kind = r.u8();
@@ -375,7 +386,7 @@ bool GalacticSim::read(ByteReader& r) {
         }
         for (std::vector<BuildEntry>& q : p.queue) {
             uint32_t nq = 0;
-            if (!get_count(r, nq, 28)) return false;
+            if (!r.count(nq, 28)) return false;
             q.resize(nq);
             for (BuildEntry& e : q) {
                 e.type = r.u32();
@@ -393,13 +404,13 @@ bool GalacticSim::read(ByteReader& r) {
         if (!r.ok() || !player_ok(p.starbase_owner)) return false;
         if (!get_handle(r, st, p.starbase) || !get_handles(r, st, p.structures) || !get_handles(r, st, p.surface)) return false;
         uint32_t ninf = 0;
-        if (!get_count(r, ninf, 4)) return false;
+        if (!r.count(ninf, 4)) return false;
         p.influence.resize(ninf);
         for (int32_t& id : p.influence) id = r.i32();
         if (!get_u32s(r, p.orbit)) return false;  // fleet indices: checked once the fleets are read
         p.sabotage_count = r.i32();
         uint32_t nr = 0;
-        if (!get_count(r, nr, 13)) return false;
+        if (!r.count(nr, 13)) return false;
         p.respawns.resize(nr);
         for (RespawnEntry& e : p.respawns) {
             e.due = r.i32();
@@ -408,33 +419,33 @@ bool GalacticSim::read(ByteReader& r) {
             e.flag = r.u8();
             if (!r.ok() || e.type >= types || !player_ok(e.owner)) return false;
         }
-        p.built_objects.clear();  // v1 / v2: none
-        if (version >= 3) {
-            uint32_t nb = 0;
-            if (!get_count(r, nb, 24)) return false;
-            p.built_objects.resize(nb);
-            for (PersistedBuiltObject& b : p.built_objects) {
-                b.type = r.u32();
-                b.x = r.f32();
-                b.y = r.f32();
-                b.z = r.f32();
-                b.base_level = r.i32();
-                b.owner = r.i32();
-                if (!r.ok() || b.type >= types || !player_ok(b.owner)) return false;
-            }
+        uint32_t nb = 0;
+        if (!r.count(nb, 24)) return false;
+        p.built_objects.resize(nb);
+        for (PersistedBuiltObject& b : p.built_objects) {
+            b.type = r.u32();
+            b.x = r.f32();
+            b.y = r.f32();
+            b.z = r.f32();
+            b.base_level = r.i32();
+            b.owner = r.i32();
+            if (!r.ok() || b.type >= types || !player_ok(b.owner)) return false;
         }
+        for (int32_t& phase : p.queue_phase) phase = r.i32();
+        for (const int32_t phase : p.queue_phase)
+            if (p.is_planet ? phase < 1 || phase > econ::kFramesPerSecond : phase != 0) return false;
         if (!r.ok()) return false;
     }
 
     uint32_t nf = 0;
-    if (!get_count(r, nf, 1)) return false;
+    if (!r.count(nf, 1)) return false;
     std::vector<FleetState> fleets(nf);
     for (FleetState& f : fleets) {
         f.alive = r.boolean();
         if (!get_handle(r, st, f.object)) return false;
         f.owner = r.i32();
         uint32_t nc = 0;
-        if (!r.ok() || !player_ok(f.owner) || !get_count(r, nc, 5)) return false;
+        if (!r.ok() || !player_ok(f.owner) || !r.count(nc, 5)) return false;
         f.contents.assign(nc, ObjectHandle{});
         f.carried.assign(nc, 0);
         for (uint32_t i = 0; i < nc; ++i) {
@@ -466,11 +477,11 @@ bool GalacticSim::read(ByteReader& r) {
             if (fi >= nf) return false;
 
     uint32_t ns = 0;
-    if (!get_count(r, ns, 4)) return false;
+    if (!r.count(ns, 4)) return false;
     std::vector<int32_t> stealthed(ns);
     for (int32_t& id : stealthed) id = r.i32();
     uint32_t ncl = 0;
-    if (!get_count(r, ncl, 13)) return false;
+    if (!r.count(ncl, 13)) return false;
     std::vector<VictoryClaim> claims(ncl);
     for (VictoryClaim& c : claims) {
         c.player = r.i32();
@@ -479,10 +490,10 @@ bool GalacticSim::read(ByteReader& r) {
         c.countdown = r.i32();
         if (!r.ok() || !player_ok(c.player)) return false;
     }
-    const int32_t hold = version >= 2 ? r.i32() : 0;
+    const int32_t hold = r.i32();
     if (hold < 0) return false;
     uint32_t ne = 0;
-    if (!get_count(r, ne, 37)) return false;
+    if (!r.count(ne, 37)) return false;
     std::vector<GalacticEvent> events(ne);
     for (GalacticEvent& e : events) {
         e.frame = r.i32();
@@ -498,6 +509,40 @@ bool GalacticSim::read(ByteReader& r) {
         e.object = r.i32();
         e.value = r.i32();
     }
+    std::vector<int32_t> ground_shy;  // cu8f t04b (v5)
+    uint32_t ng = 0;
+    if (!r.count(ng, 4)) return false;
+    ground_shy.resize(ng);
+    for (int32_t& id : ground_shy) id = r.i32();
+    for (size_t i = 1; i < ground_shy.size(); ++i)
+        if (ground_shy[i] <= ground_shy[i - 1]) return false;  // ascending, unique
+    std::vector<std::pair<int32_t, uint8_t>> deferred;  // q6 t21 (v6)
+    {
+        uint32_t nd = 0;
+        if (!r.count(nd, 5)) return false;
+        deferred.resize(nd);
+        for (auto& e : deferred) {
+            e.first = r.i32();
+            e.second = r.u8();
+            if (!r.ok() || !player_ok(e.first)) return false;
+        }
+    }
+    std::vector<std::pair<int32_t, std::string>> names;  // v7 ([port] fleet / ship names)
+    if (version >= 7) {
+        uint32_t nn = 0;
+        if (!r.count(nn, 8)) return false;
+        names.resize(nn);
+        for (size_t i = 0; i < names.size(); ++i) {
+            names[i].first = r.i32();
+            names[i].second = r.str();
+            std::string normalized;
+            if (!r.ok() || !st.alive(st.find(names[i].first))) return false;  // a live object of the restored store
+            if (!commands::normalize_object_name(names[i].second, normalized) || normalized != names[i].second ||
+                normalized.empty())
+                return false;
+            if (i > 0 && names[i].first <= names[i - 1].first) return false;  // ascending, unique
+        }
+    }
     if (!r.ok() || !r.done()) return false;
 
     // ---- commit ----
@@ -511,7 +556,6 @@ bool GalacticSim::read(ByteReader& r) {
     local_player_ = local;
     auto_reveal_ = auto_reveal;
     reveal_sfx_ = reveal_sfx;
-    initial_build_locks_ = build_locks;
     emit_events_ = emit;
     slot_choices_ = slot_choices;
     players_ = std::move(players);
@@ -520,8 +564,11 @@ bool GalacticSim::read(ByteReader& r) {
     planets_ = std::move(planets);
     fleets_ = std::move(fleets);
     stealthed_ = std::move(stealthed);
+    ground_shy_ = std::move(ground_shy);
     claims_ = std::move(claims);
     victory_hold_ = hold;
+    victory_deferred_ = std::move(deferred);
+    names_ = std::move(names);
     events_ = std::move(events);
     // Rebuilt caches: store slot -> fleet / planet (creation order, so a reused slot maps to the newest fleet as
     // create_fleet left it), the per-tick owner derivation scratch, the spawn payload latch.
@@ -571,7 +618,7 @@ void put_f64s(ByteWriter& w, const std::vector<double>& v) {
 
 bool get_f64s(ByteReader& r, std::vector<double>& v) {
     uint32_t n = 0;
-    if (!get_count(r, n, 8)) return false;
+    if (!r.count(n, 8)) return false;
     v.assign(n, 0.0);
     for (double& x : v) x = r.f64();
     return r.ok();
@@ -584,7 +631,7 @@ void put_u8s(ByteWriter& w, const std::vector<uint8_t>& v) {
 
 bool get_u8s(ByteReader& r, std::vector<uint8_t>& v) {
     uint32_t n = 0;
-    if (!get_count(r, n, 1)) return false;
+    if (!r.count(n, 1)) return false;
     v.assign(n, 0);
     for (uint8_t& x : v) x = r.u8();
     return r.ok();
@@ -683,7 +730,7 @@ bool ConflictManager::read(ByteReader& r) {
     std::vector<ConflictInfo> qs[2];
     for (std::vector<ConflictInfo>& q : qs) {
         uint32_t n = 0;
-        if (!get_count(r, n, 21)) return false;
+        if (!r.count(n, 21)) return false;
         q.resize(n);
         for (ConflictInfo& c : q)
             if (!get_info(r, st, c) || c.planet >= rows || !player_ok(c.attacker) || !player_ok(c.defender)) return false;
@@ -706,13 +753,13 @@ bool ConflictManager::read(ByteReader& r) {
     in.retreating = r.i32();
     in.from_tactical = r.boolean();
     uint32_t nc = 0;
-    if (!r.ok() || !get_count(r, nc, 17)) return false;
+    if (!r.ok() || !r.count(nc, 17)) return false;
     in.combatants.resize(nc);
     const auto& types = sim_->rules().types;
     for (ArCombatant& c : in.combatants) {
         c.owner = r.i32();
         uint32_t np = 0;
-        if (!get_count(r, np, 16)) return false;
+        if (!r.count(np, 16)) return false;
         c.pieces.resize(np);
         for (ArPiece& p : c.pieces) {
             p.type = r.u32();
@@ -726,7 +773,7 @@ bool ConflictManager::read(ByteReader& r) {
         c.super = r.boolean();
         c.super_killer = r.boolean();
         uint32_t nsb = 0;
-        if (!get_count(r, nsb, 8)) return false;
+        if (!r.count(nsb, 8)) return false;
         c.starbase.resize(nsb);
         for (ArStarbaseLevel& l : c.starbase) {
             l.type = r.u32();
@@ -735,7 +782,7 @@ bool ConflictManager::read(ByteReader& r) {
         if (!r.ok()) return false;
     }
     uint32_t nsides = 0;
-    if (!get_count(r, nsides, 6)) return false;
+    if (!r.count(nsides, 6)) return false;
     in.players.resize(nsides);
     for (ArSideInfo& s : in.players) {
         s.player = r.i32();
@@ -743,7 +790,7 @@ bool ConflictManager::read(ByteReader& r) {
         s.playable = r.boolean();
     }
     uint32_t ncargo = 0;
-    if (!get_count(r, ncargo, 5)) return false;
+    if (!r.count(ncargo, 5)) return false;
     in.cargo.resize(ncargo);
     for (AutoResolveInput::Cargo& c : in.cargo) {
         c.owner = r.i32();
@@ -778,7 +825,7 @@ bool ConflictManager::read(ByteReader& r) {
     if (!get_info(r, st, req.info) || !get_str(r, req.map)) return false;
     req.base_level = r.i32();
     uint32_t nforces = 0;
-    if (!r.ok() || !get_count(r, nforces, 12)) return false;
+    if (!r.ok() || !r.count(nforces, 12)) return false;
     req.forces.resize(nforces);
     for (BattleForces& f : req.forces) {
         f.player = r.i32();
@@ -791,12 +838,12 @@ bool ConflictManager::read(ByteReader& r) {
     if (version >= 3) req.sandbox = r.boolean();
 
     uint32_t nmaps = 0;
-    if (!r.ok() || !get_count(r, nmaps, 4)) return false;
+    if (!r.ok() || !r.count(nmaps, 4)) return false;
     std::vector<std::string> maps(nmaps);
     for (std::string& m : maps)
         if (!get_str(r, m)) return false;
     uint32_t nlog = 0;
-    if (!get_count(r, nlog, 54)) return false;
+    if (!r.count(nlog, 54)) return false;
     std::vector<ConflictLogEntry> log(nlog);
     for (ConflictLogEntry& e : log) {
         e.tick = r.u64();

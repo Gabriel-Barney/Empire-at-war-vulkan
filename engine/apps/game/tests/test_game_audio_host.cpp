@@ -12,6 +12,8 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_data.hpp"
+#include "alamo/tactical/combat/hero_clash.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_GAME_HAVE_AUDIO
 #include "alamo/audio/audio_system.hpp"
 #endif
@@ -19,14 +21,7 @@
 using namespace alamo;
 using namespace alamo::game;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -59,11 +54,15 @@ const char* kMusic = R"(<?xml version="1.0"?>
   <MusicEvent Name="Game_Credits_Music_Event"><Files>C1.MP3, C2.MP3, C3.MP3</Files><Loop>Yes</Loop></MusicEvent>
   <MusicEvent Name="Main_Menu_Music_Event"><Files>MENU.MP3</Files><Loop>Yes</Loop></MusicEvent>
   <MusicEvent Name="Movie_Cue"><Files>CUE.MP3</Files></MusicEvent>
+  <MusicEvent Name="Amb_Space"><Files>AS.MP3</Files><Loop>Yes</Loop></MusicEvent>
+  <MusicEvent Name="Amb_Space_DS"><Files>ADS.MP3</Files><Loop>Yes</Loop></MusicEvent>
 </MusicEvents>
 )";
 const char* kFactions = R"(<?xml version="1.0" ?>
 <Factions>
-  <Faction Name="Rebel"><Strategic_Map_Music_Event> Gal_Rebel </Strategic_Map_Music_Event></Faction>
+  <Faction Name="Rebel"><Strategic_Map_Music_Event> Gal_Rebel </Strategic_Map_Music_Event>
+    <Music_Event_List_Ambient> Space, Amb_Space </Music_Event_List_Ambient>
+    <Music_Event_Space_Ambient_Super_Weapon> Amb_Space_DS </Music_Event_Space_Ambient_Super_Weapon></Faction>
 </Factions>
 )";
 
@@ -154,7 +153,45 @@ void test_missing_credits_event() {
     h.movie_ended();
     CHECK(cur(h) == "Gal_Rebel" && h.stats().movie_restores == 0);
 }
+
+// aud4 b0286 (AUDIO.md §2.3): the first super-weapon report of a battle re-picks the ambient music with the
+// _Super_Weapon variant; later reports only set the flag; battle_reset starts a new battle's first report.
+void test_super_weapon_music() {
+    GameData data;
+    data.files = make_tree(true);
+    GameAudioHost h;
+    CHECK(h.init(data, AudioBackendKind::Null, 7));
+    if (!h.active()) return;
+    h.music(MusicScene::Battle, "Rebel", true);
+    CHECK(cur(h) == "Amb_Space" && mode(h) == audio::music_mode::kTacticalAmbient);
+    h.super_weapon_report(true);
+    CHECK(cur(h) == "Amb_Space_DS" && mode(h) == audio::music_mode::kTacticalAmbient);
+    h.super_weapon_report(false);  // the super weapon died: the music stays until the next mode switch
+    CHECK(cur(h) == "Amb_Space_DS");
+    h.battle_reset();
+    h.super_weapon_report(true);  // a new battle's first report: the same event is already playing (not restarted)
+    CHECK(cur(h) == "Amb_Space_DS");
+    h.battle_reset();
+    h.super_weapon_report(false);
+    CHECK(cur(h) == "Amb_Space");
+}
 #endif
+
+// aud4 b0289 / b0300: garrison entry line and the hero clash win speech (both builds; presentation rules only).
+void test_garrison_and_clash_lines() {
+    using H = GameAudioHost;
+    CHECK(H::garrison_line(1, 1) == "SFXEvent_Bunker_Garrisoned");
+    CHECK(H::garrison_line(2, 1).empty());   // an enemy / ally unit entering: no local line
+    CHECK(H::garrison_line(-1, -1).empty());  // no local player
+    tactical::combat::HeroClashData d;
+    d.entries.resize(2);
+    d.entries[1].first_speech = "Vader_Win";
+    d.entries[1].second_speech = "Obiwan_Win";
+    CHECK(H::clash_win_speech(&d, 1, true) == "Vader_Win");
+    CHECK(H::clash_win_speech(&d, 1, false) == "Obiwan_Win");
+    CHECK(H::clash_win_speech(&d, 0, true).empty());
+    CHECK(H::clash_win_speech(&d, 5, true).empty() && H::clash_win_speech(nullptr, 0, true).empty());
+}
 
 void test_inactive() {
     GameData data;
@@ -167,13 +204,45 @@ void test_inactive() {
     CHECK(h.stats().movie_music == 0 && h.stats().movie_cues == 0 && h.stats().movie_halts == 0);
 }
 
+// ccpgu t01 (SKIRMISH_SETUP 4.2 announcer): the countdown lines at 60 / 30 / 15 / 5 s (x 30 frames), by the leader's relation
+// to the local player; none for a Neutral observer or while not armed. Both builds (the decision is presentation logic only).
+void test_control_point_lines() {
+    using H = GameAudioHost;
+    const std::string_view owned30 = "SFXEvent_HUD_Reinforcement_Point_Owned_30_Seconds";
+    // Arming at 900 (the shipped 30 s), seen as 900 or, when the first countdown step fell in the same tick, 899.
+    CHECK(H::control_point_line(-1, 900, 1, 1, false) == owned30);
+    CHECK(H::control_point_line(-1, 899, 1, 1, false) == owned30);
+    CHECK(H::control_point_line(-1, 899, 2, 1, false) == "SFXEvent_HUD_Reinforcement_Point_Ally_Owned_30_Seconds");
+    CHECK(H::control_point_line(-1, 899, 2, 1, true) == "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_30_Seconds");
+    CHECK(H::control_point_line(-1, 899, 2, -1, true).empty());  // no local player
+    CHECK(H::control_point_line(5, -1, -1, 1, false).empty());   // disarmed
+    // Counting down: each mark once, on the tick that reaches it.
+    CHECK(H::control_point_line(899, 898, 1, 1, false).empty());
+    CHECK(H::control_point_line(451, 450, 1, 1, false) == "SFXEvent_HUD_Reinforcement_Point_Owned_15_Seconds");
+    CHECK(H::control_point_line(450, 449, 1, 1, false).empty());
+    CHECK(H::control_point_line(151, 150, 2, 1, true) == "SFXEvent_HUD_Reinforcement_Point_Enemy_Owned_05_Seconds");
+    CHECK(H::control_point_line(1801, 1800, 1, 1, false) == "SFXEvent_HUD_Reinforcement_Point_Owned_60_Seconds");
+    // A re-arm (900 again after a capture) plays the 30 s line again.
+    CHECK(H::control_point_line(300, 900, 1, 1, false) == owned30);
+    // Over the shipped 30 s countdown exactly three lines: 30 s at arming, 15 s, 5 s.
+    int lines = 0, prev = -1;
+    for (int t = 900; t >= 0; --t) {
+        lines += H::control_point_line(prev, t, 1, 1, false).empty() ? 0 : 1;
+        prev = t;
+    }
+    CHECK(lines == 3);
+}
+
 }  // namespace
 
 int main() {
     test_inactive();
+    test_control_point_lines();
+    test_garrison_and_clash_lines();
 #ifdef ALAMO_GAME_HAVE_AUDIO
     test_movie_music();
     test_missing_credits_event();
+    test_super_weapon_music();
 #endif
     std::printf(g_fail == 0 ? "game audio host tests passed\n" : "%d game audio host check(s) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;

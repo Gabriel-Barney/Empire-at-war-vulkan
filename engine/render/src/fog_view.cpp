@@ -53,10 +53,12 @@ terrain::FowGridDesc fog_grid_desc(const FogFrameInput& in) {
 }
 
 bool parse_fog_colors(std::span<const uint8_t> xml, FogColors& out) {
-    const data::XmlDocument doc =
-        data::XmlDocument::parse(std::string_view(reinterpret_cast<const char*>(xml.data()), xml.size()), "GameConstants.xml");
-    if (!doc.ok()) return false;
-    const data::XmlNode root = doc.root();
+    const data::XmlDocument doc = data::XmlDocument::parse(xml, "GameConstants.xml");
+    return parse_fog_colors(doc.root(), out);
+}
+
+bool parse_fog_colors(const data::XmlNode& root, FogColors& out) {
+    if (!root) return false;
     auto color = [&](std::string_view tag, uint32_t& v) {
         const data::XmlNode n = root.child(tag);
         if (!n) return;
@@ -102,7 +104,8 @@ bool FogRenderer::build(const FogFrameInput& in, bool space) {
         grid_.desc().x1 != d.x1 || grid_.desc().y1 != d.y1 || grid_.desc().cell_x != d.cell_x || grid_.desc().cell_y != d.cell_y)
         grid_ = terrain::FowGrid(d);
     grid_.set_intensity(intensity_);
-    grid_.build_texels(fog_palette_for(colors_, space, in.setup_phase, space && reinforce_), blur_, &processed_);
+    grid_.build_texels(fog_palette_for(colors_, space, in.setup_phase, space && reinforce_), /*blur=*/true,
+                       &processed_);  // DECORATIONS §2.3 step 3 (renderer +0x14, always on)
     if (space && !reinforce_) grid_.fade_texel_edges(terrain::kSpaceFowEdgeFadeCells);  // [port] no hard box outline (playtest R4)
     stats_.width = d.width;
     stats_.height = d.height;

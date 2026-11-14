@@ -104,7 +104,6 @@ struct SimConfig {
     uint32_t free_seed = 0x12345678u;                           // free RNG (never sim state)
     uint32_t players = 8;                                       // PlayerList size (<= kMaxPlayers); see session_players
     commands::SchedulerConfig scheduler = commands::SchedulerConfig::single_player();
-    bool parallel_crc = true;                                   // CRC hashers on the job system
     bool story_crc = false;                                     // register the "story" CRC system (S4)
     // q6: game-object Lua scripts (object_scripts.hpp, docs/re/OBJECT_SCRIPTS.md). Off by default: the attach and the
     // first-pump draws change the synced stream, so sessions without it keep their CRC streams and goldens.
@@ -183,6 +182,13 @@ public:
     void scoring_mode_started(ModeKind kind, std::string map_name);
     // q6 t09: Reset_Tactical_Stats() at auto-resolve begin (BATTLE_TRANSITIONS §"auto-resolve").
     void scoring_reset_tactical_stats();
+    // ui1 t05 (GAME_SCORING.md §7, 0x485760): the statistics dialog's value for `control_id`
+    // (IDC_MILITARY_EFFICIENCY_STATIC, IDC_CONQUEST_EFFICIENCY_STATIC, IDC_KILL_EFFICIENCY_STATIC, IDC_TITLE_STATIC, ...):
+    // Get_Game_Stat_For_Control_ID(PlayerWrapper, control_id, tactical) of the scoring script, its first result as a
+    // number or a string. False without a script / function or when the call fails. UI thread between ticks (the
+    // script's globals it writes are not hashed).
+    bool scoring_game_stat(int32_t player, std::string_view control_id, bool tactical, double& number, std::string& text,
+                           bool& is_number);
     // q6 t09 diagnostics: Services that pumped the threads this session, event calls made, releases (exit / error).
     uint64_t scoring_services() const { return scoring_services_; }
     uint64_t scoring_calls() const { return scoring_calls_; }
@@ -249,6 +255,16 @@ public:
     CrcRegistry& crc_registry() { return registry_; }
     const CrcLog& crc_log() const { return recorder_->log(); }
     CrcLog& crc_log() { return recorder_->log(); }
+    // SIMP sp2 (docs/SIM_PARALLEL_DESIGN.md 4.5): CRC capture cadence. every == 1 (the default: headless, tests,
+    // --crc-out) records every tick. every > 1 records the initial state, the ticks with tick % every == 0 and on-demand
+    // captures (capture_crc_now: on save, at a benchmark's end, before a compare), and the log is a checkpoint log
+    // (CrcLog::checkpoint = every, so first_divergence compares stored ticks). ring > 0 keeps at most about `ring` records
+    // (the oldest are dropped). Only which ticks are hashed changes, never the sim. set_default_crc_cadence is the
+    // process-wide default a new host starts with (alamo_game's main); set_crc_cadence changes this host.
+    static void set_default_crc_cadence(uint32_t every, size_t ring = 0);
+    void set_crc_cadence(uint32_t every, size_t ring = 0);
+    uint32_t crc_cadence() const { return crc_every_; }
+    void capture_crc_now();  // records the current frame unless the log's last record already is it
     jobs::JobSystem& jobs() { return *js_; }
     const ParallelFor& parallel_for() const { return pf_; }
 
@@ -260,6 +276,9 @@ public:
     // of a galactic conflict. Trace step "T5.battles" only while a hook is set.
     using ModeUpdateHook = std::function<void(SimHost& host)>;
     void set_after_mode_update(ModeUpdateHook hook) { after_mode_update_ = std::move(hook); }
+    // sp3 t04 (AI lane): runs at the start of T2, before the tick's scheduled commands: the tactical AI lane applies its
+    // command batches due this frame (CampaignBattles -> BattleAi::apply_lane_batch). No trace step.
+    void set_before_commands(ModeUpdateHook hook) { before_commands_ = std::move(hook); }
     // ---- S10-int hooks (battle integration) ----
     // T5 object-animation slot (sim_anim.hpp: model creation + AnimWorld advance), right after the battle
     // hook. Trace step "T5.anim" only while set.
@@ -384,10 +403,18 @@ private:
     std::array<std::vector<ObjectId>, kMaxPlayers> selection_;
     std::array<PlayerController, kMaxPlayers> controllers_;
     CrcRegistry registry_;
-    jobs::TickScheduler sched_;  // owns nothing but the job-system link CrcRecorder needs
     std::unique_ptr<jobs::CrcRecorder> recorder_;
+    // cu9 t13: a fresh recorder (CRC hashers on the job system; the old parallel_crc switch was never off).
+    void make_recorder() {
+        recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, true);
+        recorder_->log().checkpoint = crc_every_ > 1 ? crc_every_ : 0;
+    }
+    void record_crc();  // sp2: capture this frame, then trim to the ring
+    uint32_t crc_every_ = 1;  // sp2: CRC capture cadence (set_crc_cadence)
+    size_t crc_ring_ = 0;
     std::vector<std::string>* trace_ = nullptr;
     ModeUpdateHook after_mode_update_;  // S10
+    ModeUpdateHook before_commands_;    // sp3 t04
     ModeUpdateHook object_anim_;        // S10-int
     TacticalCommandHook tactical_cmd_;  // S10-int
     TacticalCommandHook galactic_cmd_;  // Int-final

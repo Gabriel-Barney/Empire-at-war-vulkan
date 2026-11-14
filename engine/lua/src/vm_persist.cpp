@@ -1637,8 +1637,8 @@ bool read_heap(ByteReader& r, lua_State* L_old, void* vm_self, lua_CFunction pan
 
 std::vector<std::string> cfunction_aliases() { return cfunction_names().aliases; }
 
-HeapStats heap_stats(lua_State* L) {
-    HeapStats s;
+LuaVm::HeapInfo heap_stats(lua_State* L) {
+    LuaVm::HeapInfo s;
     s.serial = G(L)->alamo_serial;
     s.bytes = G(L)->nblocks;
     s.threshold = G(L)->GCthreshold;

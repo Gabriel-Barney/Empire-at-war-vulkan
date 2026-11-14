@@ -32,50 +32,18 @@
 #include "alamo/render/world.hpp"
 #include "alamo/rhi/rhi.hpp"
 #include "alamo/vfs/vfs.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/render/test/gpu.hpp"
 
 using namespace alamo;
 
 namespace {
 
-int g_failures = 0;
-#define CHECK(cond)                                                              \
-    do {                                                                         \
-        if (!(cond)) {                                                           \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);          \
-            ++g_failures;                                                        \
-        }                                                                        \
-    } while (0)
+using ::alamo::test::g_fail;
 
-struct Gpu {
-    rhi::Context ctx;
-    rhi::Allocator alloc;
-    rhi::Uploader up;
-    rhi::FrameRing ring;
-};
+using Gpu = render::test::GpuCore;
 
-struct Offscreen {
-    rhi::Image color;
-    rhi::Buffer readback;
-    uint32_t w = 0, h = 0;
-    bool create(Gpu& g, uint32_t width, uint32_t height) {
-        w = width;
-        h = height;
-        rhi::ImageDesc cd;
-        cd.format = rhi::Format::RGBA8;
-        cd.width = w;
-        cd.height = h;
-        cd.mips = 1;
-        cd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        return g.alloc.create_image(cd, color) &&
-               g.alloc.create_buffer(static_cast<VkDeviceSize>(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, rhi::MemoryUsage::Readback,
-                                     readback);
-    }
-    void destroy(Gpu& g) {
-        if (color) g.alloc.destroy(color);
-        if (readback) g.alloc.destroy(readback);
-    }
-    const uint8_t* data() const { return static_cast<const uint8_t*>(readback.mapped()); }
-};
+using Offscreen = render::test::OffscreenColorOnly;  // alamo/render/offscreen.hpp
 
 bool frame(Gpu& g, render::Renderer& r, Offscreen& o, const render::ViewMatrices& vm, std::span<const render::Instance> inst,
            const render::RecordOptions& ro, render::DrawStats& st, const float (&clear)[4], std::span<const render::Instance> sky = {},
@@ -251,6 +219,34 @@ void land_map(Gpu& g, const std::string& src_dir, const char* root) {
             } else {
                 std::printf("water detail: %s has no water, skipped\n", map);
             }
+            // [port] MSAA 4x: the stencil darken, the soft-shadow blur (its mid-scene resolve) and the water passes (single-sample
+            // reflection / refraction targets beside the multisampled scene) run, and the soft frame stays the 1x soft frame.
+            if (rr.msaa_samples(4) == 4) {
+                render::RecordOptions mo = ro;
+                mo.soft_shadows = true;
+                mo.msaa = 4;
+                for (int k = 0; k < 64; ++k) {  // until the multisampled pipelines exist
+                    CHECK(frame(g, rr, o, vm, scene.instances(), mo, st, clear, scene.sky()));
+                    if (k > 1 && st.post_pending == 0 && st.pending_pipeline == 0 && st.translation_pending == 0) break;
+                    rr.wait_translations();
+                    rr.pipelines().wait_idle();
+                }
+                CHECK(st.msaa == 4 && st.post_pending == 0 && st.darkened && st.soft_shadows);
+                CHECK(wst.water_patches == 0 || (wst.reflection && wst.refraction));
+                double mean_ms = 0, diff = 0;
+                for (size_t i = 0; i + 3 < bytes; i += 4) {
+                    mean_ms += luma(o.data() + i);
+                    diff += std::fabs(luma(o.data() + i) - luma(&img[2][i]));
+                }
+                mean_ms /= n;
+                diff /= n;
+                CHECK(save_png(src_dir + "/logs/render_shadow_soft_msaa4.png", std::vector<uint8_t>(o.data(), o.data() + bytes), W, H));
+                std::printf("MSAA 4x soft shadows: mean luma %.2f (1x %.2f), mean |1x - 4x| luma %.2f\n", mean_ms, mean[2], diff);
+                CHECK(std::fabs(mean_ms - mean[2]) < mean[2] * 0.02);
+                CHECK(diff < 3.0);
+                render::RecordOptions back = ro;
+                CHECK(frame(g, rr, o, vm, scene.instances(), back, st, clear, scene.sky()) && st.msaa == 1);
+            }
             CHECK(volumes[1] > 0);  // the camera sees shadow casters
             CHECK(mean[2] > mean[1] * 0.97);
             CHECK(static_cast<double>(soft_darker) / n < 0.015);
@@ -347,6 +343,6 @@ int run_gpu(const std::string& src_dir) {
 
 int main() {
     run_gpu(ALAMO_RENDER_SOURCE_DIR);
-    std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
-    return g_failures ? 1 : 0;
+    std::printf("%s (%d failures)\n", g_fail ? "FAILED" : "PASSED", g_fail);
+    return g_fail ? 1 : 0;
 }

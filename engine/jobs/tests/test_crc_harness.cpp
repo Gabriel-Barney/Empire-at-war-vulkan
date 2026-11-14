@@ -11,18 +11,12 @@
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/jobs/jobs.hpp"
+#include "alamo/test/support.hpp"
 
 namespace dm = alamo::dmath;
 using namespace alamo::jobs;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -132,8 +126,12 @@ alamo::CrcLog run(int32_t workers, uint64_t ticks, bool parallel_capture, int64_
         sched.add_system("corrupt", 1, 0, [&sim, corrupt_tick](const TickContext& ctx) {
             if (ctx.frame == static_cast<uint64_t>(corrupt_tick)) sim.vx[123] += 1e-6f;
         });
-    CrcRecorder rec(sched, sim.reg, parallel_capture);
-    rec.run(ticks);
+    CrcRecorder rec(js, sim.reg, parallel_capture);
+    for (uint64_t i = 0; i < ticks; ++i) {
+        const uint64_t frame = sched.frame();
+        sched.step();
+        rec.capture(frame);
+    }
     return rec.log();
 }
 
@@ -168,6 +166,33 @@ int main() {
     CHECK(!bad_rep.runs[0].vs_first.diverged && !bad_rep.runs[1].vs_first.diverged);
     CHECK(bad_rep.runs[2].vs_first.diverged && bad_rep.runs[2].vs_first.tick == 50 &&
           bad_rep.runs[2].vs_first.system == "particles");
+    // cu9 t18: the overload with a caller-run first result and an extra comparison (alamo_headless's --check-workers).
+    {
+        struct Res {
+            alamo::CrcLog log;
+            int32_t extra = 0;
+        };
+        const auto log_of = [](const Res& r) -> const alamo::CrcLog& { return r.log; };
+        const Res first{run(0, kTicks, false), 7};
+        std::vector<int32_t> seen;
+        // CRC logs match, the extra data matches: ok, every further count reported once, in order.
+        CHECK(check_worker_counts(
+            first, [&](int32_t w) { return Res{run(w, kTicks, false), 7}; }, log_of,
+            [&](int32_t w, const Res& r, const alamo::CrcDivergence& dv) {
+                seen.push_back(w);
+                return !dv.diverged && r.extra == first.extra;
+            },
+            {0, 1, 4}));
+        CHECK((seen == std::vector<int32_t>{1, 4}));
+        // The extra data differs on one count: not ok, although the CRC logs match.
+        CHECK(!check_worker_counts(
+            first, [&](int32_t w) { return Res{run(w, kTicks, false), w == 4 ? 8 : 7}; }, log_of,
+            [&](int32_t, const Res& r, const alamo::CrcDivergence&) { return r.extra == first.extra; }, {0, 1, 4}));
+        // The CRC log diverges while the report says the extra data matches: still not ok.
+        CHECK(!check_worker_counts(
+            first, [&](int32_t w) { return Res{run(w, kTicks, false, w == 1 ? 50 : -1), 7}; }, log_of,
+            [&](int32_t, const Res&, const alamo::CrcDivergence&) { return true; }, {0, 1}));
+    }
     // Text round trip of a real log.
     alamo::CrcLog back;
     CHECK(alamo::CrcLog::parse(ref.to_text(), back) && !alamo::first_divergence(ref, back).diverged);

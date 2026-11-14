@@ -21,20 +21,29 @@
 #include <thread>
 #include <vector>
 
+#include "alamo/ai/ai_free_store_path.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/ai/ai_path_finder.hpp"
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/ai/galactic_seed.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: '#' reseed CRC
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/all_pairs.hpp"
+#include "alamo/galactic/economy.hpp"  // FactionRules
+#ifdef ALAMO_AI_HAVE_GALACTIC_SIM
+#include "alamo/galactic/galactic_rules.hpp"  // cu5 t01: load_factions for the seed options
+#endif
 #include "alamo/galactic/planet_graph.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
 #ifdef ALAMO_AI_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -46,14 +55,7 @@ using namespace alamo;
 using namespace alamo::ai;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 // ---- equation language --------------------------------------------------------------------------
 
@@ -130,7 +132,7 @@ static void test_enum_literal_files() {
         std::vector<std::string> diag;
         t.load(mf, &diag);
         EnumLiteral lit;
-        CHECK(t.from_file("GameObjectCategoryType") && t.from_file("aigoalcategorytype"));
+        CHECK(t.from_file("GameObjectCategoryType") && t.from_file("AIGoalCategoryType") && !t.from_file("aigoalcategorytype"));
         // Bitfield values are hex (sscanf %llx): "20" = 0x20, "8000000000" = 2^39.
         CHECK(t.convert("GameObjectCategoryType", "Capital | Mod_Walker", lit) == EnumLiteralError::None &&
               lit.value == static_cast<int64_t>(0x8000000020ull) && lit.names.size() == 2);
@@ -293,7 +295,7 @@ static void test_language() {
         // Plain enums: one whole name (trimmed, case-insensitive); the value is the enum value.
         CHECK(literal("AIGoalCategoryType[MajorItem]", v, names) && v == 11 && names.size() == 1 && names[0] == "MajorItem");
         CHECK(literal("AIGoalCategoryType[ offensive ]", v, names) && v == 0 && names.size() == 1 && names[0] == "offensive");
-        CHECK(literal("aigoalcategorytype[Infrastructure]", v, names) && v == 3);  // converter name: case-insensitive [port]
+        CHECK(!literal("aigoalcategorytype[Infrastructure]", v, names));  // converter name: case-sensitive (A2K_T06_RE §2)
         CHECK(literal("DifficultyLevelType[Hard]", v, names) && v == 2);
         CHECK(literal("HardPointType[Shield_Generator]", v, names) && v == 1);
         // Any '|' on a plain enum looks up "OFFENSIVE|INFRASTRUCTURE" as one name: no conversion, the build fails.
@@ -376,6 +378,29 @@ static void test_language() {
         CHECK(set.equation(set.find("B")).line == 5);
         CHECK(eval_failure_site(set, evaluate(set, set.find("a"), ctx, r)).empty());  // ok: no site
         CHECK(eval_failure_site(set, evaluate(set, set.find("Loop"), ctx, r)) == "recursion Function_Loop");
+    }
+    // a2k t12 (A2K_T06_RE.md §1-2): every element name of every file is a Function_ token before parsing, so a reference
+    // to a later file's name builds (file order does not matter), a reference to a name no file defines fails the build;
+    // converter names are trimmed and case-sensitive.
+    {
+        EquationSet set;
+        LoadReport rep;
+        set.add_file("<Equations>\n<Early> Function_Later.Evaluate + 1 </Early>\n<Undef> Function_Nowhere.Evaluate </Undef>\n"
+                     "<Lower> Variable_Self.X {Parameter_A = gameobjectcategorytype[Infantry]} </Lower>\n"
+                     "<Spaced> Variable_Self.X {Parameter_A = GameObjectCategoryType [Infantry]} </Spaced>\n</Equations>\n",
+                     "a.xml", rep);
+        set.add_file("<Equations>\n<Later> 4 </Later>\n</Equations>\n", "b.xml", rep);
+        set.link(&rep);
+        CHECK(rep.equations == 5 && rep.parse_errors == 2 && rep.unresolved_functions == 0);
+        CHECK(set.find("Undef") == kUnresolved && set.find("Lower") == kUnresolved && set.find("Spaced") != kUnresolved);
+        EvalContext ctx;
+        ctx.self = 0;
+        const EvalResult res = evaluate(set, set.find("Early"), ctx, r);
+        CHECK(res.ok && res.value == 5.0);
+        bool msg = false;
+        for (const std::string& m : rep.messages)
+            msg = msg || m.find("a.xml(3): Undef: Invalid perceptual token (Function_Nowhere)") != std::string::npos;
+        CHECK(msg);
     }
     // q6 t10 diagnostics: eval_failure_site names the first failing node, also inside a nested Function_.
     {
@@ -604,24 +629,7 @@ static RunDigest run_synthetic(uint32_t planets, uint32_t ais, uint32_t frames, 
     return d;
 }
 
-static ParallelFor thread_pf(uint32_t threads) {
-    return [threads](uint32_t count, uint32_t grain, const RangeFn& fn) {
-        if (count == 0) return;
-        const uint32_t g = grain ? grain : 1;
-        const uint32_t chunks = (count + g - 1) / g;
-        std::vector<std::thread> pool;
-        for (uint32_t t = 0; t < threads; ++t) {
-            pool.emplace_back([&, t] {
-                for (uint32_t c = t; c < chunks; c += threads) {
-                    const uint32_t b = c * g;
-                    const uint32_t e = b + g < count ? b + g : count;
-                    fn(b, e);
-                }
-            });
-        }
-        for (auto& th : pool) th.join();
-    };
-}
+static ParallelFor thread_pf(uint32_t threads) { return ::alamo::test::make_thread_parallel_for(threads); }
 
 static std::string golden_text(const RunDigest& d) {
     char buf[160];
@@ -803,6 +811,78 @@ static void test_path_finder_costs_and_fog() {
     CHECK(zf.weight(D, B) == hop(50.0f) && zf.weight(B, D) == hop(30.0f));
 }
 
+// A2k t02: the per-target stage flood (ai_stage_flood, A2K_T02_RE_ANSWERS Q1(b)). Line A(0) - B(1) - T(2) - C(3) - D(4),
+// 50 apart, free hop <= 75. Default view: a player without an AI system, every planet visible, non-held planets are
+// enemy-owned (passable only at level 5).
+static void test_ai_stage_flood() {
+    GalaxyMap m;
+    m.campaign_name = "ai_stage";
+    m.max_fleet_move_distance = 75.0f;
+    for (uint32_t i = 0; i < 5; ++i) {
+        const auto p = m.planets.add("P" + std::to_string(i));
+        m.planets.flags[p] = kPlanetHasPlanetBehavior;
+        m.planets.position[p] = {50.0f * static_cast<float>(i), 0.0f, 0.0f};
+    }
+    const galactic::PlanetGraph g = galactic::PlanetGraph::build(m);
+    const PlanetIndex A = 0, B = 1, T = 2, C = 3, D = 4;
+    auto view_of = [](std::initializer_list<PlanetIndex> held) {
+        galactic::PlayerView v;
+        v.held_by_ally = galactic::Bitset(5);
+        for (const PlanetIndex p : held) v.held_by_ally.set(p, true);
+        return v;
+    };
+    using L = std::vector<PlanetIndex>;
+    {  // Target not held, level 5: BFS from T's first neighbour B (pop order B, A, T, C, D): A before C although C is
+       // one hop from T (hops are counted from the neighbour, not from the target).
+        const galactic::PlayerView v = view_of({A, C});
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{A, C}));
+        CHECK(ai_stage_flood(g, v, T, 0).empty() && ai_stage_flood(g, v, T, 1).empty());  // flag 4 clear: target not held
+        CHECK(ai_stage_flood(g, v, 9, 5).empty());                                       // not a node
+    }
+    {  // Target held: one BFS from the target, the target first (levels 0 and 5).
+        const galactic::PlayerView v = view_of({T, A, D, B});
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{T, B, A, D}));
+        CHECK(ai_stage_flood(g, v, T, 0) == (L{T, B, A}));  // Friendly_Only: C (enemy) does not pass, so D is cut off
+    }
+    {  // Level 2 (Enemy_destination): only held planets pass; the run with strictly the most held planets is kept.
+        CHECK(ai_stage_flood(g, view_of({B, C, D}), T, 2) == (L{C, D}));  // B's run [B] < C's run [C, D]
+        CHECK(ai_stage_flood(g, view_of({B, C}), T, 2) == (L{B}));        // a tie: the first neighbour wins
+        CHECK(ai_stage_flood(g, view_of({A}), T, 2).empty());             // no passable neighbour
+    }
+    {  // Danger (flag 2 clear at level 2): a dangerous held neighbour fails unless corrupted with the benefit.
+        galactic::PlayerView v = view_of({B, C});
+        v.dangerous = galactic::Bitset(5);
+        v.dangerous.set(B, true);
+        CHECK(ai_stage_flood(g, v, T, 2) == (L{C}));
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{B, C}));  // level 5 skips the danger test
+        v.corrupted = galactic::Bitset(5);
+        v.corrupted.set(B, true);
+        v.benefits_from_corruption = true;
+        CHECK(ai_stage_flood(g, v, T, 2) == (L{B}));
+    }
+    {  // a2l t03 level 4 "keep all" (A2L_T03_RE_ANSWERS Q3): a dangerous unheld target cuts the line; level 3 keeps the
+       // larger run [C, D], level 4 the union of the neighbours' runs in neighbour order.
+        galactic::PlayerView v = view_of({B, C, D});
+        v.dangerous = galactic::Bitset(5);
+        v.dangerous.set(T, true);
+        CHECK(ai_stage_flood(g, v, T, 3) == (L{C, D}));
+        CHECK(ai_stage_flood(g, v, T, 4) == (L{B, C, D}));
+        v.dangerous.set(T, false);  // T passes: B's run crosses it and holds everything, the union is the same list
+        CHECK(ai_stage_flood(g, v, T, 4) == ai_stage_flood(g, v, T, 3));
+        const galactic::PlayerView h = view_of({T, A, D, B});  // a held target: one BFS, keep-all changes nothing
+        CHECK(ai_stage_flood(g, h, T, 4) == ai_stage_flood(g, h, T, 3));
+    }
+    {  // Fog: an AI player (not human) never enters an unrevealed planet (B is marked visited and skipped).
+        galactic::PlayerView v = view_of({A, C});
+        v.has_ai_system = true;
+        v.revealed = galactic::Bitset(5, true);
+        v.revealed.set(B, false);
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{C}));  // from C: C, T, D; A is behind B
+        v.is_human = true;
+        CHECK(ai_stage_flood(g, v, T, 5) == (L{A, C}));
+    }
+}
+
 // The finder on the Q11 cadence over a perturbed synthetic galaxy: K AI players, staggered, 90-frame services every
 // 3 frames (the Execution interval). Digest over every finder's hash after each frame + all paths at the end.
 // OPT2 t02 / OPT3 t04: `latency` > 0 runs the background mode on `bg` (publish at the start of each frame); `save_at` >= 0
@@ -930,21 +1010,7 @@ static void test_path_finder_determinism() {
 
 // ---- real data -----------------------------------------------------------------------------------
 
-static std::string env_or(const char* name, const char* fallback) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out = fallback;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        if (*v) out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return (v && *v) ? std::string(v) : std::string(fallback);
-#endif
-}
+using ::alamo::test::env_or;  // alamo/test/support.hpp
 
 // q6: galactic seed roles (make_force_type_lookup) follow galactic::galactic_unit_kind. Synthetic types: a mod tag takes
 // its DUMMY_* behaviour's role; the seed's vanilla tags keep their rule (a vanilla-unclassified tag ignores the behaviour).
@@ -1120,11 +1186,16 @@ static void real_data(const std::string& root, const char* label, bool foc) {
         CHECK(differ == 0);
     }
     const ForceTypeLookup lookup = make_force_type_lookup(types);
+#ifdef ALAMO_AI_HAVE_GALACTIC_SIM
+    const CampaignSeedOptions seed_options = seed_options_from_factions(galactic::load_factions(*v));
+#else
+    const CampaignSeedOptions seed_options = seed_options_from_factions({});
+#endif
     uint32_t campaigns = 0, with_values = 0, unknown_forces = 0;
     for (const data::CampaignDef& c : db.campaigns()) {
         const GalaxyMap map = data::build_galaxy_map(db, c.name);
         if (map.planets.size() == 0) continue;
-        CampaignSeed seed = seed_campaign_snapshot(c, map, lookup);
+        CampaignSeed seed = seed_campaign_snapshot(c, map, lookup, seed_options);
         CHECK(seed.snapshot.validate().empty());
         for (const std::string& d : seed.diagnostics)
             if (d.find("unknown type") != std::string::npos) ++unknown_forces;
@@ -1164,7 +1235,7 @@ static void tr_seed_roles(const std::string& foc_data) {
     }
     vfs::VfsConfig cfg;
     cfg.foc_root = foc_data;
-    cfg.mod_paths = {tr};
+    cfg.mod_search = {{vfs::ModSearchEntry::Kind::Path, tr}};
     std::string err;
     auto v = vfs::Vfs::create(cfg, &err);
     if (!v) {
@@ -1212,6 +1283,7 @@ int main(int argc, char** argv) {
     test_determinism(write_golden);
     test_path_finder_cadence();
     test_path_finder_costs_and_fog();
+    test_ai_stage_flood();
     test_path_finder_determinism();
     test_path_finder_background();
     test_seed_roles();

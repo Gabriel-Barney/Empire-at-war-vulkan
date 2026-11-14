@@ -376,6 +376,10 @@ Lazy references:
   - `Destroy_Previous_Upgrade_Level`, `Show_In_Sidebar_While_Building`, `Show_In_Sidebar_When_Complete`,
     `Show_In_Sidebar_Tray`, `Tactically_Built_Child_Object_Persists`;
   - `Auto_Deploys`, `Should_Reinforcements_Move`, `Use_Transported_Object_Bounds_For_Landing_Z`;
+    (*s78n t26 RE 3, confirmed [H]:* `0x367250` calls `0x367100` on type +0x10; its dword write at block +0xbf =
+    0x100 gives `Auto_Deploys` +0xd0 = 1 and `Deploys` +0xd1 = 0. So every `Deploys` type that omits the tag is an
+    auto-deployer; in FoC only `AT_AT_Walker`, `Veers_AT_AT_Walker` and `AT_AA_Walker` (and their variants) write
+    No. List and consequences: MOVEMENT §3.2.1.)
   - `Terrain_Texture_Modifier_Square`;
   - `Destroy_When_Used_As_Corruption_Prereq`, `Respects_Skirmish_Pre_Build_Bases_Option`.
 - **All other bools default false**, e.g. `Is_Visible_On_Radar`, `Victory_Relevant`,

@@ -2,12 +2,11 @@
 #pragma once
 
 // alamo_ui_screens_tests (P4 completion, CPU): in-game screens (message boxes, battle end, campaign score, retreat ->
-// Retreat command, chat typing -> SendChat, planet info, auto-resolve, map selection), the advanced video options in the
-// options flow, the multiplayer screens as UI (multiplayer menu -> LAN lobby -> games / join / password -> staging slots
-// -> start, direct connect, connecting, disconnect / kick, vote), the HUD panels (encyclopedia delays and layout, hero
-// roster -> HeroSelect, black market -> Production, sabotage -> SabotageTarget, corruption -> CorruptionChoice, close)
-// and camera hotkeys (overview toggle, control-group jump). With ALAMO_FOC_DATA: every screen opens on the shipped
-// GUIDialogs.rc and every panel component resolves in the shipped CommandBarComponents.xml.
+// Retreat command, chat typing -> SendChat, planet info, map selection), the advanced video options in the options flow,
+// the HUD panels (encyclopedia delays and layout, hero roster -> HeroSelect, black market -> Production, sabotage ->
+// SabotageTarget, corruption -> CorruptionChoice, close) and camera hotkeys (overview toggle, control-group jump). With
+// ALAMO_FOC_DATA: every screen opens on the shipped GUIDialogs.rc and every panel component resolves in the shipped
+// CommandBarComponents.xml.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -22,9 +21,9 @@
 #include "alamo/ui/galactic_hud.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/gui_info_screens.hpp"
-#include "alamo/ui/gui_lobby.hpp"
 #include "alamo/ui/mouse_cursor.hpp"
 #include "alamo/ui/picking.hpp"
+#include "alamo/ui/rename_prompt.hpp"
 #include "alamo/ui/gui_menus.hpp"
 #include "alamo/ui/gui_resource.hpp"
 #include "alamo/ui/gui_screens.hpp"
@@ -34,6 +33,7 @@
 #include "alamo/ui/hud_panels.hpp"
 #include "alamo/ui/hud_abilities.hpp"
 #include "alamo/ui/targeting.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_UI_HAVE_ABILITIES
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/tactical/abilities/ability_system.hpp"
@@ -45,14 +45,7 @@
 using namespace alamo;
 using namespace alamo::ui;
 
-inline int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace test_gui_screens_t {
 
@@ -136,89 +129,6 @@ BEGIN
     PUSHBUTTON      "TEXT_BUTTON_CANCEL",IDC_LOAD_CANCEL_BUTTON,13,477,160,24
     PUSHBUTTON      "TEXT_SELECT_MAP_BUTTON",IDC_LOAD_MAP_BUTTON,447,477,160,24
     LISTBOX         IDC_SAVED_MAPS_LIST,7,68,606,372,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
-END
-
-IDD_MULTIPLAYER_DIALOG DIALOGEX 0, 0, 512, 1024
-STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP
-FONT 8, "MS Sans Serif", 0, 0, 0x0
-BEGIN
-    PUSHBUTTON      "TEXT_BUTTON_MULTIPLAYER_INTERNET",IDC_MULTIPLAYER_INTERNET_BUTTON,265,526,235,21
-    PUSHBUTTON      "TEXT_BUTTON_MULTIPLAYER_LAN",IDC_MULTIPLAYER_LAN_BUTTON,265,562,236,21
-    PUSHBUTTON      "TEXT_BUTTON_INTERNET_OPTIONS",IDC_MAIN_OPTIONS_NETWORK,265,598,236,21
-    PUSHBUTTON      "TEXT_BUTTON_BACK",IDC_OK_MAIN,265,634,236,21
-END
-
-IDD_LAN_LOBBY_DIALOG DIALOGEX 0, 0, 955, 701
-STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP
-FONT 8, "MS Sans Serif", 0, 0, 0x0
-BEGIN
-    PUSHBUTTON      "TEXT_BUTTON_CANCEL",IDC_LAN_CANCEL_BUTTON,730,650,200,24
-    PUSHBUTTON      "TEXT_BUTTON_HOST_GAME",IDC_LAN_HOST_GAME_BUTTON,284,353,186,24
-    PUSHBUTTON      "TEXT_BUTTON_JOIN_GAME",IDC_LAN_JOIN_GAME_BUTTON,490,353,186,24
-    LISTBOX         IDC_LAN_CHAT_LIST,20,394,700,240,LBS_NOINTEGRALHEIGHT | WS_VSCROLL
-    EDITTEXT        IDC_LAN_CHAT_EDIT,20,658,674,29,ES_AUTOHSCROLL
-    EDITTEXT        IDC_LAN_NAME_EDIT,721,83,208,18,ES_AUTOHSCROLL
-    LISTBOX         IDC_PLAYER_LIST,721,130,234,402,LBS_NOINTEGRALHEIGHT | WS_VSCROLL
-    COMBOBOX        IDC_LAN_COLOR_SELECT,856,53,73,169,CBS_DROPDOWNLIST | WS_TABSTOP
-    LISTBOX         IDC_GAME_LIST2,20,54,700,50,LBS_NOINTEGRALHEIGHT
-    LISTBOX         IDC_GAME_LIST,20,84,700,266,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
-    PUSHBUTTON      "TEXT_INTERNET_PING_BUTTON",IDC_INTERNET_PING_BUTTON,587,54,85,18
-END
-
-IDD_LAN_STAGING_DIALOG DIALOGEX 0, 0, 955, 701
-STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP
-FONT 8, "MS Sans Serif", 0, 0, 0x0
-BEGIN
-    PUSHBUTTON      "TEXT_BUTTON_CANCEL",IDC_LAN_CANCEL_BUTTON,10,647,170,24
-    PUSHBUTTON      "TEXT_BUTTON_START_GAME",IDC_LAN_START_GAME_BUTTON,746,647,189,24
-    LISTBOX         IDC_LAN_CHAT_LIST,10,395,925,197,LBS_NOINTEGRALHEIGHT | WS_VSCROLL
-    EDITTEXT        IDC_LAN_CHAT_EDIT,10,605,925,18,ES_AUTOHSCROLL
-    LISTBOX         IDC_STAGING_MAP_LIST,221,140,232,197,LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
-    PUSHBUTTON      "TEXT_BUTTON_INTERNET_LOAD",IDC_LOAD_GAME,10,290,201,24
-    COMBOBOX        IDC_PLAYER_NAME_1,495,101,155,128,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PLAYER_NAME_0,495,68,155,128,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PLAYER_FACTION_1,654,101,115,120,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PLAYER_FACTION_0,654,68,115,120,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PLAYER_COLOR_1,773,101,75,216,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PLAYER_COLOR_0,773,68,75,216,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PLAYER_TEAM_1,854,101,95,192,CBS_DROPDOWNLIST | WS_TABSTOP
-    COMBOBOX        IDC_PLAYER_TEAM_0,854,68,95,192,CBS_DROPDOWNLIST | WS_TABSTOP
-    CONTROL         "Custom2",IDC_ACCEPT_PLAYER_0,"PETROGLYPH_DIALOG_IMAGE",WS_TABSTOP,476,70,14,14
-    CONTROL         "Custom2",IDC_ACCEPT_PLAYER_1,"PETROGLYPH_DIALOG_IMAGE",WS_TABSTOP,476,103,14,14
-END
-
-IDD_ENTER_GAME_PASSWORD_DIALOG DIALOGEX 0, 0, 494, 163
-STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP
-FONT 8, "MS Sans Serif", 0, 0, 0x0
-BEGIN
-    PUSHBUTTON      "TEXT_BUTTON_CANCEL",IDC_CANCEL_BUTTON,13,127,128,24
-    PUSHBUTTON      "TEXT_BUTTON_OK",IDC_OK,353,127,128,24
-    EDITTEXT        IDC_INTERNET_GAME_PASSWORD_EDIT,241,64,160,18,ES_AUTOHSCROLL
-END
-
-IDD_DISCONNECT_DIALOG DIALOGEX 0, 0, 687, 578
-STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP
-FONT 8, "MS Sans Serif", 0, 0, 0x0
-BEGIN
-    PUSHBUTTON      "TEXT_BUTTON_DISCONNECT_QUIT",IDC_QUIT_GAME_BUTTON,279,524,128,24
-    RTEXT           "Player 0",IDC_PLAYER_NAME_0,20,93,200,12
-    CONTROL         "",IDC_CONNECTION_QUALITY0,"msctls_progress32",WS_BORDER,235,93,250,12
-    PUSHBUTTON      "TEXT_KICK",IDC_BUTTON_KICK_PLAYER0,498,93,100,12
-    RTEXT           "Player 0",IDC_PLAYER_NAME_1,20,119,200,12
-    CONTROL         "",IDC_CONNECTION_QUALITY1,"msctls_progress32",WS_BORDER,235,119,250,12
-    PUSHBUTTON      "TEXT_KICK",IDC_BUTTON_KICK_PLAYER1,498,119,100,12
-END
-
-IDD_MP_VOTE_DIALOG DIALOGEX 0, 0, 415, 286
-STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP
-FONT 8, "MS Sans Serif", 0, 0, 0x0
-BEGIN
-    PUSHBUTTON      "TEXT_BUTTON",IDC_DIALOG_BOX_BUTTON_LEFT,10,255,189,24
-    PUSHBUTTON      "TEXT_BUTTON",IDC_DIALOG_BOX_BUTTON_RIGHT,213,255,189,24
-    RTEXT           "TEXT_COUNTDOWN",IDC_COUNTDOWN_TIMER,336,32,66,8
-    LTEXT           "TEXT_PLAYER_0",IDC_NAME_PLAYER_0,10,76,180,8
-    LTEXT           "TEXT_WAITING",IDC_RESULT_PLAYER_0,200,76,108,8
-    LTEXT           "Planet name here",IDC_TEXT_MP_VOTE_PLANET_NAME,10,6,392,10
 END
 
 IDD_VIDEO_OPTIONS_DIALOG DIALOGEX 0, 0, 570, 454
@@ -539,8 +449,7 @@ struct PanelEnv {
     }
     // Click the centre of `component`'s hit box through the panel.
     template <class Panel>
-    void click(Panel& p, std::string_view name, std::vector<commands::EventData>& cmds, std::vector<HudAction>& acts,
-               Button b = Button::Left, double now = 1.0) {
+    void click(Panel& p, std::string_view name, std::vector<HudAction>& acts, Button b = Button::Left, double now = 1.0) {
         const int32_t ci = table.find(name);
         const HudHitBox* hb = nullptr;
         for (const HudHitBox& h : p.hit_boxes())
@@ -553,7 +462,7 @@ struct PanelEnv {
         ri.hover_component = ci;
         ri.hud = {{HudPointerEvent::Kind::Press, b, ci, 0, 0}, {HudPointerEvent::Kind::Release, b, ci, 0, 0},
                   {HudPointerEvent::Kind::Click, b, ci, 0, 0}};
-        p.update_input(ri, false, false, now, cmds, &acts);
+        p.update_input(ri, false, false, now, &acts);
     }
 };
 
@@ -582,11 +491,11 @@ void test_video_port_text();
 void test_video_vsync_mode();
 void test_options_polish();
 void test_advanced_video_port();
-void test_lobby();
 void test_encyclopedia_fade_anchor();
 void test_panels();
 void test_info_screens();
 void test_cursor();
+void test_credits_roll();
 void test_anim_hack_drag();
 void test_controls();
 void test_camera_hotkeys();

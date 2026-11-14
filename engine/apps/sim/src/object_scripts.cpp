@@ -1,4 +1,5 @@
 // q6: game-object Lua scripts (object_scripts.hpp, docs/re/OBJECT_SCRIPTS.md).
+#include "alamo/core/ascii.hpp"
 #include "alamo/sim/object_scripts.hpp"
 
 #include <cmath>
@@ -217,11 +218,7 @@ std::string error_key(const std::string& text) {
     auto ws = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
     while (!n.empty() && ws(n.front())) n.remove_prefix(1);
     while (!n.empty() && ws(n.back())) n.remove_suffix(1);
-    if (n.size() > 4) {  // ".lua" optional (§1.1)
-        const std::string_view ext = n.substr(n.size() - 4);
-        auto low = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
-        if (ext[0] == '.' && low(ext[1]) == 'l' && low(ext[2]) == 'u' && low(ext[3]) == 'a') n.remove_suffix(4);
-    }
+    if (n.size() > 4 && ascii_iends_with(n, ".lua")) n.remove_suffix(4);  // ".lua" optional (§1.1)
     return std::string(n);
 }
 

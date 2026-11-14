@@ -30,6 +30,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <span>
 #include <string>
 #include <string_view>
@@ -41,7 +42,7 @@
 #include "alamo/core/galaxy.hpp"
 #include "alamo/core/parallel.hpp"
 #include "alamo/core/bytes.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/galactic/economy.hpp"
 #include "alamo/galactic/fleet_path.hpp"
@@ -49,6 +50,7 @@
 #include "alamo/galactic/galactic_rules.hpp"
 #include "alamo/galactic/planet_graph.hpp"
 #include "alamo/galactic/special_systems.hpp"  // P4 sim
+#include "alamo/galactic/victory_rules.hpp"    // q6 t21
 #include "alamo/galactic/visibility.hpp"       // GRC 2
 #include "alamo/objects/object_store.hpp"
 
@@ -79,6 +81,7 @@ struct PlayerSetup {
     int32_t tech_level = 1;           // Starting_Tech_Level
     int32_t max_tech_level = 5;       // Max_Tech_Level (P +0x88); 5 when the campaign names none [L: MP_Default_Max_Tech_Level]
     PlanetIndex home = kInvalidPlanet;  // Home_Location (GRC 1.4: the local player's home is revealed at start)
+    bool named = false;  // bkc1 t03: the campaign names the faction (the others are inert players; read by AI-vs-AI hosts)
 };
 struct StartingForce {
     int32_t player = kNoPlayer;
@@ -99,6 +102,9 @@ struct GalacticSetup {
     // GALACTIC_REVEAL_CORRUPTION (GRC) 0: campaign Planet_Auto_Reveal (CampaignDataClass +0xCB, ctor true) -> galactic
     // mode +0x340.
     bool planet_auto_reveal = true;
+    // q6 t22: the campaign's victory conditions (load_victory_rules); start() builds the per-player records from them.
+    // Empty for skirmish and hand-built setups (no records: only story claims can end the game).
+    VictoryRules victory;
 };
 
 struct CampaignOptions {
@@ -248,12 +254,17 @@ struct PlanetState {
     int32_t halt_until = INT32_MIN;       // credit halt list folded: halted while now <= halt_until [M]
     bool min_income_set = false, max_income_set = false;  // D +0x280 / +0x281
     float min_income = 0.0f, max_income = 0.0f;           // D +0x278 / +0x27c
-    float build_time_bonus = 0.0f;  // m_planet = 1 - bonus [M]
-    float build_cost_bonus = 0.0f;  // m_planet_cost = 1 - bonus [M]
-    bool hidden = false;            // D +0x2e0 inaccessible
+    // (The per-planet build price / time modifiers m_planet_cost / m_planet are derived on demand from the holders present:
+    // GalacticSim::production_bonus, A2K_T01_BUILD_COST_RE 1.2.)
+    bool hidden = false;           // D +0x2e0 inaccessible
     bool in_battle = false;         // galactic conflict list (battles are tactical: never set by S3)
     std::vector<IncomeEntry> income;               // breakdown list D +0x268 (order matters)
     std::array<std::vector<BuildEntry>, 2> queue;  // ground, space
+    // A2k t04: the initial last-run frames of the planet's two AIPlanetBuildQueues (ground, space), synced
+    // Get_Int(1, 30) each, drawn in start() at the planet's PRODUCTION attach (GalacticSim::build_queue_phase). Fixed
+    // after start(); 0 on a row without a planet. Saved (v3); not hashed (the AI's per-queue last-run frames that start
+    // from them are hashed in its state, and the draws themselves move the hashed synced RNG).
+    std::array<int32_t, 2> queue_phase{0, 0};
     // bases and forces
     int32_t starbase_level = 0;           // D +0x148
     int32_t starbase_owner = kNoPlayer;   // D +0x13c
@@ -315,6 +326,10 @@ struct IncomeTick {
     int32_t frame = 0;  // mode frame of the cycle
 };
 using IncomeHook = std::function<void(const IncomeTick&)>;
+// AI credit notify (A2K_T10_CREDIT_NOTIFY_RE Q1) [H]: Add_Credits with its notify flag set, for a player with an AI
+// system, tells the galactic AI budget the APPLIED amount (after the AI Credit_Multiplier, the zero floor and the cap
+// clamp) through 0x4b0310 -> 0x615b40. No test of the amount's sign or of the current mode.
+using CreditNotifyHook = std::function<void(int32_t player, float applied)>;
 
 // FleetManagement (event id 8) ops. Op names are [M] (AI_GALACTIC §2.x, AI_GALACTIC_2 §5.4); payload use [port]:
 //   kFleetForm   {target = planet, fleet = destination fleet (kNoObject = a new fleet), unit}: the unit leaves its
@@ -341,14 +356,11 @@ inline constexpr RejectReason kRejectPopulationCap = RejectReason::FirstCustom;
 //   Ops 0 / 2 / 4 / 6 / 7 (a new fleet) take the slot to give it in `b` (0..kOrbitSlots-1; kNoObject = the first free
 //   one; a taken slot is ignored). For ops 6 / 7 it is the slot at the destination `a`.
 inline constexpr int32_t kOrbitSlots = 3;  // fleet slots per owner above a planet (g_planet_fleet slot 0..2)
-enum FleetOp : uint8_t {
-    kFleetForm = 0, kFleetJoin = 1, kFleetDetach = 2, kFleetMerge = 3, kFleetLaunch = 4, kFleetLand = 5,
-    kFleetMoveNew = 6, kFleetMoveNewFlag = 7, kFleetSlot = 8
-};
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit);
-// With the extra id (+0x54, payload "a": ops 6 / 7 destination planet) and the slot (+0x5C, op 8).
-commands::EventData fleet_management_event(FleetOp op, uint32_t target, uint32_t fleet, uint32_t unit, uint32_t a,
-                                           uint32_t slot = 0);
+// The op codes and the event builder live in engine/commands (event_types.hpp FleetOp, command.hpp
+// fleet_management_event), shared with the galactic HUD; re-exported here.
+using commands::FleetOp;
+using enum commands::FleetOp;
+using commands::fleet_management_event;
 
 // ---- S10 battle transitions hook (docs/re/BATTLE_TRANSITIONS.md; implemented by conflicts.hpp) ----------------
 // Installed with GalacticSim::set_conflict_hooks (null = the S3 behaviour: no conflicts queued, Invade refused
@@ -422,9 +434,7 @@ public:
     // kinds 1 / 4 / 5 / 7 (special_systems.hpp; NotAllowed while the galactic pause is raised). Others (SpecialAbility
     // kind 6 included): Unhandled.
     RejectReason execute(uint8_t player, const commands::EventData& event);
-    RejectReason handle_command(uint64_t tick, const commands::Command& cmd);
-    // For CommandPipeline::set_handler.
-    std::function<RejectReason(uint64_t, const commands::Command&)> command_handler();
+    RejectReason handle_command(uint64_t tick, const commands::Command& cmd);  // for CommandPipeline::set_handler
 
     // ---- direct operations (Lua / story / tests) ------------------------------------------------------
     RejectReason enqueue(int32_t player, PlanetIndex planet, uint32_t type);
@@ -447,9 +457,14 @@ public:
     RejectReason invade(int32_t player, PlanetIndex planet, std::span<const ObjectHandle> units);
     // Removes a unit, structure, starbase or fleet (battle outcome / story stand-in).
     bool destroy_object(ObjectHandle object);
-    float add_credits(int32_t player, float amount, bool notify_ai = true);
+    float add_credits(int32_t player, float amount, bool notify_ai = true);  // A2K_T10_CREDIT_NOTIFY_RE Q3 table for the flag
     float player_income(int32_t player, bool consume);
     float planet_income(PlanetIndex planet, bool gross);
+    // Planet_Income(P, gross = 0) 0x3f68b0 read-only, without its side effects (the galactic AI's income tokens) [port]:
+    // in float, in this order: the unexpired IncomeAbility entries (list order), base x black-market multiplier, the
+    // force-alignment term (when kept), the political term (owner not the neutral player), trade routes (neighbour a
+    // planet held by the owner); then the min / max clamp, no siphon. 0 for a non-planet, an unknown type or a halt.
+    float planet_income_preview(PlanetIndex planet) const;
     void recompute_credit_caps();
 
     // Instant corruption change (story / Lua / host stand-ins): cancels a running transition (0x4b6c50), sets the
@@ -577,6 +592,17 @@ public:
     // without a battle); other owner changes keep the records.
     void keep_built_objects(PlanetIndex planet, int32_t keep);
     std::span<const FleetState> fleets() const { return fleets_; }
+    // [port: Gabriel, 2026-11-13] Fleet and ship names (docs/DECISIONS.md "Fleet and ship names"; retail has none). A name
+    // belongs to a fleet object or a unit object (it stays with a unit that changes fleets; a merged-away fleet's name goes
+    // with it). Presentation only: no sim system reads a name, so names are saved (galactic.state v7) but not hashed.
+    // object_name: "" = no name (the HUD shows the default). rename: the issuer's own live fleet, or a live unit the
+    // issuer owns that is in a fleet or on a planet's surface list; `name` is normalised (commands::normalize_object_name),
+    // empty clears. InvalidUnit (no such fleet / unit) / NotOwner / InvalidTarget (bad name).
+    // Allowed while paused (it changes nothing the sim reads). Event: commands::rename_object_event (PortExtension).
+    std::string_view object_name(ObjectHandle object) const;
+    RejectReason rename(int32_t player, ObjectHandle object, std::string_view name);
+    // Every stored name {ObjectId, name}, id-ascending (names of dead objects are dropped on the next rename / save).
+    std::span<const std::pair<int32_t, std::string>> object_names() const { return names_; }
     float credits(int32_t player) const { return players_[static_cast<size_t>(player)].account.credits; }
     int32_t neutral_player() const { return neutral_player_; }
     int32_t player_of_faction(std::string_view faction) const;
@@ -593,17 +619,29 @@ public:
     int32_t ground_base_level(PlanetIndex planet) const;
     int32_t planets_owned(int32_t player) const;
     int32_t derive_owner(PlanetIndex planet) const;  // GE 4.1 precedence (pure)
+    int32_t physical_owner(PlanetIndex planet) const;  // GE 4.1 steps 1-5 only; kNoPlayer when none (bkg2 b0125)
+    // Target political control (bkg2 b0125, BKG1_RE_ANSWERS 9; 0x3f3830 / 0x3f6af0 / 0x3f6df0) [H] for the derived owner.
+    int32_t target_political_control(PlanetIndex planet, int32_t derived) const;
     bool corrupted(PlanetIndex planet) const { return planets_[planet].corruption != kCorruptionNone; }
     float build_time_for(int32_t player, PlanetIndex planet, uint32_t type) const;
     int32_t build_cost_for(int32_t player, PlanetIndex planet, uint32_t type) const;
+    // A2K_T01_BUILD_COST_RE 1.2 (0x559c10 price / 0x55a010 time): the production bonus of `type` built by `player` at
+    // `planet` = sum over stacking categories (ascending) of the largest value in each, over the merged player-wide
+    // and planet-local tables, capped at 0.999999; the multiplier is 1 - bonus. 0 when nothing applies.
+    float production_bonus(int32_t player, PlanetIndex planet, uint32_t type, bool time) const;
     bool pays_as_you_go(int32_t player) const;
     PlayerView player_view(int32_t player) const;
 
     // ---- A2 galactic: hooks for the galactic AI (src/ai_hooks.cpp) ---------------------------------------
     // Income tick listeners (IncomeTick above). Called from update() (serial) on the fiscal-cycle frame, inside the
     // payment loop; a listener may read the sim but must not change it. Not hashed, not saved: hosts re-register them.
-    uint32_t add_income_hook(IncomeHook hook);  // returns an id for remove_income_hook (never 0)
-    void remove_income_hook(uint32_t id);
+    // Several listeners (registration order): a replaced GalacticAiWorld leaves its expired-token listener behind.
+    uint32_t add_income_hook(IncomeHook hook);  // returns a registration id (never 0)
+    // Credit notify listeners (CreditNotifyHook above), same rules as the income hooks. add_credits(.., notify_ai = true)
+    // calls notify_ai_credits for a player with an AI system; a host that changes an account directly (the land battle's
+    // end return 0x614a70) calls notify_ai_credits itself with the applied amount.
+    uint32_t add_credit_notify_hook(CreditNotifyHook hook);  // returns a registration id (never 0)
+    void notify_ai_credits(int32_t player, float applied);
     // The raw income I of `player` at the last fiscal cycle (IncomeTick::gain for AI players); 0 before the first one.
     float last_income(int32_t player) const;
     // Production queries. queue_kind: kGroundQueue / kSpaceQueue, or -1 when the type cannot be queued (GE 2.1).
@@ -640,11 +678,16 @@ public:
     bool planet_restricts(PlanetIndex planet, uint32_t type) const;
     double terrain_effectiveness(PlanetIndex planet, uint32_t type) const;
     // MagicPlan HIJACK_UNIT (AI_GALACTIC_3 §4.3), galactic part:
-    // spawn_unit = step 4, the planet production "create object" (0x400b40) as a finished queue item: no cost, no queue,
-    // no story event; space units join the player's stationary orbit fleet (found or made), ground units the surface,
+    // spawn_unit = step 4, the planet production "create object" (0x400b40) as a finished queue item: no cost, no queue;
+    // space units join the player's stationary orbit fleet (found or made), ground units the surface,
     // structures / starbases the planet. Returns the new object; null = refused (invalid player / planet / type, a
-    // type with no galactic role) = the task's FAILED. Also the Lua Spawn_Unit at a planet in a galactic script (a1g t06).
+    // type with no galactic role) = the task's FAILED. Also the Lua Spawn_Unit at a planet in a galactic script (a1g t06)
+    // and the story's spawn rewards. A2k t12 (A2K_T07_STORY_LOAD_RE.md §4): a creation calls the spawn hook inside the
+    // call, which raises the story's CONSTRUCT as 0x400b40 does for every caller.
     ObjectHandle spawn_unit(int32_t player, PlanetIndex planet, uint32_t type);
+    // Not saved (the story session installs it); a hook may re-enter the sim (its rewards spawn more).
+    using SpawnHook = std::function<void(int32_t player, PlanetIndex planet, uint32_t type)>;
+    void set_spawn_hook(SpawnHook hook) { spawn_hook_ = std::move(hook); }
     // Step 2 (MagicPlanStealing or a named hero): the first live object of exactly `type` owned by `player`, walking
     // the owner's object list newest first (A2GAL_READINGS 3 [H]: ObjectStore::owned_by in reverse, so a captured
     // object counts as the owner's newest), that is not at `destination` (units in a fleet in transit never are;
@@ -664,11 +707,17 @@ public:
     bool ai_blockaded(PlanetIndex planet) const;
     // AI production market hook (AI_GALACTIC_3 §5): called for each planet inside the production service, in planet
     // service order (newest registered first), right before that planet's queues advance. The hook may enqueue or
-    // cancel at that planet (the AIPlanetBuildQueue market). Not hashed. set_ fills the primary slot (null = none; the
-    // galactic AI uses it); add_ registers further listeners, called after the primary one in registration order.
+    // cancel at that planet (the AIPlanetBuildQueue market). Not hashed. One slot (null = none; the galactic AI uses it).
     void set_production_service_hook(std::function<void(PlanetIndex)> hook) { production_hook_ = std::move(hook); }
-    uint32_t add_production_service_hook(std::function<void(PlanetIndex)> hook);  // id for remove_ (never 0)
-    void remove_production_service_hook(uint32_t id);
+    // A2k t04 (A2J_RE_BUILD_MARKET §4) [H]: the initial last-run frame of AIPlanetBuildQueue `queue` (0 ground, 1 space)
+    // at `planet`. The ctor 0x53b5c0 draws it as synced Get_Int(1, (int)(FPS + 0.5)) = [1, 30] (0x1ffb40); the
+    // ProductionDataPack ctor 0x559680 makes queue 0 then queue 1 when the planet's PRODUCTION behaviour attaches at
+    // galaxy build, so start() draws both right after each planet object is made, in planet creation (row) order, before
+    // the starting forces. The AI world starts its queues' last-run frames from these instead of drawing. 0 for a row
+    // without a planet or a queue > 1.
+    int32_t build_queue_phase(PlanetIndex planet, uint32_t queue) const {
+        return valid_planet(planet) && queue < 2 ? planets_[planet].queue_phase[queue] : 0;
+    }
     // q2f t01: an AI player's pay-as-you-go installment goes through its AI budget (0x53b900, AI_GALACTIC_2 §3.4). The
     // hook gets the planet, the queue index, the queue head and the installment a, and returns the credits to pay (>= 0;
     // the credits floor at 0 and the build advances) or a negative value (the build pauses). Without a hook every
@@ -679,7 +728,6 @@ public:
     // ---- story / script event stream (S4, galactic_events.hpp) --------------------------------------------
     // Off by default. Events are appended in emission order; the stream is not part of hash_state.
     void set_emit_events(bool on) { emit_events_ = on; }
-    bool emit_events() const { return emit_events_; }
     const std::vector<GalacticEvent>& events() const { return events_; }
     // Moves the pending events to the end of `out` (stream order) and clears the stream.
     void drain_events(std::vector<GalacticEvent>& out);
@@ -721,6 +769,9 @@ public:
         return valid_player(player) ? &players_[static_cast<size_t>(player)].account : nullptr;
     }
     float ai_credit_multiplier(int32_t player) const { return valid_player(player) ? credit_multiplier(player) : 1.0f; }
+    // cu8 t03: the AI player's DifficultyAdjustments entry (AI_GALACTIC §1.2 GetAdj; tactical damage / health / shield
+    // multipliers). Null for humans, players without an AI system or adjustment (the all-1.0 dummy) and invalid players.
+    const DifficultyRules* ai_difficulty(int32_t player) const;
 
     // ---- L1/S4 Lua + story operations (src/story_ops.cpp; owner: L1/S4) -----------------------------------------
     // Change_Owner (Lua GameObjectWrapper.Change_Owner and story; GE 4.2 "Forced transfers" for planets). False
@@ -847,13 +898,11 @@ public:
     // bar and AI production only, not by buildability (REMAINING_GAPS 1.5).
     void set_production_disabled(int32_t player, uint32_t type, bool disabled);
     bool production_disabled(int32_t player, uint32_t type) const;
-    // Build-locked = in the locked list, or (initial build locks on) Build_Initially_Locked and not unlocked
-    // (MagicPlan +0xC1 / 0x282580). prerequisites_met / enqueue / buildable refuse build-locked types.
+    // Build-locked = in the locked list, or Build_Initially_Locked and not unlocked (MagicPlan +0xC1 / 0x282580;
+    // always enforced, REMAINING_GAPS 1.5: every unlock source is wired - slice, tech sweep, story BUILDABLE_UNIT, Lua
+    // Unlock_Tech / Give_Random_Sliceable_Tech, corruption). prerequisites_met / enqueue / buildable refuse build-locked
+    // types.
     bool build_locked(int32_t player, uint32_t type) const;
-    // Build_Initially_Locked enforcement (buildability step 9), on by default (REMAINING_GAPS 1.5: every unlock source
-    // is wired - slice, tech sweep, story BUILDABLE_UNIT, Lua Unlock_Tech / Give_Random_Sliceable_Tech, corruption).
-    void set_initial_build_locks(bool on) { initial_build_locks_ = on; }
-    bool initial_build_locks() const { return initial_build_locks_; }
     // Income abilities (P4 4) and the economy panel (P4 4.3).
     std::vector<EconomyRow> economy_breakdown_by_tag(int32_t player) const;
     float economy_income_for_tag(int32_t player, uint32_t tag) const;
@@ -898,7 +947,6 @@ public:
     uint32_t representative_type(ObjectHandle object) const;
     int32_t surface_forces(PlanetIndex planet) const;       // 0x3f9530 [M]: live surface units, any owner
     // Buildability 0x2804d0 in the SG 1.3 order. check_credits: step 6 for players with Is_Human (+0x62 [M]).
-    // Build_Initially_Locked (step 9) only while initial_build_locks() is on.
     BuildCheck build_check(int32_t player, PlanetIndex planet, uint32_t type, bool check_credits = false) const;
     int32_t built_count(int32_t player, uint32_t type) const;  // step 22 count (0x281c70: + containers listing `type`)
     int32_t live_count(int32_t player, uint32_t type) const;   // step 23 live count (0x281df0)
@@ -910,6 +958,12 @@ public:
     // cargo stealthed).
     void set_galactic_stealth(ObjectHandle object, bool on);
     bool galactic_stealth(ObjectHandle object) const;  // the byte
+    // cu8f t04b (CU8F_T04_T06_RE §2): Lua Set_Prefer_Ground_Over_Space, the UNIT_AI data pack byte +0x39 (default true;
+    // the setter refuses objects without UNIT_AI, so they always read true). Its only reader is the galactic AI free
+    // store's auto-land of AI transports in an orbiting fleet: false keeps the unit in orbit. Kept as the ids set to
+    // false; saved (v5); hashed in the "OIG1" tail once a live unit is false.
+    void set_prefer_ground_over_space(ObjectHandle object, bool on);
+    bool prefer_ground_over_space(ObjectHandle object) const;
     bool hidden(ObjectHandle object) const;
     // DetectHeroAbility service (SG 2.2) for one detector: candidates = stealthed objects in the detector's planet orbit,
     // then its surface (list orders); a non-allied candidate is discovered when not (detector generic and candidate
@@ -967,15 +1021,40 @@ public:
     // != 0 -> release one level, only while held. While held, check_victory (victory.hpp) reports no winner (0x342d80:
     // the result needs hold <= 0). VICTORY (0x462b70) releases every level and claims type 0x10 (kVictoryStoryClaim,
     // SUB_TACTICAL_STORY_MODE_TRIGGERED_VICTORY) for `player`, countdown 7 s (1 s when short_silent), granted whatever
-    // the side's conditions (the reward adds its own record). [port] no deferred queue: the polled tests run on every
-    // check, so after a release they pass at the next one. Saved; hashed in the "OIG1" tail once non-zero.
+    // the side's conditions (the reward adds its own record). q6 t21: tests made while held are deferred
+    // (victory_test) and replayed when the hold reaches 0. Saved; hashed in the "OIG1" tail once non-zero.
     static constexpr uint8_t kVictoryStoryClaim = 0x10;
     void victory_hold_raise() { victory_hold_ = victory_hold_ < 0 ? 1 : victory_hold_ + 1; }
-    void victory_hold_release() {
-        if (victory_hold_ > 0) --victory_hold_;
-    }
+    // Release one level; when the hold reaches 0 the deferred tests are replayed in order (0x3440a0 replay 1) and the
+    // first declaration stops the replay. [port] the queue is emptied by the replay.
+    void victory_hold_release();
     bool story_victory(int32_t player, bool short_silent);  // false: invalid player (nothing changes)
     int32_t victory_hold() const { return victory_hold_; }
+
+    // ---- q6 t21 / t22: the galactic victory monitor's records and event-driven tests (victory.cpp) ----------------
+    // Records (setup 0x289a90, per player): none for an Is_Neutral faction; the Human_ list for the
+    // starting_active_faction's player(s); every other player the AI_ list plus one implicit Opponent_Controls_No_Planets
+    // (no faction filter) when that list is non-empty. Every record has countdown 30 frames. Built from the rules and
+    // the current player list (start() calls it with setup.victory; tests and hosts may call it after start()). Not
+    // saved: start() rebuilds it from the same setup before a load.
+    void set_victory_rules(VictoryRules rules);
+    const VictoryRules& victory_rules() const { return victory_rules_; }
+    std::span<const VictoryRecord> victory_records() const { return victory_records_; }
+    // 0 = no records (neutral), 1 = Human_ list, 2 = AI_ list.
+    uint8_t victory_side(int32_t player) const {
+        return valid_player(player) && static_cast<size_t>(player) < victory_side_.size() ? victory_side_[static_cast<size_t>(player)] : 0;
+    }
+    // [port] (headless AI-vs-AI): a player counts as AI for the type 1 "both AI" skip only when it is AI-controlled, not
+    // human and not on the Human_ side, so the Starting_Active_Player slot an AI plays stays "the human".
+    bool victory_ai_player(int32_t player) const;
+    // Test wrapper 0x28f570: false when `player` has no record of `type`; while the monitor is held, queue {type,
+    // player} (no duplicates) and answer false; once something is declared, true only for the declared {type, player};
+    // else run the test and, when it passes, declare it (claim with the record's countdown). True = passed.
+    bool victory_test(int32_t player, VictoryCondition type);
+    // The declared claim: the first claim whose {type, player} is registered (a record, or a story claim), else null.
+    const VictoryClaim* victory_declared() const;
+    // Deferred {player, type} tests (monitor +0x60), queue order. Saved (v6), hashed in the "OIG1" tail once non-empty.
+    std::span<const std::pair<int32_t, uint8_t>> victory_deferred() const { return victory_deferred_; }
 
     // ---- CRC ----------------------------------------------------------------------------------------------
     // Ordered digest of every S3 data pack (players, planets incl. queues and income lists, fleets, cycle).
@@ -1016,6 +1095,8 @@ private:
     void set_income_entry(PlanetState& p, uint8_t kind, float value);
     void remove_income_entry(PlanetState& p, uint8_t kind);
 
+    // q6 t21: every player in player order, `types` in order per player; the first pass stops the walk.
+    void victory_tests(std::initializer_list<VictoryCondition> types);
     // ownership
     void apply_ownership(PlanetIndex planet, int32_t derived);
     void on_owner_change(PlanetIndex planet, int32_t old_owner);
@@ -1118,7 +1199,6 @@ private:
     PlanetGraph graph_;
     std::vector<PlayerState> players_;
     std::vector<uint8_t> relations_;  // P x P Relation, [a * P + b]; empty = defaults (default_relation)
-    bool initial_build_locks_ = true;   // config, not hashed (REMAINING_GAPS 1.6: on, every unlock source is wired)
     std::vector<PlanetState> planets_;
     std::vector<FleetState> fleets_;
     std::vector<uint32_t> fleet_by_slot_;   // store slot -> fleet index (kNoFleet)
@@ -1142,15 +1222,24 @@ private:
     ConflictHooks* conflicts_ = nullptr;  // S10 (not owned)
     // A2 galactic (not hashed: listeners and the last cycle's gains, both re-derived by hosts / the next cycle)
     std::vector<std::pair<uint32_t, IncomeHook>> income_hooks_;
+    std::vector<std::pair<uint32_t, CreditNotifyHook>> credit_hooks_;
     uint32_t next_hook_id_ = 1;
     std::vector<float> last_income_;  // per player
     std::function<void(PlanetIndex)> production_hook_;
+    SpawnHook spawn_hook_;  // a2k t12
     InstallmentHook installment_hook_;
-    std::vector<std::pair<uint32_t, std::function<void(PlanetIndex)>>> production_hooks_;
     // OI galactic (hashed in the "OIG1" tail once non-default)
     std::vector<int32_t> stealthed_;      // ObjectIds with the galactic stealth byte set, ascending
+    std::vector<int32_t> ground_shy_;     // cu8f t04b: ObjectIds with Prefer_Ground_Over_Space false, ascending
     std::vector<VictoryClaim> claims_;    // declaration order
     int32_t victory_hold_ = 0;            // story t11: galactic monitor hold (+0x5c)
+    std::vector<std::pair<int32_t, uint8_t>> victory_deferred_;  // q6 t21: {player, type}, monitor +0x60
+    std::vector<std::pair<int32_t, std::string>> names_;  // [port] fleet / ship names {ObjectId, name}, id-ascending (v7)
+    void prune_names();                                     // drops names of objects that are no longer alive
+    // q6 t21 / t22: from set_victory_rules (definition-derived, not saved, not hashed)
+    VictoryRules victory_rules_;
+    std::vector<VictoryRecord> victory_records_;  // player order, then the side's list order, implicit last
+    std::vector<uint8_t> victory_side_;           // per player: 0 none, 1 human, 2 AI
     // GRC reveal / corruption transitions (src/reveal.cpp; hashed in the "RVC1" tail once non-default)
     int32_t local_player_ = kNoPlayer;
     bool auto_reveal_ = true;   // galactic mode +0x340

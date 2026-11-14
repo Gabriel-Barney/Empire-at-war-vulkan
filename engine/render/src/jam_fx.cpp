@@ -4,18 +4,12 @@
 #include <cmath>
 #include <cstring>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/core/log.hpp"
 
 namespace alamo::render {
 
 namespace {
-
-std::string lower(std::string_view s) {
-    std::string o(s);
-    for (char& c : o)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-    return o;
-}
 
 uint8_t byte_of(float f) {
     const float c = std::isfinite(f) ? std::clamp(f, 0.0f, 1.0f) : 1.0f;
@@ -23,7 +17,7 @@ uint8_t byte_of(float f) {
 }
 
 std::string model_key(const std::string& material, const float (&color)[4]) {
-    std::string k = lower(material);
+    std::string k = ascii_lower(material);
     k.push_back('|');
     for (float c : color) {
         k += std::to_string(static_cast<unsigned>(byte_of(c)));
@@ -139,8 +133,14 @@ Instance jam_blob_instance(const GpuModel& model, const JamBlob& blob) {
 
 uint32_t JamBlobModels::build(Renderer& renderer, const TextureSource& textures, const InterpolatedFrame& frame,
                               const std::function<float(float, float)>& ground, std::vector<Instance>& out) {
+    const std::vector<JamBlob> blobs = jam_blobs(frame);
+    return build_blobs(renderer, textures, blobs, ground, out);
+}
+
+uint32_t JamBlobModels::build_blobs(Renderer& renderer, const TextureSource& textures, std::span<const JamBlob> list,
+                                    const std::function<float(float, float)>& ground, std::vector<Instance>& out) {
     uint32_t n = 0;
-    for (JamBlob& b : jam_blobs(frame)) {
+    for (JamBlob b : list) {
         const std::string key = model_key(b.material, b.color);
         auto it = models_.find(key);
         if (it == models_.end()) {
@@ -148,9 +148,9 @@ uint32_t JamBlobModels::build(Renderer& renderer, const TextureSource& textures,
             terrain::ShadowBlobMaterial mat;
             mat.name = b.material;
             mat.mode = terrain::RenderMode::Alpha;
-            const std::string want = lower(b.material);
+            const std::string want = ascii_lower(b.material);
             for (const terrain::ShadowBlobMaterial& m : materials_)
-                if (lower(m.name) == want) {
+                if (ascii_lower(m.name) == want) {
                     mat = m;
                     break;
                 }

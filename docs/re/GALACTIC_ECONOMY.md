@@ -97,7 +97,8 @@ costs, refunds, story rewards, bounties and Lua `Give_Money`.
 4. If cap ≥ 0, and the current mode's virtual +0xF8 returns true (or there is no mode and the global flag at
    0x140b155c5 is clear), credits are clamped to the cap. [H] for the clamp, [L] for what the mode test means.
 5. Then a player-stats event and a credits-changed notification are sent. With the notify flag set, the AI budget
-   is told the applied amount (0x4b0310).
+   is told the applied amount (0x4b0310): every galactic budget category gets P += applied × w (0x615b40). Which
+   callers set the flag, and the budget arithmetic: `A2K_T10_CREDIT_NOTIFY_RE.md` (2026-11-07).
 
 **Cap (0x288f40)**, recomputed per player:
 - cap = max(1, number of planets the player owns, as float) × `Credit_Cap_Per_Planet`. The planet count comes from
@@ -328,6 +329,10 @@ Entries with `Build_Cost_Credits` < 1 are rejected. [H]
       ≥ 4 → `_4` (0.45). `_0` is never read.
     - The **starbase** level is used even for ground units that pass the test. [H] for the arithmetic, [M] for the
       classification.
+    - **Corrected 2026-11-06 (A2K_T01_BUILD_COST_RE §2.1) [H]:** the index is d − 1: d = 1 → `_0` (1.00), 2 → `_1`
+      (0.90), 3 → `_2` (0.75), 4 → `_3` (0.55), ≥ 5 → `_4` (0.45); 0x140b16dd4 is `_0` (GameConstants +0x15d4). The
+      factor applies only to space-queue items (`Required_Ground_Base_Level` = 0 and not 0x5f, and 0x282400), never
+      to ground units.
   - **m_ai** = the difficulty `Galactic_Build_Time_Multiplier` (+0x28) for AI-controlled non-human players (Easy
     1.5, Normal 0.8, Hard 0.6). Otherwise 1. [H]
   - **m_corr**: when the owner's faction does **not** benefit from corruption, it is
@@ -342,7 +347,10 @@ Entries with `Build_Cost_Credits` < 1 are rejected. [H]
 ### 2.4 Cost (0x3711c0 → 0x400240)
 
 1. raw = m_planet_cost × float(`Build_Cost_Credits`) × m_corr_price × m_techupg.
-   - m_planet_cost: 0x559c10, the analogue of m_planet for price [M].
+   - m_planet_cost: 0x559c10, the analogue of m_planet for price [M]. → Settled 2026-11-06 (A2K_T01_BUILD_COST_RE
+     §1.2–1.3) [H]: 1 − (Σ over stacking categories of the max value) from the per-type player table (+0x238) and
+     planet table (production behaviour +0x88), filled by `Reduce_Production_Price_Ability` (heroes, planet
+     abilities).
    - m_corr_price: `Corruption_Galactic_Production_Price_Multipliers`[corrupted ? 1 : 0] (faction +0x2ff0, "1.0,
      0.9"), applied only if the faction does not benefit from corruption.
    - m_techupg: only for `Build_Advances_Tech_Level` ≠ 0 items. It is the player's tech-cost modifier, 1 + the
@@ -413,7 +421,9 @@ The production service is reached through the galactic store's "planet productio
   (0x403900):
   - each takes a refund flag;
   - removing index 0 starts the next entry;
-  - the UI cancel (`CommandBarClass::Cancel_Production` 0x3cb2f0) passes refund = true.
+  - the UI cancel (`CommandBarClass::Cancel_Production` 0x3cb2f0) passes refund = true;
+  - the AI also cancels with refund = true. 0x53ba60 removes the head entry of a queue whose AI build task ended without
+    being taken by the PAYG reclaim (`A2M_R2_RE_B.md` §1, added 2026-11-12).
   
   [H]
 - **Re-evaluation** (0x402490 ground, 0x402660 space; argument = the current ground/star base level):

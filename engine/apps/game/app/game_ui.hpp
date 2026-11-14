@@ -29,12 +29,16 @@ public:
     // atlas is missing (the game cannot show its menus then).
     bool init(GpuCore& gpu, const GameData& data, ui::MenuProviders providers, std::string* err);
     void shutdown(GpuCore& gpu);
-    void resize(uint32_t w, uint32_t h);
+    // `ui_scale_pct`: the DPI-style UI scale in percent (Options > Video > UI Scale, hud_canvas.hpp); 0 = the original fitted size.
+    void resize(uint32_t w, uint32_t h, int32_t ui_scale_pct = 0);
     // Uploads image pages the dialogs asked for since the last call (MenuBack_overlay, load-screen icons, ...).
     // `portraits`: serves "planet_portrait:<type>" pages (null = they fail like a missing texture).
     void upload_pages(GpuCore& gpu, render::PlanetPortraits* portraits = nullptr);
-    // Faction look of both HUDs ([port] 0 Empire, 1 Rebel, 2 Underworld faceplates; pad lists 0 rebel / 1 empire).
-    void set_faction(std::string_view faction);
+    // Faction look of both HUDs. [port] (the original's selection is not traced) modc t20: by the GameConstants sides, not
+    // by name: the Good_Side_Name faction gets shell alternate 1 and pad index 0, the Evil_Side_Name faction shell 0 / pad
+    // 1, any other faction shell 2 / pad 1 (FoC: Rebel 1/0, Empire 0/1, Underworld 2/1 - the shells' _ALT faceplates and
+    // the pad lists "rebel, empire").
+    void set_faction(std::string_view faction, std::string_view good_side, std::string_view evil_side);
     uint8_t faction_alt() const { return faction_alt_; }
 
     ui::GuiData gui_data;

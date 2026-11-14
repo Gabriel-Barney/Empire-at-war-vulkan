@@ -49,6 +49,12 @@ nothing at the start.
   - at 50 s, "...took Abregado Rae back. You own nothing again" appears;
   - then watch until the 170 s message, or until the campaign ends.
 - **"Q6 PROBE: ELIM C (CONTROL)"**: expected to end at once (the Rebel wins). This is the control.
+- q6 t25 (optional, run 2026-11-09):
+  - **"Q6 PROBE: ELIM D (AI GAINS A PLANET)"**: you own nothing; at 20 s the script gives the neutral Abregado Rae to
+    the Rebel.
+  - **"Q6 PROBE: ELIM E (FLEET, NO PLANET)"**: a Star Destroyer at Tatooine (the start force does not give the planet);
+    the script gives you Tatooine at 10 s and makes it neutral at 40 s.
+  - In both, watch until the 170 s message or the end. Each logs a heartbeat every second for 15 s after its event.
 
 For each campaign, write down whether it ended, when (seconds after the start, or seconds after the "took it back"
 line for B), and what the screen showed. Take a screenshot of any defeat or end screen. Then quit to the main menu.
@@ -313,7 +319,7 @@ list.
 |---|---|
 | `run_q6.cmd`, `run_q6_tr.cmd` → `q6_run.py` | one session each: build + install, launch (`--no-launch`, `--windowed`, `--tr-steammod`), scan, report, cleanup; `--report-only <records.log>` re-reads an earlier run |
 | `cleanup_q6.cmd` → `q6_cleanup.py` | idempotent cleanup of both mod folders (`--dry-run`, `--no-pause`) |
-| `build_q6_mod.py` | `vanilla` builds `Mods\Q6T15Probe` (campaigns, plots, story Lua, the hooked free store, 6 hooked object scripts, text); `tr` builds `Mods\Q6T15ProbeTR` (TR's land free store + recorder, TR's faction list). Reuses `s10_map_owners/ted_owners.py` (install reader) and `build_probe.py` (`.dat` writer) |
+| `build_q6_mod.py` | `vanilla` builds `Mods\Q6T15Probe` (campaigns, plots, story Lua, the hooked free store, 6 hooked object scripts, text); `tr` builds `Mods\Q6T15ProbeTR` (TR's land free store + recorder, TR's faction list). Reuses `common/ted_owners.py` (install reader) and `build_probe.py` (`.dat` writer) |
 | `q6_story_timing.lua`, `q6_story_elim.lua` | plot scripts (probes 3 + 4, probe 1) |
 | `q6_tactical_hook.lua`, `q6_objscript_hook.lua` | free-store spawner (probes 2 + 6), object-script recorder (probe 2) |
 | `q6_tr_land_hook.lua` | TR land recorder (probe 5) |
@@ -325,7 +331,7 @@ All Python runs with the project venv: `toolchain\venv\Scripts\python.exe -I <sc
 ## Offline validation
 
 `toolchain\venv\Scripts\python.exe -I tools\probe_mod\q6_t15_probes\selftest_q6.py` (needs
-`tools\probe_mod\a1_tactical\out\tools\lua50.exe` from `a1_tactical\selftest\build_lua50.cmd`) printed
+`tools\probe_mod\out\tools\lua50.exe` from `common\build_lua50.cmd`) printed
 **Q6 SELFTEST OK** on 2026-11-04. It:
 - builds the vanilla mod from `extracted\foc_data_text.zip` and the TR overlay from the workshop folder, and compiles
   every built Lua file;

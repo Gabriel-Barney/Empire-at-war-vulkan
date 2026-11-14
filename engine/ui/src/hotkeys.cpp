@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "alamo/commands/fleet_group.hpp"
+
 namespace alamo::ui {
 
 namespace {
@@ -112,6 +114,13 @@ constexpr HotkeySlotInfo kSlots[kHotkeySlots] = {
     // 160, 161 [port: Gabriel] keyboard zoom (was Home / End in ui::Bindings, which collided with CameraHome / CameraReset):
     // = and - on the main keyboard (Alt+= / Alt+- stay Force Sight / Radioactive Contaminate: exact modifiers).
     {"CameraZoomIn", HK::Camera, {kVkOemPlus, N}}, {"CameraZoomOut", HK::Camera, {kVkOemMinus, N}},
+    // 162 [port: Gabriel 2026-11-13] fleet cohesion toggle (space battles: tight = the fleet flies at its slowest ship's
+    // speed); the host acts on the event (GameSession::toggle_fleet_cohesion).
+    {"FleetCohesion", HK::Interface, {K('O'), N}},
+    // 163..165 [port] fleet groups (docs/DECISIONS.md "Fleet groups: exception to the current focus"): N new group, U ungroup,
+    // Y lock / unlock (G, L and O are Guard, Waypoint and FleetCohesion; Ctrl+Y is Select All).
+    {"FleetGroupCreate", HK::Order, {K('N'), N}}, {"FleetGroupUngroup", HK::Order, {K('U'), N}},
+    {"FleetGroupLock", HK::Order, {K('Y'), N}},
 };
 
 }  // namespace
@@ -122,6 +131,48 @@ int32_t hotkey_slot(std::string_view name) {
     for (uint16_t i = 0; i < kHotkeySlots; ++i)
         if (name == kSlots[i].name) return i;
     return -1;
+}
+
+std::string_view hotkey_ability_name(uint16_t slot) {
+    struct Row {
+        const char* slot;
+        const char* ability;
+    };
+    static constexpr Row kRows[] = {
+        {"Ability_Deploy", "DEPLOY"}, {"Ability_SpreadOut", "SPREAD_OUT"}, {"Ability_JetPack", "JET_PACK"},
+        {"Ability_StickyBomb", "STICKY_BOMB"}, {"Ability_UntargetedStickyBomb", "UNTARGETED_STICKY_BOMB"},
+        {"Ability_RocketAttack", "ROCKET_ATTACK"}, {"Ability_CableAttack", "CABLE_ATTACK"}, {"Ability_FowRevealPing", "FOW_REVEAL_PING"},
+        {"Ability_PowerToWeapons", "POWER_TO_WEAPONS"}, {"Ability_SelfDestruct", "SELF_DESTRUCT"},
+        {"Ability_DeployTroopers", "DEPLOY_TROOPERS"}, {"Ability_MaximumFirepower", "MAXIMUM_FIREPOWER"}, {"Ability_Sprint", "SPRINT"},
+        {"Ability_PlaceRemoteBomb", "PLACE_REMOTE_BOMB"}, {"Ability_DetonateRemoteBomb", "DETONATE_REMOTE_BOMB"},
+        {"Ability_FireLobbingSuperweapon", "FIRE_LOBBING_SUPERWEAPON"}, {"Ability_LaserDefense", "LASER_DEFENSE"},
+        {"Ability_StimPack", "STIM_PACK"}, {"Ability_SwapWeapons", "SWAP_WEAPONS"}, {"Ability_MinorDrainLife", "DRAIN_LIFE"},
+        {"Ability_ProximityMines", "PROXIMITY_MINES"}, {"Ability_Defend", "DEFEND"}, {"Ability_TractorBeam", "TRACTOR_BEAM"},
+        {"Ability_Interdict", "INTERDICT"}, {"Ability_Barrage", "BARRAGE"}, {"Ability_Hunt", "HUNT"}, {"Ability_Turbo", "TURBO"},
+        {"Ability_Lure", "LURE"}, {"Ability_MissileShield", "MISSILE_SHIELD"}, {"Ability_SpoilerLock", "SPOILER_LOCK"},
+        {"Ability_IonCannonShot", "ION_CANNON_SHOT"}, {"Ability_SensorJamming", "SENSOR_JAMMING"}, {"Ability_Stealth", "STEALTH"},
+        {"Ability_LeechShields", "LEECH_SHIELDS"}, {"Ability_BuzzDroids", "BUZZ_DROIDS"}, {"Ability_SuperLaser", "SUPER_LASER"},
+        {"Ability_ClusterBomb", "CLUSTER_BOMB"}, {"Ability_SpaceLaserDefense", "LASER_DEFENSE"},
+        {"Ability_SpaceSelfDestruct", "SELF_DESTRUCT"}, {"Ability_FullSalvo", "FULL_SALVO"}, {"DeploySquad", "DEPLOY_SQUAD"},
+        {"Ability_LuckyShot", "LUCKY_SHOT"}, {"Ability_ReplenishWingmen", "REPLENISH_WINGMEN"},
+        {"Ability_Telekinesis", "FORCE_TELEKINESIS"}, {"Ability_Whirlwind", "FORCE_WHIRLWIND"}, {"Ability_Lightning", "FORCE_LIGHTNING"},
+        {"Ability_AreaConvert", "AREA_EFFECT_CONVERT"}, {"Ability_TargetedInvulnerability", "TARGETED_INVULNERABILITY"},
+        {"Ability_CaptureVehicle", "CAPTURE_VEHICLE"}, {"Ability_EjectVehicleThief", "EJECT_VEHICLE_THIEF"},
+        {"Ability_EnergyWeapon", "ENERGY_WEAPON"}, {"Ability_HarmonicBomb", "HARMONIC_BOMB"}, {"Ability_WeakenEnemy", "WEAKEN_ENEMY"},
+        {"Ability_Invulnerability", "INVULNERABILITY"}, {"Ability_AreaStun", "AREA_EFFECT_STUN"},
+        {"Ability_TargetedHack", "TARGETED_HACK"}, {"Ability_TargetedRepair", "TARGETED_REPAIR"}, {"Ability_FlameThrower", "FLAME_THROWER"},
+        {"Ability_HomeOne", "CONCENTRATE_FIRE"}, {"Ability_SaberThrow", "SABER_THROW"}, {"Ability_ForceCloak", "FORCE_CLOAK"},
+        {"Ability_ForceConfuse", "FORCE_CONFUSE"}, {"Ability_ForceSight", "FORCE_SIGHT"}, {"Ability_Berserker", "BERSERKER"},
+        {"Ability_RadioactiveContaminate", "RADIOACTIVE_CONTAMINATE"}, {"Ability_Infection", "INFECTION"},
+        {"Ability_DrainLife", "DRAIN_LIFE"}, {"Ability_Summon", "SUMMON"}, {"Ability_Blast", "BLAST"},
+        {"Ability_ShieldFlare", "SHIELD_FLARE"}, {"Ability_Stun", "STUN"}, {"Ability_TacticalBribe", "TACTICAL_BRIBE"},
+        {"Ability_FoCFullSalvo", "FULL_SALVO"}, {"Ability_FoCSensorJamming", "SENSOR_JAMMING"},
+    };
+    if (slot >= kHotkeySlots) return {};
+    const std::string_view name = kSlots[slot].name;
+    for (const Row& r : kRows)
+        if (name == r.slot) return r.ability;
+    return {};
 }
 
 int8_t hotkey_group(uint16_t slot) {
@@ -151,6 +202,26 @@ void HotkeyTable::bind(uint16_t slot, HotkeyBinding b) {
         for (int k = 0; k < 3; ++k)
             set(static_cast<uint16_t>(bases[k] + slot), b.key < 0 ? HotkeyBinding{} : HotkeyBinding{b.key, mods[k]});
     }
+}
+
+std::vector<uint16_t> HotkeyTable::conflicts(uint16_t slot, HotkeyBinding b) const {
+    std::vector<uint16_t> out;
+    if (slot >= kHotkeySlots || b.key < 0) return out;
+    std::vector<std::pair<uint16_t, HotkeyBinding>> writes{{slot, b}};
+    if (slot < 10) {  // the derived slots bind() writes with it
+        const HotkeyMod mods[3] = {HotkeyMod::Ctrl, HotkeyMod::Shift, HotkeyMod::Alt};
+        const uint16_t bases[3] = {hk::kAssignBase, hk::kAddBase, hk::kThirdBase};
+        for (int k = 0; k < 3; ++k) writes.push_back({static_cast<uint16_t>(bases[k] + slot), HotkeyBinding{b.key, mods[k]}});
+    }
+    for (uint16_t o = 0; o < kHotkeySlots; ++o) {
+        bool written = false, clash = false;
+        for (const auto& w : writes) {
+            written = written || w.first == o;
+            clash = clash || slots_[o] == w.second;
+        }
+        if (clash && !written) out.push_back(o);
+    }
+    return out;
 }
 
 void HotkeyTable::save(HotkeyProfile& out) const {
@@ -209,14 +280,6 @@ bool HotkeyTable::load(const HotkeyProfile& in) {
             }
     }
     return true;
-}
-
-uint8_t hotkey_mods(const InputState& in) { return current_mods(in); }
-
-HotkeyMod hotkey_mod_held(const InputState& in) {
-    const int n = (in.shift() ? 1 : 0) + (in.ctrl() ? 1 : 0) + (in.alt() ? 1 : 0);
-    if (n != 1) return HotkeyMod::None;
-    return in.shift() ? HotkeyMod::Shift : in.ctrl() ? HotkeyMod::Ctrl : HotkeyMod::Alt;
 }
 
 namespace {
@@ -344,6 +407,16 @@ void HotkeyDispatcher::update(const InputState& in, const HotkeyTable& table, st
         }
         if (s == hk::kRetreat) {
             cmds.push_back(commands::ev::retreat(true));
+            continue;
+        }
+        if (s == hk::kFleetCreate || s == hk::kFleetUngroup || s == hk::kFleetLock) {  // [port] fleet groups
+            if (!fleet_on_ || selection.empty()) continue;
+            commands::FleetGroupCommand c;
+            c.op = s == hk::kFleetCreate ? commands::FleetGroupOp::Create
+                 : s == hk::kFleetUngroup ? commands::FleetGroupOp::Dissolve
+                                          : commands::FleetGroupOp::SetLock;
+            c.locked = !fleet_locked_;
+            cmds.push_back(commands::fleet_group_event(c));
             continue;
         }
         events.push_back(e);

@@ -1,8 +1,8 @@
 #include "alamo/ui/hud_abilities.hpp"
 
 #include <algorithm>
-#include <cctype>
 
+#include "alamo/core/ascii.hpp"
 #include "alamo/ui/targeting.hpp"
 
 #ifdef ALAMO_UI_HAVE_ABILITIES
@@ -55,7 +55,7 @@ std::string ability_icon(uint8_t t) {
     }
     std::string n = ability_type_info(t).name;
     if (n.empty()) return {};
-    for (char& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    ascii_lower_in_place(n);
     return "i_sa_" + n + ".tga";
 #else
     return {};
@@ -95,6 +95,10 @@ void abilities_from_s9(const tactical::abilities::AbilitySystem& sys, const Sele
         a.targeted = k != TargetKind::None;
         a.target_kind = static_cast<uint8_t>(k);
         a.icon = alternate.empty() ? ability_icon(type) : std::move(alternate);
+        // ui3 t07 [port]: the MasterTextFile pair TEXT_TOOLTIP_ABILITY_<type>_NAME / _DESCRIPTION (the original's ability
+        // tooltip source is not traced; the FoC text has the pair for the ability type names). Two keys: two lines.
+        if (const std::string_view n = tactical::abilities::ability_type_info(type).name; !n.empty() && n != "NONE")
+            a.tooltip_key = "TEXT_TOOLTIP_ABILITY_" + std::string(n) + "_NAME TEXT_TOOLTIP_ABILITY_" + std::string(n) + "_DESCRIPTION";
         out.push_back(std::move(a));
     }
 }

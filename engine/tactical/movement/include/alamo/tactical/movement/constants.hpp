@@ -57,7 +57,18 @@ struct MovementConstants {
     float spread_out_spacing_coefficient = 1.8f;
     float infantry_formation_recruitment_distance = 60.0f;
     float vehicle_formation_recruitment_distance = 100.0f;
+    // s78n t26 review round 2 (MOVEMENT §4.2 step 2 item 4 [H]): a candidate whose straight line to the nearest member
+    // is blocked joins only when its path there is <= this x their distance
+    float formation_recruit_path_ratio = 1.4f;
     float double_click_move_max_speed_ratio = 1.25f;
+    // s78n t20 (MOVEMENT §4.3.1 item 4): BetweenFormationSpacing (GC +0x14ec), the margin of the destination check's
+    // formation and slot rectangles; the destination query extension (GC +0x14f0, Destination_Collision_Query_Extension,
+    // 60; s78n t20 batch 2: read from GameConstants).
+    float between_formation_spacing = 5.0f;
+    float destination_query_extension = 60.0f;
+    // s78n t14 part B (FIGHTER_FLYING §7.1, MOVEMENT §3.4): Fleeing_Infantry_Speed_Bonus (GC +0x150c, read as a float; FoC 2),
+    // the factor on a fleeing squad's speeds and turn rates (its container's current path is a crush-flee push, kind 7).
+    float fleeing_infantry_speed_bonus = 2.0f;
     // Mode speed multipliers (§3.4)
     float land_speed_multiplier = 1.56f;
     float space_speed_multiplier = 1.2f;
@@ -66,6 +77,13 @@ struct MovementConstants {
     float land_guard_range = 150.0f;
     // s78f t02 (FIGHTER_FLYING §4.11 B 1): the waypoint append's limit of queued (0x08) blocks per formation (GC +0x13f0).
     uint32_t max_waypoints_per_path = 6;
+    // s78n t25.2 (MOVEMENT §4.3.2 item 2, §4.2 item 6): Base_Land_Targeting_Arc_Angle_Coefficient (GC +0x154c), the first
+    // coefficient try of the attack slots; Solo_Attack_Range (GC +0x1548), the solo rule's margin; and
+    // Short_Range_Attack_Formation_Coefficient (GC +0x1544; [port] parsed, unused: the recruitment's "engagement distance
+    // is compatible" test is not in the spec).
+    float base_land_targeting_arc_angle_coefficient = 0.2f;
+    float solo_attack_range = 60.0f;
+    float short_range_attack_formation_coefficient = 1.6f;
 
     static MovementConstants from_game_constants(const data::GameConstants& gc);
 };

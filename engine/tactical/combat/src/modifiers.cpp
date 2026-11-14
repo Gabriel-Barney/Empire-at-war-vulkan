@@ -1,6 +1,9 @@
 #include "alamo/tactical/combat/modifiers.hpp"
 
+#include <cmath>
+
 #include "alamo/core/sim_crc.hpp"
+#include "alamo/tactical/category_reduce.hpp"
 
 namespace alamo::tactical::combat {
 
@@ -75,44 +78,15 @@ float max_then_sum(const Item* items, uint32_t n) {
 // Fallback for more than kStackEntries entries of one list: O(n * categories), allocation-free.
 float max_then_sum_slow(const ModifierSet* a, const ModifierSet* b, uint8_t list) {
     const ModifierSet* sets[2] = {a, b};
-    float total = 0.0f;
-    bool any = false;
-    bool have_last = false;
-    int32_t last = 0;
-    for (;;) {
-        bool found = false;
-        int32_t next = 0;
-        for (const ModifierSet* s : sets) {
-            if (!s) continue;
-            for (const ModifierEntry& e : s->entries()) {
-                if (e.list != list || (have_last && e.category <= last)) continue;
-                if (!found || e.category < next) {
-                    next = e.category;
-                    found = true;
-                }
+    return reduce_by_category(
+        [&](auto&& f) {
+            for (const ModifierSet* s : sets) {
+                if (!s) continue;
+                for (const ModifierEntry& e : s->entries())
+                    if (e.list == list) f(e.category, e.value);
             }
-        }
-        if (!found) break;
-        bool first = true;
-        float best = 0.0f;
-        for (const ModifierSet* s : sets) {
-            if (!s) continue;
-            for (const ModifierEntry& e : s->entries()) {
-                if (e.list != list || e.category != next) continue;
-                if (first || e.value > best) best = e.value;
-                first = false;
-            }
-        }
-        if (!any) {
-            total = best;
-            any = true;
-        } else {
-            total = total + best;
-        }
-        last = next;
-        have_last = true;
-    }
-    return total;
+        },
+        [](float v, float best) { return v > best; });  // GreaterThan<float>, seeded with the first category's maximum
 }
 
 }  // namespace
@@ -282,40 +256,12 @@ void reduce_all(const ModifierSet* player, const ModifierSet* object, const std:
 
 float reduce_most_extreme(std::span<const ModifierEntry> entries, ModList list) {
     const auto l = static_cast<uint8_t>(list);
-    float total = 0.0f;
-    bool any = false;
-    bool have_last = false;
-    int32_t last = 0;
-    for (;;) {
-        bool found = false;
-        int32_t next = 0;
-        for (const ModifierEntry& e : entries) {
-            if (e.list != l || (have_last && e.category <= last)) continue;
-            if (!found || e.category < next) {
-                next = e.category;
-                found = true;
-            }
-        }
-        if (!found) break;
-        bool first = true;
-        float best = 0.0f;
-        for (const ModifierEntry& e : entries) {
-            if (e.list != l || e.category != next) continue;
-            const float a = e.value < 0.0f ? -e.value : e.value;
-            const float b = best < 0.0f ? -best : best;
-            if (first || a > b) best = e.value;  // largest |value|, first kept on ties
-            first = false;
-        }
-        if (!any) {
-            total = best;
-            any = true;
-        } else {
-            total = total + best;
-        }
-        last = next;
-        have_last = true;
-    }
-    return total;
+    return reduce_by_category(
+        [&](auto&& f) {
+            for (const ModifierEntry& e : entries)
+                if (e.list == l) f(e.category, e.value);
+        },
+        [](float v, float best) { return std::fabs(v) > std::fabs(best); });  // largest |value|, first kept on ties
 }
 
 float ability_product(const UnitAbilityDesc* const abilities[2], const bool active[2], ModKind kind) {

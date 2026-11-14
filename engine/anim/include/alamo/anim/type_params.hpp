@@ -7,7 +7,7 @@
 
 #include "alamo/anim/anim_behaviors.hpp"
 #include "alamo/anim/anim_types.hpp"
-#include "alamo/objects/game_object_types.hpp"
+#include "alamo/objects/game_object_types_fwd.hpp"
 #include "alamo/objects/object_store.hpp"
 
 namespace alamo::anim {

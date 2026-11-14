@@ -3,6 +3,7 @@
 #include <cstring>
 #include <iterator>
 
+#include "alamo/core/hash.hpp"
 #include "alamo/render/hardpoints.hpp"
 
 namespace alamo::render::particles {
@@ -15,14 +16,10 @@ void ProxyAttachments::begin() {
 }
 
 uint64_t ProxyAttachments::static_key(const Instance& inst, uint64_t salt) {
-    uint64_t h = 0xcbf29ce484222325ull ^ salt;
-    auto mix = [&](const void* p, size_t n) {
-        const auto* b = static_cast<const uint8_t*>(p);
-        for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 0x100000001b3ull;
-    };
+    // FNV-1a 64 over the model uid then the transform bytes, from the offset basis xor salt.
     const uint64_t uid = inst.model ? inst.model->uid : 0;
-    mix(&uid, sizeof uid);
-    mix(&inst.transform, sizeof inst.transform);
+    uint64_t h = fnv1a64(&uid, sizeof uid, kFnv1a64Offset ^ salt);
+    h = fnv1a64(&inst.transform, sizeof inst.transform, h);
     return h | 1ull;  // never 0
 }
 

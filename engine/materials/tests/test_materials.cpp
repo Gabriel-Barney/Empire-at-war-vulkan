@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -18,17 +20,22 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"
 #include "alamo/materials/constants.hpp"
 #include "alamo/materials/d3d9_state.hpp"
+#include "alamo/materials/effect_audit.hpp"
 #include "alamo/materials/effect_loader.hpp"
 #include "alamo/materials/fixed_function.hpp"
+#include "alamo/materials/fx_source.hpp"
 #include "alamo/materials/fxlc.hpp"
 #include "alamo/materials/params.hpp"
 #include "alamo/materials/programs.hpp"
 #include "alamo/materials/pso.hpp"
 #include "alamo/materials/register_file.hpp"
+#include "alamo/test/support.hpp"
 #include "fx2_reader.hpp"
+#include "fx_compile.hpp"
 #ifdef ALAMO_MATERIALS_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -36,14 +43,7 @@
 using namespace alamo;
 using namespace alamo::materials;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
@@ -172,15 +172,6 @@ fx::Effect make_effect(std::vector<fx::State> states, std::vector<fx::Parameter>
     return e;
 }
 
-uint64_t ref_fnv(const void* d, size_t n) {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (size_t i = 0; i < n; ++i) {
-        h ^= static_cast<const uint8_t*>(d)[i];
-        h *= 0x100000001b3ull;
-    }
-    return h;
-}
-
 // ------------------------------------------------------------------ unit tests
 void test_layouts() {
     CHECK(sizeof(FrameCB) == 992);
@@ -218,7 +209,7 @@ void test_defaults_and_keys() {
     // hashing: FNV-1a over the bytes, independent of instance and stable
     PsoKey k2 = k;
     CHECK(hash(k) == hash(k2));
-    CHECK(hash(k) == ref_fnv(&k, sizeof k));
+    CHECK(hash(k) == alamo::fnv1a64(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&k), sizeof k)));
     CHECK(std::hash<PsoKey>{}(k) == static_cast<size_t>(hash(k)));
     k2.cull = CullMode::None;
     CHECK(hash(k) != hash(k2));
@@ -1026,7 +1017,264 @@ void test_default_effect_and_order() {
     CHECK(lib.effect_load_rank(notech) == 0);
 }
 
+// A fresh folder under the per-tree %TEMP% (the build scripts give each ctest run its own), unique per call.
+std::filesystem::path unique_temp_dir(const char* tag) {
+    static int counter = 0;
+    char name[128];
+    std::snprintf(name, sizeof name, "alamo_mat_%s_%lld_%d", tag,
+                  static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()), counter++);
+    std::error_code ec;
+    return std::filesystem::temp_directory_path(ec) / name;
+}
+
+// docs/MODS.md shader section (modc t11): .fx sources, the issue record and audit_effects().
+void test_shader_issues() {
+    struct ModShaders final : FileProvider {
+        bool read(std::string_view p, std::vector<uint8_t>& out) const override {
+            const std::string n = normalize_path(p);
+            if (!exists(p)) return false;
+            if (n.size() > 3 && n.substr(n.size() - 3) == ".FX") {
+                const char* src = "technique T { pass P { } }";  // HLSL text: never parsed as an FXO
+                out.assign(src, src + std::strlen(src));
+                return true;
+            }
+            if (n == "DATA\\ART\\SHADERS\\BOTH.FXO") {
+                const uint32_t one = std::bit_cast<uint32_t>(1.0f);
+                out = make_param_fxo({0, 3, 1, 0, 0, 0, 4, 1, one, one, one, one}, 4, 32);  // parses, no technique
+                return true;
+            }
+            out = {0x01, 0x09, 0xFF, 0xFE, 0x00, 0x00, 0x00, 0x00};  // BROKEN.FXO
+            return true;
+        }
+        bool exists(std::string_view p) const override {
+            const std::string n = normalize_path(p);
+            return n == "DATA\\ART\\SHADERS\\SRCONLY.FX" || n == "DATA\\ART\\SHADERS\\BOTH.FX" ||
+                   n == "DATA\\ART\\SHADERS\\BOTH.FXO" || n == "DATA\\ART\\SHADERS\\TERRAIN\\BROKEN.FXO";
+        }
+        std::string origin(std::string_view) const override { return {}; }
+    } files;
+    LoadOptions iso;
+    iso.fx_cache_dir = unique_temp_dir("issues");  // empty cache: the sources count as not compiled (modc t23)
+    EffectLibrary lib(files, iso);
+    CHECK(!lib.find_effect_path("SrcOnly.fx") && lib.find_effect_source("SrcOnly.fx").has_value());
+    CHECK(lib.fx_source_status("SrcOnly") == FxSourceState::NotCompiled && lib.fx_source_status("Broken") == FxSourceState::None);
+    CHECK(lib.find_effect_path("Both") && lib.find_effect_source("BOTH.FXO"));
+    CHECK(!lib.find_effect_source("Broken.fx") && lib.find_effect_path("Broken.fx") == std::string("Data\\Art\\Shaders\\Terrain\\Broken.fxo"));
+    // A path naming the .fx is never read as compiled bytecode.
+    CHECK(!lib.find_effect_path("Data\\Art\\Shaders\\SrcOnly.fx"));
+    std::string err;
+    CHECK(!lib.load("Data\\Art\\Shaders\\SrcOnly.fx", &err) && err.find(".fxo") != std::string::npos);
+    // .fx only: the original compiles it; the port draws its failed-compile result (green, own name).
+    err.clear();
+    MaterialEffect so = lib.load_or_default("SrcOnly.fx", &err);
+    CHECK(so.fallback == EffectFallback::Failed && so.name == "SRCONLY" && so.path == "Data\\Art\\Shaders\\SrcOnly.fx");
+    CHECK(!err.empty() && so.passes.size() == 1 && so.passes[0].fixed_function);
+    std::vector<ShaderIssue> si = effect_load_issues(lib, "SrcOnly.fx", so, err);
+    CHECK(si.size() == 1 && si[0].kind == ShaderIssueKind::SourceOnly && si[0].effect == "SRCONLY");
+    // A missing name is not a shader issue (the original's silent green default).
+    MaterialEffect miss = lib.load_or_default("Nothing.fx", &err);
+    CHECK(miss.fallback == EffectFallback::Missing && effect_load_issues(lib, "Nothing.fx", miss, err).empty());
+
+    CHECK(std::string(shader_issue_kind_name(ShaderIssueKind::SourceOnly)) == "source_only");
+    CHECK(std::string(shader_issue_kind_name(ShaderIssueKind::UnsupportedPass)) == "unsupported_pass");
+    CHECK(shader_path_key("data/Art\\shaders\\x.fxo") == "DATA\\ART\\SHADERS\\X.FXO");
+    CHECK(host_path_under("C:/Mods/A/Data/Shaders.meg", "c:\\mods\\a") && host_path_under("C:\\Mods\\A\\x", "C:\\Mods\\A\\"));
+    CHECK(!host_path_under("C:\\Mods\\AB\\x.meg", "C:\\Mods\\A") && !host_path_under("C:\\Mods\\A", "C:\\Mods\\A") && !host_path_under("x", ""));
+
+    std::vector<ShaderFileEntry> in = {{"DATA\\ART\\SHADERS\\SRCONLY.FX", true, 0, true},
+                                       {"DATA\\ART\\SHADERS\\BOTH.FX", true, 0, true},
+                                       {"DATA\\ART\\SHADERS\\BOTH.FXO", false, 1, false},
+                                       {"DATA\\ART\\SHADERS\\TERRAIN\\BROKEN.FXO", true, 1, false}};
+    EffectAudit a = audit_effects(lib, in);
+    CHECK(a.effects == 3 && a.mod_effects == 2 && a.loaded == 0 && a.translated_passes == 0 && !a.compiled);
+    CHECK(a.issues.size() == 4);
+    if (a.issues.size() == 4) {
+        CHECK(a.issues[0].effect == "BOTH" && a.issues[0].kind == ShaderIssueKind::SourceShadowed && a.issues[0].in_mod);
+        CHECK(a.issues[1].effect == "BOTH" && a.issues[1].kind == ShaderIssueKind::NoTechnique && !a.issues[1].in_mod);
+        CHECK(a.issues[2].effect == "BROKEN" && a.issues[2].kind == ShaderIssueKind::LoadFailed && !a.issues[2].detail.empty());
+        CHECK(a.issues[3].effect == "SRCONLY" && a.issues[3].kind == ShaderIssueKind::SourceOnly && a.issues[3].in_mod);
+    }
+    CHECK(a.count(ShaderIssueKind::SourceOnly) == 1 && a.count(ShaderIssueKind::TranslateFailed) == 0);
+    std::vector<ShaderFileEntry> rev(in.rbegin(), in.rend());
+    EffectAudit b = audit_effects(lib, rev);
+    CHECK(b.issues.size() == a.issues.size());
+    for (size_t i = 0; i < a.issues.size() && i < b.issues.size(); ++i)
+        CHECK(a.issues[i].effect == b.issues[i].effect && a.issues[i].kind == b.issues[i].kind && a.issues[i].path == b.issues[i].path);
+}
+
 #ifdef ALAMO_MATERIALS_HAVE_VFS
+// modc t23: .fx sources (fx_source.hpp), the FxCache, the loader's choice and the fxc prebuild (fx_compile.hpp).
+struct MapFiles final : FileProvider {
+    std::map<std::string, std::string> f;  // normalize_path -> contents
+    void put(std::string_view p, std::string t) { f[normalize_path(p)] = std::move(t); }
+    bool read(std::string_view p, std::vector<uint8_t>& out) const override {
+        out.clear();
+        const auto it = f.find(normalize_path(p));
+        if (it == f.end()) return false;
+        out.assign(it->second.begin(), it->second.end());
+        return true;
+    }
+    bool exists(std::string_view p) const override { return f.count(normalize_path(p)) != 0; }
+    std::string origin(std::string_view) const override { return {}; }
+};
+
+void test_fx_sources() {
+    // 1. #include collection: own folder first, then Data\Art\Shaders\; comments skipped; cycles and repeats once.
+    MapFiles m;
+    m.put("Data\\Art\\Shaders\\Terrain\\Mod.fx",
+          "// #include \"Commented.fxh\"\n/* #include \"Block.fxh\"\n */\n#include \"Local.fxh\"\n  #  include <Common.fxh>\r\n"
+          "#include \"Sub/Deep.fxh\"\n#include \"Gone.fxh\"\nfloat x;\n");
+    m.put("Data\\Art\\Shaders\\Terrain\\Local.fxh", "#include \"Mod.fx\"\nfloat a;\n");
+    m.put("Data\\Art\\Shaders\\Common.fxh", "float c;\n");
+    m.put("Data\\Art\\Shaders\\Terrain\\Sub\\Deep.fxh", "#include \"..\\Local.fxh\"\n#include \"Deeper.fxh\"\n");
+    m.put("Data\\Art\\Shaders\\Terrain\\Sub\\Deeper.fxh", "float d;\n");
+    FxSource src;
+    std::string err;
+    CHECK(collect_fx_source(m, "Data\\Art\\Shaders\\Terrain\\Mod.fx", src, &err));
+    CHECK(src.files.size() == 5 && src.missing == std::vector<std::string>{"Gone.fxh"});
+    if (src.files.size() == 5) {
+        CHECK(normalize_path(src.files[1].path) == "DATA\\ART\\SHADERS\\TERRAIN\\LOCAL.FXH");
+        CHECK(normalize_path(src.files[2].path) == "DATA\\ART\\SHADERS\\COMMON.FXH");
+        CHECK(normalize_path(src.files[3].path) == "DATA\\ART\\SHADERS\\TERRAIN\\SUB\\DEEP.FXH");
+        CHECK(normalize_path(src.files[4].path) == "DATA\\ART\\SHADERS\\TERRAIN\\SUB\\DEEPER.FXH");
+    }
+    const std::string key = src.key();
+    CHECK(key.size() == 32 && key.find_first_not_of("0123456789abcdef") == std::string::npos);
+    FxSource again;
+    CHECK(collect_fx_source(m, "data/art/shaders/terrain/mod.fx", again) && again.key() == key);
+    m.put("Data\\Art\\Shaders\\Terrain\\Sub\\Deeper.fxh", "float e;\n");  // an include changes: new key
+    CHECK(collect_fx_source(m, "Data\\Art\\Shaders\\Terrain\\Mod.fx", again) && again.key() != key);
+    m.put("Data\\Art\\Shaders\\Gone.fxh", "");  // a missing include appears: new key
+    FxSource third;
+    CHECK(collect_fx_source(m, "Data\\Art\\Shaders\\Terrain\\Mod.fx", third) && third.missing.empty() && third.key() != again.key());
+    CHECK(!collect_fx_source(m, "Data\\Art\\Shaders\\Nope.fx", third, &err) && !err.empty());
+
+    // 2. FxCache round trip; another key, a damaged file and an empty key are misses.
+    const std::filesystem::path dir = unique_temp_dir("fxcache");
+    const FxCache cache(dir);
+    FxCacheEntry e;
+    e.ok = true;
+    e.compiler = "test";
+    e.log = "warning X4717";
+    e.fxo = make_valid_fxo();
+    CHECK(cache.store(key, e));
+    FxCacheEntry r;
+    CHECK(cache.load(key, r) && r.ok && r.fxo == e.fxo && r.compiler == "test" && r.log == e.log);
+    CHECK(!cache.load(again.key(), r) && !cache.load("", r) && !cache.store("", e));
+    FxCacheEntry bad;
+    bad.log = "x.fx(1,1): error X3000: syntax error";
+    CHECK(cache.store(again.key(), bad) && cache.load(again.key(), r) && !r.ok && r.fxo.empty() && r.log == bad.log);
+    {
+        std::vector<uint8_t> bytes;
+        CHECK(read_host_file(dir / (key + ".afx"), bytes) && bytes.size() > 40);
+        bytes[bytes.size() / 2] ^= 0x5A;
+        std::ofstream o(dir / (key + ".afx"), std::ios::binary | std::ios::trunc);
+        o.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    CHECK(!cache.load(key, r));
+    CHECK(fx_log_summary("w\n\nfoo.fx(3,1): error X3004: undeclared identifier 'k'\n") ==
+          "foo.fx(3,1): error X3004: undeclared identifier 'k'");
+
+    // 3. The loader: a compiled source wins over the .fxo (RENDER.md 6); a failed or missing entry keeps the
+    //    .fxo (t11 fallback); use_fx_sources = false is the t11 behaviour.
+    MapFiles g;
+    g.put("Data\\Art\\Shaders\\Both.fx", "technique T { pass P { } }\n");
+    g.put("Data\\Art\\Shaders\\Both.fxo", std::string(reinterpret_cast<const char*>(make_valid_fxo().data()), make_valid_fxo().size()));
+    g.put("Data\\Art\\Shaders\\Lone.fx", "technique T { pass P { ZWriteEnable = false; } }\n");
+    LoadOptions lo;
+    lo.fx_cache_dir = unique_temp_dir("fxload");
+    FxSource both, lone;
+    CHECK(collect_fx_source(g, "Data\\Art\\Shaders\\Both.fx", both) && collect_fx_source(g, "Data\\Art\\Shaders\\Lone.fx", lone));
+    {
+        EffectLibrary lib(g, lo);
+        CHECK(lib.fx_source_status("Both") == FxSourceState::NotCompiled);
+        auto fx = lib.load("Both.fx", &err);
+        CHECK(fx && fx->path == "Data\\Art\\Shaders\\Both.fxo");
+        CHECK(!lib.load("Lone", &err) && err.find("alamo_fx_prebuild") != std::string::npos);
+        std::vector<ShaderIssue> si = effect_load_issues(lib, "Lone", lib.load_or_default("Lone"), err);
+        CHECK(si.size() == 1 && si[0].kind == ShaderIssueKind::SourceOnly && si[0].detail.find("alamo_fx_prebuild") != std::string::npos);
+    }
+    const FxCache lc(lo.fx_cache_dir);
+    FxCacheEntry ok_entry;
+    ok_entry.ok = true;
+    ok_entry.fxo = make_valid_fxo();
+    CHECK(lc.store(both.key(), ok_entry) && lc.store(lone.key(), ok_entry));
+    {
+        EffectLibrary lib(g, lo);
+        CHECK(lib.fx_source_status("Both") == FxSourceState::Compiled && lib.fx_source_status("LONE.FX") == FxSourceState::Compiled);
+        auto fx = lib.load("Both.fx", &err);
+        CHECK(fx && fx->path == "Data\\Art\\Shaders\\Both.fx" && fx->name == "BOTH");
+        auto lone_fx = lib.load("Lone", &err);
+        CHECK(lone_fx && lone_fx->path == "Data\\Art\\Shaders\\Lone.fx");
+        const MaterialEffect lm = lib.load_or_default("Lone", &err);
+        CHECK(!lm.is_default_effect() && effect_load_issues(lib, "Lone", lm, err).empty());
+        std::vector<ShaderFileEntry> in = {{"DATA\\ART\\SHADERS\\BOTH.FX", true, 0, true},
+                                           {"DATA\\ART\\SHADERS\\BOTH.FXO", true, 0, true},
+                                           {"DATA\\ART\\SHADERS\\LONE.FX", true, 0, true}};
+        const EffectAudit a = audit_effects(lib, in);
+        CHECK(a.effects == 2 && a.loaded == 2 && a.sources == 2 && a.sources_compiled == 2 && a.issues.empty());
+        const std::vector<std::string> paths = fx_source_paths(lib, in);
+        CHECK(paths.size() == 2 && normalize_path(paths[0]) == "DATA\\ART\\SHADERS\\BOTH.FX");
+    }
+    FxCacheEntry failed;
+    failed.log = "Both.fx(1,1): error X3000: syntax error: unexpected token 'pass'\n";
+    CHECK(lc.store(both.key(), failed));
+    {
+        EffectLibrary lib(g, lo);
+        std::string why;
+        CHECK(lib.fx_source_status("Both", &why) == FxSourceState::Failed && why.find("X3000") != std::string::npos);
+        auto fx = lib.load("Both", &err);
+        CHECK(fx && fx->path == "Data\\Art\\Shaders\\Both.fxo");  // t11 fallback
+        std::vector<ShaderIssue> si = effect_load_issues(lib, "Both", *fx, err);
+        CHECK(!si.empty() && si[0].kind == ShaderIssueKind::SourceShadowed && si[0].detail.find("X3000") != std::string::npos);
+    }
+    {
+        LoadOptions off = lo;
+        off.use_fx_sources = false;
+        EffectLibrary lib(g, off);
+        CHECK(lib.fx_source_status("Lone") == FxSourceState::Disabled && !lib.load("Lone", &err));
+    }
+
+    // 4. The prebuild with the toolchain's fxc.exe (skipped without it): compile, cache hit, compile error.
+    const std::filesystem::path fxc = default_fxc_path();
+    if (fxc.empty()) {
+        std::printf("  fxc.exe not found (ALAMO_FXC / toolchain Windows SDK): fx prebuild check skipped\n");
+    } else {
+        MapFiles p;
+        p.put("Data\\Art\\Shaders\\Inc\\Colors.fxh", "float4 K = {1, 0, 0, 1};\n");
+        p.put("Data\\Art\\Shaders\\Good.fx",
+              "#include \"Inc\\Colors.fxh\"\n"
+              "float4 PS(float2 uv : TEXCOORD0) : COLOR { return K * uv.x; }\n"
+              "technique T < string LOD = \"DX9\"; > { pass P { ZWriteEnable = false; PixelShader = compile ps_2_0 PS(); } }\n");
+        p.put("Data\\Art\\Shaders\\Bad.fx", "technique T { pass P { VertexShader = compile vs_2_0 nope(); } }\n");
+        const FxCache pc(unique_temp_dir("fxprebuild"));
+        const std::vector<std::string> paths = {"Data\\Art\\Shaders\\Bad.fx", "Data\\Art\\Shaders\\Good.fx"};
+        std::vector<FxPrebuildItem> items;
+        CHECK(prebuild_fx_sources(p, paths, pc, fxc, false, items, &err));
+        CHECK(items.size() == 2);
+        if (items.size() == 2) {
+            CHECK(!items[0].ok && !items[0].cached && items[0].detail.find("X3004") != std::string::npos);
+            CHECK(items[0].detail.find("alamo_fxc_") == std::string::npos);  // temporary folder stripped
+            std::printf("  fx prebuild: Bad.fx -> %s\n", items[0].detail.c_str());
+            CHECK(items[1].ok && !items[1].cached);
+        }
+        CHECK(prebuild_fx_sources(p, paths, pc, fxc, false, items, &err) && items.size() == 2 && items[0].cached && items[1].cached &&
+              items[1].ok);
+        LoadOptions po;
+        po.fx_cache_dir = pc.directory();
+        EffectLibrary lib(p, po);
+        auto good = lib.load("Good", &err);
+        CHECK(good && good->path == "Data\\Art\\Shaders\\Good.fx" && good->passes.size() == 1);
+        CHECK(lib.fx_source_status("Bad") == FxSourceState::Failed && !lib.load("Bad", &err));
+        CHECK(!fxc_identity(fxc).empty());
+        std::error_code ec;
+        std::filesystem::remove_all(pc.directory(), ec);
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::remove_all(lo.fx_cache_dir, ec);
+}
+
 void test_vanilla(const char* root) {
     vfs::VfsConfig cfg;
     cfg.foc_root = root;
@@ -1062,6 +1310,7 @@ void test_vanilla(const char* root) {
             continue;
         }
         ++parsed;
+        CHECK(m->skipped_technique.empty());  // every shipped best technique has programs
         for (const auto& w : m->warnings) std::printf("  warn %s: %s\n", m->name.c_str(), w.c_str());
         const bool is_phase = m->name.rfind("PHASE", 0) == 0;
         for (const auto& p : m->passes) {
@@ -1142,6 +1391,22 @@ void test_vanilla(const char* root) {
     }
     CHECK(failed == 0);
     CHECK(parsed >= 80);
+
+    // Effect audit over the shipped shaders (translation only; the sweep above compiled them): retail has
+    // no shader issue, and nothing comes from a mod.
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        EffectLibrary alib(*v, opt);
+        const std::vector<ShaderFileEntry> sf = shader_files_from_vfs(*v, true);
+        const EffectAudit au = audit_effects(alib, sf);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("  effect audit: %zu effects, %zu loaded, %zu/%zu track-B passes translate, %zu issues, %.0f ms\n", au.effects,
+                    au.loaded, au.translated_ok, au.translated_passes, au.issues.size(), ms);
+        for (const ShaderIssue& s : au.issues)
+            std::printf("    %s %s %s: %s\n", shader_issue_kind_name(s.kind), s.effect.c_str(), s.path.c_str(), s.detail.c_str());
+        CHECK(au.effects >= 80 && au.mod_effects == 0 && au.issues.empty() && au.translated_ok == au.translated_passes);
+        CHECK(sf.size() > shader_files_from_vfs(*v).size());  // + the Shaders\Engine\ files
+    }
 
     // Translated PsoKey stability: an independent library resolves identical keys and ids.
     {
@@ -1397,6 +1662,8 @@ int main() {
     test_per_draw();
     test_hardening();
     test_default_effect_and_order();
+    test_shader_issues();
+    test_fx_sources();
     if (const char* root = std::getenv("ALAMO_FOC_DATA")) {
 #ifdef ALAMO_MATERIALS_HAVE_VFS
         test_vanilla(root);

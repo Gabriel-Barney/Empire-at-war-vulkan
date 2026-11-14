@@ -1,21 +1,14 @@
 #include "alamo/ui/gui_dialog.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 
+#include "alamo/core/hash.hpp"
 #include "alamo/ui/hud_font.hpp"
 
 namespace alamo::ui {
 
 namespace {
-
-bool iequal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) return false;
-    return true;
-}
 
 bool focusable(const GuiControl& c) {
     return c.def && c.def->tabstop && c.visible && c.enabled;
@@ -31,22 +24,6 @@ constexpr float kFieldInset = 5.0f;    // [port] QA D8 / D10: left padding of ed
 constexpr float kCheckGlyph = 13.0f;   // [port] QA D8: one check box size; the shipped rows are 10 to 23 units tall
 
 }  // namespace
-
-const char* gui_event_name(GuiEvent::Kind k) {
-    switch (k) {
-        case GuiEvent::Kind::Clicked: return "Clicked";
-        case GuiEvent::Kind::Checked: return "Checked";
-        case GuiEvent::Kind::SelectionChanged: return "SelectionChanged";
-        case GuiEvent::Kind::DoubleClicked: return "DoubleClicked";
-        case GuiEvent::Kind::ValueChanged: return "ValueChanged";
-        case GuiEvent::Kind::TextChanged: return "TextChanged";
-        case GuiEvent::Kind::Submitted: return "Submitted";
-        case GuiEvent::Kind::Cancel: return "Cancel";
-        case GuiEvent::Kind::Opened: return "Opened";
-        case GuiEvent::Kind::Closed: return "Closed";
-    }
-    return "?";
-}
 
 // ---- GuiImagePages ----------------------------------------------------------------------------------------
 int32_t GuiImagePages::page(std::string_view texture) {
@@ -124,6 +101,8 @@ bool GuiDialog::set_text(std::string_view id, std::u32string text) {
     if (!c) return false;
     c->text = std::move(text);
     c->caret = std::min(c->caret, c->text.size());
+    c->sel_anchor = c->caret;
+    c->scroll_x = 0;
     return true;
 }
 bool GuiDialog::show(std::string_view id, bool visible) {
@@ -217,7 +196,7 @@ int32_t GuiDialog::control_at(Vec2f p) const {
             continue;  // [port] passive gadgets never take the pointer
         GuiRect r = control_rect(k);
         if (c.type == GuiGadgetType::ComboBox) {  // closed field only (the RC height includes the drop-down)
-            const float field = std::min(r.height(), 15.0f);
+            const float field = std::min(r.height(), c.field_height);
             r.min.y = r.max.y - field;
         }
         if (r.contains(p)) return static_cast<int32_t>(k);
@@ -236,8 +215,8 @@ void GuiManager::init(const DialogScript& script, const GuiSkin& skin, const Tex
 }
 
 void GuiManager::resize(uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts_ && next.screen_height != canvas_.screen_height) fonts_->clear();
+    const HudCanvas next = HudCanvas::make(width, height, canvas_.ui_scale);  // the UI scale is kept
+    if (fonts_ && next.font_height() != canvas_.font_height()) fonts_->clear();
     canvas_ = next;
     for (auto& d : stack_) place(*d);
 }
@@ -300,8 +279,8 @@ void GuiManager::place(GuiDialog& d) const {
     if (d.placed_) return;
     const auto w = static_cast<float>(d.def().w);
     const float h = d.height();
-    if (h > canvas_.height) {
-        // Menu column: top edge, right edge on the screen's right edge (base 20.jpg at 16:9: the buttons end ~1 % from the
+    if (h > canvas_.height || h > kHudBaseHeight) {
+        // Menu column (taller than the base canvas; a UI-scaled canvas may be taller than the column itself): top edge, right edge on the screen's right edge (base 20.jpg at 16:9: the buttons end ~1 % from the
         // right edge; UI.md §3.3 at 4:3). Its IDC_MENU_PETRO_LOGO hotspot follows the stretched backdrop (build()).
         d.origin_ = {0.5f * canvas_.width - w, 0.5f * canvas_.height};
     } else {
@@ -312,7 +291,7 @@ void GuiManager::place(GuiDialog& d) const {
 GuiDialog* GuiManager::open(std::string_view name, GuiOpenOptions opt) {
     if (!script_) return nullptr;
     for (size_t i = 0; i < stack_.size(); ++i) {
-        if (iequal(stack_[i]->name(), name)) {
+        if (iequals(stack_[i]->name(), name)) {
             std::unique_ptr<GuiDialog> d = std::move(stack_[i]);
             stack_.erase(stack_.begin() + static_cast<std::ptrdiff_t>(i));
             d->opt_ = opt;
@@ -345,6 +324,8 @@ GuiDialog* GuiManager::open(std::string_view name, GuiOpenOptions opt) {
         }
         d->controls_.push_back(std::move(c));
     }
+    for (size_t i = 0; i < d->controls_.size(); ++i)
+        if (d->controls_[i].type == GuiGadgetType::ComboBox) d->controls_[i].field_height = combo_field_height(*d, i);
     place(*d);
     stack_.push_back(std::move(d));
     return stack_.back().get();
@@ -352,7 +333,7 @@ GuiDialog* GuiManager::open(std::string_view name, GuiOpenOptions opt) {
 
 void GuiManager::close(std::string_view name) {
     for (size_t i = 0; i < stack_.size(); ++i) {
-        if (!iequal(stack_[i]->name(), name)) continue;
+        if (!iequals(stack_[i]->name(), name)) continue;
         GuiDialog* p = stack_[i].get();
         if (hover_dialog_ == p) {
             hover_dialog_ = nullptr;
@@ -377,12 +358,12 @@ void GuiManager::close_all() {
 
 GuiDialog* GuiManager::find(std::string_view name) {
     for (auto& d : stack_)
-        if (iequal(d->name(), name)) return d.get();
+        if (iequals(d->name(), name)) return d.get();
     return nullptr;
 }
 const GuiDialog* GuiManager::find(std::string_view name) const {
     for (const auto& d : stack_)
-        if (iequal(d->name(), name)) return d.get();
+        if (iequals(d->name(), name)) return d.get();
     return nullptr;
 }
 
@@ -448,9 +429,15 @@ int32_t GuiManager::visible_rows(const GuiDialog& d, size_t i) const {
     return std::max(1, static_cast<int32_t>((r.height() - 4.0f) / rh));
 }
 
+float GuiManager::combo_field_height(const GuiDialog& d, size_t i) const {
+    if (!skin_) return 15.0f;
+    const GuiImage b = image(skin_->texture(d.name(), d[i].id(), "Combo_Box_Popdown_Button"));
+    return b.valid && b.size.y > 0.0f ? b.size.y : 15.0f;  // UI.md §3.7.1: 22 x 25 button, 2 x 25 caps
+}
+
 GuiRect GuiManager::combo_field(const GuiDialog& d, size_t i) const {
     GuiRect r = d.control_rect(i);
-    r.min.y = r.max.y - std::min(r.height(), 15.0f);  // [port] closed combo field height
+    r.min.y = r.max.y - std::min(r.height(), combo_field_height(d, i));
     return r;
 }
 
@@ -470,8 +457,97 @@ GuiRect GuiManager::combo_list(const GuiDialog& d, size_t i) const {
     return r;
 }
 
+int32_t GuiManager::scroll_rows(const GuiDialog& d, size_t i) const {
+    return d[i].type == GuiGadgetType::ComboBox ? combo_rows(d, i) : visible_rows(d, i);
+}
+
+float GuiManager::scroll_width(const GuiDialog& d, size_t i) const {
+    if (!skin_) return kScrollWidth;
+    const GuiImage up = image(skin_->texture(d.name(), d[i].id(), "Scroll_Up_Button"));
+    return up.valid && up.size.x > 0.0f ? up.size.x : kScrollWidth;
+}
+
+GuiManager::ScrollBar GuiManager::scroll_bar(const GuiDialog& d, size_t i) const {
+    ScrollBar sb;
+    const GuiControl& c = d[i];
+    const GuiRect area = c.type == GuiGadgetType::ComboBox ? combo_list(d, i) : d.control_rect(i);
+    const auto count = static_cast<int32_t>(c.items.size());
+    sb.vis = scroll_rows(d, i);
+    sb.active = count > sb.vis;
+    sb.max_top = std::max(0, count - sb.vis);
+    const float sw = std::min(scroll_width(d, i), area.width());
+    float ah = sw;  // arrow button height: the art's aspect at the column width
+    if (skin_) {
+        const GuiImage up = image(skin_->texture(d.name(), c.id(), "Scroll_Up_Button"));
+        if (up.valid && up.size.x > 0.0f) ah = sw * up.size.y / up.size.x;
+    }
+    ah = std::min(ah, 0.5f * area.height());
+    sb.col = {{area.max.x - sw, area.min.y}, area.max};
+    sb.up = {{sb.col.min.x, sb.col.max.y - ah}, sb.col.max};
+    sb.down = {sb.col.min, {sb.col.max.x, sb.col.min.y + ah}};
+    sb.track_top = sb.up.min.y;
+    sb.track_len = std::max(0.0f, sb.col.height() - 2.0f * ah);
+    const float th = count > 0 ? std::clamp(sb.track_len * static_cast<float>(sb.vis) / static_cast<float>(count),
+                                            std::min(sw, sb.track_len), sb.track_len)
+                               : sb.track_len;
+    const float ty = sb.track_top - (sb.track_len - th) * static_cast<float>(std::clamp(c.top, 0, sb.max_top)) /
+                                        static_cast<float>(std::max(1, sb.max_top));
+    sb.thumb = {{sb.col.min.x, ty - th}, {sb.col.max.x, ty}};
+    return sb;
+}
+
+GuiManager::ScrollPart GuiManager::scroll_part_at(const ScrollBar& sb, Vec2f p) const {
+    if (!sb.active || !sb.col.contains(p)) return ScrollPart::None;
+    if (sb.up.contains(p)) return ScrollPart::Up;
+    if (sb.down.contains(p)) return ScrollPart::Down;
+    if (p.y > sb.thumb.max.y) return ScrollPart::PageUp;
+    if (p.y < sb.thumb.min.y) return ScrollPart::PageDown;
+    return ScrollPart::Thumb;
+}
+
+void GuiManager::scroll_press(GuiDialog& d, size_t i, ScrollPart part, double now) {
+    GuiControl& c = d.controls_[i];
+    const ScrollBar sb = scroll_bar(d, i);
+    switch (part) {
+        case ScrollPart::Up: scroll_list(c, i, d, -1); break;
+        case ScrollPart::Down: scroll_list(c, i, d, 1); break;
+        case ScrollPart::PageUp: scroll_list(c, i, d, -sb.vis); break;
+        case ScrollPart::PageDown: scroll_list(c, i, d, sb.vis); break;
+        case ScrollPart::Thumb: scroll_grab_ = sb.thumb.max.y - cursor_.y; break;
+        case ScrollPart::None: return;
+    }
+    scroll_part_ = part;
+    scroll_repeat_at_ = now + style_.scroll_repeat_delay;
+    press_dialog_ = &d;
+    press_control_ = static_cast<int32_t>(i);
+}
+
+void GuiManager::scroll_held(double now) {
+    if (scroll_part_ == ScrollPart::None || !press_dialog_ || press_control_ < 0) return;
+    GuiDialog& d = *press_dialog_;
+    const auto i = static_cast<size_t>(press_control_);
+    if (i >= d.size()) return;
+    GuiControl& c = d.controls_[i];
+    if (c.type == GuiGadgetType::ComboBox && !c.open) return;
+    const ScrollBar sb = scroll_bar(d, i);
+    if (!sb.active) return;
+    if (scroll_part_ == ScrollPart::Thumb) {
+        const float free = sb.track_len - sb.thumb.height();
+        const float down = (sb.track_top - cursor_.y) - scroll_grab_;  // wanted thumb top, below the track top
+        const float t = free > 0.0f ? std::clamp(down / free, 0.0f, 1.0f) : 0.0f;
+        c.top = std::clamp(static_cast<int32_t>(std::lround(t * static_cast<float>(sb.max_top))), 0, sb.max_top);
+        return;
+    }
+    if (now < scroll_repeat_at_) return;
+    scroll_repeat_at_ = now + style_.scroll_repeat_rate;
+    if (scroll_part_at(sb, cursor_) != scroll_part_) return;  // off the arrow, or the thumb reached the cursor
+    const int32_t step = scroll_part_ == ScrollPart::Up ? -1 : scroll_part_ == ScrollPart::Down ? 1
+                       : scroll_part_ == ScrollPart::PageUp ? -sb.vis : sb.vis;
+    scroll_list(c, i, d, step);
+}
+
 void GuiManager::scroll_list(GuiControl& c, size_t i, const GuiDialog& d, int32_t rows) {
-    const int32_t vis = visible_rows(d, i);
+    const int32_t vis = scroll_rows(d, i);
     const int32_t max_top = std::max(0, static_cast<int32_t>(c.items.size()) - vis);
     c.top = std::clamp(c.top + rows, 0, max_top);
 }
@@ -485,7 +561,7 @@ bool GuiManager::wrap_list_items(GuiDialog& d, std::string_view control) {
     const int32_t font = control_font(d, ui);
     if (font < 0) return true;
     // Text rect of a row: list minus the scroll column, 2 + 2 units of inset (draw_control).
-    const float units = d.control_rect(ui).width() - kScrollWidth - 6.0f;
+    const float units = d.control_rect(ui).width() - scroll_width(d, ui) - 6.0f;
     const float max_px = units / canvas_.units_per_pixel_x;
     if (max_px <= 0.0f) return true;
     std::vector<std::u32string> items;
@@ -514,7 +590,7 @@ bool GuiManager::set_paragraphs(GuiDialog& d, std::string_view control, const st
     GuiControl* c = d.get(control);
     if (!c) return false;
     if (max_width > 0.0f && c->def && static_cast<float>(c->def->w) > max_width) c->scale.x = max_width / static_cast<float>(c->def->w);
-    if (max_width > 0.0f && c->def && c->def->h > 0 && iequal(control, "IDC_LIST_TACTICAL")) {
+    if (max_width > 0.0f && c->def && c->def->h > 0 && iequals(control, "IDC_LIST_TACTICAL")) {
         c->offset.y = -kPlanetTacticalListDrop;
         c->scale.y = (static_cast<float>(c->def->h) - kPlanetTacticalListDrop) / static_cast<float>(c->def->h);
     }
@@ -549,6 +625,22 @@ bool GuiManager::scroll_list_to(GuiDialog& d, std::string_view control, int32_t 
     return true;
 }
 
+bool GuiManager::list_row_point(const GuiDialog& d, std::string_view control, int32_t row, Vec2f& out) const {
+    const int32_t i = d.find(control);
+    if (i < 0 || static_cast<size_t>(i) >= d.controls_.size()) return false;
+    const GuiControl& c = d.controls_[static_cast<size_t>(i)];
+    if (c.type != GuiGadgetType::ListBox || row < 0 || row >= static_cast<int32_t>(c.items.size())) return false;
+    const size_t ui = static_cast<size_t>(i);
+    if (row < c.top || row >= c.top + visible_rows(d, ui)) return false;
+    // the inverse of the press hit test in update(): row = top + (r.max.y - 2 - y) / row height
+    const GuiRect r = d.control_rect(ui);
+    const float rh = row_height(d, ui);
+    const ScrollBar sb = scroll_bar(d, ui);
+    const float right = sb.active ? sb.col.min.x : r.max.x;
+    out = {0.5f * (r.min.x + right), r.max.y - 2.0f - (static_cast<float>(row - c.top) + 0.5f) * rh};
+    return true;
+}
+
 void GuiManager::trim_dialog_height(GuiDialog& d, float units) {
     d.height_trim_ = std::max(0.0f, units);
     place(d);
@@ -568,8 +660,8 @@ void GuiManager::list_select(GuiDialog& d, size_t i, int32_t index, std::vector<
     GuiControl& c = d.controls_[i];
     if (c.items.empty()) return;
     index = std::clamp(index, 0, static_cast<int32_t>(c.items.size()) - 1);
-    if (c.type == GuiGadgetType::ListBox) {
-        const int32_t vis = visible_rows(d, i);
+    if (c.type == GuiGadgetType::ListBox || c.open) {
+        const int32_t vis = scroll_rows(d, i);
         if (index < c.top) c.top = index;
         if (index >= c.top + vis) c.top = index - vis + 1;
     }
@@ -585,6 +677,82 @@ void GuiManager::slider_set(GuiDialog& d, size_t i, int32_t v, std::vector<GuiEv
     if (v == c.value) return;
     c.value = v;
     ev.push_back(make_event(GuiEvent::Kind::ValueChanged, d, static_cast<int32_t>(i), v));
+}
+
+// ---- Edit boxes ----------------------------------------------------------------------------------------------
+// Win32 single-line edit rules [port where noted]: ES_AUTOHSCROLL scrolls the text so the caret stays in view (no
+// narrowing); without it typing stops at the field width. A click puts the caret at the nearest character boundary,
+// a drag or Shift+click / Shift+arrows select, Ctrl+A selects all, Ctrl+C / X / V (Ctrl+Insert, Shift+Delete,
+// Shift+Insert) use the clipboard, typing replaces the selection. Key-capture fields (read_only) keep the one-line
+// narrowing: they show a key name the port writes, not typed text.
+namespace {
+bool autohscroll(const GuiControl& c) { return c.def && c.def->has_style("ES_AUTOHSCROLL"); }
+}  // namespace
+
+GuiRect GuiManager::edit_text_rect(const GuiDialog& d, size_t i) const {
+    GuiRect r = d.control_rect(i);
+    r.min.x += kFieldInset;
+    r.max.x -= 2.0f;  // [port] right inset
+    return r;
+}
+
+float GuiManager::edit_measure(const GuiDialog& d, size_t i, std::u32string_view t) const {
+    if (t.empty() || !fonts_ || !skin_) return 0.0f;
+    const HudTextStyle s = text_style(d, i, false);
+    if (s.font < 0) return 0.0f;
+    return measure_text_block(*fonts_, canvas_, t, 0.0f, s).width;
+}
+
+size_t GuiManager::edit_index_at(const GuiDialog& d, size_t i, float x) const {
+    const GuiControl& c = d[i];
+    const GuiRect tr = edit_text_rect(d, i);
+    const size_t s0 = std::min(c.scroll_x, c.text.size());
+    size_t best = s0;
+    float best_d = std::fabs(x - tr.min.x);
+    for (size_t k = s0 + 1; k <= c.text.size(); ++k) {
+        const float px = tr.min.x + edit_measure(d, i, std::u32string_view(c.text).substr(s0, k - s0));
+        const float dist = std::fabs(x - px);
+        if (dist < best_d) {
+            best = k;
+            best_d = dist;
+        }
+        if (px > tr.max.x) break;
+    }
+    return best;
+}
+
+void GuiManager::edit_keep_caret_visible(GuiDialog& d, size_t i) const {
+    GuiControl& c = d.controls_[i];
+    c.caret = std::min(c.caret, c.text.size());
+    c.sel_anchor = std::min(c.sel_anchor, c.text.size());
+    if (!autohscroll(c) || c.read_only) {
+        c.scroll_x = 0;
+        return;
+    }
+    const float avail = edit_text_rect(d, i).width();
+    const std::u32string_view t = c.text;
+    c.scroll_x = std::min(c.scroll_x, c.caret);
+    while (c.scroll_x < c.caret && edit_measure(d, i, t.substr(c.scroll_x, c.caret - c.scroll_x)) > avail) ++c.scroll_x;
+    while (c.scroll_x > 0 && edit_measure(d, i, t.substr(c.scroll_x - 1)) <= avail) --c.scroll_x;  // room on the right
+}
+
+bool GuiManager::edit_insert(GuiDialog& d, size_t i, std::u32string_view t) const {
+    GuiControl& c = d.controls_[i];
+    bool changed = false;
+    const float avail = edit_text_rect(d, i).width();
+    for (char32_t ch : t) {
+        if (ch < 0x20 || ch == 0x7F || c.text.size() >= c.max_chars) continue;
+        if (!autohscroll(c)) {  // Win32: without ES_AUTOHSCROLL the text may not grow past the field
+            std::u32string test = c.text;
+            test.insert(c.caret, 1, ch);
+            if (edit_measure(d, i, test) > avail) break;
+        }
+        c.text.insert(c.caret, 1, ch);
+        ++c.caret;
+        changed = true;
+    }
+    c.sel_anchor = c.caret;
+    return changed;
 }
 
 void GuiManager::click(GuiDialog& d, size_t i, std::vector<GuiEvent>& ev, bool keyboard) {
@@ -635,7 +803,7 @@ void GuiManager::key_input(GuiDialog& d, const InputFrame& raw, std::u32string_v
     const auto fi = static_cast<size_t>(std::max(d.focus_, 0));
     const bool edit = f && (f->type == GuiGadgetType::EditBox || f->type == GuiGadgetType::IMEEditBox);
 
-    if (k.test(vk::kTab)) move_focus(d, shift ? -1 : 1);
+    if (k.test(vk::kTab) && !(edit && f->key_capture)) move_focus(d, shift ? -1 : 1);
     if (k.test(vk::kEscape)) {
         bool closed = false;
         for (GuiControl& c : d.controls_)
@@ -665,8 +833,86 @@ void GuiManager::key_input(GuiDialog& d, const InputFrame& raw, std::u32string_v
     if (!f) return;
     if (edit && f->read_only) return;
     if (edit) {
+        const bool ctrl = raw.keys_down.test(vk::kControl);
+        GuiControl& e = *f;
+        e.caret = std::min(e.caret, e.text.size());
+        e.sel_anchor = std::min(e.sel_anchor, e.text.size());
+        auto lo = [&] { return std::min(e.caret, e.sel_anchor); };
+        auto hi = [&] { return std::max(e.caret, e.sel_anchor); };
+        auto copy_sel = [&] {
+            if (lo() == hi()) return;
+            std::u32string t = e.text.substr(lo(), hi() - lo());
+            if (clip_set_) clip_set_(t);
+            else clipboard_ = std::move(t);
+        };
+        auto erase_sel = [&] {
+            if (lo() == hi()) return false;
+            const size_t a = lo();
+            e.text.erase(a, hi() - a);
+            e.caret = e.sel_anchor = a;
+            return true;
+        };
+        auto word_left = [&](size_t p) {
+            while (p > 0 && e.text[p - 1] == U' ') --p;
+            while (p > 0 && e.text[p - 1] != U' ') --p;
+            return p;
+        };
+        auto word_right = [&](size_t p) {
+            while (p < e.text.size() && e.text[p] != U' ') ++p;
+            while (p < e.text.size() && e.text[p] == U' ') ++p;
+            return p;
+        };
+        auto move = [&](size_t to) {
+            e.caret = to;
+            if (!shift) e.sel_anchor = to;
+        };
+        bool changed = false;
+        if (ctrl && k.test(vk::key('a'))) {
+            e.sel_anchor = 0;
+            e.caret = e.text.size();
+        }
+        if (ctrl && (k.test(vk::key('c')) || k.test(vk::kInsert))) copy_sel();
+        const bool cut = (ctrl && k.test(vk::key('x'))) || (shift && !ctrl && k.test(vk::kDelete));
+        if (cut) {
+            copy_sel();
+            if (erase_sel()) changed = true;
+        }
+        if ((ctrl && k.test(vk::key('v'))) || (shift && !ctrl && k.test(vk::kInsert))) {
+            std::u32string clip = clip_get_ ? clip_get_() : clipboard_;
+            for (char32_t& ch : clip)
+                if (ch == U'\n' || ch == U'\r' || ch == U'\t') ch = U' ';  // one-line field
+            if (erase_sel()) changed = true;
+            if (edit_insert(d, fi, clip)) changed = true;
+        }
+        if (k.test(vk::kBack)) {
+            if (erase_sel()) {
+                changed = true;
+            } else if (e.caret > 0) {
+                e.text.erase(e.caret - 1, 1);
+                e.caret = e.sel_anchor = e.caret - 1;
+                changed = true;
+            }
+        }
+        if (k.test(vk::kDelete) && !cut) {
+            if (erase_sel()) {
+                changed = true;
+            } else if (e.caret < e.text.size()) {
+                e.text.erase(e.caret, 1);
+                changed = true;
+            }
+        }
+        if (k.test(vk::kLeft)) {
+            if (!shift && !ctrl && lo() != hi()) move(lo());
+            else move(e.caret == 0 ? 0 : ctrl ? word_left(e.caret) : e.caret - 1);
+        }
+        if (k.test(vk::kRight)) {
+            if (!shift && !ctrl && lo() != hi()) move(hi());
+            else move(e.caret >= e.text.size() ? e.text.size() : ctrl ? word_right(e.caret) : e.caret + 1);
+        }
+        if (k.test(vk::kHome)) move(0);
+        if (k.test(vk::kEnd)) move(e.text.size());
         std::u32string add(typed);
-        if (typed.empty()) {  // [port] VK fallback when the host has no WM_CHAR text
+        if (typed.empty() && !ctrl) {  // [port] VK fallback when the host has no WM_CHAR text
             for (uint32_t c = 'A'; c <= 'Z'; ++c)
                 if (k.test(c)) add.push_back(shift ? static_cast<char32_t>(c) : static_cast<char32_t>(c - 'A' + 'a'));
             for (uint32_t c = '0'; c <= '9'; ++c)
@@ -675,30 +921,17 @@ void GuiManager::key_input(GuiDialog& d, const InputFrame& raw, std::u32string_v
             if (k.test(0xBD)) add.push_back(shift ? U'_' : U'-');
             if (k.test(0xBE)) add.push_back(U'.');
         }
-        bool changed = false;
-        if (k.test(vk::kBack) && f->caret > 0) {
-            f->text.erase(f->caret - 1, 1);
-            --f->caret;
-            changed = true;
+        bool printable = false;
+        for (char32_t c : add) printable = printable || (c >= 0x20 && c != 0x7F);
+        if (printable) {
+            if (erase_sel()) changed = true;
+            if (edit_insert(d, fi, add)) changed = true;
         }
-        if (k.test(vk::kDelete) && f->caret < f->text.size()) {
-            f->text.erase(f->caret, 1);
-            changed = true;
-        }
-        if (k.test(vk::kLeft) && f->caret > 0) --f->caret;
-        if (k.test(vk::kRight) && f->caret < f->text.size()) ++f->caret;
-        if (k.test(vk::kHome)) f->caret = 0;
-        if (k.test(vk::kEnd)) f->caret = f->text.size();
-        for (char32_t c : add) {
-            if (c < 0x20 || f->text.size() >= f->max_chars) continue;
-            f->text.insert(f->caret, 1, c);
-            ++f->caret;
-            changed = true;
-        }
+        edit_keep_caret_visible(d, fi);
         if (changed) {
-            GuiEvent e = make_event(GuiEvent::Kind::TextChanged, d, d.focus_);
-            e.text = f->text;
-            ev.push_back(std::move(e));
+            GuiEvent te = make_event(GuiEvent::Kind::TextChanged, d, d.focus_);
+            te.text = f->text;
+            ev.push_back(std::move(te));
         }
         return;
     }
@@ -709,11 +942,13 @@ void GuiManager::key_input(GuiDialog& d, const InputFrame& raw, std::u32string_v
             int32_t step = 0;
             if (k.test(vk::kUp)) step = -1;
             if (k.test(vk::kDown)) step = 1;
-            if (f->type == GuiGadgetType::ListBox) {
-                if (k.test(vk::kPageUp)) step = -visible_rows(d, fi);
-                if (k.test(vk::kPageDown)) step = visible_rows(d, fi);
+            if (f->type == GuiGadgetType::ListBox || f->open) {
+                if (k.test(vk::kPageUp)) step = -scroll_rows(d, fi);
+                if (k.test(vk::kPageDown)) step = scroll_rows(d, fi);
             }
             if (step != 0) list_select(d, fi, f->selected < 0 ? 0 : f->selected + step, ev);
+            if (k.test(vk::kHome)) list_select(d, fi, 0, ev);
+            if (k.test(vk::kEnd)) list_select(d, fi, static_cast<int32_t>(f->items.size()) - 1, ev);
             break;
         }
         case GuiGadgetType::RadioButton: {
@@ -752,6 +987,9 @@ void GuiManager::key_input(GuiDialog& d, const InputFrame& raw, std::u32string_v
 void GuiManager::update(const InputFrame& raw, const RoutedInput& routed, double now, std::vector<GuiEvent>& events,
                         std::u32string_view typed) {
     cursor_ = canvas_.pixel_to_canvas(static_cast<float>(raw.mouse_x) + 0.5f, static_cast<float>(raw.mouse_y) + 0.5f);
+    for (auto& dp : stack_)  // closed combo hit height follows the skin (the image resolver may load it late)
+        for (size_t i = 0; i < dp->size(); ++i)
+            if (dp->controls_[i].type == GuiGadgetType::ComboBox) dp->controls_[i].field_height = combo_field_height(*dp, i);
     // Pointer target: the topmost dialog (inside it, or anywhere when modal), else an always-input dialog under it.
     GuiDialog* target = nullptr;
     if (!stack_.empty()) {
@@ -799,11 +1037,17 @@ void GuiManager::update(const InputFrame& raw, const RoutedInput& routed, double
             GuiControl& c = target->controls_[i];
             if (!c.open) continue;
             consumed = true;
+            const ScrollBar sb = scroll_bar(*target, i);
+            if (const ScrollPart part = scroll_part_at(sb, cursor_); part != ScrollPart::None) {
+                scroll_press(*target, i, part, now);  // the drop-down's scroll bar: stays open
+                continue;
+            }
             const GuiRect lr = combo_list(*target, i);
             if (lr.contains(cursor_)) {
                 const float rh = row_height(*target, i);
-                const auto row = static_cast<int32_t>((lr.max.y - 2.0f - cursor_.y) / rh);
-                if (row >= 0 && row < static_cast<int32_t>(c.items.size())) list_select(*target, i, row, events);
+                const int32_t row = c.top + static_cast<int32_t>((lr.max.y - 2.0f - cursor_.y) / rh);
+                if (row >= c.top && row < c.top + sb.vis && row < static_cast<int32_t>(c.items.size()))
+                    list_select(*target, i, row, events);
             }
             c.open = false;
         }
@@ -823,18 +1067,26 @@ void GuiManager::update(const InputFrame& raw, const RoutedInput& routed, double
                         slider_drag_ = true;
                         slider_from_cursor(*target, i);
                         break;
-                    case GuiGadgetType::ComboBox: c.open = !c.open && !c.items.empty(); break;
+                    case GuiGadgetType::ComboBox:
+                        c.open = !c.open && !c.items.empty();
+                        if (c.open) {  // the drop-down opens scrolled to the selection (first row when it can be)
+                            const int32_t max_top = std::max(0, static_cast<int32_t>(c.items.size()) - combo_rows(*target, i));
+                            c.top = std::clamp(c.selected, 0, max_top);
+                        }
+                        break;
                     case GuiGadgetType::EditBox:
-                    case GuiGadgetType::IMEEditBox: c.caret = c.text.size(); break;
+                    case GuiGadgetType::IMEEditBox:
+                        c.caret = edit_index_at(*target, i, cursor_.x);
+                        if (!raw.keys_down.test(vk::kShift)) c.sel_anchor = c.caret;
+                        edit_drag_ = true;
+                        edit_keep_caret_visible(*target, i);
+                        break;
                     case GuiGadgetType::ListBox: {
-                        const int32_t vis = visible_rows(*target, i);
-                        const bool scroll = static_cast<int32_t>(c.items.size()) > vis;
-                        if (scroll && cursor_.x > r.max.x - kScrollWidth) {  // scroll bar column
-                            const float h = r.height();
-                            const float y = r.max.y - cursor_.y;
-                            if (y < kScrollWidth) scroll_list(c, i, *target, -1);
-                            else if (y > h - kScrollWidth) scroll_list(c, i, *target, 1);
-                            else scroll_list(c, i, *target, y < 0.5f * h ? -vis : vis);
+                        const ScrollBar sb = scroll_bar(*target, i);
+                        if (const ScrollPart part = scroll_part_at(sb, cursor_); part != ScrollPart::None) {
+                            scroll_press(*target, i, part, now);
+                        } else if (sb.active && cursor_.x >= sb.col.min.x) {
+                            // inside the column but outside every part: nothing
                         } else {
                             const float rh = row_height(*target, i);
                             const int32_t row = c.top + static_cast<int32_t>((r.max.y - 2.0f - cursor_.y) / rh);
@@ -842,6 +1094,7 @@ void GuiManager::update(const InputFrame& raw, const RoutedInput& routed, double
                                 const bool dbl = last_list_click_ == hc && last_list_row_ == row &&
                                                  now - last_list_time_ <= style_.double_click;
                                 list_select(*target, i, row, events);
+                                if (!dbl) events.push_back(make_event(GuiEvent::Kind::RowClicked, *target, hc, row));
                                 if (dbl) {
                                     events.push_back(make_event(GuiEvent::Kind::DoubleClicked, *target, hc, row));
                                     last_list_time_ = -1e30;
@@ -861,16 +1114,43 @@ void GuiManager::update(const InputFrame& raw, const RoutedInput& routed, double
     }
     if (slider_drag_ && press_dialog_ && press_control_ >= 0 && (raw.buttons_down & lb) != 0)
         slider_from_cursor(*press_dialog_, static_cast<size_t>(press_control_));
+    if (scroll_part_ != ScrollPart::None && (raw.buttons_down & lb) != 0) scroll_held(now);
+    if (edit_drag_ && press_dialog_ && press_control_ >= 0 && (raw.buttons_down & lb) != 0 && !pressed) {
+        const auto i = static_cast<size_t>(press_control_);
+        GuiControl& c = press_dialog_->controls_[i];
+        if (c.type == GuiGadgetType::EditBox || c.type == GuiGadgetType::IMEEditBox) {
+            const GuiRect tr = edit_text_rect(*press_dialog_, i);
+            if (cursor_.x < tr.min.x && c.scroll_x > 0) c.caret = c.scroll_x - 1;  // drag past the left edge scrolls
+            else c.caret = edit_index_at(*press_dialog_, i, cursor_.x);
+            edit_keep_caret_visible(*press_dialog_, i);
+        }
+    }
     if (released && press_dialog_) {
-        if (press_dialog_ == hover_dialog_ && press_control_ == hover_control_ && press_control_ >= 0 && !slider_drag_)
+        if (press_dialog_ == hover_dialog_ && press_control_ == hover_control_ && press_control_ >= 0 && !slider_drag_ &&
+            scroll_part_ == ScrollPart::None)
             click(*press_dialog_, static_cast<size_t>(press_control_), events, false);
         press_dialog_ = nullptr;
         press_control_ = -1;
         slider_drag_ = false;
     }
+    if (released || (raw.buttons_down & lb) == 0) {
+        scroll_part_ = ScrollPart::None;
+        edit_drag_ = false;
+    }
 
     // Wheel: dialogs only while they have focus (InputRouter's rule): scroll the list / open combo under the cursor.
-    if (raw.wheel != 0.0f && routed.wheel_target == PointerTarget::Dialog && target && hc >= 0) {
+    bool wheel_used = false;
+    if (raw.wheel != 0.0f && routed.wheel_target == PointerTarget::Dialog && target) {  // an open drop-down first
+        const auto notches = static_cast<int32_t>(std::lround(raw.wheel));
+        for (size_t i = 0; i < target->size() && !wheel_used; ++i) {
+            GuiControl& c = target->controls_[i];
+            if (c.open && combo_list(*target, i).contains(cursor_)) {
+                scroll_list(c, i, *target, -3 * notches);  // [port] 3 rows / notch
+                wheel_used = true;
+            }
+        }
+    }
+    if (!wheel_used && raw.wheel != 0.0f && routed.wheel_target == PointerTarget::Dialog && target && hc >= 0) {
         const auto i = static_cast<size_t>(hc);
         GuiControl& c = target->controls_[i];
         const auto notches = static_cast<int32_t>(std::lround(raw.wheel));
@@ -910,14 +1190,14 @@ const GuiFontSpec& GuiManager::font_spec(const GuiDialog& d, size_t i) const {
 int32_t GuiManager::control_font(const GuiDialog& d, size_t i) const {
     if (!fonts_ || !skin_) return -1;
     const GuiFontSpec& f = font_spec(d, i);
-    return fonts_->font(f.face, f.size, canvas_.screen_height, f.stretch);
+    return fonts_->font(f.face, f.size, canvas_.font_height(), f.stretch);
 }
 
 HudTextStyle GuiManager::text_style(const GuiDialog& d, size_t i, bool disabled) const {
     HudTextStyle s;
     const GuiControl& c = d[i];
     const GuiFontSpec& f = font_spec(d, i);
-    s.font = fonts_->font(f.face, f.size, canvas_.screen_height, f.stretch);
+    s.font = fonts_->font(f.face, f.size, canvas_.font_height(), f.stretch);
     s.color = disabled ? style_.disabled_text : f.top;
     s.color_bottom = f.bottom;
     s.gradient = !disabled && !(f.top == f.bottom);
@@ -1111,6 +1391,26 @@ void GuiManager::draw_fit_text(HudDrawList& dl, uint32_t layer, const GuiDialog&
     add_text_block(dl, layer, HudList::Text, *fonts_, canvas_, block, {ax, 0.5f * (r.min.y + r.max.y) + 0.5f * b.height}, 0.0f, s);
 }
 
+void GuiManager::draw_scroll_bar(HudDrawList& dl, uint32_t layer, const GuiDialog& d, size_t i, const ScrollBar& sb) const {
+    const std::string_view dn = d.name(), id = d[i].id();
+    const bool held = press_dialog_ == &d && press_control_ == static_cast<int32_t>(i);
+    // Arrow art: _Pressed while that arrow is held and the cursor is on it, _Mouse_Over under the cursor (skin keys
+    // Scroll_Up_Button / Scroll_Down_Button [_Pressed / _Mouse_Over], GUIDialogs.xml <Default>).
+    auto arrow = [&](std::string_view base, const GuiRect& r, ScrollPart part) {
+        std::string k(base);
+        if (r.contains(cursor_)) k += held && scroll_part_ == part ? "_Pressed" : "_Mouse_Over";
+        if (k.size() != base.size() && !image(skin_->texture(dn, id, k)).valid) k = std::string(base);
+        if (!quad(dl, layer, skin_->texture(dn, id, k), r) && style_.fallback_art)
+            fill(dl, layer, r, r.contains(cursor_) ? style_.fallback_button_hot : style_.fallback_button);
+    };
+    if (!quad(dl, layer, skin_->texture(dn, id, "Scroll_Middle"), sb.col) && style_.fallback_art)
+        fill(dl, layer, sb.col, {40, 44, 55, 200});
+    arrow("Scroll_Up_Button", sb.up, ScrollPart::Up);
+    arrow("Scroll_Down_Button", sb.down, ScrollPart::Down);
+    if (!quad(dl, layer, skin_->texture(dn, id, "Scroll_Tab"), sb.thumb) && style_.fallback_art)
+        fill(dl, layer, sb.thumb, {120, 130, 150, 255});
+}
+
 void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& d, size_t i, double now) const {
     const GuiControl& c = d[i];
     if (!c.visible) return;
@@ -1204,15 +1504,31 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
         case GuiGadgetType::EditBox:
         case GuiGadgetType::IMEEditBox: {
             frame9(dl, layer, d, id, r, true);
-            GuiRect tr = r;
-            tr.min.x += kFieldInset;
-            draw_text(dl, layer, d, i, c.text, tr, TextAlign::Left, false, true, !c.enabled);
-            if (d.focus_ == static_cast<int32_t>(i) && std::fmod(now, 2.0 * style_.edit_caret_blink) < style_.edit_caret_blink) {
-                const int32_t f = control_font(d, i);
-                float x = tr.min.x;
-                if (f >= 0) x += static_cast<float>(fonts_->measure(f, std::u32string_view(c.text).substr(0, c.caret))) *
-                                 canvas_.units_per_pixel_x;
-                const float cy = 0.5f * (r.min.y + r.max.y), h = std::min(r.height() - 4.0f, row_height(d, i));
+            const GuiRect tr = edit_text_rect(d, i);
+            const bool has_focus = d.focus_ == static_cast<int32_t>(i);
+            const float cy = 0.5f * (r.min.y + r.max.y), h = std::min(r.height() - 4.0f, row_height(d, i));
+            if (c.read_only) {  // key-capture field: the whole key name, narrowed to the field (draw_text)
+                draw_text(dl, layer, d, i, c.text, tr, TextAlign::Left, false, true, !c.enabled);
+                break;
+            }
+            // Typed text: never narrowed; from scroll_x, as many code points as fit.
+            const std::u32string_view all = c.text;
+            const size_t s0 = std::min(c.scroll_x, all.size());
+            std::u32string_view vis = all.substr(s0);
+            while (!vis.empty() && edit_measure(d, i, vis) > tr.width()) vis.remove_suffix(1);
+            const size_t lo = std::min(c.caret, c.sel_anchor), hi = std::max(c.caret, c.sel_anchor);
+            if (has_focus && lo != hi) {
+                const size_t a = std::clamp(lo, s0, s0 + vis.size()), b = std::clamp(hi, s0, s0 + vis.size());
+                if (a < b) {
+                    const float x0 = tr.min.x + edit_measure(d, i, all.substr(s0, a - s0));
+                    const float x1 = tr.min.x + edit_measure(d, i, all.substr(s0, b - s0));
+                    fill(dl, layer, {{x0, cy - 0.5f * h}, {x1, cy + 0.5f * h}}, style_.edit_selection);
+                }
+            }
+            draw_text(dl, layer, d, i, vis, tr, TextAlign::Left, false, true, !c.enabled);
+            if (has_focus && c.caret >= s0 && c.caret <= s0 + vis.size() &&
+                std::fmod(now, 2.0 * style_.edit_caret_blink) < style_.edit_caret_blink) {
+                const float x = tr.min.x + edit_measure(d, i, all.substr(s0, c.caret - s0));
                 fill(dl, layer, {{x, cy - 0.5f * h}, {x + canvas_.units_per_pixel_x, cy + 0.5f * h}}, {255, 255, 255, 220});
             }
             break;
@@ -1221,8 +1537,8 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
             frame9(dl, layer, d, id, r, true);
             const float rh = row_height(d, i);
             const int32_t vis = visible_rows(d, i);
-            const bool scroll = static_cast<int32_t>(c.items.size()) > vis;
-            const float right = scroll ? r.max.x - kScrollWidth : r.max.x;
+            const ScrollBar sb = scroll_bar(d, i);
+            const float right = sb.active ? sb.col.min.x : r.max.x;
             for (int32_t k = 0; k < vis; ++k) {
                 const int32_t row = c.top + k;
                 if (row < 0 || row >= static_cast<int32_t>(c.items.size())) break;
@@ -1233,27 +1549,21 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
                 tr.min.x += 2.0f;
                 {
                     const size_t ri = static_cast<size_t>(row);
+                    // [port: Gabriel] indent and icon (saved games tree)
+                    if (ri < c.item_indent.size()) tr.min.x += static_cast<float>(c.item_indent[ri]) * rh;
+                    if (ri < c.item_icons.size() && !c.item_icons[ri].empty()) {
+                        const float pad = std::max(1.0f, 0.1f * rh);
+                        quad(dl, layer, c.item_icons[ri], {{tr.min.x, rr.min.y + pad}, {tr.min.x + rh - 2.0f * pad, rr.max.y - pad}},
+                             c.enabled ? Rgba8{255, 255, 255, 255} : Rgba8{255, 255, 255, 128});
+                        tr.min.x += rh;
+                    }
                     // UI.md §3.7.1: an item colour recolours the item's text (flat), also on a disabled control.
                     const Rgba8* ic = ri < c.item_colors.size() ? &c.item_colors[ri] : nullptr;
                     const Rgba8* tc = ic ? ic : ri < c.item_text_colors.size() && c.item_text_colors[ri].a > 0 ? &c.item_text_colors[ri] : nullptr;
                     draw_text(dl, layer, d, i, c.items[ri], tr, TextAlign::Left, false, true, !c.enabled && !ic, tc);
                 }
             }
-            if (scroll) {
-                const GuiRect col{{r.max.x - kScrollWidth, r.min.y}, r.max};
-                if (!quad(dl, layer, skin_->texture(dn, id, "Scroll_Middle"), col) && style_.fallback_art)
-                    fill(dl, layer, col, {40, 44, 55, 200});
-                quad(dl, layer, skin_->texture(dn, id, "Scroll_Up_Button"), {{col.min.x, col.max.y - kScrollWidth}, col.max});
-                quad(dl, layer, skin_->texture(dn, id, "Scroll_Down_Button"), {col.min, {col.max.x, col.min.y + kScrollWidth}});
-                const float track = col.height() - 2.0f * kScrollWidth;
-                const float n = static_cast<float>(c.items.size());
-                const float th = std::max(kScrollWidth, track * static_cast<float>(vis) / n);
-                const float ty = col.max.y - kScrollWidth - (track - th) * static_cast<float>(c.top) /
-                                                                std::max(1.0f, n - static_cast<float>(vis));
-                const GuiRect tab{{col.min.x, ty - th}, {col.max.x, ty}};
-                if (!quad(dl, layer, skin_->texture(dn, id, "Scroll_Tab"), tab) && style_.fallback_art)
-                    fill(dl, layer, tab, {120, 130, 150, 255});
-            }
+            if (sb.active) draw_scroll_bar(dl, layer, d, i, sb);
             break;
         }
         case GuiGadgetType::ComboBox: {
@@ -1290,16 +1600,22 @@ void GuiManager::draw_control(HudDrawList& dl, uint32_t layer, const GuiDialog& 
                 fill(dl, kPopupLayer, lr, {8, 9, 14, 255});  // [port] opaque under the skin's translucent frame art: the rows it covers do not show through
                 frame9(dl, kPopupLayer, d, id, lr, true);
                 const float rh = row_height(d, i);
-                for (size_t k = 0; k < c.items.size(); ++k) {
+                const ScrollBar sb = scroll_bar(d, i);
+                const float right = sb.active ? sb.col.min.x : lr.max.x;
+                const int32_t top = std::clamp(c.top, 0, sb.max_top);
+                for (int32_t k = 0; k < sb.vis; ++k) {  // rows top .. top + rows - 1 (the list scrolls)
+                    const int32_t row = top + k;
+                    if (row >= static_cast<int32_t>(c.items.size())) break;
+                    const auto ri = static_cast<size_t>(row);
                     const float y1 = lr.max.y - 2.0f - static_cast<float>(k) * rh;
-                    if (y1 - rh < lr.min.y) break;
-                    const GuiRect rr{{lr.min.x + 2.0f, y1 - rh}, {lr.max.x - 2.0f, y1}};
-                    if (static_cast<int32_t>(k) == c.selected || rr.contains(cursor_)) fill(dl, kPopupLayer, rr, style_.selection);
+                    const GuiRect rr{{lr.min.x + 2.0f, y1 - rh}, {right - 2.0f, y1}};
+                    if (row == c.selected || rr.contains(cursor_)) fill(dl, kPopupLayer, rr, style_.selection);
                     GuiRect tr = rr;
                     tr.min.x += 2.0f;
-                    draw_text(dl, kPopupLayer, d, i, c.items[k], tr, TextAlign::Left, false, true, false,
-                              k < c.item_colors.size() ? &c.item_colors[k] : nullptr);
+                    draw_text(dl, kPopupLayer, d, i, c.items[ri], tr, TextAlign::Left, false, true, false,
+                              ri < c.item_colors.size() ? &c.item_colors[ri] : nullptr);
                 }
+                if (sb.active) draw_scroll_bar(dl, kPopupLayer, d, i, sb);
             }
             break;
         }
@@ -1362,13 +1678,13 @@ void GuiManager::build(HudDrawList& dl, double now) {
     for (auto& dp : stack_) {
         GuiDialog& d = *dp;
         const auto w = static_cast<float>(d.def().w);
-        const bool column = static_cast<float>(d.def().h) > canvas_.height;
+        const bool column = static_cast<float>(d.def().h) > canvas_.height || static_cast<float>(d.def().h) > kHudBaseHeight;
         const float base_x = column ? 0.5f * kHudBaseWidth - w : d.origin().x;
         for (size_t i = 0; i < d.size(); ++i) {
             GuiControl& c = d[i];
             if (!c.def) continue;
             bool hot = false;
-            for (const std::string& id : backdrop_hotspots_) hot = hot || iequal(c.def->id, id);
+            for (const std::string& id : backdrop_hotspots_) hot = hot || iequals(c.def->id, id);
             if (!hot) continue;
             const float base_left = base_x + static_cast<float>(c.def->x);
             c.scale.x = sx;
@@ -1385,7 +1701,7 @@ void GuiManager::build(HudDrawList& dl, double now) {
         quad(dl, 0, backdrop_, all);
         if (!version_text_.empty() && fonts_) {
             HudTextStyle st;
-            st.font = fonts_->font("Arial", 8.0f, canvas_.screen_height);
+            st.font = fonts_->font("Arial", 8.0f, canvas_.font_height());
             if (st.font >= 0) {
                 st.color = Rgba8{40, 160, 255, 128};
                 const float lh = static_cast<float>(fonts_->metrics(st.font).line_height) * canvas_.units_per_pixel_y;
@@ -1409,7 +1725,7 @@ void GuiManager::build(HudDrawList& dl, double now) {
         if (!key.empty()) {
             const std::u32string t = caption_text(key);
             HudTextStyle s;
-            s.font = fonts_->font(skin_->global_font().face, skin_->global_font().size, canvas_.screen_height);
+            s.font = fonts_->font(skin_->global_font().face, skin_->global_font().size, canvas_.font_height());
             s.color = {255, 255, 255, 255};
             const TextBlock b = measure_text_block(*fonts_, canvas_, t, 200.0f, s);
             const GuiRect box{{cursor_.x + 12.0f, cursor_.y + 8.0f}, {cursor_.x + 20.0f + b.width, cursor_.y + 12.0f + b.height}};

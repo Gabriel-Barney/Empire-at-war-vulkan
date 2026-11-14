@@ -1,20 +1,23 @@
-// Walk locomotor, one logic frame (docs/re/MOVEMENT.md §3.4-3.6).
+// Walk locomotor, one logic frame (docs/re/MOVEMENT.md §3.4-3.6, §3.5.2).
 //
-// Per frame (no dt): start rule (turn in place first when the heading error exceeds both one
-// frame's turn and Close_Enough_Angle_For_Move_Start), speed controller (target = effective max
-// speed capped by the formation / collision speed cap; v steps toward the target by at most accel up
-// or decel down), move step (the distance budget v is spent along the waypoints, several may be
-// passed in one frame), yaw steps toward the travel direction by at most the turn rate, then the
-// passability check before commit: the move old -> new must stay on cells passing the unit's
-// MovementClass mask (conservative grid walk); on failure the unit does not move this frame and
-// reports `blocked` (the system re-plans, §1.6 re-path triggers). Directions use the retail fast
-// inverse sqrt (§3.5 step 5).
-// PROVISIONAL [L]: the brake rule is "target <= sqrt(2 * decel * remaining path)" (the retail brakes
-// toward the next waypoint's speed cap; here only the final waypoint has cap 0), and the last
-// frame snaps onto the goal when the remaining distance is <= the frame's budget. Movement
-// direction = desired direction (Movement_Directions_Count <= 0 behaviour) for every unit.
+// Per frame (no dt), s78n t26.4 (MOVEMENT §3.5.2 A - C, §3.5.1 "Arrival turn, details" item 1): End Move at a speed <= the
+// deceleration enters 0x15 (speed 0; heading for the last waypoint within 5 of it along its segment the index steps on; on
+// the last waypoint of a started path the unit has arrived where it stands, else the move restarts from state 0; no
+// started path: idle); start rule A (turn in place first unless the heading error is within one frame's turn, or within
+// Close_Enough_Angle_For_Move_Start with the current waypoint's speed fraction > 0 - the turn itself is the caller's 0xF /
+// 0x10 / 0x11, WalkResult::turn); then the move step C: speed controller B (walk_speed), the turn budget R (x v / vmax in
+// End Move), and the loop over the waypoints - nothing left to walk: pop into a started path below (no more turning) or
+// End Move and coast along the last frame's displacement; a waypoint is passed only by crossing its line (-0.001); turn
+// toward the wanted yaw (segment direction + lane term + collision vector) by the budget left; travel along the facing to
+// the waypoint line (s' = |D / tau|, tau = 0 or a degenerate segment skips the waypoint); every step is point-tested at its
+// new position (0x50e280) unless the path is forced - a refused point reports `blocked` with no commit (s78n t24: the
+// system makes a TerrainCollision record, §5.4.7); v^2 / (2a) > the rest of the path -> End Move unless a started path
+// lies below. Directions use the retail fast inverse sqrt (§3.5 step 5).
+// s78n t26.5 (§3.5.2 E): the land team container runs the same step (WalkExtras::container): the budget R with no f
+// scaling, the coast and the travel along the facing, no collision vector, the slots re-laid at each waypoint stepped.
 #pragma once
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "alamo/tactical/movement/passability.hpp"
@@ -56,6 +59,12 @@ struct LocomotorParams {
     float turn_rate = 0.0f;   // degrees / frame
     uint32_t mask = kPassClear;
     float close_enough_angle = 180.0f;
+    // bkm1 t08 (b0050, MOVEMENT §3.5.3): UseSecondaryFacing and its coefficients (UnitDesc, raw type values)
+    bool secondary = false;
+    float sec_angle = 90.0f;
+    float sec_min = 0.0f;
+    float sec_max = 1.0f;
+    float sec_lookahead = 0.0f;
 };
 
 struct LandMotion {
@@ -66,34 +75,179 @@ struct LandMotion {
     std::vector<V2> path;      // remaining waypoints are path[next..]
     uint32_t next = 0;
     uint32_t escape_until = 0; // skip the passability check until `next` reaches this (blocked start)
+    // s78n t26.2 (MOVEMENT §3.5.2 notation, §5.4.7 item 6): the path record's per-waypoint speed fractions (entry +4; the
+    // +0 turn factor is always 1.0 and not stored) - frac[i] for waypoint i, 1.0 past the end of the vector or of the
+    // path (empty: every waypoint 1.0); turn_done = the record's turn-done byte +0x6c (set by the move step once the turn
+    // has rate left over, cleared at every waypoint index step).
+    std::vector<float> frac;
+    bool turn_done = false;
+    // s78n t26.4 (MOVEMENT §3.5.2 C.4, G): last_dir = the unit's whole previous frame's 2-D displacement (pack +0x170 -
+    // +0x1a0: P(end of frame N - 1) - P(end of frame N - 2), set by the system at the start of each land tick), the End Move
+    // coast direction; started = the record's "started" byte +0x6d (an order path set while the unit moves keeps it only
+    // when aligned, else the walk coasts to a stop and starts it from state 0x16).
+    V2 last_dir;
+    bool started = true;
+    // s78n t26 closing review (MOVEMENT §3.5.2 F, §3.4 "Units with Walk_Transition"): a Walk_Transition unit's clip as the
+    // locomotor tracks it - wt_clip = the current clip (-1 none / idle / a turn clip, 2 MOVE, 16 MOVESTART, 17..20 the
+    // end clips), wt_pos its frame, wt_rate its play rate (clip frames per sim frame = the clip's fps / 30 x wt_rate);
+    // wt_f4 = pack +0xf4 (the frame handed from one clip to the next); wt_f0 = pack +0xf0 (the speed latched when the end
+    // clip starts, the deceleration's v0; 0 at 0x15). Every value stays at its default for any other unit.
+    int32_t wt_clip = -1;
+    float wt_pos = 0.0f;
+    float wt_rate = 0.0f;
+    float wt_f4 = 0.0f;
+    float wt_f0 = 0.0f;
+    // bkm1 t06 (b0051, MOVEMENT §3.5.2 "waypoint z" items 3-4; save version 31): the stored height of the path's last waypoint
+    // while path.back() == end_at - every other waypoint is stored with z = 0 (a pathfinder path, a lane, a push path; the
+    // pathfinder drops the heights). Non-zero only on a slot-leg path (G appended with the target's height, interpolated by a
+    // fire-trim cut on that segment), so C.11 sums that last segment 3-D: sqrt(l^2 + end_z^2).
+    float end_z = 0.0f;
+    V2 end_at;
+    // bkm1 t08 (b0050, MOVEMENT §3.5.3; save version 31): the secondary yaw Y2 (Walk pack +0x270, degrees), copied from the
+    // orientation when the Walk attaches (add_unit, a locomotor swap) and never reset after: only stepped - in the move
+    // step with B2 toward the lookahead yaw w1, in the turn in place 0x10 toward its w at r x SecondaryTurnInPlaceROTCoefficient.
+    // Read only by the B2 angle and the arrival turn's reached rule ([port] the formation block pop's snap to Y2, 0x4105a0,
+    // is not modelled: the port has no multi-block land formation). Every unit carries it; only UseSecondaryFacing reads it.
+    float yaw2 = 0.0f;
 };
+
+// s78n t26 closing review (MOVEMENT §3.4 "Units with Walk_Transition" [H], §3.5.2 F): the clip data of a Walk_Transition
+// unit from its model (variant 0 [M]): count[i] = the frame count (0: the model has no such clip) and step[i] = fps / 30
+// (clip frames per sim frame at rate 1) of clip kWtClips[i] - MOVE 2, MOVESTART 16, MOVE_ENDONE..END4 17..20. on = the
+// unit has Walk_Transition and the host supplied clip data; states = the 0x12 / 0x13 / 0x14 clip states of F run (the
+// Walk locomotor; a Bike shares only the acceleration / deceleration getters, [L] its state handlers are unread);
+// s = S = 0x372b90 = Scale_Factor x Movement_Animation_Speed.
+inline constexpr int32_t kWtClips[6] = {2, 16, 17, 18, 19, 20};
+struct WalkTransition {
+    bool on = false;
+    bool states = false;
+    float s = 0.0f;
+    float count[6] = {};
+    float step[6] = {};
+};
+// vf +0x2d8 0x42c400: n = the MOVESTART frame count; n > 0 -> a = ((S / n) x (V / S)) x (V / S), else V ([port] S <= 0: V).
+float walk_transition_accel(const WalkTransition& wt, float vmax);
+// vf +0x2e0 0x42c4c0: u = max(0.75 V, v0), v0 = +0xf0 if > 0, else +0xec (v) if > 0, else V; m = the MOVE_ENDONE frame
+// count; m != 0 -> ((S / (m - 1)) x (u / S)) x (u / S), else u ([port] S <= 0: u).
+float walk_transition_decel(const WalkTransition& wt, float vmax, float v, float f0);
+
+// s78n t26.2: the speed fraction of waypoint i (1.0 past the end; 0x5c4b80 / 0x5c4af0, the static (1.0, 1.0) default).
+inline float wp_frac(const LandMotion& m, size_t i) {
+    return i < m.frac.size() && i < m.path.size() ? m.frac[i] : 1.0f;
+}
 
 struct WalkResult {
     bool moved = false;
     bool arrived = false;
     bool blocked = false;
+    // s78n t26.2 (MOVEMENT §3.5.2 A): the start rule failed - the unit turns in place (state 0xF, then 0x10 / 0x11 as the
+    // arrival turn of §3.5.1) toward `want` (degrees) before it moves; speed 0, nothing else this frame.
+    bool turn = false;
+    float want = 0.0f;
+    // s78n t26.4: popped = the walk finished the top record and went on along the started path below in the same call
+    // (C.4; the caller pops the record); coast = an End Move coast step ran (C.4); restart = 0x15 away from the end (the move
+    // restarts from state 0); tau_skips / degen_skips = waypoints skipped by tau = 0 (C.9) / a degenerate segment (C.8).
+    bool popped = false;
+    bool coast = false;
+    bool restart = false;
+    uint8_t tau_skips = 0, degen_skips = 0;
 };
+
+// s78n t26.2 (MOVEMENT §3.5.2 B, FIGHTER_FLYING §7.7 item 3): the speed controller 0x61ccd0 / the container's 0x5aaf70 -
+// a pure step. Items: T = vmax; a formation path T = its formation speed (0 -> End Move); not started -> T = a; the corner
+// cap (turn-done clear, the facing not strictly within |R| of the wanted yaw, not Start Move) T = min(T, frac(idx) x vmax),
+// 0 -> End Move; the brake-ahead (not Start Move): vn = frac(idx + 1) x vmax < v and D <= (v^2 - vn^2) / (2a) in double ->
+// T = min(T, vn), 0 -> End Move; the collision cap (and the straggler cap of a container) T = min(T, cap); End Move ->
+// T = a; then v += min(acc, T - v) up, v := T with the "at once" flag else v -= min(a, v - T) down; v := min(v, vmax), 0
+// when negative.
+struct WalkSpeedIn {
+    float v = 0.0f, vmax = 0.0f, acc = 0.0f, a = 0.0f;
+    float formation = 3.0e38f;  // B.2: the formation speed on a formation path (3e38: not one)
+    float cap = 3.0e38f;        // B.6: the collision cap (min the straggler cap for a container)
+    bool now = false;           // B.6: the "at once" flag
+    bool started = true;        // B.3
+    bool turn_done = false;     // B.4: P +0x6c
+    float yaw_err = 0.0f;       // B.4: |wrap(yaw - wanted)|
+    float rate = 0.0f;          // B.4: R (the turn rate)
+    float frac_cur = 1.0f;      // B.4: frac(idx)
+    float frac_next = 1.0f;     // B.5: frac(idx + 1)
+    float line_d = 3.0e38f;     // B.5: D, the distance along d to line(idx + 1) (3e38: none)
+    LocoState state = LocoState::WalkMoving;
+    bool hold = false;          // B.7: Walk_Transition and the current clip is MOVE (2) / WALKMOVE (0x42): End Move T = v
+};
+struct WalkSpeedOut {
+    float v = 0.0f;
+    bool end_move = false;  // the controller set state 0x14 (End Move)
+};
+WalkSpeedOut walk_speed(const WalkSpeedIn& in);
+
+// s78n t26.2 (MOVEMENT §3.5.2 C.9): D = the distance from pos along d (unit) to the waypoint line through l0 with unit normal
+// n: mu = cross(l0 - pos, d) / (d . n), X = l0 + mu (-n.y, n.x), D = |pos - X| (2-D). d . n = 0: 3e38 (no line ahead).
+float line_distance_along(V2 pos, V2 d, V2 l0, V2 n);
 
 // Remaining path length from pos through path[next..].
 float remaining_length(const LandMotion& m);
 
-// OI tactical: formation-member extras (MOVEMENT.md §3.5 step 6, §4.4).
-//   jiggle      - the formation jiggle offset (data pack +0x12c/+0x130): added to every waypoint except the last
-//                 while it is steered toward ([port]: the offset waypoint is used only when its cell passes the
-//                 unit's mask, so the jiggle never steers into an obstacle);
-//   side_error  - side-error correction (LocomotorCommon 0x42d440): on a leg that does not reach its waypoint this
-//                 frame, the direction is the segment direction pulled along the path normal by
-//                 formation_side_correction(error), error = the slot's lateral offset (0: the member's path already
-//                 leads to its slot [port]) - the member's signed lateral distance from the segment.
+// Extras of one walk (MOVEMENT §3.5.2 C, §5.4.1 "How Walk combines"):
+//   jiggle      - the formation jiggle offset (data pack +0x12c / +0x130, §3.5 step 6): on a formation path its side
+//                 component enters the lane term e (the slot's side offset is 0: [port] the member's path already leads to
+//                 its slot);
+//   lane        - s78n t26.4 (MOVEMENT §5.4.1 "How Walk combines" item 2): the lane term pack +0x15c of the formation
+//                 update 0x41dbb0 - k = formation_side_correction(e), e = the jiggle's side (formation path) - the unit's
+//                 signed side offset from its current segment; the wanted direction is normalise(d + k (-d.y, d.x));
+//   formation_path - the record is the order path of a formation member (the jiggle term, B.2's formation speed);
+//   avoid       - s78n t18 (§5.4.1 "How Walk combines" item 3): the collision steering vector 0x509810 for the wanted
+//                 direction `dir` (unit length), added to it on every leg until the last line is crossed;
+//   cap_now     - s78n t20 (§3.5 step 2, FIGHTER_FLYING §7.7 item 5): the collision records' "at once" flag;
+//   formation   - s78n t26.2 (§3.5.2 B.2): the formation speed on a formation path (3e38: none), 0 sets End Move;
+//   below       - s78n t26.4 (§3.5.2 C.4 / C.11): Q, the started order path under a collision-owned top record (null: none
+//                 or not started) - no End Move for the record's end, and the walk pops into it in the same call;
+//                 below_kind / below_resume: the record's kind and rejoin index (kind 2: Q resumes at least there),
+//                 below_forced: Q's skip-passability flag;
+//   forced      - the top path's skip-passability flag +0x5c (the flag-0x20 order path); the planner's escape leg off a
+//                 blocked start (next < escape_until) counts as forced too;
+//   directions  - Movement_Directions_Count (C.7: 1 the facing, 2 the facing or its reverse, <= 0 the wanted direction);
+//   vmax_u      - C.1 / C.2: the undeployed effective max speed for f = v / vmax_u (<= 0: the controller's vmax);
+//   container   - s78n t26.5 (MOVEMENT §3.5.2 E, FIGHTER_FLYING §7.7 item 7): the land team container's move step 0x5adfb0 -
+//                 the turn budget R with no f scaling, the coast (C.4) and the travel (C.7) along the facing (cos yaw, sin
+//                 yaw); the caller passes no collision vector (`avoid` null) and `directions` 1;
+//   relay       - s78n t26.5 (FIGHTER_FLYING §7.2 caller 3): when set, the directions of the slot re-lays 0x5ac120 are
+//                 appended - the new segment at each waypoint stepped in C.11, the path below's segment after a pop (C.4);
+//   wt          - s78n t26 closing review (MOVEMENT §3.4, §3.5.2 A / B.7 / C.2 / F): a Walk_Transition unit's clip data -
+//                 the acceleration / deceleration from the MOVESTART / MOVE_ENDONE frame counts; with `states`, Start Move
+//                 0x12 plays MOVESTART (speed 0 on its first frame) and runs the move step (budget x f) until it ends,
+//                 then 0x13 (the MOVE clip from frame int(+0xf4)); End Move 0x14 holds T = v while MOVE plays, starts an
+//                 end clip at a MOVE phase boundary and enters 0x15 when that clip ends (no speed test).
 struct WalkExtras {
     V2 jiggle;
-    bool side_error = false;
+    bool lane = false;
+    bool formation_path = false;
+    V2 (*avoid)(const void* ctx, V2 dir) = nullptr;
+    const void* avoid_ctx = nullptr;
+    bool cap_now = false;
+    float formation = 3.0e38f;
+    LandMotion* below = nullptr;
+    uint8_t below_kind = 0;
+    uint32_t below_resume = 0;
+    bool below_forced = false;
+    bool forced = false;
+    int32_t directions = 1;
+    float vmax_u = 0.0f;
+    bool container = false;           // s78n t26.5
+    std::vector<V2>* relay = nullptr;  // s78n t26.5
+    const WalkTransition* wt = nullptr;  // s78n t26 closing review: Walk_Transition clip data (null / !on: none)
 };
+
+// s78n t26.4 (MOVEMENT §5.4.1 "How Walk combines" items 1 - 3, 0x61d570): the wanted direction on the top record m - false
+// when there is none (no path, not started, on its last waypoint: m.next >= size).
+bool walk_wanted_dir(const LandMotion& m, const WalkExtras* x, V2& dir);
+bool walk_wanted_dir(std::span<const V2> path, uint32_t next, V2 pos, const WalkExtras* x, V2& dir);
+
+// s78n t26.4: the index a record resumes at when the record above it (kind, rejoin index) is popped (pop_top's rule):
+// max(next, min(resume, size)) for a kind-2 detour, at least 1.
+uint32_t resume_index(const LandMotion& q, uint8_t kind, uint32_t resume);
 
 WalkResult walk_step(LandMotion& m, const LocomotorParams& p, float speed_cap, const PassabilityGrid* grid,
                      const WalkExtras* extras = nullptr);
-
-// Moves `m.pos` by `offset` if the move passes the grid check (collision repulsion / push).
-bool try_nudge(LandMotion& m, V2 offset, uint32_t mask, const PassabilityGrid* grid);
 
 }  // namespace alamo::tactical::movement

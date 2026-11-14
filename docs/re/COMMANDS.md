@@ -159,7 +159,7 @@ parentheses where it was read directly. Otherwise the payload comes from Execute
 | 58 | SetAbilityAutofire | S | list7, 7-bit ability type, 1-bit (0x4b3790) | autofire toggle per unit | H |
 | 25 | SpecialWeaponFire | S | id32 weapon, P, 1-bit "at position", then q1–q3 or id32 target (0x40a2d0) | fire a special weapon | H |
 | 38 | TacticalSuperWeapon | S | id32 weapon, 2-bit op (0x5d6c60) | op 1 / 2 on the superweapon behaviour. Only if the object's owner is the issuer | H |
-| 28 | BombingRun | S | q1–q3 point (pack 0x524650) | bombing run on a point (BombingRunManager, mode +0x38) | H |
+| 28 | BombingRun | S | q1–q3 point (pack 0x524650, unpack 0x524590) | bombing run on a point (BombingRunManager, mode +0x38). Execute 0x5246d0: point round trip (§3.2), then start 0x492d60 when the target test 0x494540 passes for the issuer; no result. Sent only by the land HUD targeting click (HUD_GAPS §9.6-9.7); Lua `Bombing_Run` starts directly | H |
 | 54 | PlanetaryBombard | S | q1–q3 point | orbital bombard (PlanetaryBombardManager, mode +0x40) | M |
 | 12 | Reinforce | S | id32 unit (or type ref, see note), q1–q3 drop point (0x403c10) | reinforcement drop in land (mode type 1) or space (2). The validity check runs inside Execute | H |
 | 33 | TacticalBuild | S | id32 build pad, 16-bit type index, P (0x5d7820) | build on a pad | H |
@@ -211,8 +211,8 @@ type (0x407db0), depending on a GMM flag (0x28afb0) [M].
    - it has PROXIMITY_MINE (0x55, slot +0x387).
 4. Each survivor → 0x2BD2F0(GOM, id, issuer) → insert 0x2BD360, the same insert as `Select`:
    - already selected → nothing;
-   - a TEAM member is replaced by its container (obj +0x2B0 with TEAM), an attached object by its parent record
-     (obj +0x150: +0x10, else +8) [M: name];
+   - a TEAM member is replaced by its container (obj +0x2B0 with TEAM), a build pad by its content (pad pack
+     obj +0x150: the finished object +0x10, else the under-construction one +8; TACTICAL_COMBAT §5.4.3);
    - the object enters the issuer's selection only if its SelectionDataPack flag is set (obj +0xB0 → +0x38, 0x39B070):
      default 1 (pack ctor 0x55BE30), cleared by `Set_Selectable(false)` (0x580530, which also deselects the object and
      its TEAM members) and while a landing transport carries it (0x644330 / 0x6438A0);

@@ -5,16 +5,10 @@
 #include <vector>
 
 #include "alamo/core/profile.hpp"
+#include "alamo/test/support.hpp"
 
 namespace {
-int g_fail = 0;
-#define CHECK(c)                                                             \
-    do {                                                                     \
-        if (!(c)) {                                                          \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);         \
-            ++g_fail;                                                        \
-        }                                                                    \
-    } while (0)
+using ::alamo::test::g_fail;
 
 using namespace alamo::profile;
 
@@ -68,6 +62,31 @@ void test_scope_and_lap() {
     CHECK(snap[0].zone_ns[register_zone("test.lap")] >= 4'500'000u);  // lap covers the scope and the busy wait
     CHECK(snap[0].total_ns >= snap[0].zone_ns[register_zone("test.lap")]);
     stop();
+}
+
+void test_steps() {  // sp0: consecutive steps charge each section to its own zone; disabled at construction = inert
+    start(8);
+    begin_tick(20);
+    {
+        Steps steps;
+        busy_ms(2);
+        ALAMO_PROFILE_STEP(steps, "test.step.a");
+        busy_ms(3);
+        ALAMO_PROFILE_STEP(steps, "test.step.b");
+    }
+    end_tick();
+    stop();
+    {
+        Steps off;  // constructed while disabled
+        ALAMO_PROFILE_STEP(off, "test.step.off");
+    }
+    const auto snap = snapshot();
+    CHECK(snap.size() == 1);
+    const uint32_t a = snap[0].zone_ns[register_zone("test.step.a")];
+    const uint32_t b = snap[0].zone_ns[register_zone("test.step.b")];
+    CHECK(a >= 1'500'000u);
+    CHECK(b >= 2'500'000u);
+    CHECK(snap[0].zone_ns[register_zone("test.step.off")] == 0);
 }
 
 void test_ring_wrap() {
@@ -139,6 +158,7 @@ int main() {
     test_registry();
     test_disabled_is_inert();
     test_scope_and_lap();
+    test_steps();
     test_ring_wrap();
     test_threads_sum_exactly();
     test_report();

@@ -8,6 +8,7 @@
 
 #include "alamo/core/log.hpp"
 #include "alamo/render/convert.hpp"
+#include "alamo/render/frustum.hpp"
 #include "particles_cs_clear.h"
 #include "particles_cs_sort.h"
 #include "particles_cs_spawn.h"
@@ -138,35 +139,6 @@ uint32_t draw_mode(uint32_t blend) {
         case 6: return 3;
         default: return 2;
     }
-}
-
-struct Frustum {
-    float p[6][4];
-};
-Frustum frustum_of(const Mat4& vp) {
-    Frustum f{};
-    const auto& m = vp.m;
-    auto set = [&](int i, float a, float b, float c, float d) {
-        f.p[i][0] = a;
-        f.p[i][1] = b;
-        f.p[i][2] = c;
-        f.p[i][3] = d;
-    };
-    for (int s = 0; s < 2; ++s) {
-        const float sg = s == 0 ? 1.0f : -1.0f;
-        set(s, m[3][0] + sg * m[0][0], m[3][1] + sg * m[0][1], m[3][2] + sg * m[0][2], m[3][3] + sg * m[0][3]);
-        set(2 + s, m[3][0] + sg * m[1][0], m[3][1] + sg * m[1][1], m[3][2] + sg * m[1][2], m[3][3] + sg * m[1][3]);
-    }
-    set(4, m[2][0], m[2][1], m[2][2], m[2][3]);                                           // z >= 0
-    set(5, m[3][0] - m[2][0], m[3][1] - m[2][1], m[3][2] - m[2][2], m[3][3] - m[2][3]);   // z <= w
-    return f;
-}
-bool aabb_visible(const Frustum& f, const Aabb& b) {
-    for (const auto& p : f.p) {
-        const float x = p[0] >= 0 ? b.max.x : b.min.x, y = p[1] >= 0 ? b.max.y : b.min.y, z = p[2] >= 0 ? b.max.z : b.min.z;
-        if (p[0] * x + p[1] * y + p[2] * z + p[3] < 0.0f) return false;
-    }
-    return true;
 }
 
 VkDescriptorBufferInfo range_of(const rhi::UniformAlloc& a) { return {a.buffer, a.offset, a.size}; }
@@ -382,7 +354,7 @@ VkDescriptorSet ParticleRenderer::texture_set(rhi::Frame& frame, const GpuTextur
 }
 
 VkPipeline ParticleRenderer::pipeline(uint32_t mode, const SceneHookPass& p) {
-    const auto key = std::make_tuple(mode, p.color_format, p.depth_format, p.stencil_format);
+    const auto key = std::make_tuple(mode, p.color_format, p.depth_format, p.stencil_format, p.samples);
     auto it = gfx_.find(key);
     if (it != gfx_.end()) return it->second;
     const std::vector<uint32_t> vs = rhi::spirv_from_bytes(std::span<const uint8_t>(g_particles_vs, sizeof g_particles_vs));
@@ -423,6 +395,7 @@ VkPipeline ParticleRenderer::pipeline(uint32_t mode, const SceneHookPass& p) {
     d.color_formats = std::span<const VkFormat>(&color, 1);
     d.depth_format = p.depth_format;
     d.stencil_format = p.stencil_format;
+    d.samples = p.samples;
     d.layout = layout_;
     d.name = "particles.draw";
     const VkPipeline pl = cache_.create_graphics(d);

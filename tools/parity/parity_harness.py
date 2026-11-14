@@ -1,0 +1,1649 @@
+#!/usr/bin/env python3
+"""Q4 behavioural parity harness (roadmap group q4h): the original game's Q2 reference runs against the port.
+
+Standard library only. Parity is checked by behaviour, not by CRC or hash equality (Gabriel, 2026-10-29): travel and build
+timings, income, AI choices, battle outcomes and damage, each against a tolerance written down with its reason in
+tools/parity/scenarios.json. Replaces the `q2trace.py compare` step of Q2F t07; the trace, production-queue and AI-log
+parsers are reused from tools/probe_mod/q2_traces/analysis/q2_parity.py.
+
+  parity_harness.py run [--scenario ID ...] [--port-exe alamo_headless.exe] [--refs DIR] [--out DIR]
+                        [--reuse-port] [--check-baseline FILE] [--write-baseline FILE] [--commit SHA]
+      Replays every scenario in the port (alamo_headless, same campaign / map, seed and tick count as the reference runs),
+      reduces the reference runs and the port run to the same metrics and grades each metric. Writes
+      <out>/<scenario>/report.txt and report.json (default out: tools/parity/out, ignored by git).
+      Exit 0: no metric out of tolerance (or, with --check-baseline, no metric that passed in the baseline fails now);
+      1: out of tolerance / regression; 2: error; 77: skipped (ALAMO_FOC_DATA or the reference runs missing).
+  parity_harness.py retail [--scenario ID ...] [--refs DIR]
+      The retail runs of a scenario against each other: the run-to-run spread the tolerances must allow.
+  parity_harness.py list [--refs DIR]
+      Scenarios, their reference runs and whether they are present on this machine.
+  parity_harness.py selftest
+      Small synthetic fixtures (written to a temp folder): metric extraction, tolerance grading, baseline check.
+
+Reference runs (Q2 kit, tools/probe_mod/q2_traces/README.md) live in the kit's ignored out\\ folder. In a git worktree
+that folder is empty, so the default --refs is the main checkout's copy (found through `git rev-parse
+--git-common-dir`); ALAMO_Q2_TRACES overrides it.
+
+Grading. Several retail runs of one scenario differ from each other (the galaxy uses no input, but the original's AI
+reacts to wall-clock timing), so a scalar metric is graded against the retail envelope: PASS when the port value lies in
+[min(retail) - tol, max(retail) + tol], tol = max(abs, rel * max(|min|, |max|)). A type mix (AI builds, fleet targets) is
+graded by its overlap with the closest retail run: sum(min(a, b)) / max(sum(a), sum(b)) >= the scenario's threshold.
+INFO metrics (RNG draws) are reported, never graded. N/A names the side that has no data and why.
+"""
+import argparse
+import collections
+import json
+import math
+import os
+import re
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
+KIT_REL = os.path.join("tools", "probe_mod", "q2_traces")
+sys.path.insert(0, os.path.join(REPO, KIT_REL, "analysis"))
+import q2_parity as q2  # noqa: E402  (tools/probe_mod/q2_traces/analysis/q2_parity.py: trace / queue / AI-log parsers)
+
+SKIP = 77
+FACTIONS = tuple(q2.FACTION_TOKENS)  # Empire, Rebel, Underworld
+CATEGORY = {"travel": "timing", "build": "timing", "econ": "income", "ai": "AI choices", "outcome": "battle outcomes",
+            "combat": "damage", "diag": "diagnostic"}
+# Skirmish objects that are not units or structures: projectiles, team containers, props, markers, pads (the port lists pad
+# contents apart), construction stand-ins, squadron containers and starbase-upgrade objects.
+NOT_UNIT = ("PROJ_", "_MARKER", "BACKDROP", "ASTEROID", "NEBULA", "STARS_", "STAR_BACKDROP", "SPACE_JUNK", "DEATH_CLONE",
+            "_PAD", "CONTAINER", "_UPGRADE", "MERCHANT_DOCK", "EXPLOSION", "DAMAGE_SPACE", "DAMAGE_LAND", "PARTICLE",
+            "_DUD", "PROJECTILE_")  # bkg3: Large_Dud / Huge_Dud and Projectile_Shield_Absorb_* are particle types, not units
+
+
+# ---- small helpers ---------------------------------------------------------------------------------------------------
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def write_json(path, data):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(data, fh, indent=1, sort_keys=True, default=str)
+        fh.write("\n")
+
+
+def is_unit(name):
+    n = name.upper()
+    if n == "TEAM" or n.startswith("UC_"):
+        return False
+    return not any(t in n for t in NOT_UNIT)
+
+
+def overlap(a, b):
+    """Multiset overlap of two Counters: sum(min) / max(sum a, sum b); 1.0 when both are empty."""
+    sa, sb = sum(a.values()), sum(b.values())
+    if sa == 0 and sb == 0:
+        return 1.0
+    return sum(min(a[k], b[k]) for k in set(a) | set(b)) / max(sa, sb)
+
+
+def assign_factions(by_owner, allowed=FACTIONS):
+    """{owner: [type names]} -> {owner: faction}: each faction goes to the owner with the most of its unit-name tokens
+    (neutral props such as STAR_DESTROYER_DEATH_CLONE must not claim a faction)."""
+    score = {}
+    for own, names in by_owner.items():
+        for n in names:
+            for fac, toks in q2.FACTION_TOKENS.items():
+                if any(t in n.upper() for t in toks):
+                    score[(fac, own)] = score.get((fac, own), 0) + 1
+    out = {}
+    for fac in allowed:
+        cands = sorted(((s, -own) for (f, own), s in score.items() if f == fac), reverse=True)
+        for s, nown in cands:
+            if -nown not in out:
+                out[-nown] = fac
+                break
+    return out
+
+
+def median(xs):
+    return statistics.median(xs) if xs else None
+
+
+def default_refs():
+    env = os.environ.get("ALAMO_Q2_TRACES")
+    if env:
+        return env
+    here = os.path.join(REPO, KIT_REL, "out")
+    # Only a folder that holds a run counts: the kit's selftest makes out\selftest in every worktree it runs in, and
+    # that empty folder used to hide the main checkout's runs (the slow ctests then skipped with 77).
+    if os.path.isdir(here) and any(os.path.isfile(os.path.join(here, d, "trace.q2t")) for d in os.listdir(here)):
+        return here
+    main = main_checkout_refs()
+    return main if main and os.path.isdir(main) else here
+
+
+def main_checkout_refs():
+    """The main checkout's copy of the Q2 kit's out folder (None when not found)."""
+    try:
+        common = subprocess.run(["git", "-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True, check=False).stdout.strip()
+    except OSError:
+        common = ""
+    return os.path.join(os.path.dirname(common), KIT_REL, "out") if common else None
+
+
+def refs_search(a):
+    """(folder, fallback folders) for resolve_refs: --refs / ALAMO_Q2_TRACES alone, else the default folder and then the
+    main checkout's (a worktree whose kit recorded new runs holds those only; the older ones stay in the main checkout)."""
+    if a.refs or os.environ.get("ALAMO_Q2_TRACES"):
+        return a.refs or default_refs(), ()
+    first, main = default_refs(), main_checkout_refs()
+    return first, tuple(d for d in (main,) if d and os.path.normcase(os.path.abspath(d)) != os.path.normcase(os.path.abspath(first)))
+
+
+def default_port_exe():
+    for tree in ("build-wt-msvc", "build-msvc", "build-wt-clang", "build-clang"):
+        p = os.path.join(REPO, tree, "bin", "alamo_headless.exe")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+# ---- metric extraction: galactic ----------------------------------------------------------------------------------------
+def galactic_credit_pass(trace_path, factions, sample_ticks, max_tick=None):
+    """Credits per faction after each frame: the income paid on each fiscal-cycle frame (credits after that frame minus
+    credits after the previous sampled frame; the trace shows no spending on cycle frames) and credits at sample ticks.
+    max_tick: read mode frames up to this one only."""
+    players, before, income = {}, {}, collections.defaultdict(list)
+    at = {}
+    last_cycle, cycle_frame = None, None
+    mf = None
+    want = sorted(sample_ticks)
+
+    def close_frame():
+        if cycle_frame is not None and cycle_frame == mf:
+            for i, v in players.items():
+                f = factions.get(i)
+                if f in FACTIONS:
+                    income[f].append(v - before.get(i, v))
+        for t in want:
+            if mf is not None and mf <= t:
+                at[t] = {factions.get(i): v for i, v in players.items() if factions.get(i) in FACTIONS}
+    with open(trace_path, "r", encoding="ascii") as fh:
+        for line in fh:
+            if line.startswith("F "):
+                p = line.split()
+                if mf is not None:
+                    close_frame()
+                before = dict(players)
+                mf = int(p[3])
+                if max_tick is not None and mf > max_tick:
+                    mf = None
+                    break
+                if len(p) >= 11:
+                    cyc = int(p[10])
+                    if last_cycle is not None and cyc != last_cycle:
+                        cycle_frame = mf
+                    last_cycle = cyc
+            elif line.startswith("C "):
+                p = line.split()
+                players[int(p[1])] = q2.f32(p[2])
+            elif line.strip() == "end":
+                break
+    if mf is not None:
+        close_frame()
+    return dict(income), at
+
+
+STOP_SAMPLES = 3  # a fleet stops when its position holds for this many samples (one repeated sample mid-flight is not a stop)
+
+
+def fleet_tracks(trace_path, max_tick=None):
+    """Galactic fleet positions per mode frame, {fleet id: [(mode frame, owner, x, y)]}, and planet positions {name: (x, y)},
+    from a Q2TRACE 1 file (retail or port). A mode frame sampled more than once (a paused galaxy) keeps its last sample.
+    max_tick: read mode frames up to this one only."""
+    types, tracks, ppos = {}, collections.defaultdict(list), {}
+    with open(trace_path, "r", encoding="ascii") as fh:
+        for line in fh:
+            if line.startswith("T "):
+                p = line.split()
+                types[int(p[1])] = p[4]
+    objs, planets, mf = {}, set(), None
+
+    def close():
+        if mf is None:
+            return
+        for i, o in objs.items():
+            if o[1] == "GALACTIC_FLEET":
+                tr = tracks[i]
+                if tr and tr[-1][0] == mf:
+                    tr.pop()
+                tr.append((mf, o[0], o[2], o[3]))
+        for i in planets:
+            if i in objs:
+                ppos[objs[i][1]] = (objs[i][2], objs[i][3])
+    with open(trace_path, "r", encoding="ascii") as fh:
+        in_header = True
+        for line in fh:
+            p = line.split()
+            if not p:
+                continue
+            t = p[0]
+            if in_header:
+                in_header = t != "end_header"
+                continue
+            if t == "F":
+                close()
+                mf = int(p[3])
+                if max_tick is not None and mf > max_tick:
+                    mf = None
+                    break
+            elif t == "O":
+                i = int(p[1])
+                if int(p[11]) & 2:
+                    objs.pop(i, None)
+                else:
+                    objs[i] = (int(p[2]), types.get(int(p[3]), "?"), q2.f32(p[4]), q2.f32(p[5]))
+            elif t == "X":
+                objs.pop(int(p[1]), None)
+            elif t == "G":
+                planets.add(int(p[1]))
+            elif t == "end":
+                break
+    close()
+    return dict(tracks), ppos
+
+
+def segment_fleet(track, ppos, stop_samples=STOP_SAMPLES):
+    """One fleet's track -> (trips, legs). A stop is a position held for `stop_samples` samples (or at either end of the
+    track: its first sample, or 2 samples at its end); a trip runs from the first moved sample after a stop to the first sample of the next stop, between the planets
+    nearest to the two stop positions. Fleets fly planet centre to planet centre, so a trip that passes a third planet's
+    centre is split there into legs: a waypoint is the sample nearest that centre when it lies within one sample step of
+    it (arrival and next departure as at a stop, below). trips: [(dep, owner, from, to, arr)], legs: the same per leg."""
+    def same(a, b):
+        return math.hypot(a[2] - b[2], a[3] - b[3]) <= q2.ORBIT_SNAP
+
+    def nearest(x, y):
+        return min(((math.hypot(x - a, y - b), n) for n, (a, b) in ppos.items()), default=(None, None))[1]
+    # Runs of equal positions: [start index, end index].
+    runs = []
+    for k, s in enumerate(track):
+        if runs and same(track[runs[-1][1]], s):
+            runs[-1][1] = k
+        else:
+            runs.append([k, k])
+    # The track's first sample is where the fleet was made; a fleet seen still for 2 samples when the trace ends has arrived.
+    stops = [r for j, r in enumerate(runs)
+             if r[1] - r[0] + 1 >= stop_samples or j == 0 or (j == len(runs) - 1 and r[1] > r[0])]
+    trips, legs = [], []
+    for a, b in zip(stops, stops[1:]):
+        last, first = track[a[1]], track[b[0]]
+        frm, to = nearest(last[2], last[3]), nearest(first[2], first[3])
+        if frm is None or frm == to:
+            continue
+        # Departure = the last sample at the planet: retail moves the fleet from its orbit slot to the planet centre on the
+        # departure tick, the port parks it at the centre (q4hf t04: the same rule both sides, no one-tick offset).
+        fx, fy = ppos[frm]
+        nxt = track[a[1] + 1]
+        dep = nxt[0] if math.hypot(nxt[2] - fx, nxt[3] - fy) <= q2.ORBIT_SNAP else last[0]
+        arr, own = first[0], first[1]
+        trips.append((dep, own, frm, to, arr))
+        moving = track[a[1] + 1:b[0]]
+        ways = []
+        for name, (px, py) in ppos.items():
+            if name in (frm, to) or not moving:
+                continue
+            d, k = min((math.hypot(s[2] - px, s[3] - py), k) for k, s in enumerate(moving))
+            step = max([math.hypot(moving[k][2] - moving[j][2], moving[k][3] - moving[j][3])
+                        for j in (k - 1, k + 1) if 0 <= j < len(moving)] or [0.0])
+            if d <= step:
+                # Retail shows a pass as one sample in the planet's orbit slot, then the centre (the next departure): the slot
+                # sample is the arrival, as at a stop (first sample in the slot). The port parks at the centre: a pass holds
+                # there for at most 2 samples. The next departure is the last sample at the centre, as after a stop.
+                dist = [math.hypot(moving[j][2] - px, moving[j][3] - py) for j in (k - 2, k - 1)] if k >= 2 else None
+                at = moving[k - 1][0] if dist and dist[1] > dist[0] else moving[k][0]
+                k2 = k
+                while k2 + 1 < len(moving) and same(moving[k2 + 1], moving[k]):
+                    k2 += 1
+                ways.append((at, moving[k2][0], name))
+        prev_t, prev_p = dep, frm
+        for wa, wd, wn in sorted(ways):
+            if wa > prev_t:
+                legs.append((prev_t, own, prev_p, wn, wa))
+                prev_t, prev_p = wd, wn
+        legs.append((prev_t, own, prev_p, to, arr))
+    return trips, legs
+
+
+def fleet_hops(trace_path, fac, max_tick=None):
+    """(trips, legs) of every fleet of a galactic trace, owners mapped to factions by `fac` ({owner: faction})."""
+    tracks, ppos = fleet_tracks(trace_path, max_tick)
+    trips, legs = [], []
+    for _, tr in sorted(tracks.items()):
+        t, lg = segment_fleet(tr, ppos)
+        trips += t
+        legs += lg
+    name = (lambda o: fac.get(o, "p%d" % o))
+    return ([(d, name(o), a, b, r) for d, o, a, b, r in sorted(trips)],
+            [(d, name(o), a, b, r) for d, o, a, b, r in sorted(legs)])
+
+
+def galactic_metrics(trace_path, queue_path=None, ai_log=None, sample_ticks=(4500, 9000, 13500), max_tick=None):
+    """Metric values of one galactic run (retail trace or port state trace), {metric id: value}, plus notes. max_tick: only
+    the mode frames up to this one (a reference run that went on longer than the scenario, q4hf t03)."""
+    m = q2.trace_metrics(trace_path, max_tick=max_tick)
+    fac = m["factions"]
+    out, notes = {}, []
+    # Travel: leg duration per route (departure = first moved sample, arrival = first sample of a stop, a pass through a
+    # planet centre splits the trip; same rule both sides, q4hf t04). Keyed by faction: the hop speed is the fleet's (its
+    # units' Hyperspace_Speed, the Underworld corruption bonus).
+    trips, legs = fleet_hops(trace_path, fac, max_tick)
+    routes = collections.defaultdict(list)
+    for dep, f, a, b, arr in legs:
+        routes["%s:%s->%s" % (f, a, b)].append(arr - dep)
+    for r, ds in routes.items():
+        out["travel.hop_ticks[%s]" % r] = tuple(sorted(set(ds)))
+    # AI: fleet departures and their targets per faction: trips, stop to stop (the planet the fleet was sent to).
+    hops = collections.defaultdict(list)
+    for dep, f, a, b, arr in trips:
+        hops[f].append((dep, b))
+    for f in FACTIONS:
+        hs = hops.get(f, [])
+        out["ai.fleet_departures[%s]" % f] = len(hs)
+        out["ai.fleet_targets[%s]" % f] = collections.Counter(b for _, b in hs)
+        if hs:
+            out["ai.first_departure_tick[%s]" % f] = min(d for d, _ in hs)
+    # Timing: fiscal cycles (the trace's sample window of each change; the port samples every tick).
+    fc = m["fiscal_cycles"]
+    if fc:
+        for k, (lo, hi) in enumerate(fc["cycle_windows"], 1):
+            out["econ.cycle_tick[%d]" % k] = (lo, hi) if lo != hi else hi
+    # Income: per-cycle payment and credits at sample ticks.
+    income, at = galactic_credit_pass(trace_path, fac, sample_ticks, max_tick)
+    for f, xs in income.items():
+        if xs:
+            out["econ.income_cycle1[%s]" % f] = xs[0]
+            out["econ.income_mean[%s]" % f] = sum(xs) / len(xs)
+    for t, d in sorted(at.items()):
+        for f, v in d.items():
+            out["econ.credits_at_%d[%s]" % (t, f)] = v
+    if not income:
+        notes.append("no credits in the trace (reader v1 found no player vector)")
+    # Production: retail queue starts (production.q2q) or port build orders (AI log); build time per type.
+    builds = None
+    durations = collections.defaultdict(list)
+    if queue_path and os.path.exists(queue_path):
+        q2.queue_metrics(queue_path, m, max_tick)
+        builds = [(e["start"], e["faction"], e["type"]) for e in m["queue_entries"]]
+        # An item leaves the queue when its object is created (the created-id field stays unset in the retail queues), so
+        # done = the last frame listed + 1. Only items that ran uninterrupted to the end count: no restart (a stalled item
+        # restarts every tick), gone before the trace ends, and listed for at least its own build frames (an item that
+        # leaves earlier was cancelled).
+        end = max((e["last"] for e in m["queue_entries"]), default=0)
+        for e in m["queue_entries"]:
+            d = e["done"] - e["last_start"]
+            if e["restarts"] == 0 and (e["created"] is not None or e["last"] < end) and d >= e["frames"]:
+                durations["%s@%s" % (e["type"], e["planet"])].append(d)
+    elif ai_log and os.path.exists(ai_log):
+        o = q2.port_metrics(None, ai_log)
+        orders = [(tk, f, at_, t) for tk, f, at_, d in o["production"] for t in d]
+        builds = [(tk, f, t) for tk, f, _, t in orders] + [(tk, f, t) for tk, f, _, t in o.get("starbase_orders") or []]
+        # Completion = the first new object of that type and faction at that planet after the order (port state trace).
+        done = [(tk, f, at_, t) for tk, f, at_, d in m["production"] for t in d]
+        used = set()
+        for tk, f, at_, t in sorted(orders):
+            for j, (ctk, cf, cat, ct) in enumerate(done):
+                if j in used or ctk < tk or cf != f or ct != t or (at_ and cat and cat != at_):
+                    continue
+                used.add(j)
+                durations["%s@%s" % (t, cat or at_)].append(ctk - tk)
+                break
+    else:
+        notes.append("no production data (no production.q2q and no AI log): build metrics left out")
+    # The shortest completed build per type and planet (planets can carry build-time modifiers): the build time under the best modifiers, free of stalls and of port
+    # orders that were dropped (those match a later completion and look longer).
+    for t, ds in durations.items():
+        out["build.ticks[%s]" % t] = min(ds)
+    if builds is not None:
+        for f in FACTIONS:
+            bf = [b for b in builds if b[1] == f]
+            out["ai.build_count[%s]" % f] = len(bf)
+            out["ai.build_mix[%s]" % f] = collections.Counter(t for _, _, t in bf)
+            if bf:
+                out["ai.first_build_tick[%s]" % f] = min(tk for tk, _, _ in bf)
+    # Battle outcomes: planets owned per faction at the end, captures per faction.
+    if m["owners_initial"] is not None:
+        own = dict(m["owners_initial"])
+        caps = collections.Counter()
+        for tk, n, a, b in m["owner_changes"]:
+            own[n] = b
+            caps[b] += 1
+        cnt = collections.Counter(own.values())
+        for f in FACTIONS:
+            out["outcome.planets_final[%s]" % f] = cnt.get(f, 0)
+            out["outcome.captures[%s]" % f] = caps.get(f, 0)
+        out["outcome.owner_changes"] = len(m["owner_changes"])
+    # Diagnostic: synced-RNG draws (not graded: parity is behaviour, and the draw order is an implementation detail).
+    if m["rng_draws"]:
+        out["diag.rng_draws_total"] = sum(n for _, _, n in m["rng_draws"] if n is not None)
+    return out, notes, {"factions": fac, "ticks": m["scenario"]["ticks"], "seed": m["scenario"]["seed"],
+                        "campaign": m["scenario"]["campaign"]}
+
+
+# ---- metric extraction: skirmish ----------------------------------------------------------------------------------------
+def skirmish_snapshot_metrics(snaps, credits, frames, out):
+    """snaps: {frame: {faction: Counter(unit type)}}, credits: {frame: {faction: credits}}."""
+    have = sorted(snaps)
+    if not have:
+        return
+    use = [f for f in have if f in frames or f == have[0]]
+    for f in FACTIONS:
+        built, lost = collections.Counter(), 0
+        prev = None
+        for fr in use:
+            cur = snaps[fr].get(f, collections.Counter())
+            if prev is not None:
+                for t in set(cur) | set(prev):
+                    d = cur[t] - prev[t]
+                    if d > 0:
+                        built[t] += d
+                    elif d < 0:
+                        lost -= d
+            prev = cur
+        if not any(f in snaps[fr] for fr in use):
+            continue
+        out["ai.build_count[%s]" % f] = sum(built.values())
+        out["ai.build_mix[%s]" % f] = built
+        out["outcome.units_final[%s]" % f] = sum(snaps[use[-1]].get(f, collections.Counter()).values())
+        out["outcome.units_lost[%s]" % f] = lost
+        first = next((fr for fr in use[1:] if any(snaps[fr].get(f, collections.Counter())[t] >
+                                                   snaps[use[0]].get(f, collections.Counter())[t] for t in snaps[fr].get(f, {}))),
+                     None)
+        if first is not None:
+            out["ai.first_build_frame[%s]" % f] = first
+    for fr in sorted(credits):
+        if fr in frames and fr % 1800 == 0:
+            for f, v in credits[fr].items():
+                if f in FACTIONS:
+                    out["econ.credits_at_%d[%s]" % (fr, f)] = v
+
+
+def skirmish_retail_metrics(trace_path, frames):
+    """Retail skirmish trace: unit snapshots, credits, damage taken (health lost) and the first shot."""
+    types, meta = {}, {}
+    with open(trace_path, "r", encoding="ascii") as fh:
+        for line in fh:
+            if line.startswith("T "):
+                p = line.split()
+                types[int(p[1])] = p[4]
+    objs = {}  # id -> [owner, type, health]
+    players, flags = {}, {}
+    snaps, credits = {}, {}
+    damage = collections.Counter()
+    first_shot = None
+    owner_fac = {}
+    mf = None
+    end_reason = None
+
+    def close(frame):
+        if frame is None:
+            return
+        if not owner_fac and objs:
+            by = collections.defaultdict(list)
+            for o in objs.values():
+                by[o[0]].append(o[1])
+            # Only the scenario's two factions (meta "human Empire idle vs AI Rebel"): neutral props carry faction tokens
+            # too (SKIRMISH_MERCHANT_DOCK reads as Underworld's MERC).
+            named = tuple(f for f in FACTIONS if re.search(r"\b%s\b" % f, meta.get("skirmish", ""))) or FACTIONS
+            owner_fac.update(assign_factions(by, named))
+        if frame in frames or frame == 1:
+            s = collections.defaultdict(collections.Counter)
+            for o in objs.values():
+                f = owner_fac.get(o[0])
+                if f and is_unit(o[1]):
+                    s[f][o[1].upper()] += 1
+            snaps[frame] = dict(s)
+            if players:
+                credits[frame] = {cfac(i): v for i, v in players.items()}
+
+    def cfac(i):
+        sk = meta.get("skirmish", "")
+        hm, am = re.search(r"human (\w+)", sk), re.search(r"AI (\w+)", sk)
+        h, a = flags.get(i, (0, 0))
+        if h and hm:
+            return hm.group(1)
+        if a and am:
+            return am.group(1)
+        return "slot%d" % i
+    with open(trace_path, "r", encoding="ascii") as fh:
+        in_header = True
+        for line in fh:
+            p = line.split()
+            if not p:
+                continue
+            t = p[0]
+            if in_header:
+                if t == "meta":
+                    meta[p[1]] = " ".join(p[2:])
+                elif t == "end_header":
+                    in_header = False
+                continue
+            if t == "F":
+                close(mf)
+                mf = int(p[3])
+            elif t == "M":
+                meta[p[1]] = " ".join(p[2:])
+                # Port tactical traces (alamo_headless --skirmish-ai --trace-out, q4hf t02): the port's projectiles are not store
+                # objects, so the trace records the battle frame of the first shot instead of a PROJ_ object.
+                if p[1] == "first_shot_frame" and first_shot is None:
+                    first_shot = int(p[2])
+            elif t == "O":
+                i = int(p[1])
+                own, name, hp = int(p[2]), types.get(int(p[3]), "?"), q2.f32(p[10])
+                if int(p[11]) & 2:
+                    objs.pop(i, None)
+                    continue
+                old = objs.get(i)
+                if old is None and name.upper().startswith("PROJ_") and first_shot is None and mf:
+                    first_shot = mf
+                if old is not None and owner_fac.get(own) and is_unit(name) and hp < old[2]:
+                    damage[owner_fac[own]] += old[2] - hp
+                objs[i] = [own, name, hp]
+            elif t == "X":
+                objs.pop(int(p[1]), None)
+            elif t == "C":
+                players[int(p[1])] = q2.f32(p[2])
+                flags[int(p[1])] = (int(p[4]), int(p[5])) if len(p) >= 6 else (0, 0)
+            elif t == "E":
+                end_reason = " ".join(p[1:])
+            elif t == "end":
+                break
+    close(mf)
+    out = {}
+    skirmish_snapshot_metrics(snaps, credits, frames, out)
+    for f in FACTIONS:
+        if f in owner_fac.values():
+            out["combat.damage_taken[%s]" % f] = damage.get(f, 0.0)
+    if first_shot is not None:
+        out["combat.first_shot_frame"] = first_shot
+    out["outcome.battle_ended"] = 0 if end_reason in ("ticks_reached", "frames_reached") else 1
+    return out, [], {"factions": owner_fac, "ticks": mf, "seed": None, "label": meta.get("label"), "end": end_reason}
+
+
+STATE_RE = re.compile(r"^state t=(\d+) battle frame (\d+):(.*)$")
+PLAYER_RE = re.compile(r"p(\d+) credits (-?[\d.]+) objects (\d+);")
+UNITS_RE = re.compile(r"p(\d+)\{([^}]*)\}")
+PAD_RE = re.compile(r"\d+:\S+?/p(\d+)=(\S+)")
+
+
+def skirmish_port_metrics(ai_log, frames, ticks_wanted, run_text=""):
+    """Port skirmish host AI log (alamo_headless --skirmish-ai skirmish --ai-log): state blocks every 600 battle frames."""
+    snaps, credits, slot_fac = {}, {}, {}
+    cur = None
+    with open(ai_log, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            sm = STATE_RE.match(line)
+            if sm:
+                cur = int(sm.group(2))
+                credits[cur] = {int(a): float(b) for a, b, _ in PLAYER_RE.findall(sm.group(3))}
+                snaps[cur] = collections.defaultdict(collections.Counter)
+                continue
+            if cur is None:
+                continue
+            s = line.strip()
+            if s.startswith("units:"):
+                for slot, body in UNITS_RE.findall(s):
+                    for tok in body.split():
+                        name, _, n = tok.rpartition("x")
+                        if name and n.isdigit() and is_unit(name):
+                            snaps[cur][int(slot)][name.upper()] += int(n)
+            elif s.startswith("pads:"):
+                for slot, content in PAD_RE.findall(s):
+                    if is_unit(content):
+                        snaps[cur][int(slot)][content.upper()] += 1
+    # Slot factions from what each slot owns at the start.
+    if snaps:
+        first = snaps[min(snaps)]
+        slot_fac.update(assign_factions({slot: list(cnt.elements()) for slot, cnt in first.items()}))
+    fsnaps = {fr: {slot_fac[s]: c for s, c in d.items() if s in slot_fac} for fr, d in snaps.items()}
+    fcred = {fr: {slot_fac[s]: v for s, v in d.items() if s in slot_fac} for fr, d in credits.items()}
+    # Port frame 0 is the state before the first battle tick; the retail trace's frame 1 snapshot is the first one taken.
+    if 0 in fsnaps and 1 not in fsnaps:
+        fsnaps[1] = fsnaps.pop(0)
+    out = {}
+    skirmish_snapshot_metrics(fsnaps, fcred, frames, out)
+    m = re.search(r"skirmish-ai \S+ workers \d+: (\d+) ticks", run_text)
+    if m:
+        out["outcome.battle_ended"] = 1 if int(m.group(1)) < ticks_wanted else 0
+    return out, [], {"factions": slot_fac, "ticks": max(snaps) if snaps else None}
+
+
+# ---- grading ------------------------------------------------------------------------------------------------------------
+def family(metric_id):
+    return metric_id.split("[", 1)[0]
+
+
+def bracket(metric_id):
+    return metric_id.split("[", 1)[1].rstrip("]") if "[" in metric_id else None
+
+
+def tolerance_for(tols, metric_id):
+    """The most specific tolerance entry. A key is a family prefix ("ai", "econ.credits_at", "travel.hop_ticks"),
+    optionally with a bracket ("econ.credits_at[Empire]" = that family for that faction only), or an exact metric id.
+    Exact id wins, then the longest matching prefix, then a bracketed key over a bare one."""
+    if metric_id in tols:
+        return tols[metric_id]
+    fam, br = family(metric_id), bracket(metric_id)
+    best, best_key = None, None
+    for k, v in tols.items():
+        kfam, kbr = family(k), bracket(k)
+        if not fam.startswith(kfam) or (kbr is not None and kbr != br):
+            continue
+        key = (len(kfam), kbr is not None)
+        if best_key is None or key > best_key:
+            best, best_key = v, key
+    return best
+
+
+def scalar_values(v):
+    if isinstance(v, (tuple, list)):
+        return [float(x) for x in v]
+    return [float(v)]
+
+
+def grade(metric_id, retail_vals, port_val, tol, port_note=None, retail_note=None):
+    """One metric: retail_vals = values of the reference runs that have it (None left out), port_val or None."""
+    cat = CATEGORY.get(metric_id.split(".", 1)[0], "other")
+    res = {"metric": metric_id, "category": cat, "status": None, "retail": None, "port": None, "tolerance": None,
+           "detail": ""}
+    rv = [v for v in retail_vals if v is not None]
+    is_mix = any(isinstance(v, collections.Counter) for v in rv) or isinstance(port_val, collections.Counter)
+    if is_mix:
+        res["retail"] = [dict(sorted(v.items())) for v in rv]
+        res["port"] = dict(sorted(port_val.items())) if port_val is not None else None
+    else:
+        res["retail"] = rv
+        res["port"] = port_val
+    if tol is None or tol.get("info"):
+        res["status"] = "INFO"
+        res["detail"] = "port %s, retail %s; not graded" % (port_val, " | ".join(str(v) for v in rv) or "-")
+        return res
+    if not rv or port_val is None:
+        res["status"] = "N/A"
+        def show(v):
+            return ("%d items" % sum(v.values())) if isinstance(v, collections.Counter) else "%g" % scalar_values(v)[0]
+        if not rv:
+            res["detail"] = "no retail value%s; port %s" % (" (%s)" % retail_note if retail_note else "", show(port_val))
+        else:
+            res["detail"] = "no port value%s; retail %s" % (" (%s)" % port_note if port_note else "", ", ".join(show(v) for v in rv))
+        return res
+    if is_mix:
+        thr = float(tol.get("min_overlap", 1.0))
+        best = max(overlap(port_val, r) for r in rv)
+        pair = [overlap(rv[i], rv[j]) for i in range(len(rv)) for j in range(i + 1, len(rv))]
+        if tol.get("retail_floor") and pair:
+            thr = min(thr, round(min(pair), 3))  # as close to a retail run as the retail runs are to each other
+        res["tolerance"] = {"min_overlap": thr}
+        res["score"] = round(best, 3)
+        res["status"] = "PASS" if best >= thr else "FAIL"
+        res["detail"] = "overlap with the closest retail run %.2f (need >= %.2f)%s; port %d, retail %s items" % (
+            best, thr, "; retail runs among themselves %.2f..%.2f" % (min(pair), max(pair)) if pair else "",
+            sum(port_val.values()), "/".join(str(sum(r.values())) for r in rv))
+        return res
+    vals = [x for v in rv for x in scalar_values(v)]
+    lo, hi = min(vals), max(vals)
+    a, r = float(tol.get("abs", 0.0)), float(tol.get("rel", 0.0))
+    pv = scalar_values(port_val)
+    nr = "%d run%s" % (len(rv), "" if len(rv) == 1 else "s")
+    if tol.get("nearest"):
+        # Each port value must lie within tol of some retail value (a multi-modal metric: one route, several fleet speeds).
+        pool = sorted(set(vals))
+        cand = []
+        for p in pv:
+            near = min(pool, key=lambda x: abs(x - p))
+            t = max(a, r * abs(near))
+            cand.append((abs(p - near) - t, p - near, t))
+        _, worst, t = max(cand)
+        res["tolerance"] = round(t, 3)
+        res["diff"] = round(worst, 3)
+        res["status"] = "PASS" if abs(worst) <= t + 1e-9 else "FAIL"
+        res["detail"] = "port %s, retail %s (%s), worst %+g from the nearest retail value, tol %g" % (
+            ", ".join("%g" % p for p in pv), ", ".join("%g" % x for x in pool), nr, worst, t)
+        return res
+    t = max(a, r * max(abs(lo), abs(hi)))
+    plo, phi = min(pv), max(pv)  # a port value can be a window too (a trace with missed samples)
+    diff = 0.0 if plo <= hi and phi >= lo else (plo - hi if plo > hi else phi - lo)
+    res["tolerance"] = round(t, 3)
+    res["diff"] = round(diff, 3)
+    res["status"] = "PASS" if abs(diff) <= t + 1e-9 else "FAIL"
+    rng = ("%g" % lo) if lo == hi else "%g..%g" % (lo, hi)
+    ptxt = ("%g" % plo) if plo == phi else "%g..%g" % (plo, phi)
+    res["detail"] = "port %s, retail %s (%s), diff %+g, tol %g" % (ptxt, rng, nr, diff, t)
+    return res
+
+
+def compare(scen, tols, retail_runs, port, gaps=None):
+    """retail_runs: [(name, metrics)], port: metrics or None. Returns graded results sorted by category and id."""
+    gaps = gaps or {}
+    ids = set()
+    for _, mm in retail_runs:
+        ids |= set(mm)
+    ids |= set(port or {})
+    results = []
+    for mid in sorted(ids):
+        fam = family(mid)
+        tol = tolerance_for(tols, mid)
+        rv = [mm.get(mid) for _, mm in retail_runs]
+        pv = (port or {}).get(mid)
+        # A route / type seen on one side only is an AI-choice difference, already graded by the mix metrics.
+        if fam in ("travel.hop_ticks", "build.ticks") and (pv is None or not any(v is not None for v in rv)):
+            continue
+        note = gaps.get(mid) or gaps.get(fam)
+        results.append(grade(mid, rv, pv, tol, port_note=note, retail_note=note))
+    order = {"timing": 0, "income": 1, "AI choices": 2, "battle outcomes": 3, "damage": 4, "diagnostic": 5}
+    results.sort(key=lambda x: (order.get(x["category"], 9), x["metric"]))
+    return results
+
+
+# ---- distribution mode (parity tier 2, docs/DECISIONS.md "Parity tiers") --------------------------------------------------
+DIST_DEFAULTS = {"seeds": 10, "z": 2.0, "spread_factor": 3.0, "spread_min_runs": 5, "seed_min_share": 0.8}
+
+
+def dist_config(scens, scen):
+    """Distribution settings: DIST_DEFAULTS, then scenarios.json "distribution", then the scenario's own "distribution"."""
+    cfg = dict(DIST_DEFAULTS)
+    cfg.update({k: v for k, v in (scens.get("distribution") or {}).items() if k != "why"})
+    cfg.update({k: v for k, v in (scen.get("distribution") or {}).items() if k != "why"})
+    return cfg
+
+
+def describe(xs):
+    """n, mean, sample standard deviation (0 below 2 values), min, max of a list of numbers."""
+    n = len(xs)
+    mean = sum(xs) / n
+    sd = statistics.stdev(xs) if n >= 2 else 0.0
+    return {"n": n, "mean": mean, "sd": sd, "min": min(xs), "max": max(xs)}
+
+
+def mean_mix(mixes):
+    """The mean of several type mixes (Counters): per type, the count summed over the runs divided by the runs."""
+    tot = collections.Counter()
+    for m in mixes:
+        tot.update(m)
+    return collections.Counter({k: v / len(mixes) for k, v in tot.items()})
+
+
+def grade_dist(metric_id, retail_vals, port_vals, tol, cfg, note=None):
+    """One metric over several runs per side: retail_vals = one value per retail run, port_vals = one per port seed (None
+    where that run has no value). Scalars: the means must agree within tol + z * standard error, and (with at least
+    spread_min_runs values on both sides) the spreads within spread_factor of each other (plus tol). Type mixes: overlap of
+    the mean mixes. Windows and multi-modal values (tuples, `nearest`): pooled over the runs and graded like one run."""
+    cat = CATEGORY.get(metric_id.split(".", 1)[0], "other")
+    rv = [v for v in retail_vals if v is not None]
+    pv = [v for v in port_vals if v is not None]
+    res = {"metric": metric_id, "category": cat, "status": None, "mode": "distribution", "tolerance": None, "detail": "",
+           "retail_runs": len(rv), "port_runs": len(pv), "retail_total": len(retail_vals), "port_total": len(port_vals)}
+    seen = "seen in %d/%d retail runs, %d/%d port seeds" % (len(rv), len(retail_vals), len(pv), len(port_vals))
+    if tol is None or tol.get("info"):
+        res["status"] = "INFO"
+        nums = [x for v in pv for x in (scalar_values(v) if not isinstance(v, collections.Counter) else [])]
+        rnums = [x for v in rv for x in (scalar_values(v) if not isinstance(v, collections.Counter) else [])]
+        res["detail"] = "port %s, retail %s; not graded" % (
+            "%.6g+-%.3g" % (describe(nums)["mean"], describe(nums)["sd"]) if nums else "-",
+            "%.6g+-%.3g" % (describe(rnums)["mean"], describe(rnums)["sd"]) if rnums else "-")
+        return res
+    if not rv or not pv:
+        res["status"] = "N/A"
+        res["detail"] = "no %s value%s; %s" % ("retail" if not rv else "port", " (%s)" % note if note else "", seen)
+        return res
+    if any(isinstance(v, collections.Counter) for v in rv + pv):
+        thr = float(tol.get("min_overlap", 1.0))
+        pair = [overlap(rv[i], rv[j]) for i in range(len(rv)) for j in range(i + 1, len(rv))]
+        if tol.get("retail_floor") and pair:
+            thr = min(thr, round(min(pair), 3))
+        mr, mp = mean_mix(rv), mean_mix(pv)
+        ov = overlap(mp, mr)
+        res.update(tolerance={"min_overlap": thr}, score=round(ov, 3), status="PASS" if ov >= thr else "FAIL",
+                   retail={"mean_mix": {k: round(v, 3) for k, v in sorted(mr.items())}},
+                   port={"mean_mix": {k: round(v, 3) for k, v in sorted(mp.items())}})
+        res["detail"] = "mean-mix overlap %.2f (need >= %.2f); items per run port %.1f, retail %.1f; %s" % (
+            ov, thr, sum(mp.values()), sum(mr.values()), seen)
+        return res
+    if tol.get("nearest") or any(isinstance(v, (tuple, list)) for v in rv + pv):
+        # Multi-modal (one route, several fleet speeds) and window values have no mean: each seed is graded like a single
+        # run against all retail runs, and the metric passes when at least seed_min_share of the seeds pass (a fleet mix
+        # that only some seeds build is an AI choice, tier 2; a wrong speed moves every seed).
+        per = [grade(metric_id, rv, v, tol) for v in pv]
+        ok = sum(1 for g in per if g["status"] == "PASS")
+        need = float(cfg.get("seed_min_share", DIST_DEFAULTS["seed_min_share"]))
+        worst = max(per, key=lambda g: abs(g.get("diff", 0.0)) - float(g.get("tolerance") or 0.0))
+        pooled = sorted(set(x for v in pv for x in scalar_values(v)))
+        res.update(mode="per-seed", tolerance=worst.get("tolerance"), share=round(ok / len(per), 3),
+                   retail=sorted(set(x for v in rv for x in scalar_values(v))), port=pooled,
+                   status="PASS" if ok >= need * len(per) - 1e-9 else "FAIL")
+        res["detail"] = "%d/%d seeds within tolerance (need %.0f%%); port values %s; worst seed: %s" % (
+            ok, len(per), 100 * need, ", ".join("%g" % x for x in pooled), worst["detail"])
+        return res
+    r, p = describe([float(v) for v in rv]), describe([float(v) for v in pv])
+    a, rel = float(tol.get("abs", 0.0)), float(tol.get("rel", 0.0))
+    t = max(a, rel * abs(r["mean"]))
+    # Standard error of the difference of the means. With one value on a side its spread is unknown: assume the other
+    # side's (the same distribution is the hypothesis being tested), which turns the check into a prediction interval.
+    sr = r["sd"] if r["n"] >= 2 else p["sd"]
+    sp = p["sd"] if p["n"] >= 2 else r["sd"]
+    se = math.sqrt(sp * sp / p["n"] + sr * sr / r["n"])
+    z = float(cfg.get("z", 2.0))
+    allowed = t + z * se
+    diff = p["mean"] - r["mean"]
+    mean_ok = abs(diff) <= allowed + 1e-9
+    k = int(cfg.get("spread_min_runs", 5))
+    f = float(cfg.get("spread_factor", 3.0))
+    spread_graded = r["n"] >= k and p["n"] >= k
+    spread_ok = (not spread_graded) or (p["sd"] <= f * r["sd"] + t + 1e-9 and r["sd"] <= f * p["sd"] + t + 1e-9)
+    res.update(retail=r, port=p, tolerance=round(t, 3), diff=round(diff, 3), allowed=round(allowed, 3),
+               spread_graded=spread_graded, status="PASS" if mean_ok and spread_ok else "FAIL")
+    why = [] if mean_ok else ["mean"]
+    if not spread_ok:
+        why.append("spread")
+    def sd_txt(d):
+        return "+-%.3g" % d["sd"] if d["n"] >= 2 else ""
+    res["detail"] = "port %.6g%s (%d seeds, %g..%g), retail %.6g%s (%d run%s, %g..%g); mean diff %+.4g, allowed %.4g " \
+                    "(tol %g + %g*se %.3g); spread %s%s%s" % (
+                        p["mean"], sd_txt(p), p["n"], p["min"], p["max"], r["mean"], sd_txt(r), r["n"],
+                        "" if r["n"] == 1 else "s", r["min"], r["max"], diff,
+                        allowed, t, z, se,
+                        ("sd ratio %s, need within x%g" % ("%.2f" % (p["sd"] / r["sd"]) if r["sd"] > 0 else
+                                                           ("1" if p["sd"] == 0 else "inf"), f)) if spread_graded else
+                        "not graded (fewer than %d runs on a side)" % k,
+                        "; FAIL on %s" % " and ".join(why) if why else "",
+                        "; %s" % seen if len(rv) < len(retail_vals) or len(pv) < len(port_vals) else "")
+    return res
+
+
+def compare_dist(scen, tols, retail_runs, port_runs, cfg, gaps=None):
+    """retail_runs: [(name, metrics)], port_runs: [(seed, metrics)]. Graded results sorted by category and id."""
+    gaps = gaps or {}
+    ids = set()
+    for _, mm in list(retail_runs) + list(port_runs):
+        ids |= set(mm)
+    results = []
+    for mid in sorted(ids):
+        fam = family(mid)
+        rv = [mm.get(mid) for _, mm in retail_runs]
+        pv = [mm.get(mid) for _, mm in port_runs]
+        if fam in ("travel.hop_ticks", "build.ticks") and (all(v is None for v in pv) or all(v is None for v in rv)):
+            continue
+        results.append(grade_dist(mid, rv, pv, tolerance_for(tols, mid), cfg, gaps.get(mid) or gaps.get(fam)))
+    order = {"timing": 0, "income": 1, "AI choices": 2, "battle outcomes": 3, "damage": 4, "diagnostic": 5}
+    results.sort(key=lambda x: (order.get(x["category"], 9), x["metric"]))
+    return results
+
+
+def summarize(results):
+    s = collections.OrderedDict()
+    for r in results:
+        c = s.setdefault(r["category"], collections.Counter())
+        c[r["status"]] += 1
+    return {k: dict(v) for k, v in s.items()}
+
+
+def render(scen_id, scen, results, info, refs_used, commit, mode=None):
+    lines = ["Q4 parity harness: %s (%s)" % (scen_id, scen.get("title", "")),
+             "  mode: %s" % (mode or "single port run against the retail envelope"),
+             "  port commit: %s" % (commit or "?"),
+             "  reference runs: %s" % ", ".join(refs_used),
+             "  port: %s" % info.get("port_cmd", "?"), ""]
+    for n in info.get("notes", []):
+        lines.append("  NOTE " + n)
+    w = max([len(r["metric"]) for r in results] + [10])
+    cat = None
+    for r in results:
+        if r["category"] != cat:
+            cat = r["category"]
+            lines.append("")
+            lines.append("== " + cat)
+        lines.append("%-*s  %-5s %s" % (w, r["metric"], r["status"], r["detail"]))
+    lines.append("")
+    summ = summarize(results)
+    lines.append("summary: " + "; ".join("%s %s" % (k, ", ".join("%s %d" % kv for kv in sorted(v.items()))) for k, v in summ.items()))
+    tot = collections.Counter(r["status"] for r in results)
+    lines.append("total: %s" % ", ".join("%s %d" % kv for kv in sorted(tot.items())))
+    return "\n".join(lines) + "\n"
+
+
+# ---- scenarios, port runs -----------------------------------------------------------------------------------------------
+def load_scenarios():
+    return load_json(os.path.join(HERE, "scenarios.json"))
+
+
+def resolve_refs(scen, refs_dir, fallback=()):
+    """[(run name, run dir)] of the scenario's reference runs present under refs_dir (else the first fallback folder that
+    holds the run), plus the missing ones."""
+    have, missing = [], []
+    for r in scen["references"]:
+        d = next((os.path.join(b, r["run"]) for b in (refs_dir,) + tuple(fallback)
+                  if os.path.exists(os.path.join(b, r["run"], "trace.q2t"))), None)
+        if d:
+            have.append((r["run"], d))
+        else:
+            missing.append(r["run"])
+    return have, missing
+
+
+def retail_metrics(scen, run_dir):
+    trace = os.path.join(run_dir, "trace.q2t")
+    if scen["kind"] == "galactic":
+        return galactic_metrics(trace, os.path.join(run_dir, "production.q2q"), max_tick=scen.get("max_tick"))
+    return skirmish_retail_metrics(trace, set(scen["frames"]))
+
+
+def default_seed(scen, ref_info):
+    """The port seed of the single-run mode: galactic, the reference run's (retail starts from seed 0 on the menu path);
+    skirmish, none (the host's default, 1: retail seeds a skirmish itself, tools/probe_mod/q2_traces/README.md)."""
+    if scen["kind"] == "galactic":
+        return int(ref_info.get("seed") or "0", 16)
+    return None
+
+
+# b0319 (Gabriel, 2026-11-14): the port's fighter / bomber squadrons of 12 (bdb9cd57) are a deliberate departure from
+# retail, so the port side always runs with the retail squadron lists and prices: the harness measures the retail rules.
+RETAIL_ARGS = ["--squadron-size", "0"]
+
+
+def port_command(scen, exe, out_dir, ref_info, seed=None):
+    """seed None: the single-run mode's seed (default_seed)."""
+    if seed is None:
+        seed = default_seed(scen, ref_info)
+    seed_args = ["--seed", str(seed)] if seed is not None else []
+    if scen["kind"] == "galactic":
+        campaign = ref_info["campaign"]
+        human = campaign.rsplit("_", 1)[-1]
+        return [exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human] + RETAIL_ARGS + seed_args + [
+                "--ticks", str(ref_info["ticks"]), "--workers", str(scen.get("workers", 4)), "--quiet", "--story",
+                "--crc-out", os.path.join(out_dir, "port.crc"), "--ai-log", os.path.join(out_dir, "port_ai.txt"),
+                "--trace-out", os.path.join(out_dir, "port.q2t")]
+    # The host logs its state on battle frame 0 and every 600 frames, frame f at host tick f + 1: one tick more than the
+    # scenario so the last frame's state is written.
+    return [exe, "--skirmish-ai", "skirmish", "--map", scen["map"], "--human", scen["human"], "--ticks", str(scen["ticks"] + 1)
+            ] + RETAIL_ARGS + seed_args + [
+            "--workers", str(scen.get("workers", 4)), "--quiet", "--ai-log", os.path.join(out_dir, "port_ai.txt"),
+            "--crc-out", os.path.join(out_dir, "port.crc"), "--trace-out", os.path.join(out_dir, "port.q2t")]
+
+
+def seed_list(scen, ref_info, cfg, count=None, base=None):
+    """The port seeds of the distribution mode: `count` seeds from `base` (default: the single-run seed, else 1), so the
+    single run's seed is always the first."""
+    n = int(count if count is not None else cfg.get("seeds", DIST_DEFAULTS["seeds"]))
+    if base is None:
+        base = cfg.get("seed_base")
+    if base is None:
+        base = default_seed(scen, ref_info)
+    if base is None:
+        base = 1
+    return [int(base) + k for k in range(n)]
+
+
+def skirmish_port_trace_metrics(trace_path, frames):
+    """Port skirmish host tactical trace (--trace-out, q4hf t02): the damage metrics, reduced by the retail reader (hull lost
+    per faction from the per-object health, the first shot). Units, credits and builds keep coming from the AI log."""
+    m, _, info = skirmish_retail_metrics(trace_path, frames)
+    return {k: v for k, v in m.items() if k.startswith("combat.")}, info
+
+
+def run_port(scen, exe, out_dir, ref_info, reuse, seed=None):
+    os.makedirs(out_dir, exist_ok=True)
+    cmd = port_command(scen, exe, out_dir, ref_info, seed)
+    log = os.path.join(out_dir, "port_run.txt")
+    if not (reuse and os.path.exists(log) and os.path.exists(os.path.join(out_dir, "port_ai.txt"))):
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        with open(log, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(" ".join(cmd) + "\n" + r.stdout + r.stderr)
+        if r.returncode != 0:
+            raise RuntimeError("port run failed (exit %d), see %s" % (r.returncode, log))
+    with open(log, "r", encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    if scen["kind"] == "galactic":
+        m, notes, info = galactic_metrics(os.path.join(out_dir, "port.q2t"), ai_log=os.path.join(out_dir, "port_ai.txt"))
+    else:
+        m, notes, info = skirmish_port_metrics(os.path.join(out_dir, "port_ai.txt"), set(scen["frames"]), scen["ticks"] + 1, text)
+        trace = os.path.join(out_dir, "port.q2t")
+        if os.path.exists(trace):
+            cm, _ = skirmish_port_trace_metrics(trace, set(scen["frames"]))
+            m.update(cm)
+        else:
+            notes.append("no port tactical trace (%s): combat.* has no port value" % trace)
+    info["port_cmd"] = " ".join(os.path.basename(c) if i == 0 else c for i, c in enumerate(cmd))
+    return m, notes, info
+
+
+def seed_range(seeds):
+    return ("%d..%d" % (seeds[0], seeds[-1])) if seeds == list(range(seeds[0], seeds[0] + len(seeds))) else \
+        ", ".join(str(s) for s in seeds)
+
+
+def run_port_seeds(scen, exe, out_dir, ref_info, reuse, seeds, jobs=None):
+    """The port run once per seed (out_dir/seed_<s>), `jobs` at a time (separate processes, separate folders). Returns
+    ([(seed, metrics)] in seed order, notes, info of the first seed)."""
+    import concurrent.futures
+    jobs = max(1, int(jobs or min(4, len(seeds))))
+
+    def one(s):
+        return run_port(scen, exe, os.path.join(out_dir, "seed_%d" % s), ref_info, reuse, s)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+        done = list(ex.map(one, seeds))
+    notes = []
+    for s, (_, nn, _) in zip(seeds, done):
+        notes += ["seed %d: %s" % (s, n) for n in nn]
+    info = dict(done[0][2])
+    info["port_cmd"] = "%s (seeds %s)" % (info.get("port_cmd"), seed_range(seeds))
+    return [(s, m) for s, (m, _, _) in zip(seeds, done)], notes, info
+
+
+def git_head():
+    try:
+        return subprocess.run(["git", "-C", REPO, "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True,
+                              check=False).stdout.strip() or None
+    except OSError:
+        return None
+
+
+def check_baseline(baseline, scen_id, results):
+    """Metrics that passed in the baseline and fail now (a regression); PASS -> N/A is listed, not failed."""
+    base = (baseline.get("scenarios") or {}).get(scen_id, {}).get("status", {})
+    now = {r["metric"]: r["status"] for r in results}
+    regress = sorted(k for k, v in base.items() if v == "PASS" and now.get(k) == "FAIL")
+    gone = sorted(k for k, v in base.items() if v == "PASS" and now.get(k) in (None, "N/A"))
+    improved = sorted(k for k, v in now.items() if v == "PASS" and base.get(k) == "FAIL")
+    return regress, gone, improved
+
+
+def cmd_run(a):
+    scens = load_scenarios()
+    refs_dir, fallback = refs_search(a)
+    ids = a.scenario or list(scens["scenarios"])
+    exe = a.port_exe or default_port_exe()
+    commit = a.commit or git_head()
+    seeds_mode = bool(getattr(a, "seeds", None))
+    mode = "distribution" if seeds_mode else "single"
+    baseline = load_json(a.check_baseline) if a.check_baseline else None
+    if baseline is not None and baseline.get("mode", "single") != mode:
+        print("ERROR: baseline %s is a %s-mode baseline, this is a %s-mode run (single: baseline.json, --seeds: "
+              "baseline_seeds.json)" % (a.check_baseline, baseline.get("mode", "single"), mode))
+        return 2
+    new_base = {"commit": commit, "scenarios": {}}
+    if a.write_baseline and os.path.exists(a.write_baseline):
+        new_base = load_json(a.write_baseline)
+        new_base["commit"] = commit
+        new_base.setdefault("scenarios", {})
+    if seeds_mode:
+        new_base["mode"] = mode
+    rc, ran = 0, 0
+    for sid in ids:
+        scen = scens["scenarios"].get(sid)
+        if scen is None:
+            print("unknown scenario %s (have %s)" % (sid, ", ".join(scens["scenarios"])))
+            return 2
+        have, missing = resolve_refs(scen, refs_dir, fallback)
+        if not have:
+            print("SKIP %s: no reference run under %s (missing %s; kit: %s)" % (sid, refs_dir, ", ".join(missing), scen["kit"]))
+            continue
+        if not os.environ.get("ALAMO_FOC_DATA"):
+            print("SKIP %s: ALAMO_FOC_DATA not set (the port run needs the game data)" % sid)
+            continue
+        if not exe or not os.path.exists(exe):
+            print("SKIP %s: no alamo_headless.exe (give --port-exe)" % sid)
+            continue
+        print("%s: %d reference run(s) from %s%s" % (sid, len(have), refs_dir,
+                                                       "; missing %s" % ", ".join(missing) if missing else ""))
+        retail = []
+        notes = []
+        ref_info = None
+        for name, d in have:
+            mm, nn, info = retail_metrics(scen, d)
+            retail.append((name, mm))
+            notes += ["%s: %s" % (name, n) for n in nn]
+            ref_info = ref_info or info
+        out_dir = os.path.join(a.out or os.path.join(HERE, "out"), sid)
+        extra = {}
+        if seeds_mode:
+            cfg = dist_config(scens, scen)
+            seeds = seed_list(scen, ref_info, cfg, a.seeds, a.seed_base)
+            out_dir = os.path.join(out_dir, "seeds")
+            try:
+                port_runs, pn, pinfo = run_port_seeds(scen, exe, out_dir, ref_info, a.reuse_port, seeds, a.jobs)
+            except RuntimeError as e:
+                print("ERROR %s: %s" % (sid, e))
+                return 2
+            notes += ["port: %s" % n for n in pn]
+            results = compare_dist(scen, scens["tolerances"], retail, port_runs, cfg, scen.get("gaps"))
+            info = {"port_cmd": pinfo.get("port_cmd"), "notes": notes}
+            text = render(sid, scen, results, info, [n for n, _ in have], commit,
+                          mode="distribution over %d port seeds (%s) and %d retail runs; z %g, spread factor %g, spread "
+                               "graded from %d runs a side" % (len(seeds), seed_range(seeds), len(retail), cfg["z"],
+                                                                cfg["spread_factor"], cfg["spread_min_runs"]))
+            if len(retail) < 2:
+                text += ("only one retail run: the retail spread is taken to be the port's (a prediction interval); "
+                         "capture more with tools/probe_mod/parity_refs\n")
+            extra = {"mode": "distribution", "seeds": seeds, "distribution": cfg}
+        else:
+            try:
+                pm, pn, pinfo = run_port(scen, exe, out_dir, ref_info, a.reuse_port)
+            except RuntimeError as e:
+                print("ERROR %s: %s" % (sid, e))
+                return 2
+            notes += ["port: %s" % n for n in pn]
+            results = compare(scen, scens["tolerances"], retail, pm, scen.get("gaps"))
+            info = {"port_cmd": pinfo.get("port_cmd"), "notes": notes}
+            text = render(sid, scen, results, info, [n for n, _ in have], commit)
+        loo = None if seeds_mode else leave_one_out(scen, scens["tolerances"], retail)
+        if loo:
+            text += ("retail leave-one-out (each retail run graded like the port against the other %d, same tolerances; the port "
+                     "is graded against all %d, a wider envelope): %s\n" % (len(retail) - 1, len(retail), "; ".join(
+                         "%s %s" % (k, ", ".join("%s %d" % kv for kv in sorted(v.items()))) for k, v in loo.items())))
+        verdict = ""
+        if baseline is not None:
+            regress, gone, improved = check_baseline(baseline, sid, results)
+            verdict = "baseline %s (commit %s): %d regressions%s; %d metrics passing in the baseline are N/A now%s; " \
+                      "%d improved%s\n" % (
+                          a.check_baseline, baseline.get("commit"), len(regress), " (%s)" % ", ".join(regress) if regress else "",
+                          len(gone), " (%s)" % ", ".join(gone) if gone else "", len(improved),
+                          " (%s): re-record with --write-baseline" % ", ".join(improved) if improved else "")
+            if regress:
+                rc = max(rc, 1)
+        elif any(r["status"] == "FAIL" for r in results):
+            rc = max(rc, 1)
+        text += verdict
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "report.txt"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        write_json(os.path.join(out_dir, "report.json"), dict({"scenario": sid, "commit": commit, "references": [n for n, _ in have],
+                                                               "missing_references": missing, "notes": notes, "results": results,
+                                                               "summary": summarize(results)}, **extra))
+        print(text, end="")
+        print("wrote %s" % os.path.join(out_dir, "report.txt"))
+        new_base["scenarios"][sid] = dict({"references": [n for n, _ in have], "summary": summarize(results),
+                                           "status": {r["metric"]: r["status"] for r in results}},
+                                          **({"seeds": extra["seeds"]} if seeds_mode else {}))
+        ran += 1
+    if ran == 0:
+        return SKIP
+    if a.write_baseline:
+        write_json(a.write_baseline, new_base)
+        print("wrote baseline %s" % a.write_baseline)
+    return rc
+
+
+def leave_one_out(scen, tols, runs):
+    """Per category status counts of every retail run graded as if it were the port, against the other runs."""
+    if len(runs) < 2:
+        return None
+    out = collections.OrderedDict()
+    for i, (_, mm) in enumerate(runs):
+        for r in compare(scen, tols, [x for j, x in enumerate(runs) if j != i], mm, scen.get("gaps")):
+            out.setdefault(r["category"], collections.Counter())[r["status"]] += 1
+    return out
+
+
+def cmd_retail(a):
+    scens = load_scenarios()
+    refs_dir, fallback = refs_search(a)
+    for sid in a.scenario or list(scens["scenarios"]):
+        scen = scens["scenarios"][sid]
+        have, missing = resolve_refs(scen, refs_dir, fallback)
+        print("== %s: %d run(s)%s" % (sid, len(have), "; missing %s" % ", ".join(missing) if missing else ""))
+        runs = [(n, retail_metrics(scen, d)[0]) for n, d in have]
+        if len(runs) < 2:
+            print("  one run only: no spread")
+            continue
+        ids = sorted(set().union(*[set(m) for _, m in runs]))
+        for mid in ids:
+            vals = [m.get(mid) for _, m in runs]
+            if any(isinstance(v, collections.Counter) for v in vals):
+                vv = [v for v in vals if v is not None]
+                pair = [overlap(vv[i], vv[j]) for i in range(len(vv)) for j in range(i + 1, len(vv))]
+                print("  %-44s overlap %s" % (mid, " ".join("%.2f" % x for x in pair)))
+            else:
+                print("  %-44s %s" % (mid, " | ".join("-" if v is None else str(v) for v in vals)))
+        # Leave one out: each retail run graded as if it were the port, against the other runs. A tolerance that fails
+        # retail against itself is too tight (it would flag the original game's own run-to-run spread).
+        tot = collections.Counter()
+        for i, (name, mm) in enumerate(runs):
+            others = [r for j, r in enumerate(runs) if j != i]
+            res = compare(scen, scens["tolerances"], others, mm, scen.get("gaps"))
+            c = collections.Counter(r["status"] for r in res)
+            tot.update(c)
+            print("  leave-one-out %s: %s%s" % (name, ", ".join("%s %d" % kv for kv in sorted(c.items())),
+                                               "".join("\n    FAIL %s: %s" % (r["metric"], r["detail"]) for r in res
+                                                       if r["status"] == "FAIL")))
+        print("  leave-one-out total: %s" % ", ".join("%s %d" % kv for kv in sorted(tot.items())))
+    return 0
+
+
+def cmd_list(a):
+    scens = load_scenarios()
+    refs_dir, fallback = refs_search(a)
+    print("reference folder: %s" % refs_dir)
+    for sid, scen in scens["scenarios"].items():
+        have, missing = resolve_refs(scen, refs_dir, fallback)
+        print("%s (%s): %s" % (sid, scen["kind"], scen.get("title", "")))
+        for r in scen["references"]:
+            print("  %-42s %s  %s" % (r["run"], "present" if r["run"] in [n for n, _ in have] else "MISSING", r.get("note", "")))
+        print("  kit: %s" % scen["kit"])
+        print("  %d of %d present; distribution mode (--seeds) %s" % (
+            len(have), len(scen["references"]), "compares spreads too" if len(have) >= dist_config(scens, scen)["spread_min_runs"]
+            else "grades means only (spread needs %d retail runs)" % dist_config(scens, scen)["spread_min_runs"]))
+    return 0
+
+
+def _list_span(text, start):
+    """(index of '[', index of its matching ']') of the first JSON list at or after `start`, strings skipped."""
+    i = text.index("[", start)
+    depth, k, in_str = 0, i, False
+    while k < len(text):
+        c = text[k]
+        if in_str:
+            if c == "\\":
+                k += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c in "[{":
+            depth += 1
+        elif c in "]}":
+            depth -= 1
+            if depth == 0:
+                return i, k
+        k += 1
+    raise ValueError("unbalanced list")
+
+
+def add_refs(path, sid, runs, note):
+    """Append reference runs to a scenario of scenarios.json, keeping the file's hand layout (one run per line).
+    Returns the runs added (ones already listed are left out)."""
+    with open(path, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    data = json.loads(text)
+    scen = data["scenarios"].get(sid)
+    if scen is None:
+        raise ValueError("unknown scenario %s" % sid)
+    have = {r["run"] for r in scen["references"]} | set((scen.get("excluded_references") or {}))
+    new = [r for r in dict.fromkeys(runs) if r not in have]
+    if not new:
+        return []
+    at = text.index('"references"', text.index('"%s": {' % sid, text.index('"scenarios"')))
+    lo, hi = _list_span(text, at)
+    body = text[lo + 1:hi].rstrip()
+    line_start = text.rfind("\n", 0, at) + 1
+    indent = " " * (at - line_start + 1)
+    items = ",\n".join(indent + json.dumps({"run": r, "note": note}) for r in new)
+    close_indent = text[text.rfind("\n", 0, hi) + 1:hi]
+    if body.strip():
+        out = text[:lo + 1] + body + ",\n" + items + "\n" + close_indent + text[hi:]
+    else:
+        out = text[:lo + 1] + "\n" + items + "\n" + " " * (at - line_start) + text[hi:]
+    check = json.loads(out)
+    if [r["run"] for r in check["scenarios"][sid]["references"]] != [r["run"] for r in scen["references"]] + new:
+        raise ValueError("add-refs: edit check failed")
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(out)
+    return new
+
+
+def cmd_add_refs(a):
+    path = a.scenarios_file or os.path.join(HERE, "scenarios.json")
+    if not a.no_check:
+        refs_dir, fallback = refs_search(a)
+        absent = [r for r in a.runs if not any(os.path.exists(os.path.join(b, r, "trace.q2t")) for b in (refs_dir,) + fallback)]
+        if absent:
+            print("ERROR: no trace.q2t for %s under %s (--no-check to add them anyway)" % (", ".join(absent), refs_dir))
+            return 2
+    try:
+        new = add_refs(path, a.scenario, a.runs, a.note)
+    except ValueError as e:
+        print("ERROR: %s" % e)
+        return 2
+    print("added %d reference run(s) to %s in %s: %s" % (len(new), a.scenario, path, ", ".join(new) or "-"))
+    return 0
+
+
+# ---- selftest -------------------------------------------------------------------------------------------------------------
+def _f(x):
+    import struct
+    return "%08x" % struct.unpack("<I", struct.pack("<f", float(x)))[0]
+
+
+def _galactic_fixture(path, hop_len=26, income=667.5, new_obj_at=40, capture_at=45, queue_path=None, start=20):
+    """A tiny HotM-like trace: planets KUAT (Empire, x=0) and CORELLIA (Rebel, x=100), an Empire fleet hopping KUAT ->
+    CORELLIA (departs tick 10, parks after hop_len ticks), a fiscal cycle at tick 30, a Rebel X-wing built at new_obj_at
+    and CORELLIA captured by the Empire at capture_at."""
+    types = {1: "KUAT", 2: "CORELLIA", 3: "STAR_DESTROYER", 4: "REBEL_X-WING_SQUADRON", 5: "GALACTIC_FLEET"}
+    L = ["Q2TRACE 1", "meta scenario galactic", "meta campaign Sandbox_Fixture_Empire", "seed 00000000 00000000 0",
+         "end_header", "start 0 0 0 00000000"]
+    cred = {0: 1000.0, 1: 5000.0}
+    planet_owner = {1: 1, 2: 0}
+    fleet_x = 0.0
+    for t in range(0, 60):
+        cyc = 1 if t >= 30 else 0
+        L.append("F %d 0 %d 00000000 0 1 0 %d %d %d" % (t, t, 0 if cyc == 0 else 30, 30 if cyc == 0 else 60, cyc))
+        if t == 0:
+            L.append("K %d" % t)
+        if 10 <= t < 10 + hop_len:
+            fleet_x = 100.0 * (t - 9) / hop_len
+        elif t >= 10 + hop_len:
+            fleet_x = 100.0
+        if t == capture_at:
+            planet_owner[2] = 1
+        objs = [(1, planet_owner[1], 1, 0.0), (2, planet_owner[2], 2, 100.0), (10, 1, 3, 0.0), (11, 0, 4, 100.0),
+                (20, 1, 5, fleet_x)]
+        if t >= new_obj_at:
+            objs.append((12, 0, 4, 100.0))
+        for oid, own, ty, x in objs:
+            L.append("O %d %d %d %s %s 00000000 00000000 00000000 00000000 %s 1 4194303 %d 4194303 00000000 00000000" % (
+                oid, own, ty, _f(x), _f(0.0), _f(100.0), 2 if ty == 4 else 4194303))
+        if t == 0:
+            L += ["G 1 00000000 0 0 0 0 0 0", "G 2 00000000 0 0 0 0 0 0"]
+        if t == 30:
+            cred[1] += income
+            cred[0] += 100.0
+        for i, v in cred.items():
+            L.append("C %d %s 00000000 %d %d" % (i, _f(v), 1 if i == 1 else 0, 0 if i == 1 else 1))
+    L += ["T %d 0 0 %s" % (k, v) for k, v in types.items()] + ["E frames_reached", "end"]
+    with open(path, "w", encoding="ascii", newline="\n") as fh:
+        fh.write("\n".join(L) + "\n")
+    if queue_path:
+        Q = ["Q2QUEUES 1"]
+        for t in range(start, new_obj_at + 1):
+            created = 12 if t >= new_obj_at else 4194303
+            Q.append("Q %d %d 2 1 1 4:0:%d:%d:%s:%s:%s:0:2:%d" % (t, t, start, new_obj_at - start, _f(1.0), _f(0.0),
+                                                                 _f(300.0), created))
+        Q += ["E frames_reached", "end"]
+        with open(queue_path, "w", encoding="ascii", newline="\n") as fh:
+            fh.write("\n".join(Q) + "\n")
+
+
+def selftest_distribution(check, tmp):
+    C = collections.Counter
+    cfg = dict(DIST_DEFAULTS)
+    t = {"abs": 2}
+    retail = [48, 52, 50, 55, 45, 50]
+    g = grade_dist("outcome.units_lost[Rebel]", retail, [49, 51, 50, 53, 47, 50, 52, 48, 50, 50], t, cfg)
+    check(g["status"] == "PASS" and g["spread_graded"], "dist: same distribution passes, spread graded (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Rebel]", retail, [70, 72, 69, 71, 70, 73, 68, 70, 71, 69], t, cfg)
+    check(g["status"] == "FAIL" and "mean" in g["detail"], "dist: shifted mean fails (%s)" % g["detail"])
+    wide = [20, 80, 30, 70, 50, 10, 90, 40, 60, 50]
+    g = grade_dist("outcome.units_lost[Rebel]", retail, wide, t, cfg)
+    check(g["status"] == "FAIL" and "FAIL on spread" in g["detail"], "dist: same mean, 7x the spread fails (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Rebel]", [50, 54], wide, t, cfg)
+    check(g["status"] == "PASS" and not g["spread_graded"], "dist: spread not graded below spread_min_runs (%s)" % g["detail"])
+    tight = [49, 51, 50, 52, 48, 50, 51, 49, 50, 50]
+    g = grade_dist("outcome.units_lost[Rebel]", [52], tight, t, cfg)
+    check(g["status"] == "PASS", "dist: one retail run inside the port's prediction interval (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Rebel]", [60], tight, t, cfg)
+    check(g["status"] == "FAIL", "dist: one retail run outside the port's prediction interval (%s)" % g["detail"])
+    # The geonosis case after cu8j: one seed losing 8 units against retail's 0 is seed noise, not a regression.
+    g = grade_dist("outcome.units_lost[Empire]", [0, 0, 1], [8, 0, 2, 1, 0, 3, 0, 1, 0, 2], t, cfg)
+    check(g["status"] == "PASS", "dist: one outlying seed does not fail the mean (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Empire]", [0, 0, 1], [8, 9, 7, 8, 10, 8, 9, 6, 8, 7], t, cfg)
+    check(g["status"] == "FAIL", "dist: every seed far off fails (%s)" % g["detail"])
+    g = grade_dist("outcome.units_lost[Empire]", [0, None, 1], [None] * 4, t, cfg)
+    check(g["status"] == "N/A" and "2/3 retail" in g["detail"], "dist: no port value is N/A (%s)" % g["detail"])
+    g = grade_dist("diag.rng_draws_total", [10, 12], [99, 98], {"info": True}, cfg)
+    check(g["status"] == "INFO", "dist: info metric not graded")
+    mixes = [C(a=2, b=2), C(a=4)]
+    g = grade_dist("ai.build_mix[Rebel]", mixes, [C(a=3, b=1), C(a=3, b=1)], {"min_overlap": 0.7}, cfg)
+    check(g["status"] == "PASS" and g["score"] == 1.0, "dist: equal mean mixes overlap 1.0 (%s)" % g["detail"])
+    g = grade_dist("ai.build_mix[Rebel]", mixes, [C(c=4)] * 3, {"min_overlap": 0.5, "retail_floor": True}, cfg)
+    check(g["status"] == "FAIL", "dist: disjoint mean mixes fail (%s)" % g["detail"])
+    tn = {"abs": 2, "nearest": True}
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107), (107,)], [(90,), (106,), (98,)], tn, cfg)
+    check(g["status"] == "FAIL" and g["mode"] == "per-seed" and g["share"] == 0.667,
+          "dist: hop 98 between modes in 1 of 3 seeds fails at 80%% (%s)" % g["detail"])
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107), (107,)], [(90,), (106, 89), (106,)], tn, cfg)
+    check(g["status"] == "PASS", "dist: hops near the retail modes pass (%s)" % g["detail"])
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107)], [(107,)] * 9 + [(140,)], tn, cfg)
+    check(g["status"] == "PASS" and g["share"] == 0.9, "dist: one seed's odd hop is not a failure (%s)" % g["detail"])
+    g = grade_dist("travel.hop_ticks[A->B]", [(89, 107)], [(120,)] * 10, tn, cfg)
+    check(g["status"] == "FAIL" and g["share"] == 0.0, "dist: a hop wrong in every seed fails (%s)" % g["detail"])
+    g = grade_dist("econ.cycle_tick[1]", [(1350, 1353), 1351], [1351, 1351], {"abs": 0}, cfg)
+    check(g["status"] == "PASS", "dist: window metric graded per seed (%s)" % g["detail"])
+    rr = [("r1", {"travel.hop_ticks[A->B]": (10,), "outcome.units_lost[Rebel]": 3}),
+          ("r2", {"outcome.units_lost[Rebel]": 4})]
+    pr = [(0, {"travel.hop_ticks[A->C]": (12,), "outcome.units_lost[Rebel]": 3}), (1, {"outcome.units_lost[Rebel]": 5})]
+    res = {r["metric"]: r for r in compare_dist({}, {"outcome": {"abs": 2}, "travel": {"abs": 1}}, rr, pr, cfg)}
+    check(set(res) == {"outcome.units_lost[Rebel]"}, "dist: a route seen on one side only is not graded (%s)" % sorted(res))
+    check(res["outcome.units_lost[Rebel]"]["status"] == "PASS", "dist: compare_dist grades the shared metric")
+    # Seeds: the single run's seed first (galactic: the reference run's, skirmish: 1); settings merge scenario over file.
+    check(seed_list({"kind": "galactic"}, {"seed": "00000000"}, cfg) == list(range(10)), "seeds: galactic 0..9")
+    check(seed_list({"kind": "skirmish"}, {}, cfg, 3) == [1, 2, 3], "seeds: skirmish 1..3")
+    check(seed_list({"kind": "skirmish"}, {}, cfg, 2, 40) == [40, 41], "seeds: --seed-base")
+    dc = dist_config({"distribution": {"z": 3.0, "why": "x"}}, {"distribution": {"seeds": 6}})
+    check(dc["z"] == 3.0 and dc["seeds"] == 6 and dc["spread_factor"] == DIST_DEFAULTS["spread_factor"] and "why" not in dc,
+          "dist settings merge (%s)" % dc)
+    check(seed_range([3, 4, 5]) == "3..5" and seed_range([1, 5]) == "1, 5", "seed range text")
+    # add-refs keeps the hand layout and appends after the last reference.
+    sp = os.path.join(tmp, "scenarios.json")
+    shutil.copyfile(os.path.join(HERE, "scenarios.json"), sp)
+    before = load_json(sp)
+    n0 = len(before["scenarios"]["geonosis_skirmish"]["references"])
+    added = add_refs(sp, "geonosis_skirmish", ["20991231-000000-skirmish-vanilla-lua", before["scenarios"]["geonosis_skirmish"]
+                                               ["references"][0]["run"]], "selftest")
+    after = load_json(sp)
+    refs = after["scenarios"]["geonosis_skirmish"]["references"]
+    check(added == ["20991231-000000-skirmish-vanilla-lua"] and len(refs) == n0 + 1 and refs[-1]["note"] == "selftest",
+          "add-refs appends a new run once (%s)" % added)
+    check(after["scenarios"]["hotm_galactic"] == before["scenarios"]["hotm_galactic"] and
+          after["tolerances"] == before["tolerances"], "add-refs leaves the rest of the file as it was")
+    with open(sp, "r", encoding="utf-8") as fh:
+        check('    {"run": "20991231-000000-skirmish-vanilla-lua", "note": "selftest"}\n   ]' in fh.read(),
+              "add-refs writes one run per line at the list's indent")
+    check(add_refs(sp, "hotm_galactic", ["20261103-152619-galactic-vanilla-lua"], "x") == [],
+          "add-refs skips an excluded reference")
+
+
+def selftest():
+    fails = []
+
+    def check(cond, what):
+        if not cond:
+            fails.append(what)
+            print("FAIL " + what)
+    # b0319: every port run uses the retail squadrons.
+    for scen in ({"kind": "galactic"}, {"kind": "skirmish", "map": "M", "human": "Empire", "ticks": 10}):
+        cmd = port_command(scen, "exe", "out", {"campaign": "C_Empire", "ticks": 10, "seed": "0"})
+        i = cmd.index("--squadron-size") if "--squadron-size" in cmd else -1
+        check(i > 0 and cmd[i + 1] == "0", "port command (%s) passes --squadron-size 0" % scen["kind"])
+    # Grading primitives.
+    t = {"abs": 2}
+    check(grade("travel.hop_ticks[A->B]", [26, 27], 28, t)["status"] == "PASS", "envelope: 28 within 26..27 +-2")
+    tn = {"abs": 2, "nearest": True}
+    check(grade("travel.hop_ticks[A->B]", [(89, 107), (107,)], (106, 90), tn)["status"] == "PASS", "nearest: 106, 90 near 107, 89")
+    check(grade("travel.hop_ticks[A->B]", [(89, 107), (107,)], (98,), tn)["status"] == "FAIL", "nearest: 98 between modes fails")
+    check(grade("econ.cycle_tick[1]", [1351], (1350, 1353), {"abs": 0})["status"] == "PASS", "port window overlapping")
+    check(grade("travel.hop_ticks[A->B]", [26, 27], 30, t)["status"] == "FAIL", "envelope: 30 outside 26..27 +-2")
+    check(grade("econ.income_mean[Empire]", [1000.0], 1015.0, {"rel": 0.02})["status"] == "PASS", "rel tolerance 2%")
+    check(grade("econ.income_mean[Empire]", [1000.0], 1030.0, {"rel": 0.02})["status"] == "FAIL", "rel tolerance 2% fail")
+    check(grade("econ.cycle_tick[2]", [(2699, 2701), 2701], 2700, {"abs": 0})["status"] == "PASS", "window envelope")
+    check(grade("diag.rng_draws_total", [10], 99, {"info": True})["status"] == "INFO", "info metric not graded")
+    check(grade("combat.damage_taken[Rebel]", [10.0], None, {"abs": 1}, port_note="no hook")["status"] == "N/A", "N/A port")
+    C = collections.Counter
+    check(abs(overlap(C(a=2, b=1), C(a=1, b=1, c=1)) - 2 / 3) < 1e-9, "overlap value")
+    check(overlap(C(), C()) == 1.0, "overlap of empties")
+    g = grade("ai.build_mix[Rebel]", [C(a=2, b=2), C(a=4)], C(a=3, b=1), {"min_overlap": 0.7})
+    check(g["status"] == "PASS" and g["score"] == 0.75, "mix: best retail overlap 0.75")
+    g = grade("ai.build_mix[Rebel]", [C(a=2, b=2), C(a=4)], C(b=3, c=1), {"min_overlap": 0.7, "retail_floor": True})
+    check(g["status"] == "PASS" and g["tolerance"]["min_overlap"] == 0.5, "mix: threshold capped at the retail pair overlap 0.5")
+    g = grade("ai.build_mix[Rebel]", [C(a=2, b=2), C(a=4)], C(c=4), {"min_overlap": 0.7, "retail_floor": True})
+    check(g["status"] == "FAIL", "mix: no overlap fails")
+    check(tolerance_for({"ai.build_mix": {"min_overlap": 0.5}, "ai": {"abs": 1}}, "ai.build_mix[Rebel]")["min_overlap"] == 0.5,
+          "tolerance by family")
+    check(tolerance_for({"econ.credits_at": {"rel": 0.1}}, "econ.credits_at_4500[Rebel]")["rel"] == 0.1, "tolerance by prefix")
+    # Hop segmentation (q4hf t04): a repeated sample mid-flight is not a stop, a pass through B's centre splits the trip.
+    pp = {"A": (0.0, 0.0), "B": (10.0, 0.0), "C": (20.0, 0.0)}
+    trk = ([(f, 1, 0.0, 5.0) for f in range(5)] + [(5, 1, 0.0, 0.0), (6, 1, 2.5, 0.0), (7, 1, 2.5, 0.0), (8, 1, 5.0, 0.0),
+           (9, 1, 7.5, 0.0), (10, 1, 10.0, 5.0), (11, 1, 10.0, 0.0), (12, 1, 12.5, 0.0), (13, 1, 15.0, 0.0), (14, 1, 17.5, 0.0)] +
+           [(f, 1, 20.0, 5.0) for f in range(15, 20)])
+    trips, legs = segment_fleet(trk, pp)
+    check(trips == [(5, 1, "A", "C", 15)], "retail-style trip A -> C, 5 -> 15 (%s)" % trips)
+    check(legs == [(5, 1, "A", "B", 10), (11, 1, "B", "C", 15)], "legs A -> B 5 -> 10, B -> C 11 -> 15 (%s)" % legs)
+    # Port style: parked at the centre, a 2-sample hold at B.
+    trk = ([(f, 1, 0.0, 0.0) for f in range(5)] + [(5, 1, 2.5, 0.0), (6, 1, 5.0, 0.0), (7, 1, 7.5, 0.0), (8, 1, 10.0, 0.0),
+           (9, 1, 10.0, 0.0), (10, 1, 12.5, 0.0), (11, 1, 15.0, 0.0), (12, 1, 17.5, 0.0)] + [(f, 1, 20.0, 0.0) for f in range(13, 18)])
+    trips, legs = segment_fleet(trk, pp)
+    check(legs == [(4, 1, "A", "B", 8), (9, 1, "B", "C", 13)], "port-style legs A -> B 4 -> 8, B -> C 9 -> 13 (%s)" % legs)
+    tmp = tempfile.mkdtemp(prefix="parity_selftest_")
+    try:
+        # Galactic: the same fixture on both sides, then a slower hop, a smaller income and a late capture on the port side.
+        ret = os.path.join(tmp, "retail.q2t")
+        _galactic_fixture(ret, queue_path=os.path.join(tmp, "retail.q2q"))
+        rm, _, rinfo = galactic_metrics(ret, os.path.join(tmp, "retail.q2q"), sample_ticks=(59,))
+        check(rm.get("travel.hop_ticks[Empire:KUAT->CORELLIA]") == (26,), "fixture hop 26 ticks (%s)" % rm.get("travel.hop_ticks[Empire:KUAT->CORELLIA]"))
+        check(abs(rm.get("econ.income_cycle1[Empire]", 0) - 667.5) < 1e-3, "fixture Empire income 667.5")
+        check(rm.get("econ.cycle_tick[1]") == 30, "fixture cycle at tick 30 (%s)" % rm.get("econ.cycle_tick[1]"))
+        check(rm.get("build.ticks[REBEL_X-WING_SQUADRON@CORELLIA]") == 20, "fixture build: start 20, created 40 -> 20 ticks (%s)" % rm.get("build.ticks[REBEL_X-WING_SQUADRON@CORELLIA]"))
+        check(rm.get("outcome.planets_final[Empire]") == 2 and rm.get("outcome.captures[Empire]") == 1, "fixture capture")
+        check(rm.get("ai.fleet_departures[Empire]") == 1, "fixture one Empire departure")
+        check(rinfo["factions"].get(0) == "Rebel" and rinfo["factions"].get(1) == "Empire", "fixture factions")
+        port = os.path.join(tmp, "port.q2t")
+        _galactic_fixture(port, hop_len=31, income=600.0, capture_at=50)
+        ai = os.path.join(tmp, "port_ai.txt")
+        with open(ai, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("# galactic-ai campaign Sandbox_Fixture_Empire seed 0 ticks 60 human Empire\n"
+                     "0 p0 templates Basic_Rebel_Default\n18 p0 order build REBEL_X-WING_SQUADRON at Corellia\n")
+        pm, _, _ = galactic_metrics(port, ai_log=ai, sample_ticks=(59,))
+        check(pm.get("build.ticks[REBEL_X-WING_SQUADRON@CORELLIA]") == 22, "port build: order 18 -> completion 40 (%s)" % pm.get("build.ticks[REBEL_X-WING_SQUADRON@CORELLIA]"))
+        check(pm.get("ai.build_count[Rebel]") == 1, "port build orders counted")
+        tols = {"travel.hop_ticks": {"abs": 2}, "build.ticks": {"abs": 3}, "econ.income_cycle1": {"rel": 0.02},
+                "econ.income_mean": {"rel": 0.02}, "econ.cycle_tick": {"abs": 0}, "econ.credits_at": {"rel": 0.1},
+                "ai.build_mix": {"min_overlap": 0.6}, "ai": {"rel": 0.25, "abs": 2}, "ai.fleet_targets": {"min_overlap": 0.5},
+                "ai.first_departure_tick": {"abs": 30}, "ai.first_build_tick": {"abs": 30}, "outcome": {"abs": 0},
+                "diag": {"info": True}}
+        res = {r["metric"]: r for r in compare({}, tols, [("retail", rm)], pm)}
+        check(res["travel.hop_ticks[Empire:KUAT->CORELLIA]"]["status"] == "FAIL", "slower port hop fails")
+        check(res["econ.income_cycle1[Empire]"]["status"] == "FAIL", "smaller port income fails")
+        check(res["build.ticks[REBEL_X-WING_SQUADRON@CORELLIA]"]["status"] == "PASS", "build 22 vs 20 within 3")
+        check(res["outcome.planets_final[Empire]"]["status"] == "PASS", "same final owners pass")
+        check(res["econ.cycle_tick[1]"]["status"] == "PASS", "same cycle tick passes")
+        same = {r["metric"]: r for r in compare({}, tols, [("retail", rm)], rm)}
+        check(all(r["status"] in ("PASS", "INFO") for r in same.values()), "a run against itself passes everything: %s" % [
+            k for k, r in same.items() if r["status"] not in ("PASS", "INFO")])
+        # Baseline check: PASS -> FAIL is a regression, FAIL -> PASS an improvement.
+        base = {"scenarios": {"x": {"status": {"travel.hop_ticks[Empire:KUAT->CORELLIA]": "PASS", "econ.income_cycle1[Empire]": "FAIL",
+                                                "outcome.planets_final[Empire]": "PASS", "travel.hop_ticks[Empire:KUAT->NABOO]": "PASS"}}}}
+        reg, gone, imp = check_baseline(base, "x", list(res.values()))
+        check(reg == ["travel.hop_ticks[Empire:KUAT->CORELLIA]"], "baseline regression found (%s)" % reg)
+        check(gone == ["travel.hop_ticks[Empire:KUAT->NABOO]"], "baseline PASS -> missing listed (%s)" % gone)
+        reg2, _, imp2 = check_baseline(base, "x", list(same.values()))
+        check(not reg2 and imp2 == ["econ.income_cycle1[Empire]"], "baseline improvement found")
+        # Skirmish port log parser.
+        sk = os.path.join(tmp, "sk_ai.txt")
+        with open(sk, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("state t=1 battle frame 0: p0 credits 6000.0 objects 17; p1 credits 6000.0 objects 13;\n"
+                     "  pads: 28:Mineral_Extractor_Pad/p2\n"
+                     "  units: p0{Skirmish_Empire_Star_Base_1x1 TIE_Interceptorx14 Teamx2 } p1{Skirmish_Rebel_Star_Base_1x1 X-Wingx10 }\n"
+                     "state t=1801 battle frame 1800: p0 credits 6300.0 objects 17; p1 credits 900.0 objects 20;\n"
+                     "  pads: 28:Mineral_Extractor_Pad/p1=Rebel_Mineral_Extractor\n"
+                     "  units: p0{Skirmish_Empire_Star_Base_1x1 TIE_Interceptorx12 } p1{Skirmish_Rebel_Star_Base_1x1 X-Wingx15 Y-Wingx3 }\n")
+        sm, _, sinfo = skirmish_port_metrics(sk, {1800}, 1800, "skirmish-ai skirmish workers 4: 1800 ticks (1 ms)")
+        check(sinfo["factions"] == {0: "Empire", 1: "Rebel"}, "skirmish slot factions (%s)" % sinfo["factions"])
+        check(sm.get("ai.build_count[Rebel]") == 9, "skirmish Rebel built 5 X-wings, 3 Y-wings, 1 extractor (%s)" % sm.get("ai.build_count[Rebel]"))
+        check(sm.get("outcome.units_lost[Empire]") == 2, "skirmish Empire lost 2 interceptors")
+        check(sm.get("econ.credits_at_1800[Rebel]") == 900.0, "skirmish credits at 1800")
+        check(sm.get("outcome.battle_ended") == 0, "skirmish battle still running")
+        # Skirmish port tactical trace (--trace-out, q4hf t02): hull lost per faction from the O lines, the first shot from the
+        # M first_shot_frame record; a dead unit (flag 2) and a neutral prop do not count.
+        st = os.path.join(tmp, "sk_port.q2t")
+        o = "O %d %d %d 00000000 00000000 00000000 00000000 00000000 00000000 %s %d 4194303 4194303 4194303 00000000 00000000\n"
+        with open(st, "w", encoding="ascii", newline="\n") as fh:
+            fh.write("Q2TRACE 1\nmeta scenario skirmish\nmeta skirmish space 2 players, human Empire idle vs AI Rebel\n"
+                     "seed 00000001 00000000 0\nend_header\nstart 2 2 0 00000001\n"
+                     "F 2 2 0 00000001 0 2 0\nK 2\n" + o % (5, 0, 0, _f(150.0), 0) + o % (6, 1, 1, _f(300.0), 0) +
+                     o % (7, 2, 2, _f(500.0), 0) +
+                     "F 3 2 1 00000001 0 2 0\nM first_shot_frame 1\n" + o % (5, 0, 0, _f(100.0), 0) + o % (7, 2, 2, _f(400.0), 0) +
+                     "F 4 2 2 00000001 0 2 0\n" + o % (5, 0, 0, _f(0.0), 2) + o % (6, 1, 1, _f(275.0), 0) +
+                     "T 0 0 0 TIE_FIGHTER\nT 1 0 0 REBEL_X-WING\nT 2 0 0 ASTEROID_FIELD\nE ticks_reached\nend\n")
+        cm, _ = skirmish_port_trace_metrics(st, {600})
+        check(cm.get("combat.damage_taken[Empire]") == 50.0, "port trace Empire hull lost 50 (%s)" % cm.get("combat.damage_taken[Empire]"))
+        check(cm.get("combat.damage_taken[Rebel]") == 25.0, "port trace Rebel hull lost 25 (%s)" % cm.get("combat.damage_taken[Rebel]"))
+        check(cm.get("combat.first_shot_frame") == 1, "port trace first shot at frame 1 (%s)" % cm.get("combat.first_shot_frame"))
+        check(set(cm) == {"combat.damage_taken[Empire]", "combat.damage_taken[Rebel]", "combat.first_shot_frame"},
+              "port trace gives the combat metrics only (%s)" % sorted(cm))
+        # The scenario file parses and names a tolerance with a reason for every graded family it uses.
+        sc = load_scenarios()
+        for k, v in sc["tolerances"].items():
+            check(bool(v.get("why")), "tolerance %s has a reason" % k)
+        check(bool((sc.get("distribution") or {}).get("why")) and set(DIST_DEFAULTS) <= set(sc["distribution"]),
+              "scenarios.json distribution settings complete, with a reason")
+        for sid, s in sc["scenarios"].items():
+            check(bool(s.get("references")) and bool(s.get("kit")), "scenario %s has references and a kit" % sid)
+        # No reference runs -> skip code.
+        empty = os.path.join(tmp, "norefs")
+        os.makedirs(empty)
+        ns = argparse.Namespace(refs=empty, scenario=None, port_exe=None, commit=None, check_baseline=None,
+                                write_baseline=None, out=os.path.join(tmp, "out"), reuse_port=False)
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cmd_run(ns)
+        check(rc == SKIP, "no reference runs -> exit %d (got %s)" % (SKIP, rc))
+        # Distribution mode (parity tier 2): per-metric means and spreads over port seeds and retail runs.
+        selftest_distribution(check, tmp)
+        ns.seeds, ns.seed_base, ns.jobs = 3, None, None
+        ns.check_baseline = os.path.join(tmp, "single_base.json")
+        write_json(ns.check_baseline, {"commit": "x", "scenarios": {}})
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cmd_run(ns)
+        check(rc == 2, "a single-run baseline in --seeds mode is an error (got %s)" % rc)
+        ns.check_baseline = None
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = cmd_run(ns)
+        check(rc == SKIP, "--seeds without reference runs -> exit %d (got %s)" % (SKIP, rc))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("selftest %s (%d failures)" % ("OK" if not fails else "FAILED", len(fails)))
+    return 0 if not fails else 1
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run")
+    r.add_argument("--scenario", action="append", help="scenario id (repeatable; default: all)")
+    r.add_argument("--port-exe", help="alamo_headless.exe (default: build-wt-msvc / build-msvc / ... bin)")
+    r.add_argument("--refs", help="folder holding the Q2 run folders (default: the Q2 kit's out\\ folder, main checkout)")
+    r.add_argument("--out", help="output folder (default tools/parity/out)")
+    r.add_argument("--reuse-port", action="store_true", help="reuse an earlier port run in the output folder")
+    r.add_argument("--check-baseline", help="fail only on metrics that passed in this baseline JSON")
+    r.add_argument("--write-baseline", help="write the per-metric verdicts of this run to this JSON")
+    r.add_argument("--commit", help="commit id to record (default: git HEAD)")
+    r.add_argument("--seeds", type=int, help="distribution mode (parity tier 2): run the port over this many seeds and "
+                                             "compare per-metric means and spreads with the retail runs'")
+    r.add_argument("--seed-base", type=int, help="first port seed of --seeds (default: the single run's seed, else 1)")
+    r.add_argument("--jobs", type=int, help="port runs at a time in --seeds mode (default: min(4, seeds))")
+    t = sub.add_parser("retail")
+    t.add_argument("--scenario", action="append")
+    t.add_argument("--refs")
+    li = sub.add_parser("list")
+    li.add_argument("--refs")
+    ad = sub.add_parser("add-refs", help="append retail reference runs to a scenario of scenarios.json")
+    ad.add_argument("--scenario", required=True)
+    ad.add_argument("--note", default="parity_refs capture (tools/probe_mod/parity_refs)")
+    ad.add_argument("--refs", help="folder holding the run folders (checked unless --no-check)")
+    ad.add_argument("--no-check", action="store_true", help="do not require the runs' trace.q2t")
+    ad.add_argument("--scenarios-file", help="default tools/parity/scenarios.json")
+    ad.add_argument("runs", nargs="+")
+    sub.add_parser("selftest")
+    a = ap.parse_args(argv)
+    if a.cmd == "run":
+        return cmd_run(a)
+    if a.cmd == "retail":
+        return cmd_retail(a)
+    if a.cmd == "list":
+        return cmd_list(a)
+    if a.cmd == "add-refs":
+        return cmd_add_refs(a)
+    return selftest()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

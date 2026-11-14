@@ -1,33 +1,21 @@
 #include "alamo/ui/galactic_hud.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
+#include "alamo/core/ascii.hpp"
+#include "alamo/data/values.hpp"
 #include "alamo/ui/gui_dialog.hpp"
 #include "alamo/ui/hud_font.hpp"
 #include "alamo/ui/hud_radar.hpp"
+#include "ui_strings.hpp"
 
 namespace alamo::ui {
 
 namespace {
-
-int32_t find_fmt(const ComponentTable& t, const char* fmt, int a, int b = -1) {
-    char n[48];
-    if (b < 0) std::snprintf(n, sizeof n, fmt, a);
-    else std::snprintf(n, sizeof n, fmt, a, b);
-    return t.find(n);
-}
-
-std::u32string num32(int64_t v) {
-    char b[32];
-    std::snprintf(b, sizeof b, "%lld", static_cast<long long>(v));
-    std::u32string o;
-    for (const char* p = b; *p; ++p) o.push_back(static_cast<char32_t>(*p));
-    return o;
-}
 
 // Credits symbol + space before HUD credit amounts: '$' is drawn as the credits sign by the EmpireAtWar fonts.
 constexpr const char32_t* kCreditsPrefix = U"$ ";
@@ -56,7 +44,6 @@ const std::string* pick(const std::vector<std::string>& v, int32_t i) {
 }
 
 constexpr Rgba8 kGalacticRadarBackdrop{6, 10, 22, 255};  // [port] radar ground under the faceplate (build_radar)
-constexpr int32_t kShellLayerMin = 2;  // as tactical_hud.cpp: shell-bone components above the first shell half
 // §5.2 queue00..09 bone x (i_galactic_controls.alo, canvas units from the left edge).
 constexpr float kQueueDomeX[10] = {343.0f, 410.0f, 475.0f, 539.9f, 607.9f, 699.0f, 765.0f, 832.0f, 898.0f, 960.0f};
 // §1.2 top-anchored attack-mode shells: model y 92 sits on the screen's top edge [port: 28.jpg].
@@ -68,29 +55,6 @@ constexpr Rgba8 kCostUnaffordable{236, 72, 64, 255};
 constexpr const char* kStealthBadge = "i_icon_stealth.tga";
 constexpr const char* kRaidBadge = "i_icon_raid.tga";
 constexpr uint32_t kShipsPerStack = 5;
-
-// A rectangle outline of 2-unit lines plus a translucent fill ([port] stand-in plates, as tactical_hud.cpp).
-void frame_rect(HudDrawList& dl, uint32_t layer, Vec2f c, Vec2f size, Rgba8 back, Rgba8 edge) {
-    HudQuad q;
-    q.min = {c.x - 0.5f * size.x, c.y - 0.5f * size.y};
-    q.max = {c.x + 0.5f * size.x, c.y + 0.5f * size.y};
-    q.color = back;
-    dl.add(layer, HudList::Alpha, q);
-    const float t = 2.0f;
-    const HudQuad edges[4] = {
-        {{q.min.x, q.max.y - t}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.max.x, q.min.y + t}, {0, 0}, {1, 1}, edge},
-        {{q.min.x, q.min.y}, {q.min.x + t, q.max.y}, {0, 0}, {1, 1}, edge},
-        {{q.max.x - t, q.min.y}, {q.max.x, q.max.y}, {0, 0}, {1, 1}, edge},
-    };
-    for (const HudQuad& e : edges) dl.add(layer, HudList::Alpha, e);
-}
-
-uint32_t layer_of(const CommandBarComponent& c, const ComponentPlacement& p) {
-    int32_t l = c.base_layer;
-    if (p.from_bone) l = std::max(l, kShellLayerMin);
-    return static_cast<uint32_t>(std::clamp(l, 0, static_cast<int32_t>(kHudLayers) - 1));
-}
 
 }  // namespace
 
@@ -170,6 +134,15 @@ void GalacticHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
     name_ = f("g_planet_name");
     value_ = f("g_planet_value");
     credit_filter_ = f("b_filters0");
+    for (int k = 0; k < 4; ++k) filters_[k] = find_fmt(table, "b_filters%d", k);
+    build_icon_ = f("g_build");
+    smuggled_ = f("g_smuggled");
+    corruption_icon_ = f("g_corruption_icon");
+    corruption_text_ = f("g_corruption_text");
+    enemy_hero_ = f("g_enemy_hero");
+    weather_ = f("g_weather");
+    ability_ = f("g_planet_ability");
+    credit_bar_ = f("g_credit_bar");
     control_ = f("g_political_control");
     ground_ = f("g_ground_level");
     space_ = f("g_space_level");
@@ -260,9 +233,7 @@ void GalacticHud::init(const ComponentTable& table, const TextureAtlas& atlas, F
 }
 
 void GalacticHud::resize(uint32_t width, uint32_t height) {
-    const HudCanvas next = HudCanvas::make(width, height);
-    if (fonts_ && next.screen_height != canvas_.screen_height) fonts_->clear();
-    canvas_ = next;
+    resize_canvas(canvas_, fonts_, width, height);
     if (table_) {
         apply_galactic_fallback_layout(*table_, canvas_, layout_);
         layout_.update(canvas_, *table_);
@@ -270,44 +241,20 @@ void GalacticHud::resize(uint32_t width, uint32_t height) {
 }
 
 void GalacticHud::hit(int32_t component, uint32_t layer, Vec2f center, Vec2f size) {
-    HudHitBox h;
-    h.component = component;
-    h.layer = layer;
-    h.min = {center.x - 0.5f * size.x, center.y - 0.5f * size.y};
-    h.max = {center.x + 0.5f * size.x, center.y + 0.5f * size.y};
-    hits_.push_back(h);
+    hits_.push_back(make_hit_box(component, layer, center, size));
 }
 
-int32_t GalacticHud::hit_test(int32_t px, int32_t py) const {
-    const Vec2f c = canvas_.pixel_to_canvas(static_cast<float>(px) + 0.5f, static_cast<float>(py) + 0.5f);
-    int32_t best = -1;
-    uint32_t best_layer = 0;
-    for (const HudHitBox& h : hits_) {
-        if (c.x < h.min.x || c.x > h.max.x || c.y < h.min.y || c.y > h.max.y) continue;
-        if (best < 0 || h.layer >= best_layer) {
-            best = h.component;
-            best_layer = h.layer;
-        }
-    }
-    return best;
-}
+int32_t GalacticHud::hit_test(int32_t px, int32_t py) const { return topmost_hit(hits_, canvas_, px, py); }
 
 Vec2f GalacticHud::component_size(uint32_t component, const ComponentPlacement& p) const {
-    if (p.size.x > 0 && p.size.y > 0) return p.size;
-    const CommandBarComponent& c = (*table_)[component];
-    if (c.has_size) return c.size;
-    for (const auto* list : {&c.blank_texture, &c.icon_texture, &c.icon_alternate_texture})
-        if (!list->empty())
-            if (const AtlasEntry* e = atlas_->find(list->front()))
-                return {static_cast<float>(e->width) * c.scale, static_cast<float>(e->height) * c.scale};
-    return {40.0f, 40.0f};  // [port] pads without art
+    return component_art_size((*table_)[component], p, *atlas_, {40.0f, 40.0f});  // [port] pads without art
 }
 
 int32_t GalacticHud::font_of(int32_t component) const {
     if (component < 0 || !fonts_) return -1;
     const CommandBarComponent& c = (*table_)[static_cast<size_t>(component)];
     return fonts_->font(c.font_name.empty() ? std::string(kFallbackFontFace) : c.font_name,
-                        c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas_.screen_height);
+                        c.font_point_size > 0 ? c.font_point_size : 7.0f, canvas_.font_height());
 }
 
 void GalacticHud::text_at(int32_t component, std::u32string_view text, Vec2f anchor, uint32_t layer, uint8_t alpha,
@@ -408,7 +355,7 @@ void GalacticHud::build_planet_stacks(const GalacticPlanetInfo& p, Vec2f at, uin
             sh.fleet = st.fleet;
             sh.planet = p.planet;
             const std::string_view dd = cc.raw_value("DRAG_AND_DROP");
-            sh.draggable = !st.land && !st.enemy && !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
+            sh.draggable = !st.land && !st.enemy && data::parse_flag_char(dd);
             sh.enemy = st.enemy;
             sh.layers = layers;
             sh.tint = st.owner_color;
@@ -462,6 +409,14 @@ void GalacticHud::build_planet_stacks(const GalacticPlanetInfo& p, Vec2f at, uin
     }
 }
 
+uint32_t GalacticHud::filter_bits() const {
+    uint32_t bits = 0;
+    for (int k = 0; k < 4; ++k)
+        if (filters_[k] >= 0)
+            if (const ButtonRuntime* r = buttons_.find_state(static_cast<uint32_t>(filters_[k])); r && r->selected) bits |= 1u << k;
+    return bits;
+}
+
 void GalacticHud::build_labels(const GalacticHudFrame& f) {
     const float a = planet_label_alpha(f.zoom_state, f.zoom);
     const auto alpha = static_cast<uint8_t>(std::clamp(std::lround(a), 0L, 255L));
@@ -512,11 +467,38 @@ void GalacticHud::build_labels(const GalacticHudFrame& f) {
             }
         }
         build_planet_stacks(p, at, alpha, cursor);
+        const uint32_t filters = filter_bits();
         // §1.1 / §1.2: the credit filter b_filters0 (Toggle, off at start) shows it.
-        if (const CommandBarComponent* c = comp(value_); c && p.credits >= 0 && credit_filter_ >= 0 && buttons_.state(static_cast<uint32_t>(credit_filter_)).selected) {
+        if (const CommandBarComponent* c = comp(value_); c && p.credits >= 0 && (filters & kFilterCredit)) {
             const Vec2f o = up(c->offset);
             text_at(value_, num32(p.credits), {at.x + o.x, at.y + o.y}, 0, alpha);
             ++stats_.planet_values;
+        }
+        // ui4 t03 [port]: g_credit_bar with the credit filter, its Default_Offset (0, 8) below the value text, left edge on it.
+        if (const CommandBarComponent* c = comp(credit_bar_); c && p.credit_level >= 0 && (filters & kFilterCredit) && !c->bar_texture.empty()) {
+            const Vec2f vo = value_ >= 0 ? (*table_)[static_cast<size_t>(value_)].offset : Vec2f{30, -11};
+            const std::string* t = pick(c->bar_texture, std::clamp(p.credit_level, 0, std::max(0, c->max_bar_level)));
+            const AtlasEntry* e = t ? atlas_->find(*t) : nullptr;
+            const float w = e ? static_cast<float>(e->width) : 30.0f;
+            if (t && add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *t, {at.x + vo.x + 0.5f * w, at.y + vo.y - c->default_offset.y}, {}, 1.0f,
+                                    with_alpha(Rgba8{}, alpha)))
+                ++stats_.credit_bars;
+        }
+        // ui4 t03 [port]: b_filters2 shows the planet's weather (g_weather, Offset -20 -31) and ability (g_planet_ability,
+        // Offset 0 -34) icons below the planet; not on a fogged planet.
+        if ((filters & kFilterAbilityWeather) && !p.fogged)
+            for (auto [ci, tex, n] : {std::tuple{weather_, &p.weather_icon, &stats_.weather_icons}, std::tuple{ability_, &p.ability_icon, &stats_.ability_icons}}) {
+                const CommandBarComponent* c = comp(ci);
+                if (!c || tex->empty()) continue;
+                const Vec2f o = up(c->offset);
+                if (add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *tex, {at.x + o.x, at.y + o.y}, {}, c->scale, with_alpha(c->color, alpha), {16, 16}))
+                    ++*n;
+            }
+        // ui4 t03: g_corruption_text (yellow, left-justified, Offset 30 15 above the name) - the transition percentage.
+        if (const CommandBarComponent* c = comp(corruption_text_); c && !p.corruption_text.empty() && !p.fogged) {
+            const Vec2f o = up(c->offset);
+            text_at(corruption_text_, p.corruption_text, {at.x + o.x, at.y + o.y}, 0, alpha);
+            ++stats_.corruption_texts;
         }
         if (const CommandBarComponent* c = comp(control_); c && p.political_control >= 0.0f && !c->bar_overlay.empty()) {
             const auto n = static_cast<int32_t>(c->bar_overlay.size());
@@ -528,13 +510,16 @@ void GalacticHud::build_labels(const GalacticHudFrame& f) {
             add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *pick(c->bar_overlay, lvl), {at.x + o.x + 0.5f * w, at.y + o.y}, {}, 1.0f,
                            with_alpha(Rgba8{}, alpha));
         }
+        // ui4 t03 [port]: the ground / space level pips need the base-level filter b_filters1 (§1.2 "ground/space level pips
+        // need" a filter bit; b_filters1's tooltip is TEXT_TOOLTIP_BASE_LEVEL_FILTER).
         for (auto [ci, level] : {std::pair{ground_, p.groundbase_info ? p.ground_level : -1},
                                  std::pair{space_, p.starbase_info ? p.space_level : -1}}) {
             const CommandBarComponent* c = comp(ci);
-            if (!c || level < 0 || c->bar_texture.empty()) continue;
+            if (!c || level < 0 || c->bar_texture.empty() || !(filters & kFilterBaseLevel)) continue;
             const Vec2f o = up(c->default_offset);
             add_atlas_quad(dl_, 0, HudList::Alpha, *atlas_, *pick(c->bar_texture, level), {at.x + o.x, at.y + o.y}, {}, 1.0f,
                            with_alpha(Rgba8{}, alpha));
+            ++stats_.level_pips;
         }
         // Status icons in a row from g_conflict's Offset.
         Vec2f pen = conflict_ >= 0 ? up(comp(conflict_)->offset) : Vec2f{30, -16};
@@ -556,6 +541,11 @@ void GalacticHud::build_labels(const GalacticHudFrame& f) {
         icon(hero_, p.hero_underworld && !p.fogged, 4);
         icon(smuggler_, p.smuggler, 0);
         icon(bounty_, p.bounty_hunter, 0);
+        // ui4 t03 [port: the row order after the original's groups is not traced].
+        icon(build_icon_, p.building && !p.fogged, 0);
+        icon(smuggled_, p.smuggled && !p.fogged, 0);
+        icon(corruption_icon_, p.corrupted && !p.fogged, 0);
+        icon(enemy_hero_, p.enemy_hero >= 0 && !p.fogged, std::max(0, p.enemy_hero));
     }
 }
 
@@ -698,8 +688,16 @@ void GalacticHud::build_bar(const GalacticHudFrame& f) {
         const int32_t ci = create_[slots_used++];
         ButtonRuntime& r = buttons_.state(static_cast<uint32_t>(ci));
         r.icon_override = o.icon;
-        r.disabled = !o.enabled || o.production_disabled;
-        r.text2.clear();
+        r.disabled = !o.enabled || o.production_disabled || o.block != HudBuildOption::Block::None;
+        // ui4 t02: the Tooltip_Text entry by block reason (as the tactical Build_NN pads); an enabled pad has none.
+        switch (o.block) {
+            case HudBuildOption::Block::QueueFull: r.tooltip_index = 0; break;
+            case HudBuildOption::Block::PopCap: r.tooltip_index = 1; break;
+            case HudBuildOption::Block::Funds: r.tooltip_index = 2; break;
+            default: r.tooltip_index = -1; break;
+        }
+        // GALACTIC_DIALOGS §5.1 second line (Text_Offset2 0 -20, Text_Color2 gold) = the queued count [L; port: > 0].
+        r.text2 = o.queued > 0 ? num32(static_cast<int32_t>(o.queued)) : std::u32string();
         r.alt = o.space ? 1 : 0;  // §5.1: amber i_button_pad_rebel = ground tab, blue i_button_pad_empire = space tab
         PadSlot s;
         s.option = o;
@@ -716,7 +714,10 @@ void GalacticHud::build_bar(const GalacticHudFrame& f) {
             HudTextStyle st;
             st.font = font_of(ci);
             if (st.font < 0) continue;
-            st.color = o.enabled && !o.production_disabled ? kCostAffordable : kCostUnaffordable;
+            // ui4 t02: the colour says affordable or not (Funds, or a host without a block reason that disabled it).
+            const bool unaffordable = o.production_disabled || o.block == HudBuildOption::Block::Funds ||
+                                      (!o.enabled && o.block == HudBuildOption::Block::None);
+            st.color = unaffordable ? kCostUnaffordable : kCostAffordable;
             st.outline = c.text_outline;
             st.align = TextAlign::Center;
             add_text(dl_, layer_of(c, p), HudList::Text, *fonts_, canvas_, num32(o.cost), {mid.x, mid.y - 0.5f * box.y + 7.0f}, st);
@@ -806,6 +807,7 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         r.icon_override = s.icon;
         r.selected = s.selected;
         r.text = s.count > 1 ? num32(s.count) : std::u32string();
+        r.tooltip_text = s.name;  // [port] a player-given fleet / ship name
         const ComponentPlacement& p = layout_.placement(u);
         if (!p.placed) return false;
         const CommandBarComponent& c = (*table_)[u];
@@ -817,13 +819,14 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
         ps.component = ci;
         ps.select = std::move(select);
         const std::string_view dd = c.raw_value("DRAG_AND_DROP");
-        ps.draggable = !foreign && !empty && !dd.empty() && (dd[0] == 'T' || dd[0] == 't' || dd[0] == 'Y' || dd[0] == 'y' || dd[0] == '1');
+        ps.draggable = !foreign && !empty && data::parse_flag_char(dd);
         ps.foreign = foreign;
         ps.fleet_index = fleet_index;
         ps.fleet = fleet;
         ps.unit = unit;
         ps.empty = empty;
         ps.icon = s.icon;
+        ps.name = s.name;
         pads_.push_back(std::move(ps));
         return true;
     };
@@ -838,6 +841,7 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
             if (fd) {
                 GalacticFleetSlot hs;
                 hs.object = fd->fleet;
+                hs.name = fd->name;
                 draw_slot(fleet_header_[fl], hs, fd->enemy ? std::vector<uint32_t>{} : std::vector<uint32_t>{fd->fleet}, fi, fd->fleet, 0, fd->enemy);
             } else {
                 buttons_.state(static_cast<uint32_t>(fleet_header_[fl])).hidden = true;
@@ -861,9 +865,9 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
             const size_t first = stacks.size();
             for (const GalacticFleetSlot& u : gf->units) {
                 Stack* into = nullptr;
-                if (u.type != kNoSlotType)
+                if (u.type != kNoSlotType && u.name.empty())  // [port] a named unit keeps a pad of its own
                     for (size_t k = first; k < stacks.size(); ++k)
-                        if (stacks[k].slot.type == u.type) into = &stacks[k];
+                        if (stacks[k].slot.type == u.type && stacks[k].slot.name.empty()) into = &stacks[k];
                 if (into) {
                     into->slot.count += u.count;
                     into->slot.selected = into->slot.selected || u.selected;
@@ -897,13 +901,6 @@ void GalacticHud::build_fleets(const GalacticHudFrame& f) {
 }
 
 // ---- fleet drag and drop ----------------------------------------------------------------------------------------
-commands::EventData fleet_management_event(uint32_t target, uint32_t fleet, uint32_t unit, uint8_t op, uint8_t slot, uint32_t a) {
-    commands::EventData e(commands::EventType::FleetManagement);
-    e.set("target", target).set("fleet", fleet).set("unit", unit).set("op", op).set("slot", slot);
-    if (a != 0) e.set("a", a);
-    return e;
-}
-
 // The slot a new fleet should take (payload `b`, galactic campaign.hpp "kFleetSlot").
 static commands::EventData with_slot_request(commands::EventData e, int32_t slot) {
     if (slot >= 0) e.set("b", static_cast<uint32_t>(slot));
@@ -922,19 +919,19 @@ bool GalacticHud::slot_drop(const StackHit& sh, std::vector<commands::EventData>
     if (sh.planet == home) {
         if (!empty) {
             if (sh.enemy || sh.fleet == drag_.fleet) return false;
-            if (out) out->push_back(land ? fleet_management_event(sh.fleet, kNone, unit, ops_.launch)
-                                         : fleet_management_event(sh.fleet, drag_.fleet, unit, ops_.merge));
+            if (out) out->push_back(land ? fleet_management_event(commands::kFleetLaunch, sh.fleet, kNone, unit)
+                                         : fleet_management_event(commands::kFleetMerge, sh.fleet, drag_.fleet, unit));
             return true;
         }
         if (!land && drag_.unit == 0) {  // re-slot the whole fleet
-            if (out) out->push_back(fleet_management_event(home, drag_.fleet, kNone, ops_.slot, static_cast<uint8_t>(sh.slot)));
+            if (out) out->push_back(fleet_management_event(commands::kFleetSlot, home, drag_.fleet, kNone, kNone, static_cast<uint8_t>(sh.slot)));
             return true;
         }
         if (out) {
             // The unit becomes a new fleet in that slot: detach from its fleet, or launch from the surface (op 6 with the
             // destination = its own planet); the slot rides in the payload's `b` and the sim gives it to the new fleet.
-            out->push_back(with_slot_request(land ? fleet_management_event(home, kNone, unit, ops_.move_new, 0, home)
-                                                  : fleet_management_event(home, drag_.fleet, unit, ops_.detach),
+            out->push_back(with_slot_request(land ? fleet_management_event(commands::kFleetMoveNew, home, kNone, unit, home)
+                                                  : fleet_management_event(commands::kFleetDetach, home, drag_.fleet, unit),
                                              sh.slot));
         }
         return true;
@@ -945,11 +942,11 @@ bool GalacticHud::slot_drop(const StackHit& sh, std::vector<commands::EventData>
         // an enemy fleet's slot is no choice.
         const bool choose = sh.slot >= 0 && (empty || !sh.enemy);
         if (land || drag_.unit != 0) {  // the unit becomes a new fleet that moves (op 6; `b` = its slot at the destination)
-            commands::EventData e = fleet_management_event(home, land ? kNone : drag_.fleet, unit, ops_.move_new, 0, sh.planet);
+            commands::EventData e = fleet_management_event(commands::kFleetMoveNew, home, land ? kNone : drag_.fleet, unit, sh.planet);
             out->push_back(choose ? with_slot_request(std::move(e), sh.slot) : std::move(e));
         } else {
             if (choose)  // op 8 with a destination planet: the slot it takes on arrival, ahead of the move order
-                out->push_back(fleet_management_event(home, drag_.fleet, kNone, ops_.slot, static_cast<uint8_t>(sh.slot), sh.planet));
+                out->push_back(fleet_management_event(commands::kFleetSlot, home, drag_.fleet, kNone, sh.planet, static_cast<uint8_t>(sh.slot)));
             out->push_back(commands::ev::move_object_to_object(drag_.fleet, sh.planet));
         }
     }
@@ -979,6 +976,19 @@ const GalacticHud::StackHit* GalacticHud::stack_at(int32_t component, float px, 
     for (const StackHit& h : stack_hits_)  // last drawn wins (drawn on top)
         if (h.component == component && c.x >= h.min.x && c.x <= h.max.x && c.y >= h.min.y && c.y <= h.max.y) best = &h;
     return best;
+}
+
+uint32_t GalacticHud::stack_under(float px, float py, bool& land) const {
+    land = false;
+    const Vec2f c = canvas_.pixel_to_canvas(px + 0.5f, py + 0.5f);
+    const StackHit* best = nullptr;
+    for (const StackHit& h : stack_hits_)  // last drawn wins (drawn on top)
+        if ((h.component == planet_fleet_ || h.component == planet_land_) && c.x >= h.min.x && c.x <= h.max.x && c.y >= h.min.y &&
+            c.y <= h.max.y)
+            best = &h;
+    if (!best) return 0;
+    land = best->component == planet_land_;
+    return best->fleet;
 }
 
 bool GalacticHud::takes_button(int32_t component, Button b) const {
@@ -1025,7 +1035,7 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
             if (drag_.active) {
                 drag_.cursor_px = {static_cast<float>(e.x), static_cast<float>(e.y)};
                 drag_.over_component = e.component;
-                drop(out);
+                drop(&out);
                 dropped = true;
             }
             press_component_ = -1;
@@ -1063,7 +1073,7 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
     drag_.over_slot = -1;
     drag_.over_slot_planet = drag_.over_slot_fleet = 0;
     if (over && over->empty && over->fleet == 0 && !over->foreign) {  // an empty pane: the drop makes a new fleet in its slot
-        drag_.valid = selected_id_ != 0 && slot_drop(pane_hit(*over), nullptr);
+        drag_.valid = drop(nullptr);
         drag_.over_fleet = drag_.valid;
         return;
     }
@@ -1074,55 +1084,48 @@ void GalacticHud::drag_update(const RoutedInput& routed, std::vector<commands::E
             drag_.over_slot_fleet = sh->fleet;
             for (size_t i = 0; i < planet_px_.size(); ++i)
                 if (planet_px_[i].planet == sh->planet) drag_.over_planet = static_cast<int32_t>(i);
-            drag_.valid = slot_drop(*sh, nullptr);
+            drag_.valid = drop(nullptr);
             return;
         }
-    const bool over_land = over && over->fleet_index < 0;
-    const uint32_t home = drag_.planet != 0 ? drag_.planet : selected_id_;
-    const bool own_planet = drag_.over_planet >= 0 && planet_px_[static_cast<size_t>(drag_.over_planet)].planet == home;
-    const bool land_ok = drag_.planet == 0 || drag_.planet == selected_id_;
-    drag_.valid = drag_.over_fleet || (over_land && drag_.fleet_index >= 0 && land_ok) ||
-                  (drag_.over_planet >= 0 && drag_.fleet_index >= 0 && !own_planet) ||
-                  (!over && drag_.over_planet < 0 && drag_.fleet_index >= 0 && drag_.unit != 0);
+    drag_.valid = drop(nullptr);
 }
 
-void GalacticHud::drop(std::vector<commands::EventData>& out) {
+bool GalacticHud::drop(std::vector<commands::EventData>* out) {
     constexpr uint32_t kNone = commands::kNoObject;
+    const auto emit = [out](commands::EventData e) {
+        if (out) out->push_back(std::move(e));
+        return true;
+    };
     const PadSlot* over = pad_of(drag_.over_component);
     const bool from_fleet = drag_.fleet_index >= 0;
     const uint32_t unit = drag_.unit != 0 ? drag_.unit : kNone;
     if (over && over->fleet_index >= 0) {  // onto a fleet pad
-        if (over->foreign) return;  // a foreign pad is no drop target (UI.md §7.2)
-        if (over->empty && over->fleet == 0) {  // an empty pane k: a new fleet in slot k (UI.md §7.2, §7.3)
-            if (selected_id_ != 0) slot_drop(pane_hit(*over), &out);
-            return;
-        }
-        if (over->fleet == drag_.fleet) return;
-        if (from_fleet) out.push_back(fleet_management_event(over->fleet, drag_.fleet, unit, ops_.merge));
-        else out.push_back(fleet_management_event(over->fleet, kNone, unit, ops_.launch));
-        return;
+        if (over->foreign) return false;  // a foreign pad is no drop target (UI.md §7.2)
+        if (over->empty && over->fleet == 0)  // an empty pane k: a new fleet in slot k (UI.md §7.2, §7.3)
+            return selected_id_ != 0 && slot_drop(pane_hit(*over), out);
+        if (over->fleet == drag_.fleet) return false;
+        if (from_fleet) return emit(fleet_management_event(commands::kFleetMerge, over->fleet, drag_.fleet, unit));
+        return emit(fleet_management_event(commands::kFleetLaunch, over->fleet, kNone, unit));
     }
     if (over) {  // onto the land forces (a map fleet: only at the selected planet)
-        if (from_fleet && selected_id_ != 0 && (drag_.planet == 0 || drag_.planet == selected_id_)) out.push_back(fleet_management_event(selected_id_, drag_.fleet, unit, ops_.land));
-        return;
+        if (from_fleet && selected_id_ != 0 && (drag_.planet == 0 || drag_.planet == selected_id_))
+            return emit(fleet_management_event(commands::kFleetLand, selected_id_, drag_.fleet, unit));
+        return false;
     }
     if (drag_.over_component >= 0 && drag_.over_component == planet_fleet_) {  // onto a fleet slot
-        if (const StackHit* sh = stack_at(planet_fleet_, drag_.cursor_px.x, drag_.cursor_px.y)) slot_drop(*sh, &out);
-        return;
+        const StackHit* sh = stack_at(planet_fleet_, drag_.cursor_px.x, drag_.cursor_px.y);
+        return sh && slot_drop(*sh, out);
     }
-    if (drag_.over_component >= 0 || !from_fleet) return;  // another HUD component / land unit into the world
+    if (drag_.over_component >= 0 || !from_fleet) return false;  // another HUD component / land unit into the world
     const int32_t pi = planet_at(drag_.cursor_px.x, drag_.cursor_px.y);
     if (pi >= 0) {
         const uint32_t planet = planet_px_[static_cast<size_t>(pi)].planet;
-        if (drag_.unit == 0) {
-            if (planet != (drag_.planet != 0 ? drag_.planet : selected_id_))
-                out.push_back(commands::ev::move_object_to_object(drag_.fleet, planet));
-        } else {
-            out.push_back(commands::ev::move_object_to_object(drag_.unit, planet));
-        }
-    } else if (drag_.unit != 0 && selected_id_ != 0) {
-        out.push_back(fleet_management_event(selected_id_, kNone, drag_.unit, ops_.detach));
+        if (drag_.unit != 0) return emit(commands::ev::move_object_to_object(drag_.unit, planet));
+        if (planet != (drag_.planet != 0 ? drag_.planet : selected_id_)) return emit(commands::ev::move_object_to_object(drag_.fleet, planet));
+        return false;
     }
+    if (drag_.unit != 0 && selected_id_ != 0) return emit(fleet_management_event(commands::kFleetDetach, selected_id_, kNone, drag_.unit));
+    return false;
 }
 
 void GalacticHud::build_objectives(const GalacticHudFrame& f) {
@@ -1329,9 +1332,7 @@ void GalacticHud::build_day_pips(const GalacticHudFrame& f) {
         const auto sc = static_cast<uint32_t>(shell);
         const Vec2f off = layout_.shell_offset(sc);
         for (const ShellBone& b : layout_.shell_bones(sc))
-            if (b.name.size() == name.size() && std::equal(b.name.begin(), b.name.end(), name.begin(), [](char x, char y) {
-                    return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
-                })) {
+            if (ascii_iequals(b.name, name)) {
                 out = {b.x + off.x, b.y + off.y};
                 return true;
             }
@@ -1495,7 +1496,7 @@ void GalacticHud::build_battle_prompt(const GalacticHudFrame& f) {
 void GalacticHud::build_screen_text(const GalacticHudFrame& f) {
     if (f.screen_text.empty() || !fonts_) return;
     HudTextStyle st;
-    st.font = fonts_->font("EmpireAtWar-Medium", 9.0f, canvas_.screen_height);
+    st.font = fonts_->font("EmpireAtWar-Medium", 9.0f, canvas_.font_height());
     if (st.font < 0) return;
     st.outline = true;
     st.align = TextAlign::Center;
@@ -1588,7 +1589,7 @@ void GalacticHud::build(const GalacticHudFrame& f) {
         std::string icon = drag_.icon;
         // Drag_Back ("show the pancakes while dragging"): a map fleet's stack under its icon.
         const std::string_view db = c.raw_value("DRAG_BACK");
-        if (drag_.fleet_index == kMapFleetIndex && !db.empty() && (db[0] == 'T' || db[0] == 't' || db[0] == 'Y' || db[0] == 'y' || db[0] == '1'))
+        if (drag_.fleet_index == kMapFleetIndex && data::parse_flag_char(db))
             if (const std::string* b = pick(c.blank_texture, drag_.layers)) {
                 add_atlas_quad(dl_, kHudLayers - 1, HudList::Alpha, *atlas_, *b, canvas_.pixel_to_canvas(drag_.cursor_px.x, drag_.cursor_px.y), {},
                                c.scale, Rgba8{drag_.tint.r, drag_.tint.g, drag_.tint.b, 200});  // the stack keeps its owner tint
@@ -1617,6 +1618,24 @@ void GalacticHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
     auto act = [&](HudAction a) {
         if (actions) actions->push_back(std::move(a));
     };
+    // ui4 t02: a left click on a greyed build pad (HudButtons drops clicks on disabled components) is refused here with
+    // the GUI negative feedback instead of a Production command the sim would refuse silently.
+    if (!dropped)
+        for (const HudPointerEvent& e : routed.hud) {
+            if (e.kind != HudPointerEvent::Kind::Click || e.button != Button::Left || e.component < 0) continue;
+            for (const PadSlot& s : pads_) {
+                if (s.component != e.component || s.is_queue || s.foreign || !s.select.empty()) continue;
+                if (s.option.enabled && !s.option.production_disabled && s.option.block == HudBuildOption::Block::None) break;
+                HudAction a;
+                a.kind = HudAction::Kind::BuildRefused;
+                a.component = e.component;
+                a.name = (*table_)[static_cast<size_t>(e.component)].name;
+                a.value = static_cast<int32_t>(s.option.block);
+                a.unit = s.option.type_index;
+                act(std::move(a));
+                break;
+            }
+        }
     for (const ButtonClick& k : clicks) {
         bool handled = false;
         for (const PadSlot& s : pads_) {
@@ -1635,7 +1654,30 @@ void GalacticHud::update_input(const RoutedInput& routed, bool shift, bool ctrl,
                 a.shift = k.shift;
                 a.ctrl = k.ctrl;
                 act(std::move(a));
-            } else if (k.button == Button::Left && s.option.enabled && !s.option.production_disabled && selected_id_ != 0) {
+                // [port: Gabriel] a second left click on the same own pad within 0.5 s and 4 px (HeroPanel's double-click
+                // rule) asks the host to rename the fleet (header) or the pad's unit.
+                if (k.button == Button::Left && !k.shift && !k.ctrl) {
+                    const bool dbl = last_pad_click_ == k.component && now - last_pad_click_time_ <= 0.5 &&
+                                     std::abs(k.x - last_pad_click_x_) <= 4 && std::abs(k.y - last_pad_click_y_) <= 4;
+                    if (dbl && (s.unit != 0 || s.fleet != 0)) {
+                        HudAction r;
+                        r.kind = HudAction::Kind::Rename;
+                        r.component = k.component;
+                        r.name = (*table_)[static_cast<size_t>(k.component)].name;
+                        r.unit = s.unit != 0 ? s.unit : s.fleet;
+                        r.value = s.unit != 0 ? 0 : 1;
+                        if (s.fleet != 0) r.ids = {s.fleet};
+                        act(std::move(r));
+                        last_pad_click_ = -1;
+                    } else {
+                        last_pad_click_ = k.component;
+                        last_pad_click_time_ = now;
+                        last_pad_click_x_ = k.x;
+                        last_pad_click_y_ = k.y;
+                    }
+                }
+            } else if (k.button == Button::Left && s.option.enabled && !s.option.production_disabled &&
+                       s.option.block == HudBuildOption::Block::None && selected_id_ != 0) {
                 out.push_back(commands::ev::production(s.option.type_index, selected_id_));
             } else if (k.button == Button::Right && selected_id_ != 0) {
                 out.push_back(commands::ev::production(s.option.type_index, selected_id_, true));  // [port] right click cancels

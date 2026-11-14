@@ -15,6 +15,8 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/lua/ai_bridge.hpp"  // reset_script_threads
 #include "alamo/lua/bindings.hpp"
@@ -25,6 +27,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/objects/object_types.hpp"
+#include "alamo/test/support.hpp"
 #if ALAMO_LUA_HAVE_COMMANDS
 #include "alamo/commands/pipeline.hpp"
 #endif
@@ -38,14 +41,7 @@ using namespace alamo;
 using namespace alamo::lua;
 namespace fs = std::filesystem;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 static std::string run(LuaVm& vm, const std::string& code) {
     std::string err;
@@ -97,10 +93,7 @@ static bool last_message_has(LuaVm& vm, const char* text) {
     return !vm.messages().empty() && vm.messages().back().find(text) != std::string::npos;
 }
 
-static void write_file(const fs::path& p, const std::string& s) {
-    fs::create_directories(p.parent_path());
-    std::ofstream(p, std::ios::binary) << s;
-}
+using ::alamo::test::write_file;
 
 // ------------------------------------------------------------------------------------------
 // Synthetic type database.
@@ -246,6 +239,20 @@ static void test_find(const Db& db) {
     CHECK(contains(run_stop(vm, "Find_All_Objects_With_Hint(1)"), "invalid type for parameter 1. Expected string."));
     CHECK(run(vm, "gh = Find_Hint('Marker_Generic', 'spawnpoint').Get_Hint() gn = tostring(t1.Get_Hint())") == "");
     CHECK(gstr(vm, "gh") == "SpawnPoint" && gstr(vm, "gn") == "nil");
+    // q6 t28: map hints (.ted 0x482) come from the host's map_hint hook; a script-set hint wins over it.
+    {
+        const objects::ObjectId tank_id = s.store.id(s.tank), m1 = s.store.id(s.marker1);
+        s.bridge.map_hint = [&s, tank_id, m1](objects::ObjectHandle h) {
+            const objects::ObjectId id = s.store.id(h);
+            return id == tank_id ? std::string_view("falcongear1") : id == m1 ? std::string_view("mapname") : std::string_view();
+        };
+        CHECK(run(vm, "mh1 = Find_Hint('Tank', 'FalconGear1').Get_Object_ID() mh2 = tostring(Find_Hint('Trooper', 'falcongear1')) "
+                      "mh3 = tank.Get_Hint() mh4 = tostring(Find_Hint('Marker_Generic', 'mapname')) "
+                      "mh5 = table.getn(Find_All_Objects_With_Hint('falcongear1')) mh6 = Find_Hint('Marker_Generic', 'spawnpoint').Get_Object_ID()") == "");
+        CHECK(gnum(vm, "mh1") == static_cast<double>(tank_id) && gstr(vm, "mh2") == "nil" && gstr(vm, "mh3") == "falcongear1");
+        CHECK(gstr(vm, "mh4") == "nil" && gnum(vm, "mh5") == 1.0 && gnum(vm, "mh6") == 5.0);
+        s.bridge.map_hint = nullptr;
+    }
     // Find_First_Object: newest first, case-insensitive type name.
     CHECK(run(vm, "f1 = Find_First_Object('trooper').Get_Object_ID() f2 = tostring(Find_First_Object('Nope'))") == "");
     CHECK(gnum(vm, "f1") == 2.0 && gstr(vm, "f2") == "nil");
@@ -273,6 +280,16 @@ static void test_find(const Db& db) {
           last_message_has(vm, "Find_Nearest - unknown game object type, properties mask or catefory NoSuchThing."));
     CHECK(run(vm, "Find_Nearest()") == "" && last_message_has(vm, "Expected between 1 and 4, got 0."));
     CHECK(run(vm, "Find_Nearest(5)") == "" && last_message_has(vm, "invalid type for parameter 1; expected game object"));
+    // modc t06: a nil filter (a mod's category helper returning nil) is not a filter, the player is then read at slot 2;
+    // a non-player there is a null player (no player filter), a non-bool flag keeps true. No error in any of these.
+    {
+        const size_t before = vm.messages().size();
+        CHECK(run(vm, "n14 = Find_Nearest(t1, nil, p1, false).Get_Object_ID() "  // slot 2 is nil: null player, all players
+                      "n15 = Find_Nearest(t1, nil, nil, true).Get_Object_ID() "
+                      "n16 = Find_Nearest(t1, 'Infantry', 7, 'x').Get_Object_ID()") == "");
+        CHECK(gnum(vm, "n14") == 3.0 && gnum(vm, "n15") == 3.0 && gnum(vm, "n16") == 2.0);
+        CHECK(vm.messages().size() == before);
+    }
     // Bridge relation hook: "allied or self" = not an enemy. Nothing is p1's enemy -> p2's tank is a friend of p1.
     s.bridge.is_enemy = [](int32_t, int32_t) { return false; };
     CHECK(run(vm, "n9 = Find_Nearest(t1, p1, true).Get_Object_ID() n13 = tostring(Find_Nearest(t1, p1, false))") == "" &&
@@ -613,6 +630,26 @@ static void test_spawn_and_state(const Db& db) {
     CHECK(said("Lock_Current_Orders - Trooper is already locked.  Script cannot stack locks.") == 2);
     CHECK(run(vm, "team.Unlock_Current_Orders() team.Unlock_Current_Orders() c1 = members[1].Can_Move() and 1 or 0") == "");
     CHECK(gnum(vm, "c1") == 1.0 && said("Unlock_Current_Orders - object Trooper is not locked.") == 2);
+    {  // s78n t06 review (A1_READINGS §28.9 item 4): a land TEAM Unlock decrements each locked member's counter, so a member
+       // locked only by its hero clash moves again (its +0x3b4 stays: Unlock on the member itself is still the error)
+        RemainingScriptHooks hk;
+        bool held = true;
+        CHECK(run(vm, "hm = members[1].Get_Object_ID()") == "");
+        const objects::ObjectHandle hm = s.store.find(static_cast<objects::ObjectId>(gnum(vm, "hm")));
+        hk.in_hero_clash = [hm](objects::ObjectHandle h) { return h == hm; };
+        hk.hero_clash_locked = [hm, &held](objects::ObjectHandle h) { return h == hm && held; };
+        hk.release_hero_clash_lock = [hm, &held](objects::ObjectHandle h) {
+            if (h != hm || !held) return false;
+            held = false;
+            return true;
+        };
+        s.bridge.remaining = &hk;
+        CHECK(run(vm, "c1 = members[1].Can_Move() and 1 or 0") == "" && gnum(vm, "c1") == 0.0);
+        CHECK(run(vm, "team.Unlock_Current_Orders() c1 = members[1].Can_Move() and 1 or 0") == "");
+        CHECK(!held && gnum(vm, "c1") == 1.0 && said("Unlock_Current_Orders - object Trooper is not locked.") == 3);  // member 2 only
+        CHECK(contains(run_stop(vm, "members[1].Unlock_Current_Orders()"), "is locked by a hero clash.  Cannot unlock."));
+        s.bridge.remaining = nullptr;
+    }
     CHECK(run(vm, "sq = Spawn_Unit(Find_Object_Type('Squad'), mk, p1)[1] sm = Find_All_Objects_Of_Type('Squaddie') "
                   "sq.Lock_Current_Orders() q1 = sq.Can_Move() and 1 or 0 m1 = sm[1].Can_Move() and 1 or 0 "
                   "sm[2].Lock_Current_Orders() sq.Unlock_Current_Orders() q2 = sq.Can_Move() and 1 or 0") == "");
@@ -795,7 +832,7 @@ static void test_dead_handles(const Db& db) {
     CHECK(run(vm, "r = 1 r = victim.Attack_Target(t1) rn = r == nil and 1 or 0") == "" && gnum(vm, "rn") == 1.0 && !vm.exit_requested());
     // q6 t11: a dead caller is silent in most methods (nothing returned, no message, no stop); the WarnNothing ones log
     // "SCRIPT WARNING: GameObjectWrapper::<m> -- this object is dead!" and go on.
-    for (const char* m : {"Get_Position()", "Hide(true)", "Get_Hull()", "Is_Category('Infantry')", "Activate_Ability('SPRINT')"}) {
+    for (const char* m : {"Get_Position()", "Hide(true)", "Get_Hull()", "Is_Category('Infantry')", "Activate_Ability('SPRINT', true)"}) {
         const size_t m0 = vm.messages().size();
         CHECK(run(vm, std::string("nr = (function(...) return arg.n end)(victim.") + m + ")") == "" && gnum(vm, "nr") == 0.0 &&
               vm.messages().size() == m0 && !vm.exit_requested());
@@ -888,18 +925,25 @@ static void test_orders(const Db& db) {
     CHECK(std::fabs(rec.cmds.back().payload.f("angle") - 90.0f) < 0.1f);
     CHECK(contains(run_stop(vm, "t1.Turn_To_Face()"), "Turn_To_Face -- invalid number of parameters. Expected 1, got 0."));
     // Abilities: SetUnitAbilityMode / SetAbilityAutofire on the direct path.
-    CHECK(run(vm, "t1.Activate_Ability('SPRINT') act = t1.Is_Ability_Active('SPRINT') and 1 or 0 rdy = t1.Is_Ability_Ready('SPRINT') and 1 or 0") == "");
+    CHECK(run(vm, "t1.Activate_Ability('SPRINT', true) act = t1.Is_Ability_Active('SPRINT') and 1 or 0 rdy = t1.Is_Ability_Ready('SPRINT') and 1 or 0") == "");
     {
         const commands::EventData& e = rec.cmds.back().payload;
         CHECK(e.type() == EventType::SetUnitAbilityMode && e.u("ability") == 40 && e.u("on") == 1 && e.u("count") == 1 &&
               e.ids("units") == std::vector<uint32_t>{1} && e.u("object") == commands::kNoObject);
     }
     CHECK(gnum(vm, "act") == 1.0 && gnum(vm, "rdy") == 0.0);
-    CHECK(run(vm, "t1.Activate_Ability('STEALTH', tank) t1.Activate_Ability('SPRINT', false) act2 = t1.Is_Ability_Active('SPRINT') and 1 or 0") == "");
-    CHECK(rec.cmds[rec.cmds.size() - 2].payload.u("ability") == 48 && rec.cmds[rec.cmds.size() - 2].payload.u("object") == 3);
+    CHECK(run(vm, "t1.Activate_Ability('STEALTH', true) t1.Activate_Ability('SPRINT', false) act2 = t1.Is_Ability_Active('SPRINT') and 1 or 0") == "");
+    CHECK(rec.cmds[rec.cmds.size() - 2].payload.u("ability") == 48 && rec.cmds[rec.cmds.size() - 2].payload.u("object") == commands::kNoObject);
     CHECK(rec.cmds.back().payload.u("on") == 0 && gnum(vm, "act2") == 0.0);
     const size_t before = rec.cmds.size();
-    CHECK(run(vm, "nb = t1.Activate_Ability('JET_PACK') nf = nb.IsFinished() and 1 or 0") == "" && rec.cmds.size() == before);  // not owned: no-op
+    // cu8l t04 (CU8K_T04_COORDINATOR_TRACES "Which check ends the script"): on the stage-2 path too, a count other than 2,
+    // an unknown name and a wrong argument kind (STEALTH takes a bool) are script errors; nothing is issued.
+    CHECK(contains(run_stop(vm, "t1.Activate_Ability('SPRINT')"), "invalid number of parameters.  Expected 2, got 1."));
+    CHECK(contains(run_stop(vm, "t1.Activate_Ability('NOT_AN_ABILITY', true)"), "unknown ability NOT_AN_ABILITY."));
+    CHECK(contains(run_stop(vm, "t1.Activate_Ability('STEALTH', tank)"), "Ability STEALTH expects a bool."));
+    CHECK(rec.cmds.size() == before);
+    CHECK(run(vm, "nb = t1.Activate_Ability('JET_PACK', tank) nf = nb.IsFinished() and 1 or 0") == "" && rec.cmds.size() == before);  // not owned: no-op
+    CHECK(last_message_has(vm, "SCRIPT WARNING: GameObjectWrapper::Activate_Ability -- Object ") && !vm.exit_requested());
     CHECK(run(vm, "t1.Set_Single_Ability_Autofire('STEALTH', true) af = t1.Is_Ability_Autofire('STEALTH') and 1 or 0") == "");
     CHECK(rec.cmds.back().payload.type() == EventType::SetAbilityAutofire && rec.cmds.back().payload.u("ability") == 48 &&
           gnum(vm, "af") == 1.0);
@@ -1011,26 +1055,12 @@ static void test_determinism(const Db& db) {
 
 // The shipped scripts' patterns: TestValid / Find_Hint / Spawn_Unit / Teleport_And_Face / BlockOnCommand in a
 // thread. With ALAMO_FOC_DATA the real PGBase.lua drives BlockOnCommand; otherwise a minimal stand-in.
-static std::string env(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 static void test_script_patterns(const Db& db) {
     Scene s(db);
     std::unique_ptr<FileProvider> files;
-    const std::string root = env("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
 #ifdef ALAMO_LUA_HAVE_VFS
     if (!root.empty()) {
         vfs::VfsConfig cfg;

@@ -73,6 +73,42 @@ std::optional<int32_t> parse_int(std::string_view s) {
     return static_cast<int32_t>(v);
 }
 
+std::optional<int32_t> parse_int_prefix(std::string_view s) {
+    size_t i = 0;
+    while (i < s.size() && is_ws(s[i])) ++i;
+    bool neg = false;
+    if (i < s.size() && (s[i] == '+' || s[i] == '-')) neg = s[i++] == '-';
+    const size_t first = i;
+    int64_t v = 0;
+    bool overflow = false;
+    for (; i < s.size() && s[i] >= '0' && s[i] <= '9'; ++i) {
+        if (!overflow) {
+            v = v * 10 + (s[i] - '0');
+            if (v > 2147483648ll) overflow = true;
+        }
+    }
+    if (i == first) return std::nullopt;
+    if (neg) {
+        if (overflow || v > 2147483648ll) return std::numeric_limits<int32_t>::min();
+        return static_cast<int32_t>(-v);
+    }
+    if (overflow || v > 2147483647ll) return std::numeric_limits<int32_t>::max();
+    return static_cast<int32_t>(v);
+}
+
+bool parse_type_bool(std::string_view s) {
+    if (s == "1") return true;
+    if (s.empty()) return false;
+    const char c = s[0];
+    return c == 'Y' || c == 'y' || c == 'T' || c == 't';
+}
+
+bool parse_flag_char(std::string_view s) {
+    if (s.empty()) return false;
+    const char c = s[0];
+    return c == 'Y' || c == 'y' || c == 'T' || c == 't' || c == '1';
+}
+
 std::optional<bool> parse_bool(std::string_view s) {
     s = trim(s);
     if (iequals(s, "yes") || iequals(s, "true") || s == "1" || iequals(s, "on")) return true;

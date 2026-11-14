@@ -16,16 +16,8 @@
 namespace alamo::materials {
 namespace {
 
-constexpr uint64_t fnv64(std::string_view s) {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (char c : s) {
-        h ^= static_cast<uint8_t>(c);
-        h *= 0x100000001b3ull;
-    }
-    return h;
-}
 constexpr uint32_t program_id(std::string_view name) {
-    const uint64_t h = fnv64(name);
+    const uint64_t h = alamo::fnv1a64(name);  // constexpr overload
     // Hand-written programs: bit 31 clear (kProgramIdTranslatedBit marks track-B bytecode ids).
     const uint32_t id = static_cast<uint32_t>(h ^ (h >> 32)) & ~kProgramIdTranslatedBit;
     return id == 0 ? 1u : id;  // 0 = unresolved in PsoKey
@@ -171,10 +163,7 @@ std::string effect_key(std::string_view n) {
     if (slash != std::string_view::npos) n = n.substr(slash + 1);
     size_t dot = n.find_last_of('.');
     if (dot != std::string_view::npos) n = n.substr(0, dot);
-    std::string k(n);
-    for (char& c : k)
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-    return k;
+    return ascii_upper(n);
 }
 
 const ProgramInterface* iface_for(ProgramFamily f) {
@@ -197,7 +186,7 @@ const ShaderBlob* find_shader_blob(std::string_view name) {
 }
 
 uint64_t programs_fingerprint() {
-    uint64_t h = 0xcbf29ce484222325ull;
+    uint64_t h = alamo::kFnv1a64Offset;
     for (const auto& b : blobs()) h = alamo::fnv1a64(&b.content_hash, sizeof b.content_hash, h);
     return h;
 }

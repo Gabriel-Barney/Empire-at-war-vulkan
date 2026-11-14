@@ -18,7 +18,7 @@
 
 namespace alamo::profile {
 
-inline constexpr uint32_t kMaxZones = 96;
+inline constexpr uint32_t kMaxZones = 192;  // sp0 (2026-11-14): 96 -> 192 for the perception / services step zones
 inline constexpr uint32_t kMaxThreads = 32;     // accumulator slots; more threads share slots (still correct)
 inline constexpr uint32_t kMaxBusySlots = 32;   // job-system slots; slot 0 is the sim thread helping while it waits
 using ZoneId = uint16_t;
@@ -53,12 +53,34 @@ private:
     int64_t t0_;
 };
 
+// Consecutive steps of one code path on the calling thread (SIMP sp0): each mark charges the time since the previous mark
+// (or construction) to a zone, so a zone can be split into steps without wrapping each step in a block. Disabled at
+// construction = every mark is a no-op. `ALAMO_PROFILE_STEP(steps, "name")` registers the zone once per call site.
+class Steps {
+public:
+    Steps() noexcept : t_(enabled() ? now_ns() : -1) {}
+    void mark(ZoneId id) noexcept {
+        if (t_ < 0) return;
+        const int64_t t = now_ns();
+        if (id != kNoZone) add_zone_ns(id, t - t_);
+        t_ = t;
+    }
+
+private:
+    int64_t t_;
+};
+
 #define ALAMO_PROFILE_CAT2(a, b) a##b
 #define ALAMO_PROFILE_CAT(a, b) ALAMO_PROFILE_CAT2(a, b)
 #define ALAMO_PROFILE_SCOPE(name)                                                                           \
     static const ::alamo::profile::ZoneId ALAMO_PROFILE_CAT(alamo_pz_, __LINE__) =                           \
         ::alamo::profile::register_zone(name);                                                              \
     ::alamo::profile::Scope ALAMO_PROFILE_CAT(alamo_ps_, __LINE__)(ALAMO_PROFILE_CAT(alamo_pz_, __LINE__))
+#define ALAMO_PROFILE_STEP(steps, name)                                                                     \
+    do {                                                                                                    \
+        static const ::alamo::profile::ZoneId alamo_pstep_ = ::alamo::profile::register_zone(name);         \
+        (steps).mark(alamo_pstep_);                                                                         \
+    } while (0)
 
 // One closed tick. Values saturate at ~4.29 s (uint32 ns).
 struct TickRecord {

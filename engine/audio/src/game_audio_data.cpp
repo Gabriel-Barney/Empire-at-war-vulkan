@@ -7,6 +7,7 @@
 #include "alamo/core/hash.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/data/xml.hpp"
+#include "alamo/data/xml_list.hpp"
 
 namespace alamo::audio {
 namespace {
@@ -246,7 +247,9 @@ void GameAudioData::parse_factions_xml(std::string_view xml, std::string_view fi
         f.name = std::string(data::trim(n.attribute("Name")));
         for (XmlNode c : n.children()) {
             const std::string_view tag = c.name();
-            if (contains_ci(tag, "SFX") || contains_ci(tag, "Music") || contains_ci(tag, "Speech"))
+            // + Faction_Super_Weapon: picks the _Super_Weapon music variants (AUDIO.md §2.3, b0286).
+            if (contains_ci(tag, "SFX") || contains_ci(tag, "Music") || contains_ci(tag, "Speech") ||
+                iequals(tag, "Faction_Super_Weapon"))
                 f.fields.emplace_back(std::string(tag), std::string(c.text_trimmed()));
         }
         if (find_faction(f.name)) {
@@ -275,20 +278,20 @@ bool GameAudioData::load(const FileProvider& files, GameAudioLoadReport* report)
     } else {
         diag(r, "AmbientMapSounds.xml", 0, "missing");
     }
-    if (read_text(files, "Data\\XML\\FactionFiles.xml", text)) {
-        XmlDocument list = XmlDocument::parse(text, "FactionFiles.xml");
-        for (XmlNode f : list.root().children("File")) {
-            const std::string name(data::trim(f.text_trimmed()));
-            std::string body;
-            if (!read_text(files, "Data\\XML\\" + name, body)) {
-                diag(r, "FactionFiles.xml", f.line(), "listed file missing: " + name);
-                continue;
-            }
-            parse_factions_xml(body, name, r);
-            any = true;
-        }
-    } else {
-        diag(r, "FactionFiles.xml", 0, "missing");
+    {  // cu5 t02: the shared list walk (list order; every entry is opened, an empty one fails to)
+        data::ListedXmlOptions lo;
+        lo.keep_empty_entries = true;
+        lo.visit_missing = true;
+        const data::ListStatus st = data::for_each_listed_file(files, "Data\\XML\\FactionFiles.xml",
+            [&](const data::ListedXmlEntry& en, const std::vector<uint8_t>* bytes) {
+                if (!bytes) {
+                    diag(r, "FactionFiles.xml", en.line, "listed file missing: " + en.name);
+                    return;
+                }
+                parse_factions_xml(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()), en.name, r);
+                any = true;
+            }, lo);
+        if (st == data::ListStatus::Missing) diag(r, "FactionFiles.xml", 0, "missing");
     }
     if (read_text(files, "Data\\XML\\AnimationSFXMaps.txt", text)) {
         const size_t before = anim_.entry_count();

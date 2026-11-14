@@ -9,6 +9,7 @@
 // Args: --golden-dir <dir> (compare), --write-golden (rewrite the golden files instead), --quick (1./2. only),
 // --only units|synthetic|foc (one part; CMake registers the three parts as separate ctest entries).
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -19,9 +20,12 @@
 #include <utility>
 #include <vector>
 
+#include "alamo/core/hash.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/commands/pipeline.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/economy.hpp"
@@ -29,7 +33,8 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "foc_data.hpp"
-#include "thread_parallel_for.hpp"
+#include "alamo/test/thread_parallel_for.hpp"
+#include "alamo/test/support.hpp"
 #ifdef ALAMO_GALACTIC_TESTS_HAVE_VFS
 #include "alamo/vfs/vfs.hpp"
 #endif
@@ -38,18 +43,19 @@ using namespace alamo;
 using namespace alamo::galactic;
 using commands::RejectReason;
 
-static int g_fail = 0;
-#define CHECK(c)                                                     \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); \
-            ++g_fail;                                                \
-        }                                                            \
-    } while (0)
+using ::alamo::test::g_fail;
 
 namespace {
 
 bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; }
+
+// Frames a straight hop from `from` to `to` takes at v (econ::fleet_step until arrival).
+int32_t frames_for_hop(Vec3 from, Vec3 to, float v) {
+    Vec3 p = from;
+    for (int32_t k = 1; k < 100000; ++k)
+        if (econ::fleet_step(p, to, v, nullptr)) return k;
+    return -1;
+}
 
 // ---- 1. formulas ---------------------------------------------------------------------------------------------
 
@@ -97,13 +103,22 @@ void test_formulas() {
           corruption_income_pct(c, -1) == 0.0f);
 
     CHECK(build_time_t0(15, 1.0f) == 15.0f && build_time_t0(10, 0.95f) == 9.0f);
-    CHECK(tech_time_factor(3, 1, c.base_vs_tech) == 0.75f && tech_time_factor(5, 0, c.base_vs_tech) == 0.45f &&
-          tech_time_factor(1, 2, c.base_vs_tech) == 1.0f && tech_time_factor(2, 1, c.base_vs_tech) == 0.9f);
+    // A2K_T01_BUILD_COST_RE 2.1 [H]: index d - 1 (d = L - Tech_Level).
+    CHECK(tech_time_factor(2, 1, c.base_vs_tech) == 1.0f);   // d 1 -> _0
+    CHECK(tech_time_factor(3, 1, c.base_vs_tech) == 0.9f);   // d 2 -> _1
+    CHECK(tech_time_factor(3, 0, c.base_vs_tech) == 0.75f);  // d 3 -> _2 (Tartan @Kuat)
+    CHECK(tech_time_factor(4, 0, c.base_vs_tech) == 0.55f);  // d 4 -> _3
+    CHECK(tech_time_factor(5, 0, c.base_vs_tech) == 0.45f);  // d 5 -> _4
+    CHECK(tech_time_factor(1, 2, c.base_vs_tech) == 1.0f && tech_time_factor(2, 2, c.base_vs_tech) == 1.0f);
+    {
+        std::array<float, 5> t{0.1f, 0.2f, 0.3f, 0.4f, 0.5f};
+        CHECK(tech_time_factor(5, -1, t) == 0.5f);  // d 6 clamps to _4
+    }
     BuildTimeInputs in;
     in.build_time_seconds = 15;
     in.tech_factor_applies = true;
-    in.starbase_level = 3;
-    in.tech_level = 1;
+    in.starbase_level = 4;
+    in.tech_level = 1;  // d 3 -> 0.75
     in.base_vs_tech = &c.base_vs_tech;
     in.ai_multiplier = 0.5f;
     in.corruption_multiplier = 0.75f;
@@ -132,9 +147,9 @@ void test_formulas() {
     CHECK(hop_factor(false, false, false, true, 0.5f, 1.5f) == 1.0f);
     const float v0 = base_speed(1.5f, 0.07f, 1.0f);
     CHECK(v0 == 1.5f * 0.07f);
-    CHECK(hop_frames_1d(60.0f, hop_speed(v0, 5.0f)) == 113);  // GE 3.2 example: ~113 frames
-    CHECK(hop_frames_1d(60.0f, v0) == 570);                   // no route: ~20 s
-    Vec3f p{0, 0, 0}, f{};
+    CHECK(frames_for_hop({0, 0, 0}, {60.0f, 0, 0}, hop_speed(v0, 5.0f)) == 113);  // GE 3.2 example: ~113 frames
+    CHECK(frames_for_hop({0, 0, 0}, {60.0f, 0, 0}, v0) == 570);                   // no route: ~20 s
+    Vec3 p{0, 0, 0}, f{};
     CHECK(!fleet_step(p, {10, 0, 0}, 1.0f, &f) && p.x == 1.0f && f.x == 1.0f);
     p = {7.5f, 0, 0};
     CHECK(fleet_step(p, {10, 0, 0}, 1.0f, &f) && p.x == 10.0f);  // 1.5 left < 2 * 1 -> snap
@@ -387,12 +402,13 @@ void test_income() {
 void test_production() {
     World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
     GalacticSim& s = w.sim;
-    // Human, up-front payment: cost on enqueue, T = 15 * 0.9 (starbase 1 vs tech 0) = 13.5 s = 405 frames.
-    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 13.5f);
+    // Human, up-front payment: cost on enqueue, T = 15 * _0 1.0 (starbase 1 vs tech 0: d 1 -> _0, A2K_T01 2.1) = 15 s =
+    // 450 frames.
+    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 15.0f);
     CHECK(s.enqueue(pEmpire, rA, tFrigate) == RejectReason::None);
     CHECK(s.credits(pEmpire) == 3750.0f);
     const BuildEntry head = w.planet(rA).queue[kSpaceQueue][0];
-    CHECK(head.start == 0 && head.duration == 405 && head.cost == 1250.0f);
+    CHECK(head.start == 0 && head.duration == 450 && head.cost == 1250.0f);
     CHECK(s.enqueue(pEmpire, rA, tSB2) == RejectReason::None);  // upgrade, queued behind
     CHECK(s.enqueue(pEmpire, rA, tFighters) == RejectReason::None);
     CHECK(s.enqueue(pEmpire, rA, tFighters) == RejectReason::None);
@@ -407,14 +423,14 @@ void test_production() {
     CHECK(s.cancel(pUnder, rA, kSpaceQueue, 0) == RejectReason::NotOwner);
     // Infantry on the ground queue (needs ground level 1 = the barracks).
     CHECK(s.enqueue(pEmpire, rA, tInfantry) == RejectReason::None);
-    w.run(405);  // frames 0..404
+    w.run(450);  // frames 0..449
     CHECK(w.planet(rA).queue[kSpaceQueue].size() == 4 && w.sim.fleets_at(rA, pEmpire).empty());
-    w.run(1);  // frame 405: done
+    w.run(1);  // frame 450: done
     CHECK(w.planet(rA).queue[kSpaceQueue].size() == 3);
     const uint32_t f = w.fleet(rA, pEmpire);
     CHECK(f != kNoFleet && w.fl(f).contents.size() == 1 && w.store.type(w.fl(f).contents[0]) == tFrigate);
-    CHECK(w.planet(rA).queue[kSpaceQueue][0].type == tSB2 && w.planet(rA).queue[kSpaceQueue][0].start == 405);
-    // Infantry: 10 s * 0.9 (the starbase level is used for ground units too) = 9 s = 270 frames.
+    CHECK(w.planet(rA).queue[kSpaceQueue][0].type == tSB2 && w.planet(rA).queue[kSpaceQueue][0].start == 450);
+    // Infantry: 10 s, no tech factor (ground units never get it, A2K_T01 2.1) = 300 frames.
     CHECK(w.planet(rA).surface.size() == 1);
     // Starbase upgrade head while the starbase is not owned -> dropped without refund.
     const float c2 = s.credits(pEmpire);
@@ -435,7 +451,7 @@ void test_production() {
     CHECK(s.enqueue(pUnder, rE, tCorvette) == RejectReason::None);
     CHECK(s.credits(pUnder) == u0);
     const BuildEntry ce = w.planet(rE).queue[kSpaceQueue][0];
-    CHECK(ce.build_time == 10.0f * 0.9f * 0.6f && ce.duration == econ::timer_frames(ce.build_time));
+    CHECK(ce.build_time == 10.0f * 0.6f && ce.duration == econ::timer_frames(ce.build_time));
     w.run(60);
     const BuildEntry mid = w.planet(rE).queue[kSpaceQueue][0];
     const float paid = u0 - s.credits(pUnder);
@@ -460,14 +476,60 @@ void test_production() {
     CHECK(t.sim.players()[pEmpire].tech_level == 2 && t.planet(rA).queue[kSpaceQueue].empty());
 }
 
-// ---- 2c. fleets ----------------------------------------------------------------------------------------------------
-
-int32_t frames_for_hop(Vec3 from, Vec3 to, float v) {
-    econ::Vec3f p{from.x, from.y, from.z};
-    for (int32_t k = 1; k < 100000; ++k)
-        if (econ::fleet_step(p, {to.x, to.y, to.z}, v, nullptr)) return k;
-    return -1;
+// A2k t01 (A2K_T01_BUILD_COST_RE 1.2 / 1.3): Reduce_Production_Price / _Time abilities. Sum over stacking categories of
+// the per-category max, merged planet-local and player-wide, capped at 0.999999; derived from the holders present.
+void test_production_modifiers() {
+    World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rA, tInfantry}, {pEmpire, rB, tBarracks},
+             {pUnder, rE, tSB1}});
+    GalacticSim& s = w.sim;
+    SpecialRules& sp = w.rules.special;
+    sp.types.assign(tTypeCount, TypeSpecial{});
+    const auto add = [&sp](uint32_t holder, SpecialAbilityClass cls, float v, int32_t cat, bool galaxy,
+                           std::vector<uint32_t> types, uint64_t cats) {
+        SpecialAbilityDef a;
+        a.cls = cls;
+        a.style = ActivationStyle::GalacticAutomatic;
+        a.production_reduction = v;
+        a.stacking_category = cat;
+        a.galaxy_wide = galaxy;
+        a.applicable_types = std::move(types);
+        a.applicable_categories = cats;
+        sp.types[holder].production.push_back(static_cast<uint32_t>(sp.production.size()));
+        sp.production.push_back(std::move(a));
+    };
+    constexpr uint64_t kAll = ~uint64_t{0};
+    const auto P = SpecialAbilityClass::ReducePrice;
+    // Before any ability: base prices, 1.0 multipliers.
+    CHECK(s.build_cost_for(pEmpire, rA, tFrigate) == 1250 && s.production_bonus(pEmpire, rA, tFrigate, false) == 0.0f);
+    add(tPlanetA, P, 0.25f, 9, false, {tFrigate}, 0);  // planet ability (PLANETS.XML), local
+    add(tBarracks, P, 0.25f, 0, false, {}, kAll);      // structure holder, category 0
+    add(tInfantry, P, 0.5f, 0, false, {}, kAll);       // "hero" on the surface, category 0: max with the barracks
+    // 0.5 (cat 0 max) + 0.25 (cat 9) = 0.75 -> 0.25 x 1250 = 312.5 -> 313 (half away).
+    CHECK(s.production_bonus(pEmpire, rA, tFrigate, false) == 0.75f && s.build_cost_for(pEmpire, rA, tFrigate) == 313);
+    CHECK(s.build_cost_for(pEmpire, rA, tCorvette) == 400);  // All only: 0.5 x 800
+    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 15.0f);  // price abilities never touch the time
+    CHECK(s.build_cost_for(pUnder, rE, tFrigate) == 1250);    // other planet, other player
+    // A Galaxy_Wide time ability on planet B's type (Empire owns B): every Empire build of the type, nobody else's.
+    add(tPlanetB, SpecialAbilityClass::ReduceTime, 0.5f, 9, true, {tFrigate}, 0);
+    CHECK(s.build_time_for(pEmpire, rA, tFrigate) == 7.5f);
+    CHECK(s.build_time_for(pUnder, rE, tFrigate) == 15.0f * 0.6f);  // Hard AI x 0.6, no bonus
+    // Excluded types win over All.
+    sp.production[sp.types[tInfantry].production[0]].excluded_types = {tCorvette};
+    CHECK(s.build_cost_for(pEmpire, rA, tCorvette) == 600);  // the barracks' 0.25 is left
+    // Removal: the holder dies -> its entry is gone at once.
+    CHECK(w.planet(rA).surface.size() == 1);
+    CHECK(s.destroy_object(w.planet(rA).surface[0]));
+    CHECK(s.build_cost_for(pEmpire, rA, tFrigate) == 625);  // 0.25 + 0.25
+    // Cap 0.999999: max(1, 1250 x ~1e-6) = 1.
+    add(tPlanetA, P, 1.0f, 5, false, {}, kAll);
+    CHECK(s.production_bonus(pEmpire, rA, tFrigate, false) == std::bit_cast<float>(0x3f7fffefu));
+    CHECK(s.build_cost_for(pEmpire, rA, tFrigate) == 1);
+    // Price is frozen at enqueue (the entry keeps its cost).
+    CHECK(s.enqueue(pEmpire, rA, tFighters) == RejectReason::None);
+    CHECK(w.planet(rA).queue[kSpaceQueue].back().cost == 1.0f);
 }
+
+// ---- 2c. fleets ----------------------------------------------------------------------------------------------------
 
 void test_fleets() {
     {
@@ -498,13 +560,32 @@ void test_fleets() {
         CHECK(w.store.position(w.fl(f).object).x == 120.0f);
         CHECK(w.planet(rC).owner == pNeutral);  // orbit alone does not capture an accessible planet
     }
-    {   // Merge on arrival into the friendly fleet already in orbit.
-        World w({{pEmpire, rA, tFrigate}, {pEmpire, rB, tFrigate}});
+    {   // A2k t08 (A2K_T08_RE_ANSWERS Q1): without a requested slot an arriving fleet never merges. It takes the first of
+        // slots 1, 2, 0 that no other fleet of its owner holds, and shares slot 0 when all three are held.
+        World w({{pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate},
+                 {pEmpire, rA, tSB1}, {pEmpire, rB, tFrigate}});
+        GalacticSim& s = w.sim;
+        const auto id = [&w](ObjectHandle h) { return static_cast<uint32_t>(w.store.id(h)); };
+        const uint32_t pa = id(w.planet(rA).object);
         const uint32_t fa = w.fleet(rA, pEmpire), fb = w.fleet(rB, pEmpire);
-        CHECK(w.sim.move_fleet(pEmpire, fa, rB) == RejectReason::None);
-        w.run(200);
-        CHECK(!w.fl(fa).alive && w.fl(fb).contents.size() == 2 && w.sim.fleets_at(rB, pEmpire).size() == 1);
-        CHECK(!w.store.alive(w.fl(fa).object));
+        CHECK(fa != kNoFleet && fb != kNoFleet && w.fl(fb).slot == 0);
+        const std::vector<ObjectHandle> m = w.fl(fa).contents;
+        CHECK(m.size() == 4);
+        std::vector<uint32_t> movers;
+        for (size_t i = 1; i < m.size(); ++i) {  // three single-frigate fleets split off at A
+            CHECK(s.execute(static_cast<uint8_t>(pEmpire), fleet_management_event(kFleetDetach, pa, commands::kNoObject, id(m[i]))) ==
+                  RejectReason::None);
+            movers.push_back(s.fleet_containing(m[i]));
+        }
+        movers.push_back(fa);
+        const int8_t expect[] = {1, 2, 0, 0};  // B: fb holds 0, so 1, 2, then all held: shared slot 0
+        for (size_t i = 0; i < movers.size(); ++i) {
+            CHECK(s.move_fleet(pEmpire, movers[i], rB) == RejectReason::None);
+            w.run(200);
+            CHECK(w.fl(movers[i]).alive && !w.fl(movers[i]).moving && w.fl(movers[i]).planet == rB && w.fl(movers[i]).slot == expect[i]);
+            CHECK(w.fl(movers[i]).contents.size() == 1 && w.fl(fb).contents.size() == 1);
+        }
+        CHECK(s.fleets_at(rB, pEmpire).size() == 5);
     }
     {   // Interception at the first contested hop; Underworld runs through.
         World w({{pEmpire, rA, tFrigate}, {pUnder, rB, tCorvette}, {pUnder, rE, tCorvette}, {pEmpire, rC, tFrigate}});
@@ -736,10 +817,6 @@ void test_a2_income_hook() {
     w.run(1);
     CHECK(ticks.size() == 2 && ticks[1].gain == 8.0f && ticks[1].day == 3 && ticks[1].frame == 2700);
     CHECK(s.credits(pUnder) - before < 8.0f * 1.2f - 1.0f);
-    s.remove_income_hook(id);
-    const int32_t stop = s.next_cycle_frame();
-    while (s.frame() <= stop) w.run(1);
-    CHECK(ticks.size() == 2);
 
     // AI Empire: ticks in player order, the gain taken before the cap clamp.
     World a({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}}, true);
@@ -757,6 +834,27 @@ void test_a2_income_hook() {
     CHECK(z.sim.player_income(pUnder, false) == 0.0f);
     z.run(1351);
     CHECK(zt.size() == 1 && !zt.empty() && zt[0].player == pEmpire && z.sim.last_income(pUnder) == 0.0f);
+
+    // a2k t10 (A2K_T10_CREDIT_NOTIFY_RE Q1 / Q3) [H]: Add_Credits with notify tells an AI player's budget the APPLIED amount
+    // (after Credit_Multiplier, floor and cap); notify off, a player without an AI system and the fiscal income tell nothing.
+    World n({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+    std::vector<std::pair<int32_t, float>> got;
+    CHECK(n.sim.add_credit_notify_hook([&got](int32_t p, float x) { got.emplace_back(p, x); }) != 0);
+    const float u0 = n.sim.credits(pUnder);
+    const float applied = n.sim.add_credits(pUnder, 100.0f, true);  // Underworld (AI): x 1.2
+    CHECK(applied == n.sim.credits(pUnder) - u0 && applied > 100.0f);
+    n.sim.add_credits(pUnder, 100.0f, false);
+    n.sim.add_credits(pEmpire, 100.0f, true);  // human Empire: no AI system
+    n.sim.add_credits(pUnder, -1.0e9f, true);  // floored at 0: the applied amount is what was there
+    CHECK(got.size() == 2);
+    if (got.size() == 2) {
+        CHECK(got[0].first == pUnder && got[0].second == applied);
+        CHECK(got[1].first == pUnder && got[1].second < 0.0f && n.sim.credits(pUnder) == 0.0f);
+    }
+    n.sim.notify_ai_credits(pUnder, 5.0f);  // a host's direct account change (the battle-end return 0x614a70)
+    CHECK(got.size() == 3);
+    n.run(1351);  // the fiscal cycle pays with notify off
+    CHECK(got.size() == 3);
 }
 
 void test_a2_production_queries() {
@@ -1017,85 +1115,190 @@ void test_a2_population_terrain() {
     CHECK(terrain_id("desert") == 2 && terrain_id("Space") == 7 && terrain_id("Moon") == -1);
 }
 
+// q6 t21 / t22 (Q6_T15_RETAIL_RUN.md "ELIM C", "q6 t25"; STRATEGIC_GAPS 1.4): the victory records and the event-driven tests.
+VictoryRules vic_rules() {
+    VictoryRules r;
+    r.starting_active_faction = "Empire";
+    r.ai.conditions = {VictoryCondition::CyclesElapsed};  // a non-empty AI list: the AI also gets the implicit type 1
+    r.ai.cycle_limit = 1000;
+    return r;
+}
+
+bool has_claim(const GalacticSim& s, int32_t player, VictoryCondition k) {
+    const VictoryClaim* d = s.victory_declared();
+    return d && d->player == player && d->type == static_cast<uint8_t>(k);
+}
+
+const VictorySide& no_filter() {
+    static const VictorySide s;
+    return s;
+}
+
 void test_a2_victory() {
-    World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
-    GalacticSim& s = w.sim;
     CHECK(parse_victory_condition("galactic_cycles_elapsed") == VictoryCondition::CyclesElapsed &&
           parse_victory_condition("x") == VictoryCondition::Unknown);
-    VictoryRules r;
-    r.human.conditions = {VictoryCondition::SuperWeaponDestruction, VictoryCondition::ControlNamedPlanets};
-    r.human.planets = {rA, rB, rC};
-    r.ai.conditions = {VictoryCondition::AllPlanetsControlled, VictoryCondition::CyclesElapsed};
-    r.ai.cycle_limit = 3;
-    CHECK(!check_victory(s, r).finished() && victory_outcome(s, r, pEmpire) == 0);
-    // Empire takes C (named planets A, B, C).
-    s.change_owner(w.planet(rC).object, pEmpire);
-    VictoryResult v = check_victory(s, r);
-    CHECK(v.winner == pEmpire && v.how == VictoryCondition::ControlNamedPlanets && victory_outcome(s, r, pEmpire) == 1 &&
-          victory_outcome(s, r, pUnder) == -1);
-    // The AI wins on the cycle limit (the human's named planets lost again).
-    s.change_owner(w.planet(rC).object, pNeutral);
-    while (s.galactic_day() <= 3) w.run(1);  // Cycles_Elapsed: cycles > limit (SG 1.4)
-    v = check_victory(s, r);
-    CHECK(v.winner == pUnder && v.how == VictoryCondition::CyclesElapsed);
-    // Elimination: Underworld loses E and everything on it.
-    r.ai.conditions.clear();
-    const std::vector<ObjectHandle> kill(w.planet(rE).structures.begin(), w.planet(rE).structures.end());
-    for (ObjectHandle h : kill) s.destroy_object(h);
-    s.destroy_object(w.planet(rE).starbase);
-    s.change_owner(w.planet(rE).object, pNeutral);  // the leaning would keep it otherwise
-    w.run(1);
-    CHECK(player_eliminated(s, pUnder) && !player_eliminated(s, pEmpire));
-    v = check_victory(s, r);
-    CHECK(!v.finished() && v.eliminated == std::vector<int32_t>{pUnder} && victory_outcome(s, r, pUnder) == -1);
-    // q6 [port] EliminationLatch: a player the latch never saw own anything is not eliminated (Thrawn's Revenge starts
-    // the human with nothing); one it saw is, as before.
+    // t22 records: the Human_ list for the Starting_Active_Player faction, the AI_ list + the implicit type 1 for the
+    // others, nothing for an Is_Neutral faction; countdown 30 each. An empty AI list gets no implicit record.
     {
-        EliminationLatch fresh;
-        CHECK(victory_outcome(s, r, pUnder, &fresh) == 0 && !fresh.armed(pUnder) && fresh.armed(pEmpire));
-        CHECK(check_victory(s, r, &fresh).eliminated.empty());
-        EliminationLatch seen;
-        seen.arm(pUnder);
-        CHECK(victory_outcome(s, r, pUnder, &seen) == -1 && check_victory(s, r, &seen).eliminated == std::vector<int32_t>{pUnder});
+        World w({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        VictoryRules r = vic_rules();
+        r.human.conditions = {VictoryCondition::ControlNamedPlanets};
+        w.sim.set_victory_rules(r);
+        const std::span<const VictoryRecord> rec = w.sim.victory_records();
+        CHECK(rec.size() == 3);
+        if (rec.size() == 3) {
+            CHECK(rec[0].player == pEmpire && rec[0].type == VictoryCondition::ControlNamedPlanets && rec[0].human_side && !rec[0].implicit);
+            CHECK(rec[1].player == pUnder && rec[1].type == VictoryCondition::CyclesElapsed && !rec[1].human_side);
+            CHECK(rec[2].player == pUnder && rec[2].type == VictoryCondition::OpponentControlsNoPlanets && rec[2].implicit &&
+                  rec[2].countdown == kGalacticVictoryCountdown && kGalacticVictoryCountdown == 30);
+        }
+        CHECK(w.sim.victory_side(pEmpire) == 1 && w.sim.victory_side(pUnder) == 2 && w.sim.victory_side(pNeutral) == 0);
+        CHECK(!w.sim.victory_test(pNeutral, VictoryCondition::OpponentControlsNoPlanets));  // neutral: no record
+        r.ai.conditions.clear();
+        w.sim.set_victory_rules(r);
+        CHECK(w.sim.victory_records().size() == 1 && w.sim.victory_side(pUnder) == 2);
+        CHECK(!w.sim.victory_test(pUnder, VictoryCondition::OpponentControlsNoPlanets));
     }
-    // All planets: every planet's owner the Empire or allied with it (SG 1.4: neutral-owned planets block).
-    r.human.conditions = {VictoryCondition::AllPlanetsControlled};
-    CHECK(check_victory(s, r).winner == kNoPlayer);
-    for (PlanetIndex p : {rC, rD, rE}) s.change_owner(w.planet(p).object, pEmpire);
-    CHECK(check_victory(s, r).winner == pEmpire);
-    // story t11 (BT §3.1a item 3 on the galactic monitor): ENABLE_VICTORY 0 holds every result (the elimination is still
-    // reported), extra releases are no-ops, the story VICTORY releases every level and wins for its player (even one whose
-    // side lists nothing) once its countdown ran out; until then nobody wins. Hashed only once used.
-    StateHasher h0;
-    s.hash_state(h0);
-    s.victory_hold_raise();
-    s.victory_hold_raise();
-    CHECK(s.victory_hold() == 2 && check_victory(s, r).winner == kNoPlayer && check_victory(s, r).eliminated == std::vector<int32_t>{pUnder});
-    StateHasher h1;
-    s.hash_state(h1);
-    CHECK(h0.digest() != h1.digest());
-    s.victory_hold_release();
-    CHECK(s.victory_hold() == 1 && check_victory(s, r).winner == kNoPlayer);
-    s.victory_hold_release();
-    s.victory_hold_release();  // not held: nothing
-    CHECK(s.victory_hold() == 0 && check_victory(s, r).winner == pEmpire);
-    StateHasher h2;
-    s.hash_state(h2);
-    CHECK(h2.digest() == h0.digest());
-    s.victory_hold_raise();
-    CHECK(!s.story_victory(-1, false) && s.victory_hold() == 1);  // unknown player: nothing
-    CHECK(s.story_victory(pNeutral, false) && s.victory_hold() == 0);
-    CHECK(s.victory_claims().back().type == GalacticSim::kVictoryStoryClaim && s.victory_claims().back().countdown == 210);
-    CHECK(check_victory(s, r).winner == kNoPlayer && victory_outcome(s, r, pEmpire) == 0);  // declared, counting down
-    w.run(209);
-    CHECK(check_victory(s, r).winner == kNoPlayer);
-    w.run(1);
-    v = check_victory(s, r);
-    CHECK(v.winner == pNeutral && v.how == VictoryCondition::StoryTriggered && victory_outcome(s, r, pEmpire) == -1);
-    s.victory_hold_raise();  // a hold raised after the declaration delays the result (0x342d80)
-    CHECK(check_victory(s, r).winner == kNoPlayer);
-    s.victory_hold_release();
-    CHECK(check_victory(s, r).winner == pNeutral);
+    // ELIM C + first owner assignment: the human owns nothing from the start and the rules come with the setup (the
+    // first ownership pass and the first services assign owners, which tests nothing). No owner change, no end.
+    GalacticRules rules = make_rules();
+    objects::GameObjectTypes types;
+    objects::IdCounter ids;
+    objects::ObjectStore store{objects::ModeKind::Galactic, objects::StoreKind::Primary, types, &ids};
+    SimRng rng{7u};
+    GalacticSim s{rules, store, rng};
+    GalacticSetup setup = make_setup({{pUnder, rE, tSB1}, {pUnder, rE, tBarracks}, {pUnder, rC, tBarracks}});
+    setup.victory = vic_rules();
+    CHECK(s.start(setup) && s.victory_records().size() == 2);
+    CHECK(s.planets_owned(pEmpire) == 0 && s.planets_owned(pUnder) == 2);
+    CHECK(victory_condition_met(s, no_filter(), VictoryCondition::OpponentControlsNoPlanets, pUnder));  // it would pass
+    for (int i = 0; i < 300; ++i) s.update();
+    CHECK(s.victory_claims().empty() && !check_victory(s).finished() && victory_outcome(s, pEmpire) == 0);
+    // A change to the current owner is no owner change.
+    CHECK(!s.change_owner(s.planets()[rE].object, pUnder) && s.victory_claims().empty());
+    // ELIM D: an owner change while the human owns nothing: the AI's implicit Opponent_Controls_No_Planets passes and
+    // the AI wins 30 frames later (Defeat for the human).
+    CHECK(s.change_owner(s.planets()[rB].object, pUnder));
+    CHECK(has_claim(s, pUnder, VictoryCondition::OpponentControlsNoPlanets) && !check_victory(s).finished());
+    for (int i = 0; i < 29; ++i) s.update();
+    CHECK(!check_victory(s).finished());
+    s.update();
+    CHECK(check_victory(s).winner == pUnder && check_victory(s).how == VictoryCondition::OpponentControlsNoPlanets);
+    CHECK(victory_outcome(s, pEmpire) == -1 && victory_outcome(s, pUnder) == 1);
+    // Once declared, nothing else is: another test answers false and adds no claim.
+    CHECK(!s.victory_test(pUnder, VictoryCondition::CyclesElapsed) && s.victory_claims().size() == 1);
+
+    // ELIM E: units do not count. The human holds A and has a fleet at B; an owner change elsewhere while it holds A
+    // ends nothing; once A goes neutral the human's live fleet does not save it.
+    {
+        World w({{pEmpire, rA, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
+        w.sim.set_victory_rules(vic_rules());
+        const ObjectHandle frigate = w.sim.spawn_unit(pEmpire, rB, tFrigate);
+        w.run(2);
+        CHECK(w.sim.planets_owned(pEmpire) == 1 && w.planet(rB).owner == pNeutral);
+        CHECK(w.sim.change_owner(w.planet(rC).object, pUnder) && w.sim.victory_claims().empty());  // the human holds A
+        CHECK(w.sim.change_owner(w.planet(rA).object, pNeutral) && w.store.alive(frigate) && w.sim.planets_owned(pEmpire) == 0);
+        CHECK(has_claim(w.sim, pUnder, VictoryCondition::OpponentControlsNoPlanets));
+        w.run(30);
+        CHECK(victory_outcome(w.sim, pEmpire) == -1);
+    }
+    // Type 1 skips planets whose owner and the tested player are both AI non-humans; the Starting_Active_Player slot
+    // counts as human even when an AI plays it ([port] headless AI-vs-AI).
+    {
+        World w({{pEmpire, rA, tBarracks}, {pUnder, rE, tBarracks}}, true);
+        VictoryRules r = vic_rules();
+        r.starting_active_faction = "Underworld";  // the AI Empire gets the AI list
+        w.sim.set_victory_rules(r);
+        CHECK(w.sim.victory_ai_player(pEmpire) && !w.sim.victory_ai_player(pUnder));
+        CHECK(!victory_condition_met(w.sim, no_filter(), VictoryCondition::OpponentControlsNoPlanets, pUnder));  // a human P
+        r.starting_active_faction = "Neutral";  // nobody on the Human_ side: both AI
+        w.sim.set_victory_rules(r);
+        CHECK(w.sim.victory_ai_player(pUnder) && victory_condition_met(w.sim, no_filter(), VictoryCondition::OpponentControlsNoPlanets, pUnder));
+    }
+    // Control_Named_Planets (human list) at the owner change that completes the list.
+    {
+        World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pEmpire, rB, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
+        VictoryRules r = vic_rules();
+        r.human.conditions = {VictoryCondition::SuperWeaponDestruction, VictoryCondition::ControlNamedPlanets};
+        r.human.planets = {rA, rB, rC};
+        w.sim.set_victory_rules(r);
+        w.sim.change_owner(w.planet(rC).object, pEmpire);
+        CHECK(has_claim(w.sim, pEmpire, VictoryCondition::ControlNamedPlanets));
+        w.run(30);
+        CHECK(victory_outcome(w.sim, pEmpire) == 1 && victory_outcome(w.sim, pUnder) == -1);
+    }
+    // Cycles_Elapsed at the week rollover (cycles > limit); Credits_Accrued in add_credits for that player.
+    {
+        World w({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        VictoryRules r = vic_rules();
+        r.ai.cycle_limit = 2;
+        r.human.conditions = {VictoryCondition::CreditsAccrued};
+        r.human.credit_target = 1000000;
+        w.sim.set_victory_rules(r);
+        bool early = false;
+        while (w.sim.galactic_day() <= 2) {
+            early = early || !w.sim.victory_claims().empty();
+            w.run(1);
+        }
+        CHECK(!early && has_claim(w.sim, pUnder, VictoryCondition::CyclesElapsed));
+        World c({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        r.human.credit_target = 6000;
+        c.sim.set_victory_rules(r);
+        CHECK(c.sim.credits(pEmpire) < 6000.0f && c.sim.victory_claims().empty());
+        c.sim.add_credits(pEmpire, 2000.0f);
+        CHECK(has_claim(c.sim, pEmpire, VictoryCondition::CreditsAccrued));
+    }
+    // story t11 + q6 t21 (BT §3.1a item 3): ENABLE_VICTORY 0 defers the tests ({type, player}, no duplicates; saved and
+    // hashed once used); the last release replays them against the state then, first pass wins.
+    {
+        World w({{pEmpire, rA, tSB1}, {pEmpire, rA, tBarracks}, {pUnder, rE, tSB1}, {pUnder, rE, tBarracks}});
+        VictoryRules r = vic_rules();
+        r.human.conditions = {VictoryCondition::ControlNamedPlanets};
+        r.human.planets = {rA, rC};
+        w.sim.set_victory_rules(r);
+        StateHasher h0;
+        w.sim.hash_state(h0);
+        w.sim.victory_hold_raise();
+        w.sim.victory_hold_raise();
+        w.sim.change_owner(w.planet(rC).object, pEmpire);
+        w.sim.change_owner(w.planet(rD).object, pEmpire);
+        CHECK(w.sim.victory_claims().empty());
+        CHECK(w.sim.victory_deferred().size() == 2);  // {Empire, 9}, {Underworld, 1}; the second change adds no duplicate
+        StateHasher h1;
+        w.sim.hash_state(h1);
+        CHECK(h0.digest() != h1.digest());
+        ByteWriter bw;
+        w.sim.write(bw);
+        w.sim.victory_hold_release();
+        CHECK(w.sim.victory_hold() == 1 && w.sim.victory_claims().empty() && w.sim.victory_deferred().size() == 2);
+        w.sim.victory_hold_release();
+        CHECK(w.sim.victory_hold() == 0 && has_claim(w.sim, pEmpire, VictoryCondition::ControlNamedPlanets) &&
+              w.sim.victory_deferred().empty());
+        w.sim.victory_hold_release();  // not held: nothing
+        CHECK(w.sim.victory_claims().size() == 1);
+        ByteReader br(bw.bytes());
+        CHECK(w.sim.read(br) && w.sim.victory_deferred().size() == 2 && w.sim.victory_hold() == 2 && w.sim.victory_claims().empty());
+    }
+    // The story VICTORY: releases every level (no replay) and wins for its player (even one whose side lists nothing) once
+    // its countdown ran out; a hold raised after the declaration delays the result (0x342d80).
+    {
+        World w({{pEmpire, rA, tSB1}, {pUnder, rE, tSB1}});
+        w.sim.set_victory_rules(vic_rules());
+        w.sim.victory_hold_raise();
+        CHECK(!w.sim.story_victory(-1, false) && w.sim.victory_hold() == 1);  // unknown player: nothing
+        CHECK(w.sim.story_victory(pNeutral, false) && w.sim.victory_hold() == 0);
+        CHECK(w.sim.victory_claims().back().type == GalacticSim::kVictoryStoryClaim && w.sim.victory_claims().back().countdown == 210);
+        CHECK(!check_victory(w.sim).finished() && victory_outcome(w.sim, pEmpire) == 0);  // declared, counting down
+        w.run(209);
+        CHECK(!check_victory(w.sim).finished());
+        w.run(1);
+        CHECK(check_victory(w.sim).winner == pNeutral && check_victory(w.sim).how == VictoryCondition::StoryTriggered &&
+              victory_outcome(w.sim, pEmpire) == -1);
+        w.sim.victory_hold_raise();
+        CHECK(!check_victory(w.sim).finished());
+        w.sim.victory_hold_release();
+        CHECK(check_victory(w.sim).winner == pNeutral);
+    }
 }
 
 void test_a2_prerequisites_and_market_hook() {
@@ -1118,21 +1321,15 @@ void test_a2_prerequisites_and_market_hook() {
     CHECK(s.enqueue(pEmpire, rD, tBarracks) == RejectReason::PrerequisitesUnmet);
     // Starbases: only the next level.
     CHECK(!s.buildable(rA, pEmpire, tSB2) && s.enqueue(pEmpire, rA, tSB2) == RejectReason::PrerequisitesUnmet);
-    // Production-service hooks: per planet, newest registered first (reverse row order), primary slot first.
-    std::vector<std::pair<int, PlanetIndex>> calls;
-    s.set_production_service_hook([&calls](PlanetIndex p) { calls.push_back({0, p}); });
-    const uint32_t h1 = s.add_production_service_hook([&calls](PlanetIndex p) { calls.push_back({1, p}); });
-    s.add_production_service_hook([&calls](PlanetIndex p) { calls.push_back({2, p}); });
+    // Production-service hook: per planet, newest registered first (reverse row order).
+    std::vector<PlanetIndex> calls;
+    s.set_production_service_hook([&calls](PlanetIndex p) { calls.push_back(p); });
     s.update();
-    const std::vector<PlanetIndex> rows = {rE, rD, rC, rB, rA};
-    CHECK(calls.size() == 15);
-    for (size_t i = 0; i < calls.size() && i < 15; ++i)
-        CHECK(calls[i].first == static_cast<int>(i % 3) && calls[i].second == rows[i / 3]);
+    CHECK((calls == std::vector<PlanetIndex>{rE, rD, rC, rB, rA}));
     calls.clear();
-    s.remove_production_service_hook(h1);
     s.set_production_service_hook(nullptr);
     s.update();
-    CHECK(calls.size() == 5 && calls[0].first == 2 && calls[4].second == rA);
+    CHECK(calls.empty());
 }
 
 // Relation table (Make_Ally / Make_Enemy) behind every hostility test, and the build locks behind buildability.
@@ -1155,15 +1352,15 @@ void test_diplomacy_and_build_locks() {
     CHECK(!s.player_view(pEmpire).held_by_ally.test(rE) && s.player_view(pEmpire).held_by_ally.test(rA));
     VictoryRules vr;
     vr.human.conditions = {VictoryCondition::AllPlanetsControlled};
-    CHECK(check_victory(s, vr).winner == kNoPlayer);  // Underworld still holds E
+    CHECK(!victory_condition_met(s, vr.human, VictoryCondition::AllPlanetsControlled, pEmpire));  // Underworld still holds E
     // Make_Ally: both directions; no blockade, E counts as held by an ally, no hostile planet left.
     s.set_relation(pEmpire, pUnder, Relation::Ally);
     CHECK(s.relation(pUnder, pEmpire) == Relation::Ally && !s.is_hostile(pUnder, pEmpire) && s.allied(pEmpire, pUnder));
     CHECK(s.relation(pEmpire, pNeutral) == Relation::Neutral);  // untouched pairs keep their defaults
     CHECK(!s.blockaded(rE, pEmpire) && s.player_view(pEmpire).held_by_ally.test(rE));
-    CHECK(check_victory(s, vr).winner == kNoPlayer);  // C and D are neutral-owned (SG 1.4: owner self or ally)
+    CHECK(!victory_condition_met(s, vr.human, VictoryCondition::AllPlanetsControlled, pEmpire));  // C and D are neutral-owned (SG 1.4: owner self or ally)
     s.set_relation(pEmpire, pNeutral, Relation::Ally);
-    CHECK(check_victory(s, vr).winner == pEmpire);
+    CHECK(victory_condition_met(s, vr.human, VictoryCondition::AllPlanetsControlled, pEmpire));
     s.set_relation(pEmpire, pNeutral, Relation::Neutral);
     CHECK(!s.diplomacy_state_default() && digest() != fresh);
     // Ignored: self, Self relation, invalid players.
@@ -1186,15 +1383,11 @@ void test_diplomacy_and_build_locks() {
     CHECK(s.enqueue(pEmpire, rA, tFrigate) == RejectReason::PrerequisitesUnmet);
     s.lock_type(pEmpire, tFrigate, false);
     CHECK(!s.build_locked(pEmpire, tFrigate) && s.buildable(rA, pEmpire, tFrigate) && s.diplomacy_state_default());
-    // Build_Initially_Locked: only with initial build locks on (the default); Unlock_Tech (unlock_tech) adds it to the
-    // unlocked list.
-    CHECK(s.initial_build_locks());
-    w.rules.types[tCorvette].build_initially_locked = true;
-    s.set_initial_build_locks(false);
+    // Build_Initially_Locked (always enforced); Unlock_Tech (unlock_tech) adds it to the unlocked list.
     CHECK(s.buildable(rA, pEmpire, tCorvette));
-    s.set_initial_build_locks(true);
+    w.rules.types[tCorvette].build_initially_locked = true;
     CHECK(s.build_locked(pEmpire, tCorvette) && !s.buildable(rA, pEmpire, tCorvette) && s.build_locked(pUnder, tCorvette));
-    CHECK(s.diplomacy_state_default() && digest() == fresh);  // a switch, not state
+    CHECK(s.diplomacy_state_default() && digest() == fresh);  // a type flag, not state
     s.lock_type(pEmpire, tCorvette, false);  // only leaves the locked list (REMAINING_GAPS 1.5): still initially locked
     CHECK(!s.type_unlocked(pEmpire, tCorvette) && s.build_locked(pEmpire, tCorvette) && digest() == fresh);
     s.unlock_tech(pEmpire, tCorvette);
@@ -1660,11 +1853,9 @@ void test_oi_buildability() {
     w.rules.types[tFrigate].required_planets = {tPlanetB};
     CHECK(s.build_check(pEmpire, rA, tFrigate).reason == kBuildRequiredPlanet);
     w.rules.types[tFrigate].required_planets.clear();
-    // Initially locked: reason 7 with the initial locks on.
+    // Initially locked: reason 7.
     w.rules.types[tFrigate].build_initially_locked = true;
-    s.set_initial_build_locks(true);
     CHECK(s.build_check(pEmpire, rA, tFrigate).reason == kBuildInitiallyLocked);
-    s.set_initial_build_locks(false);
     w.rules.types[tFrigate].build_initially_locked = false;
     // Starbase: the next level within Max_Space_Base; a hostile visible fleet in orbit blocks a new base (reason 10).
     CHECK(s.build_check(pEmpire, rA, tSB2).ok);
@@ -1817,9 +2008,10 @@ void test_oi_victory() {
     CHECK(s.victory_claims().size() == 1 && s.victory_claims()[0].type == 3 && s.victory_claims()[0].countdown == 5);
     VictoryRules vr;
     vr.ai.conditions = {VictoryCondition::SuperWeaponDestruction};
-    CHECK(check_victory(s, vr).winner == kNoPlayer);
+    s.set_victory_rules(vr);  // q6 t22: the claim counts once the player has a record of its type
+    CHECK(check_victory(s).winner == kNoPlayer);
     w.run(5);
-    CHECK(check_victory(s, vr).winner == pUnder && check_victory(s, vr).how == VictoryCondition::SuperWeaponDestruction);
+    CHECK(check_victory(s).winner == pUnder && check_victory(s).how == VictoryCondition::SuperWeaponDestruction);
     // 6: no killer, the weapon owner's playable enemies hold no undestroyed planet.
     OiWorld w6({{pEmpire, rA, tSB1}, {pEmpire, rC, tDeathStar}, {pUnder, rE, tSB1}});
     CHECK(!w6.sim.resolve_battle_super_weapon(rC, pEmpire) && w6.sim.victory_claims().empty());
@@ -1982,7 +2174,7 @@ void test_a2_fleet_management() {
     // The same ops through the scheduled command pipeline (the HUD / replay path) and the direct path (AI).
     World v({{pEmpire, rA, tFrigate}, {pEmpire, rA, tCorvette}});
     commands::CommandPipeline pipe;
-    pipe.set_handler(v.sim.command_handler());
+    pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return v.sim.handle_command(tick, c); });
     const uint32_t g = v.fleet(rA, pEmpire);
     const uint32_t vpa = static_cast<uint32_t>(v.store.id(v.planet(rA).object));
     const uint32_t cor = static_cast<uint32_t>(v.store.id(v.fl(g).contents[1]));
@@ -2060,7 +2252,7 @@ void test_fleet_slots() {
         w.run(200);
         CHECK(w.fl(fC).alive && !w.fl(fC).moving && w.fl(fC).planet == rB && w.fl(fC).slot == 1);  // free slot 1: no merge
         CHECK(w.fl(fC).want_planet == kInvalidPlanet && w.fl(fb).alive && w.fl(fb).slot == 0 && s.fleets_at(rB, pEmpire).size() == 2);
-        // A request for an occupied slot merges into that fleet on arrival; without a request it merges into the first one.
+        // A request for an occupied slot 1 / 2 merges into that fleet on arrival; without a request no merge (A2k t08 Q1).
         CHECK(fm(kFleetDetach, pa, none, id(m[2])) == RejectReason::None);
         const uint32_t fD = s.fleet_containing(m[2]);
         CHECK(fD != kNoFleet && fD != f0 && !w.fl(fD).moving && w.fl(fD).slot == 1);
@@ -2070,7 +2262,9 @@ void test_fleet_slots() {
         CHECK(!w.fl(fD).alive && w.fl(fC).contents.size() == 2 && s.fleets_at(rB, pEmpire).size() == 2);
         CHECK(s.move_fleet(pEmpire, f0, rB) == RejectReason::None);
         w.run(200);
-        CHECK(!w.fl(f0).alive && w.fl(fb).contents.size() == 3 && s.fleets_at(rB, pEmpire).size() == 2);  // into the first (slot 0)
+        // No request: its own slot, the first of 1, 2, 0 the owner does not hold (fb 0, fC 1 -> 2), no merge.
+        CHECK(w.fl(f0).alive && w.fl(f0).planet == rB && w.fl(f0).slot == 2 && w.fl(fb).contents.size() == 1 &&
+              s.fleets_at(rB, pEmpire).size() == 3);
     };
     std::vector<uint64_t> ta, tb, tc;
     std::vector<StartingForce> forces = {{pEmpire, rA, tSB1}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate},
@@ -2087,9 +2281,10 @@ void test_fleet_slots() {
     // A world that never chose a slot keeps its CRC independent of the (automatic) slots: no "FSL1" tail.
     World wd({{pEmpire, rA, tFrigate}, {pEmpire, rB, tFrigate}});
     CHECK(wd.sim.slot_state_default());
-    CHECK(wd.sim.move_fleet(pEmpire, wd.fleet(rA, pEmpire), rB) == RejectReason::None);
+    const uint32_t wd_b = wd.fleet(rB, pEmpire), wd_a = wd.fleet(rA, pEmpire);
+    CHECK(wd.sim.move_fleet(pEmpire, wd_a, rB) == RejectReason::None);
     wd.run(200);
-    CHECK(wd.sim.slot_state_default() && wd.sim.fleets_at(rB, pEmpire).size() == 1 && wd.fl(wd.fleet(rB, pEmpire)).slot == 0);
+    CHECK(wd.sim.slot_state_default() && wd.sim.fleets_at(rB, pEmpire).size() == 2 && wd.fl(wd_b).slot == 0 && wd.fl(wd_a).slot == 1);
     {   // Ops 6 / 7 and a unit dragged off its fleet (MoveObjectToObject {unit, planet}).
         World w({{pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tFrigate}, {pEmpire, rA, tSB1}});
         GalacticSim& s = w.sim;
@@ -2117,7 +2312,8 @@ void test_fleet_slots() {
         CHECK(s.execute(static_cast<uint8_t>(pEmpire), mo) == RejectReason::None);
         CHECK(s.fleet_containing(m[2]) == f0 && w.fl(f0).contents.size() == 1 && !w.fl(f0).moving);
         w.run(300);
-        CHECK(!w.fl(mv2).alive && w.fl(mv).contents.size() == 2 && w.fl(mv).slot == 2);  // no request: merged into the first one
+        // No request: no merge (A2k t08 Q1); its own slot, the first of 1, 2, 0 free (mv holds 2).
+        CHECK(w.fl(mv2).alive && w.fl(mv2).planet == rB && w.fl(mv2).slot == 1 && w.fl(mv).contents.size() == 1 && w.fl(mv).slot == 2);
     }
 }
 
@@ -2147,7 +2343,7 @@ RunResult run_synthetic(const ParallelFor& pf, int32_t days, int32_t stride) {
     s.set_black_market_influence(rC, true);
     s.set_black_market_influence(rB, true);
     commands::CommandPipeline pipe;
-    pipe.set_handler(s.command_handler());
+    pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return s.handle_command(tick, c); });
     const CrcRegistry reg = make_registry(s, w.rng);
     RunResult out;
     out.log.systems = out.golden_view.systems = reg.names();
@@ -2246,7 +2442,7 @@ std::vector<std::pair<unsigned, ParallelFor>> worker_configs() {
     std::vector<std::pair<unsigned, ParallelFor>> v;
     v.push_back({0u, ParallelFor(serial_for)});
     const unsigned hw = std::max(2u, std::thread::hardware_concurrency());
-    for (unsigned n : {1u, 4u, hw}) v.push_back({n, testing::make_thread_parallel_for(n)});
+    for (unsigned n : {1u, 4u, hw}) v.push_back({n, ::alamo::test::make_thread_parallel_for(n)});
     return v;
 }
 
@@ -2272,21 +2468,7 @@ void test_synthetic_campaign() {
 
 // ---- 4. real FoC data -------------------------------------------------------------------------------------------------
 
-std::string env_or(const char* name) {
-#ifdef _MSC_VER
-    char* v = nullptr;
-    size_t len = 0;
-    std::string out;
-    if (_dupenv_s(&v, &len, name) == 0 && v) {
-        out = v;
-        std::free(v);
-    }
-    return out;
-#else
-    const char* v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-#endif
-}
+using ::alamo::test::env_or_empty;
 
 struct FocData {
     std::unique_ptr<FileProvider> provider;
@@ -2318,7 +2500,7 @@ RunResult run_foc(const FocData& d, const ParallelFor& pf, int32_t days, int32_t
     s.set_black_market_influence(row("Felucia"), true);
     s.set_corruption(row("Naboo"), kCorruptionPiracy, U);
     commands::CommandPipeline pipe;
-    pipe.set_handler(s.command_handler());
+    pipe.set_handler([&](uint64_t tick, const commands::Command& c) { return s.handle_command(tick, c); });
     const CrcRegistry reg = make_registry(s, rng);
     RunResult out;
     out.log.systems = out.golden_view.systems = reg.names();
@@ -2628,6 +2810,103 @@ void test_foc_corellia_kuat_hop(const FocData& d) {
 // trade 105 (Corellia_Kuat, Corellia_Tatooine at 0.5) + mining 210 (Empire_Mining_Income_Bonus, 2 x base, no mining colony)
 // = 420; Kuat 75 + 75 = 150; Kashyyyk 30 + 15 = 45 (Felucia / NalHutta are Underworld); Tatooine 35 + 17.5 = 52.5.
 // Kashyyyk's share of the sum is 82.5 (its 45 and Kuat's 37.5 link to it): 667.5 - 82.5 = 585, the a2h-era port payment.
+// A2k t01 (A2K_T01_BUILD_COST_RE 1.4 / 2.2 / 2.3): HotM day 1 with the Emperor at Corellia. Broadside @Corellia 1350
+// (0.75 x 1800, Emperor_Reduce_Production_Price: All, 0.25, category 0), Tartan @Kuat 9 s (15 x _2 0.75 x Normal 0.8),
+// Heavy_Scout @Kuat no tech factor (40 x 0.8 = 32 s), Stormtrooper @Corellia 45; nothing once he leaves.
+void test_foc_hotm_build_cost(const FocData& d) {
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, d.types, &ids);
+    SimRng rng(1u);
+    GalacticSim s(d.rules, store, rng);
+    CHECK(s.start(build_campaign_setup(d.db, d.rules, "Sandbox_Heart_Of_The_Maw_Rebel")));
+    const int32_t E = s.player_of_faction("Empire");
+    const PlanetIndex cor = s.map().planets.find("Corellia"), kuat = s.map().planets.find("Kuat");
+    const uint32_t broadside = d.rules.find_type("Broadside_Class_Cruiser"), tartan = d.rules.find_type("Tartan_Patrol_Cruiser");
+    const uint32_t scout = d.rules.find_type("Imperial_Heavy_Scout_Squad"), storm = d.rules.find_type("Imperial_Stormtrooper_Squad");
+    const uint32_t emperor = d.rules.find_type("Emperor_Palpatine_Team"), sd = d.rules.find_type("Star_Destroyer");
+    CHECK(E >= 0 && cor != kInvalidPlanet && kuat != kInvalidPlanet && broadside != kNoIndex && tartan != kNoIndex &&
+          scout != kNoIndex && storm != kNoIndex && emperor != kNoIndex && sd != kNoIndex);
+    if (E < 0 || cor == kInvalidPlanet || kuat == kInvalidPlanet || broadside == kNoIndex || tartan == kNoIndex ||
+        scout == kNoIndex || storm == kNoIndex || emperor == kNoIndex || sd == kNoIndex)
+        return;
+    // Loader: the Emperor's entry (via the team's first member), Kuat's Galaxy_Wide Star_Destroyer boost.
+    const TypeSpecial& et = d.rules.special.type(emperor);
+    CHECK(et.production.size() == 1);
+    if (et.production.size() == 1) {
+        const SpecialAbilityDef& a = d.rules.special.production[et.production[0]];
+        CHECK(a.cls == SpecialAbilityClass::ReducePrice && a.production_reduction == 0.25f && a.stacking_category == 0 &&
+              !a.galaxy_wide && a.applicable_categories == ~uint64_t{0} && a.style == ActivationStyle::GalacticAutomatic);
+    }
+    s.update();
+    CHECK(s.planets()[cor].starbase_level == 2 && s.planets()[kuat].starbase_level == 3);
+    CHECK(s.build_cost_for(E, cor, broadside) == 1800 && s.build_cost_for(E, cor, storm) == 60);  // no Emperor yet
+    // Kuat_Star_Destroyer_Production_Boost (Galaxy_Wide Yes, 0.20, category 9): the owner's builds everywhere.
+    CHECK(s.build_cost_for(E, cor, sd) == static_cast<int32_t>(std::lround(0.8f * static_cast<float>(d.rules.types[sd].build_cost))));
+    const ObjectHandle pal = s.spawn_unit(E, cor, emperor);
+    CHECK(store.alive(pal));
+    CHECK(s.build_cost_for(E, cor, broadside) == 1350 && s.build_time_for(E, cor, broadside) == 12.0f);
+    CHECK(s.build_cost_for(E, cor, storm) == 45 && s.build_cost_for(E, kuat, broadside) == 1800);
+    CHECK(s.build_cost_for(E, cor, tartan) == 938);  // 937.5, half away
+    CHECK(s.build_time_for(E, kuat, tartan) == 15.0f * 0.75f * 0.8f);  // 9 s
+    CHECK(s.build_time_for(E, kuat, scout) == 40.0f * 0.8f);          // ground: no tech factor
+    std::printf("  FoC HotM build cost: Broadside @Corellia %d, Tartan @Kuat %.2f s, Heavy_Scout @Kuat %.2f s\n",
+                s.build_cost_for(E, cor, broadside), static_cast<double>(s.build_time_for(E, kuat, tartan)),
+                static_cast<double>(s.build_time_for(E, kuat, scout)));
+    CHECK(s.destroy_object(pal));
+    CHECK(s.build_cost_for(E, cor, broadside) == 1800);
+}
+
+// bkg2 b0125 (BKG1_RE_ANSWERS 9.5): the target political control of the Underworld HotM start, max(1, ground-base
+// level, starbase level, troops) per planet with FoC data (every Political_Control 0). Table [M]: the starting structures
+// count as the ground base and the starbase level is the type's Base_Level.
+void test_foc_hotm_political_target(const FocData& d) {
+    std::printf("  FoC HotM target political control (bkg2 b0125)\n");
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, d.types, &ids);
+    SimRng rng(1u);
+    GalacticSim s(d.rules, store, rng);
+    CHECK(s.start(build_campaign_setup(d.db, d.rules, "Sandbox_Heart_Of_The_Maw_Underworld")));
+    s.update();
+    const struct {
+        const char* name;
+        float want;
+    } rows[] = {{"Kuat", 3.0f}, {"MonCalimari", 3.0f}, {"The_Maw", 3.0f}, {"Naboo", 2.0f}, {"Kashyyyk", 1.0f}, {"Yavin", 1.0f}};
+    for (const auto& r : rows) {
+        const PlanetIndex p = s.map().planets.find(r.name);
+        CHECK(p != kInvalidPlanet);
+        if (p == kInvalidPlanet) continue;
+        std::printf("    %s: target %.0f (want %.0f), owner %d\n", r.name, static_cast<double>(s.planets()[p].target_control),
+                    static_cast<double>(r.want), s.planets()[p].owner);
+        CHECK(s.planets()[p].target_control == r.want);
+    }
+}
+
+void test_foc_hotm_hop_route(const FocData& d) {
+    std::printf("  FoC HotM hop factor route (bkg3 b0115)\n");
+    // HotM lists NalHutta_Kashyyyk (HS 5); the table also holds Kashyyyk_NalHutta (HS 6, CRC 765897670 < 3159653329), which
+    // the hop factor takes (retail 21 ticks for the hop, not 25). The listed route keeps the path cost.
+    const GalacticRules::HopRoute* h = d.rules.find_hop_route(name_crc("NalHutta"), name_crc("Kashyyyk"));
+    CHECK(h != nullptr);
+    if (h) {
+        std::printf("    Kashyyyk<->NalHutta: route crc %u, HS %.1f\n", h->route_crc, static_cast<double>(h->hs));
+        CHECK(h->route_crc == name_crc("Kashyyyk_NalHutta") && h->hs == 6.0f);
+        CHECK(d.rules.find_hop_route(name_crc("Kashyyyk"), name_crc("NalHutta")) == h);
+    }
+    objects::IdCounter ids;
+    objects::ObjectStore store(objects::ModeKind::Galactic, objects::StoreKind::Primary, d.types, &ids);
+    SimRng rng(1u);
+    GalacticSim s(d.rules, store, rng);
+    CHECK(s.start(build_campaign_setup(d.db, d.rules, "Sandbox_Heart_Of_The_Maw_Underworld")));
+    const PlanetIndex k = s.map().planets.find("Kashyyyk"), n = s.map().planets.find("NalHutta");
+    CHECK(k != kInvalidPlanet && n != kInvalidPlanet);
+    if (k == kInvalidPlanet || n == kInvalidPlanet) return;
+    float listed = 0.0f;
+    const auto& rt = s.map().routes;
+    for (size_t r = 0; r < rt.point_a.size(); ++r)
+        if ((rt.point_a[r] == k && rt.point_b[r] == n) || (rt.point_a[r] == n && rt.point_b[r] == k)) listed = rt.hs_speed_factor[r];
+    CHECK(listed == 5.0f);
+}
+
 void test_foc_hotm_rebel_income(const FocData& d) {
     std::printf("  FoC HotM Rebel entry: Empire income at the first payment (a2j t03)\n");
     objects::IdCounter ids;
@@ -2656,11 +2935,11 @@ void test_foc_hotm_rebel_income(const FocData& d) {
 // the `|` OR groups of Required_Special_Structures (SG 1.3 step 14, NR_Government.xml / Research_Dummies.xml).
 void test_oi_thrawns_revenge() {
 #ifdef ALAMO_GALACTIC_TESTS_HAVE_VFS
-    std::string tr = env_or("ALAMO_TR_DATA");
-    std::string foc = env_or("ALAMO_FOC_INSTALL");
+    std::string tr = env_or_empty("ALAMO_TR_DATA");
+    std::string foc = env_or_empty("ALAMO_FOC_INSTALL");
     if (tr.empty()) {
         // Same Steam library as a Steam FoC install: <lib>\steamapps\common\Star Wars Empire at War\corruption.
-        const std::string f = env_or("ALAMO_FOC_DATA");
+        const std::string f = env_or_empty("ALAMO_FOC_DATA");
         const size_t at = f.find("\\steamapps\\common\\");
         if (at != std::string::npos) tr = f.substr(0, at) + "\\steamapps\\workshop\\content\\32470\\1125571106";
         if (foc.empty() && at != std::string::npos) foc = f;
@@ -2676,7 +2955,7 @@ void test_oi_thrawns_revenge() {
     }
     vfs::VfsConfig cfg;
     cfg.foc_root = foc;
-    cfg.mod_paths = {tr};
+    cfg.mod_search = {{vfs::ModSearchEntry::Kind::Path, tr}};
     std::string err;
     std::unique_ptr<vfs::Vfs> fs = vfs::Vfs::create(cfg, &err);
     if (!fs) {
@@ -2742,7 +3021,7 @@ void test_oi_thrawns_revenge() {
 }
 
 void test_foc_campaign() {
-    const std::string root = env_or("ALAMO_FOC_DATA");
+    const std::string root = env_or_empty("ALAMO_FOC_DATA");
     FocData d;
     std::string how;
     d.provider = testing::open_foc_data(root, how);
@@ -2779,10 +3058,32 @@ void test_foc_campaign() {
           d.rules.types[cg].hyperspace_speed == 2.0f && d.rules.types[cg].required_star_base == 2);
     const uint32_t sb = d.rules.find_type("Underworld_Star_Base_1");
     CHECK(sb != kNoIndex && d.rules.types[sb].kind == UnitKind::StarBase && d.rules.types[sb].base_level == 1);
+    {  // bkc1 t03 (BKC1_RE_ANSWERS Q2 [H]): one player per faction, index = faction table index (the UM01 retail trace: 8
+       // players, human Underworld at 6). The story campaign and a sandbox get the same list.
+        const char* const order[] = {"Rebel", "Empire", "Pirates", "Neutral", "Hostile", "Sarlacc", "Underworld", "Hutts"};
+        for (const char* campaign : {"Sandbox_Heart_Of_The_Maw_Underworld", "Full_Story_Campaign_Underworld"}) {
+            std::vector<std::string> sd;
+            const GalacticSetup s = build_campaign_setup(d.db, d.rules, campaign, {}, &sd);
+            if (s.map.planets.size() == 0) {
+                std::printf("  player list: campaign %s not found\n", campaign);
+                continue;
+            }
+            CHECK(s.players.size() == 8);
+            std::string names;
+            for (size_t i = 0; i < s.players.size() && i < 8; ++i) {
+                CHECK(s.players[i].faction == d.rules.find_faction(order[i]));
+                names += d.rules.factions[s.players[i].faction].name + (s.players[i].human ? "*" : "") + " ";
+            }
+            std::printf("  player list %s: %s\n", campaign, names.c_str());
+        }
+    }
     test_oi_foc(d);  // OI galactic
     test_foc_player_fleet_moves(d);
     test_foc_corellia_kuat_hop(d);  // G1
     test_foc_hotm_rebel_income(d);  // a2j t03
+    test_foc_hotm_political_target(d);  // bkg2 b0125
+    test_foc_hotm_hop_route(d);         // bkg3 b0115
+    test_foc_hotm_build_cost(d);    // a2k t01
     const int32_t days = 10;
     RunResult base;
     bool first = true;
@@ -2819,6 +3120,7 @@ int main(int argc, char** argv) {
         test_formulas();
         test_income();
         test_production();
+        test_production_modifiers();
         test_fleets();
         test_ownership();
         test_event_stream();

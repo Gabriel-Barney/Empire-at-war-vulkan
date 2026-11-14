@@ -6,10 +6,11 @@
 #include <array>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/type_fields.hpp"
-#include "alamo/sim/campaign_battles.hpp"
+#include "alamo/sim/l1_loaders.hpp"
 #include "alamo/sim/tactical_battle.hpp"
 #ifdef ALAMO_SIM_HAVE_ANIM
 #include "alamo/sim/sim_anim.hpp"
@@ -309,11 +310,16 @@ bool TacticalBattle::sw_fire_lobbing_at(const TacticalMode& mode, objects::Objec
 }
 
 bool TacticalBattle::special_weapons_allowed(int32_t player) const {
-    // campaign: no per-player rule (0x527620); skirmish: the player's special-weapon hard-point flag (HARDPOINT_DISABLED §4).
-    if (cfg_.skirmish && combat_ && !combat_->special_weapon_hp_enabled(player)) return false;
+    // SpecialWeaponsAllowed (0x527620): false once the battle planet is destroyed. cu8f t06 (CU8F_T04_T06_RE §3.3 [H]): the
+    // Enable_Special_Weapons list (+0x1e0): empty -> allowed in a campaign battle, refused in a skirmish; non-empty -> the
+    // AND of its entries and the special-weapon hard-point flag +0x2f0 (HARDPOINT_DISABLED §4).
     if (l1_planet_destroyed_) return false;
     const PlanetIndex p = req_.info.planet;
-    return !(p < galaxy_->planets().size() && galaxy_->planets()[p].destroyed);
+    if (p < galaxy_->planets().size() && galaxy_->planets()[p].destroyed) return false;
+    bool all = true;
+    const uint32_t n = abilities_ ? abilities_->player_gate(player, tactical::abilities::PlayerGate::SpecialWeapons, all) : 0u;
+    if (n == 0) return !cfg_.skirmish;
+    return all && (!combat_ || combat_->special_weapon_hp_enabled(player));
 }
 
 int32_t TacticalBattle::tsw_state(objects::ObjectId tsw) const { return l1_sw_.tsw_state(tsw); }
@@ -341,8 +347,25 @@ bool TacticalBattle::teleport(TacticalMode& mode, objects::ObjectId id, Vec3 pos
     if (!st.alive(h)) return false;
     st.set_position(h, position);
     st.set_facing(h, facing);
-    if (const Unit* u = unit_by_id(id); u && u->movable && movement_)
+    // s78n review (TACTICAL_COMBAT §5.4.4 item 2.4: position setters move a land squad container too [M]): a squad
+    // container is no battle unit but has a mover of its own, which commit() writes back to the store - so it moves with
+    // the mover. s78n t18 (FIGHTER_FLYING §7.4, 0x3abb80): its members go with it, each at the new place + its old
+    // offset from the container (MovementSystem::teleport); their store / combat positions and tree boxes follow here.
+    const Unit* u = unit_by_id(id);
+    const bool squad = !u && movement_ && movement_->is_land_team_container(id);
+    if (movement_ && ((u && u->movable) || squad))
         movement_->teleport(id, {position.x, position.y}, position.z, yaw_deg_of(facing), frame_);
+    if (squad) {
+        for (const Unit& m : units_) {
+            if (!m.alive || m.retreated || m.container >= containers_.size() || containers_[m.container].id != id) continue;
+            if (!movement_->has_unit(m.id) || !st.alive(m.h)) continue;
+            const mv::UnitView v = movement_->view(m.id);
+            const Vec3 p{v.pos.x, v.pos.y, map_.terrain.sample_height(v.pos.x, v.pos.y)};
+            st.set_position(m.h, p);
+            if (combat_ && combat_->has_unit(m.id)) combat_->set_position(m.id, to_t(p));
+            mode.trees().update(static_cast<tactical::EntityHandle>(m.id), mode.bounds_of(m.h));
+        }
+    }
     if (combat_ && combat_->has_unit(id)) {
         combat_->set_position(id, to_t(position));
         combat_->set_facing(id, to_t(facing));
@@ -398,7 +421,29 @@ bool TacticalBattle::disable_engines(objects::ObjectId id, float seconds) {
     if (engines_online(id) < 0) return false;
     l1_engines_.disable(id, seconds, frame_);
     l1_used_ = true;
+    // cu8 t04 (STATION_HANGARS_SOUND §3.3): a timed engine disable turns both engine loops off (audio requests only).
+    if (const Unit* u = unit_by_id(id); u && hg_engine_unit(*u)) engine_loops_.timed_disable(id, frame_);
     return true;
+}
+
+void TacticalBattle::energy_drain_engines(objects::ObjectId id, float seconds) {
+    // cu8f t02 (CU8F_T01_T02_T07_RE.md §2.4), after EnergyPool::Absorb took energy > 0: 1. with a locomotor,
+    // Locomotor_Set_Engines(destroyed 0, t) (EngineControl::disable keeps the 0x5545a0 gate and the max expiry), then the
+    // current move stops (0x422040); 2. signal 0x16; 3. moving loop off, then idle loop off.
+    // cu8g t01 [port]: 0x422040 keeps the move when its last waypoint has flag 0x10 [M meaning]; the port's paths carry no
+    // waypoint flags, so the move always stops. Signal 0x16 is the EngineControl::disable EngineEvent::Off (raised when the
+    // engines were on; nothing in the port subscribes to it); the original's repeat on engines already off is not raised.
+    const Unit* u = unit_by_id(id);
+    if (!u || !u->alive || u->retreated) return;
+    if (engines_online(id) >= 0) {
+        l1_engines_.disable(id, seconds, frame_);
+        l1_used_ = true;
+        if (u->movable && movement_ && movement_->has_unit(id)) {
+            const std::vector<objects::ObjectId> ids{id};
+            movement_->stop(ids);
+        }
+    }
+    if (hg_engine_unit(*u)) engine_loops_.timed_disable(id, frame_);
 }
 
 bool TacticalBattle::enable_engines(objects::ObjectId id) {
@@ -471,6 +516,39 @@ int32_t TacticalBattle::retreat_increment_frames(int32_t player) const {
     if (player < 0 || static_cast<size_t>(player) >= galaxy_->players().size()) return 0;
     const uint32_t f = galaxy_->players()[static_cast<size_t>(player)].faction;
     return f < l1_retreat_increments_.size() ? l1_retreat_increments_[f] : 0;
+}
+
+void TacticalBattle::l1_force_disable(const TacticalMode& mode) {
+    if (!abilities_) return;
+    const objects::GameObjectTypes& types = catalog_->types();
+    if (force_disable_range_.size() != types.size()) {
+        force_disable_range_.assign(types.size(), 0.0f);
+        for (objects::TypeIndex t = 0; t < types.size(); ++t)
+            force_disable_range_[t] = types.get_float(t, "Disable_Force_Abilities_Range");  // read as a float [M]
+    }
+    // cu8f t07 (CU8F_T01_T02_T07_RE.md §3.1): DisableForceAbilitiesBehaviorClass (0x52) Service 0x636260, interval 1, so
+    // every frame. Only objects that carry DISABLE_FORCE_ABILITIES in their current mode's list emit (FoC: Ysalamiri_Tree,
+    // Underworld_Ysalamiri_Cage, land only; Rebel_Mobile_Shield_Generator's range tag is dead data). Query 0x2a9ff0:
+    // SELECTABLE objects of every player but the emitter's owner (allies and neutral included), 3-D distance² < r².
+    // Victim stamp CD +0x110 := now when it has a Force (F column) unit ability; nothing ever clears it (gate 3 / 0x380b10
+    // ends the lockout passively).
+    const objects::ObjectStore& st = mode.primary();
+    for (const objects::ObjectHandle e : st.all_objects()) {  // emitters, store order
+        const objects::TypeIndex et = st.type(e);
+        if (!st.alive(e) || et >= force_disable_range_.size() || !(force_disable_range_[et] > 0.0f)) continue;
+        if (!st.has_behavior(e, objects::beh::DisableForceAbilities)) continue;
+        const float r = force_disable_range_[et];
+        const Vec3 ep = st.position(e);
+        const int32_t owner = st.owner(e);
+        for (const Unit& u : units_) {  // ascending id; the stamp is order-independent
+            if (!u.alive || u.retreated || !st.alive(u.h) || st.owner(u.h) == owner) continue;
+            if (!st.has_behavior(u.h, objects::beh::Selectable)) continue;
+            const Vec3 p = st.position(u.h);
+            const float dx = p.x - ep.x, dy = p.y - ep.y, dz = p.z - ep.z;
+            if (!(dx * dx + dy * dy + dz * dz < r * r)) continue;
+            if (abilities_->has_force_ability(u.id)) abilities_->set_force_disabled(u.id, frame_);
+        }
+    }
 }
 
 void TacticalBattle::l1_motion(TacticalMode& mode, SimRng& rng) {
@@ -597,14 +675,27 @@ void TacticalBattle::l1_tsw_debris(TacticalMode& mode, const ta::SpecialWeaponEv
 // ---- tactical weather (land; L1_S4_REMAINING §3.2) ----
 void TacticalBattle::l1_weather_tick(SimRng& rng) {
     if (space_ || !l1_weather_data_) return;
-    if (!l1_weather_started_) {  // the first service's re-init starts the map environment's scenario
+    const uint32_t env_now = environment_index();
+    if (!l1_weather_started_ || l1_weather_env_ != env_now) {
+        // Re-init (0x468a50): the first service starts the active environment's scenario (cu8g t02: the map-load pick);
+        // cu8g t03: a changed environment index (Set_New_Environment) restarts the weather with the new environment's
+        // scenario, and a missing scenario / no phases turns it off (§3.2). An unchanged index re-inits nothing. A start
+        // with phases costs 2 synced draws (WeatherSystem::start, CU8G_T02_ENV_PICK_RE §4).
+        const bool restart = l1_weather_started_;
         l1_weather_started_ = true;
+        l1_weather_env_ = env_now;
         const terrain::EnvironmentSet& env = map_.environments;
         std::string name;
-        if (env.start_index < env.environments.size()) name = env.environments[env.start_index].weather_effect;
+        if (env_now < env.environments.size()) name = env.environments[env_now].weather_effect;
         const tactical::combat::WeatherScenario* sc = l1_weather_data_->find(name);
-        if (!sc) return;
-        l1_weather_.start(sc, l1_weather_data_.get(), frame_, rng);
+        if (restart) {
+            l1_weather_note_fow();  // events raised between ticks reach the fog before start() clears them
+            l1_weather_.start(sc, l1_weather_data_.get(), frame_, rng);  // null / no phases: weather off, no draw
+            combat_->set_weather_accuracy(l1_weather_.accuracy_row());   // off: the all-1 row
+        } else {
+            if (!sc) return;
+            l1_weather_.start(sc, l1_weather_data_.get(), frame_, rng);
+        }
         l1_used_ = true;
     } else {
         l1_weather_note_fow();  // Int-final: events raised between ticks (Force_Weather) reach the fog first
@@ -622,6 +713,43 @@ void TacticalBattle::l1_weather_note_fow() {
         if (e.kind == tactical::combat::WeatherEvent::Kind::FowDirty) fog_weather_dirty_ = true;
 }
 
+// cu8g t03: mode vf25 (0x276ff0): index := clamp(arg, 0, n - 1), no draw. The weather follows on its next service.
+bool TacticalBattle::set_environment(int32_t index) {
+    const size_t n = map_.environments.environments.size();
+    if (n == 0) return false;  // [port] retail's clamp to n - 1 = -1 is not modelled: nothing changes
+    const int32_t hi = static_cast<int32_t>(std::min<size_t>(n - 1, 0x7fffffff));
+    env_index_ = static_cast<uint32_t>(std::clamp(index, 0, hi));
+    return true;
+}
+
+// cu8g t02: 0x277030 (CU8G_T02_ENV_PICK_RE §1). [port] n == 0 (a map without environments; retail keeps the ctor's
+// default record, n = 1) -> 0 without a draw.
+uint32_t TacticalBattle::pick_environment(const terrain::EnvironmentSet& envs, SimRng& rng) {
+    const std::vector<terrain::Environment>& e = envs.environments;
+    const size_t n = e.size();
+    if (n <= 1) return 0;
+    const int32_t hi = static_cast<int32_t>(std::min<size_t>(n - 1, 0x7ffe));
+    uint32_t i = static_cast<uint32_t>(rng.range_int(0, hi));
+    if (e[i].name == "Cinematic") i = i + 1 < n ? i + 1 : 0u;  // strcmp: exact, case-sensitive; no re-check
+    return i;
+}
+
+// cu8g t03: mode vf27 (0x2770e0, CU8G_T02_ENV_PICK_RE §5): no Cinematic skip in the typed branch.
+bool TacticalBattle::set_environment_of_weather_type(uint32_t type, SimRng& rng) {
+    const std::vector<terrain::Environment>& envs = map_.environments.environments;
+    const uint32_t n = static_cast<uint32_t>(envs.size());
+    if (n == 0) return false;
+    std::vector<uint32_t> typed;
+    if (type <= 4)
+        for (uint32_t i = 0; i < n; ++i)
+            if (envs[i].field_13 == type) typed.push_back(i);
+    uint32_t index = 0;
+    if (typed.size() == 1) index = typed[0];
+    else if (typed.size() >= 2) index = typed[static_cast<size_t>(rng.range_int(0, static_cast<int32_t>(std::min<size_t>(typed.size() - 1, 0x7ffe))))];
+    else index = pick_environment(map_.environments, rng);
+    return set_environment(static_cast<int32_t>(index));
+}
+
 bool TacticalBattle::force_weather(SimRng& rng) {
     if (space_ || finished_ || !l1_weather_.active()) return false;
     const bool ok = l1_weather_.force_weather(frame_, rng);
@@ -634,6 +762,7 @@ float TacticalBattle::weather_sight_modifier(objects::ObjectId id) const {
     const objects::ObjectStore& st = l1_mode_->primary();
     const objects::ObjectHandle h = st.find(id);
     if (!st.exists(h)) return 1.0f;
+    if (abilities_ && !abilities_->weather_affected(st.owner(h))) return 1.0f;  // cu8 t01: Weatherproof owner
     return l1_weather_.sight_modifier(catalog_->types().get_string(st.type(h), "Weather_Category"));
 }
 
@@ -853,40 +982,22 @@ void TacticalBattle::l1_hash(StateHasher& h) const {
 }
 
 // ---- CampaignBattles helper: Space_Retreat_Unit_Increment_Wait_Frames per faction (FactionFiles.xml) ----
-std::vector<int32_t> load_retreat_increments(const FileProvider& provider, const galactic::GalacticRules& rules) {
+std::vector<int32_t> load_retreat_increments(const galactic::GalacticRules& rules) {
     std::vector<int32_t> out(rules.factions.size(), 0);  // [port] unset = 0 (the hook's documented default)
-    std::vector<uint8_t> bytes;
-    if (!provider.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-    for (data::XmlNode file : list.root().children("File")) {
-        std::vector<uint8_t> fb;
-        const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
-        if (!provider.read(path, fb)) continue;
-        const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
-        for (data::XmlNode n : doc.root().children("Faction")) {
-            const uint32_t fi = rules.find_faction(n.attribute("Name"));
-            const std::string_view v = n.child_text("Space_Retreat_Unit_Increment_Wait_Frames");
-            if (fi < out.size() && !v.empty()) out[fi] = objects::c_atoi(v);
-        }
+    for (const galactic::FactionRules& f : rules.factions) {  // every definition, list order
+        const uint32_t fi = rules.find_faction(f.name);
+        const std::string_view v = f.xml_text("Space_Retreat_Unit_Increment_Wait_Frames");
+        if (fi < out.size() && !v.empty()) out[fi] = objects::c_atoi(v);
     }
     return out;
 }
 
-std::vector<float> load_retreat_flight_increments(const FileProvider& provider, const galactic::GalacticRules& rules) {
+std::vector<float> load_retreat_flight_increments(const galactic::GalacticRules& rules) {
     std::vector<float> out(rules.factions.size(), 500.0f);  // [port] unset = 500 (the shipped value)
-    std::vector<uint8_t> bytes;
-    if (!provider.read("Data\\XML\\FactionFiles.xml", bytes)) return out;
-    const data::XmlDocument list = data::XmlDocument::parse(bytes, "FactionFiles.xml");
-    for (data::XmlNode file : list.root().children("File")) {
-        std::vector<uint8_t> fb;
-        const std::string path = "Data\\XML\\" + std::string(file.text_trimmed());
-        if (!provider.read(path, fb)) continue;
-        const data::XmlDocument doc = data::XmlDocument::parse(fb, path);
-        for (data::XmlNode n : doc.root().children("Faction")) {
-            const uint32_t fi = rules.find_faction(n.attribute("Name"));
-            const std::string_view v = n.child_text("Space_Retreat_Flight_Move_Increment");
-            if (fi < out.size() && !v.empty()) out[fi] = static_cast<float>(objects::c_atof(v));
-        }
+    for (const galactic::FactionRules& f : rules.factions) {  // every definition, list order
+        const uint32_t fi = rules.find_faction(f.name);
+        const std::string_view v = f.xml_text("Space_Retreat_Flight_Move_Increment");
+        if (fi < out.size() && !v.empty()) out[fi] = static_cast<float>(objects::c_atof(v));
     }
     return out;
 }

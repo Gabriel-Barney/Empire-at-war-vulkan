@@ -29,7 +29,6 @@ struct Entry;
 namespace alamo::audio {
 
 enum class Bus : uint8_t { Sfx2D = 0, Sfx3D = 1, Music = 2, Speech = 3 };
-const char* bus_name(Bus b);
 
 struct SampleRef {
     Bus bus = Bus::Sfx2D;
