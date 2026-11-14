@@ -411,7 +411,39 @@ bool BattleAi::read(ByteReader& r) {
 
 // ---- perception snapshot ------------------------------------------------------------------------------------------
 
+void BattleAi::ensure_type_facts() {
+    const objects::GameObjectTypes& types = mode_->types();
+    if (type_facts_.size() == types.size() + 1) return;
+    type_facts_.assign(types.size() + 1, TypeFacts{});
+    for (size_t t = 0; t <= types.size(); ++t) {
+        const auto ti = static_cast<objects::TypeIndex>(t);  // == types.size(): the out-of-range entry (field defaults)
+        TypeFacts& f = type_facts_[t];
+        f.has_land_evaluator = types.get_bool(ti, "Has_Land_Evaluator");
+        f.has_space_evaluator = types.get_bool(ti, "Has_Space_Evaluator");
+        f.last_state_visible_under_fow = types.get_bool(ti, "Last_State_Visible_Under_FOW");
+        f.initial_state_visible_under_fow = types.get_bool(ti, "Initial_State_Visible_Under_FOW");
+        f.create_team = types.get_bool(ti, "Create_Team");
+        f.is_dummy = types.get_bool(ti, "Is_Dummy");
+        f.stay_in_transport = types.get_bool(ti, "Stay_In_Transport_During_Ground_Battle");
+        f.valid_target = types.get_bool(ti, "Collidable_By_Projectile_Living") && types.get_bool(ti, "Is_Valid_Target");
+        f.base_level = types.get_int(ti, "Base_Level");
+        f.additional_population_capacity = types.get_int(ti, "Additional_Population_Capacity");
+        f.reinforcement_enabling_radius = types.get_float(ti, "Reinforcement_Enabling_Radius");
+        f.reinforcement_prevention_radius = types.get_float(ti, "Reinforcement_Prevention_Radius");
+        if (t == types.size()) break;  // the behaviour bits and member flags have no out-of-range form
+        const auto has = [&](objects::BehaviorTypeId b) { return types.has_behavior(ti, objects::BehaviorSet::Union, b); };
+        f.squadron_member = types.squadron_member(ti);
+        f.company_member = types.company_member(ti);
+        f.indigenous = has(kIndigenous);
+        f.dummy_ground_structure = has(kDummyGroundStructureBeh);
+        f.dummy_ground_base = has(kDummyGroundBase);
+        f.dummy_orbital_structure = has(kDummyOrbitalStructure);
+        f.dummy_star_base = has(kDummyStarBaseBeh);
+    }
+}
+
 void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& out) {
+    ensure_type_facts();  // sp3 t01: before the parallel build below reads it
     const objects::ObjectStore& st = mode_->primary();
     const objects::GameObjectTypes& types = mode_->types();
     const galactic::GalacticSim& g = *b_->galaxy_;
@@ -671,6 +703,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         const objects::ObjectId id = st.id(h);
         const auto type = static_cast<int32_t>(st.type(h));
         const auto ti = st.type(h);
+        const TypeFacts& tf = type_facts(ti);
         const TacticalBattle::Unit* u = b_->unit_by_id(id);
         at::PerceptionObject o;
         o.id = id;
@@ -736,7 +769,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         // [inferred] the level (0x397540) = the type's Base_Level: the battle does not lower it while the station lives.
         if (kDummyStarBase != objects::kNoBehavior && st.has_behavior(h, kDummyStarBase)) {
             o.dummy_star_base = true;
-            o.starbase_level = types.get_int(ti, "Base_Level");
+            o.starbase_level = tf.base_level;
         }
         // t48: Variable_Self.BaseLevel in land skirmish: the count of P's alive objects with this behaviour.
         o.dummy_ground_structure = kDummyGroundStructure != objects::kNoBehavior && st.has_behavior(h, kDummyGroundStructure);
@@ -754,36 +787,34 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         a.handle = h;
         const objects::TypeIndex rep = o.rep_type >= 0 ? static_cast<objects::TypeIndex>(o.rep_type) : ti;
         a.target.id = id;
-        a.target.rep_has_land_evaluator = types.get_bool(rep, "Has_Land_Evaluator");
-        a.target.rep_has_space_evaluator = types.get_bool(rep, "Has_Space_Evaluator");
-        a.target.own_has_space_evaluator = types.get_bool(ti, "Has_Space_Evaluator");
+        a.target.rep_has_land_evaluator = type_facts(rep).has_land_evaluator;
+        a.target.rep_has_space_evaluator = type_facts(rep).has_space_evaluator;
+        a.target.own_has_space_evaluator = tf.has_space_evaluator;
         a.applies.has_locomotor = st.has_behavior(h, objects::beh::Locomotor);
         a.applies.has_build_objects = o.is_build_pad;
         a.applies.has_cash_point = o.is_cash_point;
-        a.applies.reinforcement_enabling_radius = types.get_float(ti, "Reinforcement_Enabling_Radius");
-        a.applies.last_state_visible_under_fow = types.get_bool(ti, "Last_State_Visible_Under_FOW");
-        a.applies.initial_state_visible_under_fow = types.get_bool(ti, "Initial_State_Visible_Under_FOW");
+        a.applies.reinforcement_enabling_radius = tf.reinforcement_enabling_radius;
+        a.applies.last_state_visible_under_fow = tf.last_state_visible_under_fow;
+        a.applies.initial_state_visible_under_fow = tf.initial_state_visible_under_fow;
         at::FreeStoreObjectInfo& fs = a.free_store;
         fs.is_transport = st.has_behavior(h, objects::beh::Transport);
-        fs.type_create_team = types.get_bool(ti, "Create_Team");
-        fs.type_is_dummy = types.get_bool(ti, "Is_Dummy");
-        fs.type_stay_in_transport = types.get_bool(ti, "Stay_In_Transport_During_Ground_Battle");
+        fs.type_create_team = tf.create_team;
+        fs.type_is_dummy = tf.is_dummy;
+        fs.type_stay_in_transport = tf.stay_in_transport;
         fs.has_indigenous_or_explosion = st.has_behavior(h, kIndigenous);
         fs.has_lobbing_superweapon = st.has_behavior(h, kLobbing);
         fs.has_locomotor = a.applies.has_locomotor && o.mobile;
         fs.is_starship_combatant = st.has_behavior(h, objects::beh::StarshipCombatant) || (u != nullptr && o.mobile);  // [port] battle units
         fs.is_team = st.has_behavior(h, kTeam);
         // Behaviour-in-type tests (0x370320) read the type's behaviour union [M: which set]; the rest are object tests.
-        const auto type_has = [&](objects::BehaviorTypeId b) { return types.has_behavior(ti, objects::BehaviorSet::Union, b); };
-        fs.type_category_bit_5f = type_has(kDummyGroundStructureBeh);
-        fs.type_bit_5b = type_has(kDummyGroundBase);
+        fs.type_category_bit_5f = tf.dummy_ground_structure;
+        fs.type_bit_5b = tf.dummy_ground_base;
         // TEAM: the representative (container) type or any live member type has INDIGENOUS_UNIT
         if (fs.is_team) {
-            fs.team_has_bit_20 = type_has(kIndigenous);
+            fs.team_has_bit_20 = tf.indigenous;
             if (mt != members.end())
                 for (const int32_t m : mt->second)
-                    if (const objects::ObjectHandle mh = st.find(static_cast<objects::ObjectId>(m));
-                        mh && types.has_behavior(st.type(mh), objects::BehaviorSet::Union, kIndigenous))
+                    if (const objects::ObjectHandle mh = st.find(static_cast<objects::ObjectId>(m)); mh && type_facts(st.type(mh)).indigenous)
                         fs.team_has_bit_20 = true;
         }
         // obj +0x2b0 / +0xf8 (contained or attached): inside a garrison, a hard point / attached child (store attach
@@ -794,11 +825,11 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         fs.in_mode_manager_set = !b_->space_ && std::binary_search(bombing_run_objects.begin(), bombing_run_objects.end(), id);
         fs.dead_or_removing = (u != nullptr && !u->alive) || !st.alive(h);  // dead and dying (refix t01 clone) objects are skipped above: always false here
         fs.in_world = true;  // [M] obj +0x3c8: every listed battle object is in the world (retreated units are skipped above)
-        fs.type_squadron_member = types.squadron_member(ti);
-        fs.type_company_member = types.company_member(ti);
+        fs.type_squadron_member = tf.squadron_member;
+        fs.type_company_member = tf.company_member;
         fs.has_special_weapon = st.has_behavior(h, kSpecialWeapon);
-        fs.type_dummy_orbital_structure = type_has(kDummyOrbitalStructure);
-        fs.type_dummy_star_base = type_has(kDummyStarBaseBeh);
+        fs.type_dummy_orbital_structure = tf.dummy_orbital_structure;
+        fs.type_dummy_star_base = tf.dummy_star_base;
         fs.has_tactical_super_weapon = st.has_behavior(h, kTacticalSuperWeapon);
         if (mt != members.end()) a.team_members = mt->second;
         a.moving = o.mobile && b_->movement_->has_unit(id) && b_->movement_->view(id).has_goal;
@@ -823,7 +854,7 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
         // garrison holder stands in]; no hero clash (+0x3b4, s78n t06: kUnitHeroClash); SPECIAL_WEAPON only on a
         // DUMMY_STAR_BASE.
         a.hero_clash = c.has_unit(id) && (c.flags(id) & tc::kUnitHeroClash) != 0;
-        a.valid_target = (fs.is_team || (types.get_bool(ti, "Collidable_By_Projectile_Living") && types.get_bool(ti, "Is_Valid_Target"))) &&
+        a.valid_target = (fs.is_team || tf.valid_target) &&
                          b_->garrison_holder_of(id) == objects::kNoObjectId && !b_->landing_hidden(id) && !fs.dead_or_removing &&
                          !a.hero_clash && (!fs.has_special_weapon || o.dummy_star_base);
         w.objects[i] = std::move(o);
@@ -1384,6 +1415,7 @@ bool BattleAi::can_reinforce(int32_t player) {
 // (the reinforcement points it holds). t50: a land skirmish is min(capacity, Land_Skirmish_Unit_Cap_By_Player_Count at the player
 // count), the capacity counting the player's and its allies' objects (§3.3 / §3.3 "plus, in skirmish, those of allied players"). ---
 float BattleAi::population_cap(int32_t player) {
+    ensure_type_facts();
     const auto& ps = b_->galaxy_->players();
     const uint32_t f = player >= 0 && static_cast<size_t>(player) < ps.size() ? ps[static_cast<size_t>(player)].faction : galactic::kNoIndex;
     if (b_->space_) return b_->rules_->faction(f).space_unit_cap;
@@ -1395,7 +1427,7 @@ float BattleAi::population_cap(int32_t player) {
         for (int32_t q = 0; q < static_cast<int32_t>(ps.size()); ++q) {
             if (q != player && b_->combat_->is_enemy(player, q)) continue;
             for (const objects::ObjectHandle h : st.owned_by(q))
-                if (st.active(h) && st.type(h) < types.size()) capacity += types.get_int(st.type(h), "Additional_Population_Capacity");
+                if (st.active(h) && st.type(h) < types.size()) capacity += type_facts(st.type(h)).additional_population_capacity;
         }
         const float cap = static_cast<float>(capacity);
         return curve < 0.0f ? cap : std::min(cap, curve);
@@ -1406,7 +1438,7 @@ float BattleAi::population_cap(int32_t player) {
     const objects::GameObjectTypes& types = mode_->types();
     int32_t capacity = f < b_->galaxy_->rules().factions.size() ? b_->galaxy_->rules().factions[f].base_population_capacity : 0;
     for (const objects::ObjectHandle h : st.owned_by(player))
-        if (st.active(h) && st.type(h) < types.size()) capacity += types.get_int(st.type(h), "Additional_Population_Capacity");
+        if (st.active(h) && st.type(h) < types.size()) capacity += type_facts(st.type(h)).additional_population_capacity;
     return std::min(planet_cap, static_cast<float>(capacity));
 }
 
@@ -1591,13 +1623,14 @@ bool BattleAi::space_drop_frame(int32_t player, at::SpaceDropFrame& out) {
 }
 
 bool BattleAi::space_prevention_hit(int32_t player, const at::Vec3f& p) {
+    ensure_type_facts();
     const objects::ObjectStore& st = mode_->primary();
     const objects::GameObjectTypes& types = mode_->types();
     for (const objects::ObjectHandle h : st.all_objects()) {  // GOM list +0x2f0 stand-in: GOM order
         if (!st.active(h)) continue;
         const objects::TypeIndex t = st.type(h);
         if (t >= types.size()) continue;
-        const float r = types.get_float(t, "Reinforcement_Prevention_Radius");
+        const float r = type_facts(t).reinforcement_prevention_radius;
         if (!(r > 0.0f)) continue;
         const int32_t o = st.owner(h);
         if (o >= 0 && (o == player || !b_->combat_->is_enemy(player, o))) continue;  // allied (0x39a230)

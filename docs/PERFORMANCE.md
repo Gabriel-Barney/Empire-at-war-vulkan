@@ -1196,3 +1196,68 @@ p99 follows the medians (land 7.5-9.3 ms at every count; nebula 22-31 ms, from `
 - Biggest zones at W0 (share of tick time): land `tac.ai.perception` 40 %, `crc.battle.ai` 19 %, `ai.goals` 9 %; water
   `tac.ai.perception` 46 %, `crc.battle.ai` 16 %; space_battle_game `tac.ai` 32 %, `tac.movement` 31 %; nebula `tac.movement` 69 %
   (p99 24 ms, one 190 ms `ai.planning` tick); galactic_late `ai.goals` 69 % (p99 4.4 ms, max 22 ms). All serial.
+
+## Serial path split: perception and the tactical tick (SIMP sp0, 2026-11-14)
+
+Step P0 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md). New profiler step zones (`profile::Steps`, `ALAMO_PROFILE_STEP`,
+wall clock only): `tac.perc.*` split `tac.ai.perception` (`TacticalAiWorld::Impl::refresh` and the signal passes after it), and
+`tac.s.*` time every step of `TacticalBattle::tick` (63 zones; the old `tac.setup` ... `tac.victory` laps stay). Run with
+`python tools/benchmark/worker_sweep.py --workers 0,15 --rounds 2 --scenes land_battle,water_battle,space_battle_game,galactic_late`
+(sim-only `alamo_headless --bench`, one process per cell, interleaved), MSVC Release at `8a4f44d6`, Ryzen 7 7800X3D, W15 = the
+default worker count then. **Busy machine**: two other lanes were building; CPU busy before the runs 8-100 % (galactic_late 55-100 %),
+so read shares and the shape, not absolute times. Every run matched its fingerprint. Values: mean ms per tick over both rounds
+(zone times are thread time summed over threads).
+
+| Zone (mean ms / tick) | land W0 | land W15 | water W0 | water W15 | space_game W0 | space_game W15 |
+|---|---|---|---|---|---|---|
+| tick (median, round 1 / 2) | 4.15 / 3.83 | 2.98 / 2.79 | 3.21 / 3.22 | 2.71 / 2.50 | 2.16 / 2.83 | 3.16 / 1.94 |
+| `tac.ai.perception` | 1.77 | 0.75 | 1.58 | 0.81 | 0.71 | 0.98 |
+| - `tac.perc.fill` (`host.fill`: `BattleAi::fill`, the per-object snapshot) | **1.64** | 0.62 | **1.46** | 0.68 | **0.64** | 0.90 |
+| - `tac.perc.diff` (sort, removed / added / owner changes) | 0.066 | 0.066 | 0.062 | 0.065 | 0.023 | 0.029 |
+| - `tac.perc.signals` (opportunity, in-range, ability, landing, production, status) | 0.026 | 0.026 | 0.013 | 0.014 | 0.019 | 0.022 |
+| - `tac.perc.grid` (UNIT_AI service) | 0.008 | 0.007 | 0.025 | 0.028 | 0.015 | 0.020 |
+| - `tac.perc.dying` / `index` / `orders` / `tf_prune` | 0.024 | 0.023 | 0.019 | 0.021 | 0.011 | 0.015 |
+| `crc.battle.ai` (inside `T13.end_tick`) | 0.89 | 0.81 | 0.56 | 0.62 | 0.18 | 0.24 |
+| `T13.end_tick` (all CRC capture) | 1.09 | 0.85 | 0.71 | 0.67 | 0.41 | 0.72 |
+| `ai.goals` | 0.42 | 0.34 | 0.17 | 0.16 | 0.07 | 0.10 |
+| all `tac.s.*` (the tactical tick) | 0.99 | 0.89 | 0.88 | 0.93 | 1.76 | 2.86 |
+| - `tac.s.move_tick` | 0.25 | 0.19 | 0.07 | 0.07 | 0.98 | 1.19 |
+| - `tac.s.abilities_combat` (combat + abilities tick) | 0.18 | 0.18 | 0.31 | 0.32 | 0.16 | 0.90 |
+| - `tac.s.fog` | 0.15 | 0.13 | 0.11 | 0.11 | 0.02 | 0.03 |
+| - `tac.s.anim` (drive_animation) | < 0.01 | < 0.01 | 0.09 | 0.09 | 0.10 | 0.12 |
+| - `tac.s.speed_factors` | 0.07 | 0.07 | 0.06 | 0.06 | 0.08 | 0.10 |
+| - `tac.s.combat_flags` (the combat_pre per-unit loop) | 0.05 | 0.05 | 0.04 | 0.04 | 0.12 | 0.14 |
+| - `tac.s.collision_feed` / `attack_targets` / `attack_block` | 0.10 | 0.10 | 0.06 | 0.06 | 0.05 | 0.06 |
+| - the other steps together | 0.19 | 0.17 | 0.15 | 0.16 | 0.26 | 0.32 |
+
+`galactic_late` (no tactical zones; median 1.26 / 0.74 ms at W0 and 1.25 / 0.69 ms at W15, the busiest cells): `ai.goals` 69 % of the
+tick at W0 (1.33 ms mean, p50 0.50 ms), `T13.end_tick` 7.7 % at W0 and 18 % at W15 (0.15 against 0.44 ms: the CRC capture forks
+one job per system, the first sign of the fork cost sp1 removes).
+
+Reading it:
+- **Perception is the snapshot fill.** `tac.perc.fill` is 92-93 % of `tac.ai.perception`; the diff, the threat-grid service and the
+  signal passes are 0.1 ms together. The fill already runs per object on workers (W15 halves it on land and water), so its cost is
+  the per-object work itself: the S6 string-keyed type lookups (`PERF_SERIAL_2026-11-14.md` option 2, the `TypeFacts` table) and what
+  P3's snapshot `S_N` replaces. (sp3 t01 has since cut `tac.ai.perception` by about 60 % with `TypeFacts`: next section.)
+- **The tactical tick is not a long serial chain of services** at today's scene sizes: 63 steps total 0.9-1.0 ms on land / water,
+  and four of them (movement, combat / abilities, fog, speed factors) are 60-80 % of that; the other ~55 steps are each below
+  0.05 ms. Space: movement dominates (`tac.s.move_tick` 0.98 ms mean, its p99 is the nebula-style spike).
+- **The checksum is the third serial block**: `crc.battle.ai` 0.6-0.9 ms on land / water at both worker counts (one system = one job),
+  the target of sp2 (game checkpoint cadence) and sp6 (tree hash).
+- Raw results: `worker_sweep.py` JSON per cell (not tracked); rerun on a quiet PC for absolute numbers (sp6 t04).
+
+## TypeFacts in the battle AI's perception fill (sp3 t01, 2026-11-14)
+
+`BattleAi::fill` (and the population-cap / space-prevention scans) read a per-battle `TypeFacts[type]` table built once instead
+of ~15 string-keyed `GameObjectTypes::get_*` calls per object (PERF_AUDIT S6). Golden-neutral (CRC logs unchanged, MSVC and clang).
+`land_battle`, `alamo_headless --bench --profile`, default workers, 3 rounds interleaved old / new on one build tree while two
+other lanes built (other-process CPU 10-49 %, printed per run):
+
+| p50 ms | before (3 runs) | after (3 runs) | change |
+|---|---|---|---|
+| tick median | 2.79 / 2.89 / 3.04 | 2.31 / 2.36 / 2.45 | about -17 % |
+| `tac.ai` | 1.03 / 1.10 / 1.18 | 0.54 / 0.56 / 0.61 | about -48 % |
+| `tac.ai.perception` | 0.68 / 0.73 / 0.77 | 0.27 / 0.28 / 0.28 | about -62 % |
+| `crc.battle.ai` | 0.75 / 0.77 / 0.82 | 0.79 / 0.80 / 0.81 | unchanged |
+
+`crc.battle.ai` is now the largest single zone of a land battle tick (simp-core's sp2 / sp6).

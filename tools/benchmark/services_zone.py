@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""SP5 t07: the services zone of a bench result - the sum of the svc.* zones of TacticalBattle's services graph, without
+"""SP5 t07: the services zone of a bench result - the sum of the tac.s.* zones (one per service of
+TacticalBattle's services graph, sp0's step names), without
 the steps that are not services (the movement and combat ticks, the stand-in orders that run instead of the tactical AI)
 and without the profile-lap barriers.
 
@@ -14,13 +15,12 @@ from __future__ import annotations
 import json
 import sys
 
-NOT_SERVICES = {"svc.movement_tick", "svc.combat_tick", "svc.issue_orders"}
+NOT_SERVICES = {"tac.s.move_tick", "tac.s.move_commit", "tac.s.abilities_combat", "tac.s.issue_orders"}
 
 
 def services(path: str) -> tuple[float, float, dict, list]:
     d = json.load(open(path, encoding="utf-8"))
-    zs = [z for z in d.get("zones", []) if z["name"].startswith("svc.") and not z["name"].startswith("svc.lap.")
-          and z["name"] not in NOT_SERVICES]
+    zs = [z for z in d.get("zones", []) if z["name"].startswith("tac.s.") and z["name"] not in NOT_SERVICES]
     mean = sum(z["mean_ms"] for z in zs)
     p50 = sum(z["p50_ms"] for z in zs)
     return mean, p50, d.get("summary", {}), sorted(zs, key=lambda z: -z["mean_ms"])[:5]

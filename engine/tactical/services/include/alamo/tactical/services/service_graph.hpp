@@ -61,7 +61,7 @@ struct ServiceInfo {
     bool barrier = false;
     uint32_t phase = 0;                 // set by build()
     ComponentSet observed_writes = 0;   // components a checked run saw this service change
-    uint16_t zone = 0xFFFF;             // profile zone "svc.<name>" (wall clock only; none for a barrier)
+    uint16_t zone = 0xFFFF;             // profile zone <prefix><name> (wall clock only; none for a barrier)
 };
 
 class ServiceGraph {
@@ -70,6 +70,8 @@ public:
 
     // Names for describe() and violation reports (index = component bit). Optional.
     void set_component_names(std::vector<std::string> names) { names_ = std::move(names); }
+    // Profile zone of each service added afterwards: prefix + name (default "svc.").
+    void set_zone_prefix(std::string prefix) { zone_prefix_ = std::move(prefix); }
     const std::string& component_name(uint32_t c) const;
 
     ServiceId add(std::string name, ComponentSet reads, ComponentSet writes, Fn fn);
@@ -102,6 +104,7 @@ private:
     std::vector<std::pair<ServiceId, ServiceId>> edges_;
     std::vector<std::vector<ServiceId>> phases_;
     std::vector<std::string> names_;
+    std::string zone_prefix_ = "svc.";
     bool built_ = false;
 };
 

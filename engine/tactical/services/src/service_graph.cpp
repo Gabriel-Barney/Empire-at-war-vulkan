@@ -22,7 +22,7 @@ ServiceId ServiceGraph::add_impl(std::string name, ComponentSet reads, Component
     s.writes = writes;
     s.barrier = barrier;
     // Barriers get no zone (the profiler's zone table is small; a barrier is usually a profile lap itself).
-    if (!barrier) s.zone = profile::register_zone(("svc." + s.name).c_str());
+    if (!barrier) s.zone = profile::register_zone((zone_prefix_ + s.name).c_str());
     info_.push_back(std::move(s));
     fn_.push_back(std::move(fn));
     built_ = false;
