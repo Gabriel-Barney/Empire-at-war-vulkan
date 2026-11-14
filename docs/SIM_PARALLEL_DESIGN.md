@@ -1,7 +1,8 @@
 # Design: a simulation that uses every physical core, with the same outcomes and bounded latency
 
-Status: **proposal** (2026-11-14, for Gabriel). Not started; tier-3 work under the current focus ([`DECISIONS.md`](DECISIONS.md),
-"Current focus"), except where a step changes AI outcomes (tier 2, noted). Inputs: the worker-count sweep in
+Status: **approved, in progress** (Gabriel, 2026-11-14: "full sim system redesign"). A named exception to the current focus
+([`DECISIONS.md`](DECISIONS.md), "Parallel sim redesign"). Roadmap: stage Performance, box `SIMP`, groups `sp0`-`sp7` (one per
+step P0-P7 of section 8). Inputs: the worker-count sweep in
 [`PERFORMANCE.md`](PERFORMANCE.md) ("Worker-count sweep", 2026-11-14), [`PERF_SERIAL_2026-11-14.md`](PERF_SERIAL_2026-11-14.md),
 [`PERF_AUDIT_2026-11-07.md`](PERF_AUDIT_2026-11-07.md) (finding ids J*, S*, L*) and [`OPT_RESEARCH.md`](OPT_RESEARCH.md).
 
