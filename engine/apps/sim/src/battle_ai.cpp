@@ -637,6 +637,7 @@ bool BattleAi::read(ByteReader& r) {
     lane_job_ = std::move(job);
     view_.valid = false;  // sp3 t02: captured again at the next AI slot
     world_->object_bridge().lane_abilities = nullptr;  // sp3 slice 4b: likewise the ability records
+    lane_unloaded_.clear();  // sp3 slice 4d: consumed within the tick of its apply
     return true;
 }
 
@@ -1254,7 +1255,6 @@ cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
     attack_refused_.clear();
     if (world_ && world_->ai_lane()) {  // sp3 t04: queued for the batch due N + k_ai
         // sp3 slice 4c: an event execute_order does not act on is not run from the AI side either
-        if (ev.type() == cmd::EventType::Reinforce) return execute_live(player, ev);  // slice 4d
         if (!lane_batched(ev)) return cmd::RejectReason::Unhandled;
         const cmd::RejectReason p = predict_order(player, ev);
         if (p == cmd::RejectReason::None) {
@@ -1294,7 +1294,8 @@ bool BattleAi::lane_batched(const cmd::EventData& ev) {
         case T::MoveToPositionFacing:
         case T::MoveToObject:
         case T::Attack:
-        case T::Retreat:  // sp3 slice 4c: every other type execute_order acts on (Reinforce: slice 4d)
+        case T::Reinforce:  // sp3 slice 4d
+        case T::Retreat:  // sp3 slice 4c: every other type execute_order acts on
         case T::Production:
         case T::TacticalBuild:
         case T::SetUnitAbilityMode:
@@ -1317,7 +1318,7 @@ cmd::RejectReason BattleAi::predict_order(uint8_t player, const cmd::EventData& 
     using R = cmd::RejectReason;
     using T = cmd::EventType;
     // sp3 slice 4c: reads the lane view and the snapshot store only (finished_ is set on the critical lane before the
-    // AI slot of the deciding tick; Reinforce still runs live from execute, slice 4d).
+    // AI slot of the deciding tick).
     if (b_->finished_) return R::NotAllowed;
     const objects::ObjectStore& st = world_->view_store();
     const auto movable = [this](objects::ObjectId id) {
@@ -1376,6 +1377,16 @@ cmd::RejectReason BattleAi::predict_order(uint8_t player, const cmd::EventData& 
                                                                                                                        : R::InvalidPosition;
         }
         // sp3 slice 4c: the rest of the batched types, from the view (the apply reports a differing answer)
+        case T::Reinforce: {  // slice 4d: in the pool, room (can_reinforce, land population), a finite point
+            const auto key = static_cast<int32_t>(ev.u("unit"));
+            const size_t pi = player;
+            if (pi >= view_.pool.size() || !view_.can_reinforce[pi]) return R::NotAllowed;
+            const auto& pool = view_.pool[pi];
+            const auto it = std::find_if(pool.begin(), pool.end(), [key](const at::TacticalReinforcement& e) { return e.key == key; });
+            if (it == pool.end()) return R::NotAllowed;
+            if (!b_->space_ && view_.pop_cap[pi] >= 0.0f && view_.pop_used[pi] + it->population > view_.pop_cap[pi]) return R::QueueFull;
+            return std::isfinite(ev.f("x")) && std::isfinite(ev.f("y")) ? R::None : R::InvalidPosition;
+        }
         case T::Retreat:
             return static_cast<size_t>(player) < view_.retreat_ok.size() && view_.retreat_ok[player] ? R::None : R::NotAllowed;
         case T::Production: {
@@ -1448,10 +1459,27 @@ void BattleAi::apply_lane_batch(uint64_t frame) {
             continue;
         }
         attack_refused_.clear();
+        const bool reinforce = c.payload.type() == cmd::EventType::Reinforce;
+        const auto player = static_cast<int32_t>(c.header.player);
+        const size_t before = reinforce ? mode_->primary().owned_by(player).size() : 0;
         const cmd::RejectReason r = execute_order(c.header.player, c.payload);
         if (r == cmd::RejectReason::None) order_signals(c.header.player, c.payload);
         else ++lane_mismatch_;  // queued only when predicted accepted
         count_executed(c.payload, r);
+        if (reinforce) {  // slice 4d: the AI waits for an unload record of every lane drop
+            const auto key = static_cast<int32_t>(c.payload.u("unit"));
+            if (r == cmd::RejectReason::None && landing_in_flight(player, key)) continue;  // the battle's signal 0x19 comes later
+            ai::tactical::ReinforcementsUnloaded rec;
+            rec.player = player;
+            rec.key = key;
+            if (r == cmd::RejectReason::None) {
+                const objects::ObjectStore& st = mode_->primary();
+                const auto owned = st.owned_by(player);
+                for (size_t k = before; k < owned.size(); ++k)
+                    if (st.active(owned[k]) && st.has_behavior(owned[k], objects::beh::Locomotor)) rec.units.push_back(st.id(owned[k]));
+            }
+            lane_unloaded_.push_back(std::move(rec));
+        }
     }
 }
 
@@ -2274,6 +2302,10 @@ bool BattleAi::movement_locked(int32_t object_id) {
 
 bool BattleAi::reinforce_in_flight(int32_t player, int32_t key) {
     if (lane_view()) return std::binary_search(view_.in_flight.begin(), view_.in_flight.end(), std::make_pair(player, key));
+    return landing_in_flight(player, key);
+}
+
+bool BattleAi::landing_in_flight(int32_t player, int32_t key) const {
     for (const TacticalBattle::Landing& l : b_->landings_) {
         const TacticalBattle::Participant& p = b_->parts_[l.participant];
         if (l.timed && l.state != 3 && p.owner == player && p.galactic_id == key) return true;
@@ -2296,6 +2328,8 @@ std::vector<ai::tactical::ReinforcementsUnloaded> BattleAi::reinforcements_unloa
         r.units.assign(rec.units.begin(), rec.units.end());
         out.push_back(std::move(r));
     }
+    for (ai::tactical::ReinforcementsUnloaded& r : lane_unloaded_) out.push_back(std::move(r));  // sp3 slice 4d
+    lane_unloaded_.clear();
     return out;
 }
 float BattleAi::sight_weather_factor(int32_t type, int32_t) {

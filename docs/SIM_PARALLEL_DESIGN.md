@@ -394,6 +394,11 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   live / movable, the teams, per player the retreat gate `retreat_block == 0`, tactical production on / off, the pad checks).
   Predictions: Retreat = the gate; Production = production on and a valid builder id (credits and buildability are not
   predicted); TacticalBuild = the AI's `build_pad_check` (cost and type are not); ability commands = an owned live unit among
-  them. Reinforce still runs live from `execute` (slice 4d: the AI reads the spawned units in the same call). `start()` with
+  them. Reinforce (slice 4d) is queued too, predicted from the view (in the pool, can-reinforce, land population room, a finite
+  point); the AI no longer reads the spawned units in the same call - with the lane on both reinforce sites (the land
+  ReinforceBlockStatus and the space poll) record the drop as a landing in flight, and the apply hands the units to the AI
+  as a signal-0x19 unload record at the next AI slot (the battle's own record when the drop is a timed landing; an empty
+  one when the apply refused it, so no status waits forever). A space status then also waits for its landings before it
+  finishes (a timeout still ends it). `start()` with
   the lane on captures the view first, refreshes the snapshot store, and collects what the start scripts queued (before this,
   the first update dropped it). **Tier 2**: these commands act k_ai ticks later and their answers are predictions.
