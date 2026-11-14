@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/materials/effect_loader.hpp"
 #include "alamo/vfs/vfs.hpp"
 #include "fx_compile.hpp"

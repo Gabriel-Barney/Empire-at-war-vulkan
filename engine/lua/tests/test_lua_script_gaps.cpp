@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/log.hpp"
 #include "alamo/lua/ai_bridge.hpp"
 #include "alamo/lua/bindings.hpp"

@@ -13,6 +13,7 @@
 #ifdef ALAMO_SHADERXLAT_HAVE_VFS
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/meg/meg.h"
 #include "alamo/vfs/vfs.hpp"
 #endif

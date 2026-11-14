@@ -2,6 +2,7 @@
 // Split out of test_battles.cpp (WF1b t01); the fixture (synthetic data, maps, run_campaign) is battle_test_fixture.hpp.
 
 #include "battle_test_fixture.hpp"
+#include "alamo/core/host_fs.hpp"
 
 #include <array>
 #include <iterator>

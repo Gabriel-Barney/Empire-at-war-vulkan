@@ -21,6 +21,7 @@
 #include "alamo/ai/galactic_ai.hpp"
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/victory.hpp"  // q6 t21: campaign end report

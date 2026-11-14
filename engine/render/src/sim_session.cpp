@@ -1,4 +1,5 @@
 #include "alamo/render/sim_session.hpp"
+#include "alamo/core/host_fs.hpp"
 
 #include <filesystem>
 #include <fstream>

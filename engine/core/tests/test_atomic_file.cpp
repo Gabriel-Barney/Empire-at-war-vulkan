@@ -11,6 +11,7 @@
 
 #include "alamo/core/atomic_file.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/test/support.hpp"
 
 #include <windows.h>

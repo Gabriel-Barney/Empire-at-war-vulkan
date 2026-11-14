@@ -19,6 +19,7 @@
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/ascii.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/data/game_database.hpp"
 #include "alamo/data/values.hpp"
 #include "alamo/galactic/campaign.hpp"

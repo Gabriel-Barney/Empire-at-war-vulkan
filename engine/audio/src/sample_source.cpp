@@ -1,4 +1,5 @@
 #include "alamo/audio/sample_source.hpp"
+#include "alamo/core/host_fs.hpp"
 
 #include <filesystem>
 

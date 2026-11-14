@@ -1,5 +1,6 @@
 // test_render: main and the tests that stayed (see test_render_common.hpp; the others are in test_render_*.cpp).
 #include "test_render_common.hpp"
+#include "alamo/core/host_fs.hpp"
 
 namespace test_render_t {
 

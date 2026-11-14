@@ -28,6 +28,7 @@
 #include <fstream>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #include "alamo/tactical/movement/ted_grid.hpp"

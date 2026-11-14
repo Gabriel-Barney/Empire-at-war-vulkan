@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/galaxy.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/data/xml_list.hpp"

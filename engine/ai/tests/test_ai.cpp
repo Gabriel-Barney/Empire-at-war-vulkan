@@ -28,6 +28,7 @@
 #include "alamo/ai/perception_equations.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/host_fs.hpp"
 #include "alamo/core/hash.hpp"  // A2 tactical: '#' reseed CRC
 #include "alamo/core/log.hpp"
 #include "alamo/core/sim_rng.hpp"
