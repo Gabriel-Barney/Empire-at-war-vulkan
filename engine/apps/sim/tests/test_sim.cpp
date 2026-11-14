@@ -240,6 +240,58 @@ static void test_tick_order(const World& w) {
     CHECK(trace.size() > 5 && trace[3] == "gmm.scoring" && trace[4] == "galactic.begin" && trace[5] == "common.begin");
 }
 
+// SIMP sp2: CRC capture cadence. Checkpoint ticks + the initial state + on-demand captures, a v2 (checkpoint) log that
+// compares clean against the full log of the same run; the ring keeps the newest records.
+static void test_crc_cadence(const World& w) {
+    auto run = [&](uint32_t every, size_t ring, uint64_t ticks) {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        SimHost host(w.types, js);
+        host.set_crc_cadence(every, ring);
+        host.start_game(ModeKind::Land);
+        for (uint64_t t = 0; t < ticks; ++t) host.tick_once();
+        host.capture_crc_now();
+        host.capture_crc_now();  // twice: no duplicate record
+        return host.crc_log();
+    };
+    const CrcLog full = run(1, 0, 200);
+    const CrcLog sparse = run(64, 0, 200);
+    CHECK(full.records.size() == 201 && full.checkpoint == 0);
+    CHECK(sparse.checkpoint == 64 && sparse.records.size() == 5);  // 0, 64, 128, 192, 200
+    if (sparse.records.size() == 5) {
+        CHECK(sparse.records[0].tick == 0 && sparse.records[1].tick == 64 && sparse.records[3].tick == 192 && sparse.records[4].tick == 200);
+        CHECK(sparse.records[2] == full.records[128]);
+    }
+    CHECK(!first_divergence(full, sparse).diverged);
+    CHECK(!first_divergence(sparse, full).diverged);
+    const CrcLog ringed = run(4, 3, 200);  // 51 checkpoint records + 1; trimmed to 3 whenever more than 6 are held
+    CHECK(ringed.records.size() >= 3 && ringed.records.size() <= 6 && ringed.records.back().tick == 200);
+    // An on-demand record between checkpoints goes on the keep line, so the saved v2 log parses again.
+    {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        SimHost host(w.types, js);
+        host.set_crc_cadence(64);
+        host.start_game(ModeKind::Land);
+        for (int t = 0; t < 100; ++t) host.tick_once();
+        host.capture_crc_now();  // tick 100: off the grid
+        for (int t = 0; t < 40; ++t) host.tick_once();
+        host.capture_crc_now();  // tick 140: the last record
+        CrcLog back;
+        std::string err;
+        CHECK(host.crc_log().keep.size() == 2 && CrcLog::parse(host.crc_log().to_text(), back, &err));
+        CHECK(back.records.size() == host.crc_log().records.size());
+    }
+    // The process default reaches a new host; set back for the other tests even if a check throws.
+    struct Restore {
+        ~Restore() { SimHost::set_default_crc_cadence(1); }
+    } restore;
+    SimHost::set_default_crc_cadence(16);
+    {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        SimHost host(w.types, js);
+        CHECK(host.crc_cadence() == 16 && host.crc_log().checkpoint == 16);
+    }
+}
+
 // --------------------------------------------------------------------------------------- commands
 static void check_spatial(const TacticalMode& tm);
 
@@ -3330,6 +3382,7 @@ int main(int argc, char** argv) {
     }
     test_mode_stack(*world);
     test_tick_order(*world);
+    test_crc_cadence(*world);
     test_commands(*world);
     test_select_all();  // bkc1 t04
     test_realtime_equals_fast(*world);

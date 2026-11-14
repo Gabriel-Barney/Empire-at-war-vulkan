@@ -2,6 +2,8 @@
 #include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cstddef>
 #include <limits>
 
 #include "alamo/galactic/campaign.hpp"
@@ -22,6 +24,9 @@ namespace cmd = alamo::commands;
 
 namespace {
 bool finite(float f) { return f - f == 0.0f; }
+// sp2: the process-wide CRC cadence new hosts start with (set_default_crc_cadence; alamo_game's main sets it once).
+std::atomic<uint32_t> g_crc_every{1};
+std::atomic<size_t> g_crc_ring{0};
 }  // namespace
 
 SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, SimConfig cfg)
@@ -43,7 +48,38 @@ SimHost::SimHost(const objects::GameObjectTypes& types, jobs::JobSystem& js, Sim
     }
     make_pipeline(cfg_.scheduler);
     register_crc();
+    crc_every_ = std::max<uint32_t>(1u, g_crc_every.load(std::memory_order_relaxed));
+    crc_ring_ = g_crc_ring.load(std::memory_order_relaxed);
     make_recorder();
+}
+
+void SimHost::set_default_crc_cadence(uint32_t every, size_t ring) {
+    g_crc_every.store(std::max<uint32_t>(1u, every), std::memory_order_relaxed);
+    g_crc_ring.store(ring, std::memory_order_relaxed);
+}
+
+void SimHost::set_crc_cadence(uint32_t every, size_t ring) {
+    crc_every_ = std::max<uint32_t>(1u, every);
+    crc_ring_ = ring;
+    recorder_->log().checkpoint = crc_every_ > 1 ? crc_every_ : 0;
+}
+
+void SimHost::record_crc() {
+    recorder_->capture(frame_);
+    std::vector<CrcRecord>& r = recorder_->log().records;
+    if (crc_ring_ > 0 && r.size() > 2 * crc_ring_) {  // amortised: drop the oldest records once twice the ring is held
+        r.erase(r.begin(), r.begin() + static_cast<std::ptrdiff_t>(r.size() - crc_ring_));
+        std::vector<uint64_t>& keep = recorder_->log().keep;
+        keep.erase(keep.begin(), std::lower_bound(keep.begin(), keep.end(), r.front().tick));
+    }
+}
+
+void SimHost::capture_crc_now() {
+    CrcLog& log = recorder_->log();
+    if (!log.records.empty() && log.records.back().tick == frame_) return;
+    // An off-checkpoint record after the first goes on the v2 log's keep line, or CrcLog::parse rejects the saved log.
+    if (log.checkpoint != 0 && !log.records.empty() && frame_ % log.checkpoint != 0) log.keep.push_back(frame_);
+    record_crc();
 }
 
 void SimHost::make_pipeline(const cmd::SchedulerConfig& cfg) {
@@ -626,7 +662,7 @@ bool SimHost::tick_once() {
     step("T12.post_tick");
     // T13 End_Tick: events, frame CRC.
     pipeline_->events().deliver();
-    recorder_->capture(frame_);
+    if (crc_every_ <= 1 || frame_ % crc_every_ == 0) record_crc();  // sp2: checkpoint ticks only when the cadence is > 1
     step("T13.end_tick");
     profile::end_tick();
     return true;

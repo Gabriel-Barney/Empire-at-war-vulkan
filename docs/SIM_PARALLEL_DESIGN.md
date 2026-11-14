@@ -145,6 +145,15 @@ All of this is golden-neutral: results already do not depend on the worker count
 - **Everywhere, later:** a **tree hash**: each system hashes fixed blocks (e.g. 256 objects) in parallel, and the system digest is the
   hash of its block digests in order. One golden regeneration; after that capture cost is spread over all cores. Blocks that did not
   change since the last capture reuse their digest (dirty bit per block).
+- **As built, first half (sp2, 2026-11-14):** `SimHost::set_crc_cadence(every, ring)` / `set_default_crc_cadence` /
+  `capture_crc_now()`. `alamo_game` uses 64 with a ~4096-record ring in live play, the scenario's fingerprint cadence (16) in a
+  benchmark with a scenario, and 1 for `--smoke`, `--bench-make` and `--bench-crc-out`; on-demand records at a save, a benchmark's
+  end and the presentation check (an off-grid one goes on the v2 log's keep line). The game's log is a v2 checkpoint log, so the
+  fingerprint and on/off compares work on its stored ticks. Headless, tests and goldens stay at 1.
+- **Space path retries (P6 line of section 5, done in sp2):** `plan_space_path(..., pf)` runs try 1 alone, then the remaining tries
+  in parallel waves with the serial chain's parameters for the best progress known so far; a speculative try is used only when its
+  parameters equal the serial ones bit for bit, else a new wave starts there. Same result as the serial loop (tested and
+  stress-tested); it costs extra CPU when tries are rerun (10-15 % of speculative tries on `nebula_battle`).
 
 ## 5. System by system
 

@@ -2,7 +2,10 @@
 #include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace alamo::tactical::movement {
@@ -429,6 +432,11 @@ struct Search {
     V2 circ_c[2] = {};        // 0 = left (counter-clockwise), 1 = right (clockwise)
     bool threat = false;      // REMAINING_GAPS §4.2: threat mode (ops 25-32 only)
     ThreatCost tcost{};
+    // SIMP sp2: a speculative try (try number `self`) stops early once a lower try succeeded (*stop < self); its result
+    // is then never used. Scheduling only: a try that runs to its end is unaffected.
+    const std::atomic<uint32_t>* stop = nullptr;
+    uint32_t self = 0;
+    bool aborted = false;
 
     int32_t cell(float v, float s) const { return static_cast<int32_t>(std::floor((v - s) * 1.5f / D)); }
     int32_t bucket(float h) const {
@@ -735,7 +743,12 @@ struct Search {
 
         bool first = true;
         int32_t found = -1;
+        uint32_t polls = 0;
         while (!sc.heap.empty()) {
+            if (stop && (++polls & 127u) == 0 && stop->load(std::memory_order_relaxed) < self) {
+                aborted = true;
+                return false;
+            }
             const int32_t ni = sc.heap.pop().value;
             const SpaceScratch::Node n = sc.nodes[static_cast<size_t>(ni)];
             const uint64_t key = vkey(cell(n.pos.x, req.start.x), cell(n.pos.y, req.start.y), bucket(n.heading));
@@ -1010,8 +1023,65 @@ bool static_route(const SpaceOccupancy& occ, const SpaceRequest& req, float spee
 
 }  // namespace
 
+namespace {
+
+// §2.4 retry chain: try t's parameters from try t-1's and the best progress of tries 1..t-1.
+void next_try(TryParams& tp, float& budget_f, uint32_t t, float dist, float best_progress, const MovementConstants& k,
+              const SpaceRequest& req) {
+    if (t >= 2) {
+        tp.rot_div += k.space_failure_rotation_increment;
+        tp.step_scale += k.space_failure_forward_increment;
+        budget_f *= k.space_failure_max_expansions_coefficient;
+        // sp2 review: clamped before the cast (a mod's large SpacePathingTries grows it past 2^32: undefined conversion).
+        tp.budget = budget_f >= 4.0e9f ? 4000000000u : static_cast<uint32_t>(budget_f);
+    }
+    if (t >= 3) {
+        tp.weight_dist = std::max(tp.weight_dist + k.space_failure_distance_cutoff_coefficient * dist, best_progress);
+        tp.heuristic_div *= k.current_path_cost_coefficient_space;
+    }
+    if (t >= 4) tp.mask = kSpaceMoving | kSpaceStatic;
+    if (t >= 5) tp.speed = req.speed * 0.5f;
+    tp.facing = t == 1;  // OI tactical: from try 2 the facing requirement is dropped
+}
+
+bool same_params(const TryParams& a, const TryParams& b) {
+    const auto f = [](float x, float y) { return std::bit_cast<uint32_t>(x) == std::bit_cast<uint32_t>(y); };
+    return f(a.rot_div, b.rot_div) && f(a.step_scale, b.step_scale) && a.budget == b.budget && f(a.heuristic_div, b.heuristic_div) &&
+           f(a.weight_dist, b.weight_dist) && a.mask == b.mask && f(a.speed, b.speed) && a.facing == b.facing;
+}
+
+// One try's outcome (sp2: a speculative try keeps its own until the in-order walk takes or rejects it).
+struct TryResult {
+    TryParams tp;
+    bool done = false;  // ran to its end (not stopped early)
+    bool ok = false;
+    uint32_t pushes = 0;
+    float best_progress = 0.0f;
+    float step_deg = 0.0f;
+    std::vector<SpaceScratch::Node> chain;
+};
+
+void run_try(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& sc, TryResult& r,
+             const std::atomic<uint32_t>* stop, uint32_t self) {
+    Search s{occ, k, req, r.tp, sc};
+    s.stop = stop;
+    s.self = self;
+    r.ok = s.run(r.chain);
+    r.done = !s.aborted;
+    r.pushes = s.pushes;
+    r.best_progress = s.best_progress;
+    r.step_deg = s.step_deg;
+}
+
+}  // namespace
+
 bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& sc,
                      SpacePath& out) {
+    return plan_space_path(occ, k, req, sc, out, nullptr);
+}
+
+bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& sc,
+                     SpacePath& out, const ParallelFor* pf) {
     out = SpacePath{};
     const float dist = distance(req.start, req.goal);
     if (!(req.speed > 0.0f)) return false;
@@ -1025,31 +1095,59 @@ bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, cons
     tp.budget = k.space_pathfind_max_expansions;
     tp.mask = req.mask;
     tp.speed = req.speed;
-    std::vector<SpaceScratch::Node> chain;
     float budget_f = static_cast<float>(tp.budget);
     float best_progress = 0.0f;
     const uint32_t tries = std::max<uint32_t>(1, k.space_pathing_tries);
+    // sp2: results of tries 2..N (index t - 2) run in parallel waves: when try t (t >= 2) has no usable result, tries t..N
+    // run at once, try t with its exact parameters and the later ones with the chain's parameters for the best progress
+    // known now (the real one can only grow; a later try whose parameters that changes starts the next wave).
+    std::vector<TryResult> spec;
+    if (pf && tries >= 2) spec.resize(tries - 1);
+    constexpr uint32_t kWaveTries = 8;  // a wave runs at most this many tries (a mod may set many)
+    const auto wave = [&](uint32_t from) {
+        const uint32_t last = std::min(tries, from + kWaveTries - 1);
+        TryParams stp = tp;
+        float sbf = budget_f;
+        for (uint32_t u = from; u <= last; ++u) {
+            if (u > from) next_try(stp, sbf, u, dist, best_progress, k, req);
+            spec[u - 2] = TryResult{};
+            spec[u - 2].tp = stp;
+        }
+        std::atomic<uint32_t> lowest_ok{std::numeric_limits<uint32_t>::max()};
+        (*pf)(last - from + 1, 1, [&](uint32_t b, uint32_t e) {
+            SpaceScratch s2;
+            for (uint32_t i = b; i < e; ++i) {
+                const uint32_t self = from + i;
+                if (lowest_ok.load(std::memory_order_relaxed) < self) continue;  // a lower try already succeeded
+                TryResult& r = spec[self - 2];
+                run_try(occ, k, req, s2, r, &lowest_ok, self);
+                if (r.done && r.ok) {
+                    uint32_t lo = lowest_ok.load(std::memory_order_relaxed);
+                    while (self < lo && !lowest_ok.compare_exchange_weak(lo, self, std::memory_order_relaxed)) {
+                    }
+                }
+            }
+        });
+    };
+    TryResult cur;
     for (uint32_t t = 1; t <= tries; ++t) {
-        if (t >= 2) {
-            tp.rot_div += k.space_failure_rotation_increment;
-            tp.step_scale += k.space_failure_forward_increment;
-            budget_f *= k.space_failure_max_expansions_coefficient;
-            tp.budget = static_cast<uint32_t>(budget_f);
+        next_try(tp, budget_f, t, dist, best_progress, k, req);
+        TryResult* r = nullptr;
+        if (t >= 2 && !spec.empty()) {
+            TryResult& sp = spec[t - 2];
+            if (!(sp.done && same_params(sp.tp, tp)) && t < tries) wave(t);  // the wave runs try t exactly
+            if (sp.done && same_params(sp.tp, tp)) r = &sp;  // the speculative run had exactly this try's parameters
         }
-        if (t >= 3) {
-            tp.weight_dist = std::max(tp.weight_dist + k.space_failure_distance_cutoff_coefficient * dist, best_progress);
-            tp.heuristic_div *= k.current_path_cost_coefficient_space;
+        if (!r) {
+            cur.tp = tp;
+            run_try(occ, k, req, sc, cur, nullptr, 0);
+            r = &cur;
         }
-        if (t >= 4) tp.mask = kSpaceMoving | kSpaceStatic;
-        if (t >= 5) tp.speed = req.speed * 0.5f;
-        tp.facing = t == 1;  // OI tactical: from try 2 the facing requirement is dropped
-        Search s{occ, k, req, tp, sc};
-        const bool ok = s.run(chain);
         out.tries = t;
-        out.pushes += s.pushes;
-        best_progress = std::max(best_progress, s.best_progress);
-        if (ok) {
-            chain_to_waypoints(chain, req, tp.speed, s.step_deg, out.wps);
+        out.pushes += r->pushes;
+        best_progress = std::max(best_progress, r->best_progress);
+        if (r->ok) {
+            chain_to_waypoints(r->chain, req, r->tp.speed, r->step_deg, out.wps);
             out.ok = true;
             return true;
         }

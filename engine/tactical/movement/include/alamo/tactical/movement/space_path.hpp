@@ -74,6 +74,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/parallel.hpp"
 #include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/tactical/movement/constants.hpp"
 #include "alamo/tactical/movement/heap.hpp"
@@ -290,6 +291,14 @@ struct SpaceScratch {
 
 bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& scratch,
                      SpacePath& out);
+// SIMP sp2: the same, with the retries run in parallel through `pf` (null: serial). Try 1 runs alone; when it fails,
+// tries 2..N run at once with the parameters the serial chain would give them if no try improved on try 1's best
+// progress, and a try past the lowest success stops early. The tries are then walked in order like the serial loop: a
+// speculative try is used only when its parameters equal the serial chain's (bit for bit), else that try and the ones
+// after it run again in parallel from there. So the result (waypoints, tries, pushes, fallback) is the serial loop's
+// for any worker count and timing.
+bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, const SpaceRequest& req, SpaceScratch& scratch,
+                     SpacePath& out, const ParallelFor* pf);
 
 // Destination search (§2.4, 0x59caa0): goal if free, else biased rings starting at radius * 1.34,
 // +50 per ring, 40 rings; `reserved` = other group members' destinations (with their radii),
