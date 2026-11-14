@@ -25,6 +25,7 @@
 #include "alamo/sim/bench_scenario.hpp"
 #include "alamo/sim/bench_stats.hpp"
 #include "crc_out.hpp"
+#include "alamo/jobs/topology.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -274,6 +275,7 @@ int not_comparable(const BenchOptions& opt, const std::string& why) {
 
 // ================================================================================================= --bench
 int bench_run(const BenchOptions& opt) {
+    (void)alamo::jobs::raise_current_thread_priority();  // SIMP sp1: the sim thread one step up (wall clock only)
     std::string err;
     bench::Scenario sc;
     if (!bench::Scenario::load(opt.scenario, sc, &err)) {

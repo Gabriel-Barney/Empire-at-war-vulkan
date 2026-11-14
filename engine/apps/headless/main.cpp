@@ -157,6 +157,7 @@
 #include "skirmish_run.hpp"  // A1 stage 2
 #include "battle_run.hpp"
 #include "bench_run.hpp"  // BM1
+#include "alamo/jobs/topology.hpp"  // sp1: OS hints
 #include "map_run.hpp"
 #include "save_run.hpp"  // N1
 #endif
@@ -1275,6 +1276,7 @@ static int headless_main(int argc, char** argv) {
 // results and CRCs are unchanged. Runs that tick several hosts in turn (--selfcheck, --check-workers) report them together.
 int main(int argc, char** argv) {
     alamo::vfs::install_steam_workshop_lookup();  // modc t10: STEAMMOD= from the Steam library folders
+    (void)alamo::jobs::disable_power_throttling();  // SIMP sp1: wall clock only (the sim thread's priority: bench_run)
     // Q5: an uncaught exception (e.g. mod data past a fixed limit) names itself instead of a silent 0xC0000409 exit.
     std::set_terminate([] {
         try {

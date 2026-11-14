@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "alamo/jobs/jobs.hpp"
+#include "alamo/jobs/topology.hpp"
 #include "alamo/test/support.hpp"
 
 using namespace alamo::jobs;
@@ -867,6 +868,177 @@ static void test_scratch() {
     CHECK(thread_scratch().bytes_in_use() == 0);
 }
 
+// sp1: strict priorities, critical work between chunks of an AI loop, inline small forks, pool plan.
+static void test_priority_order() {
+    section("sp1: critical > AI > background");
+    JobSystem js({1});
+    std::atomic<bool> release{false}, started{false};
+    JobCounter block;
+    js.spawn(block, [&] {
+        started = true;
+        while (!release.load()) std::this_thread::yield();
+    });
+    while (!started.load()) std::this_thread::yield();
+    std::mutex m;
+    std::vector<char> order;
+    auto rec = [&](char c) {
+        std::lock_guard lk(m);
+        order.push_back(c);
+    };
+    JobCounter all;
+    js.spawn(all, [&] { rec('B'); }, Priority::Background);
+    js.spawn(all, [&] { rec('A'); }, Priority::Ai);
+    js.spawn(all, [&] { rec('C'); }, Priority::Critical);
+    // The main thread only polls (a wait would help with C, or claim its own A / B), so the worker alone picks the order.
+    release = true;
+    while (!block.done() || !all.done()) std::this_thread::yield();
+    CHECK(order.size() == 3);
+    if (order.size() == 3) CHECK(order[0] == 'C' && order[1] == 'A' && order[2] == 'B');
+
+    // A critical waiter never runs an AI job; an AI thread (ScopedPriority) runs AI work while it waits.
+    std::atomic<bool> go{false}, busy_started{false};
+    JobCounter busy;
+    js.spawn(busy, [&] {
+        busy_started = true;
+        while (!go.load()) std::this_thread::yield();
+    });
+    while (!busy_started.load()) std::this_thread::yield();
+    std::thread::id ai_ran_on;
+    JobCounter ai_job;
+    js.spawn(ai_job, [&] { ai_ran_on = std::this_thread::get_id(); }, Priority::Ai);
+    std::atomic<uint32_t> sum{0};
+    js.parallel_for(64, 1, [&](uint32_t b, uint32_t e) { sum.fetch_add(e - b); });  // critical: returns without the AI job
+    CHECK(sum.load() == 64);
+    CHECK(!ai_job.done());
+    {
+        ScopedPriority ai(js, Priority::Ai);
+        js.wait(ai_job);  // claims and runs its own AI job while the worker is busy
+    }
+    CHECK(ai_ran_on == std::this_thread::get_id());
+    go = true;
+    js.wait(busy);
+}
+
+static void test_critical_between_ai_chunks() {
+    section("sp1: critical jobs run between chunks of an AI loop");
+    JobSystem js({2});
+    std::atomic<bool> loop_done{false}, crit_done_before_loop{false};
+    std::atomic<uint32_t> chunks{0};
+    std::thread ai([&] {
+        ScopedPriority p(js, Priority::Ai);
+        js.parallel_for(400, 1, [&](uint32_t, uint32_t) {
+            chunks.fetch_add(1);
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        });
+        loop_done = true;
+    });
+    while (chunks.load() < 10) std::this_thread::yield();
+    JobCounter c;
+    js.spawn(c, [&] { crit_done_before_loop = !loop_done.load(); });
+    // Poll, not wait (a wait would run the job here): a thread that finishes an AI chunk must take it before the next one.
+    while (!c.done()) std::this_thread::yield();
+    CHECK(crit_done_before_loop.load());
+    ai.join();
+    CHECK(chunks.load() == 400);
+}
+
+static void test_inline_small_forks() {
+    section("sp1: small loops run inline, large ones fork");
+    {
+        JobSystem js({4});
+        std::atomic<uint32_t> sum{0};
+        for (int r = 0; r < 20; ++r) js.parallel_for(64, 1, [&](uint32_t b, uint32_t e) { sum.fetch_add(e - b); });
+        CHECK(sum.load() == 20u * 64u);
+        CHECK(js.inline_forks() >= 15);  // the first call measures; tiny work runs inline after that
+    }
+    {
+        JobSystemConfig cfg;
+        cfg.workers = 4;
+        cfg.inline_small = false;
+        JobSystem js(cfg);
+        for (int r = 0; r < 10; ++r) js.parallel_for(64, 1, [](uint32_t, uint32_t) {});
+        CHECK(js.inline_forks() == 0);
+    }
+    {
+        JobSystem js({4});
+        for (int r = 0; r < 3; ++r) {
+            const auto before = js.executed_per_slot();
+            js.parallel_for(32, 1, [](uint32_t, uint32_t) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
+            const auto after = js.executed_per_slot();
+            uint64_t helped = 0;
+            for (size_t s = 1; s < after.size(); ++s) helped += after[s] - before[s];
+            CHECK(helped > 0);  // ~32 ms of work: never inline
+        }
+        CHECK(js.inline_forks() == 0);
+    }
+    {
+        // An inline loop still throws the lowest failing chunk and runs nothing after it (serial semantics).
+        JobSystem js({4});
+        for (int r = 0; r < 5; ++r) {
+            bool caught = false;
+            try {
+                js.parallel_for(16, 1, [&](uint32_t b, uint32_t) {
+                    if (b == 3) throw std::runtime_error("3");
+                });
+            } catch (const std::runtime_error& e) {
+                caught = std::string(e.what()) == "3";
+            }
+            CHECK(caught);
+        }
+    }
+}
+
+static void test_pool_plan() {
+    section("sp1: pool plan from a topology");
+    auto make = [](uint32_t cores, uint32_t smt, uint8_t eff, uint32_t llc, uint32_t core_base, uint32_t id_base) {
+        std::vector<LogicalCpu> v;
+        for (uint32_t c = 0; c < cores; ++c)
+            for (uint32_t t = 0; t < smt; ++t) {
+                LogicalCpu l;
+                l.cpu_set_id = id_base + c * smt + t;
+                l.number = static_cast<uint8_t>(id_base - 256 + c * smt + t);
+                l.core = core_base + c;
+                l.llc = llc;
+                l.efficiency = eff;
+                v.push_back(l);
+            }
+        return v;
+    };
+    {
+        CpuTopology t;  // 8 cores x 2 SMT, one L3 (7800X3D-like)
+        t.cpus = make(8, 2, 0, 0, 0, 256);
+        const PoolPlan p = plan_pool(t);
+        CHECK(p.cores == 8 && p.workers == 6 && p.physical_total == 8 && p.logical_total == 16 && !p.hybrid);
+        CHECK(p.cpu_set_ids.size() == 8 && p.cpu_set_ids[0] == 256 && p.cpu_set_ids[1] == 258);
+    }
+    {
+        CpuTopology t;  // hybrid: 8 P-cores with SMT (class 1) + 16 E-cores (class 0), one L3
+        t.cpus = make(8, 2, 1, 0, 0, 256);
+        const auto e = make(16, 1, 0, 0, 8, 272);
+        t.cpus.insert(t.cpus.end(), e.begin(), e.end());
+        const PoolPlan p = plan_pool(t);
+        CHECK(p.hybrid && p.cores == 8 && p.workers == 6 && p.physical_total == 24);
+    }
+    {
+        CpuTopology t;  // dual CCD: 8 + 8 cores, the second L3 larger (V-cache)
+        t.cpus = make(8, 2, 0, 0, 0, 256);
+        const auto b = make(8, 2, 0, 1, 8, 272);
+        t.cpus.insert(t.cpus.end(), b.begin(), b.end());
+        t.l3.push_back({0, 0xFFFFull, 32ull << 20});
+        t.l3.push_back({0, 0xFFFF0000ull, 96ull << 20});
+        const PoolPlan p = plan_pool(t);
+        CHECK(p.domains == 2 && p.cores == 8 && p.cpu_set_ids.size() == 8 && p.cpu_set_ids[0] == 272);
+    }
+    {
+        CpuTopology t;  // two cores: still one worker
+        t.cpus = make(2, 1, 0, 0, 0, 256);
+        CHECK(plan_pool(t).workers == 1);
+        CHECK(plan_pool(CpuTopology{}).cores == 0);
+    }
+    CHECK(JobSystem::default_worker_count() >= 1);
+    std::printf("   machine: %s\n", machine_pool().describe().c_str());
+}
+
 int main() {
     test_config();
     test_stress();
@@ -886,6 +1058,10 @@ int main() {
     test_for_waits_on_chunks();
     test_background_cap();
     test_scratch();
+    test_priority_order();
+    test_critical_between_ai_chunks();
+    test_inline_small_forks();
+    test_pool_plan();
     std::printf(g_fail ? "alamo_jobs_tests: %d failure(s)\n" : "alamo_jobs_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;
 }
