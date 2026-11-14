@@ -125,186 +125,189 @@ void MovementSystem::commit(objects::ObjectStore& store) const {
 // ---------------------------------------------------------------- CRC
 void MovementSystem::hash_units(StateHasher& h) const {
     h.u32(quota_used_);
-    h.u32(static_cast<uint32_t>(units_.size()));
-    for (const Unit& u : units_) {
-        h.i32(u.d.id);
-        h.f32(u.m.pos.x);
-        h.f32(u.m.pos.y);
-        h.f32(u.z);
-        h.f32(u.m.yaw);
-        h.f32(u.m.speed);
-        h.u8(static_cast<uint8_t>(u.m.state));
-        h.u32(u.m.next);
-        h.u32(static_cast<uint32_t>(u.m.path.size()));
-        for (const V2& p : u.m.path) {
-            h.f32(p.x);
-            h.f32(p.y);
-        }
-        h.boolean(u.has_goal);
-        h.boolean(u.need_path);
-        h.boolean(u.arrived);
-        h.f32(u.goal.x);
-        h.f32(u.goal.y);
-        h.u32(u.start_frame);
-        h.u32(u.pend);            // cu8j t01
-        h.boolean(u.adopted);     // cu8j t02
-        // s78n t24: Unit::blocked_frames / replans are gone (the blocked-frames re-plan); their constants keep the format
-        h.u32(0);
-        h.u32(0);
-        h.u32(u.path_change);  // s78n t18 (in the place of the dropped Unit::waits; 0 in space: the format is unchanged)
-        h.i32(u.check_countdown);
-        // s78n t23: Unit::speed_cap / hold_until / nudge_frames are gone (the MovingVsMoving stand-in); their constants
-        // keep the hash format (the space goldens do not move)
-        h.f32(3.0e38f);
-        h.u32(0);
-        h.u32(0);
-        h.boolean(u.following);
-        h.u32(u.path_start);
-        h.u32(static_cast<uint32_t>(u.wps.size()));
-        for (const SpaceWaypoint& w : u.wps) {
-            h.f32(w.pos.x);
-            h.f32(w.pos.y);
-            h.f32(w.heading);
-            h.f32(w.time);
-        }
-        h.boolean(u.turning);
-        if (u.aturn != LocoState::None) {  // s78l t02: the arrival turn state, hashed only while a turn runs
-            h.u8(static_cast<uint8_t>(u.aturn));
-            if (u.aturn_start) h.u8(0xE9);  // s78n t26.2: a start turn in place
-            h.f32(u.aturn_rate);
-            h.i32(u.tclip);
-            h.u32(u.tclip_start);
-            h.f32(u.tclip_speed);
-        }
-        h.f32(u.jiggle.x);  // OI tactical
-        h.f32(u.jiggle.y);
-        h.boolean(u.in_formation);
-        if (u.d.team_container) {  // s78n t03: appended only for squad containers and their members
-            h.u8(0xC7);
-            h.boolean(u.laid_out);  // s78n t14
-            h.f32(u.lay_dir.x);
-            h.f32(u.lay_dir.y);
-            h.boolean(u.spread);
-            h.boolean(u.team_target);
-            h.boolean(u.coast);  // s78n t18
-            h.boolean(u.fturn);
-            h.boolean(u.path_started);
-        }
-        if (u.anchor >= 0) {
-            h.i32(u.anchor);
-            h.f32(u.tslot.x);
-            h.f32(u.tslot.y);
-            h.u32(u.tindex);
-            h.u8(u.recovery);  // s78n t14: the recovery state (was a bool)
-            h.u32(u.start_delay);  // s78n t14
-        }
-        if (u.exit_host >= 0) {  // s78n t18: the garrison-host gate of a unit that left, only while set
-            h.u8(0xE7);
-            h.i32(u.exit_host);
-        }
-        if (u.d.no_locomotor) {  // s78n t20 batch 1: an object without a locomotor (a death clone), only for such a unit
-            h.u8(0xD1);
-            h.boolean(u.d.death_clone_obstacle);
-        }
-        if (!u.m.frac.empty() || u.m.turn_done) {  // s78n t26.2: the order path's fractions / turn-done byte (land only)
-            h.u8(0xEA);
-            h.boolean(u.m.turn_done);
-            h.u32(static_cast<uint32_t>(u.m.frac.size()));
-            for (const float f : u.m.frac) h.f32(f);
-        }
-        // s78n t26 closing review (land only): a Walk_Transition unit's clip state, only while it is not the default
-        if (u.m.wt_clip != -1 || u.m.wt_pos != 0.0f || u.m.wt_rate != 0.0f || u.m.wt_f4 != 0.0f || u.m.wt_f0 != 0.0f) {
-            h.u8(0x35);
-            h.i32(u.m.wt_clip);
-            h.f32(u.m.wt_pos);
-            h.f32(u.m.wt_rate);
-            h.f32(u.m.wt_f4);
-            h.f32(u.m.wt_f0);
-        }
-        // s78n t26.4 (land only): the coast vector, the previous tick's position and an unstarted order path
-        if (u.m.last_dir.x != 0.0f || u.m.last_dir.y != 0.0f || u.prev_pos.x != 0.0f || u.prev_pos.y != 0.0f || !u.m.started) {
-            h.u8(0xEB);
-            h.f32(u.m.last_dir.x);
-            h.f32(u.m.last_dir.y);
-            h.f32(u.prev_pos.x);
-            h.f32(u.prev_pos.y);
-            h.boolean(u.m.started);
-        }
-        if (u.hover != 0 || u.hover_off != 0.0f) {  // s78n t18: the hover state, only once it left the ground
-            h.u8(0xE8);
-            h.u8(u.hover);
-            h.f32(u.hover_off);
-        }
-        if (!u.around.empty()) {  // s78n t18: the top path's id list (decision step 3), only while any
-            h.u8(0xD7);
-            h.u32(u.around_frame);
-            h.u32(static_cast<uint32_t>(u.around.size()));
-            for (const ObjectId id : u.around) h.i32(id);
-        }
-        if (u.form_id != 0 || u.self_arrive) {  // s78n t20: the formation of the last land order (land only)
-            h.u8(0xF7);
-            h.u32(u.form_id);
-            h.f32(u.form_slot.x);
-            h.f32(u.form_slot.y);
-            h.boolean(u.self_arrive);
-            if (u.self_arrive) {  // s78n t20 F5
-                h.f32(u.self_goal.x);
-                h.f32(u.self_goal.y);
+    // SIMP sp6: tree hash, blocks of kCrcBlockItems hashed in parallel (same digest for any worker count)
+    hash_blocks(h, static_cast<uint32_t>(units_.size()), [&](StateHasher& bh, uint32_t blk_first, uint32_t blk_last) {
+        for (uint32_t blk_i = blk_first; blk_i < blk_last; ++blk_i) {
+            const Unit& u = units_[blk_i];
+            bh.i32(u.d.id);
+            bh.f32(u.m.pos.x);
+            bh.f32(u.m.pos.y);
+            bh.f32(u.z);
+            bh.f32(u.m.yaw);
+            bh.f32(u.m.speed);
+            bh.u8(static_cast<uint8_t>(u.m.state));
+            bh.u32(u.m.next);
+            bh.u32(static_cast<uint32_t>(u.m.path.size()));
+            for (const V2& p : u.m.path) {
+                bh.f32(p.x);
+                bh.f32(p.y);
+            }
+            bh.boolean(u.has_goal);
+            bh.boolean(u.need_path);
+            bh.boolean(u.arrived);
+            bh.f32(u.goal.x);
+            bh.f32(u.goal.y);
+            bh.u32(u.start_frame);
+            bh.u32(u.pend);            // cu8j t01
+            bh.boolean(u.adopted);     // cu8j t02
+            // s78n t24: Unit::blocked_frames / replans are gone (the blocked-frames re-plan); their constants keep the format
+            bh.u32(0);
+            bh.u32(0);
+            bh.u32(u.path_change);  // s78n t18 (in the place of the dropped Unit::waits; 0 in space: the format is unchanged)
+            bh.i32(u.check_countdown);
+            // s78n t23: Unit::speed_cap / hold_until / nudge_frames are gone (the MovingVsMoving stand-in); their constants
+            // keep the hash format (the space goldens do not move)
+            bh.f32(3.0e38f);
+            bh.u32(0);
+            bh.u32(0);
+            bh.boolean(u.following);
+            bh.u32(u.path_start);
+            bh.u32(static_cast<uint32_t>(u.wps.size()));
+            for (const SpaceWaypoint& w : u.wps) {
+                bh.f32(w.pos.x);
+                bh.f32(w.pos.y);
+                bh.f32(w.heading);
+                bh.f32(w.time);
+            }
+            bh.boolean(u.turning);
+            if (u.aturn != LocoState::None) {  // s78l t02: the arrival turn state, hashed only while a turn runs
+                bh.u8(static_cast<uint8_t>(u.aturn));
+                if (u.aturn_start) bh.u8(0xE9);  // s78n t26.2: a start turn in place
+                bh.f32(u.aturn_rate);
+                bh.i32(u.tclip);
+                bh.u32(u.tclip_start);
+                bh.f32(u.tclip_speed);
+            }
+            bh.f32(u.jiggle.x);  // OI tactical
+            bh.f32(u.jiggle.y);
+            bh.boolean(u.in_formation);
+            if (u.d.team_container) {  // s78n t03: appended only for squad containers and their members
+                bh.u8(0xC7);
+                bh.boolean(u.laid_out);  // s78n t14
+                bh.f32(u.lay_dir.x);
+                bh.f32(u.lay_dir.y);
+                bh.boolean(u.spread);
+                bh.boolean(u.team_target);
+                bh.boolean(u.coast);  // s78n t18
+                bh.boolean(u.fturn);
+                bh.boolean(u.path_started);
+            }
+            if (u.anchor >= 0) {
+                bh.i32(u.anchor);
+                bh.f32(u.tslot.x);
+                bh.f32(u.tslot.y);
+                bh.u32(u.tindex);
+                bh.u8(u.recovery);  // s78n t14: the recovery state (was a bool)
+                bh.u32(u.start_delay);  // s78n t14
+            }
+            if (u.exit_host >= 0) {  // s78n t18: the garrison-host gate of a unit that left, only while set
+                bh.u8(0xE7);
+                bh.i32(u.exit_host);
+            }
+            if (u.d.no_locomotor) {  // s78n t20 batch 1: an object without a locomotor (a death clone), only for such a unit
+                bh.u8(0xD1);
+                bh.boolean(u.d.death_clone_obstacle);
+            }
+            if (!u.m.frac.empty() || u.m.turn_done) {  // s78n t26.2: the order path's fractions / turn-done byte (land only)
+                bh.u8(0xEA);
+                bh.boolean(u.m.turn_done);
+                bh.u32(static_cast<uint32_t>(u.m.frac.size()));
+                for (const float f : u.m.frac) bh.f32(f);
+            }
+            // s78n t26 closing review (land only): a Walk_Transition unit's clip state, only while it is not the default
+            if (u.m.wt_clip != -1 || u.m.wt_pos != 0.0f || u.m.wt_rate != 0.0f || u.m.wt_f4 != 0.0f || u.m.wt_f0 != 0.0f) {
+                bh.u8(0x35);
+                bh.i32(u.m.wt_clip);
+                bh.f32(u.m.wt_pos);
+                bh.f32(u.m.wt_rate);
+                bh.f32(u.m.wt_f4);
+                bh.f32(u.m.wt_f0);
+            }
+            // s78n t26.4 (land only): the coast vector, the previous tick's position and an unstarted order path
+            if (u.m.last_dir.x != 0.0f || u.m.last_dir.y != 0.0f || u.prev_pos.x != 0.0f || u.prev_pos.y != 0.0f || !u.m.started) {
+                bh.u8(0xEB);
+                bh.f32(u.m.last_dir.x);
+                bh.f32(u.m.last_dir.y);
+                bh.f32(u.prev_pos.x);
+                bh.f32(u.prev_pos.y);
+                bh.boolean(u.m.started);
+            }
+            if (u.hover != 0 || u.hover_off != 0.0f) {  // s78n t18: the hover state, only once it left the ground
+                bh.u8(0xE8);
+                bh.u8(u.hover);
+                bh.f32(u.hover_off);
+            }
+            if (!u.around.empty()) {  // s78n t18: the top path's id list (decision step 3), only while any
+                bh.u8(0xD7);
+                bh.u32(u.around_frame);
+                bh.u32(static_cast<uint32_t>(u.around.size()));
+                for (const ObjectId id : u.around) bh.i32(id);
+            }
+            if (u.form_id != 0 || u.self_arrive) {  // s78n t20: the formation of the last land order (land only)
+                bh.u8(0xF7);
+                bh.u32(u.form_id);
+                bh.f32(u.form_slot.x);
+                bh.f32(u.form_slot.y);
+                bh.boolean(u.self_arrive);
+                if (u.self_arrive) {  // s78n t20 F5
+                    bh.f32(u.self_goal.x);
+                    bh.f32(u.self_goal.y);
+                }
+            }
+            if (!u.lane.empty()) {  // s78p: a lane the next plan takes
+                bh.u8(0x1A);
+                bh.u32(static_cast<uint32_t>(u.lane.size()));
+                for (const V2 p : u.lane) {
+                    bh.f32(p.x);
+                    bh.f32(p.y);
+                }
+                bh.f32(u.lane_d);
+                if (u.lane_z != 0.0f) bh.f32(u.lane_z);  // bkm1 t06
+            }
+            if (u.lp.secondary) {  // bkm1 t08 (land only): the secondary yaw of a UseSecondaryFacing unit
+                bh.u8(0xED);
+                bh.f32(u.m.yaw2);
+            }
+            if (u.m.end_z != 0.0f) {  // bkm1 t06 (land only): a stored last-waypoint height
+                bh.u8(0xEC);
+                bh.f32(u.m.end_z);
+                bh.f32(u.m.end_at.x);
+                bh.f32(u.m.end_at.y);
+            }
+            if (u.atk_rho > 0.0f || u.atk_form != 0) {  // s78n t25.2: the attack block of a land attack order (land only)
+                bh.u8(0xA5);
+                bh.f32(u.atk_theta);
+                bh.f32(u.atk_rho);
+                bh.u32(u.atk_form);
+                bh.i32(u.atk_target);
+            }
+            if (u.pushed) {  // a1k t03: hashed only while a collision-owned record is on top of the stack
+                if (u.push_flee) bh.u8(0x07);  // s78n t14 part B: a crush-flee path (kind 7)
+                bh.u32(u.push_next);
+                bh.u32(u.push_turn_done ? 1u : 0u);  // s78n t26.2: the record's turn-done byte (in the place of push_turn_first)
+                bh.u32(static_cast<uint32_t>(u.push_path.size()));
+                for (const V2& p : u.push_path) {
+                    bh.f32(p.x);
+                    bh.f32(p.y);
+                }
+                bh.u32(static_cast<uint32_t>(u.push_frac.size()));  // s78n t26.2: the record's speed fractions
+                for (const float f : u.push_frac) bh.f32(f);
+                bh.u8(u.push_kind);  // s78n t20: the record's kind, owner, weight, resume index and hold tags
+                bh.u8(u.push_weight);
+                bh.u32(u.push_owner);
+                bh.u32(u.push_resume);
+                bh.u32(static_cast<uint32_t>(u.push_tags.size()));
+                for (const HoldTag& t : u.push_tags) {
+                    bh.u32(t.index);
+                    bh.i32(t.obstacle);
+                    bh.f32(t.pt.x);
+                    bh.f32(t.pt.y);
+                    bh.f32(t.dir.x);
+                    bh.f32(t.dir.y);
+                }
             }
         }
-        if (!u.lane.empty()) {  // s78p: a lane the next plan takes
-            h.u8(0x1A);
-            h.u32(static_cast<uint32_t>(u.lane.size()));
-            for (const V2 p : u.lane) {
-                h.f32(p.x);
-                h.f32(p.y);
-            }
-            h.f32(u.lane_d);
-            if (u.lane_z != 0.0f) h.f32(u.lane_z);  // bkm1 t06
-        }
-        if (u.lp.secondary) {  // bkm1 t08 (land only): the secondary yaw of a UseSecondaryFacing unit
-            h.u8(0xED);
-            h.f32(u.m.yaw2);
-        }
-        if (u.m.end_z != 0.0f) {  // bkm1 t06 (land only): a stored last-waypoint height
-            h.u8(0xEC);
-            h.f32(u.m.end_z);
-            h.f32(u.m.end_at.x);
-            h.f32(u.m.end_at.y);
-        }
-        if (u.atk_rho > 0.0f || u.atk_form != 0) {  // s78n t25.2: the attack block of a land attack order (land only)
-            h.u8(0xA5);
-            h.f32(u.atk_theta);
-            h.f32(u.atk_rho);
-            h.u32(u.atk_form);
-            h.i32(u.atk_target);
-        }
-        if (u.pushed) {  // a1k t03: hashed only while a collision-owned record is on top of the stack
-            if (u.push_flee) h.u8(0x07);  // s78n t14 part B: a crush-flee path (kind 7)
-            h.u32(u.push_next);
-            h.u32(u.push_turn_done ? 1u : 0u);  // s78n t26.2: the record's turn-done byte (in the place of push_turn_first)
-            h.u32(static_cast<uint32_t>(u.push_path.size()));
-            for (const V2& p : u.push_path) {
-                h.f32(p.x);
-                h.f32(p.y);
-            }
-            h.u32(static_cast<uint32_t>(u.push_frac.size()));  // s78n t26.2: the record's speed fractions
-            for (const float f : u.push_frac) h.f32(f);
-            h.u8(u.push_kind);  // s78n t20: the record's kind, owner, weight, resume index and hold tags
-            h.u8(u.push_weight);
-            h.u32(u.push_owner);
-            h.u32(u.push_resume);
-            h.u32(static_cast<uint32_t>(u.push_tags.size()));
-            for (const HoldTag& t : u.push_tags) {
-                h.u32(t.index);
-                h.i32(t.obstacle);
-                h.f32(t.pt.x);
-                h.f32(t.pt.y);
-                h.f32(t.dir.x);
-                h.f32(t.dir.y);
-            }
-        }
-    }
+    });
     h.u32(static_cast<uint32_t>(crush_.size()));  // OI tactical
     for (const CrushEvent& e : crush_) {
         h.i32(e.crusher);

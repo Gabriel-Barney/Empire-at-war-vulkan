@@ -949,7 +949,8 @@ static void test_critical_between_ai_chunks() {
     JobSystem js({2});
     constexpr uint32_t kChunks = 400;
     std::atomic<uint32_t> chunks{0}, chunks_at_critical{kChunks};
-    std::atomic<bool> crit_ran{false}, ai_blocked{false};
+    std::atomic<uint32_t> started{0};
+    std::atomic<bool> crit_ran{false}, ai_blocked{false}, spawned{false};
     std::thread::id ai_id;
     std::thread ai([&] {
         ai_id = std::this_thread::get_id();
@@ -961,19 +962,26 @@ static void test_critical_between_ai_chunks() {
                 const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
                 while (!crit_ran.load() && std::chrono::steady_clock::now() < until) std::this_thread::yield();
             }
+            // Chunks after the first 10 wait (5 s at most) until the critical job is queued, so a preempted test thread
+            // cannot let the helpers run the loop ahead before it spawns the job. Load-proof as well.
+            if (started.fetch_add(1) >= 10) {
+                const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (!spawned.load() && std::chrono::steady_clock::now() < until) std::this_thread::yield();
+            }
             chunks.fetch_add(1);
             busy_us(50);  // busy, not sleep: Windows rounds short sleeps up to ~15 ms
         });
     });
-    while (chunks.load() < 10) std::this_thread::yield();
+    while (started.load() < 10) std::this_thread::yield();
     JobCounter c;
     js.spawn(c, [&] {
         chunks_at_critical = chunks.load();
         crit_ran = true;
     });
+    spawned = true;
     // Poll, not wait (a wait would run the job here): a helper that finishes an AI chunk takes it before its next one.
     while (!c.done()) std::this_thread::yield();
-    CHECK(chunks_at_critical.load() < kChunks - 100);
+    CHECK(chunks_at_critical.load() < 50);  // the helpers' in-flight chunks only
     ai.join();
     CHECK(chunks.load() == kChunks);
 }
