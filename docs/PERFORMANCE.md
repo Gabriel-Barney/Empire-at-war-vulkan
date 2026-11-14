@@ -1068,3 +1068,39 @@ Reading the sccache debug log of the third-path build, the 275 remaining misses 
 2. **`-DALAMO_*_DIR="<absolute path>"` compile definitions** on about 25 test TUs (golden, log and data dirs): the path is in the command line and the code. Fix: tests read the directory at run time (set by the ctest entry), done together with the exe merges (t03/t04).
 Note (bo1, dev 64d1d8ce): the build now scopes cache entries per checkout on purpose (`alamo_cache_scope.h`; cross-checkout hits replayed foreign `/showIncludes` paths into `.ninja_deps`), so these numbers describe the state before that change and neither cause needs fixing for cache sharing.
 Use `SCCACHE_LOG=debug SCCACHE_ERROR_LOG=<file>` and grep `compile result: cache miss` to list the misses.
+
+## Test executables: inventory (bo2 t02, 2026-11-14)
+
+`python tools/analysis/exe_inventory.py <dir> [tree]` (script header has the ctest step) lists every exe of a build tree with size, ninja link-step time and ctest run time. MSVC Release tree, 16 cores, taken after the bo3 splits: **135 exes** (the group text said 115), 120 of them with a ctest entry, 262 ctest entries in all (the "before" list for the merge is `ctest -N`, 262 lines; 227 entries map to an exe by their command).
+
+| Family | exes | with tests | ctest entries | size MB | link steps (s, sum) | test run (s, sum) |
+|---|---|---|---|---|---|---|
+| ai | 6 | 6 | 7 | 10.9 | 4.6 | 56 |
+| anim | 1 | 1 | 1 | 0.8 | 0.6 | 5 |
+| assets | 1 | 1 | 1 | 0.9 | 0.6 | 5 |
+| audio | 2 | 2 | 2 | 2.5 | 1.2 | 3 |
+| commands | 1 | 1 | 1 | 0.4 | 0.5 | 0 |
+| core | 6 | 6 | 6 | 1.8 | 4.0 | 9 |
+| data | 1 | 1 | 1 | 0.7 | 0.6 | 5 |
+| galactic | 8 | 6 | 8 | 9.0 | 5.0 | 62 |
+| game / apps | 21 | 17 | 23 | 75.0 | 28.6 | 27 |
+| jobs | 3 | 2 | 2 | 0.9 | 1.6 | 64 |
+| lua | 12 | 12 | 12 | 24.2 | 11.7 | 17 |
+| materials | 1 | 1 | 1 | 1.5 | 0.8 | 4 |
+| objects | 1 | 1 | 1 | 1.3 | 0.6 | 5 |
+| render | 15 | 15 | 21 | 51.4 | 36.5 | 345 |
+| rhi | 2 | 1 | 2 | 1.0 | 1.0 | 3 |
+| shaderxlat | 2 | 1 | 2 | 2.1 | 1.6 | 70 |
+| sim (apps, `alamo_sim_*`, `alamo_headless`) | 9 | 9 | 99 | 49.5 | 12.1 | 106 |
+| tactical | 22 | 21 | 21 | 24.3 | 15.0 | 61 |
+| terrain | 1 | 1 | 1 | 1.0 | 0.6 | 24 |
+| tools | 7 | 2 | 2 | 2.5 | 5.6 | 1 |
+| ui | 10 | 10 | 10 | 15.2 | 7.5 | 16 |
+| vfs | 2 | 2 | 2 | 1.0 | 1.5 | 2 |
+| video | 1 | 1 | 1 | 0.5 | 0.8 | 13 |
+| **total** | 135 | 120 | 227 | 278 | 143 | 902 |
+
+Reading it:
+- The "link steps" column sums per-step wall time while up to 16 steps ran at once (and compiles competed for the cores), so it overstates the cost. bo1 measured the real number: relinking all 135 exes takes **8.1 s with link.exe, 4.5 s with lld-link** (section "Build times"). A typical single-test edit relinks one exe, about 0.3 s. Merging 80 small exes into 20 runners saves a few seconds of linking on a full relink and nothing on compiling (the same test sources are compiled either way).
+- Test run time is concentrated: render 345 s, sim 106 s, shaderxlat 70 s, jobs 64 s, galactic 62 s, tactical 61 s, ai 56 s (sums of per-test times, run 4 at a time). Merging does not change these.
+- Merge candidates if it is done anyway (one test per exe, small, shared fixtures, in the t03/t04 modules): core 6 (atomic_file, dmath, profile, save, sim, tests), vfs 2, galactic 8, ai 6, lua 12, tactical 22 (movement_b2..b5, bkm, cohesion, gaps, t26, save, fog, fog_save, tree_save, garrison, hangar, hyperspace, ...). The lua and tactical families are the biggest (34 exes, 40 MB of exe files). apps / render / ui / audio / video / game are out of scope for this group.
