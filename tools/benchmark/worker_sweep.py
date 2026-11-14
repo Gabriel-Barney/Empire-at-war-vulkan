@@ -56,6 +56,10 @@ def zone_rows(results: dict, scene: str, counts: list[int], patterns: list[str])
     return rows
 
 
+def fmt(v) -> str:
+    return f"{v:.2f}" if isinstance(v, (int, float)) else "?"
+
+
 def table(rows: list[list[str]]) -> str:
     w = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     return "\n".join("  " + "  ".join(c.ljust(w[i]) if i == 0 else c.rjust(w[i]) for i, c in enumerate(r)) for r in rows)
@@ -118,7 +122,7 @@ def main(argv: list[str]) -> int:
         rows = [["metric"] + [f"W{w}" for w in counts]]
         sc: dict = {}
         for key, label in (("median_ms", "median ms"), ("p99_ms", "p99 ms")):
-            rows.append([label] + [" / ".join(f"{d.get('summary', {}).get(key, float('nan')):.2f}" for d in results[name][w]) for w in counts])
+            rows.append([label] + [" / ".join(fmt(d.get("summary", {}).get(key)) for d in results[name][w]) for w in counts])
         rows.append(["busy %"] + [" / ".join(f"{b:.0f}" if b is not None else "?" for b in busy[name][w]) for w in counts])
         base = [d.get("summary", {}).get("median_ms") for d in results[name][counts[0]]]
         ratios = []
