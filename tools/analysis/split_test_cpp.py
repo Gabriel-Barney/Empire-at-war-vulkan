@@ -159,6 +159,9 @@ def head(code):
 FUNC_HEAD = re.compile(r'^static\s+(?!constexpr|const\s+\w+\s*(?:=|\[))(?P<sig>[\w:<>,\s\*&]+?)\b(?P<name>\w+)\s*\((?P<args>.*)\)\s*(?:const\s*)?(?:noexcept\s*)?$', re.S)
 
 
+FUNC_HEAD2 = re.compile(r'^(?:static\s+)?(?P<sig>[\w:<>,\s\*&]+?)\b(?P<name>\w+)\s*\((?P<args>.*)\)\s*(?:const\s*)?(?:noexcept\s*)?$', re.S)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('file')
@@ -240,22 +243,34 @@ def main():
     parts = [[]]
     psize = 0
     in_ns = False
+    mainonly = []
+    st = {'psize': 0}
+
+    def add_part(code, cond, ns=False):
+        if st['psize'] > a.part_kb * 1024 and parts[-1]:
+            parts.append([])
+            st['psize'] = 0
+        body = wrap(cond, code)
+        if ns:
+            body = f'namespace {NS} {{\n' + body + f'}}  // namespace {NS}\n'
+        parts[-1].append(body)
+        st['psize'] += len(code)
+
     for i, it in enumerate(items):
         if i >= main_idx:
             break
         t = it['t']
+        if it['kind'] == 'code' and re.match(r'^void\s*\*?\s*operator\b', it['h']):
+            mainonly.append(t)
+            continue
         if i in movable:
             code = t
             # strip `static ` from the first code occurrence
-            code = re.sub(r'\bstatic\s+', '', code, count=1)
+            code = lead_static(code, '')
             code = strip_defaults(code, it['fn'])
             decl_head = it['sig'] + ' ' + it['fn'] + '(' + it['args'] + ');'
             hdr.append(wrap(it['cond'], decl_head + '\n'))
-            if psize > a.part_kb * 1024 and parts[-1]:
-                parts.append([])
-                psize = 0
-            parts[-1].append(wrap(it['cond'], code))
-            psize += len(code)
+            add_part(code, it['cond'])
             continue
         if it['kind'] == 'pp':
             hdr.append(t)
@@ -266,7 +281,7 @@ def main():
             t = re.sub(r'(\n\}\s*//[^\n]*)?\n*$', lambda m: m.group(0), t)
             t = t.rstrip('\n') + f'\nusing namespace {NS};\n'
             # inside the block: functions/vars need inline
-            hdr.append(inline_block(t))
+            hdr.append(inline_block(t, add_part))
             continue
         hdr.append(inline_top(t, it))
     main_text = ''.join(it['t'] for it in items[main_idx:])
@@ -277,7 +292,7 @@ def main():
     outs = {common_name: header}
     for k, p in enumerate(parts, 1):
         outs[f'{stem}_part{k}.cpp'] = f'// Part {k} of {stem} (bo3 t03: split by position; see {common_name}).\n#include "{common_name}"\n\n' + '\n'.join(x.strip('\n') + '\n' for x in p)
-    outs[stem + '.cpp'] = f'// {stem}: main() (bo3 t03: tests live in {stem}_partN.cpp, shared code in {common_name}).\n#include "{common_name}"\n\n' + main_text
+    outs[stem + '.cpp'] = f'// {stem}: main() (bo3 t03: tests live in {stem}_partN.cpp, shared code in {common_name}).\n#include "{common_name}"\n\n' + ''.join(mainonly) + main_text
     for nme, body in outs.items():
         print(f'  {nme}: {len(body)//1024} KB')
     if a.dry_run:
@@ -287,6 +302,18 @@ def main():
             body = body.replace('\n', '\r\n')
         open(os.path.join(d, nme), 'w', encoding='utf-8', newline='').write(body)
     print('parts:', len(parts), ' add to CMake:', ' '.join(f'{stem}_part{k}.cpp' for k in range(1, len(parts) + 1)))
+
+
+def lead_static(t, repl):
+    """Replace `static ` at the start of the first code line of chunk t (not one inside a body or comment)."""
+    lines = t.split(chr(10))
+    for k, ln in enumerate(lines):
+        st = ln.strip()
+        if not st or st.startswith(('//', '/*', '*')):
+            continue
+        lines[k] = re.sub(r'^(\s*)static\s+', lambda m: m.group(1) + repl, ln, count=1)
+        break
+    return chr(10).join(lines)
 
 
 def split_top(args):
@@ -324,22 +351,22 @@ def inline_top(t, it):
     h = it['h']
     if re.match(r'^(struct|class|enum|union|using|typedef|namespace|extern|static_assert)\b', h) or h.startswith('template'):
         return t
-    if '(' in h and 'static' in h.split('(')[0] or ('(' in h and '{' in strip_comments(t) and not re.search(r'=\s*[^=]', h.split('(')[0])):
+    pre = h.split('=')[0]
+    if '(' in pre and '{' in strip_comments(t):
         # function we keep in the header: inline
-        t = re.sub(r'\bstatic\s+', 'inline ', t, count=1)
-        if not re.search(r'^\s*(?://[^\n]*\n\s*)*(inline|constexpr|template)', t):
-            pass
-        return t
+        t2 = lead_static(t, 'inline ')
+        if t2 == t and not re.search(r'\b(inline|constexpr)\b', pre.split('(')[0]):
+            t2 = add_inline(t)
+        return t2
+    if '(' in pre:
+        return t  # prototype or constructor-style variable: leave
     # variable
-    if h.startswith('static') or h.startswith('const'):
-        if 'constexpr' in h:
-            t = re.sub(r'\bstatic\s+constexpr\b', 'inline constexpr', t, count=1)
-            return t
-        t = re.sub(r'\bstatic\s+', 'inline ', t, count=1)
-        if 'const' in h and 'inline' not in t.split('=')[0]:
-            t = add_inline(t)
-        return t
-    return t
+    if re.search(r'\bconstexpr\b', pre):
+        return lead_static(t, 'inline ') if re.match(r'^static\b', h) else add_inline(t)
+    if re.match(r'^(static\s+)?const\b', h) and '*' not in pre.replace('const', ''):
+        return lead_static(t, '')
+    t2 = lead_static(t, 'inline ')
+    return t2 if t2 != t else add_inline(t)
 
 
 def add_inline(t):
@@ -354,20 +381,46 @@ def add_inline(t):
     return '\n'.join(lines)
 
 
-def inline_block(t):
+def inline_block(t, add_part):
     # sub-chunk the body of `namespace NS { ... }`
     o = t.find('{')
     c = t.rfind('}')
     body = t[o + 1:c]
     subs = scan(body)
     res = []
+    cstack = []
+    dirty = 0
     for s, e, kind in subs:
         sub = body[s:e]
         if kind == 'pp':
+            ds = strip_comments(sub).strip()
+            m = re.match(r'#\s*(\w+)', ds)
+            dn = m.group(1) if m else ''
+            if dn in ('if', 'ifdef', 'ifndef'):
+                cstack.append(ds)
+            elif dn in ('else', 'elif'):
+                dirty += 1
+                cstack.append(ds)  # popped by the matching endif below
+            elif dn == 'endif':
+                while cstack and cstack[-1].startswith(('#else', '#elif', '# else', '# elif')):
+                    cstack.pop()
+                    dirty -= 1
+                if cstack:
+                    cstack.pop()
             res.append(sub)
             continue
         h = head(sub)
-        res.append(inline_top(sub, {'h': h}) if True else sub)
+        fm = FUNC_HEAD2.match(h)
+        if (fm and dirty == 0 and '{' in strip_comments(sub) and '::' not in h.split('(')[0]
+                and not h.startswith('template') and not re.search(r'\b(auto|inline|constexpr|operator)\b', h.split('(')[0])
+                and not re.search(r'=\s*[\{\[]', h)):
+            code = lead_static(sub, '')
+            code = strip_defaults(code, fm.group('name'))
+            decl = fm.group('sig').strip() + ' ' + fm.group('name') + '(' + fm.group('args').strip() + ');' + chr(10)
+            res.append(decl)
+            add_part(code, list(cstack), ns=True)
+            continue
+        res.append(inline_top(sub, {'h': h}))
     return t[:o + 1] + ''.join(res) + t[c:]
 
 

@@ -29,7 +29,7 @@ target_link_libraries(alamo_tactical_abilities PUBLIC alamo_tactical_combat alam
 # laser defense, opportunity fire), a scripted space battle with abilities and hardpoint kills whose
 # CRC log is identical for 1/4/N threads and matches the golden on every compiler, a per-tick
 # allocation count, FoC data checks (ALAMO_FOC_DATA). Regenerate: --write-golden <file>.
-add_executable(alamo_tactical_abilities_tests tests/test_abilities.cpp)
+add_executable(alamo_tactical_abilities_tests tests/test_abilities.cpp tests/test_abilities_part1.cpp tests/test_abilities_part2.cpp)
 target_link_libraries(alamo_tactical_abilities_tests PRIVATE alamo_tactical_abilities alamo_data alamo_test_support)
 # FoC data through the VFS (Data\XML lives in Config.meg in the shipped game).
 if(TARGET alamo_vfs)
