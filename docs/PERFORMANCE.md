@@ -1196,3 +1196,19 @@ p99 follows the medians (land 7.5-9.3 ms at every count; nebula 22-31 ms, from `
 - Biggest zones at W0 (share of tick time): land `tac.ai.perception` 40 %, `crc.battle.ai` 19 %, `ai.goals` 9 %; water
   `tac.ai.perception` 46 %, `crc.battle.ai` 16 %; space_battle_game `tac.ai` 32 %, `tac.movement` 31 %; nebula `tac.movement` 69 %
   (p99 24 ms, one 190 ms `ai.planning` tick); galactic_late `ai.goals` 69 % (p99 4.4 ms, max 22 ms). All serial.
+
+## TypeFacts in the battle AI's perception fill (sp3 t01, 2026-11-14)
+
+`BattleAi::fill` (and the population-cap / space-prevention scans) read a per-battle `TypeFacts[type]` table built once instead
+of ~15 string-keyed `GameObjectTypes::get_*` calls per object (PERF_AUDIT S6). Golden-neutral (CRC logs unchanged, MSVC and clang).
+`land_battle`, `alamo_headless --bench --profile`, default workers, 3 rounds interleaved old / new on one build tree while two
+other lanes built (other-process CPU 10-49 %, printed per run):
+
+| p50 ms | before (3 runs) | after (3 runs) | change |
+|---|---|---|---|
+| tick median | 2.79 / 2.89 / 3.04 | 2.31 / 2.36 / 2.45 | about -17 % |
+| `tac.ai` | 1.03 / 1.10 / 1.18 | 0.54 / 0.56 / 0.61 | about -48 % |
+| `tac.ai.perception` | 0.68 / 0.73 / 0.77 | 0.27 / 0.28 / 0.28 | about -62 % |
+| `crc.battle.ai` | 0.75 / 0.77 / 0.82 | 0.79 / 0.80 / 0.81 | unchanged |
+
+`crc.battle.ai` is now the largest single zone of a land battle tick (simp-core's sp2 / sp6).
