@@ -1013,3 +1013,26 @@ scenes' fingerprints (the rendered runs' CRC logs).
 
 The medians sit near the rendered runs' `sim_ms` in BM3's 2026-11-06 table (1.0 / 1.0 / 2.9 ms, also noisy; the quiet baseline above has 1.6 / 1.6 / 2.9 ms); the p99 and worst ticks here are the
 busy machine. Rerun on a quiet PC before using any of it as a reference.
+
+## Build speed C: header diet and big-file splits (bo3, 2026-11-14)
+
+Static include-closure scan, no compiler: `python tools/analysis/include_cost.py [--top N] [--json f]` (follows project includes under
+`engine/`, std headers by name). Numbers are translation units (TUs) that reach a header, transitively.
+
+| Measure | Before | After |
+|---|---|---|
+| `.cpp` files | 549 | 568 (19 new parts of split files) |
+| TUs reaching `<filesystem>` | 369 | 265 |
+| TUs reaching `sim_crc.hpp` (15 KB) | 269 | 218 |
+| TUs reaching `file_provider.hpp` | 307 | 307 + 19 parts (the header itself fell from 5.1 to 1.8 KB and no longer pulls `<filesystem>`, `<unordered_map>`, `<memory>`) |
+| Project-header bytes over the unchanged TUs | 244.5 MB | 243.5 MB |
+| Largest `.cpp` | 387 KB (`test_movement_gaps`), then 369, 365, 363, 327, 305, 294, 287 | 251 KB (`tactical_ai.cpp`; the eight biggest are now 3-4 parts of at most about 135 KB) |
+
+Widest headers before: `file_provider` 307, `ascii` 309, `bytes` 293, `sim_crc` 269, `galaxy` 263, `xml` 262, `sim_rng` 258; by header bytes parsed
+over all TUs: `combat_system.hpp` 14.9 MB (99 TUs), `movement_system.hpp` 11.3 MB, `tactical_battle.hpp` 11.1 MB, `campaign.hpp` 11.0 MB.
+What changed: `host_fs.hpp` (new; `DirectoryProvider`, path / long-path helpers, host directory ops) split out of `file_provider.hpp`;
+`sim_crc_fwd.hpp` (new) replaces `sim_crc.hpp` in 14 public headers. Test exes and three sim sources were split by position into
+`*_partN.cpp` plus a shared `*_common.hpp` / `*_internal.hpp` in the same CMake target (test names unchanged; one `main` per exe), so an
+edit rebuilds a 120 KB part and the parts compile in parallel. Not done: forward-declaring `game_object_types.hpp` / `game_database.hpp` /
+`campaign.hpp` (their types are used by value), splitting the public `combat_system.hpp` / `movement_system.hpp` / `tactical_battle.hpp`
+(150-200 KB of class body each), unity builds (t04: no PCH measurement from bo1 yet). Wall-clock effect is not measured here.

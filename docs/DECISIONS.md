@@ -126,3 +126,11 @@ The base layer every gameplay system sits on. Done = the engine spawns a map's r
 | 3 | Command/event pipeline: all orders queued and applied at a set tick (lockstep model) | engine/commands (new) + docs/re/COMMANDS.md |
 | 4 | Synced randomness + per-tick whole-state checksum | Q1 (engine/core, engine/jobs, engine/apps) |
 | 5 | Spatial partitioning: near-point, ray, visibility queries; parallel rebuild | S6 (engine/tactical) |
+
+## Big-file splits are by position, with named-namespace helpers (bo3, Gabriel 2026-11-13, lane-bo3 2026-11-14)
+
+A huge `.cpp` is split by `tools/analysis/split_test_cpp.py` into `<stem>.cpp` + `<stem>_partN.cpp` + a shared header, in the same CMake
+target. The file's anonymous namespace becomes the named namespace `bo3split` in that header (helpers are `inline`), so every part shares
+one definition. Test exes keep one `main`, test names and `add_test` entries; sources move only `Class::member` / external function
+definitions. Behaviour, goldens and CRCs are unchanged (no regeneration). New `engine/core` public headers: `host_fs.hpp`,
+`sim_crc_fwd.hpp`; `file_provider.hpp` lost the `<filesystem>` helpers (include `host_fs.hpp` for them).
