@@ -1013,3 +1013,17 @@ scenes' fingerprints (the rendered runs' CRC logs).
 
 The medians sit near the rendered runs' `sim_ms` in BM3's 2026-11-06 table (1.0 / 1.0 / 2.9 ms, also noisy; the quiet baseline above has 1.6 / 1.6 / 2.9 ms); the p99 and worst ticks here are the
 busy machine. Rerun on a quiet PC before using any of it as a reference.
+
+## Compiler-cache hits across worktrees (bo2 t01, 2026-11-14)
+
+Full MSVC build (595 compile requests) in a fresh worktree at another path, sccache v0.19.0 with a warm shared cache:
+
+| Case | Hits / requests | Rate |
+|---|---|---|
+| Before: `CHECK` bakes `__FILE__` (baseline tree, other worktrees' objects in the cache) | 252 / 595 | 42 % |
+| After: `CHECK` prints `source_location` basename (third path) | 320 / 595 | 54 % |
+
+Reading the sccache debug log of the third-path build, the 275 remaining misses have two path-dependent causes (neither is `__FILE__`):
+1. **`-external:I<absolute path>`** (249 TUs): every `target_include_directories(... SYSTEM ...)` (Vulkan headers, Lua, VMA, miniaudio, FFmpeg, FidelityFX, XeSS). sccache does not normalise `-external:I`, so the checkout path is part of the key. Top-level / engine CMake (bo1's files).
+2. **`-DALAMO_*_DIR="<absolute path>"` compile definitions** on about 25 test TUs (golden, log and data dirs): the path is in the command line and the code. Fix: tests read the directory at run time (set by the ctest entry), done together with the exe merges (t03/t04).
+Use `SCCACHE_LOG=debug SCCACHE_ERROR_LOG=<file>` and grep `compile result: cache miss` to list the misses.
