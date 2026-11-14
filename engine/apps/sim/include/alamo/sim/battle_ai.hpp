@@ -187,6 +187,28 @@ public:
     // --- end battle host ---
 
 private:
+    // sp3 t01 (PERF_AUDIT S6): the type facts fill() and the per-object scans (population_cap, space_prevention_hit) read for
+    // every object, resolved once per battle from the string-keyed GameObjectTypes getters (types do not change after
+    // load). Index = objects::TypeIndex; the extra last entry stands for an out-of-range index (the getters' field
+    // defaults, no behaviours). Built serially by ensure_type_facts(); read-only (also from fill's parallel build) after.
+    struct TypeFacts {
+        bool has_land_evaluator = false, has_space_evaluator = false;
+        bool last_state_visible_under_fow = false, initial_state_visible_under_fow = false;
+        bool create_team = false, is_dummy = false, stay_in_transport = false;
+        bool valid_target = false;  // Collidable_By_Projectile_Living && Is_Valid_Target
+        bool squadron_member = false, company_member = false;
+        bool indigenous = false, dummy_ground_structure = false, dummy_ground_base = false;  // behaviour union 0x20 / 0x5F / 0x5B
+        bool dummy_orbital_structure = false, dummy_star_base = false;                      // behaviour union 0x60 / 0x5C
+        int32_t base_level = 0;
+        int32_t additional_population_capacity = 0;
+        float reinforcement_enabling_radius = 0.0f;
+        float reinforcement_prevention_radius = 0.0f;
+    };
+    std::vector<TypeFacts> type_facts_;
+    void ensure_type_facts();
+    const TypeFacts& type_facts(objects::TypeIndex t) const {
+        return t < type_facts_.size() - 1 ? type_facts_[t] : type_facts_.back();
+    }
     float type_population(int32_t type) const;  // A2 tactical: pop(T, mode) 0x373500
     // OPT2 t10: build_pad_check's blocker scan. The live Influences_Capture_Point objects (store order) are listed once
     // per build_pads call instead of once per pad, and the type flag is memoised per type (0 unknown, 1 no, 2 yes).

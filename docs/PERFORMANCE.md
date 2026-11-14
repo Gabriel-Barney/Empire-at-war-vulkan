@@ -1238,10 +1238,26 @@ Reading it:
 - **Perception is the snapshot fill.** `tac.perc.fill` is 92-93 % of `tac.ai.perception`; the diff, the threat-grid service and the
   signal passes are 0.1 ms together. The fill already runs per object on workers (W15 halves it on land and water), so its cost is
   the per-object work itself: the S6 string-keyed type lookups (`PERF_SERIAL_2026-11-14.md` option 2, the `TypeFacts` table) and what
-  P3's snapshot `S_N` replaces.
+  P3's snapshot `S_N` replaces. (sp3 t01 has since cut `tac.ai.perception` by about 60 % with `TypeFacts`: next section.)
 - **The tactical tick is not a long serial chain of services** at today's scene sizes: 63 steps total 0.9-1.0 ms on land / water,
   and four of them (movement, combat / abilities, fog, speed factors) are 60-80 % of that; the other ~55 steps are each below
   0.05 ms. Space: movement dominates (`tac.s.move_tick` 0.98 ms mean, its p99 is the nebula-style spike).
 - **The checksum is the third serial block**: `crc.battle.ai` 0.6-0.9 ms on land / water at both worker counts (one system = one job),
   the target of sp2 (game checkpoint cadence) and sp6 (tree hash).
 - Raw results: `worker_sweep.py` JSON per cell (not tracked); rerun on a quiet PC for absolute numbers (sp6 t04).
+
+## TypeFacts in the battle AI's perception fill (sp3 t01, 2026-11-14)
+
+`BattleAi::fill` (and the population-cap / space-prevention scans) read a per-battle `TypeFacts[type]` table built once instead
+of ~15 string-keyed `GameObjectTypes::get_*` calls per object (PERF_AUDIT S6). Golden-neutral (CRC logs unchanged, MSVC and clang).
+`land_battle`, `alamo_headless --bench --profile`, default workers, 3 rounds interleaved old / new on one build tree while two
+other lanes built (other-process CPU 10-49 %, printed per run):
+
+| p50 ms | before (3 runs) | after (3 runs) | change |
+|---|---|---|---|
+| tick median | 2.79 / 2.89 / 3.04 | 2.31 / 2.36 / 2.45 | about -17 % |
+| `tac.ai` | 1.03 / 1.10 / 1.18 | 0.54 / 0.56 / 0.61 | about -48 % |
+| `tac.ai.perception` | 0.68 / 0.73 / 0.77 | 0.27 / 0.28 / 0.28 | about -62 % |
+| `crc.battle.ai` | 0.75 / 0.77 / 0.82 | 0.79 / 0.80 / 0.81 | unchanged |
+
+`crc.battle.ai` is now the largest single zone of a land battle tick (simp-core's sp2 / sp6).
