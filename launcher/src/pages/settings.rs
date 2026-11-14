@@ -18,9 +18,61 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         ui.add_space(6.0);
         extra_dirs_card(app, ui);
         ui.add_space(6.0);
+        workshop_card(app, ui);
+        ui.add_space(6.0);
         launcher_card(app, ui);
         ui.add_space(24.0);
     });
+}
+
+/// The optional Steam Web API key that lets the Workshop's Browse tab search in the launcher.
+fn workshop_card(app: &mut App, ui: &mut Ui) {
+    let show_id = egui::Id::new("settings_show_steam_key");
+    let mut show = ui.data(|d| d.get_temp::<bool>(show_id).unwrap_or(false));
+    theme::card(ui, |ui| {
+        theme::overline(ui, "Steam Workshop");
+        ui.label(theme::muted(
+            "Your subscriptions, downloads and mod names work without any setup. Searching the Workshop inside the launcher needs your own Steam Web API key, because Steam answers searches only with one. Without a key, Browse opens the same search in the Steam client.",
+        ));
+        ui.horizontal(|ui| {
+            fixed(ui, LABEL_W, |ui| {
+                ui.label(theme::muted("Steam Web API key"));
+            });
+            let before = app.cfg.settings.steam_web_api_key.clone();
+            ui.add(
+                egui::TextEdit::singleline(&mut app.cfg.settings.steam_web_api_key)
+                    .password(!show)
+                    .desired_width(300.0)
+                    .hint_text("Not set"),
+            );
+            if theme::icon_button(ui, icon::EYE, if show { "Hide the key" } else { "Show the key" }).clicked() {
+                show = !show;
+            }
+            if app.cfg.settings.steam_web_api_key != before {
+                let trimmed = app.cfg.settings.steam_web_api_key.trim().to_owned();
+                app.cfg.settings.steam_web_api_key = trimmed;
+                app.touch();
+            }
+            if theme::button(ui, "Get a key").on_hover_text("steamcommunity.com/dev/apikey, signed in to Steam").clicked() {
+                if let Err(e) = open_web("https://steamcommunity.com/dev/apikey") {
+                    app.err(e);
+                }
+            }
+        });
+        ui.label(theme::faint(
+            "The key is stored in the launcher's settings file on this PC and sent only to Steam (api.steampowered.com).",
+        ));
+    });
+    ui.data_mut(|d| d.insert_temp(show_id, show));
+}
+
+/// Opens a web page in the default browser.
+fn open_web(url: &str) -> Result<(), String> {
+    std::process::Command::new("explorer.exe")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Couldn't open {url}: {e}"))
 }
 
 /// A fixed-width cell, so rows line up like a table.

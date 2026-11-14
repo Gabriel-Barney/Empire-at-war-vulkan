@@ -44,6 +44,10 @@ pub struct Settings {
     /// Optional second place (another disk, a cloud-synced folder) checkpoints are mirrored to.
     #[serde(default)]
     pub backup_dir: Option<PathBuf>,
+    /// The user's own Steam Web API key: lets the Workshop's Browse tab search inside the
+    /// launcher (Steam answers searches only with a key). Empty = search in the Steam client.
+    #[serde(default)]
+    pub steam_web_api_key: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -67,6 +71,7 @@ impl Default for Settings {
             while_running: WhileRunning::Stay,
             notify_on_exit: true,
             backup_dir: None,
+            steam_web_api_key: String::new(),
         }
     }
 }
