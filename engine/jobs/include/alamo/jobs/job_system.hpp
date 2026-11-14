@@ -27,6 +27,32 @@
 //     the background queue, any idle worker takes them), a background job's own help_loop, a
 //     waiter claiming its own job, and the shutdown drain.
 //
+// Three priorities (SIMP sp1, design 4.1): Critical (= Normal: the tick's phase jobs) > Ai > Background, strict.
+//   - Critical jobs go to the per-slot deques above; Ai and Background jobs each to one shared FIFO (the helpers of a
+//     parallel_for at that priority jump to its front). A worker always takes critical work first, then AI, then
+//     background (capped). A helper running chunks of an Ai or Background parallel_for runs any queued critical job
+//     between two chunks, so AI and background work only fill gaps in the tick. The loop's owner does not: its stack
+//     may hold the very job a critical job waits for (review of sp1: a self-wait deadlock).
+//   - Rule: a critical job must not wait on an AI or background counter (it may run on a thread whose stack holds
+//     that job, see the DEADLOCK RULE below); the sim thread waits on such counters outside any job.
+//   - Priority is inherited like background always was: anything submitted from inside an Ai job (or a thread inside a
+//     ScopedPriority) is at least Ai. A thread waits by helping with work of its own priority or higher: a critical
+//     thread never runs AI or background jobs, an AI thread runs critical and AI jobs, a background thread any.
+//
+// Small forks run inline (sp1): every parallel_for call site (its RangeRef target, or for make_parallel_for the
+// std::function's target type) keeps an estimate of its work per item, measured on the wall clock (inline: the loop's
+// time; forked: the loop's time x the threads that ran chunks). A loop estimated below kInlineWorkNs runs on the caller
+// alone, and a larger one asks for at most one thread per kMinThreadWorkNs of work. Results never depend on this
+// (core/parallel.hpp: results must not depend on how ranges were split); only where and when chunks run changes.
+//
+// Waits (sp1, J2): a waiting thread spins with _mm_pause for a few microseconds, then sleeps with std::atomic::wait on
+// an epoch that pushes and completions bump (no std::this_thread::yield, no mutex / condition variable). Idle workers
+// spin a little longer before they sleep, so back-to-back forks of one tick find them awake.
+//
+// Pool (sp1, alamo/jobs/topology.hpp): the default worker count is one per physical core of the performance cores of
+// one last-level-cache domain, minus the sim thread and the AI thread; workers are kept on those cores (one logical
+// processor per core, SMT siblings left to the OS) when the pool fits (JobSystemConfig::cpu_sets).
+//
 // parallel_for waits for chunks, not helpers (2026-11-14): the caller returns as soon as every
 // chunk is claimed and no thread is still running one. Helper jobs still queued are taken back
 // out of the caller's own slot; a helper a worker popped but has not started yet (the OS has not
@@ -61,7 +87,6 @@
 #pragma once
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <exception>
@@ -80,11 +105,21 @@ namespace alamo::jobs {
 using JobFn = void (*)(void* ctx, uint32_t a, uint32_t b);
 using RangeRef = FunctionRef<void(uint32_t, uint32_t)>;
 
-enum class Priority : uint8_t { Normal, Background };
+// Strict order: Critical (Normal) > Ai > Background. Normal is the old name of Critical.
+enum class Priority : uint8_t { Critical = 0, Normal = 0, Ai = 1, Background = 2 };
 
 struct JobSystemConfig {
     int32_t workers = -1;  // < 0: default_worker_count(); 0: fully serial (debug / repro)
+    // sp1: keep the workers on the pool's cores (one logical processor per physical core) when workers + the sim and AI
+    // threads fit on them. Wall clock only. ALAMO_JOBS_CPUSETS=0 in the environment turns it off as well.
+    bool cpu_sets = true;
+    // sp1: run small parallel_for loops inline (see the header comment). Off: every loop forks (tests of the fork path).
+    bool inline_small = true;
 };
+
+// sp1 tuning (wall clock only; nothing the sim reads depends on them).
+inline constexpr int64_t kInlineWorkNs = 50'000;     // estimated loop work below this runs on the caller alone
+inline constexpr int64_t kMinThreadWorkNs = 25'000;  // at most one thread per this much estimated work
 
 // Completion counter for a group of jobs ("wait group"). Reusable after wait() returns.
 class JobCounter {
@@ -114,7 +149,8 @@ public:
     JobSystem(const JobSystem&) = delete;
     JobSystem& operator=(const JobSystem&) = delete;
 
-    // hardware_concurrency() - 1, at least 1.
+    // sp1: physical cores of the pool's cache domain (topology.hpp) minus the sim and AI threads, at least 1; without
+    // topology information hardware_concurrency() - 1, at least 1.
     static uint32_t default_worker_count();
 
     uint32_t worker_count() const noexcept { return workers_; }
@@ -124,6 +160,10 @@ public:
     bool serial() const noexcept { return workers_ == 0; }
     // 0 for non-worker threads, 1..N on this system's workers.
     uint32_t current_slot() const noexcept;
+    // sp1: whether the workers were kept on the pool's cores (JobSystemConfig::cpu_sets and the pool fits).
+    bool pinned() const noexcept { return pinned_; }
+    // sp1 diagnostics / tests: parallel_for calls that ran inline because their estimated work was small.
+    uint64_t inline_forks() const noexcept { return inline_forks_.load(std::memory_order_relaxed); }
     // Jobs executed per slot since construction (diagnostics / tests).
     std::vector<uint64_t> executed_per_slot() const;
 
@@ -156,9 +196,11 @@ public:
     // Satisfies alamo::RangeFn's contract (see core/parallel.hpp).
     template <class F>
     void parallel_for(uint32_t count, uint32_t grain, F&& fn) {
-        parallel_for_ref(count, grain, RangeRef(fn));
+        const RangeRef ref(fn);
+        parallel_for_ref(count, grain, ref, ref.target_id());
     }
-    void parallel_for_ref(uint32_t count, uint32_t grain, RangeRef fn);
+    // `site` keys the call site's work estimate (sp1 inline forks); 0 = fn's target.
+    void parallel_for_ref(uint32_t count, uint32_t grain, RangeRef fn, uintptr_t site = 0);
 
 private:
     struct Job {
@@ -171,64 +213,96 @@ private:
     };
     struct Slot;
     struct ForState;
+    struct SiteCost;
+    // One shared FIFO per non-critical priority. parallel_for helpers at that priority are queued at the front, so the
+    // queue front is a helper exactly when helpers > 0.
+    struct SharedQueue {
+        std::mutex mutex;
+        std::deque<Job> queue;
+        std::atomic<int64_t> queued{0};
+        std::atomic<int64_t> helpers{0};
+        std::atomic<uint64_t> epoch{0};  // incremented on every push
+    };
+    SharedQueue& shared(Priority p) noexcept { return p == Priority::Ai ? ai_ : bg_; }
 
     uint32_t my_slot() const noexcept;
     Priority effective_priority(Priority requested) const noexcept;
     void push(const Job& job, uint32_t copies);
     void wake(uint32_t copies);
     bool pop_foreground(uint32_t self, Job& out);
-    bool pop_background(Job& out);
+    bool pop_shared(SharedQueue& q, Job& out);
+    bool pop_background(Job& out) { return pop_shared(bg_, out); }
     // Worker top level: pop the front background job; a non-helper only below the cap, and then
     // `counted` is true and bg_running_ counts it until finish_background_capped().
     bool pop_background_capped(Job& out, bool& counted);
     void finish_background_capped();
     bool background_startable() const noexcept;
     // parallel_for internals (job_system.cpp).
-    void run_for_chunks(ForState& st);
+    // helper: called from a helper job (only helpers yield to queued critical work between chunks, sp1).
+    void run_for_chunks(ForState& st, bool helper);
     void release_for_chunk(ForState& st);
     uint32_t cancel_queued_helpers(uint32_t self, const ForState& st);
     static void for_helper_job(void* ctx, uint32_t, uint32_t);
     // Loop states are pooled (no heap allocation per parallel_for once the pool is warm).
     ForState* acquire_for_state();
     void release_for_ref(ForState* st, uint32_t refs = 1);
-    bool claim_background(const JobCounter& counter, Job& out);
+    bool claim_shared(SharedQueue& q, const JobCounter& counter, Job& out);
     void execute(const Job& job, uint32_t self);
-    // Execute queued jobs (foreground; plus background when called from inside a background
-    // job) while keep_waiting() is true; sleeps when there is nothing to do. A sleeping helper
-    // is woken by job pushes and by any JobCounter reaching zero (notify_waiters()). keep_waiting
-    // may be called under an internal lock: keep it cheap and non-blocking.
+    // Execute queued jobs (critical; plus AI / background when the thread's priority allows) while keep_waiting() is
+    // true; spins, then sleeps when there is nothing to do. A sleeping helper is woken by job pushes and by any
+    // JobCounter reaching zero (notify_waiters()). keep_waiting must be cheap and non-blocking.
     void help_loop(FunctionRef<bool()> keep_waiting, JobCounter* claim);
+    // sp1: run queued critical jobs (between two chunks of a non-critical loop).
+    void run_critical(uint32_t self);
+    // sp1 inline forks: the call site's work estimate.
+    SiteCost& site_cost(uintptr_t site) noexcept;
     // Wake threads sleeping in wait() so they re-check their condition.
     void notify_waiters();
     void worker_main(uint32_t slot);
 
     uint32_t workers_ = 0;
     uint32_t bg_cap_ = 0;
+    bool pinned_ = false;
+    bool inline_small_ = true;
     std::atomic<uint32_t> bg_running_{0};       // top-level background jobs running on workers
     std::vector<std::unique_ptr<Slot>> slots_;  // size workers_ + 1
     std::mutex for_pool_mutex_;
     std::vector<std::unique_ptr<ForState>> for_pool_;  // every loop state ever made (owner)
     std::vector<ForState*> for_free_;                  // the idle ones; capacity kept >= for_pool_.size()
-    std::mutex bg_mutex_;
-    std::deque<Job> bg_queue_;
+    SharedQueue ai_;
+    SharedQueue bg_;
     std::atomic<int64_t> fg_queued_{0};
-    std::atomic<int64_t> bg_queued_{0};
-    std::atomic<int64_t> bg_helpers_{0};  // background parallel_for helpers queued (the queue's front segment)
-    std::atomic<uint64_t> bg_epoch_{0};  // incremented on every background push
+    std::unique_ptr<SiteCost[]> sites_;  // sp1: direct-mapped call-site work estimates
+    std::atomic<uint64_t> inline_forks_{0};
 
-    std::mutex sleep_mutex_;
-    std::condition_variable work_cv_;  // idle workers
-    std::condition_variable done_cv_;  // threads blocked in wait()
+    // Sleeping (sp1, J2): idle workers wait on work_epoch_, threads blocked in wait() on done_epoch_ (std::atomic::wait).
+    std::atomic<uint32_t> work_epoch_{0};
+    std::atomic<uint32_t> done_epoch_{0};
     std::atomic<uint32_t> idle_workers_{0};
     std::atomic<uint32_t> waiters_{0};
     std::atomic<bool> stop_{false};
     std::vector<std::thread> threads_;
 };
 
-// Backs core's ParallelFor hook with `js` (which must outlive the returned function).
+// sp1: the calling thread's priority for jobs of `js` it submits (and the work it helps with while it waits) is at least
+// `p` until the scope ends: the AI lane's thread runs inside ScopedPriority(js, Priority::Ai). Scopes nest.
+class ScopedPriority {
+public:
+    ScopedPriority(const JobSystem& js, Priority p) noexcept;
+    ~ScopedPriority();
+    ScopedPriority(const ScopedPriority&) = delete;
+    ScopedPriority& operator=(const ScopedPriority&) = delete;
+
+private:
+    const JobSystem* prev_of_;
+    Priority prev_prio_;
+};
+
+// Backs core's ParallelFor hook with `js` (which must outlive the returned function). The call site of a loop is the
+// std::function's target type (sp1 inline forks: one work estimate per lambda).
 inline alamo::ParallelFor make_parallel_for(JobSystem& js) {
     return [&js](uint32_t count, uint32_t grain, const alamo::RangeFn& fn) {
-        js.parallel_for(count, grain, fn);
+        js.parallel_for_ref(count, grain, RangeRef(fn), reinterpret_cast<uintptr_t>(&fn.target_type()));
     };
 }
 

@@ -6,3 +6,4 @@
 #include "alamo/jobs/job_system.hpp"
 #include "alamo/jobs/scratch.hpp"
 #include "alamo/jobs/tick.hpp"
+#include "alamo/jobs/topology.hpp"

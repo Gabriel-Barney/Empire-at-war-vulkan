@@ -1,6 +1,7 @@
 // Non-owning, non-allocating reference to a callable (like C++26 std::function_ref).
 // The referenced callable must outlive every call through the FunctionRef.
 #pragma once
+#include <cstdint>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -21,6 +22,8 @@ public:
           call_(&invoke<std::remove_reference_t<F>>) {}
 
     R operator()(Args... args) const { return call_(obj_, std::forward<Args>(args)...); }
+    // Identifies the referenced callable's type (its call thunk), e.g. as a call-site key; never 0.
+    uintptr_t target_id() const noexcept { return reinterpret_cast<uintptr_t>(call_); }
 
 private:
     template <class T>

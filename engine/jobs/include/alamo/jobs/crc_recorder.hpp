@@ -50,7 +50,8 @@ private:
 };
 
 // Worker counts every determinism check covers: 0 (serial), 1, 4 and the machine's default
-// (hardware threads - 1), de-duplicated, in that order.
+// (JobSystem::default_worker_count(): physical cores minus the sim and AI threads since SIMP sp1), de-duplicated, in that
+// order. The per-process CMake form also runs hardware threads - 1 and 16.
 inline std::vector<int32_t> determinism_worker_counts() {
     std::vector<int32_t> w = {0, 1, 4};
     const auto n = static_cast<int32_t>(JobSystem::default_worker_count());
