@@ -1366,7 +1366,8 @@ and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched 
   | 3 | 1.685 / 1.639 | 1.021 / 0.945 | 0.606 | 0.576 | 4 % / 5 % |
   | 4 | 1.710 / 1.651 | 1.077 / 0.989 | 0.630 | 0.599 | 10 % / 11 % |
 
-  **Sum of medians: 0.564-0.599 in every round (exit bar 0.6: passed); mean: 0.597-0.630 (rounds 0-3 pooled 0.605, marginal).**
+  **Borderline: sum of medians 0.564-0.599 in every round (under the 0.6 bar); mean 0.597-0.630 (rounds 0-3 pooled 0.605, over
+  it).** The earlier sp5 numbers led with the mean, so sp5 stays open on this (roadmap sp5 t12).
   The tick median fell from ~10.5 / 9.2 ms (W0 / W7, first run) to 9.7-9.9 / 8.3-8.8 ms, mostly the combat fix below.
 - **Where damage would go** (sp5 t08, W0, one run each, 42-46 % other-process CPU, fingerprints OK): `land_battle` combat 0.147 ms
   per tick (unit walk `cmb.d_units` 0.096, projectile commit `cmb.f_projectiles` 0.004), `space_battle` 0.361 ms (projectile
