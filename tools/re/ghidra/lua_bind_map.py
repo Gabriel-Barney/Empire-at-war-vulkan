@@ -4,7 +4,7 @@ argument contract recovered from the implementation's diagnostic strings.
 Globals: each global is an instance of a LuaUserVar subclass; vftable slot 10 is the call
 operator (LuaUserVar default 0x17d070 = 'not callable'). Methods: pointer-to-member captured
 at the LuaMemberFunctionWrapper<T> registration (slot 10 of the wrapper = generic invoker 0x244d70).
-Usage: lua_bind_map.py <re_work_dir> <ghidra_functions.csv>   (updates out/lua_api.json, docs/lua_api.json, appends to docs/LUA_API.md)"""
+Usage: lua_bind_map.py <re_work_dir> <ghidra_functions.csv>   (updates out/lua_api.json, docs/re/lua_api.json, appends to docs/re/LUA_API.md)"""
 import sys, os, json, csv, struct, re, collections, bisect
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import xrefs
@@ -97,9 +97,9 @@ def main(rew, gfuncs):
                    'the stored pointer is an MSVC vcall thunk (`mov rax,[rcx]; jmp [rax+N]`); impl_rva then gives the owner class slot N/8 and '
                    '`overrides` the derived-class implementations (e.g. TaskForceClass -> Galactic/Space/LandTaskForceClass).'}
     json.dump(J, open(api_path, 'w'), indent=1)
-    json.dump(J, open(f'{rew}/docs/lua_api.json', 'w'), indent=1)
+    json.dump(J, open(f'{rew}/docs/re/lua_api.json', 'w'), indent=1)
     # markdown section
-    md = open(f'{rew}/docs/LUA_API.md').read()
+    md = open(f'{rew}/docs/re/LUA_API.md').read()
     md = md.split('\n## Binding map (Lua name -> C++)')[0]
     L = ['', '## Binding map (Lua name -> C++)', '',
          J['binding_mechanism']['globals'], '', J['binding_mechanism']['methods'], '',
@@ -112,7 +112,7 @@ def main(rew, gfuncs):
     for a in sorted([a for a in api if a['kind'] == 'method'], key=lambda a: (a['owner'], a['name'])):
         virt = f" (virtual slot {a['vtable_slot']}; overrides: {', '.join(f'{k} {v}' for k, v in a.get('overrides', {}).items())})" if 'vtable_slot' in a else ''
         L.append(f"| `{a['owner']}.{a['name']}` | {a.get('impl_rva') or '-'}{virt} | {'<br>'.join(x.replace('|', '/') for x in a.get('arg_contract', [])[:3])} |")
-    open(f'{rew}/docs/LUA_API.md', 'w').write(md + '\n'.join(L) + '\n')
+    open(f'{rew}/docs/re/LUA_API.md', 'w').write(md + '\n'.join(L) + '\n')
     print('globals resolved', n_g, 'methods', n_m, 'virtual (vcall thunk) methods', n_vc)
 
 if __name__ == '__main__':

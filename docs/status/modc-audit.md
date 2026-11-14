@@ -1,10 +1,9 @@
 # Mod and base-game hard-coding in engine/ (modc t02 audit, t03 replacements, t04 lint)
 
-Roadmap group `modc`, tasks t02 / t03 / t04 (2026-11-06). The rule is `docs/MODS.md` §1 (PR #92; until it merges, read it with
-`git show origin/claude/modc-t01-contract-5863c0:docs/MODS.md`): no mod or base-game *content* name decides behaviour in
+Roadmap group `modc`, tasks t02 / t03 / t04 (2026-11-06). The rule is `docs/MODS.md` §1: no mod or base-game *content* name decides behaviour in
 `engine/`; names the original executable itself hard-codes may stay, with a comment that cites the `docs/re/` spec and
-address. This file is the audit list; it moves into `docs/MODS.md` as §9 once #92 is on `dev` (§7 "Known violations" there
-is the short version of the same list). Status of the follow-up tasks lives on the roadmap only.
+address. This file is the audit list; `docs/MODS.md` §7 "Known violations" is the short version of the
+same list and points here. Status of the follow-up tasks lives on the roadmap only.
 
 ## How the audit was done
 

@@ -39,9 +39,8 @@ released into the public domain under [the Unlicense](LICENSE).
 > seeds): land movement and combat were ported in full from the specs (squads, formations, collision decisions, hero
 > clashes), the galactic AI's production and task-force rules now follow the original, the land skirmish AI plays a full
 > game, and the missing HUD and front-end controls found in the test build are being filled in. Open findings go to a
-> triaged backlog instead of growing the plan. The newest full gate (2026-11-12) passes with **0 warnings and
-> 246 tests** on MSVC and on clang, and 67 under the sanitizer. Task tracking is the project roadmap, kept in its own
-> repository and not in this one (1,073 of 1,167 roadmap tasks done, 144 of 160 groups); results and notes per phase are in
+> triaged backlog instead of growing the plan. Build and test results and task progress are on the project roadmap, kept
+> in its own repository and not in this one; results and notes per phase are in
 > [`docs/PHASE2.md`](docs/PHASE2.md), [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md), and every
 > document is indexed in [`docs/README.md`](docs/README.md).
 
@@ -336,6 +335,7 @@ build_gate.cmd        :: MSVC + clang + sanitizer gate used before merging
 build_module.cmd      :: build and test one module (or a ;-separated list)
 build_agent.cmd       :: fast tier of tests only, for quick iteration ("changed" = only the changed modules)
 bench_msvc.cmd        :: re-run the profiler scenarios
+build_launcher.cmd    :: the Command Center launcher (Rust, launcher\)
 ```
 
 Data-driven tests read `ALAMO_FOC_DATA` and `ALAMO_EAW_DATA` (folders containing `Data\XML`). The build scripts default

@@ -1,7 +1,7 @@
 # Fix-pass capture checklist (screenshots only, no mod files)
 
 Spec: `docs/re/FIXPASS_GALACTIC.md` §4–5. Use the unmodified **FoC** (`corruption\StarWarsG.exe`). Do not use EaW: the
-hero-bar sort key differs between the two. Take each screenshot with F12 (Steam) or PrtScn. Name the files `C<n>_<what>.jpg`
+hero-bar sort key differs between the two. Take each screenshot with F12 (Steam) or PrtScn. Name the files `C<n>_<what>.png`
 and drop them in this folder. Nothing needs installing or cleaning up.
 
 ## C1 Endor nebula over the planet (render)

@@ -9,8 +9,7 @@ worktree name). Follow the `lane` agent loop (`.claude/agents/lane.md`):
    every task with its state, `after` (and whether each group in it is `done`), `eta`, and the **`exit` test and `cap`** (a group with
    no `exit` yet: write one first, `update` `items/<id>` `{"exit":"..."}`, since that is how the group is finished). If an `after` group is not done, or the
    group is already `done`, or `by` shows another worker holding it, say so and stop.
-3. Claim it: `python roadmap-store\roadmap_store.py claim <id> --by <session>`. If `claim` is not in `roadmap_store.py --help` yet,
-   `write` an `update` of `items/<id>` with `{"by":"<session>","updated":"<today>"}` instead.
+3. Claim it: `python roadmap-store\roadmap_store.py claim <id> --by <session>`.
 4. Worktree: if this session is already in a `.claude\worktrees\<name>` checkout, verify it: `git status`, `git branch --show-current`,
    and that `Data`, `extracted`, `toolchain`, `roadmap-store` resolve (`dir`); a missing one is re-linked with
    `cmd /c mklink /J <link> <main checkout folder>`. Otherwise, from the main checkout, run

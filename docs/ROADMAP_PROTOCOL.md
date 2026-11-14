@@ -7,7 +7,7 @@ in `roadmap-store/data/` and it is rebuilt. `roadmap-store/` is its own git repo
 checkout; worktrees do not have it, so run the script from the main checkout.
 
 The page layout is `roadmap-store/page_shell.html`: edit only what is outside the `<!--roadmap-data:begin-->` and `<!--roadmap-data:end-->`
-markers (layout, script, `PRESETS`), then run `python roadmap-store/roadmap_store.py render`. `ROADMAP.html` is the shell plus a
+markers (layout, script, `PRESETS`), then run `python roadmap-store/roadmap_store.py render`. `roadmap-store/ROADMAP.html` is the shell plus a
 read-only copy of the data, and `roadmap-store/ROADMAP.md` is the text form; both are regenerated on every write, and a diff in them is never a
 change to review.
 
@@ -276,4 +276,4 @@ and push as before, so they never lose one; `python roadmap-store/roadmap_store.
 there is no remote). A busy lock is retried (4 tries of 8 s); only if it stays busy is the record written without the lock and a
 line added to `hook_errors.log`, so a record is never dropped. Pushes happen outside the lock, and a rejected push pulls and retries.
 
-The pre-database static page and its seed files are in `backups/docs-archive-2026-10-30.zip`.
+The pre-database static page and its seed files are in `backups/docs-archive-2026-10-30.zip` (local, main checkout only, not in git).

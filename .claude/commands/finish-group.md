@@ -25,7 +25,7 @@ Finish roadmap group `$ARGUMENTS` in this worktree. Work through the checklist a
 4. **Docs.** Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/` pages the tasks name); status is only on the roadmap. Keep edits minimal and factual.
 5. **Commit and land on `dev`.** `git add` the work and commit; the message lists changes, build and test results per compiler,
    skips, goldens changed or "none", tasks closed, whether the group and box are now `done`, open items, and ends with
-   `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`. Then `tools\land_on_dev.cmd` (merges `origin/dev` in, fast-forward
+   the `Co-Authored-By:` line the session's attribution reminder gives. Then `tools\land_on_dev.cmd` (merges `origin/dev` in, fast-forward
    pushes `dev`, deletes the branch on origin; rerun if `dev` moved). No PR: `main` is released from `dev` by Gabriel.
 6. **Release.** If you are stopping with tasks left: `python roadmap-store\roadmap_store.py release <id> --by <session>`.
    Once the work is on `dev`, the worktree goes with `tools\clean_worktrees.cmd --apply --only <name>`.
