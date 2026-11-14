@@ -1312,3 +1312,19 @@ The capture cost falls by the expected 15/16 (cadence 16). On the tick, `water_b
 `space_battle_game`'s capture was ~10 % of its tick and the busy machine's noise is larger than that. Every run (with and without
 `--profile`, 12 + 8 runs, `space_battle_game`, `water_battle`, `nebula_battle`) matched the scenario fingerprint, and the 12 runs with
 the presentation check (the save replayed without rendering) matched it, at the new cadence.
+
+**Parallel space path tries** (`nebula_battle`, sim-only `alamo_headless --bench`, default workers, before = sp1 `9cd35429`, after = sp2
+`8f9d8cf3`, interleaved, 4 rounds, each run started when the machine was below 35 % busy; other processes then took 28-42 % of the CPU
+during the runs):
+
+| `nebula_battle` | before (4 runs) | after (4 runs) |
+|---|---|---|
+| tick p99 ms | 25.1 / 24.0 / 24.1 / 28.0 | 16.9 / 17.2 / 17.1 / 16.5 |
+| `tac.movement` p99 ms | 23.4 / 22.2 / 22.5 / 25.3 | 15.3 / 15.5 / 15.3 / 15.0 |
+| tick mean ms | 6.22 / 6.17 / 6.15 / 6.61 | 4.44 / 4.50 / 4.44 / 4.44 |
+| tick median ms | 1.69 / 1.68 / 1.69 / 1.77 | 1.68 / 1.69 / 1.65 / 1.65 |
+
+All runs matched the fingerprint (the paths are the serial loop's, see SIM_PARALLEL_DESIGN.md 4.5 "as built"). The spikes were single
+requests failing 4-6 tries (up to 55 ms for one request); the tries now overlap. The 16.7 ms p99 target is reached in 1 of 4 runs on
+this loaded machine and missed by less than 0.5 ms in the others; a quiet-PC confirmation is open (sp2 t03). The worst tick (190-300 ms)
+is unchanged: it is a plan load in `ai.planning`, not movement.
