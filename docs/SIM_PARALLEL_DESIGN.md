@@ -416,8 +416,11 @@ How P5 is built; status and open items are on the roadmap (group `sp5`), checks 
   collision feed, attack targets, pair gates, swap-back signals, engine loops, tree boxes, fog sources) compute per unit in
   parallel and write only the unit's own slot (movement / combat entry, a per-index output); shared state (EngineLoops, the fog
   grids, the trees, the signal lists) is changed afterwards serially in unit order. Fog: `FogOfWar::service_sources` computes the
-  re-reveal cell lists in parallel (`FogGrid::dense_cells`, const) and applies every undo / count in unit order (the clamped undo
-  makes order matter). Golden-neutral by construction; the forks start at 256 units (`ServiceRunDefaults::parallel_min`).
+  re-reveal cell lists in parallel (`FogGrid::dense_cells`, const), then each player's grid applies its undos / counts in unit
+  order on its own worker (the clamped undo makes order matter within a grid; grids are independent). The trees likewise:
+  `TreeSet::update_batch` gives each spatial tree its boxes in unit order, the trees side by side. Golden-neutral by
+  construction; the forks start at 256 units (`ServiceRunDefaults::parallel_min`), and sp1's job system runs a loop whose
+  measured work is under 50 us inline (`kInlineWorkNs`), so the small services (victory, swap-back signals) stay serial.
 - **Lazy caches** are the hazard of read-only parallel loops: `TacticalMode::model_ref` fills a per-type cache on first use, so the
   loops fill exactly the entries the serial code would have filled first (`prepare_bounds`, the fog pre-pass); filling more would
   change later `model_ref(t, false)` readers.
