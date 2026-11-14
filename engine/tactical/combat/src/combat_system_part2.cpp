@@ -2066,21 +2066,23 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     // s78h t06 (TACTICAL_COMBAT §3.1.1 "When the container is serviced"): each land team's container slot = its highest
     // live unit index (members and head) in phase A; phase D's descending walk reaches it before any of the team's units.
     land_teams_.clear();
-    if (cfg_.mode == GameMode::Land)
+    if (cfg_.mode == GameMode::Land) {
+        // SP5: (team, top index) per live unit, then the highest per team (was a linear search of land_teams_ per unit);
+        // the same slots, ordered below.
+        std::vector<std::pair<uint32_t, uint32_t>> tops;
         for (uint32_t i = 0; i < n; ++i) {
             const Unit& m = units_[i];
             if (m.flags & kUnitDead) continue;
             const Unit* h = land_team_lead(m);  // s78i t03
             if (!h) continue;
             const auto hi = static_cast<uint32_t>(h - units_.data());
-            const uint32_t top = hi > i ? hi : i;
-            auto it = std::find_if(land_teams_.begin(), land_teams_.end(), [&](const LandTeamSlot& t) { return t.team == m.team; });
-            if (it == land_teams_.end()) {
-                land_teams_.push_back(LandTeamSlot{top, m.team, 0});
-            } else if (top > it->slot) {
-                it->slot = top;
-            }
+            tops.emplace_back(m.team, hi > i ? hi : i);
         }
+        std::sort(tops.begin(), tops.end());
+        for (size_t i = 0; i < tops.size(); ++i)
+            if (i + 1 == tops.size() || tops[i + 1].first != tops[i].first)  // the team's last = highest top
+                land_teams_.push_back(LandTeamSlot{tops[i].second, tops[i].first, 0});
+    }
     std::sort(land_teams_.begin(), land_teams_.end(), [](const LandTeamSlot& a, const LandTeamSlot& b) {
         return a.slot != b.slot ? a.slot > b.slot : a.team < b.team;
     });
