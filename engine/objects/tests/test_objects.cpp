@@ -475,6 +475,17 @@ static void test_squadron_size() {
     CHECK(members("Fsq") == 4u && members("Bsq") == 2u && members("Fsq_V") == 4u);
     CHECK(cost("Fsq", "Build_Cost_Credits") == 40 && cost("Bsq", "Build_Cost_Credits") == 150);
     CHECK(cost("Bsq", "Tactical_Build_Cost_Multiplayer") == 550 && cost("Bsq_V", "Tactical_Build_Cost_Multiplayer") == 350);
+    // b0319: the host-wide default (alamo_headless --squadron-size 0) is what a new database starts with.
+    CHECK(GameObjectTypes::default_squadron_size() == GameObjectTypes::kPortSquadronSize);
+    GameObjectTypes::set_default_squadron_size(0);
+    {
+        GameObjectTypes retail;
+        CHECK(retail.squadron_size() == 0u);
+        CHECK(retail.build(raw, &dp));
+        CHECK(retail.get_list(raw.find("Fsq"), "Squadron_Units").size() == 4u);
+    }
+    GameObjectTypes::set_default_squadron_size(GameObjectTypes::kPortSquadronSize);
+    CHECK(GameObjectTypes().squadron_size() == GameObjectTypes::kPortSquadronSize);
     remove_all_long(root, ec);
 }
 

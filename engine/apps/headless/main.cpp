@@ -77,6 +77,8 @@
 //       its Space_ / Land_Skirmish_AI_Default_Forces (else the cheapest buildable units, [port]).
 //       A1 stage 2: AI-vs-AI space skirmish fought by the tactical AI in an S10 battle (skirmish_run.hpp); foc-land: a land skirmish (t50), foc-land-campaign: the campaign-rules land invasion.
 //       [--fail-on-lua-errors]: fail on any tactical AI Lua error (foc-station always does; a1j t07).
+//       [--squadron-size N] (any mode, b0319): fighter / bomber squadron members for every type database this run builds;
+//       0 = the retail lists and prices (parity harness, retail-outcome tests), default GameObjectTypes::kPortSquadronSize.
 //       [--control-points]: foc-land / skirmish on a land map (ccpgt t02): the Capture Control Points game type, each slot's win
 //       condition 0x15 CONTROL_POINT_DOMINATION (SKIRMISH_SETUP §4.2) instead of 0x13.
 //       Prints and writes the fired-event log (frame, plot set:sequence, plot, event, type, params,
@@ -677,7 +679,9 @@ int usage() {
                  "                      [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]\n"
                  "       alamo_headless --bench-make SCENARIO.abench --save-session KIND [--campaign C] [--map M] [--battles B] [--story]\n"
                  "                      [--seed S] --bench-save-at T [--save-when W] --ticks K [--workers N] [--bench-every N] [--bench-desc TEXT]\n"
-                 "       alamo_headless --bench-regen SCENARIO.abench\n");
+                 "       alamo_headless --bench-regen SCENARIO.abench\n"
+                 "       (any run also takes --squadron-size N: fighter / bomber squadron members, 0 = retail lists and prices,\n"
+                 "        default 12 [port: Gabriel]; the parity harness and the retail-outcome tests pass 0)\n");
     return 2;
 }
 
@@ -910,6 +914,11 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--expect-battle-end") opt.expect_battle_end = true;  // S10 land outcome
         else if (a == "--expect-skirmish-base") opt.expect_skirmish_base = true;  // t50
         else if (a == "--fail-on-lua-errors") opt.fail_on_lua_errors = true;  // a1j t07
+        else if (a == "--squadron-size") {  // b0319: 0 = retail squadrons (the parity harness), else members per squadron
+            const unsigned long n = std::strtoul(next().c_str(), nullptr, 10);
+            if (n > 64) return usage();
+            alamo::objects::GameObjectTypes::set_default_squadron_size(static_cast<uint32_t>(n));
+        }
         else if (a == "--ai-log") opt.ai_log = next();
         else if (a == "--ai-golden") opt.ai_golden = next();
         else if (a == "--human") opt.ai_human = next();                // A2 galactic

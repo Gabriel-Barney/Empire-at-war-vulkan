@@ -6,6 +6,10 @@ tolerance that is written down with its reason. It replaces the `q2trace.py comp
 production-queue and AI-log parsers come from `tools\probe_mod\q2_traces\analysis\q2_parity.py` and are imported, not
 copied. Standard library only.
 
+The port side always runs with `alamo_headless --squadron-size 0` (retail fighter / bomber squadron lists and prices;
+Gabriel, 2026-11-14, backlog b0319): the port's squadrons of 12 are a deliberate departure from retail, and the harness
+measures the retail rules. `selftest` checks that every port command passes it.
+
 | file | what |
 |---|---|
 | `parity_harness.py` | `run` (single run, or `--seeds N`: distribution mode), `retail`, `list`, `add-refs`, `selftest` (below) |

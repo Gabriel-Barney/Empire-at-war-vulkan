@@ -62,7 +62,9 @@ std::vector<std::wstring> own_args() {
 fs::path pick_folder() {
     fs::path out;
     IFileOpenDialog* dlg = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return out;
+    // IID_IFileOpenDialog, not IID_PPV_ARGS: its __uuidof is a language extension (clang -Wlanguage-extension-token).
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_IFileOpenDialog, reinterpret_cast<void**>(&dlg))))
+        return out;
     DWORD opts = 0;
     dlg->GetOptions(&opts);
     dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);

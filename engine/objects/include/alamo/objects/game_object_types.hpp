@@ -124,6 +124,12 @@ public:
     static constexpr uint32_t kPortSquadronSize = 12;
     void set_squadron_size(uint32_t members) { squadron_size_ = members; }
     uint32_t squadron_size() const { return squadron_size_; }
+    // [port: Gabriel, 2026-11-14] The squadron size a new GameObjectTypes starts with (kPortSquadronSize unless changed).
+    // A host sets it once at start-up, before it builds any type database: alamo_headless --squadron-size 0 gives the
+    // retail lists and prices, which the parity harness and the retail-outcome tests run with (b0319). Never changed
+    // while a session runs.
+    static void set_default_squadron_size(uint32_t members) { default_squadron_size_ = members; }
+    static uint32_t default_squadron_size() { return default_squadron_size_; }
 
     bool build(const ObjectTypeDatabase& raw, const FileProvider* provider = nullptr,
                std::vector<std::string>* diagnostics = nullptr, AnimTypeLookup anim_types = nullptr);
@@ -233,7 +239,8 @@ private:
     std::vector<std::string_view> priority_set_name_;
     std::vector<std::unique_ptr<data::XmlDocument>> registry_docs_;
     AnimTypeLookup anim_lookup_ = nullptr;
-    uint32_t squadron_size_ = kPortSquadronSize;
+    inline static uint32_t default_squadron_size_ = kPortSquadronSize;
+    uint32_t squadron_size_ = default_squadron_size_;
     EnumRegistry enums_;
     uint32_t default_faction_ = kNone;
     std::unique_ptr<std::string> default_faction_name_;  // heap: stable for the written-back Affiliation views

@@ -945,6 +945,11 @@ def default_seed(scen, ref_info):
     return None
 
 
+# b0319 (Gabriel, 2026-11-14): the port's fighter / bomber squadrons of 12 (bdb9cd57) are a deliberate departure from
+# retail, so the port side always runs with the retail squadron lists and prices: the harness measures the retail rules.
+RETAIL_ARGS = ["--squadron-size", "0"]
+
+
 def port_command(scen, exe, out_dir, ref_info, seed=None):
     """seed None: the single-run mode's seed (default_seed)."""
     if seed is None:
@@ -953,14 +958,14 @@ def port_command(scen, exe, out_dir, ref_info, seed=None):
     if scen["kind"] == "galactic":
         campaign = ref_info["campaign"]
         human = campaign.rsplit("_", 1)[-1]
-        return [exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human] + seed_args + [
+        return [exe, "--economy", "--galactic-ai", "--campaign", campaign, "--human", human] + RETAIL_ARGS + seed_args + [
                 "--ticks", str(ref_info["ticks"]), "--workers", str(scen.get("workers", 4)), "--quiet", "--story",
                 "--crc-out", os.path.join(out_dir, "port.crc"), "--ai-log", os.path.join(out_dir, "port_ai.txt"),
                 "--trace-out", os.path.join(out_dir, "port.q2t")]
     # The host logs its state on battle frame 0 and every 600 frames, frame f at host tick f + 1: one tick more than the
     # scenario so the last frame's state is written.
     return [exe, "--skirmish-ai", "skirmish", "--map", scen["map"], "--human", scen["human"], "--ticks", str(scen["ticks"] + 1)
-            ] + seed_args + [
+            ] + RETAIL_ARGS + seed_args + [
             "--workers", str(scen.get("workers", 4)), "--quiet", "--ai-log", os.path.join(out_dir, "port_ai.txt"),
             "--crc-out", os.path.join(out_dir, "port.crc"), "--trace-out", os.path.join(out_dir, "port.q2t")]
 
@@ -1443,6 +1448,11 @@ def selftest():
         if not cond:
             fails.append(what)
             print("FAIL " + what)
+    # b0319: every port run uses the retail squadrons.
+    for scen in ({"kind": "galactic"}, {"kind": "skirmish", "map": "M", "human": "Empire", "ticks": 10}):
+        cmd = port_command(scen, "exe", "out", {"campaign": "C_Empire", "ticks": 10, "seed": "0"})
+        i = cmd.index("--squadron-size") if "--squadron-size" in cmd else -1
+        check(i > 0 and cmd[i + 1] == "0", "port command (%s) passes --squadron-size 0" % scen["kind"])
     # Grading primitives.
     t = {"abs": 2}
     check(grade("travel.hop_ticks[A->B]", [26, 27], 28, t)["status"] == "PASS", "envelope: 28 within 26..27 +-2")
