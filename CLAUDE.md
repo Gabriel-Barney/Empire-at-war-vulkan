@@ -83,6 +83,13 @@ Project skills (`.claude/skills/`; triggers in each description): `start-group` 
 (the loop), `determinism-check` and `regen-goldens` (sim and goldens), `diagnosing-bugs` (an unexplained failure: loop first),
 `research` (cited report in its `docs/` home), `probe-kit` (retail checks), `writing-for-agents` (editing any file agents read),
 `retro` (Gabriel-invoked review of how sessions went; lanes end with a one-line friction note for it).
+Skills reach every worker (Gabriel, 2026-11-13): a subagent does not inherit the main session's skills, so each agent in
+`.claude/agents/` lists `Skill` in `tools` (it can invoke any project skill whose description matches its task) and preloads
+the ones it always needs in `skills:` (`lane`: determinism-check, diagnosing-bugs; `reviewer`: determinism-check; `engine-module`:
+determinism-check, diagnosing-bugs; `integrator`: build, phase-status, regen-goldens, diagnosing-bugs). A new agent gets `Skill` plus
+its preloads; a new skill's `description` must say when to use it, and only `retro` sets `disable-model-invocation` (Gabriel runs
+it). Agents spawned by the `Agent` tool as `general-purpose` / `claude` already have every tool, `Skill` included; name the skill
+in the prompt if it matters.
 - Worktrees (2026-11-06): `tools\new_worktree.cmd <name> [--base origin/dev]` creates `.claude\worktrees\<name>` on `claude/<name>`
   from `origin/dev` (default since 2026-11-06), with junctions to `Data`, `extracted`, `toolchain` and `roadmap-store`, and syncs
   the roadmap. Use ONE build tree per worktree (`build_agent.cmd msvc "<modules>"` gives `build-wt-msvc`: the tree name defaults to `wt` since 2026-11-08). After the branch is
