@@ -1350,3 +1350,8 @@ and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched 
   machine stayed loaded by other lanes; the re-run is an open sp5 task for the coordinator's quiet window.
 - The whole tick (median 10.3-10.6 ms at W0, 9.1-9.3 at W7) is dominated by movement and combat (`tac.s.abilities_combat` ~1.3 ms at
   W0 and W7: combat's own phases, not a service).
+- **Combat** (new `cmb.*` zones, one per phase of `CombatSystem::tick`): on this scene nearly all of it was phase D (the serial unit
+  walk), and in it the land team targeting's member search, an exact `land_team_head` test of every unit for every team
+  (O(teams x units)): 1.07 of 1.26 ms. `a5600d5e` / `baa131c6` find the members and team slots by team value first (same
+  members, same order; Empire-Underworld seed 2's final CRC unchanged): combat 1.26 -> 0.63-0.64 ms per tick at W0 (one run each,
+  10 % and 65 % other-process CPU). The window has no shots (no projectiles): damage records (sp5 t08) do not touch this cost.
