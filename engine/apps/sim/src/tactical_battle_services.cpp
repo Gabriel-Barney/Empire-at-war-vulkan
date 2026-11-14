@@ -45,6 +45,9 @@ enum Comp : uint32_t {
 };
 constexpr svc::ComponentSet bit(Comp c) { return svc::component(c); }
 constexpr svc::ComponentSet kAll = svc::kEverything;
+// the per-unit movement feeds (speed factors, collision info, attack targets, pair gates): units / containers, the store,
+// combat's targets / flags / modifiers, ability overrides and garrison holders in; movement setters out
+constexpr svc::ComponentSet kFeedReads = bit(cStore) | bit(cState) | bit(cCombat) | bit(cAbilities) | bit(cGarrison);
 constexpr svc::ComponentSet kCheckable = bit(cRng) | bit(cStore) | bit(cState) | bit(cMovement) | bit(cCombat) | bit(cAbilities) |
                                          bit(cGarrison) | bit(cHangar) | bit(cFog) | bit(cDamage);
 
@@ -172,16 +175,16 @@ void TacticalBattle::build_service_graph() {
     // ---- pre-move: attack blocks, 4. speed factors, movement inputs --------------------------------------------------
     // s78n t20 stage A: serial, ascending mover, before the collision feed and the movement tick
     g.add("attack_block", kAll, kAll, [this] { attack_block_service(*tick_.mode, *tick_.rng); });
-    g.add("speed_factors", kAll, kAll, [this] { apply_speed_factors(); });
+    g.add("speed_factors", kFeedReads, bit(cMovement), [this] { apply_speed_factors(); });
     // [port] fleet groups: slowest-member cap and straggler wait (no-op while no group exists)
     g.add("fleet", kAll, kAll, [this] { fleet_tick(*tick_.mode); });
     // s78n t20: targets / ranges / hero clashes for the land collision decisions
-    g.add("collision_feed", kAll, kAll, [this] { feed_collision_info(tick_.mode->primary()); });
+    g.add("collision_feed", kFeedReads, bit(cMovement), [this] { feed_collision_info(tick_.mode->primary()); });
     // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
     g.add("fighter_sync", kAll, kAll, [this] { fighter_sync(); });
-    g.add("attack_targets", kAll, kAll, [this] { feed_attack_targets(tick_.mode->primary()); });
+    g.add("attack_targets", kFeedReads, bit(cMovement), [this] { feed_attack_targets(tick_.mode->primary()); });
     // SPACE_AVOIDANCE: committed member transforms for the fighter avoidance hook
-    g.add("avoid_snapshot", kAll, kAll, [this] {
+    g.add("avoid_snapshot", bit(cStore), bit(cMovement), [this] {
         if (space_) avoid_snapshot(tick_.mode->primary());
     });
     lap("tac.pre_move");
@@ -258,7 +261,7 @@ void TacticalBattle::build_service_graph() {
     g.add("combat_flags", kAll, kAll, [this] { combat_sync(tick_.mode->primary()); });
     g.add("s4_positions", kAll, kAll, [this] { s4_positions(*tick_.mode); });  // S4: garrisoned units sit on their holders
     // s78n t03: the land teams' TeamTargeting P_U (cleared after the combat tick)
-    g.add("combat_team_pos", kAll, kAll, [this] { combat_team_positions(tick_.mode->primary()); });
+    g.add("combat_team_pos", bit(cStore) | bit(cState), bit(cCombat), [this] { combat_team_positions(tick_.mode->primary()); });
     lap("tac.combat_pre");
     g.add("abilities_combat", kAll, kAll, [this] {
         hooks_->set_tick(tick_.rng, tick_.global_frame);
@@ -323,7 +326,7 @@ void TacticalBattle::build_service_graph() {
     g.add("land_obstacles", kAll, kAll, [this] { land_obstacles_sync(*tick_.mode, *tick_.pf); });  // S8 t02
     g.add("engine_requests", kAll, kAll, [this] { hg_publish_engine_requests(); });  // engine loops: requests for audio
     // s78n t18 review: the gates the command phase reads follow this tick's deaths / retreats
-    g.add("pair_gates", kAll, kAll, [this] { feed_pair_gates(); });
+    g.add("pair_gates", kFeedReads, bit(cMovement), [this] { feed_pair_gates(); });
     lap("tac.victory");
     g.build();
 }
