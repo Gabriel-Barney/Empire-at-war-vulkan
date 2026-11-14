@@ -44,10 +44,11 @@ released into the public domain under [the Unlicense](LICENSE).
 > battles (fleet groups, fleet cohesion, fighter squadrons of 12, fleet and ship names, unit path lines). Open findings go
 > to a triaged backlog instead of growing the plan.
 >
-> **Tests:** the suite now has **261 tests**. The fast tier (165 tests) passes on the tip of `dev` with 0 warnings. The
-> newest full runs (2026-11-13) have about 20 slow tests failing (game smokes and benchmarks, galactic AI with a human
-> player, two land skirmish seeds and the parity harness), so `dev` is not release-ready yet. The last full gate that
-> passed was on 2026-11-12: 246 tests and 0 warnings on MSVC and on clang, and 67 under the sanitizer.
+> **Tests:** the suite now has **261 tests**. On the tip of `dev` the fast tier (165 tests), the game smokes and
+> benchmarks pass with 0 warnings. Seven slow tests still fail, so `dev` is not release-ready yet: the four parity-harness
+> runs and one space-station skirmish, which compare against retail and moved with the squadrons of 12 (a decision is
+> pending), and two land skirmish seeds hit by a known AI script error. The last full gate that passed was on 2026-11-12:
+> 246 tests and 0 warnings on MSVC and on clang, and 67 under the sanitizer.
 >
 > Task tracking is the project roadmap, kept in its own repository and not in this one (1,097 roadmap tasks done and 79
 > open, 145 of 168 groups done). Results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
@@ -353,7 +354,7 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 | Graphics and display menu (2026-11-13) | **Built**: separate Display and Graphics pages, display modes with exclusive full screen, SMAA / TAA / MSAA, FSR and XeSS upscaling, render and UI scale, custom frame-rate cap. Waiting for Gabriel's in-game look at the anti-aliasing and upscaler modes |
 | Port features (2026-11-13) | **Built**: fleet groups phase 1, fleet cohesion, squadrons of 12 with wing buttons, fleet and ship names, unit path lines. Waiting for in-game checks; fleet groups phases 2-3 are on the backlog |
 | Command Center launcher | **In the repository** (`launcher/`, imported 2026-11-13) and shipped with the test build |
-| Full test suite | Fast tier passes on `dev`; about 20 slow tests fail in the newest full runs (game smokes and benchmarks, galactic AI with a human player, land skirmish seeds 2 and 4, the parity harness), so the full gate has not passed since 2026-11-12 |
+| Full test suite | Fast tier, game smokes and benchmarks pass on `dev`. Seven slow tests fail, so the full gate has not passed since 2026-11-12: the parity harness (4) and the foc-station skirmish move with the squadrons of 12 (they pass with retail squadrons; decision pending), and land skirmish seeds 2 and 4 log a known AI script error |
 | Mod diagnostics (Q5) | Done |
 | Thrawn's Revenge (Q6) | **Plays**: the mod loads with no loader diagnostics, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. 2026-11-13: an event-driven galactic victory monitor (the mod's campaign menu holds and grants victory), base-game objects run their Lua scripts, and map hint names reach Lua. Left: two map-hint details and a final re-check after the parity check |
 | Mod platform (MODC) | **In progress**; the goal was widened on 2026-11-13 to near-full compatibility with FoC mods, checked on a reference set of four mods (`docs/MODS.md` §10). Done so far: the loading contract (`docs/MODS.md`), a lint against mod and faction names in engine code, the mod load report, a `STEAMMOD=` resolver, a mod picker in the game UI, shader model 3 translation, compiling mod `.fx` sources, and a synthetic fixture mod in the tests; two non-TR workshop mods load, start skirmishes and run galactic-AI sessions headless. Left: the §10 checklist on every reference mod, Gabriel playing a second mod in game, the game's front end with other mods, shader model 3 leftovers, an automatic `.fx` prebuild, field-schema and load-report fixes, and picker polish |
