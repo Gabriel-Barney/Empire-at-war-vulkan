@@ -35,6 +35,7 @@
 #include "alamo/sim/tactical_battle.hpp"
 #include "alamo/tactical/movement/special_locomotors.hpp"
 #include "alamo/tactical/movement/unit_params.hpp"
+#include "alamo/tactical/services/stream_rng.hpp"  // SP5 t03: counter-based streams
 
 namespace alamo::sim {
 
@@ -492,7 +493,16 @@ objects::ObjectId TacticalBattle::hg_spawn(TacticalMode& mode, int32_t type, int
 
 void TacticalBattle::hg_tick(TacticalMode& mode, SimRng& rng) {
     if (!hangars_) return;
-    hangars_->update(frame_, rng);
+    // SP5 t03: with the Hangar stream on, each carrier's entry / bay draws come from its own counter-based stream.
+    if (svc_streams_ & (1u << static_cast<uint32_t>(tactical::services::StreamId::Hangar))) {
+        const tactical::hangar::HangarSystem::StreamOf own = [this](tactical::hangar::ObjectId carrier) {
+            return tactical::services::stream_rng(cfg_.session_seed, frame_, tactical::services::StreamId::Hangar,
+                                                  static_cast<uint64_t>(static_cast<uint32_t>(carrier)));
+        };
+        hangars_->update(frame_, rng, &own);
+    } else {
+        hangars_->update(frame_, rng);
+    }
     objects::ObjectStore& store = mode.primary();
     const std::vector<th::LaunchRequest> launches(hangars_->launches().begin(), hangars_->launches().end());
     for (const th::LaunchRequest& r : launches) {

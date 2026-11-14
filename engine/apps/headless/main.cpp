@@ -94,7 +94,8 @@
 //       N1 done-check: save at T, continue to T+K; load in this process, in a fresh process and with replays, all
 //       must give the original's per-tick CRCs.
 // SP5: any mode takes --svc-mode serial|parallel|reverse (the battle services graph; same results, reverse = order check)
-// and --svc-check (debug write check of the services' declared sets; violations printed to stderr).
+// and --svc-check (debug write check of the services' declared sets; violations printed to stderr), and
+// --svc-streams hangar|none (SP5 t03: those services draw from counter-based streams; this MOVES per-seed outcomes).
 // BM1 benchmark (bench_run.hpp; scenario format alamo/sim/bench_scenario.hpp):
 //   alamo_headless --bench SCENARIO.abench [--runs R] [--warmup W] [--workers N] [--ticks K] [--bench-json FILE|-]
 //                  [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]
@@ -152,6 +153,7 @@
 #include "alamo/sim/bench_scenario.hpp"  // BM1 --bench-regen
 #ifdef ALAMO_SIM_HAVE_BATTLES
 #include "alamo/sim/tactical_battle.hpp"  // SP5 --svc-mode / --svc-check
+#include "alamo/tactical/services/stream_rng.hpp"  // SP5 --svc-streams
 #endif
 #endif
 #include "alamo/vfs/steam_workshop.hpp"
@@ -1311,6 +1313,23 @@ int main(int argc, char** argv) {
             else {
                 std::fprintf(stderr, "alamo_headless: --svc-mode serial | parallel | reverse\n");
                 return 2;
+            }
+            alamo::sim::TacticalBattle::set_service_run_defaults(d);
+        } else if (a == "--svc-streams" && i + 1 < argc) {  // SP5 t03: services on counter-based streams (moves draws)
+            auto d = alamo::sim::TacticalBattle::service_run_defaults();
+            d.streams = 0;
+            const std::string list = argv[++i];
+            size_t at = 0;
+            while (at <= list.size()) {
+                size_t end = list.find(',', at);
+                if (end == std::string::npos) end = list.size();
+                const std::string n = list.substr(at, end - at);
+                if (n == "hangar") d.streams |= 1u << static_cast<uint32_t>(alamo::tactical::services::StreamId::Hangar);
+                else if (!n.empty() && n != "none") {
+                    std::fprintf(stderr, "alamo_headless: --svc-streams: unknown service '%s' (hangar | none)\n", n.c_str());
+                    return 2;
+                }
+                at = end + 1;
             }
             alamo::sim::TacticalBattle::set_service_run_defaults(d);
         } else if (a == "--svc-check") {

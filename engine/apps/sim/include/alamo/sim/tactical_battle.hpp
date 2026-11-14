@@ -157,6 +157,8 @@ struct BattleConfig {
     float land_capture_countdown = 30.0f, space_capture_countdown = 30.0f;
     // cu9 t13: garrison holders / occupants / capture points are always registered (the `garrisons` switch is gone).
     // --- end S4 ---
+    // SP5 t03: the host's session seed (SimHost::session_seed), the first input of the services' counter-based streams.
+    uint32_t session_seed = 0;
 };
 
 struct BattleStats {
@@ -2313,10 +2315,22 @@ private:
 public:
     struct ServiceRunDefaults {
         tactical::services::RunMode mode = tactical::services::RunMode::Parallel;
-        bool check = false;  // debug write check (serial; a violation is counted and printed)
+        // Debug write check (serial; a violation is counted and printed). On by default in debug builds (NDEBUG unset),
+        // where a violation also asserts.
+#ifdef NDEBUG
+        bool check = false;
+#else
+        bool check = true;
+#endif
         // A per-unit service loop forks through the tick's ParallelFor only with at least this many units (below it the
         // fork costs more than the loop). Wall clock only: results do not depend on it (tests set 1 to force the forks).
         uint32_t parallel_min = 256;
+        // SP5 t03 (docs/SIM_PARALLEL_DESIGN.md §4.4): bit (1 << StreamId) set = that service draws from counter-based
+        // streams (stream_rng(BattleConfig::session_seed, frame, id, entity)) instead of the synced RNG. Unlike the fields
+        // above this CHANGES per-seed outcomes (draw order, tier 3): set it per run, the same for a save and its load
+        // (headless --svc-streams). 0 = every service on the synced RNG (retail order; the goldens). A default is switched
+        // only after the Q4 harness A/B (DECISIONS "Parallel sim redesign").
+        uint32_t streams = 0;
     };
     static void set_service_run_defaults(const ServiceRunDefaults& d);
     static ServiceRunDefaults service_run_defaults();
@@ -2342,6 +2356,7 @@ private:
     const TacticalBattle* svc_owner_ = nullptr;  // the graph's lambdas capture this; rebuilt if the object moved
     tactical::services::RunMode svc_mode_ = service_run_defaults().mode;
     uint32_t svc_parallel_min_ = service_run_defaults().parallel_min;
+    uint32_t svc_streams_ = service_run_defaults().streams;  // SP5 t03: services on counter-based streams (bit per StreamId)
     std::unique_ptr<tactical::services::Checker> svc_check_;
     // --- end SP5 ---
 };

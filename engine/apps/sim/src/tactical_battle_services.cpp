@@ -10,6 +10,7 @@
 // around each service and reports one changed outside the service's write set; RunMode::Reverse runs each phase in
 // reverse order, so an undeclared read shows as a CRC difference against the Serial run (tests: test_battles_services).
 #include <atomic>
+#include <cassert>
 #include <cinttypes>
 #include <cstdio>
 
@@ -73,6 +74,7 @@ void TacticalBattle::set_service_check(bool on) {
         g_violations_total.fetch_add(1);
         std::fprintf(stderr, "svc-check: frame %u service %s changed '%s' outside its declared writes\n", frame_, s.c_str(),
                      comp_names()[c].c_str());
+        assert(false && "services graph: a service changed a component outside its declared writes");
     };
 }
 

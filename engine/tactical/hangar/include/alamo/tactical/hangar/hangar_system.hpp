@@ -168,7 +168,11 @@ public:
     void deploy_squad(ObjectId carrier, uint32_t frame, float recharge_seconds);
 
     // Serial, once per frame: carrier deaths, then the due services (descending id).
-    void update(uint32_t frame, SimRng& rng);
+    // SP5 t03 (docs/SIM_PARALLEL_DESIGN.md §4.4): with `stream_of`, each serviced carrier's draws (the entry and bay
+    // picks) come from stream_of(carrier id) - a counter-based stream of its own - instead of `rng`; the order of the
+    // services and every other effect are unchanged. Null: the synced draws (retail order).
+    using StreamOf = std::function<SimRng(ObjectId carrier)>;
+    void update(uint32_t frame, SimRng& rng, const StreamOf* stream_of = nullptr);
 
     // ---- queries ----
     bool has_carrier(ObjectId id) const { return find(id) >= 0; }

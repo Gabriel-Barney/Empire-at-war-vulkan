@@ -381,7 +381,7 @@ void HangarSystem::launch(Carrier& c, uint32_t frame, SimRng& rng) {
     c.next = next;
 }
 
-void HangarSystem::update(uint32_t frame, SimRng& rng) {
+void HangarSystem::update(uint32_t frame, SimRng& rng, const StreamOf* stream_of) {
     // Dead carriers: tracking stops; spawned units stay.
     for (size_t i = 0; i < carriers_.size();) {
         if (!combat_->alive(carriers_[i].id)) {
@@ -397,7 +397,12 @@ void HangarSystem::update(uint32_t frame, SimRng& rng) {
         if (c.due > frame) continue;
         c.due = frame + cfg_.service_interval;
         if (c.entries.empty()) build(c, frame);
-        if (c.state == 0 && can_spawn(c, frame, rng)) launch(c, frame, rng);
+        if (stream_of && *stream_of) {  // SP5 t03: this carrier's own stream
+            SimRng own = (*stream_of)(c.id);
+            if (c.state == 0 && can_spawn(c, frame, own)) launch(c, frame, own);
+        } else if (c.state == 0 && can_spawn(c, frame, rng)) {
+            launch(c, frame, rng);
+        }
     }
 }
 
