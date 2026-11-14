@@ -79,6 +79,10 @@ Real work is done per roadmap group by a `lane` agent (`.claude/agents/lane.md`;
 own worktree. Lanes own a group, not a folder: two lanes must not edit the same files, and a landing commit names any golden that changed.
 A change to `engine/core` public headers or the top-level CMake goes through the integrating agent. Single-module
 `engine-module` agents remain for narrow side tasks. Definitions live in `.claude/agents/`.
+Project skills (`.claude/skills/`; triggers in each description): `start-group` / `finish-group` / `build` / `phase-status`
+(the loop), `determinism-check` and `regen-goldens` (sim and goldens), `diagnosing-bugs` (an unexplained failure: loop first),
+`research` (cited report in its `docs/` home), `probe-kit` (retail checks), `writing-for-agents` (editing any file agents read),
+`retro` (Gabriel-invoked review of how sessions went; lanes end with a one-line friction note for it).
 - Worktrees (2026-11-06): `tools\new_worktree.cmd <name> [--base origin/dev]` creates `.claude\worktrees\<name>` on `claude/<name>`
   from `origin/dev` (default since 2026-11-06), with junctions to `Data`, `extracted`, `toolchain` and `roadmap-store`, and syncs
   the roadmap. Use ONE build tree per worktree (`build_agent.cmd msvc "<modules>"` gives `build-wt-msvc`: the tree name defaults to `wt` since 2026-11-08). After the branch is

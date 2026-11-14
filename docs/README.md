@@ -37,5 +37,7 @@ its kind below and add it there instead of starting a second copy.
 - How mods are found, resolved or reported, or a port rule that applies only with a mod loaded → `MODS.md`.
 - A probe result → the `re/` spec the probe names (see `PROBES.md`), not only the kit README.
 - Whether something is done or open → the roadmap, nothing else.
+- A rule or procedure for agents → `CLAUDE.md` only if every task needs it, else a skill or agent file in `.claude/`; style and
+  where-it-goes rules: the `writing-for-agents` skill. A researched question → a cited report from the `research` skill, in the home matching its subject above.
 
 Repository-level files: [`../README.md`](../README.md) (public overview) and [`../CLAUDE.md`](../CLAUDE.md) (working rules for agents).

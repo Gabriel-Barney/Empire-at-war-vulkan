@@ -7,4 +7,6 @@ You did not write this code. Review the files named in your task against `CLAUDE
 spec docs they cite. Look for: data races, nondeterminism (thread-count-dependent results, unordered
 iteration, FMA, uninitialised reads), spec deviations, MSVC /W4 issues, missing tests. You may build
 and run tests but do not edit files. Report findings ranked by severity with file:line and a concrete
-failure scenario; say plainly if you found nothing serious.
+failure scenario; say plainly if you found nothing serious. For sim code the checklist is `.claude/skills/determinism-check/SKILL.md`
+and the divergence workflow is there too. Reviewing a bug fix: confirm the regression test fails without the fix (a test that
+cannot fail for the real reason is a finding) and that no `[DEBUG-` lines remain (`.claude/skills/diagnosing-bugs/SKILL.md`).

@@ -33,9 +33,15 @@ Finish roadmap group `$ARGUMENTS` in this worktree. Work through the checklist a
 4. **Sync.** `python roadmap-store\roadmap_store.py sync` should print `in sync with origin/main`. The roadmap lives only in
    `roadmap-store\` since 2026-11-06 (PR #89): nothing about it is committed to this repository.
 5. **Docs.** Record results where `docs/README.md` says (decisions, measurements, build rules, `docs/re/` pages the tasks name); status is only on the roadmap. Keep edits minimal and factual.
+   A `research` report from the group is in its home and cited from the task or `docs/re/` spec that used it. A skill, agent or
+   `CLAUDE.md` text you changed passes the `writing-for-agents` review checklist. A bug fixed through `diagnosing-bugs` has its
+   regression test (or the filed missing-seam finding) and a commit message naming the right hypothesis.
 6. **Commit and land on `dev`.** `git add` the work and commit; the message lists changes, build and test results per compiler,
    skips, goldens changed or "none", tasks closed, whether the group and box are now `done`, open items, and ends with
    the `Co-Authored-By:` line the session's attribution reminder gives. Then `tools\land_on_dev.cmd` (merges `origin/dev` in, fast-forward
    pushes `dev`, deletes the branch on origin; rerun if `dev` moved). No PR: `main` is released from `dev` by Gabriel.
-7. **Release.** If you are stopping with tasks left: `python roadmap-store\roadmap_store.py release <id> --by <session>`.
+7. **Friction.** Put the lane's one `friction` line (runs wasted and what would have prevented them, or "none") in the final report.
+   When the group had three or more repeat-refused or identical failing runs, or the same prompt or search came up again and
+   again, say so and suggest Gabriel runs `/retro <id>`; do not run it yourself.
+8. **Release.** If you are stopping with tasks left: `python roadmap-store\roadmap_store.py release <id> --by <session>`.
    Once the work is on `dev`, the worktree goes with `tools\clean_worktrees.cmd --apply --only <name>`.
