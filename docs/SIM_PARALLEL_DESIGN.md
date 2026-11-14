@@ -94,6 +94,17 @@ All of this is golden-neutral: results already do not depend on the worker count
 - Readers hold `S_N` by reference count; the buffer is reused when the last reader releases it. With k_ai = 2 three buffers suffice.
 - Static data (type tables, XML) is shared read-only and never copied. The S6 string-keyed lookups are resolved once into a per-battle
   `TypeFacts[type]` table, so the snapshot holds type indices only.
+- **Follow-on option: direct writes instead of the end-of-tick copy** (Gabriel, 2026-11-14). The critical lane writes the AI-read
+  fields (position, health, owner, order, flags) straight into the buffer of the tick it is running, and publishing becomes a
+  buffer-index flip with no copy. The AI-to-sim direction already works this way (orders are written into the slot for tick N+2).
+  - What stays: one writer per buffer, and no reader opens it before it is sealed at the fixed tick. Reading a buffer still being
+    written shows a half-finished tick whose content depends on thread timing, which breaks rule 3, saves and replays.
+  - Stale fields: with three rotating buffers, the next buffer was last written two ticks ago. Either write every AI-read field
+    every tick (cheap for fields that change anyway), or patch only the fields changed since (a dirty list; a small copy remains).
+  - Cost: every system that writes those fields now writes into the buffer, a much wider change than one publish step.
+  - Gain is small: ~2,000 objects × ~64 B ≈ 128 KB, tens of µs to copy. The 1.4 ms of `tac.ai.perception` today is lookups, sort
+    and diff, not bytes moved.
+  - Order: ship the end-of-tick copy first, profile it, and move the hottest fields to direct writes only if the copy shows up.
 
 ### 4.3 Deferred writes, committed in a canonical order
 - Inside a phase, a parallel job **never writes shared state**. It writes (a) its own per-index output slot, or (b) records into a
