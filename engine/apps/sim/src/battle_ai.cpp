@@ -348,7 +348,7 @@ namespace {
 enum HostOp : uint8_t {
     kHostDivert = 64, kHostBuild, kHostLockPad, kHostBombard, kHostBombingRun, kHostBombingDisabled, kHostBombardDisabled,
     kHostRemoveBombard, kHostForceWeather, kHostSwBegin, kHostSwFire, kHostSwLob, kHostTswFire, kHostTeleport, kHostFirstLock,
-    kHostHyperspaceOut, kHostSetEnvironment, kHostReleaseClash
+    kHostHyperspaceOut, kHostSetEnvironment, kHostReleaseClash, kHostFogRevealAll, kHostFogTempReveal, kHostFogDisableRendering
 };
 }
 
@@ -569,6 +569,30 @@ void BattleAi::wrap_lane_hooks() {
         if (!lane_view()) return f(index);
         queue(kHostSetEnvironment, -1, {}, {}, index);
     };
+#ifdef ALAMO_LUA_HAVE_FOG
+    // slice 4e (part 3): the fogged test from the capture; Reveal_All / Temporary_Reveal / Disable_Rendering queued
+    fog_hooks_.object_hidden = [this, vid, f = fog_hooks_.object_hidden](objects::ObjectHandle o, int32_t player, bool force) {
+        if (!lane_view()) return f ? f(o, player, force) : false;
+        const auto pk = std::find(view_.fog_players.begin(), view_.fog_players.end(), player);
+        if (pk == view_.fog_players.end()) return false;
+        const objects::ObjectId id = vid(o);
+        const auto& v = view_.fog_hidden;
+        const auto it = std::lower_bound(v.begin(), v.end(), id, [](const std::pair<objects::ObjectId, uint32_t>& a, objects::ObjectId x) { return a.first < x; });
+        if (!force) return false;  // [port] not captured: the bindings ask with force = 1 only (Find_Nearest)
+        const auto bit = static_cast<uint32_t>(pk - view_.fog_players.begin());
+        return it != v.end() && it->first == id && ((it->second >> bit) & 1u) != 0;
+    };
+    fog_hooks_.lane_write = [this, vid](uint8_t op, int32_t player, objects::ObjectHandle o, float value) {
+        if (!lane_view()) return;  // (the binding acts on the fog itself without a lane_write; never reached)
+        const uint8_t host = op == 1 ? kHostFogRevealAll : op == 2 ? kHostFogTempReveal : kHostFogDisableRendering;
+        lua::LaneWrite w;
+        w.op = static_cast<lua::LaneWriteOp>(host);
+        w.owner = player;
+        if (op == 2) w.ids = {vid(o)};
+        w.seconds = value;
+        queue_lane_write(w);
+    };
+#endif
     // A spawned object is used at once (its handle): not available off the critical lane (no shipped AI script spawns).
     k.spawn = [this, f = k.spawn](const objects::SpawnParams& p) {
         if (!lane_view()) return f(p);
@@ -628,6 +652,24 @@ void BattleAi::capture_l1() {
         v.retreat_inc[p] = b_->retreat_increment_frames(pi);
     }
     v.sw = b_->l1_sw_;
+    // slice 4e (part 3): the AI players' fogged test of every object (both force values)
+    v.fog_players.clear();
+    v.fog_hidden.clear();
+    if (b_->fog()) {
+        for (size_t p = 0; p < ai_side_.size(); ++p)
+            if (ai_side_[p]) v.fog_players.push_back(static_cast<int32_t>(p));
+        const objects::ObjectStore& st = mode_->primary();
+        for (const objects::ObjectHandle h : st.all_objects()) {
+            if (!st.alive(h)) continue;
+            const objects::ObjectId id = st.id(h);
+            uint32_t bits = 0;
+            for (size_t k = 0; k < v.fog_players.size(); ++k) {
+                if (b_->fog_object_hidden(v.fog_players[k], id, true)) bits |= 1u << k;  // the bindings ask with force only
+            }
+            if (bits) v.fog_hidden.emplace_back(id, bits);
+        }
+        std::sort(v.fog_hidden.begin(), v.fog_hidden.end());
+    }
     // TacticalBattle::tsw_fire's planet gate (0x42a720)
     v.tsw_planet_ok = false;
     const auto planet = b_->req_.info.planet;
@@ -668,6 +710,18 @@ void BattleAi::apply_host_write(const lua::LaneWrite& w) {
         case kHostFirstLock: if (k.movement_first_lock) k.movement_first_lock(h); break;
         case kHostHyperspaceOut: if (k.hyperspace_out_link) k.hyperspace_out_link(h, w.value, w.on != 0); break;
         case kHostSetEnvironment: if (k.set_new_environment) k.set_new_environment(w.value); break;
+        case kHostFogRevealAll:
+            if (tactical::fog::FogOfWar* fog = b_->fog()) fog->reveal_all(w.owner);
+            break;
+        case kHostFogTempReveal:
+            if (tactical::fog::FogOfWar* fog = b_->fog()) {
+                tactical::fog::FogObject o;
+                if (b_->fog_object(id, o)) fog->temporary_reveal(w.owner, o, w.seconds);
+            }
+            break;
+        case kHostFogDisableRendering:
+            if (tactical::fog::FogOfWar* fog = b_->fog()) fog->disable_rendering(w.seconds != 0.0f);
+            break;
         default: break;
     }
 }
@@ -686,6 +740,7 @@ bool BattleAi::start(std::vector<std::string>* diag) {
     // queue is collected at once (no job is pending yet: the first update would otherwise drop it).
     capture_lane_view();
     const bool ok = world_->start(diag);
+    queue_global_writes();  // slice 4e (part 3)
     for (cmd::Command& c : lane_job_.batch) lane_batch_.push_back(std::move(c));
     lane_job_.batch.clear();
     lane_locks_ = world_->object_bridge().script_lock_facts();  // slice 4e
@@ -702,12 +757,14 @@ void BattleAi::update() {
     if (world_->ai_lane()) {  // sp3 t02
         lane_collect();
         capture_lane_view();
+        world_->set_lane_global_overlay(global_overlay());  // slice 4e (part 3)
         world_->publish(static_cast<int64_t>(host_->frame()), b_->frame_);
         lane_job_.pending = true;
         lane_job_.frame = host_->frame();
         lane_job_.batch.clear();
         world_->think();  // inline: the AI lane's job (t03: on the AI thread)
         lane_job_.locks = world_->object_bridge().script_lock_facts();  // slice 4e: published at collect
+        queue_global_writes();
         StateHasher h;
         world_->hash(h);
         lane_job_.digest = h.digest();
@@ -844,13 +901,70 @@ void BattleAi::capture_lane_abilities() {
 
 void BattleAi::queue_lane_write(const lua::LaneWrite& w) {
     cmd::Command c;
-    c.header.player = static_cast<uint8_t>(w.owner >= 0 && w.owner < 0xFF ? w.owner : 0xFF);
+    // the batch's player (drain order; a decodable slot): the write's owner, else 0
+    c.header.player = static_cast<uint8_t>(w.owner >= 0 && w.owner < static_cast<int32_t>(cmd::kMaxPlayerSlots) ? w.owner : 0);
     c.header.source = cmd::CommandSource::AI;
     c.header.sequence = lane_seq_++;
     c.header.issue_tick = host_->frame();
     c.header.scheduled_tick = host_->frame() + world_->k_ai();
     c.payload = cmd::ev::port_extension(lua::kLaneWriteSubtype, lua::encode_lane_write(w));
     lane_job_.batch.push_back(std::move(c));  // visible when the job is collected
+}
+
+namespace {
+constexpr uint16_t kLaneGlobalSubtype = 0x4147;  // "AG": an AI GlobalValue.Set (name, value)
+void put_global(ByteWriter& w, const lua::AiGlobalValue& v) {
+    w.u8(static_cast<uint8_t>(v.kind)).f64(v.number).str(v.text).u32(static_cast<uint32_t>(v.keys.size()));
+    for (size_t i = 0; i < v.keys.size(); ++i) {
+        put_global(w, v.keys[i]);
+        put_global(w, i < v.values.size() ? v.values[i] : lua::AiGlobalValue{});
+    }
+}
+bool get_global(ByteReader& r, lua::AiGlobalValue& v, int depth = 0) {
+    const uint8_t kind = r.u8();
+    if (kind > lua::AiGlobalValue::Table || depth > 64) return false;
+    v.kind = static_cast<lua::AiGlobalValue::Kind>(kind);
+    v.number = r.f64();
+    v.text = r.str();
+    uint32_t n = 0;
+    if (!r.count(n, 26)) return false;
+    v.keys.resize(n);
+    v.values.resize(n);
+    for (uint32_t i = 0; i < n; ++i)
+        if (!get_global(r, v.keys[i], depth + 1) || !get_global(r, v.values[i], depth + 1)) return false;
+    return r.ok();
+}
+bool decode_global(const cmd::EventData& ev, std::string& name, lua::AiGlobalValue& v) {
+    ByteReader r(ev.bytes_view("data"));
+    name = r.str();
+    return get_global(r, v) && r.ok() && r.done();
+}
+}  // namespace
+
+void BattleAi::queue_global_writes() {
+    for (auto& [name, v] : world_->take_lane_global_writes()) {
+        ByteWriter w;
+        w.str(name);
+        put_global(w, v);
+        cmd::Command c;
+        c.header.player = 0;  // no player of its own (a decodable slot)
+        c.header.source = cmd::CommandSource::AI;
+        c.header.sequence = lane_seq_++;
+        c.header.issue_tick = host_->frame();
+        c.header.scheduled_tick = host_->frame() + world_->k_ai();
+        c.payload = cmd::ev::port_extension(kLaneGlobalSubtype, w.bytes());
+        lane_job_.batch.push_back(std::move(c));
+    }
+}
+
+std::vector<ai::tactical::TacticalAiWorld::GlobalWrite> BattleAi::global_overlay() const {
+    std::vector<ai::tactical::TacticalAiWorld::GlobalWrite> out;
+    for (const cmd::Command& c : lane_batch_) {
+        if (c.payload.type() != cmd::EventType::PortExtension || c.payload.u("subtype") != kLaneGlobalSubtype) continue;
+        ai::tactical::TacticalAiWorld::GlobalWrite g;
+        if (decode_global(c.payload, g.first, g.second)) out.push_back(std::move(g));
+    }
+    return out;
 }
 
 bool BattleAi::lane_write_command(const cmd::EventData& ev) {
@@ -1867,6 +1981,15 @@ void BattleAi::apply_lane_batch(uint64_t frame) {
     for (const cmd::Command& c : due) {
         if (lane_write_command(c.payload)) {  // sp3 slice 4b: a binding's queued write
             apply_lane_write(c);
+            count_executed(c.payload, cmd::RejectReason::None);
+            continue;
+        }
+        if (c.payload.type() == cmd::EventType::PortExtension && c.payload.u("subtype") == kLaneGlobalSubtype) {  // slice 4e
+            std::string name;
+            lua::AiGlobalValue v;
+            if (decode_global(c.payload, name, v)) {
+                if (lua::GlobalValueStore* gv = host_->global_values()) gv->set(name, v);
+            }
             count_executed(c.payload, cmd::RejectReason::None);
             continue;
         }

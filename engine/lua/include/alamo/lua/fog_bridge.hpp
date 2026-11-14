@@ -87,6 +87,11 @@ struct FogScriptHooks {
     // Disable_Rendering while `fog` is null: the host's carried FOW-active / render option (CampaignBattles keeps them
     // between battles, FOG_OF_WAR §8 item 2). Unset: ignored.
     std::function<void(bool fow_active, bool render_option)> set_globals;
+    // sp3 (AI lane): set by a host whose VMs run off the critical lane. Reveal_All (op 1, player), Temporary_Reveal (op 2,
+    // player, object, seconds) and Disable_Rendering (op 3, value 1 = disable) are handed to it - the host applies them at
+    // the due tick - instead of acting on `fog`; Reveal and Undo_Reveal (a cells handle used at once) are a script error
+    // there. The fog reads stay `object_hidden` (the host answers from its capture).
+    std::function<void(uint8_t op, int32_t player, objects::ObjectHandle object, float value)> lane_write;
     uint32_t epoch = 0;  // host-chosen id of this fog instance (e.g. the battle number)
     FogScriptCells cells;
 };
