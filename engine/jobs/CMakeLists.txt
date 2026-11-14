@@ -3,6 +3,7 @@ add_library(alamo_jobs STATIC
   src/job_system.cpp
   src/scratch.cpp
   src/tick.cpp
+  src/topology.cpp
 )
 add_library(alamo::jobs ALIAS alamo_jobs)
 target_include_directories(alamo_jobs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -527,6 +527,18 @@ if(_alamo_sim)
     set_tests_properties(alamo_headless_save_skirmish_foc alamo_headless_save_skirmish_foc_land alamo_headless_save_galactic_battle
                          alamo_headless_save_galactic_before_battle alamo_headless_save_skirmish_foc_land_scheduled
                          PROPERTIES TIMEOUT 1800)
+    # sp3 (docs/SIM_PARALLEL_DESIGN.md 5.1): the same battles with the AI lane on (--ai-lane: the AI's own stream, unit orders
+    # queued for N + 2): the save / load round trip (queued orders and the AI stream in the save) and the worker-count check.
+    add_test(NAME alamo_headless_save_skirmish_foc_ai_lane
+             COMMAND alamo_headless --save-session skirmish --campaign foc --save-when battle --save-check --ai-lane
+                     --save-at 600 ${CMAKE_CURRENT_BINARY_DIR}/sp3_save_skirmish_foc_ai_lane.alsv --ticks 2400 --workers 4 --quiet)
+    add_test(NAME alamo_headless_save_skirmish_foc_land_ai_lane
+             COMMAND alamo_headless --save-session skirmish --campaign foc-land --save-when battle --save-check --ai-lane
+                     --save-at 900 ${CMAKE_CURRENT_BINARY_DIR}/sp3_save_skirmish_foc_land_ai_lane.alsv --ticks 2700 --workers 4 --quiet)
+    set_tests_properties(alamo_headless_save_skirmish_foc_ai_lane alamo_headless_save_skirmish_foc_land_ai_lane PROPERTIES TIMEOUT 1800)
+    alamo_add_worker_count_check(alamo_headless_skirmish_ai_foc_land_ai_lane
+        COMMAND alamo_headless --skirmish-ai foc-land --ticks 3000 --quiet --ai-lane
+        TIMEOUT 1800 SLOW)
     if(TARGET alamo_anim)
       # A battle with the animation on (anim worlds of the galaxy and the battle mode).
       add_test(NAME alamo_headless_save_skirmish_anim

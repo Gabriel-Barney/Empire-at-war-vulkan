@@ -564,6 +564,7 @@ bool SimHost::tick_once() {
     step("T1.begin_tick");
     // T2 scheduled commands due this frame (handler runs inside, in drain order).
     batch_crc_ = 0;
+    if (before_commands_) before_commands_(*this);  // sp3 t04: AI lane batches due this frame, before the players' commands
     pipeline_->begin_tick(frame_);
     step("T2.commands");
     // T4 TreeCull: rebuild dirty spatial trees.

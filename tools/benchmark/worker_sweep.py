@@ -7,7 +7,8 @@
 For each round, for each scene, for each worker count: one process `alamo_headless --bench SCENE --runs 1 --warmup 0 --workers W
 --quiet --bench-json OUT/<scene>_w<W>_r<round>.json` (rendered scenes run sim-only too, like PERFORMANCE.md "Game scenes timed
 sim-only"). Interleaving keeps machine-load drift out of the worker-count comparison. Before each run the whole-machine CPU use is
-sampled (typeperf) and stored next to the result: record it with every number (several lanes may be building).
+sampled (typeperf) and stored next to the result: record it with every number (several lanes may be building); `--max-busy P`
+retries a run that was busier than P percent (before it, or other processes during it).
 
 Prints, per scene: median tick and p99 per worker count and round, the busy CPU before each run, and the ratio of every count to W0
 (the sp1 exit: no scene slower than W0 by more than 3 %). `--zones` adds a zone table (p50 / mean ms and share, W0 and the largest
@@ -24,6 +25,7 @@ import os
 import statistics
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_suite import ROOT, cpu_busy_pct, scenes  # noqa: E402
@@ -73,6 +75,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--build-dir", default="build-wt-msvc")
     ap.add_argument("--out", default="")
     ap.add_argument("--zones", default="", help="comma list of zone names or prefix* patterns for the zone table")
+    ap.add_argument("--max-busy", type=float, default=0.0,
+                    help="retry a run (after a 30 s pause) when the CPU was busier than this percent before it or other processes "
+                         "took more than this during it; 0 = never retry")
+    ap.add_argument("--retries", type=int, default=3, help="most retries per run with --max-busy (the last try is kept)")
     a = ap.parse_args(argv)
     try:
         counts = sorted({int(x) for x in a.workers.split(",") if x.strip()})
@@ -97,17 +103,25 @@ def main(argv: list[str]) -> int:
         for name, path in todo:
             for w in counts:
                 res = os.path.join(out, f"{name}_w{w}_r{rnd}.json")
-                b = cpu_busy_pct()
-                cmd = [exe, "--bench", path, "--runs", "1", "--warmup", "0", "--workers", str(w), "--quiet", "--bench-json", res]
-                r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-                with open(res[:-5] + ".log", "w", encoding="utf-8") as f:
-                    f.write(r.stdout + r.stderr)
-                d = {}
-                if os.path.isfile(res):
-                    try:
-                        d = json.load(open(res, encoding="utf-8"))
-                    except (OSError, ValueError):
-                        d = {}
+                for attempt in range(a.retries + 1 if a.max_busy > 0 else 1):
+                    if attempt:
+                        time.sleep(30)
+                    b = cpu_busy_pct()
+                    cmd = [exe, "--bench", path, "--runs", "1", "--warmup", "0", "--workers", str(w), "--quiet", "--bench-json", res]
+                    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+                    with open(res[:-5] + ".log", "w", encoding="utf-8") as f:
+                        f.write(r.stdout + r.stderr)
+                    d = {}
+                    if os.path.isfile(res):
+                        try:
+                            d = json.load(open(res, encoding="utf-8"))
+                        except (OSError, ValueError):
+                            d = {}
+                    other = d.get("summary", {}).get("max_other_cpu_pct")
+                    busy_run = (b is not None and b > a.max_busy) or (isinstance(other, (int, float)) and other > a.max_busy)
+                    if a.max_busy <= 0 or not busy_run:
+                        break
+                    print(f"  round {rnd} {name} W{w}: busy (before {b} %, during {other} %), retrying", flush=True)
                 ok = r.returncode == 0 and d.get("comparable", False)
                 failed = failed or not ok
                 d["busy_before_pct"] = b
@@ -123,6 +137,7 @@ def main(argv: list[str]) -> int:
         sc: dict = {}
         for key, label in (("median_ms", "median ms"), ("p99_ms", "p99 ms")):
             rows.append([label] + [" / ".join(fmt(d.get("summary", {}).get(key)) for d in results[name][w]) for w in counts])
+        rows.append(["other CPU % during"] + [" / ".join(fmt(d.get("summary", {}).get("max_other_cpu_pct")) for d in results[name][w]) for w in counts])
         rows.append(["busy %"] + [" / ".join(f"{b:.0f}" if b is not None else "?" for b in busy[name][w]) for w in counts])
         base = [d.get("summary", {}).get("median_ms") for d in results[name][counts[0]]]
         ratios = []

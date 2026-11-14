@@ -20,6 +20,7 @@
 // Game data: --game DIR or ALAMO_FOC_DATA (the FoC "corruption" folder).
 #include "game_app.hpp"
 #include "alamo/vfs/steam_workshop.hpp"
+#include "alamo/jobs/topology.hpp"  // sp1: OS hints
 
 #include "alamo/game/save_export.hpp"
 #include "alamo/render/galactic/galactic_snapshot.hpp"
@@ -686,7 +687,12 @@ int main(int argc, char** argv) {
         // space fleets start ~5000 units apart).
         if (opt.battle_max_frames == 27000) opt.battle_max_frames = opt.smoke == "campaign" ? 900u : 4800u;
     }
-    set_process_priority(opt.priority >= 0 ? opt.priority == 1 : opt.smoke.empty());
+    const bool above = opt.priority >= 0 ? opt.priority == 1 : opt.smoke.empty();
+    set_process_priority(above);
+    // SIMP sp1 (design 4.1): no power throttling of the process; the sim thread (this one) one priority step up with the
+    // above-normal process. Wall clock only.
+    (void)alamo::jobs::disable_power_throttling();
+    if (above) (void)alamo::jobs::raise_current_thread_priority();
     App app(std::move(opt));
     const int rc = app.run();
     if (!regen_save.empty()) std::remove(regen_save.c_str());  // bm3: --bench-regen's temporary save

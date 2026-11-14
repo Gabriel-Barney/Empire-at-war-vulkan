@@ -66,6 +66,8 @@
 //       [--no-pp-streams] [--pp-latency F] (--skirmish-ai): OPT2 t10 parity knobs - slot-10 plan picks and PotentialPlan
 //       solves on the synced stream in proposal order (the original), and the frames from a goal slice to the apply of
 //       its solves (default 1; 0 = in the slice, on the job system).
+//       [--ai-lane] [--ai-lane-k K] (any run with a tactical AI, --bench included): sp3 AI lane (docs/SIM_PARALLEL_DESIGN.md
+//       5.1), off by default; K = ticks from an AI update to the apply of its command batch (default 2).
 //   alamo_headless --skirmish-ai synthetic|foc|foc-land|foc-land-campaign|foc-station|skirmish [--map NAME] [--ticks N] [--crc-out F] [--golden F] [--check-workers]
 //       [--expect-battle-end]: fail unless the battle ends with a winner before its frame limit (S10 land outcome).
 //       [--expect-skirmish-base]: foc-land only (t50): fail unless both sides start with a pre-built base, the AI acts and shots are fired.
@@ -151,6 +153,7 @@
 #include "alamo/objects/game_object_types.hpp"
 #include "alamo/objects/object_types.hpp"
 #ifdef ALAMO_HEADLESS_HAVE_SIM
+#include "alamo/sim/battle_ai.hpp"       // sp3: --ai-lane (ai_lane_defaults)
 #include "alamo/sim/bench_scenario.hpp"  // BM1 --bench-regen
 #ifdef ALAMO_SIM_HAVE_BATTLES
 #include "alamo/sim/tactical_battle.hpp"  // SP5 --svc-mode / --svc-check
@@ -165,6 +168,7 @@
 #include "skirmish_run.hpp"  // A1 stage 2
 #include "battle_run.hpp"
 #include "bench_run.hpp"  // BM1
+#include "alamo/jobs/topology.hpp"  // sp1: OS hints
 #include "map_run.hpp"
 #include "save_run.hpp"  // N1
 #endif
@@ -938,6 +942,10 @@ static int headless_main(int argc, char** argv) {
         else if (a == "--no-ai-stagger") opt.ai_stagger = 0;                                       // OPT2 t01
         else if (a == "--ai-stagger") opt.ai_stagger = 1;                                          // a2m r4
         else if (a == "--no-pp-streams") opt.pp_streams = false;                                   // OPT2 t10
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+        else if (a == "--ai-lane") alamo::sim::ai_lane_defaults().on = true;  // sp3
+        else if (a == "--ai-lane-k") alamo::sim::ai_lane_defaults().k_ai = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
+#endif
         else if (a == "--pp-latency") opt.pp_latency = std::strtoll(next().c_str(), nullptr, 10);   // OPT2 t10
         else if (a == "--aggressor") opt.aggressor = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--battle-retreat") opt.battle_retreat = static_cast<float>(std::strtod(next().c_str(), nullptr));
@@ -1283,6 +1291,7 @@ static int headless_main(int argc, char** argv) {
 // results and CRCs are unchanged. Runs that tick several hosts in turn (--selfcheck, --check-workers) report them together.
 int main(int argc, char** argv) {
     alamo::vfs::install_steam_workshop_lookup();  // modc t10: STEAMMOD= from the Steam library folders
+    (void)alamo::jobs::disable_power_throttling();  // SIMP sp1: wall clock only (the sim thread's priority: bench_run)
     // Q5: an uncaught exception (e.g. mod data past a fixed limit) names itself instead of a silent 0xC0000409 exit.
     std::set_terminate([] {
         try {

@@ -86,6 +86,21 @@ is late.** Thread timing then decides only *when the CPU does the work*, never *
 
 All of this is golden-neutral: results already do not depend on the worker count.
 
+**As built (sp1, 2026-11-14; `alamo/jobs/job_system.hpp`, `topology.hpp`).** Port choices where the build differs from the text above:
+- *Cost estimate:* measured, not declared. Each `parallel_for` call site (the lambda's type) keeps a wall-clock work-per-item
+  estimate (inline: the loop's time; forked: time x threads that ran chunks); estimated work below 50 us runs inline, and at most one
+  thread per 25 us of work joins. No call site changed. The first call of a site always forks (no estimate yet).
+- *Strict priority:* only a loop's **helpers** run queued critical jobs between chunks, not its owner (the owner's stack may hold the
+  job a critical job waits on: a self-wait deadlock found in review). Rule added: a critical job never waits on an AI or background
+  counter.
+- *Sleep:* one epoch per kind of sleeper (idle workers; waiters), `std::atomic::wait` on it, after a 5 us (waiter) / 30 us (worker)
+  `_mm_pause` spin; not one wait per counter.
+- *Pool:* P-cores of the largest cache domain (then the larger L3) minus 2; a hybrid part with few P-cores still gets up to 3 workers
+  from its other cores. E-cores do not get a background-only queue yet. Workers are kept on the pool's cores (one logical processor
+  each) only when workers + 2 fit (the default does; `ALAMO_JOBS_CPUSETS=0` turns it off).
+- *OS hints:* power-throttling opt-out in `alamo_game` and `alamo_headless`; the sim thread one step up in `alamo_game` (above-normal
+  process) and in `alamo_headless --bench`. The AI thread does not exist yet (P3); its slot is reserved in the worker count.
+
 ### 4.2 The snapshot (frozen read view)
 - At the end of each tick the critical lane publishes `S_N`: the data the AI and other readers need, as **struct-of-arrays copied into
   a double (triple) buffer**: per-object id, type index, owner, position, facing, health / shield, order state, flags; per-player
@@ -238,8 +253,12 @@ about 2.5-4x, rising with scene size, because the AI and services grow with unit
 - **AI reaction delay (tier 2).** Two ticks might shift micro-behaviour that matters (e.g. focus fire on a dying target, retreat
   timing). Mitigation: the harness; k_ai is a per-world setting (1 is possible with less slack); bindings answer from issued-command
   records (5.1 step 4).
-- **Story scripts that call AI functions** (e.g. AI-related Lua API used by mission scripts) would cross lanes. Needs an inventory of
-  bindings by lane; cross-lane calls become commands or snapshot reads.
+- **Story scripts that call AI functions** (e.g. AI-related Lua API used by mission scripts) would cross lanes. Inventory and the
+  rule for each crossing: section 11 (sp3, 2026-11-14).
+- **The tactical AI is far more coupled to the live battle than section 5.1 assumed** (section 11: ~110 live reads, ~85 writes,
+  ~30 writes whose result the AI uses in the same call, 33 shared-RNG draw sites). Gabriel chose the full lane anyway (2026-11-14);
+  sp3's estimate went from ~5 days to 3-4 weeks and its exit from 40 % to 20 % (after `TypeFacts` the whole tactical AI is ~24 %
+  of a land tick, PERFORMANCE.md).
 - **Snapshot size and copy cost** on very large battles: SoA plus copying only changed blocks (dirty bits shared with the tree hash).
 - **Services graph correctness:** a missing read/write declaration is a data race. Debug builds check declared sets (record touched
   components and assert); ASan / TSan-style runs on the services phase.
@@ -255,7 +274,109 @@ about 2.5-4x, rising with scene size, because the AI and services grow with unit
   tick + render exceed 16.7 ms on target hardware.
 - Replacing Lua 5.0.2's collector or semantics.
 
-## 11. P5 implementation notes (sp5, simp-svc, 2026-11-14)
+## 11. AI lane inventory: what crosses the lane boundary today (sp3, 2026-11-14)
+
+Everything the tactical AI (`TacticalAiWorld`, its Lua VMs, its host `BattleAi`) reads from or writes to the live battle during its
+update, with the rule the AI lane applies to each. Counted from the code at `9a5fe0f4`. Abbreviations: tai =
+`engine/ai/tactical/src/tactical_ai.cpp`, bai = `engine/apps/sim/src/battle_ai.cpp`, cb = `engine/apps/sim/src/campaign_battles.cpp`,
+bo / bsr / bsg / bfog / bpl = `engine/lua/src/bind_{objects,script_remaining,script_gaps,fog,players}.cpp`. Every rule below that
+changes *when* the AI learns something or *which* random draw it gets is a tier-2 or tier-3 change judged by the Q4 harness with the
+`ai_lane` flag on (section 7); the flag-off path is unchanged.
+
+### 11.1 Reads (~110 entry points)
+| Family | Count | Examples | Rule on the AI lane |
+|---|---|---|---|
+| Object store reads in `TacticalAiWorld` | ~40 sites, 18 functions | alive / owner / position of TF units, `arg_position`, `prune_tf`, `status_signals`, `find_target`, `store.dying` | the AI owns a private **snapshot store**: a copy of the battle store taken when `S_N` is published (same slots and generations, so held handles stay valid; hooks cleared, own id counter, `create` refused) |
+| AI Lua bindings walking the store | 14 families | `Find_All_Objects_Of_Type`, `Find_Nearest`, `Find_Hint`, GameObjectWrapper getters, `Event_Object_In_Range` | the same snapshot store (`LuaHost::store`) |
+| `PerceptionWorld` callbacks | 5 | `hard_points`, `object_fogged`, `point_fogged`, `in_active_base_shield`, `parent_rep_type` | captured into `S_N` (per-unit hard points, per-player fog bits, active shields, parent types) |
+| `TacticalAiHost` queries | 19 | `population_cap / used`, `reinforcement_pool`, `can_reinforce`, `build_pads`, `build_pad_check`, `can_build_now`, `tactical_builders`, `movement_locked`, `sight_weather_factor`, `space_drop_ok`, `land_drop_ok` | per-player answers captured at publish; per-call ones answered from frozen copies of the system state they read (pads, locks, landings); the two drop-placement searches (movement occupancy over future frames) run inside the command's apply on the critical lane |
+| Bridge / Remaining / Tactical / Fog hooks (reads) | 33 | `order_finished`, `energy`, `rate_of_damage`, `time_till_dead`, `final_blow_player`, projectile, hero clash, move goal, field / shield tests, strike availability, special-weapon readiness, TSW state, `engines_online`, `ground_height`, `object_hidden` | per-object and per-player values captured into `S_N`; geometry against static data |
+| `AbilitySystem` / `CombatSystem` pointers in the bridge | 9 bindings | `Has_Ability`, `Is_Ability_Ready`, `Get_Hull`, `Get_Shield`, `Is_Under_Effects_Of_Ability` | per-object ability / hull state captured into `S_N` |
+| Galactic reads | 3 | `Evaluate_In_Galactic_Context`, `parent_rep_type`, `hijack_unit` | read-only copy taken at battle start (the galaxy changes during a battle only through the AI's own writes) |
+
+### 11.2 Writes (~85 entry points, ~30 with a same-call result)
+| Family | Count | Same-call result used | Rule on the AI lane |
+|---|---|---|---|
+| Orders (`execute` -> `BattleAi::execute_order`) | 11 event types (2 dead) | `RejectReason`: TF status Failed vs Move / Attack, production "try builders until one accepts", `Build_All` count, `Withdraw_Units` bool, `attack_order_refused` | **AI command batch** due `N + k_ai`; the same-call answer comes from the same validation run against the snapshot (issued-command record); the critical lane validates again at apply, and a rejection reaches the AI as an order-result event in a later `S_N` |
+| Reinforce (+ `reinforce_in_flight`, the `owned_by` adoption diff) | 1 | spawned units adopted at once | adoption reads the units from the first snapshot that contains them (issued-command record keyed by the command) |
+| Host writes (`hijack_unit`, `unit_released`, `unit_left_task_force`) | 4 | `hijack_unit` returns the pool entry | commands; the entry predicted from the snapshot pool |
+| Bridge, ability, strike, special-weapon, pad, hyperspace, teleport, fog hooks | ~45 | Activate_Ability accepted count, `spawn_ability_target` id, Fire_Special_Weapon / Bombing_Run / Build / Divert bools, `FogOfWar.Reveal` handle | commands; bools predicted from the captured readiness state; objects a command will create get **provisional handles** that resolve when the batch applies |
+| Store mutations that bypass the battle | 9 | Spawn_Unit, Create_Generic_Object, the Reinforce_Unit / Spawn_From_Reinforcement_Pool stand-ins, Despawn, Take_Damage, Face_Immediate, Enable_Behavior, cinematic transport | commands (today they skip battle adoption; the flag-off path stays as it is) |
+| AI-bridge state the battle reads | 2 | Lock_Current_Orders `orders_locked`, Divert state | published with the batch; the battle reads the version of the last applied batch |
+| GlobalValue.Set, players-world writes | 6 | none | commands |
+
+### 11.3 Random draws
+33 sites share the session's synced stream: 18 on the AI side (goal init, plan pick, PotentialPlan solves, FindTarget, Script_
+evaluators, Guard / "Random" hard point, Most_Defended, Lua GameRandom / DiscreteDistribution / Find_Best_Local_Threat_Center) and
+~15 host draws inside AI-issued orders (moves, `land_attack_order`, reinforce, build, follow re-path, the UnitAI stamps of `fill`).
+Rule: the AI side draws from an **AI-owned stream** seeded from the session seed and saved with the AI state (tier 3); host draws
+stay on the synced stream, made at apply time on the critical lane.
+
+### 11.4 Pushes into the AI, and sim work inside the AI slot
+- `order_replaced` (raised by AI, human, story and any VM's orders) and the fog `refog` callback mutate AI state on the raising lane
+  today: queued with (tick, sequence) into the next `S_N` event list.
+- Movement reads the AI threat grid (`point_danger`): the grid of the last applied batch.
+- `BattleAi::follow_service` (in the battle CRC) and `standin_orders` are sim behaviour: they move to the critical lane.
+- Per-tick event lists that are pure (`attack_state_signals`, `ability_finished`, `reinforcements_unloaded`, `production_completed`)
+  are copied into `S_N`; `opportunity_targets` diffs host state (`opp_prev_`), so the diff runs at publish.
+- The AI-state CRC (`crc.battle.ai`, 0.6-0.9 ms) reads state the AI thread mutates: the AI lane computes its digest at the end of its
+  update and the critical lane's capture uses the digest of the last applied update (wiring agreed with simp-core, the checksum's owner).
+
+### 11.5 Story / mission Lua -> AI state (sp3 t07; story Lua stays on the critical lane, tier 1)
+| Crossing | Today | Rule |
+|---|---|---|
+| `Prevent_AI_Usage` (cb 1534) | writes the free store at once, returns `PreventAiResult` | a command to the AI lane applied at its next update; the result (`NotInitialised` ...) from the AI status the lane publishes in `S_N` |
+| `order_replaced` from story orders / Activate_Ability | push into AI state | queued push (11.4) |
+| `GlobalValue` Get / Set (one session table for story, tactical AI, galactic AI) | shared table | story keeps the live table; the AI reads the copy in `S_N` and its Sets are commands |
+| `set_tactical_galactic` (battle start) | host call | unchanged (runs before the lane starts) |
+| Story `FogOfWar.Reveal`, `Lock_Current_Orders`, abilities | battle state the AI reads | reach the AI through `S_N` |
+| Story `Suspend_AI`, `Give_Desire_Bonus`, `Purge_Goals`, `Budget.Flush_Category`, `Release_Credits_For_Tactical`, `EvaluatePerception`, `Find_Path`, SWITCH_CONTROL | reach the galactic AI only | sp4 |
+
+Gaps found on the way (flag-off behaviour, not changed by sp3; backlog): story `Suspend_AI` / `Give_Desire_Bonus` / `Purge_Goals`
+never reach the tactical AI; AI-VM `Turn_To_Face`, the Garrison family, `Sell` and `Hyperspace_Away` without its hook are dropped as
+Unhandled; the 9 store-bypassing writes skip battle adoption.
+
+### 11.6 Implementation choices (sp3, `[port]`, tier 3 unless marked)
+- `--ai-lane [--ai-lane-k K]` (alamo_headless; process default `sim::ai_lane_defaults()`, copied into every
+  `TacticalAiSetup`); a save of an AI-lane session records `ai_lane` / `k_ai` in its descriptor, so `--load` rebuilds it as one.
+- AI-owned stream: `GameRandom` seeded by `ai_lane_seeds(session seed)`, hashed with the AI world and saved. Tactical AI save
+  version 13 = version 12 plus `k_ai` and the stream, written only with the lane on; a version-12 save also loads into an AI-lane
+  world (the bench and harness saves), a version-13 save never into a lane-off one. `battle.ai` chunk: version 5 = 4 plus the
+  queued orders, the same rule.
+- Order batch (t04 so far): moves, MoveToObject, Attack and the Lua object orders Move_To / Attack_Move / Guard_Target / Stop
+  are queued as canonical `commands::Command`s (source AI, `scheduled_tick` = N + k_ai) and applied by `SimHost`'s T2
+  `before_commands` hook ahead of the players' commands, in `drain_order_less` order, through the unchanged `execute_order`.
+  The AI's same-call answer is `BattleAi::predict_order` (the rejections that depend on the order and the state alone);
+  a predicted rejection is not queued. **Tier 2**: the order acts two ticks later and its result is a prediction.
+- Publish / think (t02, inline so far): with the lane on, the AI slot of tick N runs `TacticalAiWorld::publish()` on the
+  critical lane (the host's fill, the tick's host event lists, the snapshot store: a copy-assigned `ObjectStore` the world and
+  its Lua VMs read) and then `think()` as a job. A job's queued orders and the digest of the AI world after it become visible
+  only when the job is collected (at the next AI slot, or at T2 of its due tick when k_ai = 1); the `battle.ai` CRC hashes the
+  digest of the last collected job, so with the lane on the world's hash is computed inside the job (off the critical lane)
+  and a capture never reads the world while a job may run. A save keeps a finished, uncollected job as it is (`battle.ai` v5).
+  The session descriptor's `ai_lane` / `k_ai` options are not compared when a save is loaded (a lane-off save loads into an
+  AI-lane session). Inline cost on `land_battle` (busy PC): `tac.ai.publish` 0.20 ms p50 (fill 0.17, store copy ~0.03) against
+  `tac.ai` 0.56 + `crc.battle.ai` 0.97 ms with the lane off.
+- Captured host answers (t02, slice 4a): at the AI slot, before `publish()`, `BattleAi::capture_lane_view` copies what the
+  `TacticalAiHost` overrides answer (reinforcement pool, can-reinforce, population cap / used, space drop frame, player
+  relations, pads and their contents / cooldowns, movement locks, reinforcements in flight, weather sight, the damage-tracking
+  store); the pad checks run on the AI side against the snapshot store (`PadEnv`). Still live from `think()` until later
+  slices: the drop-placement searches, the builders, hijack / release, `predict_order`'s unit reads, the bridge hooks of 11.1.
+- Ability / combat bindings (t02 + t05, slice 4b): `ObjectBridge::lane_abilities` holds one record per object of the battle's
+  ability or combat system (`lua::capture_lane_abilities`, one pass per object through `AbilitySystem::lane_types`): each
+  listed ability type's has / ready / can-activate / active / autofire answers plus dry runs of `set_unit_ability_mode` (on,
+  off) and `targeted_ability` (per user, without the target's checks), and container, tractored, ion stun, immobilize count,
+  engine hard points, hull and shield. The AI VMs' bindings read those and hand every write (autofire, ability mode, targeted
+  and dummy-target abilities, recharge, counter reset, movement unlock, targeting priorities, stickiness, Activate_Ability's
+  signal 0xb) to `lane_write`, which queues it as a PortExtension `kLaneWriteSubtype` command in the same batch as the orders;
+  `lua::apply_lane_write` makes the binding's own calls at the due tick. Before the first capture (battle start) and after a
+  load until the next capture the bindings act live (on the critical lane). Capture cost on `land_battle`: ~0.08 ms p50
+  (`tac.cap.abilities`, ~220 objects). **Tier 2** (for the harness): a script reads the state of the AI slot, so its own
+  writes are not visible to it in the same think (e.g. `Is_Ability_Active` right after `Activate_Ability`); the same-call
+  answers (Activate_Ability's block for the object-target and jet-pack families) are the dry runs' predictions
+  (`BattleAi::lane_mismatches` counts the applies that differ); writes apply k_ai ticks later in (player, sequence) order.
+
+## 12. P5 implementation notes (sp5, simp-svc, 2026-11-14)
 
 How P5 is built; status and open items are on the roadmap (group `sp5`), checks in [`BUILD.md`](BUILD.md) ("Services graph checks").
 - **Graph** (`engine/tactical/services`, `tactical_battle_services.cpp`): every step of `TacticalBattle::tick` is a service declared in

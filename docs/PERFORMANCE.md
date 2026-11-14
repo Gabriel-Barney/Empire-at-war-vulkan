@@ -1261,3 +1261,33 @@ other lanes built (other-process CPU 10-49 %, printed per run):
 | `crc.battle.ai` | 0.75 / 0.77 / 0.82 | 0.79 / 0.80 / 0.81 | unchanged |
 
 `crc.battle.ai` is now the largest single zone of a land battle tick (simp-core's sp2 / sp6).
+
+## Topology-aware job system: worker-count sweep (SIMP sp1, 2026-11-14)
+
+Step P1 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (4.1, "as built" there). `tools/benchmark/worker_sweep.py --workers
+0,1,3,6,7,15` (sim-only `alamo_headless --bench`, one process per cell, interleaved), MSVC Release, Ryzen 7 7800X3D; W6 is the new
+default (8 physical cores minus the sim and AI threads). **The machine was saturated by two other lanes' builds** for most of the
+afternoon (whole-machine CPU up to 100 %, other processes up to 93 % during runs), so each cell below is the quietest of its runs from two
+sweeps (round 1 / 2 of the first sweep at `a9f8db02`, round 1 of a second at `9cd35429` with `--max-busy 25` retries; the review fixes
+between them do not touch the paths the sim uses), with the other-process CPU during that run. Every run matched its fingerprint.
+
+Median tick ms (other-process CPU during the run), ratio to W0:
+
+| Scene | W0 | W1 | W3 | W6 (default) | W7 | W15 |
+|---|---|---|---|---|---|---|
+| `space_battle` | 1.140 (3 %) | 0.976 (2 %) 0.86 | 0.967 (5 %) 0.85 | 0.991 (14 %) 0.87 | 0.995 (11 %) 0.87 | 1.010 (8 %) 0.89 |
+| `land_battle` | 2.382 (2 %) | 2.228 (9 %) 0.94 | 2.171 (4 %) 0.91 | 2.190 (3 %) 0.92 | 2.208 (3 %) 0.93 | 2.217 (4 %) 0.93 |
+| `nebula_battle` | 1.815 (3 %) | 1.626 (4 %) 0.90 | 1.569 (4 %) 0.87 | 1.562 (4 %) 0.86 | 1.533 (6 %) 0.85 | 1.558 (3 %) 0.86 |
+| `water_battle` | 1.990 (4 %) | 1.853 (1 %) 0.93 | 1.833 (3 %) 0.92 | 1.824 (4 %) 0.92 | 1.858 (6 %) 0.93 | 1.857 (5 %) 0.93 |
+| `space_battle_game` | 1.922 (8 %) | 1.669 (10 %) 0.87 | 1.579 (5 %) 0.82 | 1.548 (6 %) 0.81 | 1.559 (3 %) 0.81 | 1.570 (4 %) 0.82 |
+| `galactic_late` | 0.638-0.661 | 0.627 (4 %) | 0.631 (15 %) | 0.661 (6 %) | 0.675 (8 %) | 0.662 (4 %) |
+
+`galactic_late`, same round only (the scene's quiet run-to-run cv is 3.7 %, bm1f t04): first sweep round 1 W0 0.661, W1 0.674 (+2.0 %),
+W6 0.661 (0.0 %), W7 0.675 (+2.1 %), W15 0.662 (+0.2 %); second sweep round 1 W0 0.638, W1 0.627 (-1.8 %), W3 0.631 (-1.1 %). Before sp1
+(the 2026-11-14 sweep above) the same scene was 0.63 at W0 against 0.71-0.83 ms at W15: forks of small work now run inline, and what
+remains is `jobs.for_wait` 0.03-0.04 ms per tick (the per-system CRC capture fork, sp2 / sp6).
+
+- **Every count is at most W0's time plus noise**; battles gain 7-19 %, still all of it by W3 (the serial path, sp0, is what is left).
+- The battles' W0 medians are also 5-35 % below the morning sweep: most of that is sp3 t01 (`TypeFacts`, landed on dev between the two),
+  not sp1; the like-for-like quiet-PC comparison is sp6 t04.
+- Not measured here: a hybrid or dual-CCD CPU (pool choice is unit-tested on synthetic topologies), and the effect of the OS hints alone.

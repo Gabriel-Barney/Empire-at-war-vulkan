@@ -86,6 +86,7 @@ CampaignBattles::~CampaignBattles() {
     }
     remove_battle_chunks();  // N1 stage 2
     host_->set_after_mode_update({});
+    host_->set_before_commands({});  // sp3 t04
     host_->set_tactical_command_hook({});
     host_->set_select_all_hook({});        // q6
     host_->set_galactic_command_hook({});  // Int-final
@@ -169,6 +170,11 @@ bool CampaignBattles::attach(std::vector<std::string>* diag) {
     };
     // --- end battle host ---
     host_->set_after_mode_update([this](SimHost& h) { hook(h); });
+#ifdef ALAMO_SIM_HAVE_TACTICAL_AI
+    host_->set_before_commands([this](SimHost& h) {  // sp3 t04: the AI lane's batches due this frame
+        if (ai_) ai_->apply_lane_batch(h.frame());
+    });
+#endif
     CrcRegistry& reg = host_->crc_registry();
     cm_->register_crc(reg, "galactic.conflicts");
     reg.add("battle.state", [this](StateHasher& h) {
@@ -513,7 +519,10 @@ void CampaignBattles::register_battle_chunks() {
         SaveParticipant ap;
         ap.name = "battle.ai";
         ap.write = [this](ByteWriter& w) {
-            if (ai_) ai_->write(w);
+            if (ai_) {
+                ai_->lane_sync();  // sp3: the AI lane's running job collected first
+                ai_->write(w);
+            }
         };
         ap.read = [this](ByteReader& r) { return ai_ && ai_->read(r); };
         host_->add_save_participant(std::move(ap));

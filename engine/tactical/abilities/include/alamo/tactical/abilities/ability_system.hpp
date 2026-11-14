@@ -336,6 +336,7 @@ public:
 
     const AbilityConfig& config() const { return cfg_; }
     combat::CombatSystem& combat() { return *combat_; }
+    const combat::CombatSystem& combat() const { return *combat_; }
     void reserve(uint32_t objects, uint32_t events = 512);
 
     // ---- objects (host) ----
@@ -381,6 +382,15 @@ public:
     // cu8k t01: the object's Saber_Throw data - the Saber_Name projectile (-1 none) and Catch_Dist; false without one.
     bool saber_params(ObjectId id, int32_t& projectile, float& catch_dist) const;
     bool can_activate(ObjectId id, uint8_t type, bool check_recharge, bool check_nebula, uint32_t frame) const;
+    // sp3 (the AI lane's capture, docs/SIM_PARALLEL_DESIGN.md 11.6): the objects in ascending id order, and per object the
+    // ability types it answers has_ability or is_autofire for (ascending), each with the kLane* bits of its answers at
+    // `frame`: has_ability, is_ready, can_activate(t, true, true), is_active, is_autofire, and two dry runs that act on
+    // nothing - set_unit_ability_mode(on / off) would count the object (its gates 1-3), targeted_ability would count it as a
+    // user (every check but the target's own).
+    static constexpr uint8_t kLaneHas = 1, kLaneReady = 2, kLaneCan = 4, kLaneActive = 8, kLaneAutofire = 16, kLaneModeOn = 32,
+                             kLaneModeOff = 64, kLaneTargeted = 128;
+    void object_ids(std::vector<ObjectId>& out) const;
+    void lane_types(ObjectId id, uint32_t frame, std::vector<std::pair<uint8_t, uint8_t>>& out) const;
     bool is_ready(ObjectId id, uint8_t type, uint32_t frame) const;  // Lua Is_Ability_Ready
     bool is_autofire(ObjectId id, uint8_t type) const;
     const UnitAbilityRecord* record(ObjectId id, uint8_t type) const;  // Get_Unit_Ability_Record (0x397d90)
@@ -754,6 +764,7 @@ private:
 
     // special abilities
     SpecialState* special_by_crc(Obj& o, uint32_t crc);
+    const SpecialState* special_by_crc(const Obj& o, uint32_t crc) const;
     bool allowed(const SpecialAbilityDesc& s) const;
     bool enabled(int32_t player, const SpecialAbilityDesc& s) const;
     bool enabled(const Obj& o, const SpecialAbilityDesc& s) const;  // + the (player, type) override (§9.6)
