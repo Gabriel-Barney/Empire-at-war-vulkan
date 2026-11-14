@@ -131,6 +131,72 @@ its own `lua_State`, see above), but what the scripts call does not:
   move large groups cheaply. Not a first step here: the port's movement follows the original's A* and
   formation rules, and replacing them changes behaviour. Note for later only.
 
+## Techniques for the five biggest costs (research, 2026-11-14)
+
+Added after the 2026-11-14 measurements. The five costs, as Gabriel listed them: (1) `tac.ai.perception` (40% of a land battle
+tick, 1.43 ms; 46% on water; 22% in space), (2) per-tick hashing of every system (`crc.battle.ai` etc., 16-24% of a battle tick),
+(3) `ai.goals` (69% of a galactic tick, p99 4.4 ms, spikes to 22 ms), (4) single-thread spikes (`nebula_battle` movement p99 24 ms,
+max 76 ms; one 190 ms AI-planning tick), (5) job-system overhead (galaxy 30% slower at 15 workers than at 0; battles gain
+5-25%, all of it at 3 workers). The audit (`docs/PERF_AUDIT_2026-11-07.md`) already lists S1, S2, S5, S6, S7, S8 and J1-J3; this
+section only adds to them. Evidence is thin: few sources are RTS-specific and none has benchmark numbers. Items marked
+**(own reasoning)** are not from a source. Every item must still pass rule 3 and the parity tiers; "goldens" says whether it moves them.
+
+### P1. Perception: keep a snapshot, emit changes
+- After S6 (`TypeFacts[type]` table), the remaining cost is rebuilding and diffing the whole snapshot each tick. Give each object a
+  change stamp (a tick number); at commit emit add / remove / change events in index order, so no sort-and-compare is needed.
+- Same idea as Unreal's AI perception "sense only changes" mode (off by default there) and as fog-of-war guides: a dirty flag and
+  version stamp per viewer, emit visibility changes instead of recomputing everything.
+- Deterministic: stamps are tick numbers, order is index order. Goldens: none expected (same snapshot content); verify by CRC.
+- The galactic perception parallel attempt failed because readers use results in the same frame ("Tried and not shipped" in
+  `PERFORMANCE.md`); this change is serial and does not need that.
+
+### P2. Hashing: do less of it in the game
+- **(own reasoning)** In `alamo_game`, hash only on checkpoint ticks (every 64th, the golden v2 cadence) and at save points; keep per-tick
+  hashing in `alamo_headless` and tests. Goldens: none. This extends audit S5 from the log to the hashing itself.
+- Larger option: per-entity sub-hashes combined commutatively (Zobrist-style: remove the old contribution, add the new one when an
+  entity changes). Mix the entity id in, or add modulo 2^64 instead of XOR, so equal entities do not cancel **(own reasoning)**;
+  every field that affects behaviour must be covered; run a periodic full recompute as a drift check. Goldens: change.
+- Sources agree the per-tick, per-system hash is the standard desync tool and need not be cryptographic; keep the per-system split in
+  tests so a mismatch localises. No source gives overhead numbers.
+
+### P3. Goal scoring: ids, then caching
+- After S7 (equation ids once, stats as counters): general interning. Resolve names to integer ids at load time, keep text in a
+  debug / report table only (Stingray resource ids, Unreal FName, Lengyel's compile-time hashing). Per-thread interners avoid heap
+  contention in parallel builds.
+- For the 4.4 ms p99 and 22 ms spikes **(own reasoning)**: cache each planet's score and re-score only when its inputs changed
+  (dirty flags); fall back to the tick-number round robin of technique 2 for what cannot be cached.
+
+### P4. Spikes
+- 190 ms planning tick: S1 / S2 (restore plan-VM images, prewarm `pool_count` VMs) is the right fix. Prewarming pooled instances at load
+  is the standard pattern; creating a Lua state is cheap, the cost is parsing the libraries, which is what S1 removes.
+- `nebula_battle` movement: cap path requests per tick by a **fixed count or node budget, never wall-clock time** (a time budget breaks
+  determinism), served round robin with the cursor saved in the save data. Sources suggest fixed-size batches and incremental A*.
+  The cause of the 76 ms tick is **not known**; profile that tick before choosing. Shared flow fields stay a note for later
+  (behaviour change, see technique 8).
+
+### P5. Job system
+- After J1-J3: Unity's scheduler batches jobs and flushes the batch once, so only the needed number of workers wake; waking workers
+  that find no work is the expensive part. Blitz derives the grain size from the worker count with a floor, and runs the first
+  chunk on the calling thread.
+- A per-phase worker cap (battle phases at 3-4, the galaxy at fewer when the fork is small) is deterministic because outputs are per
+  index **(own reasoning, from the measured 3-worker plateau)**.
+- Waiting: `WaitOnAddress` / `std::atomic::wait` is fine, but Raymond Chen notes hand-built waits lack the spin counts and convoy
+  resistance of Windows' own locks, so spin briefly with a pause instruction, then block (J2).
+
+### Sources for this section
+- [Unreal AI perception `bSenseOnlyChanges`](https://docs.unrealengine.com/4.27/en-US/API/Plugins/UE4ML/Sensors/UE4U4MLSensor_AIPerception/bSenseOnlyChanges/index.html);
+  [fog-of-war dirty flags](https://skillselion.com/skills/pproenca/dot-skills/fog-of-war-js-ts)
+- [Zobrist hashing](https://en.wikipedia.org/wiki/Zobrist_hashing);
+  [lockstep determinism checker](https://bugnet.io/blog/how-to-build-a-lockstep-determinism-checker)
+- [Compile-time string hashing (Lengyel)](https://gameenginegems.com/gemsdb/article.php?id=1278);
+  [Stingray resource ids](https://help.autodesk.com/cloudhelp/ENU/Stingray-SDK-Help/sdk_help/extend_engine/about_resource_ids.html)
+- [Object pooling against hitches](https://bugnet.io/blog/how-to-use-object-pooling-to-stop-instantiation-hitches);
+  [raasta batch pathfinding](https://docs.rs/crate/raasta/1.0.0/source/src/batch.rs);
+  [gamedev.net: time slicing for pathfinding](https://ehe.gamedev.net/forums/topic/627306-time-slicing-or-multithreading-for-pathfinding)
+- [Unity: job system overhead (2022.2)](https://unity.com/blog/engine-platform/improving-job-system-performance-2022-2-part-2);
+  [Blitz architecture](https://blitz-3nq.pages.dev/internals/architecture);
+  [Raymond Chen on WaitOnAddress](https://devblogs.microsoft.com/oldnewthing/20201214-00/?p=104544)
+
 ## On the roadmap
 These techniques are roadmap group **OPT3 "Techniques from the performance research"** (box OPT, 2026-10-30),
 kept separate from OPT1 / OPT2. The notes below say how they narrow the OPT2 tasks.
