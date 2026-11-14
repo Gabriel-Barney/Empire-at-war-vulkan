@@ -3324,54 +3324,61 @@ std::vector<uint8_t> encode_lane_write(const LaneWrite& lw) {
     return w.bytes();
 }
 #if ALAMO_LUA_HAVE_ABILITIES
-void capture_lane_abilities(const ab::AbilitySystem& a, uint32_t frame, LaneAbilityView& v) {
+void capture_lane_abilities(const ab::AbilitySystem& a, uint32_t frame, LaneAbilityView& v, const ParallelFor& pf) {
     namespace tc = tactical::combat;
     const tc::CombatSystem& cs = a.combat();
     v.frame = frame;
-    v.objects.clear();
     v.types.clear();
     std::vector<ObjectId> ids;
     a.object_ids(ids);
     for (size_t i = 0; i < cs.unit_count(); ++i) ids.push_back(cs.unit_id_at(i));
     std::sort(ids.begin(), ids.end());
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-    std::vector<std::pair<uint8_t, uint8_t>> types;
-    for (const ObjectId id : ids) {
-        LaneObject o;
-        o.id = id;
-        if (a.has_object(id)) {
-            o.abilities = 1;
-            o.container = a.container_of(id);
-            o.tractored = a.tractored(id) ? 1 : 0;
-            o.ion_stunned = cs.ion_stunned(id, frame) ? 1 : 0;
-            o.immobilize = a.immobilize_count(id);
-            o.first = static_cast<uint32_t>(v.types.size());
-            a.lane_types(id, frame, types);
-            for (const auto& [t, bits] : types) {
-                const auto on = [bits](uint8_t f) { return static_cast<uint8_t>((bits & f) != 0 ? 1 : 0); };
-                LaneAbility r;
-                r.type = t;
-                r.has = on(ab::AbilitySystem::kLaneHas);
-                r.ready = on(ab::AbilitySystem::kLaneReady);
-                r.can = on(ab::AbilitySystem::kLaneCan);
-                r.active = on(ab::AbilitySystem::kLaneActive);
-                r.autofire = on(ab::AbilitySystem::kLaneAutofire);
-                r.mode_on = on(ab::AbilitySystem::kLaneModeOn);
-                r.mode_off = on(ab::AbilitySystem::kLaneModeOff);
-                r.targeted = on(ab::AbilitySystem::kLaneTargeted);
-                v.types.push_back(r);
+    const auto n = static_cast<uint32_t>(ids.size());
+    v.objects.assign(n, {});
+    std::vector<std::vector<LaneAbility>> types(n);  // per object, flattened below in id order
+    pf(n, 16, [&](uint32_t begin, uint32_t end) {
+        std::vector<std::pair<uint8_t, uint8_t>> lt;
+        for (uint32_t i = begin; i < end; ++i) {
+            const ObjectId id = ids[i];
+            LaneObject& o = v.objects[i];
+            o.id = id;
+            if (a.has_object(id)) {
+                o.abilities = 1;
+                o.container = a.container_of(id);
+                o.tractored = a.tractored(id) ? 1 : 0;
+                o.ion_stunned = cs.ion_stunned(id, frame) ? 1 : 0;
+                o.immobilize = a.immobilize_count(id);
+                a.lane_types(id, frame, lt);
+                for (const auto& [t, bits] : lt) {
+                    const auto on = [b = bits](uint8_t f) { return static_cast<uint8_t>((b & f) != 0 ? 1 : 0); };
+                    LaneAbility r;
+                    r.type = t;
+                    r.has = on(ab::AbilitySystem::kLaneHas);
+                    r.ready = on(ab::AbilitySystem::kLaneReady);
+                    r.can = on(ab::AbilitySystem::kLaneCan);
+                    r.active = on(ab::AbilitySystem::kLaneActive);
+                    r.autofire = on(ab::AbilitySystem::kLaneAutofire);
+                    r.mode_on = on(ab::AbilitySystem::kLaneModeOn);
+                    r.mode_off = on(ab::AbilitySystem::kLaneModeOff);
+                    r.targeted = on(ab::AbilitySystem::kLaneTargeted);
+                    types[i].push_back(r);
+                }
             }
-            o.count = static_cast<uint32_t>(v.types.size()) - o.first;
+            if (cs.has_unit(id)) {
+                o.combat = 1;
+                o.hull = cs.script_hull(id);
+                o.shield = cs.shield_fraction(id);
+                for (uint32_t h = 0; h < cs.hardpoint_count(id); ++h)
+                    if (cs.hardpoint_kind(id, h) == tc::HardpointKind::Engine) o.engine_hardpoints = 1;
+                o.engines_live = cs.live_hardpoints(id, tc::HardpointKind::Engine) > 0 ? 1 : 0;
+            }
         }
-        if (cs.has_unit(id)) {
-            o.combat = 1;
-            o.hull = cs.script_hull(id);
-            o.shield = cs.shield_fraction(id);
-            for (uint32_t h = 0; h < cs.hardpoint_count(id); ++h)
-                if (cs.hardpoint_kind(id, h) == tc::HardpointKind::Engine) o.engine_hardpoints = 1;
-            o.engines_live = cs.live_hardpoints(id, tc::HardpointKind::Engine) > 0 ? 1 : 0;
-        }
-        v.objects.push_back(o);
+    });
+    for (uint32_t i = 0; i < n; ++i) {
+        v.objects[i].first = static_cast<uint32_t>(v.types.size());
+        v.objects[i].count = static_cast<uint32_t>(types[i].size());
+        v.types.insert(v.types.end(), types[i].begin(), types[i].end());
     }
 }
 
@@ -3406,7 +3413,7 @@ int32_t apply_lane_write(ab::AbilitySystem& a, uint32_t frame, const LaneWrite& 
     }
 }
 #else
-void capture_lane_abilities(const tactical::abilities::AbilitySystem&, uint32_t frame, LaneAbilityView& v) {
+void capture_lane_abilities(const tactical::abilities::AbilitySystem&, uint32_t frame, LaneAbilityView& v, const ParallelFor&) {
     v = LaneAbilityView{};
     v.frame = frame;
 }

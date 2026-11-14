@@ -54,6 +54,7 @@
 #include <vector>
 
 #include "alamo/core/bytes.hpp"
+#include "alamo/core/parallel.hpp"
 #include "alamo/lua/script_remaining.hpp"  // L1 final: RemainingScriptHooks, RemainingObjectState
 #include "alamo/objects/object_store.hpp"
 
@@ -163,7 +164,8 @@ struct ScriptLockFact;  // sp3: below ObjectBridge
 // write at the due tick's `frame` through the calls the binding makes live. `host` = the VMs' bridge (its
 // spawn_ability_target and raise_order_replaced). apply returns the count of a write with a predicted answer (compare
 // LaneWrite::value), else -1.
-void capture_lane_abilities(const tactical::abilities::AbilitySystem& a, uint32_t frame, LaneAbilityView& out);
+void capture_lane_abilities(const tactical::abilities::AbilitySystem& a, uint32_t frame, LaneAbilityView& out,
+                            const ParallelFor& pf = serial_for);  // per object through pf (per-index outputs, id order)
 int32_t apply_lane_write(tactical::abilities::AbilitySystem& a, uint32_t frame, const LaneWrite& w, const ObjectBridge& host);
 
 struct AbilityState {

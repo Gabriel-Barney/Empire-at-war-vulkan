@@ -472,3 +472,10 @@ How P5 is built; status and open items are on the roadmap (group `sp5`), checks 
   no tactical AI (the AI's land population cap would keep the extra companies in reserve; the stand-in deploys them all): ~700 live
   units against land_battle's ~200. Made on demand by `tools/benchmark/stress_land4.cmd` (its save is over the repository's size
   limit); `tools/benchmark/services_zone.py` sums the services zones (all `tac.s.*` but movement, combat and the stand-in orders).
+- Parallel capture and the perception's battle reads (slice 4f): the per-object captures run through `SimHost::parallel_for`
+  on the critical lane (per-index outputs, flattened in id order): the battle units' facts, the L1 facts, the fogged bits,
+  and the ability records (`lua::capture_lane_abilities(..., pf)`). The perception world's `object_fogged` answers from the
+  fogged bits, `point_fogged` (FogOfWar::point_fogged with force 1) from copies of the AI players' fog grids taken at the
+  capture, and `in_active_base_shield` runs `l1_base_shield_covers` on the snapshot store. Critical-lane budget on
+  `land_battle` (publish + every capture): ~0.45 ms p50 (capture 0.28, publish 0.17; was 0.69 serial); zones
+  `tac.cap.l1`, `tac.cap.fog`, `tac.cap.fog_grids`.

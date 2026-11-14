@@ -607,32 +607,41 @@ const BattleAi::LaneView::L1Obj* BattleAi::view_l1(objects::ObjectId id) const {
 }
 
 void BattleAi::capture_l1() {
+    ALAMO_PROFILE_SCOPE("tac.cap.l1");  // wall clock only
     LaneView& v = view_;
     std::vector<objects::ObjectId> ids;
     for (const TacticalBattle::Unit& u : b_->units_) ids.push_back(u.id);
     for (const TacticalBattle::Container& c : b_->containers_) ids.push_back(c.id);
     std::sort(ids.begin(), ids.end());
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-    v.l1.clear();
-    v.proj_types.clear();
     const bool fields = b_->space_;
-    for (const objects::ObjectId id : ids) {
-        LaneView::L1Obj o;
-        o.id = id;
-        o.rate = b_->rate_of_damage(id);
-        o.ttd = b_->time_till_dead(id);
-        o.cur_proj = b_->current_projectile(id);
-        o.engines = b_->engines_online(id);
-        o.energy = b_->combat().has_unit(id) ? b_->combat().energy(id) : -1.0f;
-        o.clash = b_->combat().has_unit(id) && (b_->combat().flags(id) & tactical::combat::kUnitHeroClash) != 0 ? 1 : 0;
-        o.clash_locked = b_->hero_clash_locked(id) ? 1 : 0;
-        if (fields)
-            for (int i = 0; i < 4; ++i) o.field[i] = static_cast<int8_t>(b_->object_in_field(id, 1u << i));
-        const std::vector<objects::TypeIndex> pt = b_->projectile_types(id);
-        o.pt_first = static_cast<uint32_t>(v.proj_types.size());
-        o.pt_count = static_cast<uint32_t>(pt.size());
-        v.proj_types.insert(v.proj_types.end(), pt.begin(), pt.end());
-        v.l1.push_back(o);
+    // slice 4f: per object in parallel (const battle reads, per-index outputs), flattened in id order
+    const auto n = static_cast<uint32_t>(ids.size());
+    v.l1.assign(n, {});
+    std::vector<std::vector<objects::TypeIndex>> pts(n);
+    const TacticalBattle* bt = b_;
+    host_->parallel_for()(n, 16, [&](uint32_t begin, uint32_t end) {
+        for (uint32_t i = begin; i < end; ++i) {
+            const objects::ObjectId id = ids[i];
+            LaneView::L1Obj& o = v.l1[i];
+            o.id = id;
+            o.rate = bt->rate_of_damage(id);
+            o.ttd = bt->time_till_dead(id);
+            o.cur_proj = bt->current_projectile(id);
+            o.engines = bt->engines_online(id);
+            o.energy = bt->combat().has_unit(id) ? bt->combat().energy(id) : -1.0f;
+            o.clash = bt->combat().has_unit(id) && (bt->combat().flags(id) & tactical::combat::kUnitHeroClash) != 0 ? 1 : 0;
+            o.clash_locked = bt->hero_clash_locked(id) ? 1 : 0;
+            if (fields)
+                for (int k = 0; k < 4; ++k) o.field[k] = static_cast<int8_t>(bt->object_in_field(id, 1u << k));
+            pts[i] = bt->projectile_types(id);
+        }
+    });
+    v.proj_types.clear();
+    for (uint32_t i = 0; i < n; ++i) {
+        v.l1[i].pt_first = static_cast<uint32_t>(v.proj_types.size());
+        v.l1[i].pt_count = static_cast<uint32_t>(pts[i].size());
+        v.proj_types.insert(v.proj_types.end(), pts[i].begin(), pts[i].end());
     }
     v.final_blow = b_->l1_final_blow_;
     const auto np = static_cast<size_t>(host_->players());
@@ -652,23 +661,36 @@ void BattleAi::capture_l1() {
         v.retreat_inc[p] = b_->retreat_increment_frames(pi);
     }
     v.sw = b_->l1_sw_;
-    // slice 4e (part 3): the AI players' fogged test of every object (both force values)
+    ALAMO_PROFILE_SCOPE("tac.cap.fog");  // wall clock only
+    // slice 4e (part 3): the AI players' fogged test of every object (force 1)
     v.fog_players.clear();
     v.fog_hidden.clear();
     if (b_->fog()) {
         for (size_t p = 0; p < ai_side_.size(); ++p)
             if (ai_side_[p]) v.fog_players.push_back(static_cast<int32_t>(p));
         const objects::ObjectStore& st = mode_->primary();
-        for (const objects::ObjectHandle h : st.all_objects()) {
-            if (!st.alive(h)) continue;
-            const objects::ObjectId id = st.id(h);
-            uint32_t bits = 0;
-            for (size_t k = 0; k < v.fog_players.size(); ++k) {
-                if (b_->fog_object_hidden(v.fog_players[k], id, true)) bits |= 1u << k;  // the bindings ask with force only
-            }
-            if (bits) v.fog_hidden.emplace_back(id, bits);
-        }
+        std::vector<objects::ObjectId> fids;
+        for (const objects::ObjectHandle h : st.all_objects())
+            if (st.alive(h)) fids.push_back(st.id(h));
+        std::vector<uint32_t> bits(fids.size(), 0);  // slice 4f: in parallel, per-index outputs
+        host_->parallel_for()(static_cast<uint32_t>(fids.size()), 64, [&](uint32_t begin, uint32_t end) {
+            for (uint32_t i = begin; i < end; ++i)
+                for (size_t k = 0; k < v.fog_players.size(); ++k)
+                    if (bt->fog_object_hidden(v.fog_players[k], fids[i], true)) bits[i] |= 1u << k;  // the bindings: force only
+        });
+        for (size_t i = 0; i < fids.size(); ++i)
+            if (bits[i]) v.fog_hidden.emplace_back(fids[i], bits[i]);
         std::sort(v.fog_hidden.begin(), v.fog_hidden.end());
+    }
+    // slice 4f: the perception's point test (FogOfWar::point_fogged with force 1) on copies of the AI players' grids
+    ALAMO_PROFILE_SCOPE("tac.cap.fog_grids");  // wall clock only
+    const tactical::fog::FogOfWar* fog = b_->fog();
+    v.fog_live = fog && fog->started() && fog->fow_active();
+    v.fog_grids.resize(v.fog_live ? v.fog_players.size() : 0);  // copied into the kept buffers
+    for (size_t k = 0; k < v.fog_grids.size(); ++k) {
+        const tactical::fog::FogGrid* g = fog->grid(v.fog_players[k]);
+        if (g) v.fog_grids[k] = *g;
+        else v.fog_grids[k] = tactical::fog::FogGrid{};
     }
     // TacticalBattle::tsw_fire's planet gate (0x42a720)
     v.tsw_planet_ok = false;
@@ -855,24 +877,28 @@ void BattleAi::capture_lane_view() {
     {
         const objects::ObjectStore& st = mode_->primary();
         view_.units.resize(b_->units_.size());
-        for (size_t i = 0; i < b_->units_.size(); ++i) {
-            const TacticalBattle::Unit& u = b_->units_[i];
-            LaneView::Unit& v = view_.units[i];
-            v = {};
-            v.id = u.id;
-            v.owner = st.owner(u.h);
-            v.container = u.container;
-            v.live = static_cast<uint8_t>(u.alive && !u.retreated ? 1 : 0);
-            v.movable = static_cast<uint8_t>(u.movable ? 1 : 0);
-            if (b_->movement_ && b_->movement_->has_unit(u.id)) {  // slice 4e
-                const mv::UnitView m = b_->movement_->view(u.id);
-                v.mv = 1;
-                v.has_goal = m.has_goal ? 1 : 0;
-                v.arrived = m.arrived ? 1 : 0;
-                v.gx = m.goal.x;
-                v.gy = m.goal.y;
+        const TacticalBattle* bt = b_;
+        // slice 4f: per unit in parallel (const reads, per-index outputs)
+        host_->parallel_for()(static_cast<uint32_t>(b_->units_.size()), 32, [&](uint32_t begin, uint32_t end) {
+            for (uint32_t i = begin; i < end; ++i) {
+                const TacticalBattle::Unit& u = bt->units_[i];
+                LaneView::Unit& v = view_.units[i];
+                v = {};
+                v.id = u.id;
+                v.owner = st.owner(u.h);
+                v.container = u.container;
+                v.live = static_cast<uint8_t>(u.alive && !u.retreated ? 1 : 0);
+                v.movable = static_cast<uint8_t>(u.movable ? 1 : 0);
+                if (bt->movement_ && bt->movement_->has_unit(u.id)) {  // slice 4e
+                    const mv::UnitView m = bt->movement_->view(u.id);
+                    v.mv = 1;
+                    v.has_goal = m.has_goal ? 1 : 0;
+                    v.arrived = m.arrived ? 1 : 0;
+                    v.gx = m.goal.x;
+                    v.gy = m.goal.y;
+                }
             }
-        }
+        });
         view_.teams.resize(b_->containers_.size());
         for (size_t i = 0; i < b_->containers_.size(); ++i) {
             const TacticalBattle::Container& c = b_->containers_[i];
@@ -893,7 +919,7 @@ void BattleAi::capture_lane_view() {
 // sp3 slice 4b: one record per object of the ability system or the combat system (ascending id, merged), the answers of
 // the bindings' queries at the ability frame. The bridge reads them from here on.
 void BattleAi::capture_lane_abilities() {
-    lua::capture_lane_abilities(b_->abilities(), b_->frame(), lane_abilities_);
+    lua::capture_lane_abilities(b_->abilities(), b_->frame(), lane_abilities_, host_->parallel_for());
     lua::ObjectBridge& br = world_->object_bridge();
     br.lane_abilities = &lane_abilities_;
     br.lane_write = [this](const lua::LaneWrite& w) { queue_lane_write(w); };
@@ -1403,14 +1429,45 @@ void BattleAi::fill(at::PerceptionWorld& w, std::vector<at::TacticalAiObject>& o
     // strike validity test. `inside_shield` (IsInside*Shield) stays unset: always 0 in shipped data.
     if (!b_->space_ && !w.in_active_base_shield) {
         const TacticalBattle* sb = b_;
-        w.in_active_base_shield = [sb](const at::Vec3f& p) { return sb->l1_base_shield_covers({p.x, p.y, p.z}); };
+        if (world_->ai_lane() && b_->l1_mode_) {  // sp3 slice 4f: l1_base_shield_covers on the snapshot store (AI lane)
+            w.in_active_base_shield = [this](const at::Vec3f& p) {
+                static const objects::BehaviorTypeId kBaseShield = objects::behavior_type_id("BASE_SHIELD");
+                const objects::ObjectStore& st = world_->view_store();
+                if (kBaseShield == objects::kNoBehavior) return false;
+                for (const objects::ObjectHandle h : st.all_objects()) {
+                    if (!st.active(h) || !st.has_behavior(h, kBaseShield)) continue;
+                    const float r = b_->catalog_->types().get_float(st.type(h), "Base_Shield_Radius");
+                    const Vec3 c = st.position(h);
+                    const float dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+                    if (r > 0.0f && dx * dx + dy * dy + dz * dz < r * r) return true;
+                }
+                return false;
+            };
+        } else {
+            w.in_active_base_shield = [sb](const at::Vec3f& p) { return sb->l1_base_shield_covers({p.x, p.y, p.z}); };
+        }
     }
     // --- fog of war (owner: fog agent): the real fog with force = 1 (the AI target-selection form); the AI gate
     // (non-human players unfogged while AIUsesFogOfWar is False) is applied by the perception's own force-0
     // tests (threat-grid fog memory). fow_active = the battle's FOW-active flag. ---
     if (const tactical::fog::FogOfWar* fog = b_->fog()) {
         w.fow_active = fog->fow_active();
-        if (!w.object_fogged) {
+        if (!w.object_fogged && world_->ai_lane()) {  // sp3 slice 4f: the view's bits and grid copies (AI lane)
+            w.object_fogged = [this](int32_t player, int32_t id) {
+                const auto pk = std::find(view_.fog_players.begin(), view_.fog_players.end(), player);
+                if (pk == view_.fog_players.end()) return false;
+                const auto& v = view_.fog_hidden;
+                const auto it = std::lower_bound(v.begin(), v.end(), id, [](const std::pair<objects::ObjectId, uint32_t>& a, int32_t x) { return a.first < x; });
+                return it != v.end() && it->first == id && ((it->second >> static_cast<uint32_t>(pk - view_.fog_players.begin())) & 1u) != 0;
+            };
+            w.point_fogged = [this](int32_t player, float x, float y) {  // FogOfWar::point_fogged, force 1
+                if (!view_.fog_live) return false;
+                const auto pk = std::find(view_.fog_players.begin(), view_.fog_players.end(), player);
+                if (pk == view_.fog_players.end()) return false;
+                const tactical::fog::FogGrid& g = view_.fog_grids[static_cast<size_t>(pk - view_.fog_players.begin())];
+                return g.valid() && g.fogged_at(x, y);
+            };
+        } else if (!w.object_fogged) {
             const TacticalBattle* fb = b_;
             w.object_fogged = [fb](int32_t player, int32_t id) { return fb->fog_object_hidden(player, id, true); };
             w.point_fogged = [fb](int32_t player, float x, float y) { return fb->fog_point_fogged(player, x, y, true); };

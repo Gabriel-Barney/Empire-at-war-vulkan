@@ -371,6 +371,9 @@ private:
         // k-th entry of fog_players); empty without fog.
         std::vector<int32_t> fog_players;
         std::vector<std::pair<objects::ObjectId, uint32_t>> fog_hidden;
+        // slice 4f: the perception's point test (force 1) - the fog running and FOW-active, the AI players' grids
+        bool fog_live = false;
+        std::vector<tactical::fog::FogGrid> fog_grids;  // fog_players order
     };
     LaneView view_;
     // sp3 slice 4b: the ability / combat records the AI VMs' bindings read with the lane on (ObjectBridge::lane_abilities,
