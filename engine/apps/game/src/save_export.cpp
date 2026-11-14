@@ -205,7 +205,7 @@ bool export_session_json(const GameData& data, const GameSession& session, const
         }
         j.key("human", f), j.boolean(p.human);
         j.key("ai", f), j.boolean(p.ai);
-        j.key("neutral", f), j.boolean(known && data.rules.factions[p.faction].is_neutral);
+        j.key("neutral", f), j.boolean(known && data.rules.factions[p.faction].is_neutral);  // [name-ok: JSON key for Factions.xml Is_Neutral, not a faction]
         j.key("credits", f), j.num(static_cast<double>(p.account.credits));
         j.key("techLevel", f), j.num(static_cast<int64_t>(p.tech_level));
         j.key("maxTechLevel", f), j.num(static_cast<int64_t>(p.max_tech_level));
