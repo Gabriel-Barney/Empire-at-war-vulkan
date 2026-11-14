@@ -3075,6 +3075,42 @@ void test_runtime_obstacles(bool space) {
 }
 
 
+// SP5 (docs/SIM_PARALLEL_DESIGN.md §5): the tick's services phase graph. Every run mode gives the default run's per-tick
+// CRCs and fog digests (Serial = the declared order, Reverse = each phase backwards: an undeclared read or write between
+// services of one phase would show here, Parallel at 4 workers), and the debug write check (every service's changes to
+// the checkable components inside its declared writes) finds no violation.
+void test_service_modes(const Data& d) {
+    using tactical::services::RunMode;
+    const TacticalBattle::ServiceRunDefaults saved = TacticalBattle::service_run_defaults();
+    for (const bool land : {false, true}) {
+        const uint64_t ticks = 1500;
+        const Run ref = run_campaign(d, land, true, 0, ticks);
+        CHECK(ref.fought == 1);
+        struct Mode {
+            RunMode mode;
+            bool check;
+            int32_t workers;
+            const char* name;
+        };
+        const Mode modes[] = {{RunMode::Serial, false, 0, "serial"},
+                              {RunMode::Reverse, false, 0, "reverse"},
+                              {RunMode::Parallel, false, 4, "parallel w4"},
+                              {RunMode::Serial, true, 4, "write check"}};
+        for (const Mode& m : modes) {
+            TacticalBattle::set_service_run_defaults({m.mode, m.check});
+            const uint64_t v0 = TacticalBattle::service_violations_total();
+            const Run r = run_campaign(d, land, true, m.workers, ticks);
+            const auto dv = first_divergence(ref.crc, r.crc);
+            const uint64_t violations = TacticalBattle::service_violations_total() - v0;
+            std::printf("  %s %-12s %s, fog %s, violations %llu\n", land ? "land " : "space", m.name, dv.message.c_str(),
+                        r.fog_hash == ref.fog_hash ? "same" : "DIFFERENT", static_cast<unsigned long long>(violations));
+            CHECK(!dv.diverged && r.battles == ref.battles && r.fog_hash == ref.fog_hash);
+            CHECK(violations == 0);
+        }
+        TacticalBattle::set_service_run_defaults(saved);
+    }
+}
+
 }  // namespace
 
 
@@ -3088,6 +3124,8 @@ int main(int argc, char** argv) {
     test_space_battle(*d);
     std::printf("land battle\n");
     test_land_battle(*d);
+    std::printf("SP5 services graph: serial / reverse / parallel / write check\n");
+    test_service_modes(*d);
     std::printf("retreat\n");
     test_retreat(*d);
     std::printf("auto-resolve only\n");

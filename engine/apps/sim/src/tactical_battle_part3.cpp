@@ -937,85 +937,9 @@ void TacticalBattle::expire_objects(TacticalMode& mode) {
     dummies_.resize(w);
 }
 
-void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf, double sim_time, uint64_t global_frame) {
-    if (finished_) {  // finished outside a tick (auto-resolve stop): the clones go before the mode pops (refixf t04)
-        if (!death_clones_.empty()) remove_death_clones(mode, true);
-        return;
-    }
-    ++frame_;
-    oi_global_frame_ = global_frame;
-    stats_.frames = frame_;
-    // s78n t12 review: deaths raised between ticks by command-phase ability effects - the vehicle thief's eject (unit
-    // ability 46 / 18 off: Take_Damage kind 13 kills the stolen vehicle), a STIM_PACK that kills its user - are still in
-    // the combat system's list, which the coming combat tick clears. Process them now, in list order, like the combat
-    // tick's own deaths (process_death skips a unit that was processed already: last tick's deaths, script_damage's).
-    // [port] before this the host never saw such a death (the object stayed, dead in combat only).
-    if (combat_ && !combat_->deaths().empty()) {
-        // s78n t19: the hooks get this tick's context first, so what a late death starts (its death clip, a corpse
-        // clone) is stamped with the current frame, not with the tick before
-        if (hooks_) hooks_->set_tick(&rng, global_frame);
-        const std::vector<tc::DeathEvent> late(combat_->deaths().begin(), combat_->deaths().end());
-        for (const tc::DeathEvent& d : late) process_death(mode, d, rng);
-    }
-    story_reinforced_.clear();  // L1/S4 wave 2b story hook: this tick's reserve deployments
-    ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
-    landings_unloaded_.clear();  // a1i t04: signal 0x19 records of the last tick
-    production_done_.clear();    // q6 t19: signal 0x22 records of the last tick
-    story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
-    story_captured_.clear();
-    share_groups_sync();  // S8 t17 (FIGHTER_FLYING §4.10 B): squadron of the shared team target, before this tick's orders
-    objects::ObjectStore& store = mode.primary();
-    l1_weather_tick(rng);  // L1 systems: land weather service (before the common tick)
-    hero_clash_tick(mode, rng, global_frame);  // s78n t06: land tick step 4, after the weather (HERO_CLASH §2.1)
-    fog_decay();  // fog of war: common-tick step 4, before the object services (owner: fog agent)
-    hg_production(mode, rng);  // station contents / skirmish tactical production (before the object services)
-    profile::lap("tac.setup");
-    // 1. reinforcements, 2. stand-in orders, 3. retreat coordinator.
-    reinforce(mode, rng, true);
-    landing_service(mode, rng);  // a1i t04: landing objects (timed unload steps, take-off)
-    if (cfg_.order_interval > 0 && (frame_ - 1) % cfg_.order_interval == 0) issue_orders(mode, rng);
-    retreat_policy();
-    if (retreat_side_ >= 0 && !retreat_complete_ && frame_ >= retreat_done_frame_) {
-        bt_retreat_attrition(static_cast<uint8_t>(retreat_side_), rng);  // battle host: vf12 at the countdown end (§4.9)
-        complete_retreat(mode, static_cast<uint8_t>(retreat_side_));
-    }
-    profile::lap("tac.orders");
-    attack_block_service(mode, rng);  // s78n t20 stage A: serial, ascending mover, before the collision feed and the movement tick
-    // 4. speed factors, movement, positions into the store and the trees, locomotor animation.
-    apply_speed_factors();
-    fleet_tick(mode);  // [port] fleet groups: slowest-member cap and straggler wait (no-op while no group exists)
-    feed_collision_info(store);  // s78n t20: targets / ranges / hero clashes for the land collision decisions
-    fighter_sync();  // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
-    feed_attack_targets(store);
-    if (space_) avoid_snapshot(store);  // SPACE_AVOIDANCE: committed member transforms for the fighter avoidance hook
-    profile::lap("tac.pre_move");
-    movement_->tick(frame_, rng, pf);
-    movement_->commit(store);
-    kill_pushed_clones(mode);  // s78n t20 batch 1: the death clones a collision push killed
-    play_turn_clip_events(rng, global_frame);  // s78l t02: the arrival turn's clip plays (synced variant draws), ascending id
-    s4_exit_arrivals();  // s78n t26.1: the garrison hosts' +0xf8 hook for the walk-out moves that finished
-    oi_deploy_sync();  // S8 t11: deploy clip ends (Is_Active, deploy flags, signal 0x29) before the combat tick
-    profile::lap("tac.movement");
-    fighter_enter_idle();  // S7 t22 / t25: enter_idle drops the squadrons' team targets (§4.7 step 4, §4.10 D)
-    forward_fighter_events();  // S7 fighters: Provoke / Retarget -> combat attack orders (before the combat tick)
-    for (const objects::ObjectId id : movement_->despawned())  // §4.6: land bombers at their path end, no death effects
-        if (const Unit* u = unit_by_id(id)) bt_kill_silently(mode, u->h);
-    oi_crush_.assign(movement_->crush_events().begin(), movement_->crush_events().end());  // OI tactical
-    l1_motion(mode, rng);  // L1 systems: hyperspace jumps, engine re-enables
-    arrival_service(mode, rng);  // cu8l t03: the start fleet's hyperspace arrivals (timer draws, finishes)
-    l1_force_disable(mode);  // cu8 t02: Disable_Force_Abilities_Range emitters (Force-disable stamps)
-    hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
-    bt_team_positions(mode);  // battle host: space squadrons / non-steering land squads at their members' box centre
-    profile::lap("tac.motion_post");
-    mode.resolve_models();  // refixf t07: after a load, before the boxes and the parallel sweeps read the model cache
-    for (const Unit& u : units_)
-        if (u.alive && !u.retreated && u.movable && store.alive(u.h))
-            mode.trees().update(static_cast<tactical::EntityHandle>(u.id), mode.bounds_of(u.h));
-    mode.trees().maintain(sim_time, pf);
-    profile::lap("tac.trees");
-    drive_animation(store, rng, global_frame);
-    profile::lap("tac.anim");
-    // 5. combat (abilities run inside its serial phases), events.
+// The combat_pre sync (S10, PERF_AUDIT_2026-11-07): each movable unit's position, facing and the movement-derived combat
+// flags into the combat system, before the combat tick (SP5: the services graph's "combat_sync" service).
+void TacticalBattle::combat_sync(const objects::ObjectStore& store) {
     for (const Unit& u : units_) {
         if (!u.alive || u.retreated || !u.movable) continue;
         combat_->set_position(u.id, tv(store.position(u.h)));
@@ -1056,48 +980,6 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
                               mvv.locomotor == mv::LocomotorKind::Fighter && fighter_formation(fighter_key(u)) != nullptr);
         }
     }
-    s4_positions(mode);  // S4: garrisoned units sit on their holders
-    combat_team_positions(store);  // s78n t03: the land teams' TeamTargeting P_U (cleared after the combat tick)
-    profile::lap("tac.combat_pre");
-    hooks_->set_tick(&rng, global_frame);
-    abilities_->tick(frame_, mode.trees(), rng, pf);
-    combat_->clear_team_positions();  // s78n t03: readers between ticks use the head's own position (save / load equal)
-    profile::lap("tac.combat");
-    consume_events(mode, rng);
-    oi_respawn_due(mode);  // OI abilities: Tactical_Respawn creations due this frame
-    profile::lap("tac.events");
-    hg_tick(mode, rng);    // hangars: SPAWN_SQUADRON services and the launches they request
-    saber_throw_service(mode);  // cu8k t01: Saber_Throw throws / SWORD_CONTROL / SWORD_CATCH (after the saber's step)
-    hg_holster_service();  // cu8g t01: HOLSTER_WEAPON (engine-loop suppression, draw / holster SFX requests)
-    l1_weapons(mode, rng);  // L1 systems: special-weapon volleys, TSW state machines
-    profile::lap("tac.services");
-    expire_objects(mode);
-    s4_tick(mode, rng);  // S4: garrison enters / exits / ejects, structure capture
-    pads_tick(mode);     // Int-final: build pads (construction completion, children gone)
-    sk_income(mode);     // skai: skirmish map battles: the Income_Stream credit trickle
-    bt_shield_stamps(mode);  // battle host: base-shield secondary occupants follow the live shields (land)
-    service_damage_tracking();
-    profile::lap("tac.cleanup");
-    fog_service(mode);  // fog of war: REVEAL sources, attacker flashes (owner: fog agent)
-    fog_setup_tick();   // FOWF t05: setup phase end (all humans ready / countdown)
-    profile::lap("tac.fog");
-    team_attack_service(mode, rng);  // q6: attacks on TEAM containers (re-pick, end), before the queues read the orders
-    advance_queues(mode, rng);  // [port: Gabriel] 5b. queueable unit actions: completed orders start the next entry
-    late_swap_back_signals();   // S7 t27: a jetpack swap back after the combat_pre loop raises signal 0x29 in this tick
-    stats_.shots = combat_->stats().shots;
-    stats_.hits = combat_->stats().hits;
-    // cu8j t01 (MOVEMENT §4.6.2): the movement coordinator update (retail common tick step 10, after the object services):
-    // this tick's new coordinators compose their formations (the FormationClass ctor draws, the land stagger draws).
-    // Orders given after it (the AI and story services of the host) compose at the next tick's.
-    movement_->coordinator_update(frame_, global_frame, rng);
-    // 6. victory.
-    check_victory(mode);  // story t06: the victory monitor (losses since the last tick, countdown, end)
-    if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
-    space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
-    land_obstacles_sync(mode, pf);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
-    hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
-    feed_pair_gates();  // s78n t18 review: the gates the command phase reads follow this tick's deaths / retreats
-    profile::lap("tac.victory");
 }
 
 // S7 t27 (MOVEMENT §3.1.1 step 6): the swap back raises signal 0x29 at once. The combat_pre loop sees the swaps of the

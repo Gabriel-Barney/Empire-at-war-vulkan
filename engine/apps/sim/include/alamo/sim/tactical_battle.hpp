@@ -87,6 +87,7 @@
 #include "alamo/tactical/hangar/engine_loops.hpp"         // hangars / engine loops (STATION_HANGARS_SOUND.md)
 #include "alamo/tactical/hangar/hangar_system.hpp"
 #include "alamo/tactical/hangar/contents.hpp"            // station contents / tactical production
+#include "alamo/tactical/services/service_graph.hpp"  // SP5: the tick as a services phase graph
 #include "alamo/terrain/ted.hpp"
 #ifdef ALAMO_SIM_HAVE_AI_TACTICAL
 #include "alamo/ai/tactical/damage_tracking.hpp"
@@ -1647,6 +1648,7 @@ private:
     std::vector<objects::ObjectId> enqueue(std::span<const objects::ObjectId> ids, const QueuedOrder& o);  // -> run now
     void advance_queues(TacticalMode& mode, SimRng& rng);
     void late_swap_back_signals();  // S7 t27: signal 0x29 for a jetpack swap back after the combat_pre loop
+    void combat_sync(const objects::ObjectStore& store);  // SP5 / S10: positions, facings, movement flags into combat
     bool queue_object_live(const TacticalMode& mode, objects::ObjectId id) const;
     // s78n t20: `no_destination_check` - the move stands for an object-goal block (MOVEMENT §4.3.1 item 2: no destination
     // check; an object goal implies it)
@@ -2303,6 +2305,40 @@ private:
     uint32_t hg_launches_ = 0;
     bool hg_used_ = false;                       // hashed once a carrier / upgrade existed
     // --- end hangars ---
+
+    // ---- SP5: the tick as a services phase graph (tactical_battle_services.cpp; docs/SIM_PARALLEL_DESIGN.md §5) ----
+    // Every step of tick() is a service with declared read / write components; tick() runs the graph. The run mode and the
+    // debug write check never change results when the declarations are right (the checks prove them), so they are
+    // process-wide defaults read when a battle is built (headless --svc-mode / --svc-check, tests).
+public:
+    struct ServiceRunDefaults {
+        tactical::services::RunMode mode = tactical::services::RunMode::Parallel;
+        bool check = false;  // debug write check (serial; a violation is counted and printed)
+    };
+    static void set_service_run_defaults(const ServiceRunDefaults& d);
+    static ServiceRunDefaults service_run_defaults();
+    void set_service_mode(tactical::services::RunMode m) { svc_mode_ = m; }
+    void set_service_check(bool on);
+    uint64_t service_violations() const;
+    static uint64_t service_violations_total();  // every battle of the process (tests)
+    const tactical::services::ServiceGraph* service_graph() const { return svc_graph_.get(); }
+
+private:
+    void build_service_graph();
+    uint64_t service_digest(uint32_t component) const;
+    struct TickContext {
+        TacticalMode* mode = nullptr;
+        SimRng* rng = nullptr;
+        const ParallelFor* pf = nullptr;
+        double sim_time = 0.0;
+        uint64_t global_frame = 0;
+    };
+    TickContext tick_{};
+    std::unique_ptr<tactical::services::ServiceGraph> svc_graph_;
+    const TacticalBattle* svc_owner_ = nullptr;  // the graph's lambdas capture this; rebuilt if the object moved
+    tactical::services::RunMode svc_mode_ = service_run_defaults().mode;
+    std::unique_ptr<tactical::services::Checker> svc_check_;
+    // --- end SP5 ---
 };
 
 // --- P4 tactical: campaign Black Market gate (ABILITIES_HARDPOINTS 2.4, P4_SIM_SYSTEMS 1.5) ---

@@ -60,6 +60,7 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
       sim/src/tactical_battle.cpp
       sim/src/tactical_battle_part2.cpp  # bo3 t03: split by position, shared code in tactical_battle_internal.hpp
       sim/src/tactical_battle_part3.cpp
+      sim/src/tactical_battle_services.cpp  # SP5: the tick as a services phase graph
       # Fog of war (tactical_battle_fog.cpp) and S4 garrisons + structure capture (tactical_battle_garrison.cpp).
       sim/src/tactical_battle_fog.cpp
       sim/src/tactical_battle_garrison.cpp
@@ -77,7 +78,7 @@ if(TARGET alamo_objects AND TARGET alamo_commands AND TARGET alamo_tactical AND 
     )
     target_link_libraries(alamo_sim_battle PUBLIC alamo_sim_base alamo_tactical_movement alamo_tactical_combat
                                                   alamo_tactical_abilities alamo_tactical_fog alamo_tactical_garrison
-                                                  alamo_tactical_hangar)
+                                                  alamo_tactical_hangar alamo_tactical_services)
     target_compile_definitions(alamo_sim_config INTERFACE ALAMO_SIM_HAVE_BATTLES=1)
     add_library(alamo_sim_campaign STATIC sim/src/campaign_battles.cpp)
     target_link_libraries(alamo_sim_campaign PUBLIC alamo_sim_battle)

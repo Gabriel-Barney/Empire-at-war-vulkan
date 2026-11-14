@@ -93,6 +93,8 @@
 //   alamo_headless --save-session KIND --save-check --save-at T FILE --ticks K
 //       N1 done-check: save at T, continue to T+K; load in this process, in a fresh process and with replays, all
 //       must give the original's per-tick CRCs.
+// SP5: any mode takes --svc-mode serial|parallel|reverse (the battle services graph; same results, reverse = order check)
+// and --svc-check (debug write check of the services' declared sets; violations printed to stderr).
 // BM1 benchmark (bench_run.hpp; scenario format alamo/sim/bench_scenario.hpp):
 //   alamo_headless --bench SCENARIO.abench [--runs R] [--warmup W] [--workers N] [--ticks K] [--bench-json FILE|-]
 //                  [--bench-baseline OLD.json] [--crc-out F] [--golden F] [--bench-allow-changed]
@@ -148,6 +150,9 @@
 #include "alamo/objects/object_types.hpp"
 #ifdef ALAMO_HEADLESS_HAVE_SIM
 #include "alamo/sim/bench_scenario.hpp"  // BM1 --bench-regen
+#ifdef ALAMO_SIM_HAVE_BATTLES
+#include "alamo/sim/tactical_battle.hpp"  // SP5 --svc-mode / --svc-check
+#endif
 #endif
 #include "alamo/vfs/steam_workshop.hpp"
 #include "alamo/vfs/vfs.hpp"
@@ -1295,6 +1300,25 @@ int main(int argc, char** argv) {
         if (a == "--profile") profile_on = true;
         else if (a == "--profile-out" && i + 1 < argc) profile_out = argv[++i];
         else if (a == "--profile-budget" && i + 1 < argc) budget_ms = std::strtod(argv[++i], nullptr);
+#ifdef ALAMO_SIM_HAVE_BATTLES
+        // SP5: how a battle tick runs its services graph (results are the same in every mode; the modes are checks).
+        else if (a == "--svc-mode" && i + 1 < argc) {
+            const std::string m = argv[++i];
+            auto d = alamo::sim::TacticalBattle::service_run_defaults();
+            if (m == "serial") d.mode = alamo::tactical::services::RunMode::Serial;
+            else if (m == "parallel") d.mode = alamo::tactical::services::RunMode::Parallel;
+            else if (m == "reverse") d.mode = alamo::tactical::services::RunMode::Reverse;
+            else {
+                std::fprintf(stderr, "alamo_headless: --svc-mode serial | parallel | reverse\n");
+                return 2;
+            }
+            alamo::sim::TacticalBattle::set_service_run_defaults(d);
+        } else if (a == "--svc-check") {
+            auto d = alamo::sim::TacticalBattle::service_run_defaults();
+            d.check = true;
+            alamo::sim::TacticalBattle::set_service_run_defaults(d);
+        }
+#endif
         else args.push_back(argv[i]);
     }
     if (profile_on || !profile_out.empty()) alamo::profile::start(65536);
