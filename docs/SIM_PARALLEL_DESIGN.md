@@ -86,6 +86,21 @@ is late.** Thread timing then decides only *when the CPU does the work*, never *
 
 All of this is golden-neutral: results already do not depend on the worker count.
 
+**As built (sp1, 2026-11-14; `alamo/jobs/job_system.hpp`, `topology.hpp`).** Port choices where the build differs from the text above:
+- *Cost estimate:* measured, not declared. Each `parallel_for` call site (the lambda's type) keeps a wall-clock work-per-item
+  estimate (inline: the loop's time; forked: time x threads that ran chunks); estimated work below 50 us runs inline, and at most one
+  thread per 25 us of work joins. No call site changed. The first call of a site always forks (no estimate yet).
+- *Strict priority:* only a loop's **helpers** run queued critical jobs between chunks, not its owner (the owner's stack may hold the
+  job a critical job waits on: a self-wait deadlock found in review). Rule added: a critical job never waits on an AI or background
+  counter.
+- *Sleep:* one epoch per kind of sleeper (idle workers; waiters), `std::atomic::wait` on it, after a 5 us (waiter) / 30 us (worker)
+  `_mm_pause` spin; not one wait per counter.
+- *Pool:* P-cores of the largest cache domain (then the larger L3) minus 2; a hybrid part with few P-cores still gets up to 3 workers
+  from its other cores. E-cores do not get a background-only queue yet. Workers are kept on the pool's cores (one logical processor
+  each) only when workers + 2 fit (the default does; `ALAMO_JOBS_CPUSETS=0` turns it off).
+- *OS hints:* power-throttling opt-out in `alamo_game` and `alamo_headless`; the sim thread one step up in `alamo_game` (above-normal
+  process) and in `alamo_headless --bench`. The AI thread does not exist yet (P3); its slot is reserved in the worker count.
+
 ### 4.2 The snapshot (frozen read view)
 - At the end of each tick the critical lane publishes `S_N`: the data the AI and other readers need, as **struct-of-arrays copied into
   a double (triple) buffer**: per-object id, type index, owner, position, facing, health / shield, order state, flags; per-player
