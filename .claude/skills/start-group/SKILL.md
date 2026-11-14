@@ -1,5 +1,7 @@
 ---
-description: Start a roadmap group - sync, show tasks and prerequisites, claim it, create or verify the worktree
+name: start-group
+description: Start a roadmap group (an id such as s78m, a2m, fg1) - sync the roadmap store, show its tasks, exit test and prerequisites, claim it, create or verify the worktree, print the plan. Use whenever work on a roadmap group begins, when asked to "start", "pick up" or "take" a group, or as the first step of a lane.
+argument-hint: <group-id> [session-name]
 ---
 Start roadmap group `$ARGUMENTS` (a group id such as `s78m`; add a session name after it to override the default, which is the
 worktree name). Follow the `lane` agent loop (`.claude/agents/lane.md`):

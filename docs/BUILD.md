@@ -128,3 +128,20 @@ Header-only INTERFACE targets; link them from a test exe, never from an engine l
   ring; derive to add a renderer, HUD or timer) and `OffscreenWithDepth` / `OffscreenColorOnly` over
   `alamo/render/offscreen.hpp` (the render library's offscreen target, also used by the `alamo_render` sub-mains through
   `engine/render/app/app_common.hpp`).
+
+## Claude Code setup (2026-11-13)
+
+- Skills (`.claude/skills/<name>/SKILL.md`, invoked as `/<name>` or picked by Claude from their descriptions): `build`, `start-group`,
+  `finish-group`, `phase-status` (the former `.claude/commands`), plus `regen-goldens` (drift vs real failure, how to regenerate and
+  record), `determinism-check` (rule 3 checklist and test recipe) and `probe-kit` (layout and lessons for `tools/probe_mod` kits).
+  `finish-group` reviews the branch diff before landing: the built-in `/code-review high`, plus the `reviewer` agent for sim code.
+- C++ code intelligence: the project-local plugin `eaw-clangd` (marketplace `tools/claude_plugins`, enabled in `.claude/settings.json`)
+  gives Claude clangd diagnostics after each edit and an `LSP` navigation tool. It runs `python -I tools/lsp/clangd_launch.py`, which
+  starts `toolchain\llvm\bin\clangd.exe` with the MSVC environment of `toolchain\msvc\setup_x64.bat` and the newest
+  `compile_commands.json` of this checkout's build trees (`build-wt-clang`, `build-clang`, `build-wt-msvc`, `build-msvc`), so build a
+  tree once first. `python -I tools/lsp/clangd_launch.py --check <file>` is a one-shot diagnostics run (its `ExtractFunction` tweak
+  "errors" are clangd's refactoring self-test, not compile errors); `--print` shows the command. The plugin loads after the folder is
+  trusted; if diagnostics are missing, check the `/plugin` errors list.
+- Read-only allowlist (2026-11-13, from transcript frequencies): PowerShell `Get-Content`, `Get-ChildItem`, `Select-String`,
+  `Test-Path`, `Measure-Object`; `roadmap_store.py lint`, `backlog list`, `claims`, `--help`; `clangd_launch.py --check` / `--print`.
+  Cmdlets that take script blocks (`Where-Object`, `ForEach-Object`, `Select-Object` with calculated properties) are left out on purpose.

@@ -1,0 +1,12 @@
+{
+  "name": "eaw-local",
+  "owner": { "name": "EaW:FoC engine rewrite" },
+  "description": "Project-local Claude Code plugins (tools/claude_plugins; docs/BUILD.md, \"Claude Code setup\")",
+  "plugins": [
+    {
+      "name": "eaw-clangd",
+      "source": "./plugins/eaw-clangd",
+      "description": "C++ code intelligence: the project's toolchain clangd with this checkout's compile database"
+    }
+  ]
+}

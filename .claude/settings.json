@@ -16,8 +16,38 @@
       "Bash(python -I tools/worktree/stop_tree_procs.py *)",
       "PowerShell(python -I tools\\lint\\test_slot.py --status)",
       "PowerShell(python -I tools/lint/test_slot.py --status)",
-      "Bash(python -I tools/lint/test_slot.py --status)"
+      "Bash(python -I tools/lint/test_slot.py --status)",
+      "PowerShell(Select-String *)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Measure-Object *)",
+      "Bash(python roadmap-store/roadmap_store.py backlog list)",
+      "Bash(python roadmap-store/roadmap_store.py backlog list *)",
+      "PowerShell(python roadmap-store\\roadmap_store.py backlog list)",
+      "PowerShell(python roadmap-store\\roadmap_store.py backlog list *)",
+      "Bash(python roadmap-store/roadmap_store.py lint)",
+      "Bash(python roadmap-store/roadmap_store.py lint *)",
+      "PowerShell(python roadmap-store\\roadmap_store.py lint)",
+      "PowerShell(python roadmap-store\\roadmap_store.py lint *)",
+      "Bash(python roadmap-store/roadmap_store.py claims)",
+      "PowerShell(python roadmap-store\\roadmap_store.py claims)",
+      "Bash(python roadmap-store/roadmap_store.py --help)",
+      "PowerShell(python roadmap-store\\roadmap_store.py --help)",
+      "Bash(python -I tools/lsp/clangd_launch.py --check *)",
+      "Bash(python -I tools/lsp/clangd_launch.py --print)"
     ]
+  },
+  "extraKnownMarketplaces": {
+    "eaw-local": {
+      "source": {
+        "source": "directory",
+        "path": "tools/claude_plugins"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "eaw-clangd@eaw-local": true
   },
   "hooks": {
     "PostToolUse": [
