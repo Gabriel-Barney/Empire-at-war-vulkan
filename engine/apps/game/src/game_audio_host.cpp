@@ -57,6 +57,15 @@ std::string_view GameAudioHost::control_point_line(int32_t prev, int32_t timer, 
     return {};
 }
 
+std::string_view GameAudioHost::garrison_line(int32_t unit_owner, int32_t local_player) {
+    return local_player >= 0 && unit_owner == local_player ? std::string_view("SFXEvent_Bunker_Garrisoned") : std::string_view();
+}
+
+std::string_view GameAudioHost::clash_win_speech(const tactical::combat::HeroClashData* data, uint32_t entry, bool first_won) {
+    if (!data || entry >= data->entries.size()) return {};
+    return first_won ? data->entries[entry].first_speech : data->entries[entry].second_speech;
+}
+
 Vec3 GameAudioHost::position_of(uint64_t id) const {
     const auto it = positions_.find(id);
     return it == positions_.end() ? Vec3{} : it->second;
@@ -116,6 +125,7 @@ bool GameAudioHost::init(const GameData& data, AudioBackendKind kind, uint32_t s
         audio::AudioSystem::ObjectAudio a;
         a.position = it->second;
         a.audible = inaudible_.find(owner) == inaudible_.end();  // §3.5 item 8: fog / hidden / stealth mute, no stop
+        a.hidden = hidden_.find(owner) != hidden_.end();          // AUDIO.md §1.6 (b0280): a cinematic unmutes fog only
         return a;
     });
     return true;
@@ -255,24 +265,45 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
     // stealthed for the local player (running loops are muted, never stopped).
     const tactical::abilities::AbilitySystem& ab = battle.abilities();
     const float threshold = battle.engine_moving_threshold();
+    if (!super_weapon_types_ready_) {  // AUDIO.md §2.3 (b0286): the factions' Faction_Super_Weapon types
+        super_weapon_types_ready_ = true;
+        for (const audio::FactionAudio& f : game_data_->factions()) {
+            const objects::TypeIndex t = types.resolve_name(f.get("Faction_Super_Weapon"));
+            if (t != objects::kNone && std::find(super_weapon_types_.begin(), super_weapon_types_.end(), t) == super_weapon_types_.end())
+                super_weapon_types_.push_back(t);
+        }
+    }
+    bool super_weapon = false;
     std::vector<objects::ObjectId> live;
     for (const objects::ObjectId id : mv.unit_ids()) {
         const objects::ObjectHandle h = store.find(id);
         if (!store.alive(h)) continue;
         live.push_back(id);
+        // [port] any owner: only the Empire names a Faction_Super_Weapon (Death_Star) in shipped data.
+        if (std::find(super_weapon_types_.begin(), super_weapon_types_.end(), store.type(h)) != super_weapon_types_.end())
+            super_weapon = true;
         if (spawned_.insert(id).second) {
             game_->object_spawned(static_cast<uint64_t>(id), sounds(types, store.type(h)), store.position(h));
             ++stats_.spawned;
         }
-        const bool hidden = battle.fog_object_hidden(local_player, id, false) || ab.is_stealthed(id, battle.frame()) ||
+        const bool hidden = ab.is_stealthed(id, battle.frame()) ||
                             (script_hidden && script_hidden(id));  // q6 t19: Lua Hide(true) mutes the object's sound
-        if (hidden) inaudible_.insert(static_cast<uint64_t>(id));
+        const bool fogged = battle.fog_object_hidden(local_player, id, false);
+        if (hidden || fogged) inaudible_.insert(static_cast<uint64_t>(id));
         else inaudible_.erase(static_cast<uint64_t>(id));
+        if (hidden) hidden_.insert(static_cast<uint64_t>(id));
+        else hidden_.erase(static_cast<uint64_t>(id));
         if (battle.hyperspace().departing(id)) continue;  // hyperspace states: the locomotor leaves the loops alone
         const bool moving = mv.view(id).speed >= threshold;
         moving_[id] = moving;
         game_->object_moving(static_cast<uint64_t>(id), moving);
     }
+    if (!super_weapon && battle.lead_object() != objects::kNoObjectId) {  // the spawned super weapon (§4.8 lead object)
+        const objects::ObjectHandle lh = store.find(battle.lead_object());
+        super_weapon = store.alive(lh) && std::find(super_weapon_types_.begin(), super_weapon_types_.end(), store.type(lh)) !=
+                                              super_weapon_types_.end();
+    }
+    super_weapon_report(super_weapon);
     // §3.3 engine-loop requests of the tick (TacticalBattle::engine_loop_requests, hangar::EngineLoops): mode enter,
     // locomotor services, engines offline / online - start = fade-in, stop = fade-out. cu8g t01: HOLSTER_WEAPON / Saber_Throw
     // suppress (0x392410: every engine loop stopped with the request's fade, < 0 = the event's own) / unsuppress (0x393970)
@@ -325,6 +356,7 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
         if (std::find(died.begin(), died.end(), *it) == died.end()) ++stats_.removed;
         moving_.erase(*it);
         inaudible_.erase(static_cast<uint64_t>(*it));
+        hidden_.erase(static_cast<uint64_t>(*it));
         it = spawned_.erase(it);
     }
     // §1.2 step 11: the 2D station-upgrade announcement for the local player (own / ally / enemy).
@@ -335,6 +367,27 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
                                                                                           : "SFXEvent_Starbase_Enemy_Upgraded";
         faction_sfx(ev);
         ++stats_.station_upgrades;
+    }
+    // L1_S4_REMAINING §4.1 (b0289): a unit that actually entered a garrison this tick -> the local faction's
+    // SFXEvent_Bunker_Garrisoned [M: played for the local player's own units only].
+    for (const sim::TacticalBattle::StoryGarrisonEvent& e : battle.story_garrisoned()) {
+        const std::string_view line = garrison_line(owner_of(e.unit), local_player);
+        if (line.empty()) continue;
+        faction_sfx(line);
+        ++stats_.garrison_lines;
+    }
+    // HERO_CLASH §3.8 (b0300): a clash end plays the winner's First_ / Second_Hero_Win_Speech (speech queue).
+    {
+        const auto& ends = battle.hero_clashes().ended();
+        const tactical::combat::HeroClashData* cd = battle.hero_clashes().data();
+        if (ends.size() < clash_ends_seen_) clash_ends_seen_ = 0;  // cleared (load / new battle)
+        for (; clash_ends_seen_ < ends.size(); ++clash_ends_seen_) {
+            const auto& e = ends[clash_ends_seen_];
+            const std::string_view line = clash_win_speech(cd, e.entry, e.first_won);
+            if (line.empty()) continue;
+            speech(line);
+            ++stats_.clash_win_speech;
+        }
     }
     // ccpgu t01 (SKIRMISH_SETUP 4.2): the control point domination countdown lines.
     {
@@ -379,6 +432,12 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle& battle, const objects
         game_->combat(ce);
         ++stats_.combat_notes;
     }
+}
+
+void GameAudioHost::super_weapon_report(bool present) {
+    const bool first = !battle_reported_;
+    battle_reported_ = true;
+    if (game_) game_->set_super_weapon_present(present, first);
 }
 
 void GameAudioHost::tsw_audio(std::span<const TswCue> cues, const objects::GameObjectTypes& types) {
@@ -537,6 +596,7 @@ void GameAudioHost::battle_tick(const sim::TacticalBattle&, const objects::Objec
 void GameAudioHost::battle_end(bool, std::string_view) {}
 void GameAudioHost::tsw_audio(std::span<const TswCue>, const objects::GameObjectTypes&) {}
 void GameAudioHost::sim_tick() {}
+void GameAudioHost::super_weapon_report(bool) { battle_reported_ = true; }
 void GameAudioHost::music(MusicScene scene, std::string_view, bool, std::string_view) {
     if (scene != scene_) pending_played_ = false;
     scene_ = scene;
@@ -564,6 +624,9 @@ void GameAudioHost::battle_reset() {
     spawned_.clear();
     moving_.clear();
     inaudible_.clear();
+    hidden_.clear();
+    battle_reported_ = false;
+    clash_ends_seen_ = 0;
     upgrades_seen_ = 0;
     cp_timer_ = -1;
     retreating_player_ = -1;

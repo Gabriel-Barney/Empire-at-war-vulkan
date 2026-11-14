@@ -70,7 +70,7 @@ struct AmbientMapSound {
 };
 
 // Audio-related tags of one <Faction> element (every child whose tag contains "SFX", "Music" or
-// "Speech"), kept raw in document order so the game host and GameAudio can read any of the ~70 tags.
+// "Speech", plus Faction_Super_Weapon), kept raw in document order so the game host and GameAudio can read any of the ~70 tags.
 struct FactionAudio {
     std::string name;
     std::vector<std::pair<std::string, std::string>> fields;  // tag as written, trimmed text

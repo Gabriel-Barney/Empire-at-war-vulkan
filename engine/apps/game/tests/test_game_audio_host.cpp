@@ -12,6 +12,7 @@
 #include "alamo/core/file_provider.hpp"
 #include "alamo/game/game_audio_host.hpp"
 #include "alamo/game/game_data.hpp"
+#include "alamo/tactical/combat/hero_clash.hpp"
 #include "alamo/test/support.hpp"
 #ifdef ALAMO_GAME_HAVE_AUDIO
 #include "alamo/audio/audio_system.hpp"
@@ -53,11 +54,15 @@ const char* kMusic = R"(<?xml version="1.0"?>
   <MusicEvent Name="Game_Credits_Music_Event"><Files>C1.MP3, C2.MP3, C3.MP3</Files><Loop>Yes</Loop></MusicEvent>
   <MusicEvent Name="Main_Menu_Music_Event"><Files>MENU.MP3</Files><Loop>Yes</Loop></MusicEvent>
   <MusicEvent Name="Movie_Cue"><Files>CUE.MP3</Files></MusicEvent>
+  <MusicEvent Name="Amb_Space"><Files>AS.MP3</Files><Loop>Yes</Loop></MusicEvent>
+  <MusicEvent Name="Amb_Space_DS"><Files>ADS.MP3</Files><Loop>Yes</Loop></MusicEvent>
 </MusicEvents>
 )";
 const char* kFactions = R"(<?xml version="1.0" ?>
 <Factions>
-  <Faction Name="Rebel"><Strategic_Map_Music_Event> Gal_Rebel </Strategic_Map_Music_Event></Faction>
+  <Faction Name="Rebel"><Strategic_Map_Music_Event> Gal_Rebel </Strategic_Map_Music_Event>
+    <Music_Event_List_Ambient> Space, Amb_Space </Music_Event_List_Ambient>
+    <Music_Event_Space_Ambient_Super_Weapon> Amb_Space_DS </Music_Event_Space_Ambient_Super_Weapon></Faction>
 </Factions>
 )";
 
@@ -148,7 +153,45 @@ void test_missing_credits_event() {
     h.movie_ended();
     CHECK(cur(h) == "Gal_Rebel" && h.stats().movie_restores == 0);
 }
+
+// aud4 b0286 (AUDIO.md §2.3): the first super-weapon report of a battle re-picks the ambient music with the
+// _Super_Weapon variant; later reports only set the flag; battle_reset starts a new battle's first report.
+void test_super_weapon_music() {
+    GameData data;
+    data.files = make_tree(true);
+    GameAudioHost h;
+    CHECK(h.init(data, AudioBackendKind::Null, 7));
+    if (!h.active()) return;
+    h.music(MusicScene::Battle, "Rebel", true);
+    CHECK(cur(h) == "Amb_Space" && mode(h) == audio::music_mode::kTacticalAmbient);
+    h.super_weapon_report(true);
+    CHECK(cur(h) == "Amb_Space_DS" && mode(h) == audio::music_mode::kTacticalAmbient);
+    h.super_weapon_report(false);  // the super weapon died: the music stays until the next mode switch
+    CHECK(cur(h) == "Amb_Space_DS");
+    h.battle_reset();
+    h.super_weapon_report(true);  // a new battle's first report: the same event is already playing (not restarted)
+    CHECK(cur(h) == "Amb_Space_DS");
+    h.battle_reset();
+    h.super_weapon_report(false);
+    CHECK(cur(h) == "Amb_Space");
+}
 #endif
+
+// aud4 b0289 / b0300: garrison entry line and the hero clash win speech (both builds; presentation rules only).
+void test_garrison_and_clash_lines() {
+    using H = GameAudioHost;
+    CHECK(H::garrison_line(1, 1) == "SFXEvent_Bunker_Garrisoned");
+    CHECK(H::garrison_line(2, 1).empty());   // an enemy / ally unit entering: no local line
+    CHECK(H::garrison_line(-1, -1).empty());  // no local player
+    tactical::combat::HeroClashData d;
+    d.entries.resize(2);
+    d.entries[1].first_speech = "Vader_Win";
+    d.entries[1].second_speech = "Obiwan_Win";
+    CHECK(H::clash_win_speech(&d, 1, true) == "Vader_Win");
+    CHECK(H::clash_win_speech(&d, 1, false) == "Obiwan_Win");
+    CHECK(H::clash_win_speech(&d, 0, true).empty());
+    CHECK(H::clash_win_speech(&d, 5, true).empty() && H::clash_win_speech(nullptr, 0, true).empty());
+}
 
 void test_inactive() {
     GameData data;
@@ -195,9 +238,11 @@ void test_control_point_lines() {
 int main() {
     test_inactive();
     test_control_point_lines();
+    test_garrison_and_clash_lines();
 #ifdef ALAMO_GAME_HAVE_AUDIO
     test_movie_music();
     test_missing_credits_event();
+    test_super_weapon_music();
 #endif
     std::printf(g_fail == 0 ? "game audio host tests passed\n" : "%d game audio host check(s) FAILED\n", g_fail);
     return g_fail == 0 ? 0 : 1;

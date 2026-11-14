@@ -95,6 +95,25 @@ struct MiniaudioBackend::Impl {
         if (engine_ok) ma_engine_uninit(&engine);
     }
 
+    // SFX buses: the decoded PCM of `sample` from the cache, decoding it on the first use. nullptr = missing / undecodable.
+    std::shared_ptr<const PcmBuffer> cached_pcm(const SampleRef& sample) {
+        const std::string key = normalize_name(sample.file);
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second;
+        std::vector<uint8_t> bytes;
+        if (!samples->read(sample, bytes)) {
+            error = "missing sample " + sample.file;
+            return nullptr;
+        }
+        auto pcm = std::make_shared<PcmBuffer>();
+        std::string err;
+        if (!decode_audio(bytes, *pcm, &err)) {
+            error = sample.file + ": " + err;
+            return nullptr;
+        }
+        return cache.emplace(key, std::move(pcm)).first->second;
+    }
+
     void apply(Voice& v, const VoiceParams& p) {
         ma_sound_set_volume(&v.sound, p.gain);
         ma_sound_set_pan(&v.sound, p.pan);
@@ -124,29 +143,20 @@ std::unique_ptr<MiniaudioBackend> MiniaudioBackend::create(const SampleSource& s
     return std::unique_ptr<MiniaudioBackend>(new MiniaudioBackend(std::move(impl)));
 }
 
+bool MiniaudioBackend::load(const SampleRef& sample) {
+    Impl& im = *impl_;
+    if (sample.bus == Bus::Sfx2D || sample.bus == Bus::Sfx3D) return im.cached_pcm(sample) != nullptr;
+    return im.samples->exists(sample);
+}
+
 bool MiniaudioBackend::start(uint32_t voice, const SampleRef& sample, const VoiceParams& p) {
     Impl& im = *impl_;
     im.voices.erase(voice);  // restart = fresh sound
     auto v = std::make_unique<Voice>();
     ma_data_source* ds = nullptr;
     if (sample.bus == Bus::Sfx2D || sample.bus == Bus::Sfx3D) {
-        const std::string key = normalize_name(sample.file);
-        auto it = im.cache.find(key);
-        if (it == im.cache.end()) {
-            std::vector<uint8_t> bytes;
-            if (!im.samples->read(sample, bytes)) {
-                im.error = "missing sample " + sample.file;
-                return false;
-            }
-            auto pcm = std::make_shared<PcmBuffer>();
-            std::string err;
-            if (!decode_audio(bytes, *pcm, &err)) {
-                im.error = sample.file + ": " + err;
-                return false;
-            }
-            it = im.cache.emplace(key, std::move(pcm)).first;
-        }
-        v->pcm = it->second;
+        v->pcm = im.cached_pcm(sample);
+        if (!v->pcm) return false;
         if (ma_audio_buffer_ref_init(ma_format_f32, v->pcm->channels, v->pcm->samples.data(), v->pcm->frames(),
                                      &v->ref) != MA_SUCCESS) {
             im.error = "ma_audio_buffer_ref_init failed";

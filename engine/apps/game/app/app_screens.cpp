@@ -352,7 +352,14 @@ void App::show_auto_resolve_end(const galactic::ConflictLogEntry& e) {
     info.your_efficiency = sum.efficiency[0];
     info.enemy_efficiency = sum.efficiency[1];
     info.can_save_replay = false;
-    audio_.battle_end(info.victory, std::string_view());
+    // b0310 (AUDIO.md §2.3): a lost auto-resolve names the winner's faction, as the tactical battle end does, so the
+    // faction's Music_Event_Tactical_Lose_Vs_Faction row is tried first.
+    std::string winner;
+    if (!info.victory && e.winner >= 0 && static_cast<size_t>(e.winner) < g->players().size()) {
+        const uint32_t f = g->players()[static_cast<size_t>(e.winner)].faction;
+        if (f < g->rules().factions.size()) winner = g->rules().factions[f].name;
+    }
+    audio_.battle_end(info.victory, winner);
     battle_end_open_ = screens_.show_battle_end(info);
     battle_end_auto_ = battle_end_open_;
     if (battle_end_open_) ++auto_results_;
