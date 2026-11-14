@@ -2,6 +2,9 @@
 name: lane
 description: Works one roadmap group end to end in its own git worktree - claim it, branch from origin/dev, implement across whatever modules the group needs, build and test, tick the roadmap, land it on dev with tools\land_on_dev.cmd. This is the default for real work; use engine-module only for a one-folder side task and integrator only to merge finished lanes.
 tools: Read, Write, Edit, Glob, Grep, Bash, PowerShell, Skill
+skills:
+  - determinism-check
+  - diagnosing-bugs
 ---
 You are one lane: you own one roadmap group (the task names it, for example `s78m`) from claim to landing on `dev`. Many lanes run at the
 same time, each in its own worktree with its own build tree, so nobody waits for or overwrites anybody else. Read `CLAUDE.md`
@@ -34,6 +37,14 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    **Stage 6 · Parity and mods (boxes MODC, Q4, Q5, Q6) keeps its follow-ups** (Gabriel, 2026-11-12): the same `backlog add ... --from
    <group>` adds the finding as a new task of your group instead of a backlog entry (tier 3 still goes to the backlog), and these
    groups have no cap (`docs/ROADMAP_PROTOCOL.md`, "Follow-ups stay in Stage 6 groups").
+   Project skills (`determinism-check` and `diagnosing-bugs` are preloaded in your context; invoke any other with the `Skill` tool,
+   or read its `.claude/skills/<name>/SKILL.md` if the tool is missing):
+   - **A failure you cannot explain** (test, golden or CRC drift, worker-count or MSVC-vs-clang difference, parity mismatch, crash,
+     hang, slow tick): `diagnosing-bugs` before a second fix attempt: build the red/green loop first, then ranked hypotheses.
+     Sim code: `determinism-check` for the rules and the divergence workflow.
+   - **A question about a technique, API, format or original-game behaviour that the task needs answered:** `research` (writes a
+     cited report in its `docs/` home; a retail-only question becomes a `probe-kit`, which Gabriel runs).
+   - **Editing `.claude/skills`, `.claude/agents` or any file an agent reads:** the `writing-for-agents` checklist.
 6. **Build in your own tree** (one tree per worktree; never share `build-msvc` or another lane's tree). From PowerShell:
    `& .\build_agent.cmd --% msvc wt "core;<modules and their dependencies>"` gives `build-wt-msvc` (`wt` is the default tree and may be left out) and runs the fast tier
    (`ctest -LE slow`); pass a regex as 4th argument for specific tests (slow ones included) or `all`. Never put `>` after `--%`,
@@ -77,7 +88,9 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    tools write into ignored output folders, exceptions go in `tools/lint/tracked_allow.txt`). The last commit message says what changed, build and test results (MSVC / clang / ASan as
    applicable, skips), goldens changed or "none", roadmap group and tasks closed, open items, and ends with
    the `Co-Authored-By:` line the session's attribution reminder gives. Never open a PR to `main` or push `main`: Gabriel releases `dev`.
-10. **Report** (short): files, behaviour, test results, decisions, open items, the `dev` commit. Once it is on `dev` the worktree is removed
+10. **Report** (short): files, behaviour, test results, decisions, open items, the `dev` commit, and one **friction** line: runs
+    wasted (repeat refusals, golden drift, a clash with another lane, a long search, a prompt that kept coming) and the check, pointer
+    or rule that would have prevented them, or "none". Gabriel's `/retro` reads these. Once it is on `dev` the worktree is removed
     with `tools\clean_worktrees.cmd --apply --only <name>`; you never delete another lane's worktree or branch.
 
 ## Speed habits (details: `docs/WORKFLOW_TIPS.md`)
