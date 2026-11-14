@@ -31,7 +31,7 @@ void MovementSystem::tick_space(uint32_t frame, const ParallelFor& pf) {
                 q.threat_threshold = u.threat;
                 q.space_layer_type = u.d.space_layer_type;
                 q.threat = tf ? &tf : nullptr;
-                plan_space_path(space_, k, q, sc, out[r]);
+                plan_space_path(space_, k, q, sc, out[r], &pf);  // sp2: retries in parallel, same result
             }
         });
         for (size_t r = 0; r < req.size(); ++r) {

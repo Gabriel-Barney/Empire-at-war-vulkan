@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <limits>
 #include <string>
@@ -2192,6 +2193,44 @@ static void test_space() {
     tight.space_pathfind_max_expansions = 20;
     q.goal = {1500.0f, 0.0f};
     CHECK(plan_space_path(occ, tight, q, sc, p) && p.tries > 1);
+    {
+        // SIMP sp2: retries run in parallel give the serial result exactly (tries, pushes, fallback, waypoint bits), with the
+        // ranges run backwards and on threads, for budgets from "every try fails" to "try 1 succeeds".
+        const alamo::ParallelFor reversed = [](uint32_t n, uint32_t, const alamo::RangeFn& fn) {
+            for (uint32_t i = n; i-- > 0;) fn(i, i + 1);
+        };
+        const alamo::ParallelFor threaded = [](uint32_t n, uint32_t, const alamo::RangeFn& fn) {
+            std::vector<std::thread> th;
+            for (uint32_t i = 0; i < n; ++i) th.emplace_back([&fn, i] { fn(i, i + 1); });
+            for (std::thread& t : th) t.join();
+        };
+        const auto same = [](const SpacePath& a, const SpacePath& b) {
+            if (a.ok != b.ok || a.fallback != b.fallback || a.tries != b.tries || a.pushes != b.pushes || a.wps.size() != b.wps.size())
+                return false;
+            for (size_t i = 0; i < a.wps.size(); ++i)
+                if (std::memcmp(&a.wps[i].pos, &b.wps[i].pos, sizeof(V2)) != 0 || a.wps[i].heading != b.wps[i].heading ||
+                    a.wps[i].time != b.wps[i].time || a.wps[i].speed != b.wps[i].speed)
+                    return false;
+            return true;
+        };
+        uint32_t multi = 0;
+        for (const uint32_t budget : {5u, 20u, 60u, 200u, 800u, 3500u}) {
+            MovementConstants kb = k;
+            kb.space_pathfind_max_expansions = budget;
+            for (const V2 goal : {V2{1500.0f, 0.0f}, V2{0.0f, 900.0f}, V2{1500.0f, 300.0f}}) {
+                q.goal = goal;
+                SpacePath serial, par_rev, par_thr;
+                SpaceScratch s1, s2, s3;
+                plan_space_path(occ, kb, q, s1, serial);
+                plan_space_path(occ, kb, q, s2, par_rev, &reversed);
+                plan_space_path(occ, kb, q, s3, par_thr, &threaded);
+                CHECK(same(serial, par_rev) && same(serial, par_thr));
+                if (serial.tries > 1) ++multi;
+            }
+        }
+        CHECK(multi >= 3);  // the comparison covered the retry path
+        q.goal = {1500.0f, 0.0f};
+    }
     // Destination search: a goal inside the asteroid moves to a free ring point biased toward the ship.
     const V2 dst = find_space_destination(occ, k, {0.0f, 0.0f}, {-2000.0f, 0.0f}, 60.0f, kLayerFrigate, 1, 0, {});
     CHECK(distance(dst, {0.0f, 0.0f}) >= 400.0f + 72.0f && dst.x < 0.0f);
