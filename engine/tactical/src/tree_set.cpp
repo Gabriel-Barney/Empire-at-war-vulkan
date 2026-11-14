@@ -53,6 +53,42 @@ bool TreeSet::update(EntityHandle id, const Aabb& box) {
     return true;
 }
 
+SpatialTree& TreeSet::tree_at(uint32_t k) {
+    const auto p = static_cast<uint32_t>(players_.size());
+    if (k == 0) return all_;
+    if (k <= p) return players_[k - 1];
+    return k == p + 1 ? obstacle_ : space_;
+}
+
+uint32_t TreeSet::update_batch(std::span<const BoxUpdate> updates, const ParallelFor& pf) {
+    const auto p = static_cast<uint32_t>(players_.size());
+    const uint32_t trees = p + 3;
+    std::vector<std::vector<uint32_t>> lists(trees);  // per tree: indices into updates, in entry order
+    uint32_t applied = 0;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(updates.size()); ++i) {
+        const BoxUpdate& u = updates[i];
+        if (!valid(u.box)) continue;
+        const auto it = objects_.find(u.id);
+        if (it == objects_.end()) continue;
+        it->second.box = u.box;
+        ++applied;
+        const TreeMembership& m = it->second.m;
+        if (m.projectile_collidable) {
+            lists[0].push_back(i);
+            if (m.owner >= 0 && static_cast<uint32_t>(m.owner) < p) lists[static_cast<size_t>(m.owner) + 1].push_back(i);
+        }
+        if (m.obstacle) lists[p + 1].push_back(i);
+        if (m.space_avoidance) lists[p + 2].push_back(i);
+    }
+    pf(trees, 1, [&](uint32_t b, uint32_t e) {
+        for (uint32_t k = b; k < e; ++k) {
+            SpatialTree& t = tree_at(k);
+            for (const uint32_t i : lists[k]) t.update(updates[i].id, updates[i].box);
+        }
+    });
+    return applied;
+}
+
 bool TreeSet::set_membership(EntityHandle id, const TreeMembership& m) {
     const auto it = objects_.find(id);
     if (it == objects_.end()) return false;

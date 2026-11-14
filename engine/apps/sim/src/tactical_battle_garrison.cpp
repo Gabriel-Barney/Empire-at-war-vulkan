@@ -633,7 +633,14 @@ void TacticalBattle::s4_tick(TacticalMode& mode, SimRng&) {
         for (const Unit& u : units_) {
             if (!u.alive || u.retreated || garrison_.garrisoned(u.id) || !store.alive(u.h)) continue;
             const int32_t owner = store.owner(u.h);
-            if (owner < 0 || !tg::influences_capture(types, u.type)) continue;
+            if (owner < 0) continue;
+            if (u.type >= s4_capture_influence_.size()) {
+                if (u.type >= types.size()) continue;  // not a valid type: influences_capture says false
+                s4_capture_influence_.resize(types.size(), -1);
+            }
+            int8_t& influence = s4_capture_influence_[u.type];
+            if (influence < 0) influence = tg::influences_capture(types, u.type) ? 1 : 0;
+            if (influence == 0) continue;
             inf.push_back({u.id, owner, store.position(u.h)});
         }
         captures_->service(frame_, inf);

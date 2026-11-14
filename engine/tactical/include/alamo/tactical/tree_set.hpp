@@ -19,6 +19,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -49,6 +50,14 @@ public:
     bool add(EntityHandle id, const Aabb& box, uint32_t mask, const TreeMembership& m);
     bool remove(EntityHandle id);
     bool update(EntityHandle id, const Aabb& box);
+    // SP5: the same as update() for each entry in order (invalid boxes and unknown ids skipped); returns how many were
+    // applied. The trees are independent, so with a parallel pf each tree takes its own entries in entry order on one
+    // worker: every tree ends exactly as after the serial calls.
+    struct BoxUpdate {
+        EntityHandle id;
+        Aabb box;
+    };
+    uint32_t update_batch(std::span<const BoxUpdate> updates, const ParallelFor& pf = serial_for);
     bool set_membership(EntityHandle id, const TreeMembership& m);
     bool set_owner(EntityHandle id, int32_t owner);
     bool set_mask(EntityHandle id, uint32_t mask);
@@ -87,6 +96,7 @@ private:
     void for_trees(const TreeMembership& m, Fn&& fn);
     template <class Fn>
     void for_all_trees(Fn&& fn);
+    SpatialTree& tree_at(uint32_t k);  // registry order: all, players, obstacle, space_avoidance
 
     std::vector<SpatialTree> players_;
     SpatialTree all_, obstacle_, space_;

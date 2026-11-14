@@ -440,6 +440,9 @@ constexpr int kFleetScale = 4;
 // BM3 t02: --save-session skirmish --campaign foc-land-army, the foc-land skirmish with both sides' company lists this many times over
 // (the benchmark's large land battle, tests/benchmark/land_battle.abench).
 constexpr int kArmyScale = 6;
+// SP5 t07: --save-session skirmish --campaign foc-land-army4, four times land_battle's forces (the services stress scene,
+// docs/SIM_PARALLEL_DESIGN.md §7 "a large-scene stress (four times the fleets)"; tools/benchmark/stress_land4.cmd).
+constexpr int kArmyStressScale = 4 * kArmyScale;
 
 // land: a land battle; land_skirmish (t50): that battle is a skirmish (an _MP_LAND_ map, MP_Default_Credits), else the campaign invasion.
 // fleet_scale (BM1 t02, kind foc-fleet; BM3 t02, kind foc-land-army for the land lists): the starting forces of both sides repeated that many
@@ -1180,10 +1183,11 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     Session& s = d->s;
     std::vector<std::string> diag;
     skipped = false;
-    const bool army = kind == "foc-land-army";  // BM3 t02: foc-land with the company lists repeated kArmyScale times
+    const bool army4 = kind == "foc-land-army4";  // SP5 t07: four times foc-land-army
+    const bool army = kind == "foc-land-army" || army4;  // BM3 t02: foc-land with the company lists repeated kArmyScale times
     const bool foc = kind == "foc" || kind == "foc-land" || kind == "foc-land-campaign" || kind == "foc-fleet" || army;
     if (!foc && kind != "synthetic") {
-        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-fleet | foc-land | foc-land-army | foc-land-campaign)";
+        err = "unknown skirmish '" + kind + "' (synthetic | foc | foc-fleet | foc-land | foc-land-army | foc-land-army4 | foc-land-campaign)";
         return nullptr;
     }
     MapRunOptions mo;
@@ -1191,12 +1195,15 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     mo.game_args = game_args;
     mo.map = map;
     const bool ok = foc ? foc_session(s, mo, diag, skipped, kind == "foc-land" || kind == "foc-land-campaign" || army, false,
-                                      kind == "foc-land" || army, kind == "foc-fleet" ? kFleetScale : army ? kArmyScale : 1)
+                                      kind == "foc-land" || army, kind == "foc-fleet" ? kFleetScale : army4 ? kArmyStressScale : army ? kArmyScale : 1)
                         : synthetic_session(s, diag);
     if (skipped) {
         err = "ALAMO_FOC_DATA / --game not set";
         return nullptr;
     }
+    // SP5 t07: Max_Ground_Forces_On_Planet x 4 for the stress scene, so the galaxy holds (and the battle takes) four times
+    // land_battle's companies on each side ([port] bench only; GalacticSim reads the rules when it starts).
+    if (army4) s.rules.constants.max_ground_forces_on_planet *= 4;
     if (!ok) {
         err = "skirmish " + kind + ": setup failed (" + std::to_string(diag.size()) + " diagnostics" +
               (diag.empty() ? std::string() : ": " + diag.front()) + ")";
@@ -1229,6 +1236,10 @@ std::shared_ptr<SkirmishSaveData> skirmish_save_load(const std::string& kind, co
     h.u32(static_cast<uint32_t>(s.defs.goals.size()));
     h.u32(static_cast<uint32_t>(s.eqs.size()));
     d->fingerprint = sim::combine_fingerprints({sim::fingerprint_types(s.types), sim::fingerprint_galactic(s.rules, s.setup), h.digest()});
+    // SP5 t07: the services stress scene runs without the tactical AI. The AI's land population cap (BattleAi::population_cap,
+    // retail rule) would keep most of the 24x lists in reserve; the stand-in deploys every reserve on its cadence (no land
+    // cap), so the map holds four times land_battle's forces, and the tick is movement, combat and the services.
+    if (army4) s.ai.reset();
     return d;
 }
 

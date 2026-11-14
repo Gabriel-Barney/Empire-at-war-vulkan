@@ -234,20 +234,47 @@ void TacticalBattle::fog_decay() {
 
 // REVEAL services (object-service step): live units in ascending id; dead / retreated ones leave (vf15), garrisoned
 // ones undo (vf6 step 2). Order does not matter (FogOfWar is order-independent).
+// SP5 (read old, write new, commit in index order): each unit's inputs - leave / service / nothing, setup-only, garrisoned
+// and its FogObject - are built in parallel into its own slot (const reads of the store, types, combat, garrison and
+// weather; the only cache touched is the unit's own combat modifier cache). FogOfWar::service_sources then applies them as
+// one batch in unit order (the re-reveals' cell lists in parallel, every grid change serially in unit order). The
+// model-cache entries fog_object_of fills lazily (TacticalMode::model_ref) are filled first, serially.
 void TacticalBattle::fog_service_sources(const objects::ObjectStore& store) {
-    for (const Unit& u : units_) {
-        const bool live = u.alive && !u.retreated && store.alive(u.h);
-        if (!live) {
-            if (fog_.has_source(u.id)) fog_.source_remove(u.id);
-            continue;
+    using Op = fw::FogOfWar::SourceOp;
+    const auto n = static_cast<uint32_t>(units_.size());
+    std::vector<Op> ops(n);
+    std::vector<uint8_t> use(n, 0);
+    const bool reveal = fog_reveal_beh_ != objects::kNoBehavior;
+    if (fog_mode_ && reveal)  // exactly the units fog_object_of runs for (live, REVEAL): the same entries it would fill
+        for (const Unit& u : units_)
+            if (u.alive && !u.retreated && store.alive(u.h) && store.has_behavior(u.h, fog_reveal_beh_))
+                (void)fog_mode_->model_ref(store.type(u.h), true);
+    const auto fill = [&](uint32_t b, uint32_t e) {
+        for (uint32_t i = b; i < e; ++i) {
+            const Unit& u = units_[i];
+            Op& x = ops[i];
+            x.id = u.id;
+            if (!(u.alive && !u.retreated && store.alive(u.h))) {
+                x.remove = true;
+                use[i] = fog_.has_source(u.id) ? 1 : 0;
+                continue;
+            }
+            if (!reveal || !store.has_behavior(u.h, fog_reveal_beh_)) continue;
+            const objects::TypeIndex t = store.type(u.h);
+            use[i] = 1;
+            x.setup_only = t < catalog_->types().size() && catalog_->types().get_bool(t, "Reveal_During_Setup_Phase_Only");
+            x.contained = garrison_.garrisoned(u.id);  // OI fog: obj +0x3a7 (garrisoned / contained)
+            x.obj = fog_object_of(store, u.h);
         }
-        if (fog_reveal_beh_ == objects::kNoBehavior || !store.has_behavior(u.h, fog_reveal_beh_)) continue;
-        const objects::TypeIndex t = store.type(u.h);
-        const bool setup_only = t < catalog_->types().size() && catalog_->types().get_bool(t, "Reveal_During_Setup_Phase_Only");
-        bool contained = false;
-        contained = garrison_.garrisoned(u.id);  // OI fog: obj +0x3a7 (garrisoned / contained)
-        fog_.source_service(u.id, fog_object_of(store, u.h), contained, setup_only);
-    }
+    };
+    const ParallelFor serial = serial_for;
+    const ParallelFor& pf = tick_.pf && n >= svc_parallel_min_ ? *tick_.pf : serial;
+    pf(n, kSvcParallelGrain, fill);
+    std::vector<Op> batch;
+    batch.reserve(n);
+    for (uint32_t i = 0; i < n; ++i)
+        if (use[i]) batch.push_back(std::move(ops[i]));
+    fog_.service_sources(batch, pf);
 }
 
 void TacticalBattle::fog_service(TacticalMode& mode) {
@@ -271,13 +298,25 @@ void TacticalBattle::fog_service(TacticalMode& mode) {
     // a1h t01: REVEAL (0x18) is a behaviour of the object, serviced every frame whether or not it is a battle unit
     // (FOG_OF_WAR §3.2): map markers and capture points such as Reinforcement_Point (REVEAL, Land_FOW_Reveal_Range 275)
     // reveal for their owner's allies too. A live non-unit REVEAL object without a source joins the list below.
-    if (fog_reveal_beh_ != objects::kNoBehavior)
-        for (const objects::ObjectHandle h : store.all_objects()) {
-            if (!store.alive(h) || !store.has_behavior(h, fog_reveal_beh_)) continue;
-            const objects::ObjectId id = store.id(h);
-            if (!fog_.has_source(id) && !unit_by_id(id) && std::find(fog_pings_.begin(), fog_pings_.end(), id) == fog_pings_.end())
-                fog_pings_.push_back(id);
-        }
+    // SP5: the scan is const reads into per-object marks (in parallel on large scenes), the new pings appended in store
+    // order afterwards.
+    if (fog_reveal_beh_ != objects::kNoBehavior) {
+        const std::span<const objects::ObjectHandle> all = store.all_objects();
+        const auto n = static_cast<uint32_t>(all.size());
+        std::vector<uint8_t> join(n, 0);
+        const auto scan = [&](uint32_t b, uint32_t e) {
+            for (uint32_t i = b; i < e; ++i) {
+                const objects::ObjectHandle h = all[i];
+                if (!store.alive(h) || !store.has_behavior(h, fog_reveal_beh_)) continue;
+                const objects::ObjectId id = store.id(h);
+                join[i] = !fog_.has_source(id) && !unit_by_id(id) && std::find(fog_pings_.begin(), fog_pings_.end(), id) == fog_pings_.end();
+            }
+        };
+        if (tick_.pf && n >= svc_parallel_min_) (*tick_.pf)(n, kSvcParallelGrain, scan);
+        else scan(0, n);
+        for (uint32_t i = 0; i < n; ++i)
+            if (join[i]) fog_pings_.push_back(store.id(all[i]));
+    }
     // fog follow-up: FOW_REVEAL_PING objects (S9 SpawnObject, e.g. Proj_Special_Land_FOW_Reveal_Ping_Blast) and the
     // other non-unit REVEAL objects reveal through their own REVEAL behaviour while they live (FOG_OF_WAR §3.3 [M]);
     // removed sources are undone, so the cells regrow ~6.4-6.9 s later.

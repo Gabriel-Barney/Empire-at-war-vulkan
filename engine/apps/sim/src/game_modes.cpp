@@ -246,6 +246,11 @@ bool TacticalMode::obstacle_of(ObjectHandle h, tactical::movement::AvoidObstacle
     return true;
 }
 
+void TacticalMode::prepare_bounds(ObjectHandle h) const {
+    const objects::TypeIndex t = primary_.type(h);
+    if (model_source_ && t < team_.size() && !team_[t]) (void)model_ref(t, true);
+}
+
 tactical::Aabb TacticalMode::bounds_of(ObjectHandle h) const {
     const objects::TypeIndex t = primary_.type(h);
     if (!model_source_ || t >= team_.size() || team_[t]) return extent_box(h);

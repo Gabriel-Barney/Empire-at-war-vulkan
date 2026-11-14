@@ -85,7 +85,23 @@ single baseline. More retail runs per scenario come from `tools\probe_mod\parity
 
 BM3 (2026-11-06): `alamo_headless_bench_galactic_late*` and `alamo_headless_bench_land_battle*` are the same check on the two new headless scenes (slow); `alamo_game_bench_scene_<name>` runs each rendered scene for 120 hidden ticks (slow, FoC data, `engine/apps/game/bench_scene_check.cmake`); `alamo_bench_compare_tool` is the result comparison tool's self-test (no data). `tools\regen_goldens.cmd` checks and remakes `host game` scenarios too (`alamo_game --hidden --bench-scenario ... --bench-ticks 120`, remade with `alamo_game --hidden --bench-regen`; the tree needs `alamo_game.exe`). docs/PHASE4.md "BM3".
 bm2c t02 (2026-11-08): `alamo_headless_bench_space_battle_game*` is the same check on the game-made space scene, timed sim-only by `alamo_headless --bench` through `alamo_game_core` (slow); `alamo_headless_bench_game_<scene>` runs each rendered scene once sim-only (`engine/apps/headless/check_bench_game.cmake`). docs/PHASE4.md "BM2c".
+SP5 (2026-11-14, `docs/SIM_PARALLEL_DESIGN.md` §5): `alamo_headless_bench_land_battle_svc*` runs the land scene with the battle services'
+per-unit loops forced wide (`--svc-parallel-min 1`; the scene's ~200 units are below the 256-unit default), and
+`alamo_headless_bench_space_battle_svc_streams*` the space scene with that and the hangar services on counter-based streams
+(`--svc-streams hangar`, which moves draws: "not comparable" is expected). Both slow, FoC data.
 Not converted: `alamo_headless_skirmish_ai_synthetic` and the in-process loops in `engine/apps/sim/tests` stay as they are (short).
+
+### Services graph checks (SP5, 2026-11-14)
+`TacticalBattle::tick` runs as a phase graph of declared services (`engine/tactical/services`, `tactical_battle_services.cpp`). A
+service that touches a component outside its declared sets is a data race once its phase runs wide, so:
+- **Write check**: `alamo_headless ... --svc-check` (and every battle of a debug build, NDEBUG unset, where it also asserts) digests
+  the checkable components around each service and prints `svc-check: ... changed '<component>' outside its declared writes`.
+  Slow (it serialises the save parts per service): use short runs.
+- **Read check**: `--svc-mode reverse` runs each phase backwards; its CRC log must equal the default run's.
+- **Forks**: `--svc-parallel-min 1` makes the per-unit service loops fork in any scene; `--svc-mode serial` turns phase concurrency off.
+- In-process: `alamo_sim_battle_tests` (`test_service_modes`: serial / reverse / parallel w4 / w15 / write check, CRCs and fog
+  digests), `alamo_tactical_services_tests`, `alamo_tactical_fog_tests` (`test_batch_sources`), `alamo_sim_battle_fighter_tests`
+  (`test_hangar_streams`: the stream flag on / off over worker counts).
 
 ## Sanitizer limits (PAF t02 / t03, 2026-10-30)
 

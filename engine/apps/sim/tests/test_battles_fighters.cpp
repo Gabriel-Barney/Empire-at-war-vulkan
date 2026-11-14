@@ -3,6 +3,8 @@
 
 #include "battle_test_fixture.hpp"
 #include "alamo/core/host_fs.hpp"
+#include "alamo/core/sim_crc.hpp"
+#include "alamo/tactical/services/stream_rng.hpp"  // SP5 t03
 
 
 // S7 t12 (FIGHTER_FLYING §2 step 6 / §4.3, TACTICAL_COMBAT §2.8 Formation_Attack_Target): a fighter squadron moved past
@@ -288,9 +290,9 @@ struct FighterBattle {
 };
 
 // The S7 t12 fighter battle: the TIE squadron (player 0) joins the S10 space fight; no stand-in orders.
-bool start_fighter_battle(FighterBattle& fb, bool fog, bool carrier = false) {
+bool start_fighter_battle(FighterBattle& fb, bool fog, bool carrier = false, uint32_t workers = 0) {
     fb.d = make_data(fog, false, false, false, false, false, false, false, true);
-    fb.js = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{0});
+    fb.js = std::make_unique<jobs::JobSystem>(jobs::JobSystemConfig{static_cast<int32_t>(workers)});
     SimConfig cfg;
     cfg.seed = 2026;
     cfg.players = 4;
@@ -1143,6 +1145,98 @@ void test_fleet_placement_campaign() {
     CHECK(ends_frame >= start_frame + 130 && ends_frame <= start_frame + 145);
 }
 
+// SP5 t03 (docs/SIM_PARALLEL_DESIGN.md §4.4): hangar services on counter-based streams (ServiceRunDefaults::streams, bit
+// StreamId::Hangar). The carrier gets two bays and two hangar entries, so every launch draws (entry and bay picks). Off:
+// the synced draws (the default; every other test). On: each carrier draws from its own stream - the run differs from
+// the synced one and is identical at 0 / 1 / 4 / 15 workers (rule 3 with the flag on).
+namespace {
+std::string two_bay_carrier(std::string t) {
+    const auto rep = [&t](const std::string& a, const std::string& b) {
+        const size_t p = t.find(a);
+        if (p != std::string::npos) t.replace(p, a.size(), b);
+    };
+    rep("<HardPoints>HP_S10_Laser_A, HP_S10_Bay</HardPoints>", "<HardPoints>HP_S10_Laser_A, HP_S10_Bay, HP_S10_Bay_B</HardPoints>");
+    rep("<Starting_Spawned_Units_Tech_0>S10_TIE_Squadron, 1</Starting_Spawned_Units_Tech_0>",
+        "<Starting_Spawned_Units_Tech_0>S10_TIE_Squadron, 3, S10_TIE_Pair, 3</Starting_Spawned_Units_Tech_0>");
+    // A second squadron type (two fighters) for the second hangar entry.
+    rep(" <Team Name=\"Team\">", " <Squadron Name=\"S10_TIE_Pair\"><Squadron_Units>S10_TIE, S10_TIE</Squadron_Units>"
+                                  "<Population_Value>1</Population_Value></Squadron>\n <Team Name=\"Team\">");
+    return t;
+}
+// The second bay: another flyout distance, so a bay pick shows in the launch positions.
+std::string second_bay(std::string t) {
+    const size_t p = t.rfind("</HardPoints>");
+    if (p != std::string::npos)
+        t.insert(p, "<HardPoint Name=\"HP_S10_Bay_B\"><Type>HARD_POINT_FIGHTER_BAY</Type><Health>200</Health>"
+                    "<Fighter_Bay_Flyout_Distance>400</Fighter_Bay_Flyout_Distance></HardPoint>");
+    return t;
+}
+struct StreamRun {
+    uint64_t digest = 0;
+    uint32_t fighters = 0;  // live S10_TIE objects at the end
+};
+StreamRun run_hangar_streams(uint32_t streams, uint32_t workers) {
+    const TacticalBattle::ServiceRunDefaults saved = TacticalBattle::service_run_defaults();
+    TacticalBattle::ServiceRunDefaults d = saved;
+    d.streams = streams;
+    TacticalBattle::set_service_run_defaults(d);
+    StreamRun r;
+    FighterBattle fb;
+    if (start_fighter_battle(fb, false, true, workers)) {
+        StateHasher all;
+        for (uint64_t t = 0; t < 1500; ++t) {
+            fb.host->tick_once();
+            TacticalBattle* b = fb.battles->battle();
+            TacticalMode* tm = fb.host->tactical();
+            if (!b || !tm) continue;
+            const objects::ObjectStore& st = tm->primary();
+            all.u64(t);
+            for (const objects::ObjectHandle h : st.all_objects()) {
+                if (!st.alive(h)) continue;
+                const Vec3 p = st.position(h);
+                all.u32(static_cast<uint32_t>(st.id(h)));
+                all.u32(static_cast<uint32_t>(st.type(h)));
+                all.f32(p.x);
+                all.f32(p.y);
+                all.f32(p.z);
+            }
+        }
+        r.digest = all.digest();
+        if (TacticalMode* tm = fb.host->tactical()) {
+            const objects::ObjectStore& st = tm->primary();
+            const auto tie = static_cast<objects::TypeIndex>(type_of(*fb.d, "S10_TIE"));
+            for (const objects::ObjectHandle h : st.all_objects()) r.fighters += st.alive(h) && st.type(h) == tie ? 1u : 0u;
+        }
+    }
+    TacticalBattle::set_service_run_defaults(saved);
+    return r;
+}
+}  // namespace
+
+void test_hangar_streams() {
+    const char* prefix = g_temp_prefix;
+    g_types_patch = two_bay_carrier;
+    g_bay_patch = second_bay;
+    g_temp_prefix = "alamo_sim_battle_fighter_tests_sp5";
+    const uint32_t hangar = 1u << static_cast<uint32_t>(tactical::services::StreamId::Hangar);
+    const StreamRun off = run_hangar_streams(0, 0);
+    const StreamRun on = run_hangar_streams(hangar, 0);
+    std::printf("  hangar streams: off digest %016llx (%u fighters), on %016llx (%u fighters)\n",
+                static_cast<unsigned long long>(off.digest), off.fighters, static_cast<unsigned long long>(on.digest), on.fighters);
+    CHECK(off.fighters > 0 && on.fighters > 0);
+    CHECK(off.digest != on.digest);  // the draws moved
+    for (const uint32_t w : {1u, 4u, 15u}) {
+        const StreamRun x = run_hangar_streams(hangar, w);
+        std::printf("  hangar streams on, workers %2u: %s\n", w, x.digest == on.digest ? "identical" : "DIFFERENT");
+        CHECK(x.digest == on.digest);
+        const StreamRun y = run_hangar_streams(0, w);  // the flag off stays worker-independent too
+        CHECK(y.digest == off.digest);
+    }
+    g_types_patch = nullptr;
+    g_bay_patch = nullptr;
+    g_temp_prefix = prefix;
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     g_temp_prefix = "alamo_sim_battle_fighter_tests";
@@ -1167,6 +1261,8 @@ int main(int argc, char** argv) {
     test_fleet_placement_campaign();
     std::printf("s78n t10 review: the space composition's squadron box is the union of its fighters' boxes\n");
     test_compose_squadron_union();
+    std::printf("SP5 t03: hangar services on counter-based streams (flag off / on, worker counts)\n");
+    test_hangar_streams();
     if (g_fail) {
         std::printf("%d check(s) FAILED\n", g_fail);
         return 1;
