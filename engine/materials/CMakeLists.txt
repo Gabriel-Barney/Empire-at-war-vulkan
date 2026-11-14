@@ -119,7 +119,7 @@ endif()
 target_link_libraries(alamo_materials PUBLIC alamo_core alamo_fx2 alamo_shaderxlat)
 
 # ---------------------------------------------------------------- .fx prebuild (roadmap modc t23)
-# fxc.exe of the project toolchain's Windows SDK (toolchain_setup.cmd installs it with MSVC); the newest
+# fxc.exe of the project toolchain's Windows SDK (toolchain\2_setup.cmd installs it with MSVC); the newest
 # SDK version folder wins. Only the prebuild tool, the audit tool and the tests run it, never the engine.
 file(GLOB _mat_fxc_candidates "${PROJECT_SOURCE_DIR}/toolchain/msvc/Windows Kits/10/bin/*/x64/fxc.exe")
 set(_mat_fxc "")

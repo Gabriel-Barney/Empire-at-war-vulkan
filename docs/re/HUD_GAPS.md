@@ -607,7 +607,7 @@ ShadowBlobMaterials blob.
 - [x] Feed tests: `test_game_session.cpp` (`hud_feeds_test`: `bombing_run_button`, `bombing_run_style`) and
   `engine/ui/tests/test_hud_stage2.cpp` (`test_bombing_run_button`: enable, icon 3, tooltip 3, dial, space untouched).
 - [ ] Visual baselines (`tests/visual_baselines`): not refreshed. On 2026-11-08 the smoke PNGs of dev already differ from the
-  2026-11-04 baselines in most shots (attract camera, campaign screens, ...), so a `toolsisualisual_check.cmd update`
+  2026-11-04 baselines in most shots (attract camera, campaign screens, ...), so a `tools\visual\visual_check.cmd update`
   would store unrelated drift; refresh them in one pass when the baselines are next reviewed. The button's change (icon 3,
   full dial while disabled) shows only in land shots.
 
