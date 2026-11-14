@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/tactical/category_reduce.hpp"
@@ -325,29 +326,53 @@ void FogOfWar::service_sources(std::span<const SourceOp> ops, const ParallelFor&
     const auto nr = static_cast<uint32_t>(reveals.size());
     if (nr >= 16) pf(nr, 8, fill);
     else fill(0, nr);
-    // 3. Apply (serial, op order): exactly the grid operations of source_remove / source_service.
+    // 3. Apply: exactly the grid operations of source_remove / source_service. A grid operation touches only its own
+    //    grid, so (a) serially in op order the sources change and each op's grid operations are listed per grid, then
+    //    (b) every grid runs its own list in op order, the grids side by side: each grid sees the serial sequence.
+    struct GridOp {
+        const CellList* cells;
+        bool count;  // count_cells, else undo
+    };
+    std::vector<std::vector<GridOp>> per_grid(grids_.size());
+    std::deque<CellList> olds;  // the lists the undos read (stable addresses)
+    struct Keep {
+        int32_t id;
+        uint32_t k, j;
+    };
+    std::vector<Keep> keep;
+    const auto undo_for = [&](const CellList* cells, int32_t owner) {  // undo_for_allies
+        for (const FogPlayer& p : players_)
+            if (grid(p.id) && allied(p.id, owner)) per_grid[static_cast<size_t>(p.id)].push_back({cells, false});
+    };
     uint32_t k = 0;
     for (uint32_t i = 0; i < n; ++i) {
-        if (work[i] == kRemove) {
-            source_remove(ops[i].id);
+        if (work[i] == kRemove) {  // source_remove
+            auto it = std::lower_bound(sources_.begin(), sources_.end(), ops[i].id,
+                                       [](const Source& a, int32_t v) { return a.id < v; });
+            if (it == sources_.end() || it->id != ops[i].id) continue;
+            olds.push_back(std::move(it->cells));
+            undo_for(&olds.back(), it->owner);
+            sources_.erase(it);
         } else if (work[i] == kUndo) {
             Source* s = find_source(ops[i].id);
-            undo_for_allies(*s, s->owner);
+            olds.push_back(std::move(s->cells));
+            undo_for(&olds.back(), s->owner);
             s->cells.clear();
         } else if (work[i] == kReveal) {
             Source* s = find_source(ops[i].id);
             const FogObject& o = ops[i].obj;
-            CellList last;
+            olds.push_back(std::move(s->cells));
+            const CellList* old = &olds.back();
             size_t j = 0;
             for (const FogPlayer& p : players_) {  // reveal_for_allies: undo the stored list, count the fresh one
-                FogGrid* g = grid(p.id);
-                if (!g || !allied(p.id, o.owner)) continue;
-                g->undo(s->cells);
-                g->count_cells(lists[k][j], frame_);
-                last = std::move(lists[k][j]);
+                if (!grid(p.id) || !allied(p.id, o.owner)) continue;
+                std::vector<GridOp>& g = per_grid[static_cast<size_t>(p.id)];
+                g.push_back({old, false});
+                g.push_back({&lists[k][j], true});
                 ++j;
             }
-            s->cells = std::move(last);
+            s->cells.clear();  // the last allied player's list, moved in after (b) (an id appears at most once)
+            if (j > 0) keep.push_back({ops[i].id, k, static_cast<uint32_t>(j - 1)});
             s->x0 = o.x;
             s->y0 = o.y;
             s->owner = o.owner;
@@ -356,6 +381,22 @@ void FogOfWar::service_sources(std::span<const SourceOp> ops, const ParallelFor&
             ++k;
         }
     }
+    std::vector<uint32_t> busy;
+    for (uint32_t g = 0; g < static_cast<uint32_t>(per_grid.size()); ++g)
+        if (!per_grid[g].empty()) busy.push_back(g);
+    const auto apply = [&](uint32_t b, uint32_t e) {
+        for (uint32_t x = b; x < e; ++x) {
+            FogGrid& g = grids_[busy[x]];
+            for (const GridOp& op : per_grid[busy[x]]) {
+                if (op.count) g.count_cells(*op.cells, frame_);
+                else g.undo(*op.cells);
+            }
+        }
+    };
+    const auto nb = static_cast<uint32_t>(busy.size());
+    if (nb >= 2 && n >= 16) pf(nb, 1, apply);
+    else apply(0, nb);
+    for (const Keep& q : keep) find_source(q.id)->cells = std::move(lists[q.k][q.j]);
 }
 
 void FogOfWar::source_change_owner(int32_t id, int32_t old_owner, const FogObject& o) {
