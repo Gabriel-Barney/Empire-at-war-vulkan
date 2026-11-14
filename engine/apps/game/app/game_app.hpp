@@ -171,6 +171,7 @@ inline int usage() {
                  "                  presets: bm-low, bm-medium, bm-high (default), bm-ultra, bm-smoke\n"
                  "       alamo_game --bench-scenario S.abench [--bench-* flags]     a BM1/BM2 scenario (host game); flags win over the file\n"
                  "       alamo_game --bench-make S.abench --bench-save FILE [...]   run from the save, then write the scenario S\n"
+                 "       alamo_game --export-save SAVE.alsv --out FILE.json [--game DIR] [MODPATH=..]   (a save as JSON, no window)\n"
                  "       game data: --game DIR or ALAMO_FOC_DATA (the corruption folder)\n");
     return 2;
 }
