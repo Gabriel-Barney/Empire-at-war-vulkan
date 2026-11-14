@@ -1,4 +1,5 @@
 // combat_system: part 2 (bo3 t03 split; shared code in combat_system_internal.hpp).
+#include "alamo/core/profile.hpp"
 #include "combat_system_internal.hpp"
 
 namespace alamo::tactical::combat {
@@ -2013,6 +2014,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     attack_events_.clear();  // s78f t08 (signal 0x1E)
     survivor_events_.clear();  // OI abilities
     const auto n = static_cast<uint32_t>(units_.size());
+    profile::Steps steps;  // SP5: the phases' times (cmb.*), timing only
 
     // A. modifiers
     for (ModifierSet& ps : player_mods_) ps.purge_expired(frame);  // player-level purge [M: cadence]
@@ -2032,6 +2034,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         };
         pf(n, cfg_.grain, fn);
     }
+    ALAMO_PROFILE_STEP(steps, "cmb.a_mods");
     // Team heads (serial). s78h t03: no squad rule here any more; a member (the team_leader stand-in included) keeps its own
     // Mod_Multiplier, and the container's squad value is team_mod_multiplier (TACTICAL_COMBAT §4.4).
     leaders_.clear();
@@ -2082,6 +2085,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         return a.slot != b.slot ? a.slot > b.slot : a.team < b.team;
     });
     if (hooks_) hooks_->begin_tick(frame);
+    ALAMO_PROFILE_STEP(steps, "cmb.a_teams");
 
     // B1. delayed damage (queue order)
     if (!delayed_.empty()) {
@@ -2108,6 +2112,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         }
         delayed_.resize(w);
     }
+    ALAMO_PROFILE_STEP(steps, "cmb.b1_delayed");
     // B2. shields and hull/hardpoint coupling (per unit)
     {
         const RangeFn fn = [this](uint32_t b, uint32_t e) {
@@ -2115,6 +2120,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         };
         pf(n, cfg_.grain, fn);
     }
+    ALAMO_PROFILE_STEP(steps, "cmb.b2_upkeep");
     // C. target candidates (parallel, no draws)
     {
         const RangeFn fn = [this](uint32_t b, uint32_t e) {
@@ -2124,6 +2130,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         };
         pf(n, cfg_.grain, fn);
     }
+    ALAMO_PROFILE_STEP(steps, "cmb.c_gather");
     // D. decide + fire, newest unit first (serial: every synced draw of the tick happens here or in F).
     //    S9 per-unit order (OBJECT_RUNTIME 4.4 behaviours, ABILITIES_HARDPOINTS.md 6.2): ability
     //    countdown (hook) -> burning -> targeting -> pending ability + special abilities (hook) ->
@@ -2189,6 +2196,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         if (!idle) update_weapons(u, frame, rng, suspended);
         converted_decay(u, frame, rng);
     }
+    ALAMO_PROFILE_STEP(steps, "cmb.d_units");
     // E. projectile sweeps (parallel)
     const auto np = static_cast<uint32_t>(projectiles_.size());
     sweep_.resize(np);
@@ -2201,6 +2209,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         };
         pf(np, cfg_.grain, fn);
     }
+    ALAMO_PROFILE_STEP(steps, "cmb.e_sweep");
     // F. commit in serial order. Hit processing can spawn projectiles (death projectiles), so no
     //    reference into projectiles_ is held across it: work on a copy, write back by index.
     emitters_.clear();  // missile-shield emitters, ascending id (S9 port choice, 6.3)
@@ -2280,6 +2289,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
         }
         if (expire) expire_projectile(i, frame);
     }
+    ALAMO_PROFILE_STEP(steps, "cmb.f_projectiles");
     // G. velocity history (OI tactical: two steps for the circular-lead fit), flush
     for (Unit& u : units_) {
         u.prev_pos = u.last_pos;
@@ -2289,6 +2299,7 @@ void CombatSystem::tick(uint32_t frame, const TreeSet& trees, SimRng& rng, const
     // s78n review: the team member lists as a load rebuilds them (combat_save), so readers between ticks (the movement
     // tick's fighter-formation in_range hook -> inside_min_range -> nearest_team_member) agree live and after a load.
     rebuild_team_members();
+    ALAMO_PROFILE_STEP(steps, "cmb.g_flush");
     trees_ = nullptr;
     tick_rng_ = nullptr;
 }

@@ -2168,9 +2168,20 @@ void CombatSystem::team_targeting_service(Unit& head, uint32_t frame, SimRng& rn
     // moving: no member needs to turn -> every member's facing is snapped to the target, 4; else slot 47(0) on the
     // members, 3, the turn request ([port] one turn step on each member that needs it), 4 when none needs to turn any
     // more. No TURRET branch. Out of range: 2. State 4 -> slot 47(1) on each member (each draws its own blend).
+    // SP5: land_team_head(m) can be the head only when m.team is the head's id (the container) or a team whose first
+    // team_heads_ entry is the head (team_head); the exact test runs on those units only, the rest are skipped by their
+    // team value (was: the exact test on every unit, O(teams x units) per tick). Taken now: hand_over_team may have
+    // changed team_heads_ earlier in this walk.
+    std::vector<uint32_t> teams;
+    if (head.id >= 0) teams.push_back(static_cast<uint32_t>(head.id));
+    for (size_t i = 0; i < team_heads_.size(); ++i)
+        if (team_heads_[i].second == head.id && (i == 0 || team_heads_[i - 1].first != team_heads_[i].first))
+            teams.push_back(team_heads_[i].first);
     std::vector<Unit*> members;
-    for (Unit& m : units_)
+    for (Unit& m : units_) {
+        if (m.team == 0 || std::find(teams.begin(), teams.end(), m.team) == teams.end()) continue;
         if (&m != &head && !(m.flags & kUnitDead) && land_team_head(m) == &head) members.push_back(&m);
+    }
     const ObjectId tid = current_target(head.id);
     const bool ordered = head.ordered_target != kNoObject && head.ordered_target == tid;  // TD +0xf4 (slot 32 copies it to the members)
     const Unit* t = unit(tid);
