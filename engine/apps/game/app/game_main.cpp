@@ -501,6 +501,10 @@ int App::run() {
 
 using namespace alamo_game_app;
 
+// SIMP sp2: the live game's CRC cadence (main below).
+static constexpr uint32_t kGameCrcCheckpoint = 64;  // the goldens' v2 checkpoint cadence
+static constexpr size_t kGameCrcRing = 4096;        // records kept in live play (~2.4 h of ticks at 64)
+
 // BM3: `--bench-new-save FILE ...` / `--bench-maps`: loads the game data and works on it without a window or a renderer.
 static int bench_new_main(const Options& opt) {
     if (const std::string why = check_bench_new_save(opt.bench_new); !why.empty()) {
@@ -686,6 +690,15 @@ int main(int argc, char** argv) {
         // Smoke battles end on the time limit; the skirmish battles get longer for their forces to meet and fight (the
         // space fleets start ~5000 units apart).
         if (opt.battle_max_frames == 27000) opt.battle_max_frames = opt.smoke == "campaign" ? 900u : 4800u;
+    }
+    // SIMP sp2 (design 4.5): the live game hashes the sim on checkpoint ticks only (every 64, the goldens' cadence; the
+    // newest ~4096 records kept), on save and on demand; a benchmark with a scenario at its fingerprint's cadence (its
+    // compare needs those ticks). Every tick for smoke runs, --bench-make and --bench-crc-out (full logs asked for).
+    if (opt.smoke.empty() && !opt.bench.make && opt.bench.crc_out.empty()) {
+        const sim::bench::Scenario* sc = opt.bench.scenario_data.get();
+        if (sc) alamo::sim::SimHost::set_default_crc_cadence(sc->fingerprint_every);
+        else if (opt.bench.mode != BenchMode::Off) alamo::sim::SimHost::set_default_crc_cadence(kGameCrcCheckpoint);
+        else alamo::sim::SimHost::set_default_crc_cadence(kGameCrcCheckpoint, kGameCrcRing);
     }
     const bool above = opt.priority >= 0 ? opt.priority == 1 : opt.smoke.empty();
     set_process_priority(above);

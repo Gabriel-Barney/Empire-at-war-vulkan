@@ -1064,6 +1064,7 @@ std::string GameSession::check_save() {
     const uint64_t frame = host_->frame();
     if (save_checked_ && save_check_frame_ == frame && save_check_submits_ == submits_) return save_refusal_;
     save_cache_.reset();
+    host_->capture_crc_now();  // sp2: a save is a CRC capture point (checkpoint cadence; no-op when this tick has a record)
     SaveFile f;
     std::string err;
     if (!host_->save(f, &err)) {

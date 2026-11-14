@@ -629,6 +629,7 @@ bool App::crc_check() {
         std::fprintf(stderr, "crc check: no session\n");
         return false;
     }
+    session_->host().capture_crc_now();  // sp2: both logs end with the current tick (checkpoint cadence)
     const CrcLog& on = session_->host().crc_log();
     const uint64_t ticks = session_->ticks();
     CrcLog off;
@@ -641,6 +642,7 @@ bool App::crc_check() {
             return false;
         }
         for (uint64_t i = 0; i < ticks; ++i) replay->tick();
+        replay->host().capture_crc_now();
         off = replay->host().crc_log();
     } else {
         jobs::JobSystem js(jobs::JobSystemConfig{opt_.workers});
@@ -651,6 +653,7 @@ bool App::crc_check() {
             return false;
         }
         for (uint64_t i = 0; i < ticks; ++i) replay.tick();
+        replay.host().capture_crc_now();
         off = replay.host().crc_log();
     }
     if (!opt_.png_dir.empty() && !opt_.smoke.empty()) {  // the run's CRC log and command stream, for cross-build comparisons
