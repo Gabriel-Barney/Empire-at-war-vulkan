@@ -3,7 +3,8 @@
 // the save format (N1): save / load are requests.
 //
 //   IDD_MAIN_MENU_DIALOG            Tutorial -> IDD_SELECT_TUTORIAL_DIALOG, Single Player -> IDD_SINGLE_PLAYER_GAMES_MENU_
-//                                   DIALOG, Multiplayer -> OpenMultiplayer, Load Game -> IDD_LOAD_GAME_DIALOG, Options ->
+//                                   DIALOG, Multiplayer hidden (out of scope; the column closes up), Load Game ->
+//                                   IDD_LOAD_GAME_DIALOG, Options ->
 //                                   IDD_MAIN_OPTIONS_DIALOG, Exit -> IDD_DIALOG_BOX_QUIT_CONFIRM -> ExitGame, Credits
 //   IDD_SINGLE_PLAYER_GAMES_MENU_   New Campaign -> IDD_CAMPAIGN_SELECTION_DIALOG (story sets, faction A / B, difficulty
 //   DIALOG                          slider), Custom Campaign -> IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG (custom sets, faction
@@ -348,7 +349,6 @@ struct MenuAction {
         ResumeGame,
         QuitToMainMenu,
         ExitGame,
-        OpenMultiplayer,
         ShowCredits,
         PreviewAudio,    // audio (slider moved; live preview)
         ApplyAudio,      // audio
@@ -482,6 +482,7 @@ private:
     void on_cancel(const GuiEvent& e, std::vector<MenuAction>& out);
     void on_change(const GuiEvent& e, std::vector<MenuAction>& out);
     void setup(GuiDialog& d);
+    void close_multiplayer_gap(GuiDialog& d);
     void fill_campaign_select(GuiDialog& d);
     void fill_custom_staging(GuiDialog& d);
     void fill_skirmish(GuiDialog& d);

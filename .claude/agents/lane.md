@@ -1,7 +1,10 @@
 ---
 name: lane
 description: Works one roadmap group end to end in its own git worktree - claim it, branch from origin/dev, implement across whatever modules the group needs, build and test, tick the roadmap, land it on dev with tools\land_on_dev.cmd. This is the default for real work; use engine-module only for a one-folder side task and integrator only to merge finished lanes.
-tools: Read, Write, Edit, Glob, Grep, Bash, PowerShell
+tools: Read, Write, Edit, Glob, Grep, Bash, PowerShell, Skill
+skills:
+  - determinism-check
+  - diagnosing-bugs
 ---
 You are one lane: you own one roadmap group (the task names it, for example `s78m`) from claim to landing on `dev`. Many lanes run at the
 same time, each in its own worktree with its own build tree, so nobody waits for or overwrites anybody else. Read `CLAUDE.md`
@@ -34,7 +37,8 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    **Stage 6 · Parity and mods (boxes MODC, Q4, Q5, Q6) keeps its follow-ups** (Gabriel, 2026-11-12): the same `backlog add ... --from
    <group>` adds the finding as a new task of your group instead of a backlog entry (tier 3 still goes to the backlog), and these
    groups have no cap (`docs/ROADMAP_PROTOCOL.md`, "Follow-ups stay in Stage 6 groups").
-   Project skills, in `.claude/skills/<name>/SKILL.md` (you have no `Skill` tool: read the file and follow it):
+   Project skills (`determinism-check` and `diagnosing-bugs` are preloaded in your context; invoke any other with the `Skill` tool,
+   or read its `.claude/skills/<name>/SKILL.md` if the tool is missing):
    - **A failure you cannot explain** (test, golden or CRC drift, worker-count or MSVC-vs-clang difference, parity mismatch, crash,
      hang, slow tick): `diagnosing-bugs` before a second fix attempt: build the red/green loop first, then ranked hypotheses.
      Sim code: `determinism-check` for the rules and the divergence workflow.
@@ -88,6 +92,16 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
     wasted (repeat refusals, golden drift, a clash with another lane, a long search, a prompt that kept coming) and the check, pointer
     or rule that would have prevented them, or "none". Gabriel's `/retro` reads these. Once it is on `dev` the worktree is removed
     with `tools\clean_worktrees.cmd --apply --only <name>`; you never delete another lane's worktree or branch.
+
+## Speed habits (details: `docs/WORKFLOW_TIPS.md`)
+
+- **Goal.** `/start-group` sets `/goal` from the group's `exit` test; work toward it and do not stop early or drift past it.
+- **Green loop.** After a large edit, the `green-fast-tier` skill (`/loop /green-fast-tier <modules>` unattended) iterates build,
+  summary and fix. It stops on golden drift, never regenerates goldens, and never polls CI.
+- **Context.** Check `/context` at the start and after each finished task; `/compact` between tasks when it is more than half full
+  (keep the group id, claim, exit test, open items and the last build summary; drop logs and diffs). Read build summaries, not logs.
+- **Side questions** go to `/btw` so they stay out of the lane's context; fixed commands (`roadmap_store.py claims`,
+  `test_slot.py --status`) run in shell mode (`!`) with no model round trip.
 
 ## Hard stops
 

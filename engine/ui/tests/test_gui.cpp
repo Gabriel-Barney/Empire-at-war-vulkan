@@ -885,6 +885,14 @@ void test_menus() {
     CHECK(fe.top() == "IDD_MAIN_MENU_DIALOG");
     GuiDialog* mm = env.gui.top();
     CHECK(!mm->get("IDC_MAIN_MENU_PLAY_DEMO")->visible && mm->get("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES")->visible);
+    {  // multiplayer is out of scope: its button is hidden and Load Game / Options / Exit move up one slot each
+        CHECK(!mm->get("IDC_MAIN_MENU_MULTIPLAYER")->visible);
+        auto top_of = [&](const char* id) { return mm->control_rect(static_cast<size_t>(mm->find(id))).max.y; };
+        CHECK(top_of("IDC_LOAD_GAME_MAIN") == top_of("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES") - 36.0f);  // the old 598 slot
+        CHECK(top_of("IDC_OPTIONS") == top_of("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES") - 72.0f);         // 634
+        CHECK(top_of("IDC_MAIN_MENU_EXIT2") == top_of("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES") - 108.0f);  // 670
+        CHECK(mm->get("IDC_MENU_CREDITS")->offset.y == 0.0f && mm->get("IDC_MENU_PETRO_LOGO")->offset.y == 0.0f);
+    }
     step(env.click(*mm, "IDC_MAIN_MENU_SINGLE_PLAYER_GAMES"));
     CHECK(fe.top() == "IDD_SINGLE_PLAYER_GAMES_MENU_DIALOG" && env.gui.open_count() == 1);
     CHECK(!env.gui.top()->get("IDC_DEBUG_LOAD_SKIRMISH_MAP_BUTTON")->visible);
