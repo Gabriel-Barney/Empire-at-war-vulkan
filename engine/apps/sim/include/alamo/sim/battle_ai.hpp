@@ -34,6 +34,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -44,6 +45,7 @@
 #include "alamo/lua/fog_bridge.hpp"        // refixf t03: Find_Nearest's fog test in the tactical AI VMs
 #include "alamo/lua/script_gaps.hpp"       // battle host: the tactical AI VMs' TacticalScriptHooks
 #include "alamo/lua/script_remaining.hpp"  // L1 bindings: the tactical AI VMs' RemainingScriptHooks
+#include "alamo/tactical/abilities/special_weapons.hpp"  // sp3 slice 4e: the view's SpecialWeaponSystem copy
 #include "alamo/tactical/movement/common.hpp"  // kThreatOff
 
 namespace alamo::galactic {
@@ -332,15 +334,39 @@ private:
             int32_t owner = -1;
             uint32_t container = 0xFFFFFFFFu;  // index into teams
             uint8_t live = 0, movable = 0;     // alive and not retreated; movable
+            uint8_t mv = 0, has_goal = 0, arrived = 0;  // slice 4e: the movement system has it; its UnitView
+            float gx = 0.0f, gy = 0.0f;                 // the move goal
         };
         std::vector<Unit> units;
         struct Team {
             objects::ObjectId id = objects::kNoObjectId;
             uint8_t removed = 0, target = 0;
+            objects::TypeIndex rep_type = objects::kNone;  // slice 4e: TacticalBattle::representative_type
         };
         std::vector<Team> teams;
         std::vector<uint8_t> retreat_ok;
         bool production = false;
+        // slice 4e (part 2): the L1 hooks' answers - per battle unit and container (ascending id), the strike / weapon
+        // state per player, a copy of the special weapons (reads, and the dry runs of begin_targeting / tsw_fire), the TSW
+        // planet gate.
+        struct L1Obj {
+            objects::ObjectId id = objects::kNoObjectId;
+            double rate = 0.0, ttd = 1e18;
+            objects::TypeIndex cur_proj = objects::kNone;
+            int32_t engines = -1;
+            float energy = -1.0f;
+            uint8_t clash = 0, clash_locked = 0;
+            int8_t field[4] = {-1, -1, -1, -1};  // object_in_field for kinds 1, 2, 4, 8
+            uint32_t pt_first = 0, pt_count = 0;  // projectile_types in proj_types
+        };
+        std::vector<L1Obj> l1;
+        std::vector<objects::TypeIndex> proj_types;
+        std::vector<std::pair<objects::ObjectId, int32_t>> final_blow;
+        std::vector<uint8_t> sw_allowed, bomb_avail, bombard_avail, bomb_finished;
+        std::vector<float> bomb_result;
+        std::vector<int32_t> retreat_inc;
+        std::optional<tactical::abilities::SpecialWeaponSystem> sw;
+        bool tsw_planet_ok = false;
     };
     LaneView view_;
     // sp3 slice 4b: the ability / combat records the AI VMs' bindings read with the lane on (ObjectBridge::lane_abilities,
@@ -348,6 +374,15 @@ private:
     lua::LaneAbilityView lane_abilities_;
     void capture_lane_abilities();
     void queue_lane_write(const lua::LaneWrite& w);
+    // slice 4e (part 2): with the lane on, the hooks the AI VMs call answer from the view and queue their writes (host ops
+    // of lua::LaneWriteOp::HostFirst..); the live hook sets kept here are what the apply calls.
+    lua::RemainingScriptHooks live_remaining_;
+    lua::TacticalScriptHooks live_tactical_;
+    uint32_t lane_refused_spawns_ = 0;  // [diagnostic] Spawn_Unit from an AI VM with the lane on (refused)
+    void wrap_lane_hooks();
+    void capture_l1();
+    const LaneView::L1Obj* view_l1(objects::ObjectId id) const;
+    void apply_host_write(const lua::LaneWrite& w);
     // sp3 slice 4d: unload records of lane Reinforce applies that spawned their units at once (or were refused: no units),
     // handed to the AI with the battle's own at the next AI slot (the same tick: never pending at a save).
     std::vector<ai::tactical::ReinforcementsUnloaded> lane_unloaded_;
@@ -367,7 +402,11 @@ private:
         uint64_t frame = 0;   // global frame of the update
         uint64_t digest = 0;  // StateHasher digest of the world after think()
         std::vector<commands::Command> batch;  // the orders it queued (execute() appends while it runs)
+        std::vector<lua::ScriptLockFact> locks;  // slice 4e: the AI bridge's movement-lock facts after think()
     };
+    // slice 4e: the movement-lock facts the battle's movement reads with the lane on (the last collected job's; at start
+    // the start scripts'); hashed and saved.
+    std::vector<lua::ScriptLockFact> lane_locks_;
     LaneJob lane_job_;
     uint64_t lane_digest_ = 0;  // digest of the last collected job (hashed and saved)
     void lane_collect();

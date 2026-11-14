@@ -411,6 +411,27 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   finishes (a timeout still ends it). `start()` with
   the lane on captures the view first, refreshes the snapshot store, and collects what the start scripts queued (before this,
   the first update dropped it). **Tier 2**: these commands act k_ai ticks later and their answers are predictions.
+- Bridge reads and the script movement lock (slice 4e, part 1): with the lane on the AI bridge's `is_enemy`,
+  `representative_type` (Find_Nearest / Find_All_Objects_Of_Type on TEAM containers), `order_finished` (every blocking
+  order poll) and `move_goal` (Is_On_Diversion) answer from the view (per battle unit: movement unit, has goal, arrived, goal;
+  per container: its team type). `map_hint` and `reinforce_facing` read data fixed at map setup. The movement lock the
+  battle's movement reads (Lock_Current_Orders, a Divert's forced move) no longer reads the AI bridge: each job's
+  `ObjectBridge::script_lock_facts` is published when the job is collected (`start()`: the start scripts'), hashed, and
+  saved (`battle.ai` version 6 = 5 + the published and the pending facts; a version-5 save takes the loaded bridge's).
+  **Tier 2**: a script lock or Divert reaches the movement at the collect, one AI slot after the script ran.
+- L1 hooks (slice 4e, part 2): with the lane on `BattleAi::wrap_lane_hooks` keeps the live `RemainingScriptHooks` /
+  `TacticalScriptHooks` and puts lane-aware ones on the AI bridge. Reads answer from the view: per battle unit and container
+  rate of damage, time till dead, current projectile and projectile types, engines, energy, hero clash, `object_in_field`
+  for the four field kinds; per player bombing run / bombardment availability and result, special weapons allowed, retreat
+  increment; the final-blow list; a copy of the `SpecialWeaponSystem` (readiness, TSW state); build pad contents from the
+  pads. `point_in_field` / `nearest_field` and `ground_height` read data fixed at map setup. Writes (Divert, Build,
+  Lock_Build_Pad, strikes and their switches, Force_Weather, hero-clash release, special weapon begin / fire / lob, TSW fire,
+  teleport, first lock, hyperspace out, set environment) are queued as host ops (`lua::LaneWriteOp::HostFirst..`) and the
+  apply calls the kept live hook. Predictions: Divert = a live movable unit; Build = an empty pad; strikes = available;
+  begin_targeting / TSW fire = the dry run on the copy; fire at object = readiness >= 1 and a valid target; lobbing = a lobbing
+  pack with an owner. `spawn` from an AI VM is refused with the lane on (no shipped AI script spawns; counted). Not yet off
+  the live battle (slice 4e part 3): the shield-side queries, the fog hooks and FogOfWar, GlobalValue, Prevent_AI_Usage.
+  Capture cost on `land_battle` grew to ~0.30 ms p50 (`tac.ai.capture`; the per-unit facts are serial for now).
 
 ## 12. P5 implementation notes (sp5, simp-svc, 2026-11-14)
 
@@ -425,8 +446,11 @@ How P5 is built; status and open items are on the roadmap (group `sp5`), checks 
   collision feed, attack targets, pair gates, swap-back signals, engine loops, tree boxes, fog sources) compute per unit in
   parallel and write only the unit's own slot (movement / combat entry, a per-index output); shared state (EngineLoops, the fog
   grids, the trees, the signal lists) is changed afterwards serially in unit order. Fog: `FogOfWar::service_sources` computes the
-  re-reveal cell lists in parallel (`FogGrid::dense_cells`, const) and applies every undo / count in unit order (the clamped undo
-  makes order matter). Golden-neutral by construction; the forks start at 256 units (`ServiceRunDefaults::parallel_min`).
+  re-reveal cell lists in parallel (`FogGrid::dense_cells`, const), then each player's grid applies its undos / counts in unit
+  order on its own worker (the clamped undo makes order matter within a grid; grids are independent). The trees likewise:
+  `TreeSet::update_batch` gives each spatial tree its boxes in unit order, the trees side by side. Golden-neutral by
+  construction; the forks start at 256 units (`ServiceRunDefaults::parallel_min`), and sp1's job system runs a loop whose
+  measured work is under 50 us inline (`kInlineWorkNs`), so the small services (victory, swap-back signals) stay serial.
 - **Lazy caches** are the hazard of read-only parallel loops: `TacticalMode::model_ref` fills a per-type cache on first use, so the
   loops fill exactly the entries the serial code would have filled first (`prepare_bounds`, the fog pre-pass); filling more would
   change later `model_ref(t, false)` readers.

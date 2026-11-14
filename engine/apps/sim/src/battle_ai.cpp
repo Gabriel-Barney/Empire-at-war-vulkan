@@ -148,10 +148,21 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     br.abilities = &b_->abilities();
     TacticalBattle* bt = b_;
     br.ability_frame = [bt] { return bt->frame(); };
-    br.is_enemy = [bt](int32_t x, int32_t y) { return bt->combat().is_enemy(x, y); };
+    br.is_enemy = [this, bt](int32_t x, int32_t y) {  // sp3 slice 4e: the view with the lane on
+        if (!lane_view()) return bt->combat().is_enemy(x, y);
+        return x >= 0 && x < 256 && view_hostile(static_cast<uint8_t>(x), y);
+    };
     // refixf t03: Find_All_Objects_Of_Type / Find_Nearest match TEAM containers on their company / team type.
     const objects::ObjectStore* rep_store = &mode.primary();
-    br.representative_type = [bt, rep_store](objects::ObjectHandle o) {
+    br.representative_type = [this, bt, rep_store](objects::ObjectHandle o) {
+        if (lane_view()) {  // sp3 slice 4e: the AI's handles are the snapshot store's
+            const objects::ObjectStore& vs = world_->view_store();
+            if (!vs.exists(o)) return objects::kNone;
+            const objects::ObjectId id = vs.id(o);
+            for (const LaneView::Team& t : view_.teams)
+                if (t.id == id) return t.rep_type;
+            return objects::kNone;
+        }
         return rep_store->exists(o) ? bt->representative_type(rep_store->id(o)) : objects::kNone;
     };
     // q6 t28: Find_Hint / Get_Hint see the map objects' .ted hint names.
@@ -160,18 +171,27 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     };
     // s78i t02: the Reinforce_Unit stand-in faces the owner's entry-facing record (TACTICAL_COMBAT §3.1.1 "other spawns").
     br.reinforce_facing = [bt](int32_t player) { return bt->player_drop_facing(player); };
-    br.order_finished = [bt](objects::ObjectId id, uint32_t) {
+    br.order_finished = [this, bt](objects::ObjectId id, uint32_t) {
+        if (lane_view()) {  // sp3 slice 4e
+            const LaneView::Unit* u = view_unit(id);
+            return !u || !u->mv || !u->has_goal;
+        }
         return !bt->movement_->has_unit(id) || !bt->movement_->view(id).has_goal;
     };
     // OI follow-up t03 (A1_READINGS §28.9): this bridge's shares of the movement lock - Lock_Current_Orders, and the
     // locomotor's forced-move term while a Divert is the unit's current move (goal unchanged, not yet arrived).
-    bt->set_script_movement_lock(this, [bt, &br](objects::ObjectId id) { return lua::script_movement_locked(br, id, [bt](objects::ObjectId u, Vec3& g) {
-        if (!bt->movement_->has_unit(u)) return false;
-        const auto v = bt->movement_->view(u);
-        if (!v.has_goal || v.arrived) return false;
-        g = Vec3{v.goal.x, v.goal.y, 0.0f};
-        return true;
-    }); });
+    // sp3 slice 4e: with the lane on, from the facts published with the AI's batch (the bridge belongs to the AI lane).
+    bt->set_script_movement_lock(this, [this, bt, &br](objects::ObjectId id) {
+        const auto goal = [bt](objects::ObjectId u, Vec3& g) {
+            if (!bt->movement_->has_unit(u)) return false;
+            const auto v = bt->movement_->view(u);
+            if (!v.has_goal || v.arrived) return false;
+            g = Vec3{v.goal.x, v.goal.y, 0.0f};
+            return true;
+        };
+        if (world_->ai_lane()) return lua::script_movement_locked(std::span<const lua::ScriptLockFact>(lane_locks_), id, goal);
+        return lua::script_movement_locked(br, id, goal);
+    });
     // OI host (L1/S4 wave 1 integrator ask 2): Change_Owner of the AI VMs goes through the battle (store + TreeSet::set_owner
     // + the battle systems), as the story VMs' bridge (CampaignBattles::change_owner); before, the binding set the store only.
     TacticalMode* owner_mode = &mode;
@@ -199,7 +219,14 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
     remaining_.release_hero_clash_lock = [bt, ast](objects::ObjectHandle u) {  // s78n t06 review: a TEAM Unlock
         return ast->alive(u) && bt->release_hero_clash_lock(ast->id(u));
     };
-    remaining_.move_goal = [bt, ast](objects::ObjectHandle u, Vec3& goal) {
+    remaining_.move_goal = [this, bt, ast](objects::ObjectHandle u, Vec3& goal) {
+        if (lane_view()) {  // sp3 slice 4e
+            const objects::ObjectStore& vs = world_->view_store();
+            const LaneView::Unit* v = vs.alive(u) ? view_unit(vs.id(u)) : nullptr;
+            if (!v || !v->mv || !v->has_goal) return false;
+            goal = Vec3{v->gx, v->gy, 0.0f};
+            return true;
+        }
         if (!ast->alive(u) || !bt->movement_->has_unit(ast->id(u))) return false;
         const mv::UnitView v = bt->movement_->view(ast->id(u));
         if (!v.has_goal) return false;
@@ -312,6 +339,337 @@ BattleAi::BattleAi(TacticalBattle& battle, TacticalMode& mode, SimHost& host, co
         SimHost* hs = &host;
         br.spawn_ability_target = [bt, md, hs](Vec3 p, int32_t owner) { return bt->spawn_dummy_target(*md, owner, p, hs->random().synced()); };
     }
+    if (world_->ai_lane()) wrap_lane_hooks();  // sp3 slice 4e (part 2)
+}
+
+// ---- sp3 slice 4e (part 2): the AI VMs' L1 hooks on the AI lane -----------------------------------------------------
+
+namespace {
+enum HostOp : uint8_t {
+    kHostDivert = 64, kHostBuild, kHostLockPad, kHostBombard, kHostBombingRun, kHostBombingDisabled, kHostBombardDisabled,
+    kHostRemoveBombard, kHostForceWeather, kHostSwBegin, kHostSwFire, kHostSwLob, kHostTswFire, kHostTeleport, kHostFirstLock,
+    kHostHyperspaceOut, kHostSetEnvironment, kHostReleaseClash
+};
+}
+
+void BattleAi::wrap_lane_hooks() {
+    live_remaining_ = remaining_;
+    live_tactical_ = tactical_;
+    lua::RemainingScriptHooks& r = remaining_;
+    lua::TacticalScriptHooks& k = tactical_;
+    // The AI VMs' handles are the snapshot store's: ids for the records and the queued writes.
+    auto vid = [this](objects::ObjectHandle h) {
+        const objects::ObjectStore& vs = world_->view_store();
+        return vs.exists(h) ? vs.id(h) : objects::kNoObjectId;
+    };
+    auto queue = [this](uint8_t op, int32_t owner, std::vector<objects::ObjectId> ids, Vec3 p = {}, int32_t value = -1, bool on = false,
+                        objects::ObjectId target = objects::kNoObjectId, Vec3 q = {}) {
+        lua::LaneWrite w;
+        w.op = static_cast<lua::LaneWriteOp>(op);
+        w.owner = owner;
+        w.ids = std::move(ids);
+        w.p = p;
+        w.q = q;
+        w.value = value;
+        w.on = on ? 1 : 0;
+        w.target = target;
+        queue_lane_write(w);
+    };
+    auto owner_of = [this](objects::ObjectId id) {
+        const objects::ObjectStore& vs = world_->view_store();
+        const objects::ObjectHandle h = vs.find(id);
+        return vs.exists(h) ? vs.owner(h) : -1;
+    };
+    auto per_player = [](const auto& v, int32_t p, auto none) { return p >= 0 && static_cast<size_t>(p) < v.size() ? v[static_cast<size_t>(p)] : none; };
+    // ---- reads ----
+    r.rate_of_damage = [this, vid, f = r.rate_of_damage](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const LaneView::L1Obj* o = view_l1(vid(u));
+        return o ? o->rate : 0.0;
+    };
+    r.time_till_dead = [this, vid, f = r.time_till_dead](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const LaneView::L1Obj* o = view_l1(vid(u));
+        return o ? o->ttd : 1e18;
+    };
+    r.final_blow_player = [this, vid, f = r.final_blow_player](objects::ObjectHandle o) {
+        if (!lane_view()) return f(o);
+        const objects::ObjectId id = vid(o);
+        const auto& v = view_.final_blow;
+        const auto it = std::lower_bound(v.begin(), v.end(), id, [](const std::pair<objects::ObjectId, int32_t>& a, objects::ObjectId x) { return a.first < x; });
+        return it != v.end() && it->first == id ? it->second : -1;
+    };
+    r.projectile_types = [this, vid, f = r.projectile_types](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        std::vector<objects::TypeIndex> out;
+        if (const LaneView::L1Obj* o = view_l1(vid(u)))
+            out.assign(view_.proj_types.begin() + o->pt_first, view_.proj_types.begin() + o->pt_first + o->pt_count);
+        return out;
+    };
+    r.current_projectile = [this, vid, f = r.current_projectile](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const LaneView::L1Obj* o = view_l1(vid(u));
+        return o ? o->cur_proj : objects::kNone;
+    };
+    r.energy = [this, vid, f = r.energy](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const LaneView::L1Obj* o = view_l1(vid(u));
+        return o ? o->energy : -1.0f;
+    };
+    r.in_hero_clash = [this, vid, f = r.in_hero_clash](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const LaneView::L1Obj* o = view_l1(vid(u));
+        return o && o->clash;
+    };
+    r.hero_clash_locked = [this, vid, f = r.hero_clash_locked](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const LaneView::L1Obj* o = view_l1(vid(u));
+        return o && o->clash_locked;
+    };
+    r.bombing_run_available = [this, per_player, f = r.bombing_run_available](int32_t p) {
+        return lane_view() ? per_player(view_.bomb_avail, p, uint8_t{0}) != 0 : f(p);
+    };
+    r.bombardment_available = [this, per_player, f = r.bombardment_available](int32_t p) {
+        return lane_view() ? per_player(view_.bombard_avail, p, uint8_t{0}) != 0 : f(p);
+    };
+    r.bombing_run_finished = [this, per_player, f = r.bombing_run_finished](int32_t p) {
+        return lane_view() ? per_player(view_.bomb_finished, p, uint8_t{0}) != 0 : f(p);
+    };
+    r.bombing_run_result = [this, per_player, f = r.bombing_run_result](int32_t p) {
+        return lane_view() ? per_player(view_.bomb_result, p, 0.0f) : f(p);
+    };
+    // point_in_field / nearest_field read the space fields, fixed at map setup; nearest_field's handle: the snapshot's
+    r.nearest_field = [this, f = r.nearest_field](Vec3 p, uint32_t mask) {
+        if (!lane_view()) return f(p, mask);
+        const objects::ObjectId id = b_->nearest_field(p.x, p.y, mask);
+        return id == objects::kNoObjectId ? objects::ObjectHandle{} : world_->view_store().find(id);
+    };
+    r.object_in_field = [this, vid, f = r.object_in_field](objects::ObjectHandle o, uint32_t kind) {
+        if (!lane_view()) return f(o, kind);
+        const LaneView::L1Obj* x = view_l1(vid(o));
+        const int i = kind == 1u ? 0 : kind == 2u ? 1 : kind == 4u ? 2 : kind == 8u ? 3 : -1;
+        return x && i >= 0 ? static_cast<int32_t>(x->field[i]) : -1;
+    };
+    r.build_pad_contents = [this, vid, f = r.build_pad_contents](objects::ObjectHandle pad) {
+        if (!lane_view()) return f(pad);
+        const objects::ObjectId id = vid(pad);
+        for (const LaneView::Pad& p : view_.pads)
+            if (p.pad == id) return p.contents == objects::kNoObjectId ? objects::ObjectHandle{} : world_->view_store().find(p.contents);
+        return objects::ObjectHandle{};
+    };
+    k.weapon_readiness = [this, vid, f = k.weapon_readiness](objects::ObjectHandle w) {
+        return lane_view() && view_.sw ? view_.sw->readiness(vid(w), view_.frame) : f(w);
+    };
+    k.tsw_state = [this, vid, f = k.tsw_state](objects::ObjectHandle t) { return lane_view() && view_.sw ? view_.sw->tsw_state(vid(t)) : f(t); };
+    k.special_weapons_allowed = [this, per_player, f = k.special_weapons_allowed](int32_t p) {
+        return lane_view() ? per_player(view_.sw_allowed, p, uint8_t{0}) != 0 : f(p);
+    };
+    k.engines_online = [this, vid, f = k.engines_online](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const LaneView::L1Obj* o = view_l1(vid(u));
+        return o ? o->engines : -1;
+    };
+    k.retreat_increment_frames = [this, per_player, f = k.retreat_increment_frames](int32_t p) {
+        return lane_view() ? per_player(view_.retreat_inc, p, 0) : f(p);
+    };
+    // ---- writes: queued (host ops), the same-call answer predicted from the view ----
+    r.move_to = [this, vid, queue, owner_of, f = r.move_to](objects::ObjectHandle u, Vec3 p) {
+        if (!lane_view()) return f(u, p);
+        const objects::ObjectId id = vid(u);
+        const LaneView::Unit* v = view_unit(id);
+        queue(kHostDivert, owner_of(id), {id}, p);
+        return v && v->live && v->movable;
+    };
+    r.build = [this, vid, queue, owner_of, f = r.build](objects::ObjectHandle pad, objects::TypeIndex t, bool check) {
+        if (!lane_view()) return f(pad, t, check);
+        const objects::ObjectId id = vid(pad);
+        queue(kHostBuild, owner_of(id), {id}, {}, static_cast<int32_t>(t), check);
+        for (const LaneView::Pad& p : view_.pads)
+            if (p.pad == id) return p.contents == objects::kNoObjectId ? 1 : 0;
+        return 0;
+    };
+    r.lock_build_pad = [this, vid, queue, owner_of, f = r.lock_build_pad](objects::ObjectHandle pad, bool lock) {
+        if (!lane_view()) return f(pad, lock);
+        queue(kHostLockPad, owner_of(vid(pad)), {vid(pad)}, {}, -1, lock);
+    };
+    r.orbital_bombardment = [this, queue, per_player, f = r.orbital_bombardment](int32_t player, Vec3 p) {
+        if (!lane_view()) return f(player, p);
+        queue(kHostBombard, player, {}, p);
+        return per_player(view_.bombard_avail, player, uint8_t{0}) != 0;
+    };
+    r.bombing_run = [this, queue, per_player, f = r.bombing_run](int32_t player, Vec3 p) {
+        if (!lane_view()) return f(player, p);
+        queue(kHostBombingRun, player, {}, p);
+        return per_player(view_.bomb_avail, player, uint8_t{0}) != 0;
+    };
+    r.set_bombing_run_disabled = [this, queue, f = r.set_bombing_run_disabled](int32_t p, bool on) {
+        if (!lane_view()) return f(p, on);
+        queue(kHostBombingDisabled, p, {}, {}, -1, on);
+    };
+    r.set_bombardment_disabled = [this, queue, f = r.set_bombardment_disabled](int32_t p, bool on) {
+        if (!lane_view()) return f(p, on);
+        queue(kHostBombardDisabled, p, {}, {}, -1, on);
+    };
+    r.remove_bombardment = [this, queue, f = r.remove_bombardment](int32_t p, bool on) {
+        if (!lane_view()) return f(p, on);
+        queue(kHostRemoveBombard, p, {}, {}, -1, on);
+    };
+    r.force_weather = [this, queue, f = r.force_weather]() {
+        if (!lane_view()) return f();
+        queue(kHostForceWeather, -1, {});
+        return true;
+    };
+    r.release_hero_clash_lock = [this, vid, queue, owner_of, f = r.release_hero_clash_lock](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        const objects::ObjectId id = vid(u);
+        const LaneView::L1Obj* o = view_l1(id);
+        queue(kHostReleaseClash, owner_of(id), {id});
+        return o && o->clash_locked;
+    };
+    k.begin_targeting = [this, vid, queue, owner_of, f = k.begin_targeting](objects::ObjectHandle w) {
+        if (!lane_view() || !view_.sw) return f(w);
+        const objects::ObjectId id = vid(w);
+        queue(kHostSwBegin, owner_of(id), {id});
+        return view_.sw->begin_targeting(id, view_.frame);  // the copy's dry run (it also answers the next reads)
+    };
+    k.fire_at_object = [this, vid, queue, owner_of, f = k.fire_at_object](objects::ObjectHandle w, objects::ObjectHandle t) {
+        if (!lane_view() || !view_.sw) return f(w, t);
+        const objects::ObjectId id = vid(w), tid = vid(t);
+        queue(kHostSwFire, owner_of(id), {id}, {}, -1, false, tid);
+        return !b_->finished_ && tid != objects::kNoObjectId && tid != id && view_.sw->readiness(id, view_.frame) >= 1.0f;
+    };
+    k.fire_lobbing_at = [this, vid, queue, owner_of, f = k.fire_lobbing_at](objects::ObjectHandle w, Vec3 p) {
+        if (!lane_view() || !view_.sw) return f(w, p);
+        const objects::ObjectId id = vid(w);
+        queue(kHostSwLob, owner_of(id), {id}, p);
+        return !b_->finished_ && (view_.sw->kinds(id) & tactical::abilities::kSwLobbing) != 0 && owner_of(id) >= 0;
+    };
+    k.tsw_fire = [this, vid, queue, owner_of, f = k.tsw_fire](objects::ObjectHandle t) {
+        if (!lane_view() || !view_.sw) return f(t);
+        const objects::ObjectId id = vid(t);
+        queue(kHostTswFire, owner_of(id), {id});
+        return view_.sw->tsw_fire(id, view_.tsw_planet_ok, view_.frame);  // dry run on the copy
+    };
+    k.teleport = [this, vid, queue, owner_of, f = k.teleport](objects::ObjectHandle u, Vec3 p, Vec3 facing) {
+        if (!lane_view()) return f(u, p, facing);
+        queue(kHostTeleport, owner_of(vid(u)), {vid(u)}, p, -1, false, objects::kNoObjectId, facing);
+    };
+    k.movement_first_lock = [this, vid, queue, owner_of, f = k.movement_first_lock](objects::ObjectHandle u) {
+        if (!lane_view()) return f(u);
+        queue(kHostFirstLock, owner_of(vid(u)), {vid(u)});
+    };
+    k.hyperspace_out_link = [this, vid, queue, owner_of, f = k.hyperspace_out_link](objects::ObjectHandle u, int32_t delay, bool keep) {
+        if (!lane_view()) return f(u, delay, keep);
+        const objects::ObjectId id = vid(u);
+        queue(kHostHyperspaceOut, owner_of(id), {id}, {}, delay, keep);
+        const LaneView::Unit* v = view_unit(id);
+        return v && v->live;
+    };
+    k.set_new_environment = [this, queue, f = k.set_new_environment](int32_t index) {
+        if (!lane_view()) return f(index);
+        queue(kHostSetEnvironment, -1, {}, {}, index);
+    };
+    // A spawned object is used at once (its handle): not available off the critical lane (no shipped AI script spawns).
+    k.spawn = [this, f = k.spawn](const objects::SpawnParams& p) {
+        if (!lane_view()) return f(p);
+        ++lane_refused_spawns_;
+        return objects::ObjectHandle{};
+    };
+}
+
+const BattleAi::LaneView::L1Obj* BattleAi::view_l1(objects::ObjectId id) const {
+    const auto it = std::lower_bound(view_.l1.begin(), view_.l1.end(), id, [](const LaneView::L1Obj& o, objects::ObjectId v) { return o.id < v; });
+    return it != view_.l1.end() && it->id == id ? &*it : nullptr;
+}
+
+void BattleAi::capture_l1() {
+    LaneView& v = view_;
+    std::vector<objects::ObjectId> ids;
+    for (const TacticalBattle::Unit& u : b_->units_) ids.push_back(u.id);
+    for (const TacticalBattle::Container& c : b_->containers_) ids.push_back(c.id);
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    v.l1.clear();
+    v.proj_types.clear();
+    const bool fields = b_->space_;
+    for (const objects::ObjectId id : ids) {
+        LaneView::L1Obj o;
+        o.id = id;
+        o.rate = b_->rate_of_damage(id);
+        o.ttd = b_->time_till_dead(id);
+        o.cur_proj = b_->current_projectile(id);
+        o.engines = b_->engines_online(id);
+        o.energy = b_->combat().has_unit(id) ? b_->combat().energy(id) : -1.0f;
+        o.clash = b_->combat().has_unit(id) && (b_->combat().flags(id) & tactical::combat::kUnitHeroClash) != 0 ? 1 : 0;
+        o.clash_locked = b_->hero_clash_locked(id) ? 1 : 0;
+        if (fields)
+            for (int i = 0; i < 4; ++i) o.field[i] = static_cast<int8_t>(b_->object_in_field(id, 1u << i));
+        const std::vector<objects::TypeIndex> pt = b_->projectile_types(id);
+        o.pt_first = static_cast<uint32_t>(v.proj_types.size());
+        o.pt_count = static_cast<uint32_t>(pt.size());
+        v.proj_types.insert(v.proj_types.end(), pt.begin(), pt.end());
+        v.l1.push_back(o);
+    }
+    v.final_blow = b_->l1_final_blow_;
+    const auto np = static_cast<size_t>(host_->players());
+    v.sw_allowed.assign(np, 0);
+    v.bomb_avail.assign(np, 0);
+    v.bombard_avail.assign(np, 0);
+    v.bomb_finished.assign(np, 0);
+    v.bomb_result.assign(np, 0.0f);
+    v.retreat_inc.assign(np, 0);
+    for (size_t p = 0; p < np; ++p) {
+        const auto pi = static_cast<int32_t>(p);
+        v.sw_allowed[p] = b_->special_weapons_allowed(pi) ? 1 : 0;
+        v.bomb_avail[p] = b_->bombing_run_available(pi) ? 1 : 0;
+        v.bombard_avail[p] = b_->bombardment_available(pi) ? 1 : 0;
+        v.bomb_finished[p] = b_->bombing_run_finished(pi) ? 1 : 0;
+        v.bomb_result[p] = b_->bombing_run_result(pi);
+        v.retreat_inc[p] = b_->retreat_increment_frames(pi);
+    }
+    v.sw = b_->l1_sw_;
+    // TacticalBattle::tsw_fire's planet gate (0x42a720)
+    v.tsw_planet_ok = false;
+    const auto planet = b_->req_.info.planet;
+    if (!b_->finished_ && !b_->l1_planet_destroyed_ && planet < b_->galaxy_->planets().size() && !b_->galaxy_->planets()[planet].destroyed) {
+        const uint32_t gt = b_->galaxy_->planets()[planet].type;
+        if (gt < b_->galaxy_->rules().types.size()) {
+            const objects::TypeIndex t = b_->catalog_->types().resolve_name(b_->galaxy_->rules().types[gt].name);
+            v.tsw_planet_ok = t != objects::kNone && b_->catalog_->types().get_bool(t, "Planet_Is_Destroyable_By_TSW");
+        }
+    }
+}
+
+// The hook calls the AI VM made, at the due tick, on the live battle (handles from the live store).
+void BattleAi::apply_host_write(const lua::LaneWrite& w) {
+    const objects::ObjectStore& st = mode_->primary();
+    const objects::ObjectId id = w.ids.empty() ? objects::kNoObjectId : w.ids.front();
+    const objects::ObjectHandle h = id == objects::kNoObjectId ? objects::ObjectHandle{} : st.find(id);
+    const lua::RemainingScriptHooks& r = live_remaining_;
+    const lua::TacticalScriptHooks& k = live_tactical_;
+    switch (static_cast<uint8_t>(w.op)) {
+        case kHostDivert: if (r.move_to) r.move_to(h, w.p); break;
+        case kHostBuild: if (r.build) r.build(h, static_cast<objects::TypeIndex>(w.value), w.on != 0); break;
+        case kHostLockPad: if (r.lock_build_pad) r.lock_build_pad(h, w.on != 0); break;
+        case kHostBombard: if (r.orbital_bombardment) r.orbital_bombardment(w.owner, w.p); break;
+        case kHostBombingRun: if (r.bombing_run) r.bombing_run(w.owner, w.p); break;
+        case kHostBombingDisabled: if (r.set_bombing_run_disabled) r.set_bombing_run_disabled(w.owner, w.on != 0); break;
+        case kHostBombardDisabled: if (r.set_bombardment_disabled) r.set_bombardment_disabled(w.owner, w.on != 0); break;
+        case kHostRemoveBombard: if (r.remove_bombardment) r.remove_bombardment(w.owner, w.on != 0); break;
+        case kHostForceWeather: if (r.force_weather) r.force_weather(); break;
+        case kHostReleaseClash: if (r.release_hero_clash_lock) r.release_hero_clash_lock(h); break;
+        case kHostSwBegin: if (k.begin_targeting) k.begin_targeting(h); break;
+        case kHostSwFire:
+            if (k.fire_at_object) k.fire_at_object(h, w.target == objects::kNoObjectId ? objects::ObjectHandle{} : st.find(w.target));
+            break;
+        case kHostSwLob: if (k.fire_lobbing_at) k.fire_lobbing_at(h, w.p); break;
+        case kHostTswFire: if (k.tsw_fire) k.tsw_fire(h); break;
+        case kHostTeleport: if (k.teleport) k.teleport(h, w.p, w.q); break;
+        case kHostFirstLock: if (k.movement_first_lock) k.movement_first_lock(h); break;
+        case kHostHyperspaceOut: if (k.hyperspace_out_link) k.hyperspace_out_link(h, w.value, w.on != 0); break;
+        case kHostSetEnvironment: if (k.set_new_environment) k.set_new_environment(w.value); break;
+        default: break;
+    }
 }
 
 BattleAi::~BattleAi() {
@@ -330,6 +688,7 @@ bool BattleAi::start(std::vector<std::string>* diag) {
     const bool ok = world_->start(diag);
     for (cmd::Command& c : lane_job_.batch) lane_batch_.push_back(std::move(c));
     lane_job_.batch.clear();
+    lane_locks_ = world_->object_bridge().script_lock_facts();  // slice 4e
     return ok;
 }
 
@@ -348,6 +707,7 @@ void BattleAi::update() {
         lane_job_.frame = host_->frame();
         lane_job_.batch.clear();
         world_->think();  // inline: the AI lane's job (t03: on the AI thread)
+        lane_job_.locks = world_->object_bridge().script_lock_facts();  // slice 4e: published at collect
         StateHasher h;
         world_->hash(h);
         lane_job_.digest = h.digest();
@@ -440,18 +800,33 @@ void BattleAi::capture_lane_view() {
         view_.units.resize(b_->units_.size());
         for (size_t i = 0; i < b_->units_.size(); ++i) {
             const TacticalBattle::Unit& u = b_->units_[i];
-            view_.units[i] = {u.id, st.owner(u.h), u.container, static_cast<uint8_t>(u.alive && !u.retreated ? 1 : 0),
-                              static_cast<uint8_t>(u.movable ? 1 : 0)};
+            LaneView::Unit& v = view_.units[i];
+            v = {};
+            v.id = u.id;
+            v.owner = st.owner(u.h);
+            v.container = u.container;
+            v.live = static_cast<uint8_t>(u.alive && !u.retreated ? 1 : 0);
+            v.movable = static_cast<uint8_t>(u.movable ? 1 : 0);
+            if (b_->movement_ && b_->movement_->has_unit(u.id)) {  // slice 4e
+                const mv::UnitView m = b_->movement_->view(u.id);
+                v.mv = 1;
+                v.has_goal = m.has_goal ? 1 : 0;
+                v.arrived = m.arrived ? 1 : 0;
+                v.gx = m.goal.x;
+                v.gy = m.goal.y;
+            }
         }
         view_.teams.resize(b_->containers_.size());
         for (size_t i = 0; i < b_->containers_.size(); ++i) {
             const TacticalBattle::Container& c = b_->containers_[i];
-            view_.teams[i] = {c.id, static_cast<uint8_t>(c.removed ? 1 : 0), static_cast<uint8_t>(c.team && !c.removed && c.alive > 0 ? 1 : 0)};
+            view_.teams[i] = {c.id, static_cast<uint8_t>(c.removed ? 1 : 0), static_cast<uint8_t>(c.team && !c.removed && c.alive > 0 ? 1 : 0),
+                              c.team && c.type != 0xFFFFFFFFu ? static_cast<objects::TypeIndex>(c.type) : objects::kNone};
         }
         view_.retreat_ok.assign(np, 0);
         for (int32_t p = 0; p < players; ++p) view_.retreat_ok[static_cast<size_t>(p)] = b_->retreat_block(p) == 0 ? 1 : 0;
         view_.production = b_->production_enabled();
     }
+    if (world_->ai_lane()) capture_l1();  // slice 4e (part 2)
     ALAMO_PROFILE_STEP(steps, "tac.cap.units");
     capture_lane_abilities();
     ALAMO_PROFILE_STEP(steps, "tac.cap.abilities");
@@ -486,6 +861,7 @@ bool BattleAi::lane_write_command(const cmd::EventData& ev) {
 void BattleAi::apply_lane_write(const cmd::Command& c) {
     lua::LaneWrite w;
     if (b_->finished_ || !lua::decode_lane_write(c.payload.bytes_view("data"), w)) return;
+    if (static_cast<uint8_t>(w.op) >= static_cast<uint8_t>(lua::LaneWriteOp::HostFirst)) return apply_host_write(w);  // slice 4e
     const int32_t n = lua::apply_lane_write(b_->abilities(), b_->frame(), w, world_->object_bridge());
     if (n >= 0 && n != w.value) ++lane_mismatch_;
 }
@@ -496,6 +872,8 @@ void BattleAi::lane_collect() {
     for (cmd::Command& c : lane_job_.batch) lane_batch_.push_back(std::move(c));
     lane_job_.batch.clear();
     lane_digest_ = lane_job_.digest;
+    lane_locks_ = std::move(lane_job_.locks);  // slice 4e
+    lane_job_.locks.clear();
 }
 
 void BattleAi::end() { world_->end_battle(); }
@@ -528,6 +906,14 @@ void BattleAi::hash(StateHasher& h) const {
     }
     if (world_->ai_lane()) {  // sp3 t04: the queued orders (canonical command bytes) and the sequence counter
         h.u32(lane_seq_);
+        h.u32(static_cast<uint32_t>(lane_locks_.size()));  // slice 4e
+        for (const lua::ScriptLockFact& f : lane_locks_) {
+            h.i32(f.id);
+            h.u8(static_cast<uint8_t>(f.locked | (f.diverted << 1)));
+            h.f32(f.goal.x);
+            h.f32(f.goal.y);
+            h.f32(f.goal.z);
+        }
         h.u32(static_cast<uint32_t>(lane_batch_.size()));
         for (const cmd::Command& c : lane_batch_) {
             const std::vector<uint8_t> bytes = cmd::encode_command(c);
@@ -540,7 +926,26 @@ void BattleAi::hash(StateHasher& h) const {
 namespace {
 // 2: UnitAI re-projection stamps; 3: a1h t02 object-goal follow records; 4: s78n t25.4 ObjectFollow::guard
 constexpr uint32_t kBattleAiSaveVersion = 4;
-constexpr uint32_t kBattleAiLaneSaveVersion = 5;  // sp3 t04: version 4 + the AI lane's queued orders (lane on only)
+constexpr uint32_t kBattleAiLaneSaveVersion5 = 5;  // sp3 t04: version 4 + the AI lane's queued orders (lane on only)
+constexpr uint32_t kBattleAiLaneSaveVersion = 6;   // sp3 slice 4e: version 5 + the movement-lock facts (published, job)
+void put_locks(ByteWriter& w, const std::vector<lua::ScriptLockFact>& v) {
+    w.u32(static_cast<uint32_t>(v.size()));
+    for (const lua::ScriptLockFact& f : v) w.i32(f.id).u8(f.locked).u8(f.diverted).f32(f.goal.x).f32(f.goal.y).f32(f.goal.z);
+}
+bool get_locks(ByteReader& r, std::vector<lua::ScriptLockFact>& v) {
+    uint32_t n = 0;
+    if (!r.count(n, 18)) return false;
+    v.resize(n);
+    for (lua::ScriptLockFact& f : v) {
+        f.id = r.i32();
+        f.locked = r.u8();
+        f.diverted = r.u8();
+        f.goal = Vec3{r.f32(), 0.0f, 0.0f};
+        f.goal.y = r.f32();
+        f.goal.z = r.f32();
+    }
+    return r.ok();
+}
 template <class A, class F>
 void follow_fields(A& a, F& f) {
     a(f.units, f.target, f.gx, f.gy, f.r, f.threat, f.next, f.guard);
@@ -571,13 +976,16 @@ void BattleAi::write(ByteWriter& w) const {
     w.u64(lane_job_.frame);
     w.u64(lane_job_.digest);
     put_batch(lane_job_.batch);
+    put_locks(w, lane_locks_);  // version 6
+    put_locks(w, lane_job_.locks);
 }
 
 bool BattleAi::read(ByteReader& r) {
     // sp3 t04: version 5 (lane block) only into an AI-lane world; version 4 into either (an AI-lane world then starts with
     // an empty batch)
     const uint32_t version = r.u32();
-    if (!r.ok() || !(version == kBattleAiSaveVersion || (version == kBattleAiLaneSaveVersion && world_->ai_lane()))) return false;
+    const bool lane_version = version == kBattleAiLaneSaveVersion5 || version == kBattleAiLaneSaveVersion;
+    if (!r.ok() || !(version == kBattleAiSaveVersion || (lane_version && world_->ai_lane()))) return false;
     const std::span<const uint8_t> world = r.raw(r.u32());
     std::vector<uint8_t> side;
     uint32_t stale = 0;
@@ -592,7 +1000,8 @@ bool BattleAi::read(ByteReader& r) {
     uint64_t lane_digest = 0;
     std::vector<cmd::Command> lane_batch;
     LaneJob job;
-    if (version == kBattleAiLaneSaveVersion) {
+    std::vector<lua::ScriptLockFact> lane_locks;
+    if (lane_version) {
         const auto get_batch = [&r](std::vector<cmd::Command>& out) {
             uint32_t n = 0;
             if (!r.count(n, 4)) return false;
@@ -612,6 +1021,7 @@ bool BattleAi::read(ByteReader& r) {
         job.frame = r.u64();
         job.digest = r.u64();
         if (!get_batch(job.batch)) return false;
+        if (version == kBattleAiLaneSaveVersion && (!get_locks(r, lane_locks) || !get_locks(r, job.locks))) return false;
     }
     if (!r.ok() || !r.done() || side != ai_side_) return false;  // the AI players are rebuilt by start()
     const std::map<objects::ObjectId, int32_t> stamps_before = unit_ai_stamps_;
@@ -635,6 +1045,8 @@ bool BattleAi::read(ByteReader& r) {
     lane_batch_ = std::move(lane_batch);
     lane_digest_ = lane_digest;
     lane_job_ = std::move(job);
+    // slice 4e: a version-5 save (no facts) takes the loaded bridge's (its world was saved after the job)
+    lane_locks_ = version == kBattleAiLaneSaveVersion ? std::move(lane_locks) : world_->object_bridge().script_lock_facts();
     view_.valid = false;  // sp3 t02: captured again at the next AI slot
     world_->object_bridge().lane_abilities = nullptr;  // sp3 slice 4b: likewise the ability records
     lane_unloaded_.clear();  // sp3 slice 4d: consumed within the tick of its apply

@@ -753,6 +753,8 @@ void test_batch_sources() {
         f->start(s);
         const FogOfWar::DenseCircle nebula[] = {{1050.0f, 950.0f, 500.0f}};
         f->set_dense_obstacles(nebula);
+        f->set_relation(0, 2, 0);  // 0 and 2 allied: their sources' lists go to both grids (the allies' undo quirk)
+        f->set_relation(2, 0, 0);
         return f;
     };
     const auto digest = [](const FogOfWar& f) {
