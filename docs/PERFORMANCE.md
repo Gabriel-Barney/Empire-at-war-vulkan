@@ -1381,6 +1381,15 @@ and the stand-in orders (`tools/benchmark/services_zone.py`). Every run matched 
 
   **Borderline: sum of medians 0.564-0.599 in every round (under the 0.6 bar); mean 0.597-0.630 (rounds 0-3 pooled 0.605, over
   it).** The earlier sp5 numbers led with the mean, so sp5 stays open on this (roadmap sp5 t12).
+- **t12 pass (mean is the exit metric; loaded machine, 7-14 % other CPU, indicative only)**: per-zone W7 time left after the
+  re-run: fog 0.26-0.28 ms (two player grids: the per-grid apply is at most two-wide), speed factors 0.15-0.16, collision feed
+  0.10, trees 0.10 (0.08 of it `update_batch`: the `all` tree takes every unit's box in order, its refits depend on that order),
+  and ~0.25 ms of small services under sp1's 50 us inline threshold (victory, swap-back signals, reinforce, ...). Tried: fog
+  apply in cell bands per grid (each band rescans every list: fog 0.44 -> 0.57 ms at W0, 0.26 -> 0.31 at W7; reverted); tree
+  lookups in parallel (no change; reverted); container Max_Speed per type and the container tail in parallel (kept, `speed
+  factors` W0 0.31 -> 0.28, W7 0.16 -> 0.15). A cut that removes serial work from W0 as well does not lower W7 / W0, so the
+  mean stays at about 0.61 (two loaded runs: 0.62-0.64). Below 0.6 needs between-service concurrency (narrow declarations for
+  the small services, sp5 b0411) or splitting the `all` tree's update order (moves the spatial CRC, a golden change).
   The tick median fell from ~10.5 / 9.2 ms (W0 / W7, first run) to 9.7-9.9 / 8.3-8.8 ms, mostly the combat fix below.
 - **Where damage would go** (sp5 t08, W0, one run each, 42-46 % other-process CPU, fingerprints OK): `land_battle` combat 0.147 ms
   per tick (unit walk `cmb.d_units` 0.096, projectile commit `cmb.f_projectiles` 0.004), `space_battle` 0.361 ms (projectile

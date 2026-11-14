@@ -1873,6 +1873,9 @@ private:
     // SP5: Influences_Capture_Point per type (-1 not looked up yet), filled on first use by the serial capture pass;
     // type data does not change in a battle, so this is a pure cache (never saved or hashed)
     std::vector<int8_t> s4_capture_influence_;
+    // SP5: Max_Speed per type for apply_speed_factors (kMaxSpeedUnread: not looked up yet, -1: no tag); a pure cache
+    static constexpr float kMaxSpeedUnread = -2.0f;
+    std::vector<float> sp_type_max_speed_;
     // --- end S4 ---
     Vec3 anchor_[2]{}, facing_[2]{};
     Vec3 drop_facing_[2]{};  // a1h t06: the sides' entry-facing records (mode +0x288; zero = yaw 0), see drop_yaw
