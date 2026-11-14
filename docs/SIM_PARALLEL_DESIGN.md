@@ -357,3 +357,21 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   The session descriptor's `ai_lane` / `k_ai` options are not compared when a save is loaded (a lane-off save loads into an
   AI-lane session). Inline cost on `land_battle` (busy PC): `tac.ai.publish` 0.20 ms p50 (fill 0.17, store copy ~0.03) against
   `tac.ai` 0.56 + `crc.battle.ai` 0.97 ms with the lane off.
+- Captured host answers (t02, slice 4a): at the AI slot, before `publish()`, `BattleAi::capture_lane_view` copies what the
+  `TacticalAiHost` overrides answer (reinforcement pool, can-reinforce, population cap / used, space drop frame, player
+  relations, pads and their contents / cooldowns, movement locks, reinforcements in flight, weather sight, the damage-tracking
+  store); the pad checks run on the AI side against the snapshot store (`PadEnv`). Still live from `think()` until later
+  slices: the drop-placement searches, the builders, hijack / release, `predict_order`'s unit reads, the bridge hooks of 11.1.
+- Ability / combat bindings (t02 + t05, slice 4b): `ObjectBridge::lane_abilities` holds one record per object of the battle's
+  ability or combat system (`lua::capture_lane_abilities`, one pass per object through `AbilitySystem::lane_types`): each
+  listed ability type's has / ready / can-activate / active / autofire answers plus dry runs of `set_unit_ability_mode` (on,
+  off) and `targeted_ability` (per user, without the target's checks), and container, tractored, ion stun, immobilize count,
+  engine hard points, hull and shield. The AI VMs' bindings read those and hand every write (autofire, ability mode, targeted
+  and dummy-target abilities, recharge, counter reset, movement unlock, targeting priorities, stickiness, Activate_Ability's
+  signal 0xb) to `lane_write`, which queues it as a PortExtension `kLaneWriteSubtype` command in the same batch as the orders;
+  `lua::apply_lane_write` makes the binding's own calls at the due tick. Before the first capture (battle start) and after a
+  load until the next capture the bindings act live (on the critical lane). Capture cost on `land_battle`: ~0.08 ms p50
+  (`tac.cap.abilities`, ~220 objects). **Tier 2** (for the harness): a script reads the state of the AI slot, so its own
+  writes are not visible to it in the same think (e.g. `Is_Ability_Active` right after `Activate_Ability`); the same-call
+  answers (Activate_Ability's block for the object-target and jet-pack families) are the dry runs' predictions
+  (`BattleAi::lane_mismatches` counts the applies that differ); writes apply k_ai ticks later in (player, sequence) order.

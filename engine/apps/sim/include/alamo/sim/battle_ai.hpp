@@ -40,6 +40,7 @@
 
 #include "alamo/ai/tactical/tactical_ai.hpp"
 #include "alamo/core/file_provider.hpp"
+#include "alamo/lua/object_bridge.hpp"     // sp3 slice 4b: LaneAbilityView, LaneWrite
 #include "alamo/lua/fog_bridge.hpp"        // refixf t03: Find_Nearest's fog test in the tactical AI VMs
 #include "alamo/lua/script_gaps.hpp"       // battle host: the tactical AI VMs' TacticalScriptHooks
 #include "alamo/lua/script_remaining.hpp"  // L1 bindings: the tactical AI VMs' RemainingScriptHooks
@@ -325,6 +326,13 @@ private:
         ai::tactical::DamageTrackingStore damage;
     };
     LaneView view_;
+    // sp3 slice 4b: the ability / combat records the AI VMs' bindings read with the lane on (ObjectBridge::lane_abilities,
+    // set at each capture and cleared by a load: before the first capture the bindings act live, on the critical lane).
+    lua::LaneAbilityView lane_abilities_;
+    void capture_lane_abilities();
+    void queue_lane_write(const lua::LaneWrite& w);
+    void apply_lane_write(const commands::Command& c);  // a kLaneWriteSubtype command of the batch
+    static bool lane_write_command(const commands::EventData& ev);
     std::vector<int32_t> weather_category_;  // per type: index into weather_categories_ (-1: none)
     std::vector<std::string> weather_categories_;
     void capture_lane_view();
@@ -339,7 +347,7 @@ private:
     uint64_t lane_digest_ = 0;  // digest of the last collected job (hashed and saved)
     void lane_collect();
     uint32_t lane_seq_ = 0;
-    uint32_t lane_mismatch_ = 0;  // not saved, not hashed
+    uint32_t lane_mismatch_ = 0;  // not saved, not hashed: orders refused, writes counting other than predicted
     static bool lane_batched(const commands::EventData& ev);
     void count_executed(const commands::EventData& ev, commands::RejectReason r);  // executed_ (diagnostic)
     // The rejections of execute_order that depend on the order and the battle state alone, without side effects.

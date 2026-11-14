@@ -548,6 +548,95 @@ static void test_abilities(const Db& db) {
 // 0x570a50 in order - count, name (script errors), not the unit's ability (warning, nil), not ready (nil, the argument
 // not read), then the argument kind per ability id (script error; a dead target object of an object id: warning, nil);
 // ids 6 / 10 / 12 always switch the mode on, on the team container; ids 4 8 47 75 76 are unsupported (script error).
+// sp3 slice 4b (AI lane): the same script on a live bridge and on a lane bridge (records captured before the run, writes
+// queued and applied afterwards) ends in the same ability / combat state; during the lane run the reads are the records'
+// and nothing is written; each predicted count equals the applied one; the write codec round-trips.
+static void test_lane_abilities(const Db& db) {
+    struct Side {
+        objects::IdCounter ids;
+        objects::ObjectStore store;
+        AbilityWorld w;
+        objects::ObjectId ship = 0, target = 0;
+        explicit Side(const Db& db) : store(objects::ModeKind::Space, objects::StoreKind::Primary, db.types, &ids) {
+            ship = store.id(make(store, db.t("Ship"), 0, {0, 0, 0}));
+            target = store.id(make(store, db.t("Target_Ship"), 1, {300, 0, 0}));
+            w.add(ship, 0, 0, {0, 0, 0});
+            w.add(target, 1, 1, {300, 0, 0});
+        }
+    };
+    const char* script = "s = Find_First_Object('Ship') t = Find_First_Object('Target_Ship') "
+                         "r0 = s.Is_Ability_Ready('DEFEND') s.Activate_Ability('DEFEND', true) a1 = s.Is_Ability_Active('DEFEND') "
+                         "s.Force_Ability_Recharge('SPOILER_LOCK', 2) s.Set_Targeting_Priorities('fighter_attack') "
+                         "s.Set_Targeting_Stickiness_Time_Threshold(2.5) s.Set_Single_Ability_Autofire('DEFEND', true) "
+                         "s.Activate_Ability('TRACTOR_BEAM', t) hull = s.Get_Hull() eng = s.Are_Engines_Online()";
+    auto vm_for = [&db](Side& side, ObjectBridge& bridge) {
+        bridge.abilities = side.w.abilities.get();
+        AbilityWorld* w = &side.w;
+        bridge.ability_frame = [w] { return w->frame; };
+        LuaHost host;
+        host.store = &side.store;
+        host.types = &db.types;
+        auto vm = std::make_unique<LuaVm>(host);
+        attach_object_bridge(*vm, &bridge);
+        return vm;
+    };
+    Side live(db), lane(db);
+    ObjectBridge lb;
+    auto lvm = vm_for(live, lb);
+    CHECK(run(*lvm, script) == "");
+    ObjectBridge qb;
+    auto qvm = vm_for(lane, qb);
+    LaneAbilityView view;
+    capture_lane_abilities(*lane.w.abilities, lane.w.frame, view);
+    {  // every record answer equals the live query (types not listed: all false)
+        const ab::AbilitySystem& la = *lane.w.abilities;
+        const uint32_t f = lane.w.frame;
+        CHECK(view.objects.size() == 2 && view.frame == f);
+        for (const LaneObject& o : view.objects)
+            for (uint8_t t = 1; t <= ab::kMaxAbilityType; ++t) {
+                const LaneAbility* r = view.ability(o, t);
+                const auto bit = [r](uint8_t LaneAbility::*m) { return r && r->*m != 0; };
+                CHECK(bit(&LaneAbility::has) == la.has_ability(o.id, t) && bit(&LaneAbility::ready) == la.is_ready(o.id, t, f) &&
+                      bit(&LaneAbility::active) == la.is_active(o.id, t) && bit(&LaneAbility::autofire) == la.is_autofire(o.id, t));
+                if (bit(&LaneAbility::has)) CHECK(bit(&LaneAbility::can) == la.can_activate(o.id, t, true, true, f));
+            }
+    }
+    std::vector<LaneWrite> queued;
+    qb.lane_abilities = &view;
+    qb.lane_write = [&queued](const LaneWrite& w) {
+        LaneWrite back;
+        const std::vector<uint8_t> bytes = encode_lane_write(w);
+        CHECK(decode_lane_write(bytes, back) && encode_lane_write(back) == bytes);
+        queued.push_back(std::move(back));
+    };
+    CHECK(run(*qvm, script) == "");
+    ab::AbilitySystem& a = *lane.w.abilities;
+    // The reads were the records (DEFEND not active yet), nothing reached the systems.
+    CHECK(gtrue(*qvm, "r0") && gtrue(*lvm, "r0") && !gtrue(*qvm, "a1") && gtrue(*lvm, "a1"));
+    CHECK(gnum(*qvm, "hull") == gnum(*lvm, "hull") && gtrue(*qvm, "eng") == gtrue(*lvm, "eng"));
+    CHECK(queued.size() >= 6 && !a.is_active(lane.ship, ab::kDefend) && a.pending_type(lane.ship) == -1);
+    CHECK(lane.w.combat->priority_override(lane.ship) == -1 && lane.w.combat->stickiness_override(lane.ship) == 0.0f);
+    for (const LaneWrite& w : queued) {
+        const int32_t n = apply_lane_write(a, lane.w.frame, w, qb);
+        CHECK(n < 0 || n == w.value);
+    }
+    ab::AbilitySystem& la = *live.w.abilities;
+    CHECK(a.is_active(lane.ship, ab::kDefend) == la.is_active(live.ship, ab::kDefend) && a.is_active(lane.ship, ab::kDefend));
+    CHECK(a.countdown_counter(lane.ship, ab::kSpoilerLock) == la.countdown_counter(live.ship, ab::kSpoilerLock));
+    CHECK(a.countdown_counter(lane.ship, ab::kDefend) == la.countdown_counter(live.ship, ab::kDefend));
+    CHECK(a.is_autofire(lane.ship, ab::kDefend) == la.is_autofire(live.ship, ab::kDefend));
+    CHECK(a.pending_type(lane.ship) == ab::kTractorBeam && la.pending_type(live.ship) == ab::kTractorBeam &&
+          a.pending_target(lane.ship) == lane.target);
+    CHECK(lane.w.combat->priority_override(lane.ship) == 1 && live.w.combat->priority_override(live.ship) == 1);
+    CHECK(lane.w.combat->stickiness_override(lane.ship) == 2.5f && live.w.combat->stickiness_override(live.ship) == 2.5f);
+    // A malformed payload is refused.
+    std::vector<uint8_t> bad = encode_lane_write(queued.front());
+    bad.push_back(0);
+    LaneWrite out;
+    CHECK(!decode_lane_write(bad, out) && !decode_lane_write(std::span<const uint8_t>(bad.data(), 3), out));
+    std::printf("  lane: frozen ability records, queued writes OK\n");
+}
+
 static void test_activate_ability_checks(const Db& db) {
     objects::IdCounter ids;
     objects::ObjectStore store(objects::ModeKind::Space, objects::StoreKind::Primary, db.types, &ids);
@@ -726,6 +815,7 @@ int main() {
 #if ALAMO_LUA_HAVE_ABILITIES
     test_abilities(db);
     test_activate_ability_checks(db);
+    test_lane_abilities(db);
 #else
     std::printf("  abilities: built without engine/tactical/abilities, skipped\n");
 #endif

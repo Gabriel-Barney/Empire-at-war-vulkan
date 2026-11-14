@@ -428,7 +428,41 @@ void BattleAi::capture_lane_view() {
     ALAMO_PROFILE_STEP(steps, "tac.cap.weather");
     view_.damage = b_->damage_tracking_;
     ALAMO_PROFILE_STEP(steps, "tac.cap.damage");
+    capture_lane_abilities();
+    ALAMO_PROFILE_STEP(steps, "tac.cap.abilities");
     view_.valid = true;
+}
+
+// sp3 slice 4b: one record per object of the ability system or the combat system (ascending id, merged), the answers of
+// the bindings' queries at the ability frame. The bridge reads them from here on.
+void BattleAi::capture_lane_abilities() {
+    lua::capture_lane_abilities(b_->abilities(), b_->frame(), lane_abilities_);
+    lua::ObjectBridge& br = world_->object_bridge();
+    br.lane_abilities = &lane_abilities_;
+    br.lane_write = [this](const lua::LaneWrite& w) { queue_lane_write(w); };
+}
+
+void BattleAi::queue_lane_write(const lua::LaneWrite& w) {
+    cmd::Command c;
+    c.header.player = static_cast<uint8_t>(w.owner >= 0 && w.owner < 0xFF ? w.owner : 0xFF);
+    c.header.source = cmd::CommandSource::AI;
+    c.header.sequence = lane_seq_++;
+    c.header.issue_tick = host_->frame();
+    c.header.scheduled_tick = host_->frame() + world_->k_ai();
+    c.payload = cmd::ev::port_extension(lua::kLaneWriteSubtype, lua::encode_lane_write(w));
+    lane_job_.batch.push_back(std::move(c));  // visible when the job is collected
+}
+
+bool BattleAi::lane_write_command(const cmd::EventData& ev) {
+    return ev.type() == cmd::EventType::PortExtension && ev.u("subtype") == lua::kLaneWriteSubtype;
+}
+
+// The calls the binding makes on the critical lane (bind_objects.cpp AbilityAccess), at the battle frame of the apply.
+void BattleAi::apply_lane_write(const cmd::Command& c) {
+    lua::LaneWrite w;
+    if (b_->finished_ || !lua::decode_lane_write(c.payload.bytes_view("data"), w)) return;
+    const int32_t n = lua::apply_lane_write(b_->abilities(), b_->frame(), w, world_->object_bridge());
+    if (n >= 0 && n != w.value) ++lane_mismatch_;
 }
 
 void BattleAi::lane_collect() {
@@ -577,6 +611,7 @@ bool BattleAi::read(ByteReader& r) {
     lane_digest_ = lane_digest;
     lane_job_ = std::move(job);
     view_.valid = false;  // sp3 t02: captured again at the next AI slot
+    world_->object_bridge().lane_abilities = nullptr;  // sp3 slice 4b: likewise the ability records
     return true;
 }
 
@@ -1305,6 +1340,11 @@ void BattleAi::apply_lane_batch(uint64_t frame) {
     lane_batch_ = std::move(later);
     std::stable_sort(due.begin(), due.end(), [](const cmd::Command& a, const cmd::Command& b) { return cmd::drain_order_less(a.header, b.header); });
     for (const cmd::Command& c : due) {
+        if (lane_write_command(c.payload)) {  // sp3 slice 4b: a binding's queued write
+            apply_lane_write(c);
+            count_executed(c.payload, cmd::RejectReason::None);
+            continue;
+        }
         attack_refused_.clear();
         const cmd::RejectReason r = execute_order(c.header.player, c.payload);
         if (r == cmd::RejectReason::None) order_signals(c.header.player, c.payload);
