@@ -23,7 +23,7 @@ bool near(V2 a, V2 b, float tol = 1.0e-3f) { return near(a.x, b.x, tol) && near(
     do {                                                                                                             \
         const V2 va_ = (a), vb_ = (b);                                                                               \
         if (!near(va_, vb_)) {                                                                                       \
-            std::printf("FAIL %s:%d: %s ~ %s ((%.6g, %.6g) vs (%.6g, %.6g))\n", __FILE__, __LINE__, #a, #b, va_.x, va_.y, \
+            std::printf("FAIL %s:%d: %s ~ %s ((%.6g, %.6g) vs (%.6g, %.6g))\n", ALAMO_TEST_FILE(), __LINE__, #a, #b, va_.x, va_.y, \
                         vb_.x, vb_.y);                                                                               \
             ++g_fail;                                                                                                \
         }                                                                                                            \

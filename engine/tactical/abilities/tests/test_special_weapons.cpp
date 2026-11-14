@@ -28,7 +28,7 @@ using ::alamo::test::g_fail;
     do {                                                                                                \
         const double va_ = static_cast<double>(a), vb_ = static_cast<double>(b);                        \
         if (!(va_ == vb_)) {                                                                            \
-            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, va_, vb_); \
+            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", ALAMO_TEST_FILE(), __LINE__, #a, #b, va_, vb_); \
             ++g_fail;                                                                                   \
         }                                                                                               \
     } while (0)

@@ -76,7 +76,7 @@ using ::alamo::test::g_fail;
     do {                                                                                                  \
         const float va_ = (a), vb_ = (b);                                                                 \
         if (!(va_ == vb_)) {                                                                              \
-            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, static_cast<double>(va_), \
+            std::printf("FAIL %s:%d: %s == %s (%.9g vs %.9g)\n", ALAMO_TEST_FILE(), __LINE__, #a, #b, static_cast<double>(va_), \
                         static_cast<double>(vb_));                                                        \
             ++g_fail;                                                                                     \
         }                                                                                                 \
@@ -85,7 +85,7 @@ using ::alamo::test::g_fail;
     do {                                                                                                  \
         const double va_ = (a), vb_ = (b);                                                                \
         if (!(std::fabs(va_ - vb_) <= (eps))) {                                                           \
-            std::printf("FAIL %s:%d: %s ~ %s (%.9g vs %.9g)\n", __FILE__, __LINE__, #a, #b, va_, vb_);  \
+            std::printf("FAIL %s:%d: %s ~ %s (%.9g vs %.9g)\n", ALAMO_TEST_FILE(), __LINE__, #a, #b, va_, vb_);  \
             ++g_fail;                                                                                     \
         }                                                                                                 \
     } while (0)

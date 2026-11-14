@@ -14,6 +14,7 @@
 #include <fstream>
 #include <ios>
 #include <iterator>
+#include <source_location>
 #include <string>
 #include <string_view>
 
@@ -25,6 +26,16 @@ inline int g_checks = 0;
 
 // Exit code ctest reads as "skipped" for tests registered with SKIP_RETURN_CODE 77 (the automake convention).
 inline constexpr int kSkipReturnCode = 77;
+
+// The last path component of a source file name ("a/b\c.cpp" -> "c.cpp"). FAIL lines print this instead of __FILE__ so the
+// compiler cache sees the same preprocessed text for a TU in any worktree (a __FILE__ in the macro text differs per
+// checkout path and halved the hit rate); the line number plus the file name is enough to find the check.
+inline const char* file_tail(const char* path) {
+    const char* tail = path;
+    for (const char* p = path; *p; ++p)
+        if (*p == '/' || *p == '\\') tail = p + 1;
+    return tail;
+}
 
 // Prints "== <name>" so a failure line can be placed in a long log.
 inline void section(const char* name) { std::printf("== %s\n", name); }
@@ -91,13 +102,16 @@ inline std::string read_file(const std::filesystem::path& p) {
 
 }  // namespace alamo::test
 
+// ALAMO_TEST_FILE() is the path-independent file name for a test file's own check macros (use it instead of __FILE__).
+#define ALAMO_TEST_FILE() (::alamo::test::file_tail(std::source_location::current().file_name()))
+
 // One failed condition prints "FAIL <file>:<line>: <expr>" and counts in alamo::test::g_fail; every evaluation counts
 // in g_checks. Define ALAMO_TEST_NO_CHECK_MACRO before including to get only ALAMO_CHECK (a file with its own CHECK).
 #define ALAMO_CHECK(c)                                                       \
     do {                                                                     \
         ++::alamo::test::g_checks;                                           \
         if (!(c)) {                                                          \
-            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);         \
+            std::printf("FAIL %s:%d: %s\n", ALAMO_TEST_FILE(), __LINE__, #c); \
             ++::alamo::test::g_fail;                                         \
         }                                                                    \
     } while (0)
