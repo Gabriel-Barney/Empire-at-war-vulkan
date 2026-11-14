@@ -255,6 +255,16 @@ public:
     CrcRegistry& crc_registry() { return registry_; }
     const CrcLog& crc_log() const { return recorder_->log(); }
     CrcLog& crc_log() { return recorder_->log(); }
+    // SIMP sp2 (docs/SIM_PARALLEL_DESIGN.md 4.5): CRC capture cadence. every == 1 (the default: headless, tests,
+    // --crc-out) records every tick. every > 1 records the initial state, the ticks with tick % every == 0 and on-demand
+    // captures (capture_crc_now: on save, at a benchmark's end, before a compare), and the log is a checkpoint log
+    // (CrcLog::checkpoint = every, so first_divergence compares stored ticks). ring > 0 keeps at most about `ring` records
+    // (the oldest are dropped). Only which ticks are hashed changes, never the sim. set_default_crc_cadence is the
+    // process-wide default a new host starts with (alamo_game's main); set_crc_cadence changes this host.
+    static void set_default_crc_cadence(uint32_t every, size_t ring = 0);
+    void set_crc_cadence(uint32_t every, size_t ring = 0);
+    uint32_t crc_cadence() const { return crc_every_; }
+    void capture_crc_now();  // records the current frame unless the log's last record already is it
     jobs::JobSystem& jobs() { return *js_; }
     const ParallelFor& parallel_for() const { return pf_; }
 
@@ -392,7 +402,13 @@ private:
     CrcRegistry registry_;
     std::unique_ptr<jobs::CrcRecorder> recorder_;
     // cu9 t13: a fresh recorder (CRC hashers on the job system; the old parallel_crc switch was never off).
-    void make_recorder() { recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, true); }
+    void make_recorder() {
+        recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, true);
+        recorder_->log().checkpoint = crc_every_ > 1 ? crc_every_ : 0;
+    }
+    void record_crc();  // sp2: capture this frame, then trim to the ring
+    uint32_t crc_every_ = 1;  // sp2: CRC capture cadence (set_crc_cadence)
+    size_t crc_ring_ = 0;
     std::vector<std::string>* trace_ = nullptr;
     ModeUpdateHook after_mode_update_;  // S10
     ModeUpdateHook object_anim_;        // S10-int

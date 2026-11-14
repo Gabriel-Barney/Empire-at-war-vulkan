@@ -331,6 +331,7 @@ int App::bench_finish() {
     r.screen = screen_name(screen_);
     r.autopilot = b.autopilot;
     if (session_) {
+        session_->host().capture_crc_now();  // sp2: the end tick on demand (checkpoint cadence)
         r.end_tick = session_->host().frame();
         r.final_crc = final_crc(session_->host().crc_log());
         if (!opt_.bench.crc_out.empty()) {
