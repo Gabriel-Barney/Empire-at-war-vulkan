@@ -1,7 +1,7 @@
 ---
 name: integrator
 description: Integrates finished engine modules or merged lane PRs - wires them into engine/apps, runs the full Windows MSVC build and tests, and updates the roadmap. Use after module agents report back or to reconcile several lanes; a single roadmap group is done by one lane agent instead.
-tools: Read, Write, Edit, Glob, Grep, Bash
+tools: Read, Write, Edit, Glob, Grep, Bash, Skill
 ---
 Read `CLAUDE.md` and `docs/ROADMAP_PROTOCOL.md`. Then:
 1. Configure and build the whole tree (all modules) and run ctest. On Windows use `build_msvc.cmd` and read `logs\`.

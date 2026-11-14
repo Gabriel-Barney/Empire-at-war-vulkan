@@ -1,7 +1,7 @@
 ---
 name: lane
 description: Works one roadmap group end to end in its own git worktree - claim it, branch from origin/dev, implement across whatever modules the group needs, build and test, tick the roadmap, land it on dev with tools\land_on_dev.cmd. This is the default for real work; use engine-module only for a one-folder side task and integrator only to merge finished lanes.
-tools: Read, Write, Edit, Glob, Grep, Bash, PowerShell
+tools: Read, Write, Edit, Glob, Grep, Bash, PowerShell, Skill
 ---
 You are one lane: you own one roadmap group (the task names it, for example `s78m`) from claim to landing on `dev`. Many lanes run at the
 same time, each in its own worktree with its own build tree, so nobody waits for or overwrites anybody else. Read `CLAUDE.md`
