@@ -116,6 +116,51 @@ ScriptStep step_select_row(std::string dialog, std::string control, std::functio
             2000};
 }
 
+// [port: Gabriel, 2026-11-13] a new campaign opens the mission holocron by itself once its first chapter is added, and
+// the open summary holds the ticks: wait until that has happened (or the campaign added no chapter early on), then close
+// the summary with its Close button like a player. Nothing to do when it never opened.
+void close_auto_holocron(std::vector<ScriptStep>& s) {
+    s.push_back(step_wait("campaign-start holocron settled", [](App& a) { return !a.summary_auto_open_; }, 600));
+    ScriptStep click = step_click_control(ui::dlg::kStorySummary, "IDC_SUMMARY_DIALOG_CLOSE_BUTTON");
+    auto skip = std::make_shared<bool>(false);
+    auto checked = std::make_shared<bool>(false);
+    s.push_back({"close the campaign-start holocron", [skip, checked, run = std::move(click.run)](App& a, ui::InputFrame& f) {
+                     if (!*checked) {
+                         *checked = true;
+                         *skip = !a.story_summary_open_;
+                     }
+                     return *skip || run(a, f);
+                 },
+                 click.timeout_frames});
+    s.push_back(step_wait("campaign-start holocron closed", [](App& a) { return !a.story_summary_open_; }, 300));
+}
+
+// Clicks list row `row` itself like a player (scrolled into view first). Unlike step_select_row it never clicks another
+// row on the way: in the saved games tree a click on a group row opens / closes that group.
+ScriptStep step_click_row(std::string dialog, std::string control, std::function<int32_t(App&)> row) {
+    auto st = std::make_shared<ClickState>();
+    auto px = std::make_shared<std::pair<int32_t, int32_t>>(0, 0);
+    return {"click row of " + dialog + "/" + control, [st, px, dialog, control, row](App& a, ui::InputFrame& f) {
+                if (st->phase > 0) return click_at(*st, f, px->first, px->second, ui::Button::Left);
+                ui::GuiDialog* d = a.ui_.gui.find(dialog);
+                if (!d || d != a.ui_.gui.top()) return false;  // wait for the dialog
+                const int32_t want = row(a);
+                ui::Vec2f p{};
+                if (!a.ui_.gui.list_row_point(*d, control, want, p)) {
+                    a.ui_.gui.scroll_list_to(*d, control, want);
+                    if (!a.ui_.gui.list_row_point(*d, control, want, p)) {
+                        std::fprintf(stderr, "script: %s/%s has no visible row %d\n", dialog.c_str(), control.c_str(), static_cast<int>(want));
+                        a.script_failed_ = true;
+                        return true;
+                    }
+                }
+                const ui::Vec2f q = a.ui_.gui.canvas().canvas_to_pixel(p.x, p.y);
+                *px = {static_cast<int32_t>(q.x), static_cast<int32_t>(q.y)};
+                return click_at(*st, f, px->first, px->second, ui::Button::Left);
+            },
+            600};
+}
+
 ScriptStep step_shot(std::string file) {
     auto st = std::make_shared<int>(0);
     return {"shot " + file, [st, file](App& a, ui::InputFrame&) {
@@ -1537,6 +1582,7 @@ void App::make_script() {
             s.push_back(step_click_control("IDD_CUSTOM_CAMPAIGN_STAGING_DIALOG", "IDC_PLAY_BUTTON"));
         }
         s.push_back(step_wait("galactic map", [](App& a) { return a.screen_ == Screen::Galactic; }, 600));
+        close_auto_holocron(s);
         s.push_back(step_ticks("galaxy runs", 30));
         // GALACTIC_DIALOGS §2: the opening Story_Dialog event adds its chapter to the mission holocron (retail: b_story_arc_g
         // flashes; [port: Gabriel] a new campaign opens the summary by itself). Clicking the holocron (re)opens the story
