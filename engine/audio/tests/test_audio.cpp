@@ -1401,10 +1401,33 @@ void test_real(const std::string& game, const std::string& root, bool is_eaw) {
 
 }  // namespace
 
+// [port] Bounded event log (AudioConfig::log_limit): the live game keeps only the newest events, so a long battle
+// neither regrows the log on the frame thread nor leaks it (docs/PERFORMANCE.md "Audio event log hitches").
+void test_log_limit() {
+    Rig rig;
+    AudioSystem& a = *rig.a;
+    CHECK(a.config().log_limit == static_cast<size_t>(-1));  // tests keep everything by default
+    a.set_log_limit(8);
+    size_t cap = 0;
+    for (int i = 0; i < 200; ++i) {
+        CHECK(a.play_sfx("NoSuchEvent") == 0);  // one SfxReject entry each
+        CHECK(a.log().size() <= 8);
+        if (i == 20) cap = a.log().capacity();
+    }
+    CHECK(a.log().size() >= 4 && last_reason(a) == "unknown_event");  // the newest entry survives every trim
+    CHECK(a.log().capacity() == cap);                                   // trimming never regrows the vector
+    a.set_log_limit(2);  // lowering the limit trims at once
+    CHECK(a.log().size() == 2);
+    a.set_log_limit(0);  // 0: nothing is kept (the log is emptied at once)
+    CHECK(a.log().empty());
+    CHECK(a.play_sfx("NoSuchEvent") == 0 && a.log().empty());
+}
+
 int main() {
     test_parse();
     test_draws();
     test_gates();
+    test_log_limit();
     test_state_machine();
     test_voices();
     test_music();

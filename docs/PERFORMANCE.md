@@ -1144,6 +1144,30 @@ Reading it:
   15 workers level with 0 in the game. `alamo_game` now raises itself to above normal at start (`--priority normal` turns it off;
   `--smoke` test runs stay normal). `alamo_headless` and the tests are unchanged.
 - The question's 177 / 250 ms did not reproduce, not even with all 16 threads busy; a heavier load (memory or disk pressure from
-  several builds) is the likely difference. Worst frames of 150-230 ms under load remain in `space_battle_game` (both binaries).
+  several builds) is the likely difference. The 115-230 ms worst frames of `space_battle_game` were the audio event log, fixed
+  the same day (next section).
 - Separately, `space_battle_game`'s idle frame p99 is about 12 ms here against 6.6 ms in the 2026-11-08 baseline (same before and after
   this change): a regression on dev since then, filed on the backlog.
+
+## Audio event log hitches (2026-11-14)
+
+`space_battle_game`'s worst frames (110-130 ms idle, 190-230 ms loaded) fell on the same measured frames in every run, at every worker
+count and load: 564, 846, 1270, 1905, 2858, each 1.5 x the one before (MSVC's `std::vector` growth). Section timers in the frame loop put
+them in the audio update, and timing `AudioSystem::push` matched each spike: `AudioSystem::log_` (152-byte `LogEntry`, three strings)
+logged every SFX start / reject / steal, about 60,000 entries per second of space battle, and was never cleared in the game. At frame
+2858 it held 3.54 M entries (about 540 MB) and its regrowth copy took 134 ms on the frame thread; an hour of play would have grown it by
+roughly 30 GB.
+
+Fix: `AudioConfig::log_limit` (unlimited by default: the tests read the whole log); at the limit the oldest half is dropped. The live game
+keeps 4096 (`kGameAudioLogLimit`, `GameAudioHost::set_log_limit`).
+
+| `space_battle_game`, 15 workers | Frame p99 (ms) | Worst frame (ms) | Hitches over 25 ms |
+|---|---|---|---|
+| idle, before (dev e0342ed8) | 12.9 / 12.1 | 115.1 / 110.7 | 6 / 6 |
+| idle, after | 12.2 / 11.5 | 26.1 / 25.3 | 1 / 1 |
+| loaded (16 burners), before, normal priority | 40.3 / 41.7 | 189-231 (all runs) | 124-171 |
+| loaded, after (above-normal priority, the new default) | 17.6 | 42.1 | 2 |
+
+Same final CRC before and after (`4d1f861208999872`); `water_battle` unchanged (no hitches either way). The one hitch left idle is a
+single sim tick at measured frame 536 (battle tick 1291): `tac.movement` 20.7 ms, nearly all of it the sim thread waiting on one slow
+`parallel_for` chunk (`jobs.for_wait` 19.8 ms), filed on the backlog.

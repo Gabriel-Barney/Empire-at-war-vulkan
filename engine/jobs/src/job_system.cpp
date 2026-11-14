@@ -60,6 +60,42 @@ struct JobSystem::Slot {
     std::atomic<uint64_t> executed{0};
 };
 
+// parallel_for loop state (pooled; see parallel_for_ref).
+struct JobSystem::ForState {
+    explicit ForState(JobSystem& s) : js(&s) {}
+    // Set up for a new loop; only called by the owner while no job references this state.
+    void reset(RangeRef f, uint32_t n, uint32_t g, uint64_t c, uint32_t r) {
+        fn = f;
+        count = n;
+        grain = g;
+        chunks = c;
+        next.store(0);
+        first_failed.store(kNoFail);
+        in_flight.store(0);
+        refs.store(r);
+        error = nullptr;
+        error_chunk = 0;
+    }
+    JobSystem* js;
+    RangeRef fn{kNoopRange};  // the caller's closure: only called for a claimed chunk
+    uint32_t count = 0;
+    uint32_t grain = 1;
+    uint64_t chunks = 0;
+    std::atomic<uint64_t> next{0};
+    std::atomic<uint64_t> first_failed{kNoFail};  // lowest chunk that threw so far
+    std::atomic<uint32_t> in_flight{0};  // threads between their claim attempt and the end of that chunk
+    std::atomic<uint32_t> refs{0};       // the caller + every queued or running helper job
+    std::mutex error_mutex;
+    std::exception_ptr error;
+    uint64_t error_chunk = 0;
+
+    // No chunk left to start: all claimed, or the rest skipped after a failure.
+    bool exhausted() const noexcept { return next.load() >= chunks || first_failed.load() != kNoFail; }
+    // Every chunk ran (or was skipped). seq_cst throughout: a claimer raises in_flight before its claim,
+    // so once `next` shows every chunk claimed, an in_flight of 0 means none is still running.
+    bool finished() const noexcept { return exhausted() && in_flight.load() == 0; }
+};
+
 uint32_t JobSystem::default_worker_count() {
     const unsigned hc = std::thread::hardware_concurrency();
     return hc > 1 ? static_cast<uint32_t>(hc - 1) : 1u;
@@ -69,6 +105,17 @@ JobSystem::JobSystem(JobSystemConfig config) {
     workers_ = config.workers < 0 ? default_worker_count()
                                   : std::min(static_cast<uint32_t>(config.workers), kMaxWorkers);
     bg_cap_ = workers_ == 0 ? 0u : std::max(1u, workers_ / 2u);
+    if (workers_ > 0) {
+        // Pre-warm the loop-state pool: up to 4 nested loops per thread at once never allocate, so a steady-state frame
+        // does not either (render's zero-allocation checks); deeper or more concurrent nesting grows it on demand.
+        const size_t warm = static_cast<size_t>(workers_ + 1) * 4u;
+        for_pool_.reserve(warm);
+        for_free_.reserve(warm);
+        for (size_t i = 0; i < warm; ++i) {
+            for_pool_.push_back(std::make_unique<ForState>(*this));
+            for_free_.push_back(for_pool_.back().get());
+        }
+    }
     slots_.reserve(workers_ + 1);
     for (uint32_t i = 0; i <= workers_; ++i) slots_.push_back(std::make_unique<Slot>());
     threads_.reserve(workers_);
@@ -359,41 +406,6 @@ void JobSystem::worker_main(uint32_t slot) {
 
 // ---------------------------------------------------------------------------------------------
 // parallel_for
-
-struct JobSystem::ForState {
-    explicit ForState(JobSystem& s) : js(&s) {}
-    // Set up for a new loop; only called by the owner while no job references this state.
-    void reset(RangeRef f, uint32_t n, uint32_t g, uint64_t c, uint32_t r) {
-        fn = f;
-        count = n;
-        grain = g;
-        chunks = c;
-        next.store(0);
-        first_failed.store(kNoFail);
-        in_flight.store(0);
-        refs.store(r);
-        error = nullptr;
-        error_chunk = 0;
-    }
-    JobSystem* js;
-    RangeRef fn{kNoopRange};  // the caller's closure: only called for a claimed chunk
-    uint32_t count = 0;
-    uint32_t grain = 1;
-    uint64_t chunks = 0;
-    std::atomic<uint64_t> next{0};
-    std::atomic<uint64_t> first_failed{kNoFail};  // lowest chunk that threw so far
-    std::atomic<uint32_t> in_flight{0};  // threads between their claim attempt and the end of that chunk
-    std::atomic<uint32_t> refs{0};       // the caller + every queued or running helper job
-    std::mutex error_mutex;
-    std::exception_ptr error;
-    uint64_t error_chunk = 0;
-
-    // No chunk left to start: all claimed, or the rest skipped after a failure.
-    bool exhausted() const noexcept { return next.load() >= chunks || first_failed.load() != kNoFail; }
-    // Every chunk ran (or was skipped). seq_cst throughout: a claimer raises in_flight before its claim,
-    // so once `next` shows every chunk claimed, an in_flight of 0 means none is still running.
-    bool finished() const noexcept { return exhausted() && in_flight.load() == 0; }
-};
 
 void JobSystem::run_for_chunks(ForState& st) {
     // Once chunk f threw, chunks above f are pointless (the serial loop would have stopped at f)

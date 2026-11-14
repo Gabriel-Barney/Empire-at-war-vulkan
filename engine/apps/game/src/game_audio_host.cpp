@@ -553,6 +553,10 @@ void GameAudioHost::update(double dt) {
     if (game_) game_->update(dt);
 }
 
+void GameAudioHost::set_log_limit(size_t limit) {
+    if (system_) system_->set_log_limit(limit);
+}
+
 void GameAudioHost::apply_presentation(const std::vector<lua::PresentationEvent>& events, uint32_t* next_seq) {
 #ifdef ALAMO_AUDIO_HAVE_LUA
     if (game_ && next_seq)
@@ -613,6 +617,7 @@ void GameAudioHost::set_flags(bool modal, bool gui_only, bool attract) {  // sam
 double GameAudioHost::output_latency_seconds() const { return 0.0; }
 void GameAudioHost::set_volumes(float, float, float, float) {}
 void GameAudioHost::update(double) {}
+void GameAudioHost::set_log_limit(size_t) {}
 void GameAudioHost::apply_presentation(const std::vector<lua::PresentationEvent>&, uint32_t*) {}
 
 #endif

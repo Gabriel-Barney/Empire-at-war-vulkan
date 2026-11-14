@@ -180,6 +180,8 @@ inline int usage() {
 }
 
 enum class Screen : uint8_t { Menu, SessionLoad, Galactic, BattleLoad, Battle, Quit, Movie };
+// [port] Audio event log entries the live game keeps (audio::AudioConfig::log_limit): the last 2048-4096 events, about 0.6 MB.
+constexpr size_t kGameAudioLogLimit = 4096;
 constexpr uint16_t kVkF11 = 0x7A;  // OPT1 t07: frame-time overlay toggle (not in the default hotkey table)
 constexpr int32_t kLoadIntroMaxFrames = 30;  // QA t11: the most frames the sim waits for the load screen's textures
 constexpr uint32_t kBattleEndHoldFrames = 150;  // [port] Playtest QA D1: 5 s between the victory and the summary (the last break-up plays)

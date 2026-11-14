@@ -314,8 +314,16 @@ float AudioSystem::stream_gain(uint32_t handle) const {
 }
 
 void AudioSystem::push(LogEntry e) {
+    if (cfg_.log_limit == 0) return;
+    // At the limit, drop the oldest half: amortised O(1) per entry and the capacity stays put (no regrowth copies).
+    if (log_.size() >= cfg_.log_limit) log_.erase(log_.begin(), log_.begin() + static_cast<ptrdiff_t>(log_.size() - cfg_.log_limit / 2));
     e.time_us = now_us_;
     log_.push_back(std::move(e));
+}
+
+void AudioSystem::set_log_limit(size_t limit) {
+    cfg_.log_limit = limit;
+    if (log_.size() > limit) log_.erase(log_.begin(), log_.begin() + static_cast<ptrdiff_t>(log_.size() - limit));
 }
 
 std::string AudioSystem::log_text() const {

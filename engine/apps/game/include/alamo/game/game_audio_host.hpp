@@ -84,6 +84,9 @@ public:
     bool init(const GameData& data, AudioBackendKind backend, uint32_t seed, std::string* err = nullptr);
     bool active() const { return game_ != nullptr; }
     audio::AudioSystem* system() { return system_.get(); }  // movie streams (null when inactive)
+    // [port] Bounds the audio event log (audio::AudioConfig::log_limit); no-op when inactive. The live game calls it with
+    // kGameAudioLogLimit after init; tests leave the log unlimited.
+    void set_log_limit(size_t limit);
 
     void ui(std::string_view event);
     void speech(std::string_view event);  // a queued speech event (story dialog scripts' DIALOG lines)
