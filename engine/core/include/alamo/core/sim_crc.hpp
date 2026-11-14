@@ -32,10 +32,13 @@
 // checksum, not a cryptographic hash. The typed feeds (u8..u64, f32, f64, value) are inline (OPT3 t05): they append to
 // the pending word without a call per field, which is what the per-field hashers of the big systems spend their time on.
 #pragma once
+#include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -102,6 +105,11 @@ public:
     uint64_t digest() const noexcept;  // does not change the state; more bytes may follow
     uint64_t length() const noexcept { return len_; }
 
+    // SIMP sp6: the fan-out a hasher may use for hash_blocks (set by CrcRegistry::capture; null = serial). Scheduling
+    // only: the bytes fed never depend on it.
+    void set_parallel(const ParallelFor* pf) noexcept { pf_ = pf; }
+    const ParallelFor* parallel() const noexcept { return pf_; }
+
 private:
     template <class T>
     static constexpr bool kHashable =
@@ -130,7 +138,73 @@ private:
     uint64_t len_ = 0;
     uint64_t acc_ = 0;       // pending bytes of the next word, little-endian, zero above tail_len_
     uint32_t tail_len_ = 0;  // bytes in acc_ (0..7)
+    const ParallelFor* pf_ = nullptr;  // sp6: not part of the hashed state
 };
+
+// ---- Tree hash of a per-item loop (SIMP sp6, docs/SIM_PARALLEL_DESIGN.md 4.5) ------------------------------------------
+// hash_blocks(h, count, fn): the items [0, count) in fixed blocks of kCrcBlockItems; fn(bh, begin, end) feeds block
+// [begin, end) into its own StateHasher bh (seed 0, fresh per block); the blocks run in parallel through h.parallel()
+// when it is set; then h receives u32(count) and every block's digest (u64), in block order. So the digest is the same for
+// any worker count and split (fn must only read state, like every hasher). Fixed forever like StateHasher: changing the
+// block size or the layout invalidates golden files.
+// CrcBlockCache (optional): the digest of a block that nobody marked dirty since the last call is reused instead of
+// hashed again. The owner of the hashed items must mark every change (mark(item), or mark_all()); a missed mark hides a
+// divergence in that block from the CRC (never changes the sim). A different count re-hashes every block.
+inline constexpr uint32_t kCrcBlockItems = 256;
+
+class CrcBlockCache;
+template <class Fn>
+void hash_blocks(StateHasher& h, uint32_t count, Fn&& fn, CrcBlockCache* cache = nullptr);
+
+class CrcBlockCache {
+public:
+    CrcBlockCache() = default;
+    CrcBlockCache(const CrcBlockCache&) = delete;
+    CrcBlockCache& operator=(const CrcBlockCache&) = delete;
+    void mark(uint32_t item) noexcept;  // thread-safe
+    void mark_all() noexcept { valid_ = false; }
+    uint64_t reused() const noexcept { return reused_; }  // blocks taken from the cache so far (tests, diagnostics)
+
+private:
+    template <class Fn>
+    friend void hash_blocks(StateHasher& h, uint32_t count, Fn&& fn, CrcBlockCache* cache);
+    void prepare(uint32_t count, uint32_t blocks);  // drops everything when the count changed
+    bool usable(uint32_t block) const noexcept;
+    void store(uint32_t block, uint64_t digest) noexcept;
+    std::vector<uint64_t> digest_;
+    std::unique_ptr<std::atomic<uint8_t>[]> dirty_;
+    uint32_t count_ = 0;
+    uint32_t blocks_ = 0;
+    bool valid_ = false;
+    uint64_t reused_ = 0;
+};
+
+template <class Fn>
+void hash_blocks(StateHasher& h, uint32_t count, Fn&& fn, CrcBlockCache* cache) {
+    const uint32_t blocks = (count + kCrcBlockItems - 1) / kCrcBlockItems;
+    std::vector<uint64_t> digests(blocks);
+    if (cache) cache->prepare(count, blocks);
+    const RangeFn body = [&](uint32_t b, uint32_t e) {
+        for (uint32_t blk = b; blk < e; ++blk) {
+            if (cache && cache->usable(blk)) {
+                digests[blk] = cache->digest_[blk];
+                continue;
+            }
+            StateHasher bh;
+            const uint32_t begin = blk * kCrcBlockItems;
+            fn(bh, begin, std::min(count, begin + kCrcBlockItems));
+            digests[blk] = bh.digest();
+        }
+    };
+    if (h.parallel() && *h.parallel() && blocks > 1) (*h.parallel())(blocks, 1, body);
+    else if (blocks > 0) body(0, blocks);
+    h.u32(count);
+    for (uint32_t blk = 0; blk < blocks; ++blk) {
+        h.u64(digests[blk]);
+        if (cache) cache->store(blk, digests[blk]);
+    }
+    if (cache) cache->valid_ = true;
+}
 
 // ---- Parity CRC: the original's frame CRC (docs/re/COMMANDS.md §7.1, OBJECT_RUNTIME.md §5/§8) --------
 // Calculate_Frame_CRC, per tick:
@@ -207,8 +281,8 @@ public:
     const std::string& name(SystemId id) const { return systems_.at(id).name; }
     std::vector<std::string> names() const;
 
-    // Digest of one system (fresh StateHasher, seed 0).
-    uint64_t hash_system(SystemId id) const;
+    // Digest of one system (fresh StateHasher, seed 0). pf: the fan-out its hash_blocks calls may use (sp6).
+    uint64_t hash_system(SystemId id, const ParallelFor* pf = nullptr) const;
     // Runs every hasher (in parallel through `pf` if given; outputs are per index, so the
     // result is identical) and combines them: combined = StateHasher over (str(name), u64(crc))
     // for each system in order.

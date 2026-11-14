@@ -154,6 +154,15 @@ All of this is golden-neutral: results already do not depend on the worker count
   in parallel waves with the serial chain's parameters for the best progress known so far; a speculative try is used only when its
   parameters equal the serial ones bit for bit, else a new wave starts there. Same result as the serial loop (tested and
   stress-tested); it costs extra CPU when tries are rerun (10-15 % of speculative tries on `nebula_battle`).
+- **As built, second half, slice 1 (sp6, 2026-11-14):** `hash_blocks(h, count, fn[, cache])` in `alamo/core/sim_crc.hpp`. It splits
+  items into fixed blocks of `kCrcBlockItems` = 256 and gives each block its own `StateHasher`. Blocks run in parallel through the
+  capture's `ParallelFor` (`StateHasher::set_parallel`, set by `CrcRegistry::capture`). The system's hasher then receives `u32(count)`
+  and each block's digest (u64) in block order, so the digest is the same for any worker count and split. `CrcBlockCache` is the
+  dirty bit per block: a block nobody marked since the last capture reuses its digest, and a new count re-hashes every block. Nothing
+  uses it yet, because no system tracks its changes. Converted so far: `battle.movement` and `battle.combat` (per-unit loops) and
+  `objects` (the per-object loop). `galactic.state` is left as it is (its planets fit in one block). `battle.abilities` is in
+  simp-svc's file and costs 0.04-0.08 ms. `battle.ai` (`crc.battle.ai`, the largest at 0.5-0.9 ms on land) converts after sp3, in
+  simp-ai's code. Goldens moved once for this slice; the `battle.ai` slice moves them again.
 
 ## 5. System by system
 
@@ -402,6 +411,27 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   finishes (a timeout still ends it). `start()` with
   the lane on captures the view first, refreshes the snapshot store, and collects what the start scripts queued (before this,
   the first update dropped it). **Tier 2**: these commands act k_ai ticks later and their answers are predictions.
+- Bridge reads and the script movement lock (slice 4e, part 1): with the lane on the AI bridge's `is_enemy`,
+  `representative_type` (Find_Nearest / Find_All_Objects_Of_Type on TEAM containers), `order_finished` (every blocking
+  order poll) and `move_goal` (Is_On_Diversion) answer from the view (per battle unit: movement unit, has goal, arrived, goal;
+  per container: its team type). `map_hint` and `reinforce_facing` read data fixed at map setup. The movement lock the
+  battle's movement reads (Lock_Current_Orders, a Divert's forced move) no longer reads the AI bridge: each job's
+  `ObjectBridge::script_lock_facts` is published when the job is collected (`start()`: the start scripts'), hashed, and
+  saved (`battle.ai` version 6 = 5 + the published and the pending facts; a version-5 save takes the loaded bridge's).
+  **Tier 2**: a script lock or Divert reaches the movement at the collect, one AI slot after the script ran.
+- L1 hooks (slice 4e, part 2): with the lane on `BattleAi::wrap_lane_hooks` keeps the live `RemainingScriptHooks` /
+  `TacticalScriptHooks` and puts lane-aware ones on the AI bridge. Reads answer from the view: per battle unit and container
+  rate of damage, time till dead, current projectile and projectile types, engines, energy, hero clash, `object_in_field`
+  for the four field kinds; per player bombing run / bombardment availability and result, special weapons allowed, retreat
+  increment; the final-blow list; a copy of the `SpecialWeaponSystem` (readiness, TSW state); build pad contents from the
+  pads. `point_in_field` / `nearest_field` and `ground_height` read data fixed at map setup. Writes (Divert, Build,
+  Lock_Build_Pad, strikes and their switches, Force_Weather, hero-clash release, special weapon begin / fire / lob, TSW fire,
+  teleport, first lock, hyperspace out, set environment) are queued as host ops (`lua::LaneWriteOp::HostFirst..`) and the
+  apply calls the kept live hook. Predictions: Divert = a live movable unit; Build = an empty pad; strikes = available;
+  begin_targeting / TSW fire = the dry run on the copy; fire at object = readiness >= 1 and a valid target; lobbing = a lobbing
+  pack with an owner. `spawn` from an AI VM is refused with the lane on (no shipped AI script spawns; counted). Not yet off
+  the live battle (slice 4e part 3): the shield-side queries, the fog hooks and FogOfWar, GlobalValue, Prevent_AI_Usage.
+  Capture cost on `land_battle` grew to ~0.30 ms p50 (`tac.ai.capture`; the per-unit facts are serial for now).
 
 ## 12. P5 implementation notes (sp5, simp-svc, 2026-11-14)
 

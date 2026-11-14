@@ -838,44 +838,47 @@ uint32_t CombatSystem::next_scan(ObjectId id) const {
 // ================================================================================================
 
 void CombatSystem::hash_units(StateHasher& h) const {
-    h.u32(static_cast<uint32_t>(units_.size()));
-    for (const Unit& u : units_) {
-        h.i32(u.id);
-        h.u32(u.desc);
-        h.i32(u.owner);
-        h.u32(u.flags & ~kUnitHostMirrorFlags);  // S8 t10 / t11: the host mirrors are derived state
-        h.f32(u.health);
-        h.f32(u.shield);
-        h.u8(u.shield_depleted);
-        h.u32(u.shield_depleted_frame);
-        h.i32(u.shield_regen_countdown);
-        h.u32(u.next_scan);
-        h.i32(u.auto_target);
-        h.i32(u.ordered_target);
-        h.f32(u.target_score);
-        h.i32(u.weapon_cooldown);
-        h.i32(u.weapon_pulses);
-        h.u8(u.ability_active[0]);
-        h.u8(u.ability_active[1]);
-        h.u8(u.ever_hit);
-        h.u32(u.last_hit_frame);
-        for (uint32_t b = 0; b < 5; ++b) {
-            h.f32(u.dmg_bucket[b]);
-            h.u32(u.dmg_second[b]);
+    // SIMP sp6: tree hash, blocks of kCrcBlockItems hashed in parallel (same digest for any worker count)
+    hash_blocks(h, static_cast<uint32_t>(units_.size()), [&](StateHasher& bh, uint32_t blk_first, uint32_t blk_last) {
+        for (uint32_t blk_i = blk_first; blk_i < blk_last; ++blk_i) {
+            const Unit& u = units_[blk_i];
+            bh.i32(u.id);
+            bh.u32(u.desc);
+            bh.i32(u.owner);
+            bh.u32(u.flags & ~kUnitHostMirrorFlags);  // S8 t10 / t11: the host mirrors are derived state
+            bh.f32(u.health);
+            bh.f32(u.shield);
+            bh.u8(u.shield_depleted);
+            bh.u32(u.shield_depleted_frame);
+            bh.i32(u.shield_regen_countdown);
+            bh.u32(u.next_scan);
+            bh.i32(u.auto_target);
+            bh.i32(u.ordered_target);
+            bh.f32(u.target_score);
+            bh.i32(u.weapon_cooldown);
+            bh.i32(u.weapon_pulses);
+            bh.u8(u.ability_active[0]);
+            bh.u8(u.ability_active[1]);
+            bh.u8(u.ever_hit);
+            bh.u32(u.last_hit_frame);
+            for (uint32_t b = 0; b < 5; ++b) {
+                bh.f32(u.dmg_bucket[b]);
+                bh.u32(u.dmg_second[b]);
+            }
+            bh.u32(u.hp_count);
+            for (uint32_t i = 0; i < u.hp_count; ++i) {
+                const Hardpoint& hp = hps_[u.hp_begin + i];
+                bh.u32(hp.desc);
+                bh.f32(hp.health);
+                bh.i32(hp.cooldown);
+                bh.i32(hp.pulses);
+                bh.u8(hp.destroyed);
+                bh.u8(hp.disabled);
+                bh.i32(hp.target);
+                bh.i32(hp.target_hp);
+            }
         }
-        h.u32(u.hp_count);
-        for (uint32_t i = 0; i < u.hp_count; ++i) {
-            const Hardpoint& hp = hps_[u.hp_begin + i];
-            h.u32(hp.desc);
-            h.f32(hp.health);
-            h.i32(hp.cooldown);
-            h.i32(hp.pulses);
-            h.u8(hp.destroyed);
-            h.u8(hp.disabled);
-            h.i32(hp.target);
-            h.i32(hp.target_hp);
-        }
-    }
+    });
 }
 
 void CombatSystem::hash_projectiles(StateHasher& h) const {
