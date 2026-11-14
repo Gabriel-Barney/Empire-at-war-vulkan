@@ -48,9 +48,24 @@ def read(p):
         return None
 
 
+def skipped_builds(logs):
+    """Builds gate_scope.py (build_gate.cmd, bo1 t05) decided the change does not need: {name: reason}."""
+    out = {}
+    text = read(logs / 'gate_scope.txt') or ''
+    for line in text.splitlines():
+        m = re.match(r'skip\s+(\w+): (.*)', line)
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
 def main(logs):
     bad = False
+    skipped = skipped_builds(logs)
     for name, cfg, bld in BUILDS:
+        if name in skipped:
+            print(f'{name:6} SKIP  not needed for this change ({skipped[name]})')
+            continue
         c, b = read(logs / cfg), read(logs / bld)
         if c is None or b is None or 'BUILD_DONE' not in c:
             print(f'{name:6} FAIL  did not finish (missing log or no BUILD_DONE)')
