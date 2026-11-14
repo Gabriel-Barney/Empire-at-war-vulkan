@@ -56,7 +56,7 @@ add_test(NAME alamo_tactical_movement_tests COMMAND alamo_tactical_movement_test
 set_tests_properties(alamo_tactical_movement_tests PROPERTIES TIMEOUT 900)
 
 # REMAINING_GAPS 4.1-4.7: corridor squeeze, threat mode, special locomotors.
-add_executable(alamo_tactical_movement_gaps_tests tests/test_movement_gaps.cpp)
+add_executable(alamo_tactical_movement_gaps_tests tests/test_movement_gaps.cpp tests/test_movement_gaps_part1.cpp tests/test_movement_gaps_part2.cpp tests/test_movement_gaps_part3.cpp)
 target_link_libraries(alamo_tactical_movement_gaps_tests PRIVATE alamo_tactical_movement Threads::Threads alamo_test_support)
 add_test(NAME alamo_tactical_movement_gaps_tests COMMAND alamo_tactical_movement_gaps_tests)
 set_tests_properties(alamo_tactical_movement_gaps_tests PROPERTIES TIMEOUT 300)
