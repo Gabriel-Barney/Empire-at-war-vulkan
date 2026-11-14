@@ -13,7 +13,8 @@
 | AI assistance | Claude Code (Anthropic): desktop app and CLI, parallel agent sessions in separate git worktrees, and computer use to drive the original game for in-game probe runs |
 | Build | MSVC 14.51 and Windows SDK 10.0.28000 (project-local), CMake 4.4, Ninja 1.13, clang / LLVM 20.1.8 (check build and AddressSanitizer), sccache 0.19 (optional compiler cache), Python 3 (lint, build summaries, roadmap, parity harness, probe kits) |
 | Graphics and shaders | Vulkan SDK 1.3.296 headers and validation layers, Vulkan Memory Allocator 3.3.0, DXC 1.8.2407 (HLSL to SPIR-V), fxc from the Windows SDK (compiling mod `.fx` sources) |
-| Libraries in the engine | Lua 5.0.2 (vendored), miniaudio 0.11.25, FFmpeg 8.1.3's Bink decoder (built with MSYS2) |
+| Libraries in the engine | Lua 5.0.2 (vendored), miniaudio 0.11.25, FFmpeg 8.1.3's Bink decoder (built with MSYS2), the reference SMAA, AMD FidelityFX SDK 2.4.0 (FSR upscaler DLLs), Intel XeSS SDK 3.0.2 (`libxess.dll`) |
+| Launcher | Rust 1.100 (project-local) with egui / eframe for the Command Center launcher |
 | Reverse engineering (specs only, never engine code) | Ghidra 12.2 (headless decompiler export with project scripts), Python with pefile, Capstone and LIEF for static analysis, DXVK 3.1.1 and apitrace 14.0 for capturing the original's rendering, in-game probe mods and a debugger-based tracer for the running game |
 | Version control | Git (MinGit 2.47, project-local), GitHub and the GitHub CLI |
 
@@ -32,17 +33,26 @@ original game cannot be loaded; all three are out of scope by design.
 feature of your own, you are more than welcome to fork it and add whatever features and systems you like. The code is
 released into the public domain under [the Unlicense](LICENSE).
 
-> **Status (2026-11-13):** active development, playable end to end through its own host, `alamo_game`, and handed
-> out as packaged test builds (the newest on 2026-11-12, with a mod launcher). Simulation, renderer, Lua layer, AI, UI,
-> story and save/load are in place, and **Thrawn's Revenge loads and plays**. Since 2026-11-10 the work is limited to
-> **parity** with the original (rules, data and feel exactly; random-driven outcomes by their distribution over many
-> seeds): land movement and combat were ported in full from the specs (squads, formations, collision decisions, hero
-> clashes), the galactic AI's production and task-force rules now follow the original, the land skirmish AI plays a full
-> game, and the missing HUD and front-end controls found in the test build are being filled in. Open findings go to a
-> triaged backlog instead of growing the plan. Build and test results and task progress are on the project roadmap, kept
-> in its own repository and not in this one; results and notes per phase are in
-> [`docs/PHASE2.md`](docs/PHASE2.md), [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md), and every
-> document is indexed in [`docs/README.md`](docs/README.md).
+> **Status (2026-11-13, evening):** active development, playable end to end through its own host, `alamo_game`, and
+> handed out as packaged test builds (the newest on 2026-11-13, started from the new **Command Center** launcher or a
+> double-click `Play.exe`). Simulation, renderer, Lua layer, AI, UI, story and save/load are in place, and **Thrawn's
+> Revenge loads and plays**. Since 2026-11-10 the work is limited to **parity** with the original (rules, data and feel
+> exactly; random-driven outcomes by their distribution over many seeds): land movement and combat were ported in full
+> from the specs, the galactic AI's production and task-force rules follow the original, and the land skirmish AI plays a
+> full game. A few **named exceptions** were built on 2026-11-13: a reworked graphics and display menu (SMAA / TAA /
+> MSAA, **AMD FSR and Intel XeSS upscaling**, render and UI scale, exclusive full screen), and port features for space
+> battles (fleet groups, fleet cohesion, fighter squadrons of 12, fleet and ship names, unit path lines). Open findings go
+> to a triaged backlog instead of growing the plan.
+>
+> **Tests:** the suite now has **261 tests**. The fast tier (165 tests) passes on the tip of `dev` with 0 warnings. The
+> newest full runs (2026-11-13) have about 20 slow tests failing (game smokes and benchmarks, galactic AI with a human
+> player, two land skirmish seeds and the parity harness), so `dev` is not release-ready yet. The last full gate that
+> passed was on 2026-11-12: 246 tests and 0 warnings on MSVC and on clang, and 67 under the sanitizer.
+>
+> Task tracking is the project roadmap, kept in its own repository and not in this one (1,097 roadmap tasks done and 79
+> open, 145 of 168 groups done). Results and notes per phase are in [`docs/PHASE2.md`](docs/PHASE2.md),
+> [`docs/PHASE3.md`](docs/PHASE3.md) and [`docs/PHASE4.md`](docs/PHASE4.md), and every document is indexed in
+> [`docs/README.md`](docs/README.md).
 
 This repository contains **no game assets and no original code**. You need your own copy of the game (Steam:
 *Star Wars: Empire at War - Forces of Corruption*). Behaviour was recovered by studying the shipped binary and data
@@ -72,8 +82,10 @@ and written up as specs in [`docs/re/`](docs/re/) (about 145 documents) before a
    work over every core, keeps big AI and script updates off single ticks, and drives the GPU through Vulkan.
 4. **Deterministic by design.** The same inputs give the same results on any number of threads, on any run, and on
    both supported compilers. That is what makes saves, replays, parallelism and debugging trustworthy.
-5. **Quality-of-life the original never had.** Smooth motion at any refresh rate, modern anti-aliasing and ambient
-   occlusion, pause on both levels, a free camera, order queues, and built-in profiling tools.
+5. **Quality-of-life the original never had.** Smooth motion at any refresh rate, modern anti-aliasing, upscaling and
+   ambient occlusion, pause on both levels, a free camera, order queues, fleet groups, and built-in profiling tools.
+   Fleet groups are off by default and fleet cohesion defaults to the retail behaviour. The one deliberate rule change
+   (fighter and bomber squadrons of 12, with prices scaled to match) is recorded as a departure from parity.
 
 **Scope.** Windows x64 only, single player. Multiplayer, loading the original game's save files, non-Windows
 platforms and RenderDoc support are deliberately out of scope.
@@ -133,18 +145,26 @@ networking.
 - Presentation-only options never feed the simulation, so turning them on or off cannot change a battle.
 
 ### Graphics and display options
+The options menu has separate **Display** and **Graphics** pages (2026-11-13).
 - **Refresh-rate aware.** The sim ticks at 30 Hz; views interpolate between ticks, so motion is smooth at 60, 144 or
   240 Hz instead of stepping.
-- **V-sync modes:** FIFO, Mailbox (low latency) or off, plus a frame-rate cap (display rate, or 30-240 fps) that works
-  with V-sync on.
-- **Temporal anti-aliasing:** Halton jitter, depth reprojection, per-object motion vectors from a velocity pass, depth-based
-  disocclusion rejection and variance clipping, so movers do not smear.
+- **Display mode:** Fullscreen (exclusive Vulkan full screen, as the original's D3D9 one was), Borderless fullscreen or
+  Windowed. The galactic camera keeps its vertical view and widens on wide screens (Hor+).
+- **V-sync mode** (Off, FIFO, Mailbox) and a **frame-rate cap** (Off, the display's refresh rate, or a custom
+  20-500 fps) that works with V-sync on.
+- **Anti-aliasing**, one choice: Off, **SMAA** (the reference implementation), **TAA** (Halton jitter, depth
+  reprojection, per-object motion vectors, disocclusion rejection and variance clipping, so movers do not smear) or
+  **MSAA 2x / 4x / 8x**.
+- **Upscaling:** **AMD FSR** (FSR 4.1 on GPUs that support it, FSR 3.1 otherwise) or **Intel XeSS** Super Resolution, with
+  a quality list from Native AA to Ultra Performance. Both are loaded at run time; a missing DLL or an unsupported GPU
+  falls back to TAA.
+- **Render scale** (50-100 % of the window's pixels) and **UI scale** (100-500 %, DPI style; 100 % is the original's size
+  on a 1440p screen, and on very large screens past the fitted size only the text grows).
 - **Screen-space ambient occlusion** in land battles (half resolution, depth-aware blur).
 - **Anisotropic filtering** up to 16x.
-- **Auto Detect** in the Video dialogs picks a quality level from the GPU (device memory, discrete or integrated),
-  with anisotropy clamped to what the device supports.
 - **Frame-time overlay** (F11 in game, or `--frame-overlay`): the last 120 sim ticks and host frames against the
   16.7 ms and 33.3 ms lines, with the worst tick's biggest cost.
+- The original's Auto Detect, Widescreen and Hardware Mouse options are gone (the game always draws its own cursor).
 
 ### Controls and camera
 - **Pause** on both the galactic and tactical level, rebindable, and issued through the command stream so replays stay valid.
@@ -152,6 +172,19 @@ networking.
 - **Free tactical camera:** full 360 degree rotation on all axes; W A S D moves by default.
 - **Shift+click order queues:** line up attacks, moves and abilities; a plain click replaces the queue. Queued orders
   are ordinary commands, so they replay deterministically.
+
+### Port features (not in the original)
+Built on 2026-11-13 as named exceptions to the parity focus. Each goes through the command stream, so replays and
+saves carry it.
+- **Fleet groups** (off by default): persistent unit groups in tactical battles, shown inside the selected-unit bar. A
+  locked group keeps its formation, moves at its slowest member's speed and waits for stragglers (hotkeys N, U, Y).
+  Phase 1 is done; phases 2 and 3 are on the backlog.
+- **Fleet cohesion** (hotkey O): Loose (retail, the default) or Tight, where the player's moves cap every non-fighter ship
+  at the slowest one's speed so the fleet keeps its spacing.
+- **Fighter and bomber squadrons of 12**, with build prices and AI combat power scaled to match, and FIGHTERS / BOMBERS
+  wing buttons (F2 / F3) in the tactical HUD. This one departs from the retail rules on purpose.
+- **Fleet and ship names**, renamed in the galactic fleet organiser.
+- **Unit path lines** (optional): a thin line along each own moving unit's path, one per squadron or company.
 
 ### Interface
 - The original menus and HUD, drawn from the original dialog data, fonts and art.
@@ -165,8 +198,9 @@ networking.
 - **Galactic HUD:** hero roster, build-pad prices and the reason a build is blocked, map filters and planet-label icons,
   on-screen galactic messages and announcer events.
 - **Front end and options:** key rebinding (clear, conflict prompt, apply prompt), drop-down, list and edit-box
-  behaviour with selection and the Windows clipboard, full screen or windowed, the game's cursor art as the hardware
-  mouse, and options kept between runs.
+  behaviour with selection and the Windows clipboard, and options kept between runs.
+- **Save and load dialogs** list saves as a tree (map, faction with its emblem, playthrough), each save showing its week
+  and when it was saved. A new campaign opens the mission holocron by itself.
 
 ### Save and load
 - The port's own compact format: a Forces of Corruption story save is about 50-60 KB, a mid-battle save about 150 KB.
@@ -195,8 +229,12 @@ networking.
   timings, income, AI choices, damage and battle outcomes against tolerances taken from several retail runs; the result is
   kept as a baseline that is re-recorded, like a golden, when an intended behaviour change moves a metric. A
   distribution mode compares random-driven outcomes over many seeds against several retail captures.
-- **Test builds** (`tools/testbuild/`): packages the game with launchers for the base game and for any installed mod
-  (workshop or local, submods stacked on the mod they need), each mod with its own saves, shader cache and log.
+- **Command Center launcher** (`launcher/`, Rust and egui, built by `build_launcher.cmd`): starts `alamo_game` with
+  profiles, mods and Workshop items, saves, graphics options and diagnostics. It is a separate program that never links
+  engine code.
+- **Test builds** (`tools/testbuild/`): packages the game with the Command Center, a double-click `Play.exe` that finds
+  the game install by itself, and launchers for the base game and for any installed mod (workshop or local, submods
+  stacked on the mod they need), each mod with its own saves, shader cache and log.
 
 ---
 
@@ -269,10 +307,10 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 - **Two compilers in the loop.** MSVC ships; clang 20 checks (extra warnings: `-Wconversion -Wshadow`) and provides a
   second compiler for determinism. Sim changes get both; threading changes also run under a clang sanitizer.
 - **Zero warnings** at MSVC `/W4 /permissive-` and clang `-Wall -Wextra -Wpedantic -Wconversion -Wshadow`.
-- **246 tests** in the newest full gate (2026-11-12), on each of MSVC and clang (sanitizer build: 67 sim-module
-  tests), plus golden-file checks of whole battles and campaigns, each compared across worker counts. Goldens store a
-  checkpoint every 64 ticks, so a behaviour change is a small diff. The full suite takes about 4 minutes on the
-  development PC; slow tests carry a label so quick iteration can skip them.
+- **261 tests** on each of MSVC and clang (the last passing full gate, on 2026-11-12, had 246, plus 67 sim-module
+  tests under the sanitizer), with golden-file checks of whole battles and campaigns, each compared across worker counts.
+  Goldens store a checkpoint every 64 ticks, so a behaviour change is a small diff. The full suite takes about 4 minutes
+  on the development PC; slow tests carry a label, and the 165-test fast tier is what quick iteration and landing run.
 - **Pre-merge gate** (`build_gate.cmd`): MSVC, clang and sanitizer builds, each recorded on the roadmap. A nightly
   gate runs on the tip of `dev`. Landing on `dev` (`tools\land_on_dev.cmd`) first merges `dev` in and refuses a merged
   result without a passing MSVC build and fast-tier test run, so `dev` is never pushed red; an identical failing rerun is
@@ -288,11 +326,12 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
   become work only when picked. Parity groups (Stage 6) keep their follow-ups as their own tasks.
 - **Clean-room.** Engine code is written from the specs in `docs/re/`, never from decompiled output, which is kept out of
   the engine tree.
-- **Project-local toolchain.** MSVC 14.51, Windows SDK, CMake, Ninja, DXC, LLVM and FFmpeg's Bink decoder live under
+- **Project-local toolchain.** MSVC 14.51, Windows SDK, CMake, Ninja, DXC, LLVM, Rust and FFmpeg's Bink decoder live under
   `toolchain\` with pinned versions and hashes. Nothing is installed system-wide.
 - **Third-party code** in `engine/` is limited to approved dependencies: Vulkan-Headers, DXC, VMA, Lua 5.0.2 (vendored,
-  original semantics), miniaudio and FFmpeg's Bink decoder (LGPL, dynamically linked).
-- About **430,000 lines** of C++ in `engine/` (tests included), across 21 modules plus a shared test-support library.
+  original semantics), miniaudio, FFmpeg's Bink decoder (LGPL, dynamically linked), the reference SMAA, and the AMD
+  FidelityFX (FSR) and Intel XeSS runtime DLLs (loaded at run time, optional).
+- About **437,000 lines** of C++ in `engine/` (tests included), across 21 modules plus a shared test-support library.
 
 ---
 
@@ -307,13 +346,20 @@ worker count so the counts run side by side. Clang's logs equal MSVC's.
 | Galactic AI parity (A2, AIVIEW) | **Done** (2026-11-12): free-store claims, build-queue slots, budget, goal cadence and task-force rules follow the original; Shola attack timing matches retail in 11 of 12 seeds. Remaining tier-2 metrics are worked from the backlog |
 | Land skirmish AI and Capture Control Points | The land AI builds its base, charges its pads and plays to the end; control-point skirmish and its announcer are in. Open: Imperial self-repair in long idle games, and a foc-land seed that does not end in time |
 | Parity check against the original (Q4) | **Harness built** (`tools/parity/`) with a baseline from several retail runs and a many-seed distribution mode. Open: the Geonosis skirmish, where the port's Rebel AI attacks about a minute early, and the final Q4 run |
-| Interface gaps from the 2026-11-12 test build (UI1-UI5) | **Mostly done** (2026-11-13): tactical and galactic HUD controls, cursor, key rebinding, list / combo / edit widgets, clipboard, full screen; a few items per group left, and the generic UI art and font pass (UI2) is not started |
+| Interface gaps from the 2026-11-12 test build (UI1, UI3-UI5) | **Mostly done** (2026-11-13): tactical and galactic HUD controls, cursor, key rebinding, list / combo / edit widgets, clipboard, full screen. Left: install-language detection, unit-cap and under-attack feedback in the tactical HUD, the FoC planet map and fleet route preview, UI sounds and a few dialog details |
+| Story and tutorial presentation (UI2) | **Not started**: story text rewards, tutorial pointers and flashes, the story cinematic camera and screen fades |
 | Story campaigns end to end | Event system, linked tactical battles, victory handling and corruption missions in; map hints now load, so the Kessel mission script runs further; Kessel story parity checks remain |
+| Animation-driven gameplay (R3g, R3h) | **Open**: reinforcement transport landing timing, AT-AT troop deployment, structures that spawn squadrons, tow cables, and ability and hero-clash clips |
+| Graphics and display menu (2026-11-13) | **Built**: separate Display and Graphics pages, display modes with exclusive full screen, SMAA / TAA / MSAA, FSR and XeSS upscaling, render and UI scale, custom frame-rate cap. Waiting for Gabriel's in-game look at the anti-aliasing and upscaler modes |
+| Port features (2026-11-13) | **Built**: fleet groups phase 1, fleet cohesion, squadrons of 12 with wing buttons, fleet and ship names, unit path lines. Waiting for in-game checks; fleet groups phases 2-3 are on the backlog |
+| Command Center launcher | **In the repository** (`launcher/`, imported 2026-11-13) and shipped with the test build |
+| Full test suite | Fast tier passes on `dev`; about 20 slow tests fail in the newest full runs (game smokes and benchmarks, galactic AI with a human player, land skirmish seeds 2 and 4, the parity harness), so the full gate has not passed since 2026-11-12 |
 | Mod diagnostics (Q5) | Done |
 | Thrawn's Revenge (Q6) | **Plays**: the mod loads with no loader diagnostics, its skirmish, land and campaign smoke runs pass, and its galactic AI plays. 2026-11-13: an event-driven galactic victory monitor (the mod's campaign menu holds and grants victory), base-game objects run their Lua scripts, and map hint names reach Lua. Left: two map-hint details and a final re-check after the parity check |
 | Mod platform (MODC) | **In progress**; the goal was widened on 2026-11-13 to near-full compatibility with FoC mods, checked on a reference set of four mods (`docs/MODS.md` §10). Done so far: the loading contract (`docs/MODS.md`), a lint against mod and faction names in engine code, the mod load report, a `STEAMMOD=` resolver, a mod picker in the game UI, shader model 3 translation, compiling mod `.fx` sources, and a synthetic fixture mod in the tests; two non-TR workshop mods load, start skirmishes and run galactic-AI sessions headless. Left: the §10 checklist on every reference mod, Gabriel playing a second mod in game, the game's front end with other mods, shader model 3 leftovers, an automatic `.fx` prebuild, field-schema and load-report fixes, and picker polish |
 | Performance (OPT1-OPT3) | **Paused** (tier 3): p99 budget met everywhere; the first tick of a battle (setup) is still over 33.3 ms (group OPT3f, parked) |
-| Benchmark (side goal) | BM1-BM3 and their follow-ups done (scenarios, sim-only and rendered runs, stress scenes, reports); the in-game screen (BM4) is open |
+| Full QA pass | **Open**: a playtest to confirm what only tests and smoke shots have covered, and a fresh 4K capture pass over galactic, land, space and menus |
+| Benchmark (side goal) | BM1-BM3 and their follow-ups done (scenarios, sim-only and rendered runs, stress scenes, reports); the in-game screen (BM4) is in progress on a branch, not on `dev` yet |
 | First-person and captain's view (side goals) | Planned |
 
 The detail, task by task, is on the project roadmap, which is kept in its own repository (not this one) and is the only place for status.
@@ -335,7 +381,7 @@ build_gate.cmd        :: MSVC + clang + sanitizer gate used before merging
 build_module.cmd      :: build and test one module (or a ;-separated list)
 build_agent.cmd       :: fast tier of tests only, for quick iteration ("changed" = only the changed modules)
 bench_msvc.cmd        :: re-run the profiler scenarios
-build_launcher.cmd    :: the Command Center launcher (Rust, launcher\)
+build_launcher.cmd    :: the Command Center launcher (Rust; not part of the engine gates)
 ```
 
 Data-driven tests read `ALAMO_FOC_DATA` and `ALAMO_EAW_DATA` (folders containing `Data\XML`). The build scripts default
@@ -358,6 +404,7 @@ alamo_render.exe                    :: renderer test app
 | Path | What |
 |---|---|
 | `engine/` | The engine, one static library per module: `core`, `vfs`, `data`, `jobs`, `galactic`, `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render`, `objects`, `tactical`, `ai`, `lua`, `anim`, `commands`, `audio`, `video`, `ui`, `apps`, plus `test_support` (shared test helpers) |
+| `launcher/` | The Command Center launcher (Rust / egui), a separate program that starts `alamo_game.exe` |
 | `tools/` | MEG archive tool, format readers, shader tools, in-game probe kits and trace recorder (`probe_mod/`), benchmark runner (`benchmark/`), golden regeneration, worktree and landing scripts, analysis scripts, the parity harness (`parity/`), visual diff, lint and build-summary scripts |
 | `docs/` | All documentation, indexed in [`docs/README.md`](docs/README.md): decisions, build and test, performance, probes, phase results, behaviour specs recovered from the original (`docs/re/`), asset, format and shader specs |
 | `tests/` | Screenshot baselines for visual regression (`visual_baselines/`) and benchmark scenarios (`benchmark/`) |
@@ -379,4 +426,7 @@ of the game to use it. This repository contains no game assets and no original c
 The project's own code and documentation are released into the public domain under [the Unlicense](LICENSE). This does
 not cover the game, its assets or its trademarks. Third-party libraries keep their own licenses: Lua 5.0.2 (MIT), miniaudio (public
 domain or MIT No Attribution), Vulkan Memory Allocator (MIT), Vulkan-Headers (Apache 2.0 or MIT), DXC (LLVM Release License and
-MIT; the prebuilt `dxil.dll` is under Microsoft's own license terms) and FFmpeg's Bink decoder (LGPL 2.1 or later, loaded as separate DLLs that ship with their license text).
+MIT; the prebuilt `dxil.dll` is under Microsoft's own license terms), FFmpeg's Bink decoder (LGPL 2.1 or later, loaded as separate DLLs that ship with their license text), the reference SMAA (MIT), the AMD FidelityFX SDK (MIT) and the Intel XeSS SDK (Intel Simplified Software License; the unmodified
+`libxess.dll` ships with its notice). The Command Center launcher's Rust crates keep their own licenses, and the
+`steam_api64.dll` shipped next to it is Valve's, under the Steamworks SDK Access Agreement; the test build lists all of
+them in `THIRD_PARTY_NOTICES.txt`.

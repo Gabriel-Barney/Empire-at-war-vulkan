@@ -388,7 +388,6 @@ fn diagnostics_state(ctx: &egui::Context) -> Arc<Mutex<Diagnostics>> {
 fn diagnostics_input(app: &App, report: Option<&Report>) -> diagnostics::Input {
     let profile = app.cfg.active();
     let ws = app.mods_ui.workshop();
-    let connected = ws.is_connected();
     let workshop_dir = app.steam.workshop_dir.as_deref();
     let mods = profile
         .mods
@@ -396,8 +395,10 @@ fn diagnostics_input(app: &App, report: Option<&Report>) -> diagnostics::Input {
         .map(|path| {
             // Only folders inside Steam's Workshop content folder are Steam's to keep current.
             let id = profiles::workshop_item_of(path, workshop_dir);
-            let steam = id.filter(|id| connected && ws.is_subscribed(*id)).map(|id| {
-                let s = ws.item_status(id);
+            // Only while Steam is fetching it (its download folder exists): everything else
+            // the diagnostics read from Steam's record themselves.
+            let fetching = id.map(|id| ws.item_status(id)).filter(|s| s.downloading && s.bytes_done > 0);
+            let steam = fetching.map(|s| {
                 diagnostics::SteamItem {
                     installed: s.installed,
                     needs_update: s.needs_update,
@@ -412,7 +413,6 @@ fn diagnostics_input(app: &App, report: Option<&Report>) -> diagnostics::Input {
         game_exe: app.cfg.settings.game_exe.clone(),
         foc: mods::foc_dir(&app.steam, &app.cfg.settings),
         mods,
-        steam_connected: connected,
         workshop_acf: workshop_dir.and_then(diagnostics::workshop_acf_path),
         saves_dir: app.saves_dir(),
         video_preset: profile

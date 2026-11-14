@@ -1,7 +1,7 @@
 @echo off
 rem Build and test the Command Center launcher (launcher\, Rust) with the project-local toolchain.
 rem Separate from the CMake engine build: build_msvc / build_clang / build_gate do not build it.
-rem Output: launcher\target\release\command-center.exe (+ steam_api64.dll). Log: logs\launcher_build.txt
+rem Output: launcher\target\release\command-center.exe. Log: logs\launcher_build.txt
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 if not exist logs mkdir logs

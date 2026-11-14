@@ -6,7 +6,7 @@ use crate::config::{mod_key, Config};
 use crate::mods::{self, ModInfo, ModSource, Sizes};
 use crate::steam::same_path;
 use crate::theme::{self, icon};
-use crate::workshop::{self, ItemStatus, LocalState, Notice, Sort, Status, Workshop};
+use crate::workshop::{self, ItemStatus, LocalState, Notice, Sort, Workshop};
 use egui::{
     pos2, vec2, Align, Align2, Button, Color32, CornerRadius, FontFamily, FontId, Layout, Margin, Rect, Response,
     RichText, Sense, Stroke, Ui,
@@ -422,8 +422,9 @@ pub fn background(app: &mut App, ctx: &egui::Context) {
     app.mods_ui = st;
 }
 
-/// Takes in what Steam reported since the last frame.
+/// Takes in what Steam's records and web API reported since the last frame.
 fn tick(app: &mut App, st: &mut State, ctx: &egui::Context) {
+    st.ws.configure(ctx, app.steam.workshop_dir.as_deref(), &app.cfg.settings.steam_web_api_key);
     for notice in st.ws.poll(ctx) {
         match notice {
             Notice::Error(e) => app.err(e),
@@ -436,9 +437,7 @@ fn tick(app: &mut App, st: &mut State, ctx: &egui::Context) {
             Notice::TitlesChanged => mods::apply_workshop_titles(&mut app.mods, st.ws.titles()),
         }
     }
-    if !st.ws.is_connected() {
-        st.titles_asked = false;
-    } else if !st.titles_asked {
+    if !st.titles_asked {
         // Installed Workshop mods that don't name themselves: ask Steam what they're called.
         st.titles_asked = true;
         let ids: Vec<u64> = app
@@ -466,14 +465,8 @@ fn steam_time(local: Option<&LocalState>, m: &ModInfo) -> i64 {
     steam_id(m).and_then(|id| local?.item(id)).map_or(0, |item| item.time_updated)
 }
 
-/// Whether a newer version than the installed one exists: Steam's live answer while the
-/// launcher is connected, else what Steam's records on this PC say.
-fn update_available(ws: &Workshop, local: Option<&LocalState>, id: u64) -> bool {
-    if ws.is_connected() {
-        if let Some(status) = ws.known_status(id) {
-            return status.installed && status.needs_update;
-        }
-    }
+/// Whether a newer version than the installed one exists, by Steam's records on this PC.
+fn update_available(local: Option<&LocalState>, id: u64) -> bool {
     local.and_then(|l| l.item(id)).is_some_and(|item| item.update_available())
 }
 
@@ -648,12 +641,8 @@ fn listing_key(app: &App, st: &State) -> u64 {
         (p.id, &p.name, &p.mods).hash(&mut h);
     }
     (&cfg.mod_names, &cfg.mod_favourites, &cfg.mod_tags, &cfg.mod_last_used).hash(&mut h);
-    let connected = st.ws.is_connected();
-    connected.hash(&mut h);
-    if connected {
-        for id in app.mods.iter().filter_map(steam_id) {
-            st.ws.known_status(id).map(|s| (s.installed, s.needs_update)).hash(&mut h);
-        }
+    for id in app.mods.iter().filter_map(steam_id) {
+        st.ws.known_status(id).map(|s| (s.installed, s.needs_update, s.downloading)).hash(&mut h);
     }
     h.finish()
 }
@@ -726,7 +715,7 @@ fn build_listing(app: &App, st: &State, key: u64) -> Listing {
             updated: if steam_updated > 0 { steam_updated } else { measured.map_or(0, |x| x.newest) },
             updated_by_steam: steam_updated > 0,
             last_used: cfg.mod_last_used.get(&key).copied().unwrap_or(0),
-            update_available: steam.is_some_and(|id| update_available(&st.ws, local, id)),
+            update_available: steam.is_some_and(|id| update_available(local, id)),
             change: st.seen.as_ref().and_then(|seen| seen.get(&key)?.changed.clone()),
             key,
         });
@@ -1143,18 +1132,13 @@ fn mod_card(
                         if let Some(status) = status {
                             state_chip(ui, &status, false);
                         } else if e.update_available {
-                            let chip = theme::chip(ui, "Update available", theme::WARN);
-                            if ws.is_connected() {
-                                chip.on_hover_text("Steam has a newer version of this mod than the one installed.");
-                                let link =
-                                    Button::new(RichText::new("Update now").size(12.0).color(theme::ACCENT_HI)).frame(false);
-                                if ui.add(link).clicked() {
-                                    act = Some(Act::Download(id));
-                                }
-                            } else {
-                                chip.on_hover_text(
-                                    "Steam's records on this PC show a newer version than the one installed.\nConnect to Steam on the Workshop tab to update it from here, or let the Steam client update it.",
-                                );
+                            theme::chip(ui, "Update available", theme::WARN).on_hover_text(
+                                "Steam's records on this PC show a newer version than the one installed. Steam updates it on its own while the game isn't running.",
+                            );
+                            let link =
+                                Button::new(RichText::new("Update in Steam").size(12.0).color(theme::ACCENT_HI)).frame(false);
+                            if ui.add(link).on_hover_text("Opens Steam's Downloads page").clicked() {
+                                act = Some(Act::Download(id));
                             }
                         }
                     }
@@ -1206,104 +1190,24 @@ fn mod_card(
 // ------------------------------------------------------------------ workshop
 
 fn workshop_tab(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Act> {
-    match st.ws.status().clone() {
-        Status::Connected => connected(app, st, ui),
-        status => {
-            not_connected(app, st, ui, &status);
-            None
-        }
-    }
-}
-
-/// The two things that work without a Steam connection.
-fn steam_links(app: &mut App, st: &mut State, ui: &mut egui::Ui) {
-    if theme::button(ui, &format!("{}  Browse the Workshop in Steam", icon::GLOBE)).clicked() {
-        if let Err(e) = workshop::open_workshop_home() {
-            app.err(e);
-        }
-    }
-    if theme::button(ui, "Open a Workshop item…").clicked() {
-        st.open_item = Some(String::new());
-        st.open_item_focus = true;
-    }
-}
-
-fn not_connected(app: &mut App, st: &mut State, ui: &mut egui::Ui, status: &Status) {
-    egui::ScrollArea::vertical().id_salt("ws_offline").auto_shrink([false, false]).show(ui, |ui| {
-        theme::card(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(30.0);
-                ui.label(RichText::new(icon::GLOBE).size(34.0).color(theme::FAINT));
-                ui.add_space(4.0);
-                ui.label(theme::title("Steam Workshop"));
-                ui.label(theme::muted(
-                    "Connect to see the mods you are subscribed to, and to find and subscribe to new ones without leaving the launcher.",
-                ));
-                ui.add_space(10.0);
-                match status {
-                    Status::Connecting => {
-                        ui.add(egui::Spinner::new().size(18.0));
-                        ui.label(theme::muted("Connecting to Steam…"));
-                    }
-                    Status::Failed(failure) => {
-                        ui.label(RichText::new(format!("{}  {}", icon::WARNING, failure.reason)).color(theme::BAD));
-                        if !failure.detail.is_empty() {
-                            ui.label(theme::faint(&failure.detail));
-                        }
-                        ui.add_space(4.0);
-                        if theme::primary_button(ui, "Retry").clicked() {
-                            st.ws.connect(ui.ctx());
-                        }
-                    }
-                    _ => {
-                        if theme::primary_button(ui, "Connect to Steam").clicked() {
-                            st.ws.connect(ui.ctx());
-                        }
-                    }
-                }
-                ui.add_space(6.0);
-                ui.label(theme::faint("While the launcher is connected, Steam shows Empire at War as running."));
-                ui.add_space(30.0);
-            });
-        });
-        ui.add_space(14.0);
-        theme::card(ui, |ui| {
-            theme::overline(ui, "Without connecting");
-            ui.label(theme::muted(
-                "These open in the Steam client. Mods you subscribe to there appear under Installed after a rescan.",
-            ));
-            ui.add_space(2.0);
-            ui.horizontal(|ui| steam_links(app, st, ui));
-        });
-        ui.add_space(24.0);
-    });
-}
-
-fn connected(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Act> {
     let subscribed_label = match st.ws.subscribed() {
         Some(ids) => format!("Subscribed  {}", ids.len()),
         None => "Subscribed".to_owned(),
     };
-    let mut disconnect = false;
     ui.horizontal(|ui| {
         segmented(ui, &mut st.ws_tab, &[(WsTab::Subscribed, subscribed_label), (WsTab::Browse, "Browse".to_owned())]);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if theme::button(ui, "Disconnect").clicked() {
-                disconnect = true;
+            if theme::button(ui, "Open a Workshop item…").clicked() {
+                st.open_item = Some(String::new());
+                st.open_item_focus = true;
             }
             if theme::icon_button(ui, icon::GLOBE, "Browse the Workshop in Steam").clicked() {
                 if let Err(e) = workshop::open_workshop_home() {
                     app.err(e);
                 }
             }
-            theme::chip(ui, "Connected to Steam", theme::GOOD)
-                .on_hover_text("While the launcher is connected, Steam shows Empire at War as running.");
         });
     });
-    if disconnect {
-        st.ws.disconnect();
-        return None;
-    }
     match st.ws_tab {
         WsTab::Subscribed => subscribed_tab(app, st, ui),
         WsTab::Browse => browse_tab(app, st, ui),
@@ -1313,12 +1217,21 @@ fn connected(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Act> {
 fn subscribed_tab(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Act> {
     let Some(mut ids) = st.ws.subscribed().map(<[u64]>::to_vec) else {
         theme::card(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(36.0);
-                ui.add(egui::Spinner::new().size(18.0));
-                ui.label(theme::muted("Asking Steam for your subscriptions…"));
-                ui.add_space(36.0);
-            });
+            if app.steam.workshop_dir.is_none() {
+                theme::empty_state(
+                    ui,
+                    icon::WARNING,
+                    "Steam's Workshop folder wasn't found",
+                    "Subscriptions are read from Steam's records on this PC. Subscribe to a mod in Steam (or check Settings > Detection), then come back.",
+                );
+            } else {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(36.0);
+                    ui.add(egui::Spinner::new().size(18.0));
+                    ui.label(theme::muted("Reading Steam's records…"));
+                    ui.add_space(36.0);
+                });
+            }
         });
         return None;
     };
@@ -1330,7 +1243,7 @@ fn subscribed_tab(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Ac
         let count = if ids.len() == 1 { "1 subscription".to_owned() } else { format!("{} subscriptions", ids.len()) };
         ui.label(theme::faint(format!("{count} · adding to profile \"{profile_name}\"")));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if theme::icon_button(ui, icon::REFRESH, "Ask Steam again").clicked() {
+            if theme::icon_button(ui, icon::REFRESH, "Read Steam's records again").clicked() {
                 st.ws.refresh_subscribed();
             }
         });
@@ -1344,7 +1257,7 @@ fn subscribed_tab(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Ac
                     ui,
                     icon::LIBRARY,
                     "No subscriptions yet",
-                    "Find mods under Browse. Subscribing downloads them and adds them to Installed.",
+                    "Find mods under Browse and subscribe to them in Steam. Steam downloads them, and they appear here and under Installed.",
                 );
                 ui.vertical_centered(|ui| {
                     if theme::primary_button(ui, "Browse the Workshop").clicked() {
@@ -1367,7 +1280,60 @@ fn subscribed_tab(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Ac
     act
 }
 
+/// Browse without a Steam Web API key: Steam answers searches only with one, so the search
+/// opens in the Steam client instead.
+fn browse_in_steam(app: &mut App, st: &mut State, ui: &mut egui::Ui) {
+    let mut go = false;
+    egui::ScrollArea::vertical().id_salt("ws_browse_steam").auto_shrink([false, false]).show(ui, |ui| {
+        theme::card(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.label(RichText::new(icon::SEARCH).size(30.0).color(theme::FAINT));
+                ui.add_space(4.0);
+                ui.label(theme::title("Search the Workshop in Steam"));
+                ui.label(theme::muted(
+                    "The search opens in the Steam client, where you can subscribe. Mods you subscribe to show up under Subscribed and Installed once Steam has them.",
+                ));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut st.browse_text)
+                            .desired_width(260.0)
+                            .hint_text(format!("{}  Search the Workshop", icon::SEARCH)),
+                    );
+                    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        go = true;
+                    }
+                    egui::ComboBox::from_id_salt("ws_sort_steam").selected_text(st.browse_sort.label()).show_ui(ui, |ui| {
+                        for sort in Sort::ALL {
+                            ui.selectable_value(&mut st.browse_sort, sort, sort.label());
+                        }
+                    });
+                    if theme::primary_button(ui, "Search in Steam").clicked() {
+                        go = true;
+                    }
+                });
+                ui.add_space(8.0);
+                ui.label(theme::faint(
+                    "To search inside the launcher, add your own Steam Web API key under Settings > Steam Workshop.",
+                ));
+                ui.add_space(24.0);
+            });
+        });
+        ui.add_space(24.0);
+    });
+    if go {
+        if let Err(e) = workshop::open_search_in_steam(&st.browse_text, st.browse_sort) {
+            app.err(e);
+        }
+    }
+}
+
 fn browse_tab(app: &mut App, st: &mut State, ui: &mut egui::Ui) -> Option<Act> {
+    if !st.ws.can_search() {
+        browse_in_steam(app, st, ui);
+        return None;
+    }
     if !st.ws.browse().started {
         st.ws.search(&st.browse_text, st.browse_sort, 1);
     }
@@ -1494,7 +1460,8 @@ fn pager(ui: &mut Ui, browse: &workshop::Browse) -> Option<u32> {
 
 fn state_chip(ui: &mut Ui, status: &ItemStatus, busy: bool) {
     if busy {
-        theme::chip(ui, "Working…", theme::MUTED);
+        theme::chip(ui, "Waiting for Steam…", theme::MUTED)
+            .on_hover_text("The item's page is open in Steam. The launcher sees the change once Steam records it.");
     } else if status.downloading {
         match status.percent() {
             Some(p) => theme::chip(ui, format!("Downloading {p}%"), theme::ACCENT_HI),
@@ -1638,8 +1605,9 @@ fn workshop_card(
                         theme::chip(ui, "In profile", theme::GOOD);
                     }
                     if status.subscribed && status.needs_update && !status.downloading && !busy {
-                        let link = Button::new(RichText::new("Update now").size(12.0).color(theme::ACCENT_HI)).frame(false);
-                        if ui.add(link).clicked() {
+                        let link =
+                            Button::new(RichText::new("Update in Steam").size(12.0).color(theme::ACCENT_HI)).frame(false);
+                        if ui.add(link).on_hover_text("Opens Steam's Downloads page").clicked() {
                             act = Some(Act::Download(id));
                         }
                     }
@@ -1649,15 +1617,17 @@ fn workshop_card(
 
                 ui.horizontal(|ui| {
                     if busy {
-                        ui.add_enabled(false, Button::new("Working…").corner_radius(CornerRadius::same(8)));
+                        ui.add_enabled(false, Button::new("Waiting for Steam…").corner_radius(CornerRadius::same(8)));
                     } else if !status.subscribed {
-                        if theme::primary_button(ui, "Subscribe").clicked() {
+                        let button = theme::primary_button(ui, "Subscribe in Steam")
+                            .on_hover_text("Opens the item's page in Steam: press Subscribe there.");
+                        if button.clicked() {
                             act = Some(Act::Subscribe(id));
                         }
                     } else if status.downloading {
                         download_progress(ui, &status);
                     } else if mode == WsTab::Browse {
-                        if theme::button(ui, "Unsubscribe").clicked() {
+                        if theme::button(ui, "Unsubscribe in Steam").clicked() {
                             act = Some(Act::AskUnsubscribe(id));
                         }
                     } else if let Some(f) = &folder {
@@ -1668,7 +1638,7 @@ fn workshop_card(
                         } else if theme::primary_button(ui, "Add to profile").clicked() {
                             act = Some(Act::Add(f.clone()));
                         }
-                    } else if theme::primary_button(ui, "Download").clicked() {
+                    } else if theme::primary_button(ui, "Download in Steam").on_hover_text("Opens Steam's Downloads page").clicked() {
                         act = Some(Act::Download(id));
                     }
 
@@ -1676,7 +1646,7 @@ fn workshop_card(
                         ui.spacing_mut().item_spacing.x = 2.0;
                         if mode == WsTab::Subscribed {
                             ui.add_enabled_ui(!busy, |ui| {
-                                if theme::icon_button(ui, icon::DELETE, "Unsubscribe").clicked() {
+                                if theme::icon_button(ui, icon::DELETE, "Unsubscribe in Steam").clicked() {
                                     act = Some(Act::AskUnsubscribe(id));
                                 }
                             });
@@ -1983,7 +1953,7 @@ fn unsubscribe_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
         ui.set_width(440.0);
         ui.label(theme::title(format!("Unsubscribe from {title}?")));
         ui.label(theme::muted(
-            "Steam removes the mod's files from this PC, which can wait until the launcher disconnects. Profiles that list the mod will show it as missing.",
+            "The item's page opens in Steam: press Unsubscribe there. Steam then removes the mod's files from this PC, and profiles that list the mod will show it as missing.",
         ));
         if !used_by.is_empty() {
             ui.label(RichText::new(format!("{}  Used by: {}", icon::WARNING, used_by.join(", "))).color(theme::WARN));
@@ -1991,7 +1961,7 @@ fn unsubscribe_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if theme::danger_button(ui, "Unsubscribe").clicked() {
+                if theme::danger_button(ui, "Open in Steam").clicked() {
                     confirm = true;
                 }
                 if theme::button(ui, "Cancel").clicked() {
@@ -2002,11 +1972,7 @@ fn unsubscribe_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
     });
 
     if confirm {
-        if st.ws.is_connected() {
-            st.ws.unsubscribe(id);
-        } else {
-            app.err("Not connected to Steam any more.");
-        }
+        st.ws.unsubscribe(id);
         st.unsubscribe = None;
     } else if cancel || modal.should_close() {
         st.unsubscribe = None;

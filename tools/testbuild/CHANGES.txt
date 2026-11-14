@@ -20,8 +20,9 @@ How to run
                  Or drag a mod folder (the one holding its Data folder) onto Play_Mod.cmd.
 - command-center.exe   The Command Center launcher (new): profiles, mods and Steam Workshop
                  items, saves, graphics options, unit data, the campaign map and diagnostics in one
-                 window. It starts alamo_game.exe from this folder. Keep steam_api64.dll next to it
-                 (Workshop pages need Steam running; the rest works without it).
+                 window. It starts alamo_game.exe from this folder. Subscribing, unsubscribing and
+                 updating open the item in the Steam client; searching the Workshop opens in Steam
+                 too, unless you add your own Steam Web API key under Settings.
 - In the game: the main menu's Mods button lists the same mods, checks the one you select and
   restarts the game with it.
 
@@ -88,7 +89,7 @@ Changes since the 2026-11-13 render scale build
 - Fighter / bomber squadrons of 12, wing select buttons and F2 / F3.
 - Fleet cohesion (O), unit path lines option, fleet and ship names, saved games tree.
 - Fleet groups, phase 1 (off by default, see What to try).
-- Command Center launcher (command-center.exe, steam_api64.dll) is part of the zip.
+- Command Center launcher (command-center.exe) is part of the zip.
 
 Changes in the earlier 2026-11-13 builds (since 2026-11-12)
 -----------------------------------------------------------

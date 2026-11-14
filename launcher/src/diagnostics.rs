@@ -132,7 +132,8 @@ pub fn quick(game_exe: Option<&Path>, foc: Option<&Path>, mods: &[PathBuf]) -> V
 
 // ------------------------------------------------------------------ input
 
-/// What a live Steam connection says about a Workshop item.
+/// What the launcher sees of a Workshop item Steam is fetching right now (its folder in
+/// Steam's download area).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SteamItem {
     pub installed: bool,
@@ -148,7 +149,7 @@ pub struct ModEntry {
     pub path: PathBuf,
     /// Set for mods Steam manages: the ones inside the Workshop content folder.
     pub workshop_id: Option<u64>,
-    /// Only while the launcher is connected to Steam and Steam has reported the item.
+    /// Only while Steam is downloading the item; otherwise Steam's record on disk is read.
     pub steam: Option<SteamItem>,
 }
 
@@ -158,7 +159,6 @@ pub struct Input {
     pub foc: Option<PathBuf>,
     /// The profile's mods in load order.
     pub mods: Vec<ModEntry>,
-    pub steam_connected: bool,
     /// `...\steamapps\workshop\appworkshop_32470.acf`, Steam's own record of Workshop items.
     pub workshop_acf: Option<PathBuf>,
     pub saves_dir: Option<PathBuf>,
@@ -478,8 +478,8 @@ fn check_workshop(input: &Input, out: &mut Vec<Finding>) {
         n => format!("All {n} Workshop mods are"),
     };
 
-    // Steam's live answer where there is one; otherwise its own record on disk. (A live
-    // connection only reports on items the account is subscribed to.)
+    // What the launcher sees of a download in progress where there is one; otherwise
+    // Steam's own record on disk.
     let need_record = managed.iter().any(|(m, _)| m.steam.is_none());
     let acf = if need_record {
         input.workshop_acf.as_deref().and_then(|p| parse_workshop_acf(&std::fs::read_to_string(p).ok()?))
@@ -522,27 +522,22 @@ fn check_workshop(input: &Input, out: &mut Vec<Finding>) {
     }
 
     if unknown > 0 {
-        let detail = if input.steam_connected {
-            "Steam hasn't reported on every Workshop mod in the profile, and its record of Workshop items on disk couldn't be read. Run the diagnostics again in a moment."
-        } else {
-            "Steam's record of Workshop items couldn't be read. Connect to Steam on the Mods page to see whether the profile's Workshop mods are fully downloaded."
-        };
-        out.push(Finding::warn("Workshop downloads weren't checked", detail, Some(Fix::OpenMods)));
-    } else if acf.as_ref().is_some_and(|a| a.needs_download) && !input.steam_connected {
+        out.push(Finding::warn(
+            "Workshop downloads weren't checked",
+            "Steam's record of Workshop items on this PC couldn't be read, so whether the profile's Workshop mods are fully downloaded is unknown. Run the diagnostics again in a moment.",
+            Some(Fix::OpenMods),
+        ));
+    } else if acf.as_ref().is_some_and(|a| a.needs_download) {
         out.push(Finding::warn(
             "Steam has Workshop downloads waiting",
             "Steam's record for the game says Workshop content is waiting to be downloaded. Let Steam finish before playing.",
             Some(Fix::OpenMods),
         ));
     } else if problems == 0 {
-        let source = if !need_record {
-            "says Steam.".to_owned()
-        } else if input.steam_connected {
-            "according to Steam and its record on disk.".to_owned()
-        } else {
-            "according to Steam's record on disk. Connect to Steam on the Mods page for live download status.".to_owned()
-        };
-        out.push(Finding::ok("Workshop mods are downloaded", format!("{count} installed and current, {source}")));
+        out.push(Finding::ok(
+            "Workshop mods are downloaded",
+            format!("{count} installed and current, according to Steam's record on disk."),
+        ));
     }
 }
 
@@ -975,8 +970,7 @@ mod tests {
         input.workshop_acf = Some(s.0.join("ws/missing.acf"));
         assert_eq!(titles(&workshop(&input), Severity::Warning), vec!["Workshop downloads weren't checked"]);
 
-        // Connected: Steam's live answer is used and the file isn't.
-        input.steam_connected = true;
+        // A download in progress is reported from what the launcher sees; the file isn't needed.
         input.mods = vec![ws("Current", 1125571106), ws("Busy", 7)];
         input.mods[0].steam = Some(SteamItem { installed: true, ..Default::default() });
         input.mods[1].steam = Some(SteamItem { installed: true, downloading: true, percent: Some(40), ..Default::default() });
