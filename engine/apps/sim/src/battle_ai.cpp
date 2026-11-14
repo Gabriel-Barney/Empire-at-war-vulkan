@@ -323,7 +323,14 @@ BattleAi::~BattleAi() {
 
 bool BattleAi::start(std::vector<std::string>* diag) {
     if (!world_->load_plans(diag) && diag) diag->push_back("tactical AI: no plan loaded");
-    return world_->start(diag);
+    if (!world_->ai_lane()) return world_->start(diag);
+    // sp3 slice 4c: the start scripts (critical lane, before the first AI slot) read a view captured now, and what they
+    // queue is collected at once (no job is pending yet: the first update would otherwise drop it).
+    capture_lane_view();
+    const bool ok = world_->start(diag);
+    for (cmd::Command& c : lane_job_.batch) lane_batch_.push_back(std::move(c));
+    lane_job_.batch.clear();
+    return ok;
 }
 
 bool BattleAi::controls(int32_t player) const {
@@ -428,6 +435,24 @@ void BattleAi::capture_lane_view() {
     ALAMO_PROFILE_STEP(steps, "tac.cap.weather");
     view_.damage = b_->damage_tracking_;
     ALAMO_PROFILE_STEP(steps, "tac.cap.damage");
+    {
+        const objects::ObjectStore& st = mode_->primary();
+        view_.units.resize(b_->units_.size());
+        for (size_t i = 0; i < b_->units_.size(); ++i) {
+            const TacticalBattle::Unit& u = b_->units_[i];
+            view_.units[i] = {u.id, st.owner(u.h), u.container, static_cast<uint8_t>(u.alive && !u.retreated ? 1 : 0),
+                              static_cast<uint8_t>(u.movable ? 1 : 0)};
+        }
+        view_.teams.resize(b_->containers_.size());
+        for (size_t i = 0; i < b_->containers_.size(); ++i) {
+            const TacticalBattle::Container& c = b_->containers_[i];
+            view_.teams[i] = {c.id, static_cast<uint8_t>(c.removed ? 1 : 0), static_cast<uint8_t>(c.team && !c.removed && c.alive > 0 ? 1 : 0)};
+        }
+        view_.retreat_ok.assign(np, 0);
+        for (int32_t p = 0; p < players; ++p) view_.retreat_ok[static_cast<size_t>(p)] = b_->retreat_block(p) == 0 ? 1 : 0;
+        view_.production = b_->production_enabled();
+    }
+    ALAMO_PROFILE_STEP(steps, "tac.cap.units");
     capture_lane_abilities();
     ALAMO_PROFILE_STEP(steps, "tac.cap.abilities");
     view_.valid = true;
@@ -612,6 +637,7 @@ bool BattleAi::read(ByteReader& r) {
     lane_job_ = std::move(job);
     view_.valid = false;  // sp3 t02: captured again at the next AI slot
     world_->object_bridge().lane_abilities = nullptr;  // sp3 slice 4b: likewise the ability records
+    lane_unloaded_.clear();  // sp3 slice 4d: consumed within the tick of its apply
     return true;
 }
 
@@ -1227,7 +1253,9 @@ void BattleAi::order_signals(uint8_t player, const cmd::EventData& ev) {
 
 cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
     attack_refused_.clear();
-    if (world_ && world_->ai_lane() && lane_batched(ev)) {  // sp3 t04: queued for the batch due N + k_ai
+    if (world_ && world_->ai_lane()) {  // sp3 t04: queued for the batch due N + k_ai
+        // sp3 slice 4c: an event execute_order does not act on is not run from the AI side either
+        if (!lane_batched(ev)) return cmd::RejectReason::Unhandled;
         const cmd::RejectReason p = predict_order(player, ev);
         if (p == cmd::RejectReason::None) {
             cmd::Command c;
@@ -1241,6 +1269,10 @@ cmd::RejectReason BattleAi::execute(uint8_t player, const cmd::EventData& ev) {
         }
         return p;
     }
+    return execute_live(player, ev);
+}
+
+cmd::RejectReason BattleAi::execute_live(uint8_t player, const cmd::EventData& ev) {
     const cmd::RejectReason r = execute_order(player, ev);
     if (r == cmd::RejectReason::None) order_signals(player, ev);
     count_executed(ev, r);
@@ -1261,7 +1293,15 @@ bool BattleAi::lane_batched(const cmd::EventData& ev) {
     switch (ev.type()) {
         case T::MoveToPositionFacing:
         case T::MoveToObject:
-        case T::Attack: return true;
+        case T::Attack:
+        case T::Reinforce:  // sp3 slice 4d
+        case T::Retreat:  // sp3 slice 4c: every other type execute_order acts on
+        case T::Production:
+        case T::TacticalBuild:
+        case T::SetUnitAbilityMode:
+        case T::TacticalSpecialAbility:
+        case T::TacticalSpecialAbilityWithDummyTarget:
+        case T::SetAbilityAutofire: return true;
         case T::PortExtension: {
             const uint32_t sub = ev.u("subtype");
             if (sub < lua::kLuaOrderSubtype || sub > lua::kLuaOrderSubtype + 0xFFu || ev.bytes_view("data").size() < lua::kLuaOrderPayloadBytes)
@@ -1274,20 +1314,22 @@ bool BattleAi::lane_batched(const cmd::EventData& ev) {
     }
 }
 
-cmd::RejectReason BattleAi::predict_order(uint8_t player, const cmd::EventData& ev) const {
+cmd::RejectReason BattleAi::predict_order(uint8_t player, const cmd::EventData& ev) {
     using R = cmd::RejectReason;
     using T = cmd::EventType;
+    // sp3 slice 4c: reads the lane view and the snapshot store only (finished_ is set on the critical lane before the
+    // AI slot of the deciding tick).
     if (b_->finished_) return R::NotAllowed;
-    const objects::ObjectStore& st = mode_->primary();
+    const objects::ObjectStore& st = world_->view_store();
     const auto movable = [this](objects::ObjectId id) {
-        const TacticalBattle::Unit* u = b_->unit_by_id(id);
+        const LaneView::Unit* u = view_unit(id);
         return u && u->movable;
     };
-    switch (ev.type()) {
+        switch (ev.type()) {
         case T::MoveToPositionFacing: {
             bool any = false;
             for (const uint32_t id : ev.ids("units"))
-                for (const objects::ObjectId mid : team_units(player, id)) any = any || movable(mid);
+                for (const objects::ObjectId mid : view_team_units(player, id)) any = any || movable(mid);
             if (!any) return R::InvalidUnit;
             return std::isfinite(ev.f("x")) && std::isfinite(ev.f("y")) ? R::None : R::InvalidPosition;
         }
@@ -1296,27 +1338,33 @@ cmd::RejectReason BattleAi::predict_order(uint8_t player, const cmd::EventData& 
             const objects::ObjectHandle th = tw <= 0x7FFFFFFFu ? st.find(static_cast<objects::ObjectId>(tw)) : objects::ObjectHandle{};
             if (!st.alive(th)) return R::None;  // a silent no-op when applied
             for (const uint32_t id : ev.ids("movers"))
-                for (const objects::ObjectId mid : team_units(player, id))
+                for (const objects::ObjectId mid : view_team_units(player, id))
                     if (mid != static_cast<objects::ObjectId>(tw) && movable(mid)) return R::None;
             return R::InvalidUnit;
         }
         case T::Attack: {
             const uint32_t tw = ev.u("target");
-            const TacticalBattle::Unit* t = tw <= 0x7FFFFFFFu ? b_->unit_by_id(static_cast<objects::ObjectId>(tw)) : nullptr;
-            const TacticalBattle::Container* ct = t || tw > 0x7FFFFFFFu ? nullptr : b_->team_target(static_cast<objects::ObjectId>(tw));
-            if (ct ? !hostile_owner(player, st.owner(ct->h)) : (!t || !t->alive || t->retreated || !hostile_owner(player, st.owner(t->h))))
+            const LaneView::Unit* t = tw <= 0x7FFFFFFFu ? view_unit(static_cast<objects::ObjectId>(tw)) : nullptr;
+            bool team = false;
+            if (!t && tw <= 0x7FFFFFFFu)
+                for (const LaneView::Team& c : view_.teams)
+                    if (c.id == static_cast<objects::ObjectId>(tw)) {
+                        team = c.target != 0;
+                        break;
+                    }
+            const objects::ObjectHandle th = team ? st.find(static_cast<objects::ObjectId>(tw)) : objects::ObjectHandle{};
+            if (team ? !view_hostile(player, st.exists(th) ? st.owner(th) : -1) : (!t || !t->live || !view_hostile(player, t->owner)))
                 return R::InvalidTarget;
             for (const uint32_t id : ev.ids("attackers"))
-                for (const objects::ObjectId mid : team_units(player, id))
-                    if (b_->unit_by_id(mid)) return R::None;
+                if (!view_team_units(player, id).empty()) return R::None;
             return R::InvalidUnit;
         }
         case T::PortExtension: {
             const auto b = ev.bytes_view("data");
             const auto order = static_cast<lua::LuaOrder>(ev.u("subtype") - lua::kLuaOrderSubtype);
-            std::vector<objects::ObjectId> ids = team_units(player, le32(b, 0));
+            std::vector<objects::ObjectId> ids = view_team_units(player, le32(b, 0));
             for (size_t off = lua::kLuaOrderPayloadBytes; off + 4 <= b.size(); off += 4)
-                for (const objects::ObjectId mid : team_units(player, le32(b, off))) ids.push_back(mid);
+                for (const objects::ObjectId mid : view_team_units(player, le32(b, off))) ids.push_back(mid);
             if (ids.empty()) return R::InvalidUnit;
             if (order == lua::LuaOrder::Stop) return R::None;
             bool any = false;
@@ -1328,8 +1376,73 @@ cmd::RejectReason BattleAi::predict_order(uint8_t player, const cmd::EventData& 
             return std::isfinite(std::bit_cast<float>(le32(b, 8))) && std::isfinite(std::bit_cast<float>(le32(b, 12))) ? R::None
                                                                                                                        : R::InvalidPosition;
         }
+        // sp3 slice 4c: the rest of the batched types, from the view (the apply reports a differing answer)
+        case T::Reinforce: {  // slice 4d: in the pool, room (can_reinforce, land population), a finite point
+            const auto key = static_cast<int32_t>(ev.u("unit"));
+            const size_t pi = player;
+            if (pi >= view_.pool.size() || !view_.can_reinforce[pi]) return R::NotAllowed;
+            const auto& pool = view_.pool[pi];
+            const auto it = std::find_if(pool.begin(), pool.end(), [key](const at::TacticalReinforcement& e) { return e.key == key; });
+            if (it == pool.end()) return R::NotAllowed;
+            if (!b_->space_ && view_.pop_cap[pi] >= 0.0f && view_.pop_used[pi] + it->population > view_.pop_cap[pi]) return R::QueueFull;
+            return std::isfinite(ev.f("x")) && std::isfinite(ev.f("y")) ? R::None : R::InvalidPosition;
+        }
+        case T::Retreat:
+            return static_cast<size_t>(player) < view_.retreat_ok.size() && view_.retreat_ok[player] ? R::None : R::NotAllowed;
+        case T::Production: {
+            if (!view_.production) return R::Unhandled;
+            const uint32_t loc = ev.u("location");
+            return loc == cmd::kNoObject || loc > 0x7FFFFFFFu ? R::InvalidTarget : R::None;
+        }
+        case T::TacticalBuild: {
+            const uint32_t pw = ev.u("pad");
+            if (pw == cmd::kNoObject || pw > 0x7FFFFFFFu) return R::InvalidTarget;
+            // the pad checks the AI's build_pad_check runs (relation, contents, rebuild cooldown); cost and type are not
+            const at::PadCheck c = build_pad_check(static_cast<int32_t>(player), static_cast<int32_t>(pw),
+                                                                                static_cast<int32_t>(ev.u("type_index")));
+            return c == at::PadCheck::Ok ? R::None : R::NotAllowed;
+        }
+        case T::SetUnitAbilityMode:
+        case T::TacticalSpecialAbility:
+        case T::TacticalSpecialAbilityWithDummyTarget:
+        case T::SetAbilityAutofire: {
+            const bool users = ev.type() == T::TacticalSpecialAbility || ev.type() == T::TacticalSpecialAbilityWithDummyTarget;
+            for (const uint32_t w : ev.ids(users ? "users" : "units")) {
+                const objects::ObjectHandle h = w <= 0x7FFFFFFFu ? st.find(static_cast<objects::ObjectId>(w)) : objects::ObjectHandle{};
+                if (st.alive(h) && st.owner(h) == static_cast<int32_t>(player)) return R::None;
+            }
+            return R::InvalidUnit;
+        }
         default: return R::Unhandled;
     }
+}
+
+const BattleAi::LaneView::Unit* BattleAi::view_unit(objects::ObjectId id) const {
+    const auto it = std::lower_bound(view_.units.begin(), view_.units.end(), id, [](const LaneView::Unit& u, objects::ObjectId v) { return u.id < v; });
+    return it != view_.units.end() && it->id == id ? &*it : nullptr;
+}
+
+std::vector<objects::ObjectId> BattleAi::view_team_units(uint8_t player, uint32_t wire) const {  // team_units on the view
+    std::vector<objects::ObjectId> out;
+    if (wire == cmd::kNoObject || wire > 0x7FFFFFFFu) return out;
+    const auto id = static_cast<objects::ObjectId>(wire);
+    if (const LaneView::Unit* u = view_unit(id)) {
+        if (u->live && u->owner == static_cast<int32_t>(player)) out.push_back(u->id);
+        return out;
+    }
+    for (size_t c = 0; c < view_.teams.size(); ++c) {
+        if (view_.teams[c].id != id || view_.teams[c].removed) continue;
+        for (const LaneView::Unit& m : view_.units)
+            if (m.container == c && m.live && m.owner == static_cast<int32_t>(player)) out.push_back(m.id);
+        break;
+    }
+    return out;
+}
+
+bool BattleAi::view_hostile(uint8_t player, int32_t owner) const {  // hostile_owner (CombatSystem::is_enemy) on the view
+    const size_t n = view_.retreat_ok.size();
+    if (owner < 0 || static_cast<size_t>(owner) >= n || player >= n) return false;
+    return view_.enemy[static_cast<size_t>(player) * n + static_cast<size_t>(owner)] != 0;
 }
 
 void BattleAi::apply_lane_batch(uint64_t frame) {
@@ -1346,10 +1459,27 @@ void BattleAi::apply_lane_batch(uint64_t frame) {
             continue;
         }
         attack_refused_.clear();
+        const bool reinforce = c.payload.type() == cmd::EventType::Reinforce;
+        const auto player = static_cast<int32_t>(c.header.player);
+        const size_t before = reinforce ? mode_->primary().owned_by(player).size() : 0;
         const cmd::RejectReason r = execute_order(c.header.player, c.payload);
         if (r == cmd::RejectReason::None) order_signals(c.header.player, c.payload);
         else ++lane_mismatch_;  // queued only when predicted accepted
         count_executed(c.payload, r);
+        if (reinforce) {  // slice 4d: the AI waits for an unload record of every lane drop
+            const auto key = static_cast<int32_t>(c.payload.u("unit"));
+            if (r == cmd::RejectReason::None && landing_in_flight(player, key)) continue;  // the battle's signal 0x19 comes later
+            ai::tactical::ReinforcementsUnloaded rec;
+            rec.player = player;
+            rec.key = key;
+            if (r == cmd::RejectReason::None) {
+                const objects::ObjectStore& st = mode_->primary();
+                const auto owned = st.owned_by(player);
+                for (size_t k = before; k < owned.size(); ++k)
+                    if (st.active(owned[k]) && st.has_behavior(owned[k], objects::beh::Locomotor)) rec.units.push_back(st.id(owned[k]));
+            }
+            lane_unloaded_.push_back(std::move(rec));
+        }
     }
 }
 
@@ -2172,6 +2302,10 @@ bool BattleAi::movement_locked(int32_t object_id) {
 
 bool BattleAi::reinforce_in_flight(int32_t player, int32_t key) {
     if (lane_view()) return std::binary_search(view_.in_flight.begin(), view_.in_flight.end(), std::make_pair(player, key));
+    return landing_in_flight(player, key);
+}
+
+bool BattleAi::landing_in_flight(int32_t player, int32_t key) const {
     for (const TacticalBattle::Landing& l : b_->landings_) {
         const TacticalBattle::Participant& p = b_->parts_[l.participant];
         if (l.timed && l.state != 3 && p.owner == player && p.galactic_id == key) return true;
@@ -2194,6 +2328,8 @@ std::vector<ai::tactical::ReinforcementsUnloaded> BattleAi::reinforcements_unloa
         r.units.assign(rec.units.begin(), rec.units.end());
         out.push_back(std::move(r));
     }
+    for (ai::tactical::ReinforcementsUnloaded& r : lane_unloaded_) out.push_back(std::move(r));  // sp3 slice 4d
+    lane_unloaded_.clear();
     return out;
 }
 float BattleAi::sight_weather_factor(int32_t type, int32_t) {

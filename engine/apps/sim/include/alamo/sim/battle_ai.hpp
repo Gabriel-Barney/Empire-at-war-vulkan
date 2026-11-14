@@ -324,6 +324,23 @@ private:
         std::vector<std::pair<int32_t, int32_t>> in_flight;  // reinforce_in_flight (owner, key), ascending
         std::vector<float> weather_sight;                    // per weather_categories_ index
         ai::tactical::DamageTrackingStore damage;
+        // sp3 slice 4c: what predict_order reads - the battle units (TacticalBattle::units_, ascending id), the containers
+        // (containers_ order; `target` = team_target answers it), per player the retreat gate (retreat_block == 0), and
+        // whether the battle has tactical production.
+        struct Unit {
+            objects::ObjectId id = objects::kNoObjectId;
+            int32_t owner = -1;
+            uint32_t container = 0xFFFFFFFFu;  // index into teams
+            uint8_t live = 0, movable = 0;     // alive and not retreated; movable
+        };
+        std::vector<Unit> units;
+        struct Team {
+            objects::ObjectId id = objects::kNoObjectId;
+            uint8_t removed = 0, target = 0;
+        };
+        std::vector<Team> teams;
+        std::vector<uint8_t> retreat_ok;
+        bool production = false;
     };
     LaneView view_;
     // sp3 slice 4b: the ability / combat records the AI VMs' bindings read with the lane on (ObjectBridge::lane_abilities,
@@ -331,11 +348,19 @@ private:
     lua::LaneAbilityView lane_abilities_;
     void capture_lane_abilities();
     void queue_lane_write(const lua::LaneWrite& w);
+    // sp3 slice 4d: unload records of lane Reinforce applies that spawned their units at once (or were refused: no units),
+    // handed to the AI with the battle's own at the next AI slot (the same tick: never pending at a save).
+    std::vector<ai::tactical::ReinforcementsUnloaded> lane_unloaded_;
+    bool landing_in_flight(int32_t player, int32_t key) const;  // the battle's timed landing of `key` (live)
     void apply_lane_write(const commands::Command& c);  // a kLaneWriteSubtype command of the batch
     static bool lane_write_command(const commands::EventData& ev);
     std::vector<int32_t> weather_category_;  // per type: index into weather_categories_ (-1: none)
     std::vector<std::string> weather_categories_;
     void capture_lane_view();
+    // sp3 slice 4c: TacticalBattle::unit_by_id / team_units / hostile_owner on the view (predict_order on the AI lane).
+    const LaneView::Unit* view_unit(objects::ObjectId id) const;
+    std::vector<objects::ObjectId> view_team_units(uint8_t player, uint32_t wire) const;
+    bool view_hostile(uint8_t player, int32_t owner) const;
     bool lane_view() const { return view_.valid; }
     struct LaneJob {
         bool pending = false;
@@ -351,7 +376,8 @@ private:
     static bool lane_batched(const commands::EventData& ev);
     void count_executed(const commands::EventData& ev, commands::RejectReason r);  // executed_ (diagnostic)
     // The rejections of execute_order that depend on the order and the battle state alone, without side effects.
-    commands::RejectReason predict_order(uint8_t player, const commands::EventData& ev) const;
+    commands::RejectReason predict_order(uint8_t player, const commands::EventData& ev);
+    commands::RejectReason execute_live(uint8_t player, const commands::EventData& ev);  // execute_order + signals + count
     std::vector<int32_t> attack_refused_;  // q6 t19: attack_order_refused() of the last execute (not saved: read at once)
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed_;  // event name -> (applied, rejected) [diagnostic]
     std::vector<std::pair<uint64_t, int32_t>> opp_prev_;  // battle host: (unit id << 8 | hp, target), ascending key

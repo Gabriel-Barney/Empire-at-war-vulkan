@@ -145,6 +145,15 @@ All of this is golden-neutral: results already do not depend on the worker count
 - **Everywhere, later:** a **tree hash**: each system hashes fixed blocks (e.g. 256 objects) in parallel, and the system digest is the
   hash of its block digests in order. One golden regeneration; after that capture cost is spread over all cores. Blocks that did not
   change since the last capture reuse their digest (dirty bit per block).
+- **As built, first half (sp2, 2026-11-14):** `SimHost::set_crc_cadence(every, ring)` / `set_default_crc_cadence` /
+  `capture_crc_now()`. `alamo_game` uses 64 with a ~4096-record ring in live play, the scenario's fingerprint cadence (16) in a
+  benchmark with a scenario, and 1 for `--smoke`, `--bench-make` and `--bench-crc-out`; on-demand records at a save, a benchmark's
+  end and the presentation check (an off-grid one goes on the v2 log's keep line). The game's log is a v2 checkpoint log, so the
+  fingerprint and on/off compares work on its stored ticks. Headless, tests and goldens stay at 1.
+- **Space path retries (P6 line of section 5, done in sp2):** `plan_space_path(..., pf)` runs try 1 alone, then the remaining tries
+  in parallel waves with the serial chain's parameters for the best progress known so far; a speculative try is used only when its
+  parameters equal the serial ones bit for bit, else a new wave starts there. Same result as the serial loop (tested and
+  stress-tested); it costs extra CPU when tries are rerun (10-15 % of speculative tries on `nebula_battle`).
 
 ## 5. System by system
 
@@ -369,12 +378,30 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   engine hard points, hull and shield. The AI VMs' bindings read those and hand every write (autofire, ability mode, targeted
   and dummy-target abilities, recharge, counter reset, movement unlock, targeting priorities, stickiness, Activate_Ability's
   signal 0xb) to `lane_write`, which queues it as a PortExtension `kLaneWriteSubtype` command in the same batch as the orders;
-  `lua::apply_lane_write` makes the binding's own calls at the due tick. Before the first capture (battle start) and after a
-  load until the next capture the bindings act live (on the critical lane). Capture cost on `land_battle`: ~0.08 ms p50
+  `lua::apply_lane_write` makes the binding's own calls at the due tick. The records are never carried across AI slots:
+  every `BattleAi::update()` captures them from the battle state of that tick right before `think()`, and the AI scripts
+  run only inside `think()`, so they are not saved - a load recaptures the same records from the same saved battle state
+  at its next AI slot (the queued writes are saved with the job, `battle.ai` v5; checked by
+  `alamo_headless_save_skirmish_foc_ai_lane` / `_foc_land_ai_lane`, `--save-check` with a job in flight). Only scripts run
+  before the first capture (`TacticalAiWorld::start` at battle start, critical lane) act live. Capture cost on `land_battle`: ~0.08 ms p50
   (`tac.cap.abilities`, ~220 objects). **Tier 2** (for the harness): a script reads the state of the AI slot, so its own
   writes are not visible to it in the same think (e.g. `Is_Ability_Active` right after `Activate_Ability`); the same-call
   answers (Activate_Ability's block for the object-target and jet-pack families) are the dry runs' predictions
   (`BattleAi::lane_mismatches` counts the applies that differ); writes apply k_ai ticks later in (player, sequence) order.
+- AI commands (t04 + t05, slice 4c): with the lane on, `BattleAi::execute` runs nothing from the AI side. Retreat,
+  Production, TacticalBuild and the four ability commands are queued like the orders; an event `execute_order` does not act on
+  answers Unhandled without running. `predict_order` reads only the snapshot store and the view (units with owner / container /
+  live / movable, the teams, per player the retreat gate `retreat_block == 0`, tactical production on / off, the pad checks).
+  Predictions: Retreat = the gate; Production = production on and a valid builder id (credits and buildability are not
+  predicted); TacticalBuild = the AI's `build_pad_check` (cost and type are not); ability commands = an owned live unit among
+  them. Reinforce (slice 4d) is queued too, predicted from the view (in the pool, can-reinforce, land population room, a finite
+  point); the AI no longer reads the spawned units in the same call - with the lane on both reinforce sites (the land
+  ReinforceBlockStatus and the space poll) record the drop as a landing in flight, and the apply hands the units to the AI
+  as a signal-0x19 unload record at the next AI slot (the battle's own record when the drop is a timed landing; an empty
+  one when the apply refused it, so no status waits forever). A space status then also waits for its landings before it
+  finishes (a timeout still ends it). `start()` with
+  the lane on captures the view first, refreshes the snapshot store, and collects what the start scripts queued (before this,
+  the first update dropped it). **Tier 2**: these commands act k_ai ticks later and their answers are predictions.
 
 ## 12. P5 implementation notes (sp5, simp-svc, 2026-11-14)
 
