@@ -1097,17 +1097,48 @@ bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, cons
     float budget_f = static_cast<float>(tp.budget);
     float best_progress = 0.0f;
     const uint32_t tries = std::max<uint32_t>(1, k.space_pathing_tries);
-    // sp2: speculative results of tries 2..N (index t - 2), made after try 1 fails when `pf` is given.
+    // sp2: results of tries 2..N (index t - 2) run in parallel waves: when try t (t >= 2) has no usable result, tries t..N
+    // run at once, try t with its exact parameters and the later ones with the chain's parameters for the best progress
+    // known now (the real one can only grow; a later try whose parameters that changes starts the next wave).
     std::vector<TryResult> spec;
+    if (pf && tries >= 2) spec.resize(tries - 1);
+    const auto wave = [&](uint32_t from) {
+        TryParams stp = tp;
+        float sbf = budget_f;
+        for (uint32_t u = from; u <= tries; ++u) {
+            if (u > from) next_try(stp, sbf, u, dist, best_progress, k, req);
+            spec[u - 2] = TryResult{};
+            spec[u - 2].tp = stp;
+        }
+        std::atomic<uint32_t> lowest_ok{std::numeric_limits<uint32_t>::max()};
+        (*pf)(tries - from + 1, 1, [&](uint32_t b, uint32_t e) {
+            SpaceScratch s2;
+            for (uint32_t i = b; i < e; ++i) {
+                const uint32_t self = from + i;
+                if (lowest_ok.load(std::memory_order_relaxed) < self) continue;  // a lower try already succeeded
+                TryResult& r = spec[self - 2];
+                run_try(occ, k, req, s2, r, &lowest_ok, self);
+                if (r.done && r.ok) {
+                    uint32_t lo = lowest_ok.load(std::memory_order_relaxed);
+                    while (self < lo && !lowest_ok.compare_exchange_weak(lo, self, std::memory_order_relaxed)) {
+                    }
+                }
+            }
+        });
+    };
     TryResult cur;
     for (uint32_t t = 1; t <= tries; ++t) {
         next_try(tp, budget_f, t, dist, best_progress, k, req);
-        TryResult* r = &cur;
-        if (t >= 2 && !spec.empty() && spec[t - 2].done && same_params(spec[t - 2].tp, tp)) {
-            r = &spec[t - 2];  // the speculative run had exactly this try's parameters
-        } else {
+        TryResult* r = nullptr;
+        if (t >= 2 && !spec.empty()) {
+            TryResult& sp = spec[t - 2];
+            if (!(sp.done && same_params(sp.tp, tp)) && t < tries) wave(t);  // the wave runs try t exactly
+            if (sp.done && same_params(sp.tp, tp)) r = &sp;  // the speculative run had exactly this try's parameters
+        }
+        if (!r) {
             cur.tp = tp;
             run_try(occ, k, req, sc, cur, nullptr, 0);
+            r = &cur;
         }
         out.tries = t;
         out.pushes += r->pushes;
@@ -1116,31 +1147,6 @@ bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, cons
             chain_to_waypoints(r->chain, req, r->tp.speed, r->step_deg, out.wps);
             out.ok = true;
             return true;
-        }
-        if (t == 1 && pf && tries >= 2) {
-            // Tries 2..N at once, with the chain's parameters for a best progress that stays at try 1's (the real one can
-            // only be larger; a try whose parameters that changes runs again in this loop).
-            spec.resize(tries - 1);
-            TryParams stp = tp;
-            float sbf = budget_f;
-            for (uint32_t u = 2; u <= tries; ++u) {
-                next_try(stp, sbf, u, dist, best_progress, k, req);
-                spec[u - 2].tp = stp;
-            }
-            std::atomic<uint32_t> lowest_ok{std::numeric_limits<uint32_t>::max()};
-            (*pf)(tries - 1, 1, [&](uint32_t b, uint32_t e) {
-                SpaceScratch s2;
-                for (uint32_t i = b; i < e; ++i) {
-                    const uint32_t self = i + 2;
-                    if (lowest_ok.load(std::memory_order_relaxed) < self) continue;  // a lower try already succeeded
-                    run_try(occ, k, req, s2, spec[i], &lowest_ok, self);
-                    if (spec[i].done && spec[i].ok) {
-                        uint32_t lo = lowest_ok.load(std::memory_order_relaxed);
-                        while (self < lo && !lowest_ok.compare_exchange_weak(lo, self, std::memory_order_relaxed)) {
-                        }
-                    }
-                }
-            });
         }
     }
     out.ok = true;
