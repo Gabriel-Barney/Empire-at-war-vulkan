@@ -77,14 +77,6 @@ pub fn find_profile(profiles: &[config::Profile], wanted: &str) -> Option<u64> {
 }
 
 fn main() -> eframe::Result<()> {
-    // Started by the launcher itself to talk to Steam (see workshop.rs). Opens no window and
-    // exits when the launcher disconnects: Steam counts the game as running for as long as a
-    // process connected to it is alive, so that process can't be the launcher.
-    if std::env::args_os().nth(1).is_some_and(|a| a == workshop::HELPER_ARG) {
-        workshop::helper_main();
-        return Ok(());
-    }
-
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     let cli = parse_cli(&args);
     let cfg = config::Config::load();
@@ -162,8 +154,8 @@ mod tests {
             cli(&["--verbose", "--profile", "A", "x", "--profile", "B"]),
             Cli { profile: Some("B".into()), launch: false }
         );
-        // The Steam helper's own argument isn't mistaken for anything.
-        assert_eq!(cli(&[workshop::HELPER_ARG]), Cli::default());
+        // The retired Steam helper's argument (old shortcuts, scripts) opens the launcher.
+        assert_eq!(cli(&["--steam-workshop-helper"]), Cli::default());
     }
 
     #[test]

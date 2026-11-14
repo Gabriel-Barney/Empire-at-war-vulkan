@@ -1,6 +1,6 @@
 # QA review: playtest video 2026-10-29 20:20
 
-Source: `C:\Users\Gabriel\Videos\Radeon ReLive\unknown\unknown_2026.10.29-20.20.mp4` (3840×2160, 60 fps, 2 min 24 s, AMD RX 9070 XT).
+Source: `unknown_2026.10.29-20.20.mp4` (3840×2160, 60 fps, 2 min 24 s, AMD RX 9070 XT).
 Build: `alamo_game` (the port). The Video dialog shows the Vulkan V-sync modes, so this is not the retail exe.
 Method: one frame every 5 s, full-resolution crops of suspect areas, and a per-frame change scan to check frame pacing.
 Docs checked: `docs/PHASE4.md` (playtest logs 1–3), `docs/re/GALACTIC_DIALOGS.md`, `docs/re/HUD_GAPS.md`.

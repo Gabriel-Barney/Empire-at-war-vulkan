@@ -12,8 +12,8 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
 
 1. **Worktree.** Work only in your worktree (`.claude\worktrees\<name>`). Do not `cd` elsewhere and never edit the main checkout.
    No worktree yet: from the main checkout run `tools\new_worktree.cmd <name>` (branch `claude/<name>` from `origin/dev`; it
-   junctions `Data`, `extracted`, `toolchain` and `roadmap-store` to the main checkout, runs `roadmap_store.py sync` and
-   `tools\setup_git.cmd`). A junction is not a copy: never delete through one (`cmd /c rmdir <link>` only; the tool does this).
+   junctions `Data`, `extracted`, `toolchain` and `roadmap-store` to the main checkout, and runs `roadmap_store.py sync`).
+   A junction is not a copy: never delete through one (`cmd /c rmdir <link>` only; the tool does this).
 2. **Sync and read.** `python roadmap-store\roadmap_store.py sync`, then read the group in
    `roadmap-store\data\items\<id>.json` (tasks `t01..`, `after`, `why`, `preset`, `eta`) and its box in `nodes\<ID>.json`, plus the
    `docs/` pages the tasks name (`docs/PHASE4.md`, `docs/re/*`). If an `after` group is not `done`, stop and say so: do not start it.
@@ -76,7 +76,7 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
    push means `dev` moved: rerun it. It also refuses generated or oversized new files (`tools\lint\check_tracked.py`;
    tools write into ignored output folders, exceptions go in `tools/lint/tracked_allow.txt`). The last commit message says what changed, build and test results (MSVC / clang / ASan as
    applicable, skips), goldens changed or "none", roadmap group and tasks closed, open items, and ends with
-   `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`. Never open a PR to `main` or push `main`: Gabriel releases `dev`.
+   the `Co-Authored-By:` line the session's attribution reminder gives. Never open a PR to `main` or push `main`: Gabriel releases `dev`.
 10. **Report** (short): files, behaviour, test results, decisions, open items, the `dev` commit. Once it is on `dev` the worktree is removed
     with `tools\clean_worktrees.cmd --apply --only <name>`; you never delete another lane's worktree or branch.
 

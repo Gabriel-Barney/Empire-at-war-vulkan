@@ -7,21 +7,21 @@ headless multithreaded simulation core first, then a Vulkan 1.3 renderer. Any Cl
 ## Where things are
 | Path | What |
 |---|---|
-| `engine/` | Engine. One static lib per module: Phase 2 `core`, `vfs`, `data`, `jobs`, `galactic`, `apps`; Phase 3 `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render` (Vulkan 1.3 renderer, `alamo_render.exe`); Phase 4 `objects` (game object model) |
+| `engine/` | Engine. One static lib per module: Phase 2 `core`, `vfs`, `data`, `jobs`, `galactic`, `apps`; Phase 3 `assets`, `rhi`, `materials`, `shaderxlat`, `terrain`, `render` (Vulkan 1.3 renderer, `alamo_render.exe`); Phase 4 `objects` (game object model), `anim`, `commands`, `tactical`, `lua`, `ai`, `ui`, `audio`, `video`; header-only `test_support` (list: `engine/CMakeLists.txt`) |
 | `launcher/` | Command Center (Rust / egui): launcher and control panel for `alamo_game.exe`. Not part of `engine/` or the CMake build: `build_launcher.cmd`, toolchain `toolchain\rust` (`docs/DECISIONS.md`, "Command Center launcher") |
 | `docs/README.md` | **Index of all documentation (start here).** One place per kind: `DECISIONS.md` (binding decisions), `BUILD.md` (build / test / gate), `PERFORMANCE.md` (measurements), `PROBES.md` (in-game probe index), `ROADMAP_PROTOCOL.md` (roadmap rules); status lives only on the roadmap |
 | `docs/PHASE4.md` | Phase 4 step map (what each step is, where its code is) and the open per-step port choices. Finished-work notes: `docs/PHASE4_HISTORY.md` |
 | **Project roadmap** | **The one main roadmap: `roadmap-store/` in this folder (Gabriel, 2026-11-06: one location; before that the page was also tracked in this repo as `ROADMAP.html` and `docs/ROADMAP.html`, both removed). Open `roadmap-store/ROADMAP.html` in any browser; it needs no sign-in and is generated, so never edit it by hand.** Update it with `python roadmap-store/roadmap_store.py write <file>`; ordered stages, boxes and arrows, task groups, tasks, build records and the activity log live in `roadmap-store/data/`, the page layout in `roadmap-store/page_shell.html` (edit outside the `roadmap-data` markers, then `render`). Rules and field list: `docs/ROADMAP_PROTOCOL.md`. `roadmap-store/` is its own git repository (remote `Empire-Vulkan-Brenach`) and is not in worktrees; use the main checkout's copy. When the remote changed, run `python roadmap-store/roadmap_store.py sync` |
 | `roadmap-store/` | Own git repository holding the roadmap data, so every account shares one copy. Rules in its `README.md` |
 | `docs/PHASE3.md` | Phase 3 (renderer) results, assumptions and reference; no status board. Long details of finished work: `docs/archive/*.zip` (2026-10-30) |
-| `tools/` | Phase 1 tools: `meg` (MEG archives, used by the VFS), `formats` (ALO/ALA/…), `shaders`, `re`, `probe_mod` |
+| `tools/` | Phase 1 tools: `meg` (MEG archives, used by the VFS), `formats` (ALO/ALA/…), `shaders`, `re`, `probe_mod`; since then `lint` (build summary, checks), `parity`, `benchmark`, `goldens`, `worktree`, `visual`, `pr_check`, `testbuild`, `analysis`, and the `*.cmd` helpers (`land_on_dev`, `new_worktree`, `clean_worktrees`, `regen_goldens`, `pr_check`, `test_env`) |
 | `docs/PHASE2.md` | Phase 2 results and design notes (determinism contract, file resolution order); no status board |
 | `docs/re/` | Behavioural specs recovered from the binary (GALACTIC, HOTSPOTS, STRUCTS, SUBSYSTEMS, LUA_API, xml tags) |
 | `docs/assets/`, `docs/formats/`, `docs/shaders/` | Asset catalog and format specs |
 | `extracted/` | Game text (XML/Lua) zipped: `foc_data_text.zip`, `eaw_data_text.zip` |
 | `re_reference/` | Decompiled output. **Never read it while writing engine code** (clean-room). Only RE/doc tasks use it, and they write behaviour into `docs/re/`, never code |
 | `toolchain/` | Project-local MSVC 14.51, Windows SDK, CMake, Ninja. Nothing is installed system-wide |
-| `logs/` | Build/test logs written by `build_msvc.cmd` |
+| `logs/` | Build/test logs written by the build scripts |
 
 ## Platform and compilers (Gabriel, 2026-10-27; full record in `docs/DECISIONS.md`)
 - **Windows x64 only.** Multiplayer, loading the original game's save files and RenderDoc are out of scope. Parity with the original is checked by behaviour, not by matching its CRC / hashes bit for bit; the port's own determinism rule 3 is unchanged. Same outcome, own method (Gabriel, 2026-11-09, "Parity tiers" in `docs/DECISIONS.md`): rules, data / Lua handling and feel match retail exactly; random-driven outcomes match retail's distribution over many seeds; internals (including random-number draw order) are the port's choice, recorded as `[port]` entries.

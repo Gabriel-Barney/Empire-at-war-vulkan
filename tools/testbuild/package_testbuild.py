@@ -1,8 +1,8 @@
 """Packs a test build zip for Gabriel: alamo_game + alamo_mod_check (with the DXC, FFmpeg, FSR and XeSS runtime DLLs) from a
 Release build tree, the launchers in
 tools/testbuild/launchers (Play.cmd for Forces of Corruption, Play_Mod.cmd for any installed mod), Play.exe (Play.cmd
-without a console window, built by build_msvc.cmd), the Command Center launcher (command-center.exe and
-steam_api64.dll from launcher/target/release, built by build_launcher.cmd; it finds alamo_game.exe next to itself),
+without a console window, built by build_msvc.cmd), the Command Center launcher (command-center.exe from
+launcher/target/release, built by build_launcher.cmd; it finds alamo_game.exe next to itself),
 tools/testbuild/CHANGES.txt and THIRD_PARTY_NOTICES.txt (the license of every third-party component in the zip, read
 from toolchain/ and the launcher's Rust crates, plus where to get the exact FFmpeg source and build options the LGPL
 asks for).
@@ -41,7 +41,8 @@ SMOKE_MOD = "1125571106"  # Thrawn's Revenge (Steam workshop), the mod the smoke
 TOOLCHAIN = ROOT / "toolchain"
 LAUNCHER = ROOT / "launcher"
 LAUNCHER_BIN = LAUNCHER / "target" / "release"
-LAUNCHER_FILES = ["command-center.exe", "steam_api64.dll"]  # Command Center (docs/DECISIONS.md, 2026-11-13)
+# Command Center (docs/DECISIONS.md, 2026-11-13). No Valve DLL: the launcher uses Steam's web API and its records on disk.
+LAUNCHER_FILES = ["command-center.exe"]
 LAUNCHER_TARGET = "x86_64-pc-windows-msvc"
 
 
@@ -200,9 +201,7 @@ def third_party_notices():
            "to their owners and are not part of this build.", ""]
     out += ["%d. %s: %s" % (i, name, where) for i, (name, where, _) in enumerate(parts, 1)]
     out.append("%d. %s" % (len(parts) + 1, ff_title))
-    steam_title = "Steamworks API (Valve Corporation): steam_api64.dll, unmodified, used by command-center.exe"
-    out.append("%d. %s" % (len(parts) + 2, steam_title))
-    out.append("%d. Rust crates compiled into command-center.exe (the Command Center launcher)" % (len(parts) + 3))
+    out.append("%d. Rust crates compiled into command-center.exe (the Command Center launcher)" % (len(parts) + 2))
     for name, where, files in parts:
         out += ["", rule, "%s: %s" % (name, where), rule]
         for f in files:
@@ -222,11 +221,6 @@ def third_party_notices():
             "",
             "The engine loads these DLLs at run time and links no FFmpeg code into its own executables. You may",
             "replace them with your own build of FFmpeg %s (same DLL names), for example one built from that source." % ff_ver]
-    out += ["", rule, steam_title, rule, "",
-            "Copyright Valve Corporation. steam_api64.dll is the Steamworks SDK redistributable, shipped unmodified as",
-            "it comes in the steamworks-sys crate. It is used only for Steam Workshop browsing and subscribing in the",
-            "launcher, and only when Steam is running; it is subject to the Steamworks SDK Access Agreement",
-            "(https://partner.steamgames.com/documentation/sdk_access_agreement)."]
     out += launcher_notices()
     return "\n".join(out) + "\n"
 

@@ -145,7 +145,7 @@ set_tests_properties(alamo_mod_check_fixture PROPERTIES TIMEOUT 120
                      FAIL_REGULAR_EXPRESSION "\"run_errors\": \\[[^]]")
 
 # modc t08: the mod picker's data side (mod_picker.hpp) on the same read-only fixture; its modinfo.json decoding cases write
-# to their own temp folder (%TEMP%lamo_mod_picker_tests, no other test uses it).
+# to their own temp folder (%TEMP%\alamo_mod_picker_tests, no other test uses it).
 add_executable(alamo_game_mod_picker_tests tests/test_mod_picker.cpp)
 target_link_libraries(alamo_game_mod_picker_tests PRIVATE alamo_core alamo_game_core alamo_test_support)
 add_test(NAME alamo_game_mod_picker_tests COMMAND alamo_game_mod_picker_tests ${CMAKE_CURRENT_SOURCE_DIR}/testdata/mod_fixture)

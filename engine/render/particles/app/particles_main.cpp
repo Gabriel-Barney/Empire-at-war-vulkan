@@ -132,7 +132,7 @@ struct Gpu {
         ok = true;
         return true;
     }
-    // inst / sky are read after efore ran (it may refill them).
+    // inst / sky are read after `before` ran (it may refill them).
     bool frame(const render::ViewMatrices& vm, const std::vector<render::Instance>& inst, const std::vector<render::Instance>& sky = {},
                const std::function<void()>& before = {}) {
         rhi::Frame* f = ring.begin_frame();

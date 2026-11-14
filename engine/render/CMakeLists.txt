@@ -254,7 +254,7 @@ set_tests_properties(alamo_render_taa_tests PROPERTIES TIMEOUT 900 ENVIRONMENT "
 
 # [port] FSR upscaling: quality modes / jitter / camera rules (CPU), the upscale of an empty scene and its history rules
 # (GPU, through the real AMD runtime; skipped with the reason when it cannot run here), with ALAMO_FOC_DATA a land map
-# drawn with TAA vs FSR Quality / Performance -> logsender_fsr_*.png.
+# drawn with TAA vs FSR Quality / Performance -> logs\render_fsr_*.png.
 add_executable(alamo_render_fsr_tests tests/test_render_fsr.cpp)
 target_link_libraries(alamo_render_fsr_tests PRIVATE alamo_core alamo_render alamo_render_test_support)
 target_compile_definitions(alamo_render_fsr_tests PRIVATE "ALAMO_RENDER_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\"")

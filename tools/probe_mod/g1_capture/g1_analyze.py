@@ -1196,7 +1196,7 @@ def main(argv):
                                                     "whose final image is snapshotted (default: 3 frames of the focus range)")
     ap.add_argument("--vb-draws", default="", help="A-B: decode the vertex-buffer contents read by the draws in this call range")
     ap.add_argument("--vs-filter", default="", help="--vb-draws: only draws whose 'vs | ps' description contains this text")
-    ap.add_argument("--facts", default="", help="--vb-draws: facts.json with the shader descriptions (default analysisacts.json)")
+    ap.add_argument("--facts", default="", help="--vb-draws: facts.json with the shader descriptions (default analysis\\facts.json)")
     ap.add_argument("--max-draws", type=int, default=64)
     ap.add_argument("--draw-calls", default="", help="--vb-draws: comma list of draw call numbers; only these draws")
     ap.add_argument("--tex-filter", default="", help="--vb-draws: comma list of texture handles; only draws with one of them on stage 0")

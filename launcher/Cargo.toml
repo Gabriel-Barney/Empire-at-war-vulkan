@@ -24,11 +24,9 @@ winreg = "0.55"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 similar = "2"
 dirs = "6"
-# Steam Workshop: subscribing and browsing from inside the launcher. Needs steam_api64.dll
-# next to the exe at run time (build.rs copies it there).
-steamworks = "0.13"
-# Workshop preview images. native-tls = Windows SChannel with the system's root certificates,
-# so there is no C code (ring/aws-lc) to compile.
+# Steam Workshop details and searches (Steam's web API) and preview images. native-tls =
+# Windows SChannel with the system's root certificates, so there is no C code (ring/aws-lc)
+# to compile.
 ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
 # Desktop / Start-menu shortcuts (IShellLinkW), exit notifications (WinRT toasts) and bringing
 # the window back when the game exits. Same version the `trash` crate already pulls in.

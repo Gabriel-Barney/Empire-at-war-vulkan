@@ -1,73 +1,20 @@
-//! Build script: program icon and Steam Workshop support.
+//! Build script: embeds `assets/icon.ico` in the exe as its program icon (what Explorer,
+//! shortcuts and the taskbar show before the window opens). The `.res` file is written here
+//! in plain Rust and handed to the MSVC linker, so no resource compiler (rc.exe) is needed.
 //!
-//! 0. Embeds `assets/icon.ico` in the exe as its program icon (what Explorer, shortcuts and
-//!    the taskbar show before the window opens). The `.res` file is written here in plain
-//!    Rust and handed to the MSVC linker, so no resource compiler (rc.exe) is needed.
-//! 1. Copies `steam_api64.dll` (shipped inside the `steamworks-sys` crate) next to the built
-//!    exe, i.e. into `target\<profile>\`. A release package must ship that DLL beside
-//!    `command-center.exe`.
-//! 2. Makes the DLL a *delay-loaded* import, so the launcher still starts when the DLL is
-//!    missing. Only the Steam helper process (the same exe, see `workshop.rs`) loads it, by
-//!    full path, before its first Steam call, and reports a plain error when it isn't there.
+//! (Until 2026-11-13 this also copied Valve's `steam_api64.dll` next to the exe; the
+//! launcher no longer uses the Steamworks SDK, see `src/workshop.rs`.)
 
 use std::path::{Path, PathBuf};
 
-const DLL: &str = "steam_api64.dll";
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=Cargo.lock");
-
     let target = std::env::var("TARGET").unwrap_or_default();
-    if !target.contains("windows") || target.contains("i686") {
+    if !target.contains("windows") || !target.contains("msvc") {
         return;
     }
-
-    // OUT_DIR is target\<profile>\build\command-center-<hash>\out on older Cargo and
-    // target\<profile>\build\command-center\<hash>\out on newer Cargo.
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
-
-    if target.contains("msvc") {
-        // Applies to the launcher exe and to its test binary.
-        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{DLL}");
-        println!("cargo:rustc-link-arg-bins=delayimp.lib");
-        // The test binary makes no Steam calls, so the linker would warn (LNK4199) that the
-        // delay-load has nothing to delay.
-        println!("cargo:rustc-link-arg-bins=/IGNORE:4199");
-        embed_icon(&out_dir);
-    }
-    // The profile folder (where the exe goes) is the parent of the nearest `build` folder,
-    // which holds for both layouts.
-    let profile_dir = out_dir
-        .ancestors()
-        .find(|p| p.file_name().is_some_and(|n| n == "build"))
-        .and_then(Path::parent)
-        .map(Path::to_path_buf);
-    let Some(profile_dir) = profile_dir else {
-        println!("cargo:warning=Could not work out the target folder; {DLL} was not copied.");
-        return;
-    };
-
-    let Some(source) = find_dll(&profile_dir) else {
-        println!(
-            "cargo:warning={DLL} was not found in the steamworks-sys crate. Workshop features need it next to the exe."
-        );
-        return;
-    };
-    println!("cargo:rerun-if-changed={}", source.display());
-
-    let dest = profile_dir.join(DLL);
-    // A missing destination makes cargo run this script again on the next build.
-    println!("cargo:rerun-if-changed={}", dest.display());
-    if same_file(&source, &dest) {
-        return;
-    }
-    if let Err(e) = std::fs::copy(&source, &dest) {
-        // The Steam helper may be running and holding the DLL: only a problem if it's absent.
-        if !dest.is_file() {
-            println!("cargo:warning=Could not copy {DLL} to {}: {e}", dest.display());
-        }
-    }
+    embed_icon(&out_dir);
 }
 
 const ICON: &str = "assets/icon.ico";
@@ -149,67 +96,4 @@ fn push_resource(res: &mut Vec<u8>, kind: u16, name: u16, flags: u16, lang: u16,
     while res.len() % 4 != 0 {
         res.push(0);
     }
-}
-
-fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(x), Ok(y)) => x.len() == y.len() && std::fs::read(a).ok() == std::fs::read(b).ok(),
-        _ => false,
-    }
-}
-
-/// The version of `steamworks-sys` the lock file resolved to.
-fn locked_version() -> Option<String> {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
-    let lock = std::fs::read_to_string(Path::new(&manifest).join("Cargo.lock")).ok()?;
-    let mut lines = lock.lines();
-    while let Some(line) = lines.next() {
-        if line.trim() == "name = \"steamworks-sys\"" {
-            let version = lines.next()?.trim();
-            return Some(version.strip_prefix("version = \"")?.strip_suffix('"')?.to_owned());
-        }
-    }
-    None
-}
-
-fn find_dll(profile_dir: &Path) -> Option<PathBuf> {
-    // 1. The crate's own redistributable folder in the cargo registry.
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".cargo")));
-    if let (Some(home), Some(version)) = (cargo_home, locked_version()) {
-        if let Ok(indexes) = std::fs::read_dir(home.join("registry").join("src")) {
-            for index in indexes.flatten() {
-                let dll = index
-                    .path()
-                    .join(format!("steamworks-sys-{version}"))
-                    .join("lib")
-                    .join("steam")
-                    .join("redistributable_bin")
-                    .join("win64")
-                    .join(DLL);
-                if dll.is_file() {
-                    return Some(dll);
-                }
-            }
-        }
-    }
-    // 2. The copy steamworks-sys's own build script leaves in its OUT_DIR (present once that
-    //    crate has been built for this profile): build\steamworks-sys-<hash>\out on older
-    //    Cargo, build\steamworks-sys\<hash>\out on newer Cargo.
-    let builds = std::fs::read_dir(profile_dir.join("build")).ok()?;
-    builds.flatten().find_map(|e| {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with("steamworks-sys-") {
-            Some(e.path().join("out").join(DLL)).filter(|p| p.is_file())
-        } else if name == "steamworks-sys" {
-            std::fs::read_dir(e.path())
-                .ok()?
-                .flatten()
-                .map(|h| h.path().join("out").join(DLL))
-                .find(|p| p.is_file())
-        } else {
-            None
-        }
-    })
 }

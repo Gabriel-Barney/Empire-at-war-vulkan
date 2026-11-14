@@ -407,7 +407,6 @@ fn import_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
     let names: Vec<String> = app.cfg.profiles.iter().map(|p| p.name.clone()).collect();
 
     let ws = app.mods_ui.workshop();
-    let connected = ws.is_connected();
     let state_of = |id: u64| {
         let status = ws.item_status(id);
         MissingItem {
@@ -444,7 +443,6 @@ fn import_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
     let mut create = false;
     let mut cancel = false;
     let mut subscribe: Vec<u64> = Vec::new();
-    let mut open_steam: Option<u64> = None;
     let modal = egui::Modal::new(egui::Id::new("import_profile")).show(ctx, |ui| {
         ui.set_width(600.0);
         ui.label(theme::title("Import profile"));
@@ -555,17 +553,17 @@ fn import_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
                                     ImportStatus::MissingWorkshop { id, .. } => {
                                         let s = state_of(*id);
                                         if s.busy {
-                                            theme::chip(ui, "Subscribing…", theme::ACCENT_HI);
+                                            theme::chip(ui, "Waiting for Steam…", theme::ACCENT_HI);
                                         } else if let Some(progress) = &s.progress {
                                             theme::chip(ui, progress.clone(), theme::ACCENT_HI);
                                         } else if s.subscribed {
                                             theme::chip(ui, "Subscribed, waiting for Steam", theme::ACCENT_HI);
-                                        } else if connected {
-                                            if theme::button(ui, "Subscribe").clicked() {
+                                        } else {
+                                            let button = theme::button(ui, "Subscribe in Steam")
+                                                .on_hover_text("Opens the item's page in Steam: press Subscribe there.");
+                                            if button.clicked() {
                                                 subscribe.push(*id);
                                             }
-                                        } else if theme::button(ui, "Open in Steam").clicked() {
-                                            open_steam = Some(*id);
                                         }
                                         theme::chip(ui, "Missing Workshop mod", theme::WARN)
                                             .on_hover_text(format!("Workshop item {id} isn't installed on this PC."));
@@ -588,14 +586,12 @@ fn import_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
                 "Missing Workshop mods keep their place in the load order. They show as not downloaded, and the profile can't be launched, until Steam has finished downloading them. No need to keep this window open."
             };
             ui.add(egui::Label::new(theme::faint(text)).wrap());
-            if !connected {
-                ui.add(
-                    egui::Label::new(theme::faint(
-                        "Connect to Steam on the Mods page to subscribe to them from here. Until then, Open in Steam shows the item's page.",
-                    ))
-                    .wrap(),
-                );
-            }
+            ui.add(
+                egui::Label::new(theme::faint(
+                    "Subscribing opens each item's page in Steam, one after the other: press Subscribe on each. The next one opens once Steam has the previous one.",
+                ))
+                .wrap(),
+            );
         }
         if missing_local > 0 {
             ui.add(
@@ -612,8 +608,8 @@ fn import_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if connected && !to_subscribe.is_empty() {
-                let label = format!("Subscribe to all missing ({})", to_subscribe.len());
+            if !to_subscribe.is_empty() {
+                let label = format!("Subscribe to all missing in Steam ({})", to_subscribe.len());
                 if theme::button(ui, &label).clicked() {
                     subscribe.extend(to_subscribe.iter().copied());
                 }
@@ -629,11 +625,6 @@ fn import_modal(app: &mut App, st: &mut State, ctx: &egui::Context) {
         });
     });
 
-    if let Some(id) = open_steam {
-        if let Err(e) = workshop::open_item_page(id) {
-            app.err(e);
-        }
-    }
     for id in subscribe {
         app.mods_ui.workshop_mut().subscribe(id);
     }
@@ -1204,7 +1195,6 @@ fn conflict_lines(report: &Report, i: usize) -> Vec<String> {
 fn mods_card(app: &mut App, st: &mut State, ui: &mut egui::Ui, report: Option<&Report>) -> bool {
     let workshop_dir = app.steam.workshop_dir.clone();
     let ws = app.mods_ui.workshop();
-    let connected = ws.is_connected();
     let rows: Vec<Row> = app
         .cfg
         .active()
@@ -1227,7 +1217,7 @@ fn mods_card(app: &mut App, st: &mut State, ui: &mut egui::Ui, report: Option<&R
                 let busy = ws.is_busy(id);
                 let subscribed = ws.is_subscribed(id);
                 let text = if busy {
-                    "Subscribing…".to_owned()
+                    "Waiting for Steam…".to_owned()
                 } else if status.downloading {
                     match status.percent() {
                         Some(p) => format!("Downloading {p}%"),
@@ -1239,7 +1229,7 @@ fn mods_card(app: &mut App, st: &mut State, ui: &mut egui::Ui, report: Option<&R
                     "Not downloaded".to_owned()
                 };
                 pending = Some((id, text));
-                can_subscribe = connected && !busy && !subscribed;
+                can_subscribe = !busy && !subscribed;
             }
             let warning = report
                 .map(|r| r.warnings_for(i).map(|w| w.text.clone()).collect::<Vec<_>>().join("\n\n"))
@@ -1357,13 +1347,16 @@ fn mods_card(app: &mut App, st: &mut State, ui: &mut egui::Ui, report: Option<&R
                                     if theme::icon_button(ui, icon::GLOBE, "Open this Workshop item in Steam").clicked() {
                                         act = Some(Act::OpenSteam(*id));
                                     }
-                                    if row.can_subscribe && theme::button(ui, "Subscribe").clicked() {
+                                    if row.can_subscribe
+                                        && theme::button(ui, "Subscribe in Steam")
+                                            .on_hover_text("Opens the item's page in Steam: press Subscribe there.")
+                                            .clicked()
+                                    {
                                         act = Some(Act::Subscribe(*id));
                                     }
                                     ui.add_space(4.0);
                                     theme::chip(ui, text.clone(), theme::WARN).on_hover_text(format!(
-                                        "Steam hasn't put Workshop item {id} on this PC yet. The profile can't be launched until it has.{}",
-                                        if connected { "" } else { "\nConnect to Steam on the Mods page to subscribe from here." }
+                                        "Steam hasn't put Workshop item {id} on this PC yet. The profile can't be launched until it has."
                                     ));
                                     ui.add_space(4.0);
                                 } else if row.missing {

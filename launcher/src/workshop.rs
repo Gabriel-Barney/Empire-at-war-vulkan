@@ -1,53 +1,51 @@
-//! Steam Workshop for Empire at War through the Steamworks API.
+//! Steam Workshop for Empire at War, without any Valve code in the launcher.
 //!
-//! Everything that talks to Steam lives here, behind [`Workshop`]. Pages never see a
-//! `steamworks` type. The rules this module keeps:
+//! The launcher ships no Steamworks DLL (Gabriel, 2026-11-13). Where each thing comes from:
 //!
-//! * Nothing touches Steam until [`Workshop::connect`] is called. While connected Steam shows
-//!   the user as playing Empire at War, so connecting is always the user's choice.
-//! * The Steam client lives in a **helper process**: the launcher's own exe started again
-//!   with [`HELPER_ARG`] (see `main.rs`), with no window. Steam counts the game as running
-//!   for as long as a process that initialised the Steam API is alive. Shutting the API
-//!   down is not enough (measured: the "Running" flag stays set until the process exits).
-//!   So disconnecting means ending that process, and it must not be the launcher. It also
-//!   keeps anything the Steam DLL does out of the launcher's own process.
-//! * The two talk over the helper's stdin/stdout, one JSON message per line. In the launcher
-//!   a reader and a writer thread sit on the pipes, so the UI thread never waits on Steam;
-//!   results arrive through a channel and wake the UI with `request_repaint`.
-//! * `steam_api64.dll` is a delay-loaded import (see `build.rs`). Only the helper loads it,
-//!   by full path from the exe's own folder, right before the first Steam call. A missing
-//!   DLL is an ordinary error message, and the launcher itself never needs it to start.
-//! * Preview images come from the URL Steam returned for the item, only from Steam's own
-//!   hosts, over HTTPS, size-limited, a few at a time, cached on disk.
+//! * Subscriptions and install state: Steam's own records on this PC,
+//!   `appworkshop_<appid>.acf`, and the item folders under `workshop\content\<appid>`. An
+//!   item Steam is fetching has a folder under `workshop\downloads\<appid>`; its size
+//!   against the item's size is the download progress.
+//! * Titles, descriptions, preview images and sizes: Steam's public web API
+//!   (`ISteamRemoteStorage/GetPublishedFileDetails`), which needs no key.
+//! * Searching the Workshop: `IPublishedFileService/QueryFiles`, which Steam only answers
+//!   with a Steam Web API key. With the user's own key (Settings) the Browse tab searches
+//!   inside the launcher; without one it opens the same search in the Steam client.
+//! * Subscribing, unsubscribing and updating: the Steam client does those. The launcher
+//!   opens the item's page (`steam://url/CommunityFilePage/<id>`) or Steam's Downloads page,
+//!   then watches Steam's records for the result. Several subscriptions (a profile import)
+//!   open one after the other, each once the previous one shows up in Steam's records.
+//! * Web requests run on one worker thread; results arrive through a channel and wake the
+//!   UI with `request_repaint`. Preview images come only from Steam's own hosts, over
+//!   HTTPS, size-limited, a few at a time, cached on disk.
 
 use crate::config;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io::{BufRead, Write};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use steamworks as sw;
 
 /// Star Wars: Empire at War (Gold Pack) on Steam.
 pub const APP_ID: u32 = 32470;
 
-/// First command-line argument that makes the exe run as the Steam helper instead of
-/// opening the launcher. `main` checks for it before anything else.
-pub const HELPER_ARG: &str = "--steam-workshop-helper";
-/// Starts every message the helper prints. The Steam DLL writes to stdout too.
-const MESSAGE_MARK: &str = "@@workshop ";
-
-const DLL_NAME: &str = "steam_api64.dll";
-/// Steam's page size for Workshop queries.
+/// Workshop items per search page.
 pub const PAGE_SIZE: u32 = 50;
 /// "Most popular" ranks by subscriptions gained over this many days.
 const TREND_DAYS: u32 = 30;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
+/// How long a subscribe or unsubscribe handed to the Steam client is waited for.
+const STEAM_WAIT: Duration = Duration::from_secs(180);
+/// How often Steam's records are looked at: normally, and while something is changing.
+const LOCAL_EVERY: Duration = Duration::from_secs(5);
+const LOCAL_EVERY_BUSY: Duration = Duration::from_secs(1);
+/// After a web request failed, quiet time before the next failure is reported.
+const ERROR_QUIET: Duration = Duration::from_secs(60);
+const DETAILS_URL: &str = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
+const QUERY_URL: &str = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/";
+const JSON_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const PREVIEW_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const PREVIEW_WORKERS: usize = 3;
 const PREVIEW_EXT: [&str; 4] = ["jpg", "png", "gif", "webp"];
@@ -62,29 +60,6 @@ const PREVIEW_HOSTS: [&str; 6] = [
 ];
 
 // ------------------------------------------------------------------ public types
-
-/// Why connecting failed, in words for the user.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Failure {
-    pub reason: String,
-    /// What Steam (or Windows) actually said. May be empty.
-    pub detail: String,
-}
-
-impl Failure {
-    fn new(reason: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { reason: reason.into(), detail: detail.into() }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum Status {
-    #[default]
-    Disconnected,
-    Connecting,
-    Connected,
-    Failed(Failure),
-}
 
 /// One Workshop item as Steam describes it.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -103,6 +78,9 @@ pub struct Item {
     /// Unix seconds of the last update.
     pub updated: i64,
     pub tags: Vec<String>,
+    /// Size of the item's files in bytes (0 = not reported).
+    #[serde(default)]
+    pub file_size: u64,
 }
 
 impl Item {
@@ -129,7 +107,7 @@ pub struct ItemStatus {
 }
 
 impl ItemStatus {
-    /// Download progress in percent, when Steam knows the total.
+    /// Download progress in percent, when the total is known.
     pub fn percent(&self) -> Option<u32> {
         (self.downloading && self.bytes_total > 0)
             .then(|| ((self.bytes_done as f64 / self.bytes_total as f64) * 100.0).clamp(0.0, 100.0) as u32)
@@ -162,12 +140,25 @@ impl Sort {
         }
     }
 
-    fn query_type(self) -> sw::UGCQueryType {
+    /// `query_type` for `QueryFiles` (Steam's EPublishedFileQueryType). A search ranked by
+    /// popularity is ranked by how well the text matches instead, as on the Workshop site.
+    fn query_type(self, searching: bool) -> u32 {
         match self {
-            Sort::Popular => sw::UGCQueryType::RankedByTrend,
-            Sort::Subscribed => sw::UGCQueryType::RankedByTotalUniqueSubscriptions,
-            Sort::Updated => sw::UGCQueryType::RankedByLastUpdatedDate,
-            Sort::Rated => sw::UGCQueryType::RankedByVote,
+            Sort::Popular if searching => 12, // RankedByTextSearch
+            Sort::Popular => 3,               // RankedByTrend
+            Sort::Subscribed => 9,            // RankedByTotalUniqueSubscriptions
+            Sort::Updated => 21,              // RankedByLastUpdatedDate
+            Sort::Rated => 0,                 // RankedByVote
+        }
+    }
+
+    /// `browsesort` on the Workshop site.
+    fn site_key(self) -> &'static str {
+        match self {
+            Sort::Popular => "trend",
+            Sort::Subscribed => "totaluniquesubscribers",
+            Sort::Updated => "lastupdated",
+            Sort::Rated => "toprated",
         }
     }
 }
@@ -207,7 +198,7 @@ pub enum Notice {
 }
 
 /// Title and description Steam has for a Workshop item, kept so that installed Workshop
-/// mods have real names even when the launcher is not connected.
+/// mods have real names without asking Steam every time.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Title {
     #[serde(default)]
@@ -256,14 +247,54 @@ fn open_url(url: &str) -> Result<(), String> {
         .map_err(|e| format!("Couldn't open Steam: {e}"))
 }
 
-/// Opens the game's Workshop front page in the Steam client. Works without connecting.
+/// Opens the game's Workshop front page in the Steam client.
 pub fn open_workshop_home() -> Result<(), String> {
     open_url(&format!("steam://url/SteamWorkshopPage/{APP_ID}"))
 }
 
-/// Opens one Workshop item's page in the Steam client. Works without connecting.
+/// Opens one Workshop item's page in the Steam client: where Subscribe and Unsubscribe are.
 pub fn open_item_page(id: u64) -> Result<(), String> {
     open_url(&format!("steam://url/CommunityFilePage/{id}"))
+}
+
+/// Opens Steam's Downloads page, where Workshop updates are queued and can be started.
+pub fn open_downloads() -> Result<(), String> {
+    open_url("steam://open/downloads")
+}
+
+/// The Workshop site's search for the game, as a URL.
+pub fn search_url(text: &str, sort: Sort) -> String {
+    let mut url = format!(
+        "https://steamcommunity.com/workshop/browse/?appid={APP_ID}&browsesort={}&section=readytouseitems",
+        sort.site_key()
+    );
+    if sort == Sort::Popular {
+        url.push_str(&format!("&days={TREND_DAYS}"));
+    }
+    let text = text.trim();
+    if !text.is_empty() {
+        url.push_str("&searchtext=");
+        url.push_str(&encode_component(text));
+    }
+    url
+}
+
+/// Opens a Workshop search in the Steam client's own browser.
+pub fn open_search_in_steam(text: &str, sort: Sort) -> Result<(), String> {
+    open_url(&format!("steam://openurl/{}", search_url(text, sort)))
+}
+
+/// Percent-encodes everything but unreserved characters (RFC 3986), for a URL query value.
+fn encode_component(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Finds the item id in a pasted Workshop link (`...filedetails/?id=123`,
@@ -581,159 +612,333 @@ pub fn local_state_path(workshop_content_dir: &Path) -> Option<PathBuf> {
     Some(workshop_content_dir.parent()?.parent()?.join(format!("appworkshop_{APP_ID}.acf")))
 }
 
-// ------------------------------------------------------------------ launcher <-> helper messages
+/// Steam's download folder for the game's Workshop items (`...\workshop\downloads\<appid>`),
+/// given its content folder (`...\workshop\content\<appid>`).
+pub fn downloads_dir(workshop_content_dir: &Path) -> Option<PathBuf> {
+    Some(workshop_content_dir.parent()?.parent()?.join("downloads").join(APP_ID.to_string()))
+}
 
-#[derive(Serialize, Deserialize)]
-enum Cmd {
-    Refresh,
+/// Builds what the launcher shows for one item from Steam's records and the folders on disk.
+/// `downloading` is the byte count in its download folder, when it has one.
+fn local_status(
+    record: Option<&LocalItem>,
+    pending: bool,
+    folder: Option<PathBuf>,
+    downloading: Option<u64>,
+    file_size: u64,
+) -> ItemStatus {
+    let Some(record) = record else {
+        // Not in Steam's records (yet), but Steam may already be fetching it.
+        return ItemStatus {
+            subscribed: downloading.is_some(),
+            downloading: downloading.is_some(),
+            bytes_done: downloading.unwrap_or(0),
+            bytes_total: file_size,
+            ..Default::default()
+        };
+    };
+    let installed = record.installed && folder.is_some();
+    let needs_update = installed && record.update_available();
+    // Recorded but not on disk: Steam has it queued (or is about to, when `pending`).
+    let queued = !installed && (pending || record.latest_time_updated > 0 || !record.latest_manifest.is_empty());
+    ItemStatus {
+        subscribed: true,
+        installed,
+        needs_update,
+        downloading: downloading.is_some() || queued,
+        bytes_done: downloading.unwrap_or(0),
+        bytes_total: file_size,
+        size_on_disk: if installed { record.size } else { 0 },
+        folder: folder.filter(|_| installed),
+    }
+}
+
+// ------------------------------------------------------------------ web requests
+
+enum Job {
     Details(Vec<u64>),
-    Query { req: u64, text: String, sort: Sort, page: u32 },
-    Subscribe(u64),
-    Unsubscribe(u64),
-    Download(u64),
-    Disconnect,
+    Query { req: u64, key: String, text: String, sort: Sort, page: u32 },
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
-    Subscribe,
-    Unsubscribe,
-}
-
-#[derive(Serialize, Deserialize)]
-enum Event {
-    Connected,
-    Failed(Failure),
-    Subscribed(Vec<u64>),
-    States(Vec<(u64, ItemStatus)>),
-    Details(Vec<Item>),
+enum Done {
+    Details(Result<Vec<Item>, String>),
     Page { req: u64, result: Result<(Vec<Item>, u32), String> },
-    Action { id: u64, action: Action, result: Result<(), String> },
-    Installed(u64),
-    Removed,
-    Error(String),
 }
 
-struct Link {
-    tx: Sender<Cmd>,
-    rx: Receiver<Event>,
+struct Web {
+    tx: Sender<Job>,
+    rx: Receiver<Done>,
+}
+
+/// Starts the worker thread that makes the web requests, one at a time.
+fn start_web(ctx: &egui::Context) -> Option<Web> {
+    let (job_tx, job_rx) = mpsc::channel::<Job>();
+    let (done_tx, done_rx) = mpsc::channel::<Done>();
+    let ctx = ctx.clone();
+    std::thread::Builder::new()
+        .name("workshop-web".into())
+        .spawn(move || {
+            for job in job_rx {
+                let done = match job {
+                    Job::Details(ids) => Done::Details(fetch_details(&ids)),
+                    Job::Query { req, key, text, sort, page } => {
+                        Done::Page { req, result: fetch_page(&key, &text, sort, page) }
+                    }
+                };
+                if done_tx.send(done).is_err() {
+                    break;
+                }
+                ctx.request_repaint();
+            }
+        })
+        .ok()?;
+    Some(Web { tx: job_tx, rx: done_rx })
+}
+
+/// A request that went wrong, in words for the user.
+fn web_error(error: ureq::Error) -> String {
+    match error {
+        ureq::Error::StatusCode(401 | 403) => {
+            "Steam refused the request. Check the Steam Web API key in Settings.".to_owned()
+        }
+        ureq::Error::StatusCode(429) => "Steam says too many requests. Try again in a moment.".to_owned(),
+        ureq::Error::StatusCode(code) if code >= 500 => format!("Steam's web service had a problem (HTTP {code})."),
+        ureq::Error::StatusCode(code) => format!("Steam answered HTTP {code}."),
+        ureq::Error::Timeout(_) => "Steam didn't answer in time.".to_owned(),
+        other => format!("Couldn't reach Steam: {other}"),
+    }
+}
+
+fn read_json(response: &mut ureq::http::Response<ureq::Body>) -> Result<serde_json::Value, String> {
+    let text = response
+        .body_mut()
+        .with_config()
+        .limit(JSON_MAX_BYTES)
+        .read_to_string()
+        .map_err(|e| format!("Couldn't read Steam's answer: {e}"))?;
+    serde_json::from_str(&text).map_err(|_| "Steam's answer wasn't readable.".to_owned())
+}
+
+/// A number Steam sends either as a JSON number or as text.
+fn number(value: &serde_json::Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
+/// One entry of `publishedfiledetails` (both web APIs use this shape). `None` for entries
+/// Steam marks as failed (`result` other than 1: deleted, hidden, unknown id).
+fn parse_item(value: &serde_json::Value) -> Option<Item> {
+    if value.get("result").and_then(number).is_some_and(|r| r != 1) {
+        return None;
+    }
+    let id = value.get("publishedfileid").and_then(number).filter(|id| *id > 0)?;
+    let text = |key: &str| value.get(key).and_then(|v| v.as_str()).unwrap_or_default();
+    let description = ["description", "file_description", "short_description"]
+        .into_iter()
+        .map(text)
+        .find(|d| !d.trim().is_empty())
+        .unwrap_or_default();
+    let votes = value.get("vote_data");
+    let vote = |key: &str| votes.and_then(|v| v.get(key)).and_then(number).unwrap_or(0);
+    let tags = value
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|tags| {
+            tags.iter()
+                .filter_map(|t| t.get("tag").and_then(|s| s.as_str()).or_else(|| t.as_str()))
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Item {
+        id,
+        title: text("title").trim().to_owned(),
+        description: plain_text(description, 600),
+        preview_url: text("preview_url").trim().to_owned(),
+        subscribers: value.get("subscriptions").and_then(number),
+        votes_up: u32::try_from(vote("votes_up")).unwrap_or(u32::MAX),
+        votes_down: u32::try_from(vote("votes_down")).unwrap_or(u32::MAX),
+        score: votes.and_then(|v| v.get("score")).and_then(|s| s.as_f64()).unwrap_or(0.0) as f32,
+        updated: value.get("time_updated").and_then(number).map_or(0, |t| i64::try_from(t).unwrap_or(0)),
+        tags,
+        file_size: value.get("file_size").and_then(number).unwrap_or(0),
+    })
+}
+
+/// The items of an answer from either web API.
+fn parse_items(json: &serde_json::Value) -> Vec<Item> {
+    json.pointer("/response/publishedfiledetails")
+        .and_then(|list| list.as_array())
+        .map(|list| list.iter().filter_map(parse_item).collect())
+        .unwrap_or_default()
+}
+
+/// Title, description, preview and size of these items. Needs no key.
+fn fetch_details(ids: &[u64]) -> Result<Vec<Item>, String> {
+    let mut form: Vec<(String, String)> = vec![("itemcount".to_owned(), ids.len().to_string())];
+    for (i, id) in ids.iter().enumerate() {
+        form.push((format!("publishedfileids[{i}]"), id.to_string()));
+    }
+    let mut response = http_agent()
+        .post(DETAILS_URL)
+        .send_form(form.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .map_err(web_error)?;
+    Ok(parse_items(&read_json(&mut response)?))
+}
+
+/// The `QueryFiles` request for one search page, without the key.
+fn query_url(text: &str, sort: Sort, page: u32) -> String {
+    let text = text.trim();
+    let mut url = format!(
+        "{QUERY_URL}?appid={APP_ID}&creator_appid={APP_ID}&filetype=0&query_type={}&page={}&numperpage={PAGE_SIZE}&return_vote_data=true&return_tags=true",
+        sort.query_type(!text.is_empty()),
+        page.max(1)
+    );
+    if sort == Sort::Popular && text.is_empty() {
+        url.push_str(&format!("&days={TREND_DAYS}"));
+    }
+    if !text.is_empty() {
+        url.push_str("&search_text=");
+        url.push_str(&encode_component(text));
+    }
+    url
+}
+
+/// One page of a Workshop search, and the number of matches. Needs a Steam Web API key.
+fn fetch_page(key: &str, text: &str, sort: Sort, page: u32) -> Result<(Vec<Item>, u32), String> {
+    let url = format!("{}&key={}", query_url(text, sort, page), encode_component(key.trim()));
+    let mut response = http_agent().get(&url).call().map_err(web_error)?;
+    let json = read_json(&mut response)?;
+    let total = json.pointer("/response/total").and_then(number).unwrap_or(0);
+    Ok((parse_items(&json), u32::try_from(total).unwrap_or(u32::MAX)))
 }
 
 // ------------------------------------------------------------------ the handle pages use
 
-/// The launcher's connection to Steam Workshop. `Default` is cheap and does nothing.
+/// A subscribe or unsubscribe handed to the Steam client, waiting to show up in its records.
+struct Pending {
+    since: Instant,
+    subscribe: bool,
+}
+
+/// The launcher's view of the game's Workshop. `Default` is cheap and does nothing until
+/// [`Workshop::configure`] and [`Workshop::poll`] are called.
 #[derive(Default)]
 pub struct Workshop {
-    status: Status,
-    link: Option<Link>,
-    connect_started: Option<Instant>,
+    ctx: Option<egui::Context>,
+    /// `...\steamapps\workshop\content\<appid>`.
+    content_dir: Option<PathBuf>,
+    api_key: String,
+    web: Option<Web>,
+    last_web_error: Option<Instant>,
     items: HashMap<u64, Item>,
-    states: HashMap<u64, ItemStatus>,
-    subscribed: Option<Vec<u64>>,
+    /// Ids whose details were asked for in this session.
+    asked: HashSet<u64>,
+    titles: Option<Titles>,
+    previews: Previews,
     browse: Browse,
     browse_req: u64,
     browse_sent: Option<Instant>,
-    /// Subscribe / unsubscribe requests Steam has not answered yet.
-    busy: HashMap<u64, Instant>,
-    titles: Option<Titles>,
-    previews: Previews,
+
+    /// Steam's records as last read, and the file's time and size then.
+    local: Option<LocalState>,
+    local_file: Option<(Option<std::time::SystemTime>, u64)>,
+    local_read: bool,
+    local_checked: Option<Instant>,
+    local_failures: u32,
+    /// What Steam's records and folders say about each item they mention.
+    states: HashMap<u64, ItemStatus>,
+    subscribed: Vec<u64>,
+    /// Bytes in each download folder, measured on a worker thread.
+    downloads: HashMap<u64, u64>,
+    measuring: Arc<AtomicBool>,
+    measured: Option<(Sender<HashMap<u64, u64>>, Receiver<HashMap<u64, u64>>)>,
+
+    busy: HashMap<u64, Pending>,
+    /// Subscriptions still to be opened in Steam, one after the other.
+    queue: VecDeque<u64>,
+    /// Until then, read Steam's records every second.
+    watch_until: Option<Instant>,
+    notices: Vec<Notice>,
 }
 
 impl Workshop {
-    pub fn status(&self) -> &Status {
-        &self.status
+    /// Tells the handle where Steam keeps the game's Workshop items and which key (if any)
+    /// to search with. Cheap; call every frame before [`Workshop::poll`].
+    pub fn configure(&mut self, ctx: &egui::Context, content_dir: Option<&Path>, api_key: &str) {
+        if self.ctx.is_none() {
+            self.ctx = Some(ctx.clone());
+        }
+        if self.content_dir.as_deref() != content_dir {
+            self.content_dir = content_dir.map(Path::to_path_buf);
+            self.local = None;
+            self.local_file = None;
+            self.local_read = false;
+            self.local_checked = None;
+            self.states.clear();
+            self.subscribed.clear();
+        }
+        if self.api_key != api_key.trim() {
+            self.api_key = api_key.trim().to_owned();
+            // A search made without the key (or with another one) is out of date.
+            self.browse.started = false;
+        }
     }
 
-    pub fn is_connected(&self) -> bool {
-        self.status == Status::Connected
+    /// True when searches run inside the launcher (a Steam Web API key is set).
+    pub fn can_search(&self) -> bool {
+        !self.api_key.is_empty()
     }
 
-    /// Starts connecting. The result shows up in [`Workshop::status`] a moment later.
-    pub fn connect(&mut self, ctx: &egui::Context) {
-        if matches!(self.status, Status::Connecting | Status::Connected) {
+    fn send(&mut self, job: Job) -> bool {
+        if self.web.is_none() {
+            self.web = self.ctx.as_ref().and_then(start_web);
+        }
+        self.web.as_ref().is_some_and(|w| w.tx.send(job).is_ok())
+    }
+
+    fn report_web_error(&mut self, error: String) {
+        if self.last_web_error.is_some_and(|t| t.elapsed() < ERROR_QUIET) {
             return;
         }
-        self.reset_session();
-        match start_helper(ctx) {
-            Ok(link) => {
-                self.link = Some(link);
-                self.connect_started = Some(Instant::now());
-                self.status = Status::Connecting;
-            }
-            Err(failure) => self.status = Status::Failed(failure),
-        }
+        self.last_web_error = Some(Instant::now());
+        self.notices.push(Notice::Error(format!("Couldn't get Workshop details from Steam. {error}")));
     }
 
-    /// Ends the helper process. Steam stops showing the game as running a few seconds later.
-    pub fn disconnect(&mut self) {
-        if let Some(link) = self.link.take() {
-            let _ = link.tx.send(Cmd::Disconnect);
-        }
-        self.reset_session();
-        self.status = Status::Disconnected;
+    fn watch_closely(&mut self) {
+        self.watch_until = Some(Instant::now() + STEAM_WAIT);
+        self.local_checked = None;
     }
 
-    fn reset_session(&mut self) {
-        self.link = None;
-        self.connect_started = None;
-        self.states.clear();
-        self.subscribed = None;
-        self.browse = Browse::default();
-        self.browse_sent = None;
-        self.busy.clear();
-    }
-
-    fn send(&mut self, cmd: Cmd) -> bool {
-        self.link.as_ref().is_some_and(|l| l.tx.send(cmd).is_ok())
-    }
-
-    fn fail(&mut self, failure: Failure) {
-        self.reset_session();
-        self.status = Status::Failed(failure);
-    }
-
-    /// Collects what Steam reported since the last call. Call once per frame while the page
-    /// that owns this is on screen. Cheap when nothing happened.
+    /// Collects web answers, reads Steam's records when they changed and follows what was
+    /// handed to the Steam client. Call once per frame. Cheap when nothing happened.
     pub fn poll(&mut self, ctx: &egui::Context) -> Vec<Notice> {
-        let mut notices = Vec::new();
         self.previews.collect();
+        let mut titles_changed = false;
 
-        let Some(link) = &self.link else { return notices };
-        let mut events = Vec::new();
-        let mut lost = false;
-        loop {
-            match link.rx.try_recv() {
-                Ok(event) => events.push(event),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    // The helper is gone. Fine if it said why; otherwise it died.
-                    lost = true;
-                    break;
+        let mut done = Vec::new();
+        if let Some(web) = &self.web {
+            loop {
+                match web.rx.try_recv() {
+                    Ok(d) => done.push(d),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.web = None;
+                        break;
+                    }
                 }
             }
         }
-
-        let mut titles_changed = false;
-        let mut rescan = false;
-        for event in events {
-            match event {
-                Event::Connected => {
-                    self.status = Status::Connected;
-                    self.connect_started = None;
-                }
-                Event::Failed(failure) => {
-                    self.fail(failure);
-                    return notices;
-                }
-                Event::Subscribed(ids) => self.subscribed = Some(ids),
-                Event::States(list) => self.states.extend(list),
-                Event::Details(items) => {
+        for d in done {
+            match d {
+                Done::Details(Ok(items)) => {
                     for item in items {
                         titles_changed |= self.remember_title(&item);
                         self.items.insert(item.id, item);
                     }
                 }
-                Event::Page { req, result } => {
+                Done::Details(Err(e)) => self.report_web_error(e),
+                Done::Page { req, result } => {
                     if req != self.browse_req {
                         continue;
                     }
@@ -755,44 +960,56 @@ impl Workshop {
                         }
                     }
                 }
-                Event::Action { id, action, result } => {
-                    self.busy.remove(&id);
-                    let title = self.title(id);
-                    match (action, result) {
-                        (Action::Subscribe, Ok(())) => {
-                            if let Some(item) = self.items.get(&id).cloned() {
-                                titles_changed |= self.remember_title(&item);
-                            }
-                        }
-                        (Action::Unsubscribe, Ok(())) => notices.push(Notice::Info(format!("Unsubscribed from {title}"))),
-                        (Action::Subscribe, Err(e)) => {
-                            notices.push(Notice::Error(format!("Couldn't subscribe to {title}: {e}")))
-                        }
-                        (Action::Unsubscribe, Err(e)) => {
-                            notices.push(Notice::Error(format!("Couldn't unsubscribe from {title}: {e}")))
-                        }
-                    }
-                }
-                Event::Installed(id) => {
-                    notices.push(Notice::Info(format!("{} is installed", self.title(id))));
-                    rescan = true;
-                }
-                Event::Removed => rescan = true,
-                Event::Error(e) => notices.push(Notice::Error(e)),
             }
         }
 
-        if lost {
-            self.fail(Failure::new("The connection to Steam stopped unexpectedly.", ""));
-            return notices;
+        if let Some((_, rx)) = &self.measured {
+            if let Some(sizes) = rx.try_iter().last() {
+                self.downloads = sizes;
+                self.local_checked = None;
+            }
         }
 
-        // Nothing here may wait forever on Steam.
         let now = Instant::now();
-        if self.connect_started.is_some_and(|t| now.duration_since(t) > CONNECT_TIMEOUT) {
-            self.fail(Failure::new("Steam didn't answer. Check that Steam is running and signed in, then try again.", ""));
-            return notices;
+        let watching = self.watch_until.is_some_and(|t| now < t);
+        let busy = watching || !self.busy.is_empty() || !self.downloads.is_empty();
+        let every = if busy { LOCAL_EVERY_BUSY } else { LOCAL_EVERY };
+        if self.local_checked.is_none_or(|t| t.elapsed() >= every) {
+            self.local_checked = Some(now);
+            self.refresh_local(ctx);
         }
+
+        // Follow what was handed to the Steam client.
+        let mut finished = Vec::new();
+        for (id, p) in &self.busy {
+            let subscribed = self.is_recorded(*id);
+            if p.subscribe == subscribed {
+                finished.push((*id, true, p.subscribe));
+            } else if now.duration_since(p.since) > STEAM_WAIT {
+                finished.push((*id, false, p.subscribe));
+            }
+        }
+        for (id, ok, subscribe) in finished {
+            self.busy.remove(&id);
+            let title = self.title(id);
+            self.notices.push(Notice::Info(match (ok, subscribe) {
+                (true, true) => format!("Subscribed to {title}. Steam downloads it next."),
+                (true, false) => format!("Unsubscribed from {title}."),
+                (false, true) => format!("Steam hasn't recorded a subscription to {title}."),
+                (false, false) => format!("Steam still lists {title} as subscribed."),
+            }));
+            if ok && subscribe {
+                if let Some(item) = self.items.get(&id).cloned() {
+                    titles_changed |= self.remember_title(&item);
+                }
+            }
+        }
+        self.open_next_subscription();
+
+        // Names for subscriptions the launcher hasn't seen yet.
+        let unnamed: Vec<u64> = self.subscribed.iter().copied().filter(|id| !self.items.contains_key(id)).collect();
+        self.request_details(&unnamed);
+
         if self.browse.loading && self.browse_sent.is_some_and(|t| now.duration_since(t) > REQUEST_TIMEOUT) {
             self.browse.loading = false;
             self.browse_sent = None;
@@ -801,28 +1018,115 @@ impl Workshop {
             self.browse.total = 0;
             self.browse.error = Some("Steam didn't answer in time.".to_owned());
         }
-        let late: Vec<u64> =
-            self.busy.iter().filter(|(_, t)| now.duration_since(**t) > REQUEST_TIMEOUT).map(|(id, _)| *id).collect();
-        for id in late {
-            self.busy.remove(&id);
-            notices.push(Notice::Error(format!("Steam didn't answer about {}.", self.title(id))));
-        }
-        if self.connect_started.is_some() || self.browse.loading || !self.busy.is_empty() {
+        if busy || self.browse.loading {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
 
         if titles_changed {
             if let Some(titles) = &self.titles {
                 if let Err(e) = save_titles(titles) {
-                    notices.push(Notice::Error(e));
+                    self.notices.push(Notice::Error(e));
                 }
             }
-            notices.push(Notice::TitlesChanged);
+            self.notices.push(Notice::TitlesChanged);
+        }
+        std::mem::take(&mut self.notices)
+    }
+
+    /// Reads Steam's records again if the file changed, looks at the download folders, and
+    /// works out each item's state.
+    fn refresh_local(&mut self, ctx: &egui::Context) {
+        let Some(content) = self.content_dir.clone() else {
+            self.local_read = false;
+            return;
+        };
+        if let Some(path) = local_state_path(&content) {
+            let file = std::fs::metadata(&path).ok().map(|m| (m.modified().ok(), m.len()));
+            if file != self.local_file || !self.local_read {
+                match LocalState::read(&path) {
+                    Ok(local) => {
+                        self.local = local;
+                        self.local_file = file;
+                        self.local_read = true;
+                        self.local_failures = 0;
+                    }
+                    Err(e) => {
+                        // Steam may be in the middle of writing it: only report a lasting problem.
+                        self.local_failures += 1;
+                        if self.local_failures == 3 {
+                            self.notices.push(Notice::Error(e));
+                        }
+                        if !self.local_read {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Items Steam is fetching right now have a folder in its download area.
+        let fetching: Vec<(u64, PathBuf)> = downloads_dir(&content)
+            .and_then(|dir| std::fs::read_dir(dir).ok())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .filter_map(|e| Some((e.file_name().to_str()?.parse::<u64>().ok()?, e.path())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.downloads.retain(|id, _| fetching.iter().any(|(f, _)| f == id));
+        for (id, _) in &fetching {
+            self.downloads.entry(*id).or_insert(0);
+        }
+        if !fetching.is_empty() && !self.measuring.swap(true, Ordering::SeqCst) {
+            let tx = self.measured.get_or_insert_with(mpsc::channel).0.clone();
+            let (flag, ctx) = (self.measuring.clone(), ctx.clone());
+            let spawned = std::thread::Builder::new().name("workshop-downloads".into()).spawn(move || {
+                let sizes: HashMap<u64, u64> = fetching.into_iter().map(|(id, dir)| (id, folder_bytes(&dir))).collect();
+                let _ = tx.send(sizes);
+                flag.store(false, Ordering::SeqCst);
+                ctx.request_repaint();
+            });
+            if spawned.is_err() {
+                self.measuring.store(false, Ordering::SeqCst);
+            }
+        }
+
+        let pending = self.local.as_ref().is_some_and(|l| l.pending);
+        let mut ids: Vec<u64> = self.local.as_ref().map(|l| l.items.keys().copied().collect()).unwrap_or_default();
+        ids.extend(self.downloads.keys().copied());
+        ids.sort_unstable();
+        ids.dedup();
+        let mut states = HashMap::new();
+        for id in &ids {
+            let record = self.local.as_ref().and_then(|l| l.item(*id));
+            let folder = Some(content.join(id.to_string())).filter(|f| f.is_dir());
+            let size = self.items.get(id).map_or(0, |i| i.file_size);
+            states.insert(*id, local_status(record, pending, folder, self.downloads.get(id).copied(), size));
+        }
+
+        // Say what finished, and have the mod list rescanned when files appeared or went.
+        let mut rescan = false;
+        for (id, new) in &states {
+            match self.states.get(id) {
+                Some(old) if new.ready() && !old.ready() => {
+                    self.notices.push(Notice::Info(format!("{} is installed", self.title(*id))));
+                    rescan = true;
+                }
+                Some(old) if old.installed != new.installed => rescan = true,
+                None if self.local_read && new.installed && !self.states.is_empty() => rescan = true,
+                _ => {}
+            }
+        }
+        if self.states.iter().any(|(id, old)| old.installed && !states.contains_key(id)) {
+            rescan = true;
         }
         if rescan {
-            notices.push(Notice::Rescan);
+            self.notices.push(Notice::Rescan);
         }
-        notices
+        self.subscribed = ids;
+        self.states = states;
     }
 
     /// Stores the item's title for offline use. True when the cache changed.
@@ -845,24 +1149,40 @@ impl Workshop {
         self.titles.get_or_insert_with(load_titles)
     }
 
-    /// Ids of the items the account is subscribed to. `None` until Steam has answered.
+    /// Ids of the items Steam's records on this PC list for the game: what the account is
+    /// subscribed to here. `None` while Steam's Workshop folder or records aren't known.
     pub fn subscribed(&self) -> Option<&[u64]> {
-        self.subscribed.as_deref()
+        (self.content_dir.is_some() && self.local_read).then_some(self.subscribed.as_slice())
+    }
+
+    fn is_recorded(&self, id: u64) -> bool {
+        self.states.get(&id).is_some_and(|s| s.subscribed)
     }
 
     pub fn is_subscribed(&self, id: u64) -> bool {
-        self.states.get(&id).is_some_and(|s| s.subscribed) || self.subscribed.as_ref().is_some_and(|s| s.contains(&id))
+        self.is_recorded(id)
     }
 
-    /// Asks Steam again for the subscription list, item details and install states.
+    /// Reads Steam's records again and asks for the subscriptions' details again.
     pub fn refresh_subscribed(&mut self) {
-        self.send(Cmd::Refresh);
+        self.local_file = None;
+        self.local_read = false;
+        self.local_checked = None;
+        let ids = self.subscribed.clone();
+        for id in &ids {
+            self.asked.remove(id);
+        }
+        self.request_details(&ids);
     }
 
-    /// Asks Steam for the details (title, description, preview) of these items.
+    /// Asks Steam's web API for the details (title, description, preview, size) of these
+    /// items, once per session each.
     pub fn request_details(&mut self, ids: &[u64]) {
-        if !ids.is_empty() {
-            self.send(Cmd::Details(ids.to_vec()));
+        let new: Vec<u64> = ids.iter().copied().filter(|id| *id > 0 && !self.asked.contains(id)).collect();
+        for chunk in new.chunks(PAGE_SIZE as usize) {
+            if self.send(Job::Details(chunk.to_vec())) {
+                self.asked.extend(chunk.iter().copied());
+            }
         }
     }
 
@@ -881,24 +1201,23 @@ impl Workshop {
         format!("Workshop item {id}")
     }
 
-    /// Install state and download progress. Refreshed about once a second while Steam is
-    /// downloading something, every few seconds otherwise.
+    /// Install state and download progress, from Steam's records and folders.
     pub fn item_status(&self, id: u64) -> ItemStatus {
         self.states.get(&id).cloned().unwrap_or_default()
     }
 
-    /// Like [`Workshop::item_status`], but `None` while Steam has said nothing about the
-    /// item (not connected, or not asked about it yet).
+    /// Like [`Workshop::item_status`], but `None` for items Steam's records don't mention.
     pub fn known_status(&self, id: u64) -> Option<&ItemStatus> {
         self.states.get(&id)
     }
 
-    /// A subscribe or unsubscribe for this item is waiting for Steam's answer.
+    /// A subscribe or unsubscribe for this item is with the Steam client, or waiting its turn.
     pub fn is_busy(&self, id: u64) -> bool {
-        self.busy.contains_key(&id)
+        self.busy.contains_key(&id) || self.queue.contains(&id)
     }
 
-    /// Runs a Workshop search. `page` is 1-based. Results arrive in [`Workshop::browse`].
+    /// Runs a Workshop search inside the launcher (needs a key: see [`Workshop::can_search`]).
+    /// `page` is 1-based. Results arrive in [`Workshop::browse`].
     pub fn search(&mut self, text: &str, sort: Sort, page: u32) {
         self.browse_req += 1;
         let page = page.max(1);
@@ -908,12 +1227,19 @@ impl Workshop {
         self.browse.page = page;
         self.browse.started = true;
         self.browse.error = None;
-        if self.send(Cmd::Query { req: self.browse_req, text, sort, page }) {
+        if self.api_key.is_empty() {
+            self.browse.loading = false;
+            self.browse.items.clear();
+            self.browse.total = 0;
+            return;
+        }
+        let job = Job::Query { req: self.browse_req, key: self.api_key.clone(), text, sort, page };
+        if self.send(job) {
             self.browse.loading = true;
             self.browse_sent = Some(Instant::now());
         } else {
             self.browse.loading = false;
-            self.browse.error = Some("Not connected to Steam.".to_owned());
+            self.browse.error = Some("The launcher couldn't start its web requests.".to_owned());
         }
     }
 
@@ -921,31 +1247,100 @@ impl Workshop {
         &self.browse
     }
 
-    /// Subscribes and starts the download straight away.
+    /// Opens the item's page in Steam to subscribe there, and watches for the result. Several
+    /// calls open the pages one after the other.
     pub fn subscribe(&mut self, id: u64) {
-        if self.send(Cmd::Subscribe(id)) {
-            self.busy.insert(id, Instant::now());
+        if self.is_recorded(id) || self.is_busy(id) {
+            return;
+        }
+        self.queue.push_back(id);
+        self.open_next_subscription();
+    }
+
+    fn open_next_subscription(&mut self) {
+        if self.busy.values().any(|p| p.subscribe) {
+            return;
+        }
+        while let Some(id) = self.queue.pop_front() {
+            if self.is_recorded(id) {
+                continue;
+            }
+            match open_item_page(id) {
+                Ok(()) => {
+                    self.busy.insert(id, Pending { since: Instant::now(), subscribe: true });
+                    self.watch_closely();
+                    let more = match self.queue.len() {
+                        0 => String::new(),
+                        1 => " The next one opens once Steam has it.".to_owned(),
+                        n => format!(" The next of {n} opens once Steam has it."),
+                    };
+                    self.notices.push(Notice::Info(format!(
+                        "{} is open in Steam: press Subscribe there.{more}",
+                        self.title(id)
+                    )));
+                    return;
+                }
+                Err(e) => self.notices.push(Notice::Error(e)),
+            }
         }
     }
 
-    /// Unsubscribes. Steam deletes the item's files on its own schedule.
+    /// Opens the item's page in Steam to unsubscribe there, and watches for the result.
     pub fn unsubscribe(&mut self, id: u64) {
-        if self.send(Cmd::Unsubscribe(id)) {
-            self.busy.insert(id, Instant::now());
+        if self.busy.contains_key(&id) {
+            return;
+        }
+        self.queue.retain(|q| *q != id);
+        match open_item_page(id) {
+            Ok(()) => {
+                self.busy.insert(id, Pending { since: Instant::now(), subscribe: false });
+                self.watch_closely();
+                self.notices.push(Notice::Info(format!("{} is open in Steam: press Unsubscribe there.", self.title(id))));
+            }
+            Err(e) => self.notices.push(Notice::Error(e)),
         }
     }
 
-    /// Asks Steam to download (or update) a subscribed item now.
+    /// Opens Steam's Downloads page, where the item's download or update can be started.
     pub fn download(&mut self, id: u64) {
-        self.send(Cmd::Download(id));
+        match open_downloads() {
+            Ok(()) => {
+                self.watch_closely();
+                self.notices.push(Notice::Info(format!(
+                    "Steam's Downloads page is open: start {} there if it isn't already queued. Steam also updates Workshop items on its own while the game isn't running.",
+                    self.title(id)
+                )));
+            }
+            Err(e) => self.notices.push(Notice::Error(e)),
+        }
     }
 
     /// Path of the item's preview image once it is in the cache. The first call for an item
     /// queues the download; a later frame gets the path. `None` also when it has no preview.
     pub fn preview(&mut self, ctx: &egui::Context, id: u64) -> Option<PathBuf> {
+        if !self.items.contains_key(&id) {
+            self.request_details(&[id]);
+        }
         let item = self.items.get(&id);
         self.previews.get(ctx, id, item)
     }
+}
+
+/// Total size of the files under `dir`, in bytes.
+fn folder_bytes(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for entry in entries.flatten() {
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => stack.push(entry.path()),
+                Ok(_) => total += entry.metadata().map_or(0, |m| m.len()),
+                Err(_) => {}
+            }
+        }
+    }
+    total
 }
 
 // ------------------------------------------------------------------ preview images
@@ -1105,544 +1500,6 @@ fn download_preview(id: u64, url: &str) -> Result<PathBuf, String> {
     Err("too many redirects".to_owned())
 }
 
-// ------------------------------------------------------------------ launcher side of the pipe
-
-/// The exe to start as the helper: the launcher itself.
-fn helper_exe() -> Result<PathBuf, Failure> {
-    let exe = std::env::current_exe()
-        .map_err(|e| Failure::new("The launcher couldn't work out where its own exe is.", e.to_string()))?;
-    // A test binary can't be its own helper: use the launcher exe built next to it.
-    #[cfg(test)]
-    let exe = std::env::var_os("COMMAND_CENTER_HELPER_EXE")
-        .map(PathBuf::from)
-        .or_else(|| exe.ancestors().map(|d| d.join("command-center.exe")).find(|p| p.is_file()))
-        .unwrap_or(exe);
-    Ok(exe)
-}
-
-/// Starts the helper process and the two threads that sit on its pipes.
-fn start_helper(ctx: &egui::Context) -> Result<Link, Failure> {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    let exe = helper_exe()?;
-    let mut child = Command::new(&exe)
-        .arg(HELPER_ARG)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| Failure::new("The launcher couldn't start its Steam helper.", format!("{}: {e}", exe.display())))?;
-    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-        let _ = child.kill();
-        return Err(Failure::new("The launcher couldn't talk to its Steam helper.", ""));
-    };
-
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
-    let (ev_tx, ev_rx) = mpsc::channel::<Event>();
-
-    // Writer: passes commands on, and owns the process so it can make sure it ends.
-    let writer = std::thread::Builder::new().name("steam-helper-in".into()).spawn(move || {
-        // Ends on Disconnect, or when the `Workshop` lets go of the link.
-        for cmd in cmd_rx {
-            let last = matches!(cmd, Cmd::Disconnect);
-            let sent = serde_json::to_string(&cmd)
-                .ok()
-                .is_some_and(|json| writeln!(stdin, "{json}").and_then(|_| stdin.flush()).is_ok());
-            if last || !sent {
-                break;
-            }
-        }
-        // Closing its stdin tells the helper to stop even if no message got through.
-        drop(stdin);
-        for _ in 0..50 {
-            if !matches!(child.try_wait(), Ok(None)) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-    });
-    if let Err(e) = writer {
-        // The closure (and with it the helper's stdin) was dropped, so the helper exits by itself.
-        return Err(Failure::new("The launcher couldn't start its Steam helper.", e.to_string()));
-    }
-
-    // Reader: one message per marked line. Anything else is the Steam DLL talking.
-    let ctx = ctx.clone();
-    let reader = std::thread::Builder::new().name("steam-helper-out".into()).spawn(move || {
-        let mut lines = std::io::BufReader::new(stdout);
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            match lines.read_until(b'\n', &mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-            let text = String::from_utf8_lossy(&line);
-            let Some(json) = text.trim().strip_prefix(MESSAGE_MARK.trim_end()) else { continue };
-            let Ok(event) = serde_json::from_str::<Event>(json.trim()) else { continue };
-            if ev_tx.send(event).is_err() {
-                break;
-            }
-            ctx.request_repaint();
-        }
-        // The helper is gone: dropping the sender is how the UI finds out.
-        drop(ev_tx);
-        ctx.request_repaint();
-    });
-    if let Err(e) = reader {
-        let _ = cmd_tx.send(Cmd::Disconnect);
-        return Err(Failure::new("The launcher couldn't start its Steam helper.", e.to_string()));
-    }
-    Ok(Link { tx: cmd_tx, rx: ev_rx })
-}
-
-// ------------------------------------------------------------------ the helper process
-
-/// Runs the exe as the Steam helper: reads commands from stdin, prints events to stdout,
-/// and returns (so the process exits) when told to disconnect or when stdin closes.
-pub fn helper_main() {
-    let (tx, rx) = mpsc::channel::<Cmd>();
-    std::thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
-            let Ok(line) = line else { break };
-            if let Ok(cmd) = serde_json::from_str::<Cmd>(line.trim()) {
-                if tx.send(cmd).is_err() {
-                    return;
-                }
-            }
-        }
-        // The launcher closed the pipe or is gone. Stop, and don't let a stuck Steam call
-        // keep this process (and Steam's "running" state) alive.
-        let _ = tx.send(Cmd::Disconnect);
-        std::thread::sleep(Duration::from_secs(3));
-        std::process::exit(0);
-    });
-    worker(rx, Out);
-}
-
-/// Where the helper's events go: its stdout, one marked JSON line each.
-#[derive(Clone)]
-struct Out;
-
-impl Out {
-    fn send(&self, event: Event) {
-        let Ok(json) = serde_json::to_string(&event) else { return };
-        // The leading newline ends whatever the Steam DLL may have left on the line.
-        let message = format!("\n{MESSAGE_MARK}{json}\n");
-        let mut stdout = std::io::stdout().lock();
-        let _ = stdout.write_all(message.as_bytes());
-        let _ = stdout.flush();
-    }
-}
-
-/// Loads `steam_api64.dll` from the exe's own folder, so the delay-loaded imports resolve.
-/// Without this the first Steam call would crash the helper when the DLL is missing.
-fn load_steam_api() -> Result<(), Failure> {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn LoadLibraryW(name: *const u16) -> *mut std::ffi::c_void;
-    }
-    use std::os::windows::ffi::OsStrExt;
-
-    let dir = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .ok_or_else(|| Failure::new("The launcher couldn't work out its own folder.", ""))?;
-    let dll = dir.join(DLL_NAME);
-    if !dll.is_file() {
-        return Err(Failure::new(
-            format!("{DLL_NAME} is missing. It has to sit next to the launcher's exe."),
-            format!("Looked in {}", dir.display()),
-        ));
-    }
-    let wide: Vec<u16> = dll.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
-    let module = unsafe { LoadLibraryW(wide.as_ptr()) };
-    if module.is_null() {
-        return Err(Failure::new(
-            format!("{DLL_NAME} couldn't be loaded. The file next to the launcher may be damaged."),
-            std::io::Error::last_os_error().to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn init_failure(error: sw::SteamAPIInitError) -> Failure {
-    match error {
-        sw::SteamAPIInitError::NoSteamClient(detail) => {
-            Failure::new("Steam isn't running. Start Steam, sign in, then try again.", detail)
-        }
-        sw::SteamAPIInitError::VersionMismatch(detail) => {
-            Failure::new("Steam is out of date. Let Steam update itself, then try again.", detail)
-        }
-        sw::SteamAPIInitError::FailedGeneric(detail) => Failure::new(
-            "Steam refused the connection. Usually that means the signed-in account doesn't own Empire at War, or Steam is still starting.",
-            detail,
-        ),
-    }
-}
-
-fn steam_error(error: sw::SteamError) -> String {
-    use sw::SteamError as E;
-    match error {
-        E::NoConnection | E::ServiceUnavailable => "Steam is offline or can't reach the Workshop.".to_owned(),
-        E::NotLoggedOn => "Steam isn't signed in.".to_owned(),
-        E::Timeout | E::IOFailure => "Steam didn't answer. It may be offline.".to_owned(),
-        E::AccessDenied | E::InsufficientPrivilege => "Steam says this account isn't allowed to do that.".to_owned(),
-        E::Banned => "Steam says this item or account is banned.".to_owned(),
-        E::FileNotFound => "The item no longer exists on the Workshop.".to_owned(),
-        E::LimitExceeded | E::RateLimitExceeded => "Steam says too many requests. Try again in a moment.".to_owned(),
-        E::DiskFull => "The disk is full.".to_owned(),
-        E::Busy | E::Pending => "Steam is busy. Try again in a moment.".to_owned(),
-        other => format!("Steam error: {other}."),
-    }
-}
-
-/// Converts one page of query results. Each item is read on its own so one odd entry
-/// (the bindings assert on values they don't know) can't lose the page.
-fn read_results(results: &sw::QueryResults<'_>) -> Vec<Item> {
-    let mut items = Vec::new();
-    for index in 0..results.returned_results() {
-        let Ok(Some(r)) = catch_unwind(AssertUnwindSafe(|| results.get(index))) else { continue };
-        let preview_url = catch_unwind(AssertUnwindSafe(|| results.preview_url(index))).ok().flatten().unwrap_or_default();
-        let subscribers =
-            catch_unwind(AssertUnwindSafe(|| results.statistic(index, sw::UGCStatisticType::Subscriptions))).ok().flatten();
-        items.push(Item {
-            id: r.published_file_id.0,
-            title: r.title.trim().to_owned(),
-            description: plain_text(&r.description, 600),
-            preview_url,
-            subscribers,
-            votes_up: r.num_upvotes,
-            votes_down: r.num_downvotes,
-            score: r.score,
-            updated: r.time_updated as i64,
-            tags: r.tags.into_iter().filter(|t| !t.trim().is_empty()).collect(),
-        });
-    }
-    items
-}
-
-struct Known {
-    bits: u32,
-    status: ItemStatus,
-}
-
-struct Worker {
-    ugc: sw::UGC,
-    out: Out,
-    /// Set by callbacks when install states should be re-read right away.
-    poke: Arc<AtomicBool>,
-    /// Items to start downloading (subscribing alone waits until the "game" exits).
-    downloads: Arc<Mutex<Vec<u64>>>,
-    /// Ids on the Browse page currently shown.
-    page_ids: Arc<Mutex<Vec<u64>>>,
-    /// Other ids worth watching: ones the user acted on or asked details for.
-    extra: HashSet<u64>,
-    subscribed: Vec<u64>,
-    sent_subscribed: bool,
-    known: HashMap<u64, Known>,
-    downloading: bool,
-    /// Until then, poll every second: the user just started something.
-    watch_closely_until: Instant,
-    last_poll: Instant,
-}
-
-fn worker(rx: Receiver<Cmd>, out: Out) {
-    if let Err(failure) = load_steam_api() {
-        out.send(Event::Failed(failure));
-        return;
-    }
-    // Sets SteamAppId for this process only, so no steam_appid.txt is needed.
-    let client = match catch_unwind(|| sw::Client::init_app(sw::AppId(APP_ID))) {
-        Ok(Ok(client)) => client,
-        Ok(Err(e)) => {
-            out.send(Event::Failed(init_failure(e)));
-            return;
-        }
-        Err(_) => {
-            out.send(Event::Failed(Failure::new("Steam answered in a way the launcher didn't understand.", "")));
-            return;
-        }
-    };
-
-    let session = catch_unwind(AssertUnwindSafe(|| run_session(&client, &rx, &out)));
-    drop(client);
-    match session {
-        Ok(Ok(())) => {}
-        Ok(Err(failure)) => out.send(Event::Failed(failure)),
-        Err(_) => out.send(Event::Failed(Failure::new("The connection to Steam stopped unexpectedly.", ""))),
-    }
-}
-
-fn run_session(client: &sw::Client, rx: &Receiver<Cmd>, out: &Out) -> Result<(), Failure> {
-    if !client.apps().is_subscribed() {
-        return Err(Failure::new("The Steam account that is signed in doesn't own Empire at War.", ""));
-    }
-
-    let poke = Arc::new(AtomicBool::new(false));
-    let _download_done = {
-        let (poke, out) = (poke.clone(), out.clone());
-        client.register_callback(move |result: sw::DownloadItemResult| {
-            if result.app_id.0 != APP_ID {
-                return;
-            }
-            poke.store(true, Ordering::SeqCst);
-            if let Some(e) = result.error {
-                out.send(Event::Error(format!(
-                    "Steam couldn't download Workshop item {}: {}",
-                    result.published_file_id.0,
-                    steam_error(e)
-                )));
-            }
-        })
-    };
-
-    let mut w = Worker {
-        ugc: client.ugc(),
-        out: out.clone(),
-        poke,
-        downloads: Arc::default(),
-        page_ids: Arc::default(),
-        extra: HashSet::new(),
-        subscribed: Vec::new(),
-        sent_subscribed: false,
-        known: HashMap::new(),
-        downloading: false,
-        watch_closely_until: Instant::now(),
-        last_poll: Instant::now(),
-    };
-    out.send(Event::Connected);
-    w.poll_states(true);
-    w.fetch_details(&w.subscribed.clone());
-
-    loop {
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Cmd::Disconnect) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
-            Ok(cmd) => w.handle(cmd),
-            Err(RecvTimeoutError::Timeout) => {}
-        }
-        client.run_callbacks();
-
-        let queued: Vec<u64> = w.downloads.lock().map(|mut d| std::mem::take(&mut *d)).unwrap_or_default();
-        for id in queued {
-            w.ugc.download_item(sw::PublishedFileId(id), true);
-            w.watch_closely();
-        }
-
-        // About once a second while something is downloading, otherwise now and then to
-        // notice changes made in the Steam client itself.
-        let busy = w.downloading || Instant::now() < w.watch_closely_until;
-        let every = if busy { Duration::from_secs(1) } else { Duration::from_secs(4) };
-        if w.poke.swap(false, Ordering::SeqCst) || w.last_poll.elapsed() >= every {
-            w.poll_states(false);
-        }
-    }
-}
-
-impl Worker {
-    fn watch_closely(&mut self) {
-        self.watch_closely_until = Instant::now() + Duration::from_secs(20);
-        self.poke.store(true, Ordering::SeqCst);
-    }
-
-    fn handle(&mut self, cmd: Cmd) {
-        match cmd {
-            Cmd::Disconnect => {}
-            Cmd::Refresh => {
-                self.sent_subscribed = false;
-                self.poll_states(true);
-                self.fetch_details(&self.subscribed.clone());
-            }
-            Cmd::Details(ids) => {
-                self.extra.extend(ids.iter().copied());
-                self.fetch_details(&ids);
-                self.poke.store(true, Ordering::SeqCst);
-            }
-            Cmd::Query { req, text, sort, page } => self.query(req, &text, sort, page),
-            Cmd::Subscribe(id) => {
-                self.extra.insert(id);
-                self.watch_closely();
-                let (out, poke, downloads) = (self.out.clone(), self.poke.clone(), self.downloads.clone());
-                self.ugc.subscribe_item(sw::PublishedFileId(id), move |result| {
-                    if result.is_ok() {
-                        if let Ok(mut d) = downloads.lock() {
-                            d.push(id);
-                        }
-                    }
-                    poke.store(true, Ordering::SeqCst);
-                    out.send(Event::Action { id, action: Action::Subscribe, result: result.map_err(steam_error) });
-                });
-            }
-            Cmd::Unsubscribe(id) => {
-                self.extra.insert(id);
-                self.watch_closely();
-                let (out, poke) = (self.out.clone(), self.poke.clone());
-                self.ugc.unsubscribe_item(sw::PublishedFileId(id), move |result| {
-                    poke.store(true, Ordering::SeqCst);
-                    out.send(Event::Action { id, action: Action::Unsubscribe, result: result.map_err(steam_error) });
-                });
-            }
-            Cmd::Download(id) => {
-                self.extra.insert(id);
-                if !self.ugc.download_item(sw::PublishedFileId(id), true) {
-                    self.out.send(Event::Error(format!(
-                        "Steam didn't start the download of Workshop item {id}. It may already be up to date."
-                    )));
-                }
-                self.watch_closely();
-            }
-        }
-    }
-
-    fn query(&mut self, req: u64, text: &str, sort: Sort, page: u32) {
-        let text = text.replace('\0', " ");
-        let text = text.trim();
-        let app = sw::AppId(APP_ID);
-        // The query builder asserts on a `false` from Steam, hence the guard.
-        let built = catch_unwind(AssertUnwindSafe(|| {
-            let mut query = self
-                .ugc
-                .query_all(sort.query_type(), sw::UGCType::Items, sw::AppIDs::Both { creator: app, consumer: app }, page.max(1))
-                .ok()?;
-            if !text.is_empty() {
-                query = query.set_search_text(text);
-            }
-            if sort == Sort::Popular {
-                query = query.set_ranked_by_trend_days(TREND_DAYS);
-            }
-            Some(query)
-        }));
-        let Ok(Some(query)) = built else {
-            self.out.send(Event::Page { req, result: Err("Steam wouldn't accept the search.".to_owned()) });
-            return;
-        };
-        let (out, page_ids) = (self.out.clone(), self.page_ids.clone());
-        let poke = self.poke.clone();
-        query.fetch(move |result: Result<sw::QueryResults<'_>, sw::SteamError>| {
-            let result = match result {
-                Ok(results) => {
-                    let total = results.total_results();
-                    let items = read_results(&results);
-                    if let Ok(mut ids) = page_ids.lock() {
-                        *ids = items.iter().map(|i| i.id).collect();
-                    }
-                    poke.store(true, Ordering::SeqCst);
-                    Ok((items, total))
-                }
-                Err(e) => Err(steam_error(e)),
-            };
-            out.send(Event::Page { req, result });
-        });
-    }
-
-    fn fetch_details(&self, ids: &[u64]) {
-        for chunk in ids.chunks(PAGE_SIZE as usize) {
-            let list: Vec<sw::PublishedFileId> = chunk.iter().map(|id| sw::PublishedFileId(*id)).collect();
-            let Ok(query) = self.ugc.query_items(list) else {
-                self.out.send(Event::Error("Steam wouldn't accept the request for item details.".to_owned()));
-                continue;
-            };
-            let out = self.out.clone();
-            query.fetch(move |result: Result<sw::QueryResults<'_>, sw::SteamError>| match result {
-                Ok(results) => out.send(Event::Details(read_results(&results))),
-                Err(e) => out.send(Event::Error(format!("Couldn't get Workshop item details. {}", steam_error(e)))),
-            });
-        }
-    }
-
-    fn status_of(&self, id: u64, state: sw::ItemState) -> ItemStatus {
-        let file = sw::PublishedFileId(id);
-        let mut status = ItemStatus {
-            subscribed: state.contains(sw::ItemState::SUBSCRIBED),
-            installed: state.contains(sw::ItemState::INSTALLED),
-            needs_update: state.contains(sw::ItemState::NEEDS_UPDATE),
-            downloading: state.intersects(sw::ItemState::DOWNLOADING | sw::ItemState::DOWNLOAD_PENDING),
-            ..Default::default()
-        };
-        if status.installed {
-            if let Some(info) = self.ugc.item_install_info(file) {
-                status.size_on_disk = info.size_on_disk;
-                if !info.folder.is_empty() {
-                    status.folder = Some(PathBuf::from(info.folder));
-                }
-            }
-        }
-        if status.downloading || status.needs_update {
-            if let Some((done, total)) = self.ugc.item_download_info(file) {
-                status.bytes_done = done;
-                status.bytes_total = total;
-            }
-        }
-        status
-    }
-
-    /// Re-reads the subscription list and the state of every watched item, and reports
-    /// what changed. All of these are local calls to the Steam client.
-    fn poll_states(&mut self, force: bool) {
-        self.last_poll = Instant::now();
-
-        let mut subscribed: Vec<u64> = catch_unwind(AssertUnwindSafe(|| self.ugc.subscribed_items(false)))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|id| id.0)
-            .collect();
-        subscribed.sort_unstable();
-        subscribed.dedup();
-        if subscribed != self.subscribed || !self.sent_subscribed {
-            let new: Vec<u64> = subscribed.iter().copied().filter(|id| !self.subscribed.contains(id)).collect();
-            let first = !self.sent_subscribed;
-            self.subscribed = subscribed;
-            self.sent_subscribed = true;
-            self.out.send(Event::Subscribed(self.subscribed.clone()));
-            // The first list is followed by a full details request from the caller.
-            if !first {
-                self.fetch_details(&new);
-            }
-        }
-
-        let mut ids: Vec<u64> = self.subscribed.clone();
-        ids.extend(self.page_ids.lock().map(|p| p.clone()).unwrap_or_default());
-        ids.extend(self.extra.iter().copied());
-        ids.sort_unstable();
-        ids.dedup();
-
-        let mut changed = Vec::new();
-        let mut downloading = false;
-        for id in ids {
-            let state = self.ugc.item_state(sw::PublishedFileId(id));
-            let active = state.intersects(sw::ItemState::DOWNLOADING | sw::ItemState::DOWNLOAD_PENDING);
-            downloading |= active;
-            let previous = self.known.get(&id);
-            if !force && !active && previous.is_some_and(|k| k.bits == state.bits()) {
-                continue;
-            }
-            let status = self.status_of(id, state);
-            if let Some(previous) = previous {
-                if previous.status == status {
-                    continue;
-                }
-                if status.ready() && !previous.status.ready() {
-                    self.out.send(Event::Installed(id));
-                } else if previous.status.installed && !status.installed {
-                    self.out.send(Event::Removed);
-                }
-            }
-            changed.push((id, status.clone()));
-            self.known.insert(id, Known { bits: state.bits(), status });
-        }
-        self.downloading = downloading;
-        if !changed.is_empty() {
-            self.out.send(Event::States(changed));
-        }
-    }
-}
-
 // ------------------------------------------------------------------ tests
 
 #[cfg(test)]
@@ -1749,144 +1606,155 @@ mod tests {
         );
     }
 
-    /// What Steam itself says about the game running (it sets this while a client is connected).
-    fn steam_says_running() -> Option<u32> {
-        use winreg::enums::HKEY_CURRENT_USER;
-        winreg::RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(format!("Software\\Valve\\Steam\\Apps\\{APP_ID}"))
-            .ok()?
-            .get_value::<u32, _>("Running")
-            .ok()
-    }
+    /// Trimmed from a real `GetPublishedFileDetails` answer, plus a failed entry and a
+    /// `QueryFiles`-shaped one (numbers as numbers, `file_description`, vote data, tags).
+    const DETAILS_JSON: &str = r#"{"response":{"result":1,"resultcount":3,"total":1234,"publishedfiledetails":[
+        {"publishedfileid":"1125571106","result":1,"creator_app_id":32470,"consumer_app_id":32470,"file_size":"26682023071",
+         "preview_url":"https://images.steamusercontent.com/ugc/999180650299891967/53EBDB8E/",
+         "title":"EaWX: Thrawn's Revenge 3.5.1","description":"[img]https://media.example/x.png[/img]\r\n\r\nThe death of the [b]Emperor[/b]",
+         "time_created":1504034045,"time_updated":1785339388,"subscriptions":512345,"favorited":1000,
+         "tags":[{"tag":"Mod"},{"tag":"FoC"}]},
+        {"publishedfileid":"42","result":9},
+        {"publishedfileid":7,"title":" Small mod ","file_description":"Adds a ship.","time_updated":5,"subscriptions":"12",
+         "vote_data":{"score":0.75,"votes_up":30,"votes_down":10},"tags":[{"tag":"Units","display_name":"Units"}]}
+    ]}}"#;
 
-    fn pump(ws: &mut Workshop, ctx: &egui::Context, seconds: u64, mut done: impl FnMut(&mut Workshop) -> bool) -> bool {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(seconds) {
-            for notice in ws.poll(ctx) {
-                println!("  notice: {notice:?}");
-            }
-            if done(ws) {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        false
-    }
-
-    /// Waits for Steam to stop counting the game as running. Returns the seconds it took.
-    fn wait_until_not_running(limit: u64) -> Option<u64> {
-        (0..=limit).find(|_| {
-            let stopped = steam_says_running() == Some(0);
-            if !stopped {
-                std::thread::sleep(Duration::from_secs(1));
-            }
-            stopped
-        })
-    }
-
-    /// Talks to the real Steam client through the real helper process (the launcher exe
-    /// built by `cargo build`, so build first). Read-only: connects, lists subscriptions,
-    /// runs four searches, fetches one preview image, disconnects and connects again.
-    /// `cargo test workshop -- --ignored --nocapture`
     #[test]
-    #[ignore = "needs a running Steam client that owns Empire at War"]
-    fn live_steam_read_only() {
+    fn web_answers_become_items() {
+        let json: serde_json::Value = serde_json::from_str(DETAILS_JSON).unwrap();
+        let items = parse_items(&json);
+        assert_eq!(items.len(), 2, "the failed entry is left out");
+        let tr = &items[0];
+        assert_eq!(tr.id, 1125571106);
+        assert_eq!(tr.title, "EaWX: Thrawn's Revenge 3.5.1");
+        assert_eq!(tr.description, "The death of the Emperor");
+        assert_eq!(tr.file_size, 26_682_023_071);
+        assert_eq!(tr.subscribers, Some(512_345));
+        assert_eq!(tr.updated, 1_785_339_388);
+        assert_eq!(tr.tags, ["Mod", "FoC"]);
+        assert_eq!(tr.rating_percent(), None);
+        assert!(checked_url(&tr.preview_url).is_some());
+
+        let small = &items[1];
+        assert_eq!((small.id, small.title.as_str(), small.description.as_str()), (7, "Small mod", "Adds a ship."));
+        assert_eq!(small.subscribers, Some(12));
+        assert_eq!((small.votes_up, small.votes_down), (30, 10));
+        assert_eq!(small.rating_percent(), Some(75));
+        assert_eq!(json.pointer("/response/total").and_then(number), Some(1234));
+
+        assert!(parse_items(&serde_json::json!({"response": {}})).is_empty());
+        assert!(parse_items(&serde_json::json!([])).is_empty());
+    }
+
+    #[test]
+    fn search_links_and_queries() {
+        assert_eq!(encode_component("Thrawn's Revenge & co/2"), "Thrawn%27s%20Revenge%20%26%20co%2F2");
+        assert_eq!(encode_component("ü"), "%C3%BC");
+        assert_eq!(
+            search_url("  thrawn  ", Sort::Popular),
+            "https://steamcommunity.com/workshop/browse/?appid=32470&browsesort=trend&section=readytouseitems&days=30&searchtext=thrawn"
+        );
+        assert_eq!(
+            search_url("", Sort::Updated),
+            "https://steamcommunity.com/workshop/browse/?appid=32470&browsesort=lastupdated&section=readytouseitems"
+        );
+        let q = query_url("star destroyer", Sort::Popular, 0);
+        assert!(q.starts_with(QUERY_URL));
+        assert!(q.contains("&query_type=12&page=1&numperpage=50"), "{q}");
+        assert!(q.ends_with("&search_text=star%20destroyer"), "{q}");
+        assert!(!q.contains("key="));
+        let q = query_url("", Sort::Popular, 3);
+        assert!(q.contains("&query_type=3&page=3") && q.contains(&format!("&days={TREND_DAYS}")), "{q}");
+        assert!(query_url("", Sort::Subscribed, 1).contains("&query_type=9&"));
+    }
+
+    #[test]
+    fn item_state_from_records_and_folders() {
+        let state = LocalState::parse(ACF).unwrap();
+        let folder = || Some(PathBuf::from("F:\\ws\\1"));
+
+        let current = local_status(state.item(1125571106), state.pending, folder(), None, 0);
+        assert!(current.subscribed && current.installed && current.ready());
+        assert_eq!(current.size_on_disk, 26_682_023_071);
+        assert_eq!(current.folder, folder());
+
+        let stale = local_status(state.item(1770851727), state.pending, folder(), None, 0);
+        assert!(stale.installed && stale.needs_update && !stale.ready());
+
+        // Recorded as installed, but the folder is gone: not installed.
+        let gone = local_status(state.item(1125571106), false, None, None, 0);
+        assert!(gone.subscribed && !gone.installed && gone.folder.is_none());
+
+        // Subscribed, not on disk yet: queued; with a download folder, progress.
+        let queued = local_status(state.item(3830298393), state.pending, None, None, 0);
+        assert!(queued.subscribed && queued.downloading && queued.percent().is_none());
+        let fetching = local_status(state.item(3830298393), false, None, Some(250), 1000);
+        assert_eq!(fetching.percent(), Some(25));
+
+        // Not in the records yet, but Steam is already fetching it.
+        let new = local_status(None, false, None, Some(10), 0);
+        assert!(new.subscribed && new.downloading && !new.installed);
+        assert_eq!(local_status(None, false, None, None, 0), ItemStatus::default());
+
+        assert_eq!(
+            downloads_dir(Path::new("F:\\Lib\\steamapps\\workshop\\content\\32470")),
+            Some(PathBuf::from("F:\\Lib\\steamapps\\workshop\\downloads\\32470"))
+        );
+    }
+
+    /// Reads this PC's real Steam records through the handle the pages use, and fetches the
+    /// subscriptions' names. Read-only. `cargo test live_local_records -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs Steam's Workshop folder for the game and the internet"]
+    fn live_local_records() {
+        let steam = crate::steam::detect();
+        let Some(dir) = steam.workshop_dir.as_deref() else {
+            println!("no Workshop folder on this PC");
+            return;
+        };
         let ctx = egui::Context::default();
         let mut ws = Workshop::default();
-        println!("Steam's Running flag before connecting: {:?}", steam_says_running());
-
-        ws.connect(&ctx);
-        pump(&mut ws, &ctx, 40, |ws| !matches!(ws.status(), Status::Connecting));
-        println!("status after connect: {:?}", ws.status());
-        if !ws.is_connected() {
-            return;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(20) {
+            ws.configure(&ctx, Some(dir), "");
+            for notice in ws.poll(&ctx) {
+                println!("  notice: {notice:?}");
+            }
+            if ws.subscribed().is_some_and(|ids| ids.iter().all(|id| ws.item(*id).is_some())) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
-        println!("Steam's Running flag while connected: {:?}", steam_says_running());
-
-        let got = pump(&mut ws, &ctx, 20, |ws| {
-            ws.subscribed().is_some_and(|ids| ids.iter().all(|id| ws.item(*id).is_some()))
-        });
-        let ids = ws.subscribed().map(<[u64]>::to_vec).unwrap_or_default();
-        println!("subscribed items: {} (details for all: {got})", ids.len());
+        let ids = ws.subscribed().expect("Steam's records were read").to_vec();
+        println!("{} items in Steam's records under {}", ids.len(), dir.display());
         for id in &ids {
             let s = ws.item_status(*id);
             println!(
-                "  {id}  {:<48}  installed={} update={} downloading={} size={} folder={:?}",
+                "  {id}  {:<50} installed={} update={} downloading={} {:?}% on disk={}",
                 ws.title(*id),
                 s.installed,
                 s.needs_update,
                 s.downloading,
-                s.size_on_disk,
-                s.folder
+                s.percent(),
+                s.size_on_disk
             );
         }
-
-        for (text, sort) in [("", Sort::Popular), ("thrawn", Sort::Subscribed), ("", Sort::Updated), ("", Sort::Rated)] {
-            ws.search(text, sort, 1);
-            pump(&mut ws, &ctx, 30, |ws| !ws.browse().loading);
-            let b = ws.browse().clone();
-            println!(
-                "search {text:?} sorted by {:?}: total={} pages={} on this page={} error={:?}",
-                sort,
-                b.total,
-                b.pages(),
-                b.items.len(),
-                b.error
-            );
-            for id in b.items.iter().take(5) {
-                let item = ws.item(*id).cloned().unwrap_or_default();
-                let s = ws.item_status(*id);
-                println!(
-                    "  {id}  {:<48}  subscribers={:?} rating={:?}% subscribed={} installed={}",
-                    item.title,
-                    item.subscribers,
-                    item.rating_percent(),
-                    s.subscribed,
-                    s.installed
-                );
-                println!("      {}", plain_text(&item.description, 100));
-                println!("      preview: {}", item.preview_url);
-            }
-        }
-
-        if let Some(id) = ws.browse().items.first().copied() {
-            let mut path = None;
-            pump(&mut ws, &ctx, 30, |ws| {
-                path = ws.preview(&ctx, id);
-                path.is_some() || matches!(ws.previews.state.get(&id), Some(Preview::Missing))
-            });
-            let size = path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len());
-            println!("preview of {id}: {path:?} ({size:?} bytes)");
-        }
-
-        ws.disconnect();
-        println!(
-            "status after disconnect: {:?}; Steam stopped counting the game as running after {:?} s",
-            ws.status(),
-            wait_until_not_running(30)
-        );
-        println!("SteamAppId in the launcher's own environment: {:?}", std::env::var_os("SteamAppId"));
-
-        ws.connect(&ctx);
-        pump(&mut ws, &ctx, 40, |ws| !matches!(ws.status(), Status::Connecting));
-        println!("status after connecting a second time: {:?}; Running flag: {:?}", ws.status(), steam_says_running());
-        pump(&mut ws, &ctx, 10, |ws| ws.subscribed().is_some());
-        println!("subscribed items on the second connection: {:?}", ws.subscribed().map(<[u64]>::len));
-        // Letting go without disconnecting (what happens when the launcher just closes).
-        drop(ws);
-        println!("after dropping the connection: not running after {:?} s", wait_until_not_running(30));
+        assert!(ids.iter().all(|id| ws.known_status(*id).is_some_and(|s| s.subscribed)));
     }
 
-    /// A helper exe without the DLL beside it must report that, not crash.
-    /// Set COMMAND_CENTER_HELPER_EXE to a copy of the launcher exe in a folder without the DLL.
+    /// Asks Steam's real web API for one item's details (no key needed).
+    /// `cargo test live_web_details -- --ignored --nocapture`
     #[test]
-    #[ignore = "needs COMMAND_CENTER_HELPER_EXE"]
-    fn live_missing_dll() {
-        let ctx = egui::Context::default();
-        let mut ws = Workshop::default();
-        ws.connect(&ctx);
-        pump(&mut ws, &ctx, 40, |ws| !matches!(ws.status(), Status::Connecting));
-        println!("status with no DLL next to the helper: {:?}", ws.status());
-        assert!(matches!(ws.status(), Status::Failed(f) if f.reason.contains(DLL_NAME)));
+    #[ignore = "needs the internet"]
+    fn live_web_details() {
+        let items = fetch_details(&[1125571106, 1]).expect("details");
+        for item in &items {
+            println!("{} {:?} size={} subscribers={:?} tags={:?}", item.id, item.title, item.file_size, item.subscribers, item.tags);
+        }
+        assert!(items.iter().any(|i| i.id == 1125571106 && !i.title.is_empty() && i.file_size > 0));
+        // Searching without a key is refused, and says so in words.
+        let error = fetch_page("", "", Sort::Popular, 1).expect_err("QueryFiles without a key");
+        println!("search without a key: {error}");
+        assert!(error.contains("key"), "{error}");
     }
 }
