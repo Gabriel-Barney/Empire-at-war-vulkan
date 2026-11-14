@@ -247,7 +247,9 @@ void GameAudioData::parse_factions_xml(std::string_view xml, std::string_view fi
         f.name = std::string(data::trim(n.attribute("Name")));
         for (XmlNode c : n.children()) {
             const std::string_view tag = c.name();
-            if (contains_ci(tag, "SFX") || contains_ci(tag, "Music") || contains_ci(tag, "Speech"))
+            // + Faction_Super_Weapon: picks the _Super_Weapon music variants (AUDIO.md §2.3, b0286).
+            if (contains_ci(tag, "SFX") || contains_ci(tag, "Music") || contains_ci(tag, "Speech") ||
+                iequals(tag, "Faction_Super_Weapon"))
                 f.fields.emplace_back(std::string(tag), std::string(c.text_trimmed()));
         }
         if (find_faction(f.name)) {

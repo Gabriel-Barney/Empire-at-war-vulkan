@@ -48,6 +48,12 @@ public:
     virtual ~VoiceBackend() = default;
     // Starts (or restarts) `voice` with `sample`. false = sample missing / undecodable.
     virtual bool start(uint32_t voice, const SampleRef& sample, const VoiceParams& p) = 0;
+    // Loads (decodes / caches) `sample` without taking a voice. false = missing / undecodable: the SFX stage is skipped
+    // before a voice is taken or stolen (AUDIO.md §1.7, §5; b0282). Default: assume present (start() decides).
+    virtual bool load(const SampleRef& sample) {
+        (void)sample;
+        return true;
+    }
     virtual void set(uint32_t voice, const VoiceParams& p) = 0;
     virtual void stop(uint32_t voice) = 0;
     // false once a non-looping voice reached its end (or was stopped / never started).
@@ -85,6 +91,7 @@ public:
         : duration_(std::move(duration)), device_(device) {}
 
     bool start(uint32_t voice, const SampleRef& sample, const VoiceParams& p) override;
+    bool load(const SampleRef& sample) override { return duration_ && duration_(sample).has_value(); }
     void set(uint32_t voice, const VoiceParams& p) override;
     void stop(uint32_t voice) override;
     bool playing(uint32_t voice) const override;
@@ -233,6 +240,9 @@ public:
     struct ObjectAudio {
         Vec3 position{};
         bool audible = true;  // false: hidden / fogged -> visibility factor 0 (keeps running silently)
+        // Hidden / stealth / garrison (§1.6): muted even during a cinematic, which skips only the fog test. A query
+        // that leaves it false and reports audible = false means "fogged" (unmuted by a cinematic).
+        bool hidden = false;
     };
     void set_object_query(std::function<std::optional<ObjectAudio>(uint64_t owner)> q) { object_query_ = std::move(q); }
     // Gate 9: 3D-positional starts fail when the point is under the local player's fog (not in cinematics).

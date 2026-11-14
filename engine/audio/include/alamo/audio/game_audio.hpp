@@ -142,6 +142,12 @@ public:
     void battle_load_screen(bool open);
     // Tactical mode started/resumed: listener mode land/space, ambient music (mode 6), weather/map ambience.
     void enter_tactical(const TacticalSetup& setup);
+    // §2.3 (b0286): whether any player has its faction super weapon on the map; mode 6 / 7 music then picks the faction's
+    // Music_Event_<Land/Space>_<Ambient/Battle>_Super_Weapon. `restart_music`: the battle's first report (the host learns
+    // the start forces one tick after enter_tactical) - a change restarts the current mode's music with the new choice;
+    // otherwise the flag is read at the next mode switch, as retail reads it when it picks the event.
+    void set_super_weapon_present(bool present, bool restart_music = false);
+    bool super_weapon_present() const { return super_weapon_; }
     // Battle / campaign end music (mode 16, forced); combat notifications stop changing music afterwards.
     void battle_end(const BattleResult& result);
     // Battle-end summary dialog: Audio.xml Music_Event_Battle_End_Summary_Screen_<Win/Lose> (mode 16).
