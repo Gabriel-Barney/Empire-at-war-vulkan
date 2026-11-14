@@ -1032,7 +1032,8 @@ void next_try(TryParams& tp, float& budget_f, uint32_t t, float dist, float best
         tp.rot_div += k.space_failure_rotation_increment;
         tp.step_scale += k.space_failure_forward_increment;
         budget_f *= k.space_failure_max_expansions_coefficient;
-        tp.budget = static_cast<uint32_t>(budget_f);
+        // sp2 review: clamped before the cast (a mod's large SpacePathingTries grows it past 2^32: undefined conversion).
+        tp.budget = budget_f >= 4.0e9f ? 4000000000u : static_cast<uint32_t>(budget_f);
     }
     if (t >= 3) {
         tp.weight_dist = std::max(tp.weight_dist + k.space_failure_distance_cutoff_coefficient * dist, best_progress);
@@ -1102,16 +1103,18 @@ bool plan_space_path(const SpaceOccupancy& occ, const MovementConstants& k, cons
     // known now (the real one can only grow; a later try whose parameters that changes starts the next wave).
     std::vector<TryResult> spec;
     if (pf && tries >= 2) spec.resize(tries - 1);
+    constexpr uint32_t kWaveTries = 8;  // a wave runs at most this many tries (a mod may set many)
     const auto wave = [&](uint32_t from) {
+        const uint32_t last = std::min(tries, from + kWaveTries - 1);
         TryParams stp = tp;
         float sbf = budget_f;
-        for (uint32_t u = from; u <= tries; ++u) {
+        for (uint32_t u = from; u <= last; ++u) {
             if (u > from) next_try(stp, sbf, u, dist, best_progress, k, req);
             spec[u - 2] = TryResult{};
             spec[u - 2].tp = stp;
         }
         std::atomic<uint32_t> lowest_ok{std::numeric_limits<uint32_t>::max()};
-        (*pf)(tries - from + 1, 1, [&](uint32_t b, uint32_t e) {
+        (*pf)(last - from + 1, 1, [&](uint32_t b, uint32_t e) {
             SpaceScratch s2;
             for (uint32_t i = b; i < e; ++i) {
                 const uint32_t self = from + i;

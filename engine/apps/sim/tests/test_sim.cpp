@@ -265,14 +265,31 @@ static void test_crc_cadence(const World& w) {
     CHECK(!first_divergence(sparse, full).diverged);
     const CrcLog ringed = run(4, 3, 200);  // 51 checkpoint records + 1; trimmed to 3 whenever more than 6 are held
     CHECK(ringed.records.size() >= 3 && ringed.records.size() <= 6 && ringed.records.back().tick == 200);
-    // The process default reaches a new host; set it back for the other tests.
+    // An on-demand record between checkpoints goes on the keep line, so the saved v2 log parses again.
+    {
+        jobs::JobSystem js(jobs::JobSystemConfig{0});
+        SimHost host(w.types, js);
+        host.set_crc_cadence(64);
+        host.start_game(ModeKind::Land);
+        for (int t = 0; t < 100; ++t) host.tick_once();
+        host.capture_crc_now();  // tick 100: off the grid
+        for (int t = 0; t < 40; ++t) host.tick_once();
+        host.capture_crc_now();  // tick 140: the last record
+        CrcLog back;
+        std::string err;
+        CHECK(host.crc_log().keep.size() == 2 && CrcLog::parse(host.crc_log().to_text(), back, &err));
+        CHECK(back.records.size() == host.crc_log().records.size());
+    }
+    // The process default reaches a new host; set back for the other tests even if a check throws.
+    struct Restore {
+        ~Restore() { SimHost::set_default_crc_cadence(1); }
+    } restore;
     SimHost::set_default_crc_cadence(16);
     {
         jobs::JobSystem js(jobs::JobSystemConfig{0});
         SimHost host(w.types, js);
         CHECK(host.crc_cadence() == 16 && host.crc_log().checkpoint == 16);
     }
-    SimHost::set_default_crc_cadence(1);
 }
 
 // --------------------------------------------------------------------------------------- commands

@@ -2204,12 +2204,19 @@ static void test_space() {
             for (uint32_t i = 0; i < n; ++i) th.emplace_back([&fn, i] { fn(i, i + 1); });
             for (std::thread& t : th) t.join();
         };
-        const auto same = [](const SpacePath& a, const SpacePath& b) {
+        const alamo::ParallelFor halves = [](uint32_t n, uint32_t, const alamo::RangeFn& fn) {  // several tries per chunk
+            std::thread a([&fn, n] { fn(0, n / 2); });
+            fn(n / 2, n);
+            a.join();
+        };
+        const auto bits = [](float x, float y) { return std::memcmp(&x, &y, sizeof x) == 0; };
+        const auto same = [&bits](const SpacePath& a, const SpacePath& b) {
             if (a.ok != b.ok || a.fallback != b.fallback || a.tries != b.tries || a.pushes != b.pushes || a.wps.size() != b.wps.size())
                 return false;
             for (size_t i = 0; i < a.wps.size(); ++i)
-                if (std::memcmp(&a.wps[i].pos, &b.wps[i].pos, sizeof(V2)) != 0 || a.wps[i].heading != b.wps[i].heading ||
-                    a.wps[i].time != b.wps[i].time || a.wps[i].speed != b.wps[i].speed)
+                if (!bits(a.wps[i].pos.x, b.wps[i].pos.x) || !bits(a.wps[i].pos.y, b.wps[i].pos.y) ||
+                    !bits(a.wps[i].heading, b.wps[i].heading) || !bits(a.wps[i].time, b.wps[i].time) ||
+                    !bits(a.wps[i].speed, b.wps[i].speed))
                     return false;
             return true;
         };
@@ -2219,12 +2226,13 @@ static void test_space() {
             kb.space_pathfind_max_expansions = budget;
             for (const V2 goal : {V2{1500.0f, 0.0f}, V2{0.0f, 900.0f}, V2{1500.0f, 300.0f}}) {
                 q.goal = goal;
-                SpacePath serial, par_rev, par_thr;
-                SpaceScratch s1, s2, s3;
+                SpacePath serial, par_rev, par_thr, par_half;
+                SpaceScratch s1, s2, s3, s4;
                 plan_space_path(occ, kb, q, s1, serial);
                 plan_space_path(occ, kb, q, s2, par_rev, &reversed);
                 plan_space_path(occ, kb, q, s3, par_thr, &threaded);
-                CHECK(same(serial, par_rev) && same(serial, par_thr));
+                plan_space_path(occ, kb, q, s4, par_half, &halves);
+                CHECK(same(serial, par_rev) && same(serial, par_thr) && same(serial, par_half));
                 if (serial.tries > 1) ++multi;
             }
         }

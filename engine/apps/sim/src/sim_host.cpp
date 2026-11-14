@@ -67,13 +67,18 @@ void SimHost::set_crc_cadence(uint32_t every, size_t ring) {
 void SimHost::record_crc() {
     recorder_->capture(frame_);
     std::vector<CrcRecord>& r = recorder_->log().records;
-    if (crc_ring_ > 0 && r.size() > 2 * crc_ring_)  // amortised: drop the oldest records once twice the ring is held
+    if (crc_ring_ > 0 && r.size() > 2 * crc_ring_) {  // amortised: drop the oldest records once twice the ring is held
         r.erase(r.begin(), r.begin() + static_cast<std::ptrdiff_t>(r.size() - crc_ring_));
+        std::vector<uint64_t>& keep = recorder_->log().keep;
+        keep.erase(keep.begin(), std::lower_bound(keep.begin(), keep.end(), r.front().tick));
+    }
 }
 
 void SimHost::capture_crc_now() {
-    const std::vector<CrcRecord>& r = recorder_->log().records;
-    if (!r.empty() && r.back().tick == frame_) return;
+    CrcLog& log = recorder_->log();
+    if (!log.records.empty() && log.records.back().tick == frame_) return;
+    // An off-checkpoint record after the first goes on the v2 log's keep line, or CrcLog::parse rejects the saved log.
+    if (log.checkpoint != 0 && !log.records.empty() && frame_ % log.checkpoint != 0) log.keep.push_back(frame_);
     record_crc();
 }
 
