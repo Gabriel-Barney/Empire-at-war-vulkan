@@ -945,6 +945,7 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
     ++frame_;
     oi_global_frame_ = global_frame;
     stats_.frames = frame_;
+    profile::Steps steps;  // sp0: one zone per step of the tick (tac.s.*, wall-clock only); the tac.* laps stay
     // s78n t12 review: deaths raised between ticks by command-phase ability effects - the vehicle thief's eject (unit
     // ability 46 / 18 off: Take_Damage kind 13 kills the stolen vehicle), a STIM_PACK that kills its user - are still in
     // the combat system's list, which the coming combat tick clears. Process them now, in list order, like the combat
@@ -957,63 +958,98 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
         const std::vector<tc::DeathEvent> late(combat_->deaths().begin(), combat_->deaths().end());
         for (const tc::DeathEvent& d : late) process_death(mode, d, rng);
     }
+    ALAMO_PROFILE_STEP(steps, "tac.s.late_deaths");
     story_reinforced_.clear();  // L1/S4 wave 2b story hook: this tick's reserve deployments
     ability_finished_.clear();  // S7 t15 A1: this tick's signal 0x29
     landings_unloaded_.clear();  // a1i t04: signal 0x19 records of the last tick
     production_done_.clear();    // q6 t19: signal 0x22 records of the last tick
     story_garrisoned_.clear();  // S4: this tick's garrison entries / structure captures
     story_captured_.clear();
+    ALAMO_PROFILE_STEP(steps, "tac.s.clear");
     share_groups_sync();  // S8 t17 (FIGHTER_FLYING §4.10 B): squadron of the shared team target, before this tick's orders
+    ALAMO_PROFILE_STEP(steps, "tac.s.share_groups");
     objects::ObjectStore& store = mode.primary();
     l1_weather_tick(rng);  // L1 systems: land weather service (before the common tick)
+    ALAMO_PROFILE_STEP(steps, "tac.s.weather");
     hero_clash_tick(mode, rng, global_frame);  // s78n t06: land tick step 4, after the weather (HERO_CLASH §2.1)
+    ALAMO_PROFILE_STEP(steps, "tac.s.hero_clash");
     fog_decay();  // fog of war: common-tick step 4, before the object services (owner: fog agent)
+    ALAMO_PROFILE_STEP(steps, "tac.s.fog_decay");
     hg_production(mode, rng);  // station contents / skirmish tactical production (before the object services)
+    ALAMO_PROFILE_STEP(steps, "tac.s.hg_production");
     profile::lap("tac.setup");
     // 1. reinforcements, 2. stand-in orders, 3. retreat coordinator.
     reinforce(mode, rng, true);
+    ALAMO_PROFILE_STEP(steps, "tac.s.reinforce");
     landing_service(mode, rng);  // a1i t04: landing objects (timed unload steps, take-off)
+    ALAMO_PROFILE_STEP(steps, "tac.s.landing");
     if (cfg_.order_interval > 0 && (frame_ - 1) % cfg_.order_interval == 0) issue_orders(mode, rng);
+    ALAMO_PROFILE_STEP(steps, "tac.s.issue_orders");
     retreat_policy();
+    ALAMO_PROFILE_STEP(steps, "tac.s.retreat");
     if (retreat_side_ >= 0 && !retreat_complete_ && frame_ >= retreat_done_frame_) {
         bt_retreat_attrition(static_cast<uint8_t>(retreat_side_), rng);  // battle host: vf12 at the countdown end (§4.9)
         complete_retreat(mode, static_cast<uint8_t>(retreat_side_));
     }
+    ALAMO_PROFILE_STEP(steps, "tac.s.retreat_end");
     profile::lap("tac.orders");
     attack_block_service(mode, rng);  // s78n t20 stage A: serial, ascending mover, before the collision feed and the movement tick
+    ALAMO_PROFILE_STEP(steps, "tac.s.attack_block");
     // 4. speed factors, movement, positions into the store and the trees, locomotor animation.
     apply_speed_factors();
+    ALAMO_PROFILE_STEP(steps, "tac.s.speed_factors");
     fleet_tick(mode);  // [port] fleet groups: slowest-member cap and straggler wait (no-op while no group exists)
+    ALAMO_PROFILE_STEP(steps, "tac.s.fleet");
     feed_collision_info(store);  // s78n t20: targets / ranges / hero clashes for the land collision decisions
+    ALAMO_PROFILE_STEP(steps, "tac.s.collision_feed");
     fighter_sync();  // S7 fighters: new squadrons (map start, reinforcements, hangar launches, wingmen) and params
+    ALAMO_PROFILE_STEP(steps, "tac.s.fighter_sync");
     feed_attack_targets(store);
+    ALAMO_PROFILE_STEP(steps, "tac.s.attack_targets");
     if (space_) avoid_snapshot(store);  // SPACE_AVOIDANCE: committed member transforms for the fighter avoidance hook
+    ALAMO_PROFILE_STEP(steps, "tac.s.avoid_snapshot");
     profile::lap("tac.pre_move");
     movement_->tick(frame_, rng, pf);
+    ALAMO_PROFILE_STEP(steps, "tac.s.move_tick");
     movement_->commit(store);
+    ALAMO_PROFILE_STEP(steps, "tac.s.move_commit");
     kill_pushed_clones(mode);  // s78n t20 batch 1: the death clones a collision push killed
+    ALAMO_PROFILE_STEP(steps, "tac.s.pushed_clones");
     play_turn_clip_events(rng, global_frame);  // s78l t02: the arrival turn's clip plays (synced variant draws), ascending id
+    ALAMO_PROFILE_STEP(steps, "tac.s.turn_clips");
     s4_exit_arrivals();  // s78n t26.1: the garrison hosts' +0xf8 hook for the walk-out moves that finished
+    ALAMO_PROFILE_STEP(steps, "tac.s.s4_exit_arrivals");
     oi_deploy_sync();  // S8 t11: deploy clip ends (Is_Active, deploy flags, signal 0x29) before the combat tick
+    ALAMO_PROFILE_STEP(steps, "tac.s.deploy_sync");
     profile::lap("tac.movement");
     fighter_enter_idle();  // S7 t22 / t25: enter_idle drops the squadrons' team targets (§4.7 step 4, §4.10 D)
+    ALAMO_PROFILE_STEP(steps, "tac.s.fighter_idle");
     forward_fighter_events();  // S7 fighters: Provoke / Retarget -> combat attack orders (before the combat tick)
+    ALAMO_PROFILE_STEP(steps, "tac.s.fighter_events");
     for (const objects::ObjectId id : movement_->despawned())  // §4.6: land bombers at their path end, no death effects
         if (const Unit* u = unit_by_id(id)) bt_kill_silently(mode, u->h);
     oi_crush_.assign(movement_->crush_events().begin(), movement_->crush_events().end());  // OI tactical
+    ALAMO_PROFILE_STEP(steps, "tac.s.despawn_crush");
     l1_motion(mode, rng);  // L1 systems: hyperspace jumps, engine re-enables
+    ALAMO_PROFILE_STEP(steps, "tac.s.l1_motion");
     arrival_service(mode, rng);  // cu8l t03: the start fleet's hyperspace arrivals (timer draws, finishes)
+    ALAMO_PROFILE_STEP(steps, "tac.s.arrivals");
     l1_force_disable(mode);  // cu8 t02: Disable_Force_Abilities_Range emitters (Force-disable stamps)
+    ALAMO_PROFILE_STEP(steps, "tac.s.force_disable");
     hg_engine_service();   // engine loops: SimpleSpace locomotor services (moving first, then idle)
+    ALAMO_PROFILE_STEP(steps, "tac.s.engine_loops");
     bt_team_positions(mode);  // battle host: space squadrons / non-steering land squads at their members' box centre
+    ALAMO_PROFILE_STEP(steps, "tac.s.team_positions");
     profile::lap("tac.motion_post");
     mode.resolve_models();  // refixf t07: after a load, before the boxes and the parallel sweeps read the model cache
     for (const Unit& u : units_)
         if (u.alive && !u.retreated && u.movable && store.alive(u.h))
             mode.trees().update(static_cast<tactical::EntityHandle>(u.id), mode.bounds_of(u.h));
     mode.trees().maintain(sim_time, pf);
+    ALAMO_PROFILE_STEP(steps, "tac.s.trees");
     profile::lap("tac.trees");
     drive_animation(store, rng, global_frame);
+    ALAMO_PROFILE_STEP(steps, "tac.s.anim");
     profile::lap("tac.anim");
     // 5. combat (abilities run inside its serial phases), events.
     for (const Unit& u : units_) {
@@ -1056,47 +1092,75 @@ void TacticalBattle::tick(TacticalMode& mode, SimRng& rng, const ParallelFor& pf
                               mvv.locomotor == mv::LocomotorKind::Fighter && fighter_formation(fighter_key(u)) != nullptr);
         }
     }
+    ALAMO_PROFILE_STEP(steps, "tac.s.combat_flags");
     s4_positions(mode);  // S4: garrisoned units sit on their holders
+    ALAMO_PROFILE_STEP(steps, "tac.s.s4_positions");
     combat_team_positions(store);  // s78n t03: the land teams' TeamTargeting P_U (cleared after the combat tick)
+    ALAMO_PROFILE_STEP(steps, "tac.s.combat_team_pos");
     profile::lap("tac.combat_pre");
     hooks_->set_tick(&rng, global_frame);
     abilities_->tick(frame_, mode.trees(), rng, pf);
+    ALAMO_PROFILE_STEP(steps, "tac.s.abilities_combat");
     combat_->clear_team_positions();  // s78n t03: readers between ticks use the head's own position (save / load equal)
     profile::lap("tac.combat");
     consume_events(mode, rng);
+    ALAMO_PROFILE_STEP(steps, "tac.s.consume_events");
     oi_respawn_due(mode);  // OI abilities: Tactical_Respawn creations due this frame
+    ALAMO_PROFILE_STEP(steps, "tac.s.respawn");
     profile::lap("tac.events");
     hg_tick(mode, rng);    // hangars: SPAWN_SQUADRON services and the launches they request
+    ALAMO_PROFILE_STEP(steps, "tac.s.hangars");
     saber_throw_service(mode);  // cu8k t01: Saber_Throw throws / SWORD_CONTROL / SWORD_CATCH (after the saber's step)
+    ALAMO_PROFILE_STEP(steps, "tac.s.saber_throw");
     hg_holster_service();  // cu8g t01: HOLSTER_WEAPON (engine-loop suppression, draw / holster SFX requests)
+    ALAMO_PROFILE_STEP(steps, "tac.s.holster");
     l1_weapons(mode, rng);  // L1 systems: special-weapon volleys, TSW state machines
+    ALAMO_PROFILE_STEP(steps, "tac.s.l1_weapons");
     profile::lap("tac.services");
     expire_objects(mode);
+    ALAMO_PROFILE_STEP(steps, "tac.s.expire");
     s4_tick(mode, rng);  // S4: garrison enters / exits / ejects, structure capture
+    ALAMO_PROFILE_STEP(steps, "tac.s.garrisons");
     pads_tick(mode);     // Int-final: build pads (construction completion, children gone)
+    ALAMO_PROFILE_STEP(steps, "tac.s.pads");
     sk_income(mode);     // skai: skirmish map battles: the Income_Stream credit trickle
+    ALAMO_PROFILE_STEP(steps, "tac.s.income");
     bt_shield_stamps(mode);  // battle host: base-shield secondary occupants follow the live shields (land)
+    ALAMO_PROFILE_STEP(steps, "tac.s.shield_stamps");
     service_damage_tracking();
+    ALAMO_PROFILE_STEP(steps, "tac.s.damage_tracking");
     profile::lap("tac.cleanup");
     fog_service(mode);  // fog of war: REVEAL sources, attacker flashes (owner: fog agent)
+    ALAMO_PROFILE_STEP(steps, "tac.s.fog");
     fog_setup_tick();   // FOWF t05: setup phase end (all humans ready / countdown)
+    ALAMO_PROFILE_STEP(steps, "tac.s.fog_setup");
     profile::lap("tac.fog");
     team_attack_service(mode, rng);  // q6: attacks on TEAM containers (re-pick, end), before the queues read the orders
+    ALAMO_PROFILE_STEP(steps, "tac.s.team_attack");
     advance_queues(mode, rng);  // [port: Gabriel] 5b. queueable unit actions: completed orders start the next entry
+    ALAMO_PROFILE_STEP(steps, "tac.s.queues");
     late_swap_back_signals();   // S7 t27: a jetpack swap back after the combat_pre loop raises signal 0x29 in this tick
+    ALAMO_PROFILE_STEP(steps, "tac.s.swap_back");
     stats_.shots = combat_->stats().shots;
     stats_.hits = combat_->stats().hits;
     // cu8j t01 (MOVEMENT §4.6.2): the movement coordinator update (retail common tick step 10, after the object services):
     // this tick's new coordinators compose their formations (the FormationClass ctor draws, the land stagger draws).
     // Orders given after it (the AI and story services of the host) compose at the next tick's.
     movement_->coordinator_update(frame_, global_frame, rng);
+    ALAMO_PROFILE_STEP(steps, "tac.s.coordinators");
     // 6. victory.
     check_victory(mode);  // story t06: the victory monitor (losses since the last tick, countdown, end)
+    ALAMO_PROFILE_STEP(steps, "tac.s.victory");
     if (finished_ && !death_clones_.empty()) remove_death_clones(mode, true);  // refixf t04: the battle's clones end with it
+    ALAMO_PROFILE_STEP(steps, "tac.s.end_clones");
     space_obstacles_sync(mode);  // refixf t02: this tick's new / dead / retreated SPACE_OBSTACLE units
+    ALAMO_PROFILE_STEP(steps, "tac.s.space_obstacles");
     land_obstacles_sync(mode, pf);   // S8 t02: this tick's new / gone LAND_OBSTACLE objects
+    ALAMO_PROFILE_STEP(steps, "tac.s.land_obstacles");
     hg_publish_engine_requests();  // engine loops: this tick's requests for the audio host
+    ALAMO_PROFILE_STEP(steps, "tac.s.engine_requests");
     feed_pair_gates();  // s78n t18 review: the gates the command phase reads follow this tick's deaths / retreats
+    ALAMO_PROFILE_STEP(steps, "tac.s.pair_gates");
     profile::lap("tac.victory");
 }
 

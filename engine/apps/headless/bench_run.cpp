@@ -52,7 +52,7 @@ namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 constexpr int kExitNotComparable = 3;
-constexpr uint32_t kTopZones = 24;
+constexpr uint32_t kTopZones = 192;  // sp0: every active zone (the step zones are small), was the top 24
 
 double ms_between(Clock::time_point a, Clock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
@@ -444,6 +444,7 @@ int bench_run(const BenchOptions& opt) {
     bench::Json zones = bench::Json::array();
     for (size_t i = 0; i < rep.zones.size() && i < kTopZones; ++i) {
         const profile::ZoneStat& z = rep.zones[i];
+        if (z.active_ticks == 0) continue;
         bench::Json zj = bench::Json::object();
         zj.set("name", bench::Json::string(z.name));
         zj.set("share", bench::Json::number(z.share));

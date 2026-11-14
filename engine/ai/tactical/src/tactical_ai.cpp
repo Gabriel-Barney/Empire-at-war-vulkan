@@ -1436,7 +1436,9 @@ void TacticalAiWorld::Impl::release_to_free_store(int32_t player, ObjectHandle u
 }
 
 void TacticalAiWorld::Impl::refresh() {
+    profile::Steps steps;  // sp0: tac.ai.perception split (wall-clock only)
     host.fill(w, facts);
+    ALAMO_PROFILE_STEP(steps, "tac.perc.fill");
     if (facts.size() != w.objects.size()) facts.resize(w.objects.size());
     // refix t01: dying / removing objects (death clones: +0x3a0 |= 0xc0, S9_DEATH_CLONE_SHIELDS.md §1.6) are not
     // perceived - the perception adds (AI_TACTICAL §2 slot 11), the FreeStore base test and the target lists all skip
@@ -1454,9 +1456,11 @@ void TacticalAiWorld::Impl::refresh() {
         w.objects.resize(keep);
         facts.resize(keep);
     }
+    ALAMO_PROFILE_STEP(steps, "tac.perc.dying");
     w.frame = mode_frame;
     w.index();
     gate.suspend(world.ai_suspended());
+    ALAMO_PROFILE_STEP(steps, "tac.perc.index");
     // Object signals by snapshot comparison (header comment).
     std::vector<std::pair<int32_t, int32_t>> cur;
     cur.reserve(w.objects.size());
@@ -1510,8 +1514,10 @@ void TacticalAiWorld::Impl::refresh() {
         }
     }
     prev = std::move(cur);
+    ALAMO_PROFILE_STEP(steps, "tac.perc.diff");
     // UNIT_AI service (every frame, registration order).
     perc.grid().service_all(w, mode_frame);
+    ALAMO_PROFILE_STEP(steps, "tac.perc.grid");
     // Order completion for the AI VMs' object states [port]: idle units lose Has_Active_Orders and the order lock;
     // Get_Attack_Target reads the combat target.
     for (size_t i = 0; i < w.objects.size(); ++i) {
@@ -1529,6 +1535,7 @@ void TacticalAiWorld::Impl::refresh() {
             }
         }
     }
+    ALAMO_PROFILE_STEP(steps, "tac.perc.orders");
     // S7 t20 (AI_TACTICAL §7.3.2): the task forces' death / removal signals (0x10 / 0x1a) - members gone this frame leave
     // at once (ascending TF id) and No_Units_Remaining is queued when nothing is left. Before, a per-service poll.
     for (auto& [id, t] : tfs) {
@@ -1536,6 +1543,7 @@ void TacticalAiWorld::Impl::refresh() {
         prune_tf(t);
         if (t.units.size() < before) units_lost(t);
     }
+    ALAMO_PROFILE_STEP(steps, "tac.perc.tf_prune");
 }
 
 // S7 t26 (AI_TACTICAL §7.3.3 item 4, TF signal handler 0x5fe5d0): on every member loss (0x10 / 0x1a, Release_Unit, a failed
@@ -3797,12 +3805,14 @@ void TacticalAiWorld::update(int64_t now, uint32_t mode_frame) {
     {
         ALAMO_PROFILE_SCOPE("tac.ai.perception");  // OPT2 t08: snapshot, threat grid, signals
         w.refresh();
+        profile::Steps steps;  // sp0: the signal passes after refresh()
         w.opportunity_events(w.host.opportunity_targets());  // STRATEGIC_GAPS §5.3
         w.target_in_range_events(w.host.attack_state_signals());  // s78f t08: signal 0x1E
         w.ability_signals(w.host.ability_finished());       // S7 t15 A1: signal 0x29
         w.reinforcements_unloaded(w.host.reinforcements_unloaded());  // a1j t01: signal 0x19 (land landings)
         w.production_completed(w.host.production_completed());        // q6 t19: signal 0x22 (land builds to the pool)
         w.status_signals();                                  // S7 t21 / S7 t15 A1: ambush / ability status signals
+        ALAMO_PROFILE_STEP(steps, "tac.perc.signals");
     }
     const bool enabled = w.gate.enabled(ai_mode_of(w.cfg.mode));
     // OPT2 t08: one zone per AI player's service (goals, plans, free store; their Lua is also in lua.exec).
