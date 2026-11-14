@@ -19,6 +19,20 @@
 //     background job while it waits (needed so nested background work cannot deadlock).
 //     Limitation: once a background job has started on a worker, a foreground thread waiting
 //     on it does not help with that job's nested (background) chunks.
+//   - Background cap (frame-time scaling, 2026-11-14): an idle worker starts a new top-level
+//     background job only while fewer than background_cap() of them run (half the workers, at
+//     least 1), so long background work (shader compiles, AI recomputes) never occupies every
+//     worker a foreground parallel_for could use. Exempt from the cap, so it cannot deadlock or
+//     serialise background work: the helpers of a background parallel_for (queued at the FRONT of
+//     the background queue, any idle worker takes them), a background job's own help_loop, a
+//     waiter claiming its own job, and the shutdown drain.
+//
+// parallel_for waits for chunks, not helpers (2026-11-14): the caller returns as soon as every
+// chunk is claimed and no thread is still running one. Helper jobs still queued are taken back
+// out of the caller's own slot; a helper a worker popped but has not started yet (the OS has not
+// scheduled that thread) no longer holds the caller. The loop state is reference counted, so
+// such a late helper finds no chunk left and exits without touching the caller's frame.
+// Only as many idle workers are woken as helpers were queued (notify_all only when that is all of them).
 //
 // Waiting helps: wait() executes queued foreground jobs while the condition holds,
 // so nested parallel_for / wait inside a job cannot deadlock (as long as the awaited work is
@@ -104,6 +118,8 @@ public:
     static uint32_t default_worker_count();
 
     uint32_t worker_count() const noexcept { return workers_; }
+    // Most top-level background jobs that run on workers at once: max(1, workers / 2); 0 when serial.
+    uint32_t background_cap() const noexcept { return bg_cap_; }
     uint32_t thread_count() const noexcept { return workers_ + 1; }  // workers + calling thread
     bool serial() const noexcept { return workers_ == 0; }
     // 0 for non-worker threads, 1..N on this system's workers.
@@ -150,10 +166,11 @@ private:
         void* ctx = nullptr;
         uint32_t a = 0;
         uint32_t b = 0;
-        JobCounter* counter = nullptr;
+        JobCounter* counter = nullptr;  // nullptr: detached (parallel_for helpers; nobody waits on the job itself)
         Priority priority = Priority::Normal;
     };
     struct Slot;
+    struct ForState;
 
     uint32_t my_slot() const noexcept;
     Priority effective_priority(Priority requested) const noexcept;
@@ -161,6 +178,19 @@ private:
     void wake(uint32_t copies);
     bool pop_foreground(uint32_t self, Job& out);
     bool pop_background(Job& out);
+    // Worker top level: pop the front background job; a non-helper only below the cap, and then
+    // `counted` is true and bg_running_ counts it until finish_background_capped().
+    bool pop_background_capped(Job& out, bool& counted);
+    void finish_background_capped();
+    bool background_startable() const noexcept;
+    // parallel_for internals (job_system.cpp).
+    void run_for_chunks(ForState& st);
+    void release_for_chunk(ForState& st);
+    uint32_t cancel_queued_helpers(uint32_t self, const ForState& st);
+    static void for_helper_job(void* ctx, uint32_t, uint32_t);
+    // Loop states are pooled (no heap allocation per parallel_for once the pool is warm).
+    ForState* acquire_for_state();
+    void release_for_ref(ForState* st, uint32_t refs = 1);
     bool claim_background(const JobCounter& counter, Job& out);
     void execute(const Job& job, uint32_t self);
     // Execute queued jobs (foreground; plus background when called from inside a background
@@ -173,11 +203,17 @@ private:
     void worker_main(uint32_t slot);
 
     uint32_t workers_ = 0;
+    uint32_t bg_cap_ = 0;
+    std::atomic<uint32_t> bg_running_{0};       // top-level background jobs running on workers
     std::vector<std::unique_ptr<Slot>> slots_;  // size workers_ + 1
+    std::mutex for_pool_mutex_;
+    std::vector<std::unique_ptr<ForState>> for_pool_;  // every loop state ever made (owner)
+    std::vector<ForState*> for_free_;                  // the idle ones; capacity kept >= for_pool_.size()
     std::mutex bg_mutex_;
     std::deque<Job> bg_queue_;
     std::atomic<int64_t> fg_queued_{0};
     std::atomic<int64_t> bg_queued_{0};
+    std::atomic<int64_t> bg_helpers_{0};  // background parallel_for helpers queued (the queue's front segment)
     std::atomic<uint64_t> bg_epoch_{0};  // incremented on every background push
 
     std::mutex sleep_mutex_;

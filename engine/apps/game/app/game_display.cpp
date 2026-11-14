@@ -229,6 +229,10 @@ void enable_dpi_awareness() {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 }
 
+void set_process_priority(bool above) {
+    (void)SetPriorityClass(GetCurrentProcess(), above ? ABOVE_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
+}
+
 bool set_window_client_size(void* hwnd, uint32_t w, uint32_t h, bool borderless) {
     HWND wnd = static_cast<HWND>(hwnd);
     if (!wnd || w == 0 || h == 0) return false;

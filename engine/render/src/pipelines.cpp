@@ -695,7 +695,8 @@ void PipelineManager::request(const materials::PsoKey& key) {
         slot->key = key;
         e = slot.get();
     }
-    if (desc_.js) desc_.js->spawn(*counter_, [this, e] { create(*e); }, jobs::Priority::Background);
+    // A serial job system runs a job only when someone waits on it, and get() only polls: create inline there.
+    if (desc_.js && !desc_.js->serial()) desc_.js->spawn(*counter_, [this, e] { create(*e); }, jobs::Priority::Background);
     else create(*e);
 }
 

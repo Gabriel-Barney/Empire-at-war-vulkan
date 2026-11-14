@@ -1,4 +1,5 @@
 // alamo_jobs unit tests (no framework; returns non-zero on failure).
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -662,6 +663,130 @@ static void test_background_isolation() {
     CHECK(b_ran.load() && b_thread == main_id);
 }
 
+// Frame-time scaling (2026-11-14): parallel_for waits for chunks, not helper jobs.
+static void test_for_waits_on_chunks() {
+    section("parallel_for: caller does not wait for unstarted helpers");
+    {
+        // Both workers busy: the caller runs every chunk itself, takes its queued helpers back
+        // and returns without the workers ever running them.
+        JobSystem js({2});
+        std::atomic<bool> release{false};
+        std::atomic<uint32_t> started{0};
+        JobCounter busy;
+        for (int i = 0; i < 2; ++i)
+            js.spawn(busy, [&] {
+                started.fetch_add(1);
+                while (!release.load()) std::this_thread::yield();
+            });
+        while (started.load() < 2) std::this_thread::yield();
+        const auto before = js.executed_per_slot();
+        std::atomic<uint32_t> sum{0};
+        js.parallel_for(100, 1, [&](uint32_t b, uint32_t e) { sum.fetch_add(e - b); });
+        CHECK(sum.load() == 100);
+        release = true;
+        js.wait(busy);
+        // Give the workers a moment: no stale helper may be left for them.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const auto after = js.executed_per_slot();
+        CHECK(after[1] + after[2] - before[1] - before[2] == 2);  // just the two busy jobs
+        CHECK(after[0] == before[0]);                            // the caller ran no helper job either
+    }
+    {
+        // Lifetime: many short loops from several threads, nested loops and failures; late helpers
+        // must only ever see their own (still alive) state. ASan / the sums catch a mistake.
+        JobSystem js({4});
+        std::atomic<uint64_t> sum{0};
+        std::vector<std::thread> ext;
+        for (int t = 0; t < 3; ++t)
+            ext.emplace_back([&] {
+                for (uint32_t r = 0; r < 3000 / kScale + 1; ++r) {
+                    js.parallel_for(6, 1, [&](uint32_t b, uint32_t e) {
+                        js.parallel_for(3, 1, [&](uint32_t b2, uint32_t e2) { sum.fetch_add(e2 - b2); });
+                        sum.fetch_add(e - b);
+                    });
+                    try {
+                        js.parallel_for(8, 1, [](uint32_t b, uint32_t) {
+                            if (b == 5) throw std::runtime_error("x");
+                        });
+                    } catch (const std::runtime_error&) {
+                    }
+                }
+            });
+        for (auto& t : ext) t.join();
+        CHECK(sum.load() == 3ull * (3000 / kScale + 1) * (6 + 6 * 3));
+    }
+}
+
+static void test_background_cap() {
+    section("background cap");
+    JobSystem js({4});
+    CHECK(js.background_cap() == 2);
+    CHECK(JobSystem({1}).background_cap() == 1);
+    CHECK(JobSystem({0}).background_cap() == 0);
+    std::atomic<bool> release{false};
+    std::atomic<uint32_t> running{0}, peak{0};
+    JobCounter bg;
+    for (int i = 0; i < 6; ++i)
+        js.spawn(bg, [&] {
+            const uint32_t now = running.fetch_add(1) + 1;
+            uint32_t p = peak.load();
+            while (now > p && !peak.compare_exchange_weak(p, now)) {}
+            while (!release.load()) std::this_thread::yield();
+            running.fetch_sub(1);
+        }, Priority::Background);
+    for (int i = 0; i < 2000 && running.load() < 2; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));  // a third would have started by now
+    CHECK(peak.load() == 2);
+    // Two workers stay free for foreground work while the cap is reached.
+    const auto before = js.executed_per_slot();
+    js.parallel_for(64, 1, [](uint32_t, uint32_t) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
+    const auto after = js.executed_per_slot();
+    uint64_t helped = 0;
+    for (size_t s = 1; s < after.size(); ++s) helped += after[s] - before[s];
+    CHECK(helped > 0);
+    release = true;
+    js.wait(bg);  // the queued ones run once the first two finish (the waiter may claim them too)
+    CHECK(running.load() == 0);
+
+    // Cap 1, full: a Deferred result due now is claimed and run by the waiting sim thread.
+    {
+        JobSystem two({2});
+        CHECK(two.background_cap() == 1);
+        std::atomic<bool> go{false}, blocker_started{false};
+        JobCounter blocker;
+        two.spawn(blocker, [&] {
+            blocker_started = true;
+            while (!go.load()) std::this_thread::yield();
+        }, Priority::Background);
+        while (!blocker_started.load()) std::this_thread::yield();
+        Deferred<int> d(two, 0);
+        d.kick(0, 1, [] { return 7; });
+        CHECK(d.read(1) == 7);  // would hang if the cap kept the job from every thread
+        go = true;
+        two.wait(blocker);
+    }
+    // Cap 1, used by a background job: the helpers of its own parallel_for are exempt, so the
+    // other (idle) worker joins the loop instead of the job running it alone.
+    {
+        JobSystem two({2});
+        std::mutex m;
+        std::vector<std::thread::id> ran_on;
+        JobCounter c;
+        two.spawn(c, [&] {
+            two.parallel_for(64, 1, [&](uint32_t, uint32_t) {
+                {
+                    std::lock_guard lk(m);
+                    if (std::find(ran_on.begin(), ran_on.end(), std::this_thread::get_id()) == ran_on.end())
+                        ran_on.push_back(std::this_thread::get_id());
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            });
+        }, Priority::Background);
+        two.wait(c);
+        CHECK(ran_on.size() >= 2);
+    }
+}
+
 static void test_abort_skips_later_chunks() {
     section("exception stops later chunks");
     for (int32_t w : {0, 1, 4}) {
@@ -758,6 +883,8 @@ int main() {
     test_background_priority();
     test_background_isolation();
     test_abort_skips_later_chunks();
+    test_for_waits_on_chunks();
+    test_background_cap();
     test_scratch();
     std::printf(g_fail ? "alamo_jobs_tests: %d failure(s)\n" : "alamo_jobs_tests: OK\n", g_fail);
     return g_fail ? 1 : 0;

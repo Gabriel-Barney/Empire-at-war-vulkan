@@ -7,6 +7,7 @@
 //             -> Single Player -> Skirmish         -> load screen -> space battle on the chosen map -> main menu
 //
 // Usage: alamo_game [--game DIR] [--width W --height H] [--hidden] [--audio device|null|off] [--seed S] [--workers N]
+//                   [--priority above|normal]   process priority class; default above (normal for --smoke)
 //                   [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate] [MODPATH=..]
 //                   [--frame-overlay] [--profile [--profile-out FILE] [--profile-budget MS]]   OPT1 frame-time overlay
 //                   (F11 toggles it) / tick profiler + per-phase frame report at exit (frame_overlay.hpp)
@@ -623,7 +624,12 @@ int main(int argc, char** argv) {
             else return usage();
         } else if (a == "--seed") opt.seed = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--workers") opt.workers = static_cast<int32_t>(std::strtol(next().c_str(), nullptr, 10));
-        else if (a == "--frames") opt.frames = std::atol(next().c_str());
+        else if (a == "--priority") {
+            const std::string m = next();
+            if (m == "above") opt.priority = 1;
+            else if (m == "normal") opt.priority = 0;
+            else return usage();
+        } else if (a == "--frames") opt.frames = std::atol(next().c_str());
         else if (a == "--battle-max-frames") opt.battle_max_frames = static_cast<uint32_t>(std::strtoul(next().c_str(), nullptr, 10));
         else if (a == "--cache-dir") opt.cache_dir = next();
         else if (a == "--png-dir") opt.png_dir = next();
@@ -679,6 +685,7 @@ int main(int argc, char** argv) {
         // space fleets start ~5000 units apart).
         if (opt.battle_max_frames == 27000) opt.battle_max_frames = opt.smoke == "campaign" ? 900u : 4800u;
     }
+    set_process_priority(opt.priority >= 0 ? opt.priority == 1 : opt.smoke.empty());
     App app(std::move(opt));
     const int rc = app.run();
     if (!regen_save.empty()) std::remove(regen_save.c_str());  // bm3: --bench-regen's temporary save

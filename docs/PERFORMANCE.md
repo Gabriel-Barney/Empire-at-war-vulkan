@@ -1106,3 +1106,44 @@ Reading it:
 - The "link steps" column sums per-step wall time while up to 16 steps ran at once (and compiles competed for the cores), so it overstates the cost. bo1 measured the real number: relinking all 135 exes takes **8.1 s with link.exe, 4.5 s with lld-link** (section "Build times"). A typical single-test edit relinks one exe, about 0.3 s. Merging 80 small exes into 20 runners saves a few seconds of linking on a full relink and nothing on compiling (the same test sources are compiled either way).
 - Test run time is concentrated: render 345 s, sim 106 s, shaderxlat 70 s, jobs 64 s, galactic 62 s, tactical 61 s, ai 56 s (sums of per-test times, run 4 at a time). Merging does not change these.
 - Merge candidates if it is done anyway (one test per exe, small, shared fixtures, in the t03/t04 modules): core 6 (atomic_file, dmath, profile, save, sim, tests), vfs 2, galactic 8, ai 6, lua 12, tactical 22 (movement_b2..b5, bkm, cohesion, gaps, t26, save, fog, fog_save, tree_save, garrison, hangar, hyperspace, ...). The lua and tactical families are the biggest (34 exes, 40 MB of exe files). apps / render / ui / audio / video / game are out of scope for this group.
+
+## Frame time against worker count (2026-11-14)
+
+Question (Gabriel): frame p99 rose with more workers (space battle 16 ms at 0 workers to 177 ms at 15; water battle 32 to 250 ms).
+Setup: MSVC Release, Ryzen 7 7800X3D (16 threads), RX 9070 XT, the BM scenes (`space_battle` sim-only, `space_battle_game`,
+`water_battle` rendered, `bm-high`, fixed frames, hidden window), one process run per cell, two runs each unless noted. "Before" = dev
+`e0342ed8`, "after" = the job-system changes below. "Loaded" = 16 busy-loop processes at normal priority (CPU 100 %), standing in for a
+parallel build. p99 in ms (frame p99 for the rendered scenes, tick p99 for the sim-only one).
+
+| Scene | Machine | 0 workers: before / after | 7 workers: before / after | 15 workers: before / after |
+|---|---|---|---|---|
+| space_battle (sim-only) | idle | 3.5 / 3.4 | 3.2 / 3.2 | 3.1 / 3.1 |
+| space_battle_game | idle | 33.8 (after only, 1 run) | 12.2 / 12.3 | 12.8 / 12.8 |
+| water_battle | idle | (not run) | 10.2 / 9.9 | 10.4 / 9.9 |
+| space_battle (sim-only) | loaded | 21 / 19 | 27 / 29 | 28 / 29 |
+| space_battle_game | loaded | 35 (after) | 41 / 38 | 41 / 40 |
+| water_battle | loaded | 37 (after) | 44 / 43 | 47 / 45 |
+| space_battle (sim-only) | loaded, game above normal | 5.3 | 8.8 | 9.1 |
+| space_battle_game | loaded, game above normal | 19.8 | 18.1 | 18.2 |
+| water_battle | loaded, game above normal | 16.2 | 17.8 | 20.2 |
+
+(Above-normal rows: after, one run each, process started at `ABOVE_NORMAL_PRIORITY_CLASS`.)
+
+Reading it:
+- **Idle, more workers is faster**, also before the change: 15 workers against 0 is 3.1 against 3.4 ms sim-only and 12.8 against
+  33.8 ms in the game. The 0-worker game numbers in the question were not comparable: with a serial job system the renderer's polled
+  background jobs (model streaming, pipeline creation, shader translation) never ran, so nothing was loaded or drawn, and the fixed-frame
+  benchmark failed with "the presentation did not settle within 300 s". Fixed: those call sites run the work inline when the job system
+  is serial (`render/src/pipelines.cpp`, `renderer_xlat.cpp`, `renderer_graph.cpp` `ModelStreamer::request`); the 0-worker run now
+  ends with the same final CRC as 15 workers.
+- **Loaded at normal priority, more workers is slower** (sim-only 19-21 against 27-29 ms): every fork-join waits for the worker the OS
+  gave the smallest share of a core. The job-system changes (a `parallel_for` caller waits for running chunks only, no longer for helper
+  jobs a worker popped but has not started; queued helpers are taken back; at most as many workers are woken as helpers were queued; top-
+  level background jobs capped at half the workers) are neutral idle and within noise loaded: that stall is not what dominates here.
+- **Process priority is the lever**: above-normal priority halves the loaded game p99 (about 40 to 18 ms, 45 to 17-20 ms) and brings 7 and
+  15 workers level with 0 in the game. `alamo_game` now raises itself to above normal at start (`--priority normal` turns it off;
+  `--smoke` test runs stay normal). `alamo_headless` and the tests are unchanged.
+- The question's 177 / 250 ms did not reproduce, not even with all 16 threads busy; a heavier load (memory or disk pressure from
+  several builds) is the likely difference. Worst frames of 150-230 ms under load remain in `space_battle_game` (both binaries).
+- Separately, `space_battle_game`'s idle frame p99 is about 12 ms here against 6.6 ms in the 2026-11-08 baseline (same before and after
+  this change): a regression on dev since then, filed on the backlog.

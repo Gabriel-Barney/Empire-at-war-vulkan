@@ -135,3 +135,13 @@ target. The file's anonymous namespace becomes the named namespace `bo3split` in
 one definition. Test exes keep one `main`, test names and `add_test` entries; sources move only `Class::member` / external function
 definitions. Behaviour, goldens and CRCs are unchanged (no regeneration). New `engine/core` public headers: `host_fs.hpp`,
 `sim_crc_fwd.hpp`; `file_provider.hpp` lost the `<filesystem>` helpers (include `host_fs.hpp` for them).
+
+## alamo_game runs at above-normal process priority (2026-11-14, Gabriel asked for better frame times at high worker counts)
+
+`[port]` `alamo_game` sets its process to `ABOVE_NORMAL_PRIORITY_CLASS` at start (`set_process_priority`, `engine/apps/game/app/game_display.cpp`);
+`--priority normal` keeps it normal, and `--smoke` runs (tests sharing the machine with builds) stay normal unless `--priority above` is given.
+Why: on a loaded CPU every fork-join of the sim and renderer waits for the worker the OS scheduled last; at above-normal priority the
+game's threads win over normal-priority processes, which halved the loaded frame p99 (docs/PERFORMANCE.md, "Frame time against worker
+count"). Scheduling only: nothing reads it, results and CRCs are unchanged. `alamo_headless` and the test exes stay at normal priority.
+The job system's own scheduling changes of the same day (parallel_for waits on chunks, not helpers; background-job cap) are documented in
+`engine/jobs/include/alamo/jobs/job_system.hpp`.

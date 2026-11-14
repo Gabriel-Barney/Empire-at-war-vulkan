@@ -180,6 +180,11 @@ ui::AdvancedVideoSettings detail_preset(const ui::AdvancedVideoSettings& s, int3
 // pixels; without it a scaled display (150 %) stretches the window and a mode the size of the display no longer fits.
 // Call before the first window. No-op off Windows or when the call is refused.
 void enable_dpi_awareness();
+// [port] Frame-time scaling (2026-11-14): the process runs at ABOVE_NORMAL priority class (above = true) so background
+// processes at normal priority (a parallel build, other apps) yield to the sim / render thread and the job workers instead of
+// taking their timeslices; under a fully loaded CPU this halved the benchmark scenes' frame p99 (docs/PERFORMANCE.md).
+// false restores NORMAL. No-op when the call is refused. Never read by sim code (scheduling only, no effect on results).
+void set_process_priority(bool above);
 // Resizes the window `hwnd` (HWND) so its client area is w x h; false when the call fails. A framed window that fits
 // the work area of its monitor stays framed (kept on screen); a size that does not fit (e.g. the display's own
 // resolution) becomes a borderless window covering that monitor, at most the monitor's size [port: the original

@@ -101,7 +101,8 @@ const materials::TranslatedProgram* Renderer::translated_program_impl(const std:
         e->state.store(e->tp ? 1 : 2);
         if (!e->tp) log::warnf("render", "translate %s: %s", effect ? effect->name.c_str() : "?", err.c_str());
     };
-    if (desc_.js) desc_.js->spawn(*xlat_counter_, std::move(job), jobs::Priority::Background);
+    // Serial job system: the result is only polled, so nobody would run the job (see PipelineManager::request).
+    if (desc_.js && !desc_.js->serial()) desc_.js->spawn(*xlat_counter_, std::move(job), jobs::Priority::Background);
     else job();
     std::lock_guard<std::mutex> lock(xlat_mutex_);
     return e->state.load() == 1 ? e->tp.get() : nullptr;

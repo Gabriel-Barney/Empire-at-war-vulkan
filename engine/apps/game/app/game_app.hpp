@@ -134,6 +134,9 @@ struct Options {
     AudioBackendKind audio = AudioBackendKind::Device;
     uint32_t seed = 1;
     int32_t workers = -1;
+    // --priority above|normal: process priority class (game_display.hpp set_process_priority). Unset: above, except
+    // --smoke runs (tests that share the machine with builds stay at normal).
+    int8_t priority = -1;  // -1 default, 0 normal, 1 above
     long frames = -1;
     uint32_t battle_max_frames = 27000;
     bool fleet_groups = false;  // [port] --fleet-groups: fleet groups in tactical battles (docs/DECISIONS.md)
@@ -161,7 +164,7 @@ struct Options {
 inline int usage() {
     std::fprintf(stderr,
                  "usage: alamo_game [--game DIR] [--width W] [--height H] [--hidden] [--audio device|null|off] [--seed S]\n"
-                 "                  [--workers N] [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate]\n"
+                 "                  [--workers N] [--priority above|normal] [--frames N] [--battle-max-frames N] [--cache-dir DIR] [--mailbox|--immediate]\n"
                  "                  [--frame-cap N|display] [--video-options FILE] [--saves-dir DIR]\n"
                  "                  [--movie NAME]... [--no-intro] [--attract] [--smoke skirmish|land|campaign|saveload --png-dir DIR] [MODPATH=..]\n"
                  "                  [--frame-overlay] [--profile] [--profile-out FILE] [--profile-budget MS] [FALLBACKPATH=..]\n"

@@ -1275,31 +1275,31 @@ uint32_t ModelStreamer::request(std::string name) {
     entries_.push_back(std::make_unique<Entry>());
     Entry* e = entries_.back().get();
     e->name = std::move(name);
-    js_.spawn(
-        *counter_,
-        [this, e] {
-            const auto t0 = std::chrono::steady_clock::now();
-            std::shared_ptr<const assets::ModelAsset> m = cache_.model(e->name);
-            if (!m) {
-                e->error = "model load failed";
-                for (const auto& f : cache_.failures())
-                    if (f.kind == "model") e->error = f.key + ": " + f.reason;
+    auto load = [this, e] {
+        const auto t0 = std::chrono::steady_clock::now();
+        std::shared_ptr<const assets::ModelAsset> m = cache_.model(e->name);
+        if (!m) {
+            e->error = "model load failed";
+            for (const auto& f : cache_.failures())
+                if (f.kind == "model") e->error = f.key + ": " + f.reason;
+            e->state.store(static_cast<int>(State::Failed));
+        } else {
+            e->state.store(static_cast<int>(State::Uploading));
+            std::string err;
+            const bool ok = renderer_.upload_model(
+                m, [this](std::string_view n, assets::TextureRole role) { return cache_.texture(n, role); }, e->model,
+                &js_, &err);
+            if (!ok) {
+                e->error = err;
                 e->state.store(static_cast<int>(State::Failed));
-            } else {
-                e->state.store(static_cast<int>(State::Uploading));
-                std::string err;
-                const bool ok = renderer_.upload_model(
-                    m, [this](std::string_view n, assets::TextureRole role) { return cache_.texture(n, role); }, e->model,
-                    &js_, &err);
-                if (!ok) {
-                    e->error = err;
-                    e->state.store(static_cast<int>(State::Failed));
-                }
             }
-            e->cpu_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-            e->finished.store(true, std::memory_order_release);
-        },
-        jobs::Priority::Background);
+        }
+        e->cpu_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        e->finished.store(true, std::memory_order_release);
+    };
+    // Serial job system: update() only polls `finished`, so nobody would run a queued job; load inline.
+    if (js_.serial()) load();
+    else js_.spawn(*counter_, std::move(load), jobs::Priority::Background);
     return static_cast<uint32_t>(entries_.size() - 1);
 }
 
