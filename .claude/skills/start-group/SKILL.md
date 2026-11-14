@@ -19,4 +19,8 @@ worktree name). Follow the `lane` agent loop (`.claude/agents/lane.md`):
    prints. A session already on its own app branch keeps it: `tools\land_on_dev.cmd` brings `dev` in when it lands.
 5. Current focus (Gabriel, 2026-11-10, `docs/DECISIONS.md`): only tier 1 and tier 2 tasks. Skip tier-3 tasks (`tier` field) and say so in the plan.
    Print the plan: the tasks you will do in order, the modules and docs they touch, which builds apply (MSVC fast tier; clang when
-   sim code changes; ASan for `engine/jobs`), and whether goldens may move. Then begin with the first task.
+   sim code changes; ASan for `engine/jobs`), and whether goldens may move.
+6. **Goal.** Set the session goal from the group's `exit` field, so the lane has a stop condition: `/goal <exit test as a checkable
+   sentence> and python roadmap-store\roadmap_store.py lint is clean`. Where `/goal` is not available, write the same sentence at
+   the top of the plan and check it before finishing. Check context size now (`/context`): a lane that starts above half full
+   should `/compact` before the first task. Then begin with the first task.

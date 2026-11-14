@@ -12,6 +12,7 @@ its kind below and add it there instead of starting a second copy.
 | Side goals deferred until the core game and mod platform are complete (shader precompile, loading and build speed, CPU / GPU efficiency, graphics fidelity): definitions and re-analysis notes | [`DEFERRED_SIDE_GOALS.md`](DEFERRED_SIDE_GOALS.md) | Not scheduled; restart only by a new row in `DECISIONS.md` |
 | Build, test, gate, sanitizers, worker-count check, compiler cache | [`BUILD.md`](BUILD.md) | `CLAUDE.md` keeps only the short rules |
 | Performance measurements and scheduling results | [`PERFORMANCE.md`](PERFORMANCE.md) | Plans and research: [`OPT1_PLAN.md`](OPT1_PLAN.md), [`OPT_RESEARCH.md`](OPT_RESEARCH.md) |
+| Claude Code features that speed up lanes (`/loop`, `/goal`, `/compact`, `/btw`, shell mode, Remote Control) | [`WORKFLOW_TIPS.md`](WORKFLOW_TIPS.md) | Short form for agents in `.claude/agents/lane.md` |
 | In-game probes: which kit asks what, where findings go | [`PROBES.md`](PROBES.md) | Kit READMEs under `tools/probe_mod/` say how to run; findings go in `docs/re/` |
 | Roadmap rules and field list | [`ROADMAP_PROTOCOL.md`](ROADMAP_PROTOCOL.md) | The roadmap itself is `roadmap-store/` |
 | Behaviour of the original game (specs recovered from the binary) | [`re/`](re/) | Clean-room: engine code is written from these, never from decompiled output. `re/AUDIT_2026-10-30.md` is the status of each file |

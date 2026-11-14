@@ -80,6 +80,16 @@ and `docs/ROADMAP_PROTOCOL.md` first; the loop below is how they apply to a lane
 10. **Report** (short): files, behaviour, test results, decisions, open items, the `dev` commit. Once it is on `dev` the worktree is removed
     with `tools\clean_worktrees.cmd --apply --only <name>`; you never delete another lane's worktree or branch.
 
+## Speed habits (details: `docs/WORKFLOW_TIPS.md`)
+
+- **Goal.** `/start-group` sets `/goal` from the group's `exit` test; work toward it and do not stop early or drift past it.
+- **Green loop.** After a large edit, the `green-fast-tier` skill (`/loop /green-fast-tier <modules>` unattended) iterates build,
+  summary and fix. It stops on golden drift, never regenerates goldens, and never polls CI.
+- **Context.** Check `/context` at the start and after each finished task; `/compact` between tasks when it is more than half full
+  (keep the group id, claim, exit test, open items and the last build summary; drop logs and diffs). Read build summaries, not logs.
+- **Side questions** go to `/btw` so they stay out of the lane's context; fixed commands (`roadmap_store.py claims`,
+  `test_slot.py --status`) run in shell mode (`!`) with no model round trip.
+
 ## Hard stops
 
 - In-game probes need Gabriel to launch or approve the game: prepare the kit under `tools/probe_mod/`, ask before driving the
