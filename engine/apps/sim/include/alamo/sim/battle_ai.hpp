@@ -367,6 +367,10 @@ private:
         std::vector<int32_t> retreat_inc;
         std::optional<tactical::abilities::SpecialWeaponSystem> sw;
         bool tsw_planet_ok = false;
+        // slice 4e (part 3): fog_object_hidden(force = 1) of every object for the AI players (ascending id; bit k for the
+        // k-th entry of fog_players); empty without fog.
+        std::vector<int32_t> fog_players;
+        std::vector<std::pair<objects::ObjectId, uint32_t>> fog_hidden;
     };
     LaneView view_;
     // sp3 slice 4b: the ability / combat records the AI VMs' bindings read with the lane on (ObjectBridge::lane_abilities,
@@ -383,6 +387,9 @@ private:
     void capture_l1();
     const LaneView::L1Obj* view_l1(objects::ObjectId id) const;
     void apply_host_write(const lua::LaneWrite& w);
+    // slice 4e (part 3): the AI's GlobalValue.Set writes as batch commands (PortExtension kLaneGlobalSubtype)
+    void queue_global_writes();
+    std::vector<ai::tactical::TacticalAiWorld::GlobalWrite> global_overlay() const;  // the batch's, issue order
     // sp3 slice 4d: unload records of lane Reinforce applies that spawned their units at once (or were refused: no units),
     // handed to the AI with the battle's own at the next AI slot (the same tick: never pending at a save).
     std::vector<ai::tactical::ReinforcementsUnloaded> lane_unloaded_;

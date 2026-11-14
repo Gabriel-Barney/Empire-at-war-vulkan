@@ -285,6 +285,14 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     std::map<std::string, lua::AiGlobalValue> globals;
     ScriptEvaluators scripts;  // Script_<File> perception evaluators (AI_GALACTIC_2 §4.4), one shared VM per file
     lua::GlobalValueStore* gv_store = nullptr;  // Int-final: attached session-wide GlobalValue table (globals unused then)
+    // sp3 slice 4e (part 3): the AI lane's copy of gv_store, the host's overlay and this job's writes
+    lua::GlobalValueStore gv_view;
+    std::vector<TacticalAiWorld::GlobalWrite> gv_overlay, gv_out;
+    void refresh_gv_view() {
+        if (!gv_store) return;
+        gv_view = *gv_store;
+        for (const auto& [name, v] : gv_overlay) gv_view.set(name, v);
+    }
 
     AiEnableGate gate;
     std::vector<std::unique_ptr<PlayerAi>> ai;  // by player index
@@ -793,11 +801,17 @@ struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHos
     int32_t find_target(int32_t script, const lua::AiFindTargetRequest& request) override;
     int32_t find_stage_area(int32_t, const lua::AiArg&, const lua::AiArg&, const lua::AiArg&) override { return -1; }
     lua::AiGlobalValue global_value(std::string_view name) override {
+        if (gv_store && cfg.ai_lane) return gv_view.get(name);  // sp3 slice 4e: the lane's copy
         if (gv_store) return gv_store->get(name);  // Int-final: the session-wide table
         const auto it = globals.find(std::string(name));
         return it == globals.end() ? lua::AiGlobalValue{} : it->second;
     }
     void set_global_value(std::string_view name, const lua::AiGlobalValue& v) override {
+        if (gv_store && cfg.ai_lane) {  // sp3 slice 4e: the copy now, the session table at the due tick
+            gv_view.set(name, v);
+            gv_out.emplace_back(std::string(name), v);
+            return;
+        }
         if (gv_store) return gv_store->set(name, v);  // Int-final
         if (v.kind == lua::AiGlobalValue::Nil) globals.erase(std::string(name));
         else globals[std::string(name)] = v;
@@ -3728,6 +3742,12 @@ std::function<void()> TacticalAiWorld::release_scripts() {
 
 lua::ObjectBridge& TacticalAiWorld::object_bridge() { return impl_->bridge; }
 void TacticalAiWorld::set_global_values(lua::GlobalValueStore* store) { impl_->gv_store = store; }  // Int-final
+void TacticalAiWorld::set_lane_global_overlay(std::vector<GlobalWrite> overlay) { impl_->gv_overlay = std::move(overlay); }
+std::vector<TacticalAiWorld::GlobalWrite> TacticalAiWorld::take_lane_global_writes() {
+    std::vector<GlobalWrite> out = std::move(impl_->gv_out);
+    impl_->gv_out.clear();
+    return out;
+}
 lua::LuaPlayerWorld& TacticalAiWorld::player_world() { return impl_->world; }
 
 bool TacticalAiWorld::load_plans(std::vector<std::string>* diagnostics) {
@@ -3739,6 +3759,7 @@ bool TacticalAiWorld::load_plans(std::vector<std::string>* diagnostics) {
 bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
     Impl& w = *impl_;
     if (w.snap_store) *w.snap_store = *w.live_store;  // sp3: the start scripts read the battle as it is now (critical lane)
+    if (w.cfg.ai_lane) w.refresh_gv_view();
     const AiMode mode = ai_mode_of(w.cfg.mode);
     const auto mi = static_cast<size_t>(mode);
     w.ai.clear();
@@ -3844,6 +3865,7 @@ void TacticalAiWorld::publish(int64_t now, uint32_t mode_frame) {
     {
         ALAMO_PROFILE_SCOPE("tac.ai.publish");  // sp3: the critical lane's share (fill, event lists, snapshot store)
         if (w.snap_store) *w.snap_store = *w.live_store;
+        w.refresh_gv_view();  // slice 4e (part 3)
         w.host.fill(w.w, w.facts);
         w.lane_in.opportunity = w.host.opportunity_targets();
         w.lane_in.attack_states = w.host.attack_state_signals();

@@ -103,6 +103,7 @@ class ContrastTable;
 namespace alamo::lua {
 class ObjectBridge;
 class GlobalValueStore;  // Int-final
+struct AiGlobalValue;     // ai_bridge.hpp (sp3: TacticalAiWorld::GlobalWrite)
 enum class PreventAiResult : uint8_t;  // object_bridge.hpp
 }  // namespace alamo::lua
 
@@ -416,6 +417,13 @@ public:
     // Int-final: the session-wide GlobalValue table (L1_S4_REMAINING §1.5) for GlobalValue.Get / Set of every AI VM;
     // null (default) = the world's own map (hashed in its CRC section). Hosted battles attach SimHost::global_values().
     void set_global_values(lua::GlobalValueStore* store);
+    // sp3 slice 4e (part 3): with the lane on, the AI's GlobalValue.Get / Set use a private copy of the session table,
+    // rebuilt at each publish() (and at start()) as the table plus `overlay` - the AI's own writes not applied yet, in
+    // issue order (the host passes them before publish). A Set changes the copy and is handed out by
+    // take_lane_global_writes() (in issue order) for the host to apply to the session table at the due tick.
+    using GlobalWrite = std::pair<std::string, lua::AiGlobalValue>;
+    void set_lane_global_overlay(std::vector<GlobalWrite> overlay);
+    std::vector<GlobalWrite> take_lane_global_writes();
 
     // Loads the plan scripts (cfg.plan_files). False when none loaded.
     bool load_plans(std::vector<std::string>* diagnostics = nullptr);

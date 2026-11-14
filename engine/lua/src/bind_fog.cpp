@@ -105,6 +105,7 @@ int m_reveal(Call& c) {
     if (!player) return c.script_error_stop("%s -- Expected player object as first parameter.", kName);
     FogScriptHooks* hk = fog_hooks(c);
     if (!hk || !hk->fog) return c.script_error_stop("%s -- Command only valid in a tactical game", kName);
+    if (hk->lane_write) return c.script_error_stop("%s -- not available off the critical lane [port: AI lane]", kName);
     ObjectHandle h;
     if (c.nargs == 2 && object_arg(c, 2, h)) {
         // RevealObject with force 0: own sight when allied to the player, footprint otherwise.
@@ -132,6 +133,10 @@ int m_reveal_all(Call& c) {
     if (!player) return c.script_error_stop("%s -- Expected player object as first parameter.", kName);
     FogScriptHooks* hk = fog_hooks(c);
     if (!hk || !hk->fog) return c.script_error_stop("%s -- Command only valid in a tactical game", kName);
+    if (hk->lane_write) {  // sp3: applied by the host at the due tick
+        hk->lane_write(1, player->id, ObjectHandle{}, 0.0f);
+        return 0;
+    }
     hk->fog->reveal_all(player->id);
     return 0;
 }
@@ -145,6 +150,10 @@ int m_temporary_reveal(Call& c) {
     if (c.has(3) && !c.is_number(3)) return c.script_error_stop("%s -- Expected number as 3rd parameter.", kName);
     FogScriptHooks* hk = fog_hooks(c);
     if (!hk || !hk->fog) return c.script_error_stop("%s -- Command only valid in a tactical game", kName);
+    if (hk->lane_write) {  // sp3: applied by the host at the due tick (it takes the object's fog view then)
+        hk->lane_write(2, player->id, h, c.has(3) ? static_cast<float>(c.number(3)) : 0.0f);
+        return 0;
+    }
     fw::FogObject o;
     if (!fog_object(c, *hk, h, o)) return c.script_error_stop("%s -- Expected object as 2nd parameter.", kName);
     hk->fog->temporary_reveal(player->id, o, c.has(3) ? static_cast<float>(c.number(3)) : 0.0f);
@@ -156,7 +165,8 @@ int m_temporary_reveal(Call& c) {
 int m_disable_rendering(Call& c) {
     const bool disable = !c.has(1) || lua_toboolean(c.L, c.idx(1)) != 0;
     FogScriptHooks* hk = fog_hooks(c);
-    if (hk && hk->fog) hk->fog->disable_rendering(disable);
+    if (hk && hk->fog && hk->lane_write) hk->lane_write(3, -1, ObjectHandle{}, disable ? 1.0f : 0.0f);  // sp3
+    else if (hk && hk->fog) hk->fog->disable_rendering(disable);
     else if (hk && hk->set_globals) hk->set_globals(!disable, !disable);
     return 0;
 }

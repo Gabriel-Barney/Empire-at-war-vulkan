@@ -423,6 +423,16 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   pack with an owner. `spawn` from an AI VM is refused with the lane on (no shipped AI script spawns; counted). Not yet off
   the live battle (slice 4e part 3): the shield-side queries, the fog hooks and FogOfWar, GlobalValue, Prevent_AI_Usage.
   Capture cost on `land_battle` grew to ~0.30 ms p50 (`tac.ai.capture`; the per-unit facts are serial for now).
+- Fog and GlobalValue (slice 4e, part 3): with the lane on, the AI bridge's fogged test (Find_Nearest with a player,
+  force 1 - the only form the bindings use) answers from bits captured for the AI players; `FogOfWar.Reveal_All`,
+  `Temporary_Reveal` and `Disable_Rendering` are queued (`FogScriptHooks::lane_write`) and applied at the due tick; `Reveal`
+  and `Undo_Reveal` (a cells handle used at once; no shipped AI script calls them) are a script error off the critical lane.
+  GlobalValue: the AI world reads and writes a private copy of the session table, rebuilt at each publish (and at start) as
+  the table plus the AI's own writes still in the batch (read-your-writes across AI slots); each Set is a batch command
+  (PortExtension 0x4147) applied to the session table at the due tick. **Tier 2**: story Lua and the galactic AI see an AI
+  GlobalValue.Set k_ai ticks later. Still live from `think()` (slice 4f): the perception world's `object_fogged` /
+  `point_fogged` / `in_active_base_shield` hooks. Critical-lane budget on `land_battle` (publish + every capture):
+  ~0.69 ms p50 (capture 0.52, publish 0.17), all serial - slice 4f parallelizes the per-object captures.
 
 ## 12. P5 implementation notes (sp5, simp-svc, 2026-11-14)
 
