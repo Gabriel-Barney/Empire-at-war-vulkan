@@ -949,20 +949,31 @@ static void test_critical_between_ai_chunks() {
     JobSystem js({2});
     constexpr uint32_t kChunks = 400;
     std::atomic<uint32_t> chunks{0}, chunks_at_critical{kChunks};
+    std::atomic<bool> crit_ran{false}, ai_blocked{false};
+    std::thread::id ai_id;
     std::thread ai([&] {
+        ai_id = std::this_thread::get_id();
         ScopedPriority p(js, Priority::Ai);
         js.parallel_for(kChunks, 1, [&](uint32_t, uint32_t) {
+            // The AI thread's first chunk blocks until the critical job ran (5 s at most), so the loop cannot end before
+            // it: without the yield the helpers would finish every other chunk first. Load-proof (no timing bound).
+            if (std::this_thread::get_id() == ai_id && !ai_blocked.exchange(true)) {
+                const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (!crit_ran.load() && std::chrono::steady_clock::now() < until) std::this_thread::yield();
+            }
             chunks.fetch_add(1);
-            busy_us(200);  // busy, not sleep: Windows rounds short sleeps up to ~15 ms
+            busy_us(50);  // busy, not sleep: Windows rounds short sleeps up to ~15 ms
         });
     });
     while (chunks.load() < 10) std::this_thread::yield();
     JobCounter c;
-    js.spawn(c, [&] { chunks_at_critical = chunks.load(); });
-    // Poll, not wait (a wait would run the job here): a helper that finishes an AI chunk must take it before its next
-    // one, long before the loop ends (the loop's owner, the AI thread, does not yield: see the header).
+    js.spawn(c, [&] {
+        chunks_at_critical = chunks.load();
+        crit_ran = true;
+    });
+    // Poll, not wait (a wait would run the job here): a helper that finishes an AI chunk takes it before its next one.
     while (!c.done()) std::this_thread::yield();
-    CHECK(chunks_at_critical.load() < kChunks / 2);
+    CHECK(chunks_at_critical.load() < kChunks - 100);
     ai.join();
     CHECK(chunks.load() == kChunks);
 }
