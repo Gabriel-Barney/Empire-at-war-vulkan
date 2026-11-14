@@ -3729,6 +3729,7 @@ bool TacticalAiWorld::load_plans(std::vector<std::string>* diagnostics) {
 
 bool TacticalAiWorld::start(std::vector<std::string>* diagnostics) {
     Impl& w = *impl_;
+    if (w.snap_store) *w.snap_store = *w.live_store;  // sp3: the start scripts read the battle as it is now (critical lane)
     const AiMode mode = ai_mode_of(w.cfg.mode);
     const auto mi = static_cast<size_t>(mode);
     w.ai.clear();

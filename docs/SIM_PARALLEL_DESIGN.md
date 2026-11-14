@@ -378,9 +378,22 @@ Unhandled; the 9 store-bypassing writes skip battle adoption.
   engine hard points, hull and shield. The AI VMs' bindings read those and hand every write (autofire, ability mode, targeted
   and dummy-target abilities, recharge, counter reset, movement unlock, targeting priorities, stickiness, Activate_Ability's
   signal 0xb) to `lane_write`, which queues it as a PortExtension `kLaneWriteSubtype` command in the same batch as the orders;
-  `lua::apply_lane_write` makes the binding's own calls at the due tick. Before the first capture (battle start) and after a
-  load until the next capture the bindings act live (on the critical lane). Capture cost on `land_battle`: ~0.08 ms p50
+  `lua::apply_lane_write` makes the binding's own calls at the due tick. The records are never carried across AI slots:
+  every `BattleAi::update()` captures them from the battle state of that tick right before `think()`, and the AI scripts
+  run only inside `think()`, so they are not saved - a load recaptures the same records from the same saved battle state
+  at its next AI slot (the queued writes are saved with the job, `battle.ai` v5; checked by
+  `alamo_headless_save_skirmish_foc_ai_lane` / `_foc_land_ai_lane`, `--save-check` with a job in flight). Only scripts run
+  before the first capture (`TacticalAiWorld::start` at battle start, critical lane) act live. Capture cost on `land_battle`: ~0.08 ms p50
   (`tac.cap.abilities`, ~220 objects). **Tier 2** (for the harness): a script reads the state of the AI slot, so its own
   writes are not visible to it in the same think (e.g. `Is_Ability_Active` right after `Activate_Ability`); the same-call
   answers (Activate_Ability's block for the object-target and jet-pack families) are the dry runs' predictions
   (`BattleAi::lane_mismatches` counts the applies that differ); writes apply k_ai ticks later in (player, sequence) order.
+- AI commands (t04 + t05, slice 4c): with the lane on, `BattleAi::execute` runs nothing from the AI side. Retreat,
+  Production, TacticalBuild and the four ability commands are queued like the orders; an event `execute_order` does not act on
+  answers Unhandled without running. `predict_order` reads only the snapshot store and the view (units with owner / container /
+  live / movable, the teams, per player the retreat gate `retreat_block == 0`, tactical production on / off, the pad checks).
+  Predictions: Retreat = the gate; Production = production on and a valid builder id (credits and buildability are not
+  predicted); TacticalBuild = the AI's `build_pad_check` (cost and type are not); ability commands = an owned live unit among
+  them. Reinforce still runs live from `execute` (slice 4d: the AI reads the spawned units in the same call). `start()` with
+  the lane on captures the view first, refreshes the snapshot store, and collects what the start scripts queued (before this,
+  the first update dropped it). **Tier 2**: these commands act k_ai ticks later and their answers are predictions.
