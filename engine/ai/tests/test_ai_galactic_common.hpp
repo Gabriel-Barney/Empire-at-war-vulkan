@@ -71,6 +71,7 @@ void test_desire_and_hysteresis();
 void test_goal_reservations();
 void test_goal_batched_accept();
 void test_goal_batched_values();
+void test_goal_resolved_functions();  // sp4a (S7)
 void test_plan_pick_and_solver();
 
 inline const char* kSynGoals = R"(<Goals>

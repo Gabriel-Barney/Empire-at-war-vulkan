@@ -298,6 +298,14 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
     // (plan, task force, team) -> expanded type list (static per data, lookup cache)
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<uint32_t>> team_types;
     int64_t eval_count = 0;  // perception evaluations (diagnostic)
+    // sp4a (S7): the "~ eval pos / nonpos <fn>" counters of `stats` per equation id, for the last name spelling evaluated
+    // with that id (the keys keep the caller's spelling, as before); std::map nodes are stable and `stats` is never erased.
+    struct EvalStatSlot {
+        std::string name;
+        uint32_t* pos = nullptr;
+        uint32_t* nonpos = nullptr;
+    };
+    std::vector<EvalStatSlot> eval_stat_slots;
     uint64_t orders = 0, rejected = 0;
     // A2 galactic: GalacticSim income-tick listener (§3.1). The sim may outlive or predecease this object, so the
     // listener holds a weak token instead of being removed in the destructor.
@@ -394,7 +402,11 @@ struct GalacticAiWorld::Impl final : lua::AiScriptHost, lua::ScriptMarkupHost, A
             if (players[p].human) return static_cast<int32_t>(p);
         return -1;
     }
-    bool evaluate(int32_t self, int32_t opponent, const std::string& fn, int32_t target, double& out);
+    bool evaluate(int32_t self, int32_t opponent, const std::string& fn, int32_t target, double& out) {
+        return evaluate_id(self, opponent, equation(fn), fn, target, out);
+    }
+    // sp4a (S7): evaluate() with the equation id already resolved (kUnresolved fails, uncounted, like an unknown name).
+    bool evaluate_id(int32_t self, int32_t opponent, uint32_t e, const std::string& fn, int32_t target, double& out);
     bool script_evaluate(const EvalContext& c, std::string_view name, std::span<const Param> params, double& out);
     std::vector<ObjectHandle> player_units(int32_t p) const;
     uint32_t fleet_of_unit(ObjectHandle u) const;
@@ -661,6 +673,11 @@ struct PlayerAi final : GoalModeHooks, ContextModeServices {
     std::vector<PlanetIndex> flood(int mode, std::vector<uint8_t>* reached);
     bool evaluate(const std::string& function, int32_t target, double& out) override {
         return w->evaluate(player, ctx.opponent, function, target, out);
+    }
+    // sp4a (S7): goal sources resolved to equation ids at init (the EquationSet does not change after load).
+    uint32_t resolve_function(const std::string& function) override { return w->equation(function); }
+    bool evaluate_resolved(uint32_t e, const std::string& function, int32_t target, double& out) override {
+        return w->evaluate_id(player, ctx.opponent, e, function, target, out);
     }
     bool accept(Goal& g) override;
     bool plan_activatable(Goal& g) override {

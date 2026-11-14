@@ -4,6 +4,7 @@
 #include <cmath>
 #include <utility>
 
+#include "alamo/core/profile.hpp"
 #include "alamo/core/sim_crc.hpp"
 #include "alamo/core/sim_rng.hpp"
 
@@ -37,6 +38,7 @@ void GoalSystem::init(const AiDefinitions& defs, std::vector<GoalSource> sources
     rng_ = rng;
     sources_ = std::move(sources);
     hooks_ = hooks;
+    for (GoalSource& s : sources_) s.equation = hooks_ ? hooks_->resolve_function(s.function) : kAiNone;  // sp4a (S7)
     learning_ = learning;
     templates_ = templates;
     cfg_ = cfg;
@@ -138,8 +140,9 @@ bool GoalSystem::proposal_slice(int64_t now) {
             hooks_->evaluated(s.function);
             if (!batched->ok) return;
             v = batched->value;
-        } else if (!hooks_->evaluate(s.function, target, v)) {
-            return;
+        } else {
+            ALAMO_PROFILE_SCOPE("ai.goals.eval");  // sp4a: the in-place evaluations (ai.goals split)
+            if (!hooks_->evaluate_resolved(s.equation, s.function, target, v)) return;
         }
         const int32_t c1 = learning_->recent_goal_failures(s.goal_type, target, now);
         const int32_t c2 = learning_->recent_activation_failures(s.goal_type, target, now);
@@ -160,9 +163,12 @@ bool GoalSystem::proposal_slice(int64_t now) {
             pending_.push_back(std::move(g));
             return;
         }
-        if (!hooks_->accept(g)) {
-            hooks_->drop_potential_plan(g);
-            return;
+        {
+            ALAMO_PROFILE_SCOPE("ai.goals.accept");  // sp4a: slot 10 (ai.goals split)
+            if (!hooks_->accept(g)) {
+                hooks_->drop_potential_plan(g);
+                return;
+            }
         }
         accept_tail(std::move(g));
     };
@@ -455,7 +461,8 @@ void GoalSystem::commit(int64_t now) {
             const bool ok = g.target < 0 ? def.global() : hooks_->applies(g.target, def.application);
             if (!ok) continue;
             double v = 0.0;
-            if (g.source < sources_.size() && hooks_->evaluate(sources_[g.source].function, g.target, v))
+            if (g.source < sources_.size() &&
+                hooks_->evaluate_resolved(sources_[g.source].equation, sources_[g.source].function, g.target, v))
                 g.desire = g.priority = clamp_desire(v);
             else
                 g.desire = g.priority = 0.0f;

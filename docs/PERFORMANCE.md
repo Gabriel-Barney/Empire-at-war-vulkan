@@ -1329,6 +1329,19 @@ requests failing 4-6 tries (up to 55 ms for one request); the tries now overlap.
 this loaded machine and missed by less than 0.5 ms in the others; a quiet-PC confirmation is open (sp2 t03). The worst tick (190-300 ms)
 is unchanged: it is a plan load in `ai.planning`, not movement.
 
+**Quiet-PC check (2026-11-14, quiet window, no other lane running).** Six runs with the same command, default workers, MSVC
+Release at dev 7d28e28f plus sp4a t01 (no movement change since sp2). Other processes took 5-14 % of the CPU:
+
+| `nebula_battle` run | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| other CPU % | 10 | 7 | 14 | 12 | 5 | 6 |
+| tick p99 ms | 17.95 | 16.32 | 16.72 | 17.71 | 16.11 | 15.88 |
+| tick mean / median ms | 4.23 / 1.48 | 4.15 / 1.45 | 4.25 / 1.49 | 4.21 / 1.47 | 4.14 / 1.44 | 4.16 / 1.47 |
+
+All six matched the fingerprint. The median p99 is 16.5 ms; 3 of 6 runs are under 16.7 ms, 1 is level with it and 2 are 1.0-1.3 ms over.
+The spread does not follow the load, so it comes from the run itself (which ticks carry the multi-try path requests). The p99 fell
+from 24-28 ms (sp1) to 15.9-18.0 ms. The worst tick is still the 187-207 ms plan load.
+
 ## Services graph on the 4x land stress scene (SIMP sp5, 2026-11-14)
 
 Step P5 of [`SIM_PARALLEL_DESIGN.md`](SIM_PARALLEL_DESIGN.md) (section 12). Scene `foc-land-army4` (~700 live units, no tactical AI;
@@ -1412,3 +1425,32 @@ took 2-26 % of the CPU (two runs took 35 % and 93 %, see the second galactic_lat
 - **Same outcome.** Every after run matched its regenerated fingerprint, and the before runs fail only the fingerprint, as expected.
   All goldens and fingerprints moved once (commit "sp6 goldens"), identically on MSVC and clang. The movement / gaps determinism
   checks passed at 1 / 4 / 16 threads, and the worker-count ctest entries passed at every count.
+
+## Galactic goal evaluation without per-evaluation strings (sp4a, 2026-11-14)
+
+sp4a t01 / t02 (S7, golden-neutral). Goal-source equation names are resolved to ids at init, and find-target / Best_Of resolve
+their perception once per call. The "~ eval" diagnostic counters are cached per equation id. Token paths get their upper-case key
+once, at parse (`TokenRef::key`). Leaf-cache hits build no strings (a transparent comparator with the same order, so saves and the
+hit counter are unchanged).
+
+Method: sim-only `alamo_headless --bench tests/benchmark/galactic_late.abench --runs 1 --warmup 0 --profile`, MSVC Release.
+Before = dev `7d28e28f` plus only the two split zones (`ai.goals.eval` around in-place evaluations, `ai.goals.accept` around
+slot 10). After = sp4a. Runs are interleaved over 4 rounds, each started after the machine was under 25 % busy. The means below
+use the runs where other processes took under 20 % of the CPU: W0 4 before / 3 after, default 3 / 2.
+
+| galactic_late, mean ms per tick | before | after | change |
+|---|---|---|---|
+| `ai.goals` mean, W0 | 0.663 | 0.637 | -3.9 % |
+| `ai.goals` median, W0 | 0.316 | 0.283 | -10.7 % |
+| `ai.goals.eval`, W0 | 0.169 | 0.145 | -14 % |
+| `ai.goals.accept`, W0 | 0.458 | 0.456 | 0 |
+| tick mean, W0 | 0.951 | 0.919 | -3.4 % |
+| `ai.goals` mean, default workers | 0.665 | 0.636 | -4.4 % |
+
+- **Evaluations are 14 % cheaper; the accept is untouched.** Slot 10 (Find_Plan_For_Goal and the PotentialPlan solve) is about
+  70 % of `ai.goals`, so the mean falls 4 %. The sp4a target (ai.goals mean -10 % at W0) is not reached.
+- **Why the work cannot fan out inside the goal system** (measured over 27000 ticks of Sandbox_Equal_Footing_Underworld, 4 AI
+  players): about 14 evaluations and 1.5 accepts per tick. That is about 3.5 evaluations and 0.4 accepts per player slice (quota cap
+  20 / 4 players). 89 % of slot-10 solves make no synced draw beyond the plan pick. A slice holds too little work to split, so the
+  parallel option lies across players (sp4 t01, the galactic AI on the AI lane).
+- Every run matched the regenerated fingerprint.

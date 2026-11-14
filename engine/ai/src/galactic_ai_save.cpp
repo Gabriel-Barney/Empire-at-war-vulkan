@@ -379,7 +379,7 @@ bool GalacticSimTokenResolver::read(ByteReader& r) {
         e = r.u8();
         if (e > 1) r.fail();
     }
-    std::map<CacheKey, Entry> cache;
+    LeafCache cache;  // sp4a: the resolver's map type (same key order)
     const uint32_t nc = save::count(r, 32);
     for (uint32_t i = 0; i < nc && r.ok(); ++i) {
         CacheKey k;

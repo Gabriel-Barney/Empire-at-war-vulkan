@@ -169,8 +169,8 @@ uint32_t GalacticAiWorld::Impl::equation(const std::string& name) const {
     return eqs.find(ai_trim(name));  // EquationSet::find upper-cases the name
 }
 
-bool GalacticAiWorld::Impl::evaluate(int32_t self, int32_t opponent, const std::string& fn, int32_t target, double& out) {
-    const uint32_t e = equation(fn);
+bool GalacticAiWorld::Impl::evaluate_id(int32_t self, int32_t opponent, uint32_t e, const std::string& fn, int32_t target,
+                                       double& out) {
     if (e == kUnresolved) return false;
     EvalContext c;
     c.self = self;
@@ -181,9 +181,19 @@ bool GalacticAiWorld::Impl::evaluate(int32_t self, int32_t opponent, const std::
     c.rng = &rng.synced();
     const EvalResult r = ai::evaluate(eqs, e, c, res);
     ++eval_count;
-    // Port diagnostics (never hashed): a failure names its first failing site (q6 t10).
-    if (r.ok) ++stats[std::string("~ eval ") + (r.value > 0.0 ? "pos " : "nonpos ") + fn];
-    else ++stats["~ eval FAIL " + fn + " at " + eval_failure_site(eqs, r)];
+    // Port diagnostics (never hashed): a failure names its first failing site (q6 t10). sp4a: the success counters are
+    // cached per equation id (no key built per evaluation).
+    if (r.ok) {
+        if (eval_stat_slots.size() <= e) eval_stat_slots.resize(static_cast<size_t>(e) + 1);
+        EvalStatSlot& slot = eval_stat_slots[e];
+        if (slot.name != fn) slot = EvalStatSlot{fn, nullptr, nullptr};
+        const bool pos = r.value > 0.0;
+        uint32_t*& n = pos ? slot.pos : slot.nonpos;
+        if (!n) n = &stats[std::string("~ eval ") + (pos ? "pos " : "nonpos ") + fn];  // created on first use, as before
+        ++*n;
+    } else {
+        ++stats["~ eval FAIL " + fn + " at " + eval_failure_site(eqs, r)];
+    }
     if (!r.ok) return false;
     out = r.value;
     return true;
@@ -2240,11 +2250,12 @@ int32_t GalacticAiWorld::Impl::find_target(int32_t script, const lua::AiFindTarg
     const double range = have_source && r.max_distance > 0.0 ? r.max_distance : 0.0;
     std::vector<int32_t> cand;
     std::vector<double> value;
+    const uint32_t eq = equation(r.perception);  // sp4a (S7): once, not per planet
     for (uint32_t t = 0; t < sim.planets().size(); ++t) {  // the target list order (planet order)
         if (!applies(player, static_cast<int32_t>(t), flags)) continue;
         if (have_source && slot7(static_cast<PlanetIndex>(t)) >= kReachNone) continue;
         double v = 0.0;
-        if (!evaluate(player, pa->ctx.opponent, r.perception, static_cast<int32_t>(t), v)) continue;
+        if (!evaluate_id(player, pa->ctx.opponent, eq, r.perception, static_cast<int32_t>(t), v)) continue;
         if (range > 0.0 && valid_planet(source)) {
             const Vec3 a = sim.planets()[t].position, b = sim.planets()[source].position;
             const double dx = static_cast<double>(a.x) - b.x, dy = static_cast<double>(a.y) - b.y, dz = static_cast<double>(a.z) - b.z;
@@ -2376,13 +2387,14 @@ int32_t GalacticAiWorld::Impl::best_of(int32_t script, int32_t tf, const std::ve
     PlayerAi* pa = player_ai(player);
     if (!pa) return -1;
     const std::string fn(perception);
+    const uint32_t eq = equation(fn);  // sp4a (S7): once, not per target
     int32_t best = -1;
     double best_v = 0.0;
     for (size_t i = 0; i < targets.size(); ++i) {
         const PlanetIndex p = planet_arg(targets[i]);
         if (!valid_planet(p)) continue;
         double v = 0.0;
-        if (!evaluate(player, pa->ctx.opponent, fn, static_cast<int32_t>(p), v) || !(v > 0.0)) continue;  // Â§2.12: > 0
+        if (!evaluate_id(player, pa->ctx.opponent, eq, fn, static_cast<int32_t>(p), v) || !(v > 0.0)) continue;  // Â§2.12: > 0
         if (best < 0 || v > best_v) {
             best = static_cast<int32_t>(i);
             best_v = v;

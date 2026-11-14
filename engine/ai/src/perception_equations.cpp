@@ -451,6 +451,10 @@ private:
             n.path_begin = static_cast<uint32_t>(out_.path.size());
             for (size_t i = 1; i < parts.size(); ++i) out_.path.push_back(tokens_.intern(parts[i]));
             n.path_len = static_cast<uint32_t>(parts.size() - 1);
+            for (uint32_t i = 0; i < n.path_len; ++i) {  // sp4a (S7): TokenRef::key, built once here
+                if (!n.path_key.empty()) n.path_key += '.';
+                n.path_key += ascii_upper(tokens_.name(out_.path[n.path_begin + i]));
+            }
         } else if (ascii_istarts_with(head, "Function_") || ascii_istarts_with(head, "Script_")) {
             const bool fn = ascii_istarts_with(head, "Function_");
             n.op = fn ? Op::Function : Op::Script;
@@ -593,6 +597,7 @@ struct Evaluator {
                 t.path = std::span<const TokenId>(x.path).subspan(n.path_begin, n.path_len);
                 t.params = std::span<const Param>(x.params).subspan(n.param_begin, n.param_count);
                 t.tokens = &set.tokens();
+                t.key = n.path_key;
                 if (!resolver.resolve(ctx, t, out)) return fail(EvalError::Token, x, i);
                 return true;
             }
