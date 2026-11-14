@@ -215,7 +215,6 @@ const char* menu_action_name(MenuAction::Kind k) {
         case MenuAction::Kind::ResumeGame: return "ResumeGame";
         case MenuAction::Kind::QuitToMainMenu: return "QuitToMainMenu";
         case MenuAction::Kind::ExitGame: return "ExitGame";
-        case MenuAction::Kind::OpenMultiplayer: return "OpenMultiplayer";
         case MenuAction::Kind::ShowCredits: return "ShowCredits";
         case MenuAction::Kind::PreviewAudio: return "PreviewAudio";
         case MenuAction::Kind::ApplyAudio: return "ApplyAudio";
@@ -1316,6 +1315,32 @@ void FrontEnd::fill_keyboard(GuiDialog& d) {
     }
 }
 
+// [port: Gabriel 2026-11-13] multiplayer is out of scope: the main menu's IDC_MAIN_MENU_MULTIPLAYER is hidden and the
+// column closes up - each button below it (same width, larger .rc y: Load Game, Options, Exit, the port's Mods) takes the
+// slot of the button above it, so the FoC column and EaW's staggered one both keep their spacing.
+void FrontEnd::close_multiplayer_gap(GuiDialog& d) {
+    const int32_t mp = d.find("IDC_MAIN_MENU_MULTIPLAYER");
+    if (mp < 0) return;
+    GuiControl& mpc = d[static_cast<size_t>(mp)];
+    mpc.visible = false;
+    if (!mpc.def) return;
+    const RcControl& m = *mpc.def;
+    std::vector<size_t> below;
+    for (size_t i = 0; i < d.size(); ++i) {
+        const RcControl* c = d[i].def;
+        if (!c || static_cast<int32_t>(i) == mp || c->y <= m.y || d[i].type != GuiGadgetType::PushButton) continue;
+        if (c->w < m.w - 4 || c->w > m.w + 4) continue;  // logos / credits are not in the column
+        below.push_back(i);
+    }
+    std::sort(below.begin(), below.end(), [&](size_t a, size_t b) { return d[a].def->y < d[b].def->y; });
+    const RcControl* prev = &m;
+    for (const size_t i : below) {
+        const RcControl& c = *d[i].def;
+        d[i].offset = Vec2f{static_cast<float>(prev->x - c.x), static_cast<float>(c.y - prev->y)};  // +Y up
+        prev = &c;
+    }
+}
+
 void FrontEnd::setup(GuiDialog& d) {
     const std::string_view n = d.name();
     if (ascii_iequals(n, kMain)) {
@@ -1325,6 +1350,7 @@ void FrontEnd::setup(GuiDialog& d) {
         const bool mods = p_.mods && gui_->has_dialog(kPortModsDialog);
         d.show("IDC_PORT_MAIN_MENU_MODS", mods);
         if (mods) d.set_text("IDC_PORT_MAIN_MENU_MODS", gui_->port_text(U"Mods"));
+        close_multiplayer_gap(d);
     } else if (ascii_iequals(n, kSingle)) {
         d.show("IDC_DEBUG_LOAD_SKIRMISH_MAP_BUTTON", false);
         d.enable("IDC_NEW_CAMPAIGN_BUTTON", !menu_.story.empty());
@@ -1603,7 +1629,6 @@ void FrontEnd::on_click(const GuiEvent& e, std::vector<MenuAction>& out) {
     if (ascii_iequals(n, kMain)) {
         if (is("IDC_MAIN_MENU_TUTORIAL")) go(kTutorial);
         else if (is("IDC_MAIN_MENU_SINGLE_PLAYER_GAMES") || is("IDC_MAIN_MENU_PLAY_DEMO")) go(kSingle);
-        else if (is("IDC_MAIN_MENU_MULTIPLAYER")) out.push_back(act(MenuAction::Kind::OpenMultiplayer));
         else if (is("IDC_LOAD_GAME_MAIN")) push(kLoad);
         else if (is("IDC_OPTIONS")) go(kOptions);
         else if (is("IDC_PORT_MAIN_MENU_MODS")) {  // modc t08
