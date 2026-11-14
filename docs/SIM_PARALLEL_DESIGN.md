@@ -320,3 +320,16 @@ stay on the synced stream, made at apply time on the critical lane.
 Gaps found on the way (flag-off behaviour, not changed by sp3; backlog): story `Suspend_AI` / `Give_Desire_Bonus` / `Purge_Goals`
 never reach the tactical AI; AI-VM `Turn_To_Face`, the Garrison family, `Sell` and `Hyperspace_Away` without its hook are dropped as
 Unhandled; the 9 store-bypassing writes skip battle adoption.
+
+### 11.6 Implementation choices (sp3, `[port]`, tier 3 unless marked)
+- `--ai-lane [--ai-lane-k K]` (alamo_headless; process default `sim::ai_lane_defaults()`, copied into every
+  `TacticalAiSetup`); a save of an AI-lane session records `ai_lane` / `k_ai` in its descriptor, so `--load` rebuilds it as one.
+- AI-owned stream: `GameRandom` seeded by `ai_lane_seeds(session seed)`, hashed with the AI world and saved. Tactical AI save
+  version 13 = version 12 plus `k_ai` and the stream, written only with the lane on; a version-12 save also loads into an AI-lane
+  world (the bench and harness saves), a version-13 save never into a lane-off one. `battle.ai` chunk: version 5 = 4 plus the
+  queued orders, the same rule.
+- Order batch (t04 so far): moves, MoveToObject, Attack and the Lua object orders Move_To / Attack_Move / Guard_Target / Stop
+  are queued as canonical `commands::Command`s (source AI, `scheduled_tick` = N + k_ai) and applied by `SimHost`'s T2
+  `before_commands` hook ahead of the players' commands, in `drain_order_less` order, through the unchanged `execute_order`.
+  The AI's same-call answer is `BattleAi::predict_order` (the rejections that depend on the order and the state alone);
+  a predicted rejection is not queued. **Tier 2**: the order acts two ticks later and its result is a prediction.

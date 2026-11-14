@@ -266,6 +266,9 @@ public:
     // of a galactic conflict. Trace step "T5.battles" only while a hook is set.
     using ModeUpdateHook = std::function<void(SimHost& host)>;
     void set_after_mode_update(ModeUpdateHook hook) { after_mode_update_ = std::move(hook); }
+    // sp3 t04 (AI lane): runs at the start of T2, before the tick's scheduled commands: the tactical AI lane applies its
+    // command batches due this frame (CampaignBattles -> BattleAi::apply_lane_batch). No trace step.
+    void set_before_commands(ModeUpdateHook hook) { before_commands_ = std::move(hook); }
     // ---- S10-int hooks (battle integration) ----
     // T5 object-animation slot (sim_anim.hpp: model creation + AnimWorld advance), right after the battle
     // hook. Trace step "T5.anim" only while set.
@@ -395,6 +398,7 @@ private:
     void make_recorder() { recorder_ = std::make_unique<jobs::CrcRecorder>(*js_, registry_, true); }
     std::vector<std::string>* trace_ = nullptr;
     ModeUpdateHook after_mode_update_;  // S10
+    ModeUpdateHook before_commands_;    // sp3 t04
     ModeUpdateHook object_anim_;        // S10-int
     TacticalCommandHook tactical_cmd_;  // S10-int
     TacticalCommandHook galactic_cmd_;  // Int-final

@@ -56,6 +56,14 @@ class TacticalBattle;
 class TacticalMode;
 
 // What the tactical AI needs from the session (loaded once by the host).
+// sp3: the process-wide default of TacticalAiSetup::ai_lane / k_ai (alamo_headless --ai-lane [--ai-lane-k K]). Set once
+// at start-up, before any setup is built; never read by sim code after that (each world keeps its own copy, saved).
+struct AiLaneDefaults {
+    bool on = false;
+    uint32_t k_ai = ai::tactical::kDefaultAiLaneLatency;
+};
+AiLaneDefaults& ai_lane_defaults();
+
 struct TacticalAiSetup {
     const ai::AiDefinitions* defs = nullptr;
     const ai::EquationSet* equations = nullptr;
@@ -75,6 +83,10 @@ struct TacticalAiSetup {
     // frames after their slice; pp_streams false = the original synced draws in proposal order.
     bool pp_streams = true;
     uint32_t pp_latency = ai::tactical::kDefaultPpLatency;
+    // sp3 (TacticalAiConfig::ai_lane / k_ai, docs/SIM_PARALLEL_DESIGN.md 5.1): the AI lane, off by default; the process
+    // default (ai_lane_defaults) is what a setup starts with, so every host that builds one follows the command line.
+    bool ai_lane = ai_lane_defaults().on;
+    uint32_t k_ai = ai_lane_defaults().k_ai;
 };
 
 // The AIPlayerType of a non-human, playable, non-neutral player: its faction's Basic_AI (FactionRules::basic_ai, faction
@@ -104,6 +116,15 @@ public:
     void end();  // battle end: every plan released
     // a1h t02: the object-goal follow records' 30-frame re-path (the first step of update(); public for the host tests).
     void follow_service();
+    // sp3 t04 (AI lane, docs/SIM_PARALLEL_DESIGN.md 5.1): with TacticalAiConfig::ai_lane on, the AI's unit orders (moves,
+    // MoveToObject, Attack, the Lua object orders Move_To / Attack_Move / Guard_Target / Stop) are not executed when given:
+    // execute() answers with predict_order() and queues an accepted order as a command due on global frame N + k_ai (N =
+    // the frame of the AI update). apply_lane_batch(frame) runs at the start of a tick (SimHost T2, before the players'
+    // commands) and executes every queued order due by then in (due, player, sequence) order with the same rules as
+    // before (execute_order), signals included. The other AI writes stay immediate until t05. Lane off: nothing queued.
+    void apply_lane_batch(uint64_t frame);
+    size_t lane_pending() const { return lane_batch_.size(); }
+    uint32_t lane_mismatches() const { return lane_mismatch_; }  // applied with another result than predicted [diagnostic]
     ai::tactical::TacticalAiWorld& world() { return *world_; }
     const ai::tactical::TacticalAiWorld& world() const { return *world_; }
     bool controls(int32_t player) const;
@@ -263,6 +284,15 @@ private:
     uint32_t order_listener_ = 0;   // S7 t31: TacticalBattle::add_order_replaced_listener token (world_->order_replaced)
     std::vector<uint8_t> ai_side_;  // per player: has a tactical AI
     uint32_t stale_ = 0;  // object orders whose target died before execution (no-ops)
+    // sp3 t04: the AI lane's queued orders (header: player, source AI, sequence, scheduled_tick = due frame), in issue
+    // order; hashed and saved with the lane on.
+    std::vector<commands::Command> lane_batch_;
+    uint32_t lane_seq_ = 0;
+    uint32_t lane_mismatch_ = 0;  // not saved, not hashed
+    static bool lane_batched(const commands::EventData& ev);
+    void count_executed(const commands::EventData& ev, commands::RejectReason r);  // executed_ (diagnostic)
+    // The rejections of execute_order that depend on the order and the battle state alone, without side effects.
+    commands::RejectReason predict_order(uint8_t player, const commands::EventData& ev) const;
     std::vector<int32_t> attack_refused_;  // q6 t19: attack_order_refused() of the last execute (not saved: read at once)
     std::map<std::string, std::pair<uint32_t, uint32_t>> executed_;  // event name -> (applied, rejected) [diagnostic]
     std::vector<std::pair<uint64_t, int32_t>> opp_prev_;  // battle host: (unit id << 8 | hp, target), ascending key

@@ -127,6 +127,11 @@ double dist3(const Vec3f& a, const Vec3f& b) {
 
 }  // namespace
 
+std::pair<uint32_t, uint32_t> ai_lane_seeds(uint32_t game_seed) {
+    const uint64_t h = pp_mix(pp_mix(game_seed) ^ 0x41494C414E450001ull);  // "AILANE" salt
+    return {static_cast<uint32_t>(h >> 32), static_cast<uint32_t>(h)};
+}
+
 // ================================================================ state records
 
 struct Slot {
@@ -229,12 +234,18 @@ struct PlayerAi;
 struct TacticalAiWorld::Impl final : lua::AiScriptHost, lua::AiTacticalScriptHost {
     Impl(objects::ObjectStore& st, const objects::GameObjectTypes* ty, const FileProvider* fp, GameRandom& r, const AiDefinitions& d,
          const EquationSet& e, TacticalAiHost& h, TacticalAiConfig c)
-        : store(st), types(ty), files(fp), rng(r), defs(d), eqs(e), host(h), cfg(std::move(c)) {}
+        : store(st), types(ty), files(fp), own_rng(lane_rng(c)), rng(c.ai_lane ? own_rng : r), defs(d), eqs(e), host(h),
+          cfg(std::move(c)) {}
+    static GameRandom lane_rng(const TacticalAiConfig& c) {
+        const auto [synced, free] = ai_lane_seeds(c.game_seed);
+        return c.ai_lane ? GameRandom(synced, free) : GameRandom();
+    }
 
     objects::ObjectStore& store;
     const objects::GameObjectTypes* types;
     const FileProvider* files;
-    GameRandom& rng;
+    GameRandom own_rng;  // sp3: the AI-owned stream of an AI-lane world (unused with the lane off)
+    GameRandom& rng;     // the session's GameRandom, or own_rng with the lane on
     const AiDefinitions& defs;
     const EquationSet& eqs;
     TacticalAiHost& host;
@@ -3903,6 +3914,8 @@ std::vector<std::string> TacticalAiWorld::lua_errors() const {
     return e;
 }
 uint64_t TacticalAiWorld::orders_issued() const { return impl_->orders; }
+bool TacticalAiWorld::ai_lane() const { return impl_->cfg.ai_lane; }
+uint32_t TacticalAiWorld::k_ai() const { return impl_->cfg.k_ai; }
 uint64_t TacticalAiWorld::orders_rejected() const { return impl_->rejected; }
 size_t TacticalAiWorld::pending_order_results() const { return impl_->pipeline.events().pending().size(); }
 const std::map<std::string, uint32_t>& TacticalAiWorld::stats() const {
@@ -4078,6 +4091,11 @@ void TacticalAiWorld::hash(StateHasher& h) const {
     w.bridge.hash(h);
     h.u64(w.orders);
     h.u64(w.rejected);
+    if (w.cfg.ai_lane) {  // sp3: the AI-owned stream is AI state (both instances: the free one drives AI decisions too)
+        h.u32(w.cfg.k_ai);
+        w.own_rng.synced().hash(h);
+        w.own_rng.free().hash(h);
+    }
 }
 
 void TacticalAiWorld::register_crc(CrcRegistry& registry, const std::string& name) const {
@@ -4090,6 +4108,7 @@ namespace {
 
 namespace io = save_io;
 
+constexpr uint32_t kTacticalAiLaneSaveVersion = 13;  // sp3: version 12 plus the AI-lane block (k_ai, the AI-owned GameRandom)
 constexpr uint32_t kTacticalAiSaveVersion = 12;  // 2: six space free-store facts; 3: re-projection stamp; 4: flood sets;
                                                  // 5: refixf t06 space reinforcement status fields; 6: a1g t01 PP+0x100,
                                                  // entry +0x30 moved into the free store; 7: S7 t20/t21/t15 A1 (no had_units /
@@ -4335,7 +4354,12 @@ void rebind_vm(TacticalAiWorld::Impl& m, lua::LuaVm& vm, int32_t script_id) {
 void TacticalAiWorld::write(ByteWriter& w) const {
     const Impl& m = *impl_;
     const objects::ObjectStore& st = m.store;
-    w.u32(kTacticalAiSaveVersion);
+    // sp3: an AI-lane world writes version 13 with its lane block; with the lane off the bytes are version 12's.
+    w.u32(m.cfg.ai_lane ? kTacticalAiLaneSaveVersion : kTacticalAiSaveVersion);
+    if (m.cfg.ai_lane) {
+        w.u32(m.cfg.k_ai);
+        m.own_rng.write(w);
+    }
     // ---- shape ----
     io::put_count(w, m.ai.size());
     for (const auto& a : m.ai) w.boolean(a != nullptr);
@@ -4546,7 +4570,17 @@ bool TacticalAiWorld::read(ByteReader& r) {
     const size_t lib = m.library.plans.size();
     const size_t goal_types = m.defs.goals.size();
     const auto mi = static_cast<size_t>(ai_mode_of(m.cfg.mode));
-    if (!io::version(r, kTacticalAiSaveVersion)) return false;
+    // sp3: version 13 = an AI-lane world (its lane block follows) and loads only into one; version 12 (lane off) also
+    // loads into an AI-lane world, which then keeps its configured k_ai and its stream from the start seeds (the bench
+    // and harness saves).
+    const uint32_t version = r.u32();
+    if (!r.ok() || !(version == kTacticalAiSaveVersion || (m.cfg.ai_lane && version == kTacticalAiLaneSaveVersion))) return io::bad(r);
+    uint32_t saved_k_ai = m.cfg.k_ai;
+    GameRandom saved_lane_rng = m.own_rng;
+    if (version == kTacticalAiLaneSaveVersion) {
+        saved_k_ai = r.u32();
+        if (!r.ok() || saved_k_ai == 0 || !saved_lane_rng.read(r)) return io::bad(r);
+    }
     // ---- shape: the loader rebuilt the same session ----
     if (r.u32() != m.ai.size() || !r.ok()) return io::bad(r);
     for (const auto& a : m.ai)
@@ -4979,6 +5013,10 @@ bool TacticalAiWorld::read(ByteReader& r) {
         for (const int32_t hp : list) m.tf_opportunity_fire_subscription(t, 0, hp);
     m.runtime->restore_pools(std::move(pools), static_cast<size_t>(created));
     m.scripts.restore(std::move(evals), std::move(missing));
+    if (m.cfg.ai_lane) {  // sp3: the saved k_ai and stream position
+        m.cfg.k_ai = saved_k_ai;
+        m.own_rng = saved_lane_rng;
+    }
     return true;
 }
 
