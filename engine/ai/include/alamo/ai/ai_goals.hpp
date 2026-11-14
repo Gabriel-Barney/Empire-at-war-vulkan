@@ -75,6 +75,9 @@ namespace alamo::ai {
 struct GoalSource {
     uint32_t goal_type = kAiNone;
     std::string function;  // perception equation name
+    // sp4a (S7) [port]: the mode's id for `function`, resolved once by GoalSystem::init (GoalModeHooks::resolve_function);
+    // kAiNone = evaluated by name. Not hashed or saved (rebuilt with the sources).
+    uint32_t equation = kAiNone;
 };
 
 // InstantiatedGoal (+0x48..+0x90).
@@ -111,6 +114,17 @@ public:
     virtual bool blocked(uint32_t goal_type, int32_t target) = 0;          // slot 9 reachability lookup
     // Perception for (self, opponent, human, target); `function` names an equation.
     virtual bool evaluate(const std::string& function, int32_t target, double& out) = 0;
+    // sp4a (S7): equation names resolved at load. resolve_function() runs once per source in GoalSystem::init (kAiNone =
+    // none); evaluate_resolved() is evaluate() for a source whose id it gave (`function` is still passed, for diagnostics).
+    // Defaults: no ids, evaluation by name.
+    virtual uint32_t resolve_function(const std::string& function) {
+        (void)function;
+        return kAiNone;
+    }
+    virtual bool evaluate_resolved(uint32_t equation, const std::string& function, int32_t target, double& out) {
+        (void)equation;
+        return evaluate(function, target, out);
+    }
     // Slot 10 (galactic 0x6b8660): Find_Plan_For_Goal + PotentialPlan + time/budget gross test. Fills
     // g.plan / g.pp_* / g.cost / g.eta (galactic: g.nominal_time). False rejects the candidate.
     virtual bool accept(Goal& g) = 0;

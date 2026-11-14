@@ -12,6 +12,7 @@ int main(int argc, char** argv) {
     test_goal_reservations();
     test_queue_slot_lifetime();
     test_goal_batched_values();
+    test_goal_resolved_functions();  // sp4a (S7)
     test_goal_batched_accept();  // OPT2 t10
     test_plan_pick_and_solver();
     test_definitions_and_templates();

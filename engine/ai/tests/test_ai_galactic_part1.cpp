@@ -513,6 +513,77 @@ void test_goal_batched_accept() {
     }
 }
 
+// sp4a (S7): GoalSystem::init resolves each source's function once through resolve_function(); the proposal walk and Commit's
+// re-evaluation then call evaluate_resolved() with that id (a source the mode does not resolve keeps kAiNone).
+void test_goal_resolved_functions() {
+    struct IdHooks final : GoalModeHooks {
+        std::vector<std::string> trace;
+        uint32_t resolves = 0, by_name = 0;
+        uint32_t target_count() override { return 0; }
+        bool applies(int32_t, uint32_t) override { return false; }
+        bool blocked(uint32_t, int32_t) override { return false; }
+        uint32_t resolve_function(const std::string& f) override {
+            ++resolves;
+            return f == "A" ? 7u : kAiNone;
+        }
+        bool evaluate(const std::string&, int32_t, double& out) override {
+            ++by_name;  // the default evaluate_resolved() is not used here: every call goes through the override below
+            out = 1.0;
+            return true;
+        }
+        bool evaluate_resolved(uint32_t e, const std::string& f, int32_t, double& out) override {
+            trace.push_back(f + " " + (e == kAiNone ? std::string("none") : std::to_string(e)));
+            out = f == "A" ? 10.0 : 5.0;
+            return true;
+        }
+        bool accept(Goal& g) override {
+            g.plan = 0;
+            return true;
+        }
+        bool plan_activatable(Goal&) override { return true; }
+        bool plan_invalid(const Goal& g) override { return g.running < 0; }
+        bool replaceable(const Goal&) override { return true; }
+        void refresh_plan(Goal&) override {}
+        void suspend_reservations(Goal&) override {}
+        bool uses_budget() override { return false; }
+        bool can_fund(const Goal&) override { return true; }
+        float category_credits(int32_t) override { return 1.0f; }
+        void budget_add(Goal&) override {}
+        void budget_release(Goal&) override {}
+        void budget_weights() override {}
+        std::vector<int32_t> category_order() override { return {}; }
+        void queue_production(Goal&) override {}
+        void instantiate(Goal& g) override { g.running = 1; }
+        void end_plan(Goal&, bool) override {}
+        void drop_potential_plan(Goal&) override {}
+        float elapsed_eta(const Goal&) override { return 0.0f; }
+        int32_t quota_players() override { return 1; }
+    } hooks;
+    AiDefinitions defs;
+    for (const char* n : {"Goal_A", "Goal_B"}) {
+        GoalTypeDef d;
+        d.name = n;
+        d.application = app::Global;
+        d.category = 0;
+        defs.goals.push_back(d);
+    }
+    LearningSystem learning;
+    SimRng rng(7);
+    GoalSystem gs;
+    GoalSystemConfig cfg;
+    cfg.extra_goals_per_category = 2;
+    gs.init(defs, {{0, "A"}, {1, "B"}}, &hooks, &learning, nullptr, &rng, cfg);
+    CHECK(hooks.resolves == 2 && gs.sources()[0].equation == 7u && gs.sources()[1].equation == kAiNone);
+    gs.service(1);  // pass 1: both proposed and activated
+    CHECK(hooks.trace == (std::vector<std::string>{"A 7", "B none"}));
+    CHECK(gs.active()[0].size() == 2);
+    hooks.trace.clear();
+    gs.service(2);  // pass 2: Commit re-evaluates both incumbents by id
+    CHECK(std::count(hooks.trace.begin(), hooks.trace.end(), "A 7") == 1 &&
+          std::count(hooks.trace.begin(), hooks.trace.end(), "B none") == 1);
+    CHECK(hooks.by_name == 0 && hooks.resolves == 2);  // resolved once, at init
+}
+
 void test_goal_batched_values() {
     struct BatchHooks final : GoalModeHooks {
         const ParallelFor* pf = nullptr;
