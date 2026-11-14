@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 namespace alamo::galactic {
 

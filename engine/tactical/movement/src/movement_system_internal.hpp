@@ -1,6 +1,7 @@
 #pragma once
 // Shared includes, helpers and types of movement_system.cpp (bo3 t03 split); its member definitions are in movement_system.cpp and movement_system_partN.cpp.
 #include "alamo/tactical/movement/movement_system.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <bit>

@@ -40,7 +40,7 @@
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/parallel.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/core/sim_rng.hpp"
 #include "alamo/objects/object_store.hpp"
 #include "alamo/tactical/tree_set.hpp"

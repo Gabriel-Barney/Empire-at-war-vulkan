@@ -8,6 +8,7 @@
 #include "battle_test_fixture.hpp"
 
 #include "alamo/commands/fleet_group.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/host_fs.hpp"
 #include "alamo/sim/fleet_groups.hpp"
 

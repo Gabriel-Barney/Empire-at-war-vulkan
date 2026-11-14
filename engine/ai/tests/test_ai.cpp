@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "alamo/ai/ai_free_store_path.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/ai/ai_path_finder.hpp"
 #include "alamo/ai/galactic_perception.hpp"
 #include "alamo/ai/galactic_seed.hpp"

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "alamo/galactic/auto_resolve.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/galactic/campaign.hpp"
 #include "alamo/galactic/conflicts.hpp"
 #include "alamo/galactic/special_systems.hpp"

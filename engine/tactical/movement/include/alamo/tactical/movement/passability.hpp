@@ -31,7 +31,7 @@
 
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/parallel.hpp"
-#include "alamo/core/sim_crc.hpp"
+#include "alamo/core/sim_crc_fwd.hpp"
 #include "alamo/tactical/movement/common.hpp"
 
 namespace alamo::tactical::movement {

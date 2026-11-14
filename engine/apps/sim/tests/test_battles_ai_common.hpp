@@ -5,6 +5,7 @@
 
 #include "battle_test_fixture.hpp"
 #include "alamo/core/host_fs.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <array>
 #include <iterator>

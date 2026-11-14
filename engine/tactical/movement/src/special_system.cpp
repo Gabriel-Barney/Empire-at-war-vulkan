@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "alamo/tactical/movement/movement_system.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 namespace alamo::tactical::movement {
 

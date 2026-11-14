@@ -12,6 +12,7 @@
 
 #include "battle_test_fixture.hpp"
 #include "alamo/core/parallel.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/host_fs.hpp"
 #include "alamo/tactical/tree_set.hpp"
 

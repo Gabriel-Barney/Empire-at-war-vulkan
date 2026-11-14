@@ -13,6 +13,7 @@
 // galactic state, so campaigns that never choose a slot keep their CRCs. Until then slots are a function of the
 // (hashed) arrival / departure order.
 #include "alamo/galactic/campaign.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 namespace alamo::galactic {
 

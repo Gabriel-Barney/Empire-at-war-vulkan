@@ -1,6 +1,7 @@
 #pragma once
 // Shared includes, helpers and types of tactical_battle.cpp (bo3 t03 split); its member definitions are in tactical_battle.cpp and tactical_battle_partN.cpp.
 #include "alamo/sim/tactical_battle.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <array>

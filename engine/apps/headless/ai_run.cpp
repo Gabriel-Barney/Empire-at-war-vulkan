@@ -16,6 +16,7 @@
 
 #if defined(ALAMO_HEADLESS_HAVE_GALACTIC_AI) && defined(ALAMO_SIM_HAVE_BATTLES)
 #include "alamo/ai/ai_context.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/ai/ai_definitions.hpp"
 #include "alamo/ai/ai_lua_runtime.hpp"
 #include "alamo/ai/galactic_ai.hpp"

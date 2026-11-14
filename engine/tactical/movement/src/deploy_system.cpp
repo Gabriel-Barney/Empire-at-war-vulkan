@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "alamo/core/dmath.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include "alamo/tactical/movement/movement_system.hpp"
 

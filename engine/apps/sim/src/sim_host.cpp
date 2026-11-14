@@ -1,4 +1,5 @@
 #include "alamo/sim/sim_host.hpp"
+#include "alamo/core/sim_crc.hpp"
 
 #include <algorithm>
 #include <limits>

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "alamo/core/hash.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/commands/pipeline.hpp"
 #include "alamo/core/bytes.hpp"
 #include "alamo/core/file_provider.hpp"

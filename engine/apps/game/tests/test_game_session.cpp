@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "alamo/core/file_provider.hpp"
+#include "alamo/core/sim_crc.hpp"
 #include "alamo/core/host_fs.hpp"
 #include "alamo/data/xml.hpp"
 #include "alamo/game/attract_mode.hpp"
